@@ -32,6 +32,50 @@ pub struct TaskHistoryEntry {
     pub decision: Option<TaskDecision>,
 }
 
+impl TaskHistoryEntry {
+    pub fn new(at: DateTime<Utc>, by: impl Into<String>, event: impl Into<String>) -> Self {
+        Self {
+            at,
+            by: by.into(),
+            event: event.into(),
+            note: None,
+            from_status: None,
+            to_status: None,
+            operation_id: None,
+            decision: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_note(mut self, note: Option<String>) -> Self {
+        self.note = note;
+        self
+    }
+
+    #[must_use]
+    pub fn with_status_change(
+        mut self,
+        from_status: Option<TaskStatus>,
+        to_status: Option<TaskStatus>,
+    ) -> Self {
+        self.from_status = from_status;
+        self.to_status = to_status;
+        self
+    }
+
+    #[must_use]
+    pub fn with_operation_id(mut self, operation_id: Option<String>) -> Self {
+        self.operation_id = operation_id;
+        self
+    }
+
+    #[must_use]
+    pub fn with_decision(mut self, decision: Option<TaskDecision>) -> Self {
+        self.decision = decision;
+        self
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaskArtifact {
     pub path: String,
@@ -343,13 +387,25 @@ impl UnsatisfiableTaskDependency {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ExternalRef {
     pub system: String,
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
 }
+
+// An external reference names its target by key (`system` + `id`); the `url`
+// is display metadata a later writer may complete. Key-only and
+// with-URL forms of the same pull request compare equal so a handoff that
+// records its link still satisfies a key-only membership check.
+impl PartialEq for ExternalRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.system == other.system && self.id == other.id
+    }
+}
+
+impl Eq for ExternalRef {}
 
 pub const GITHUB_PR_EXTERNAL_REF_SYSTEM: &str = "github-pr";
 

@@ -5,7 +5,8 @@
 
 use chrono::{Duration, Utc};
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{OrbitRuntime, ShipMode, WorkspaceRuntimeBinding};
+use orbit_core::runtime::WorkspaceRuntimeBinding;
+use orbit_core::{OrbitRuntime, ShipMode};
 use orbit_store::contracts::{
     InvocationInsertParams, ResourceUsageStoreBackend, RunResourceMinute,
 };
@@ -114,6 +115,7 @@ fn profile_delivery(runtime: &OrbitRuntime, cores: f64) {
     let workspace = runtime.workspace_id().unwrap();
     let admitted = Utc::now() - Duration::days(2);
     let run = JobRun {
+        build: None,
         executed_on: None,
         run_id: "jrun-profiled".into(),
         job_id: "task_pr_pipeline".into(),
@@ -204,8 +206,8 @@ fn heavy_profiles_drain_with_less_parallelism_at_the_same_ceiling() {
     // one fits only on an idle host.
     let heavy = Fixture::new(5.0).forecast("enforce");
     let light = Fixture::new(0.5).forecast("enforce");
-    // Resource fit landed at model 6. Model 14 keeps that factor.
-    assert_eq!(heavy["model_version"], 14);
+    // Resource fit landed at model 6. Model 19 keeps that factor.
+    assert_eq!(heavy["model_version"], 19);
     assert_eq!(heavy["inputs"]["admission_factors"]["resource_fit"], 1);
     for forecast in [&heavy, &light] {
         let fit = &forecast["inputs"]["resource_fit"];

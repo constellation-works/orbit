@@ -7,6 +7,7 @@ use serde_json::json;
 
 use super::{MergedPullRequest, RevokedHandoff};
 use crate::OrbitRuntime;
+use crate::application::task::TaskDistributedPort;
 
 impl OrbitRuntime {
     pub(super) fn external_handoff_settlement_context(
@@ -39,7 +40,7 @@ impl OrbitRuntime {
             candidate: candidate.clone(),
             footprint_widening: accepted.handoff.footprint_widening,
             required_commands: accepted.required_commands,
-            owner_completion_authority: self.owner_completion_authority(),
+            owner_completion_authority: self.external_merge_completion_authority(),
             review: None,
             known_red: Vec::new(),
             light_delivery: self.owner_light_delivery(&accepted.handoff.task_id, candidate)?,

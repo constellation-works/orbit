@@ -108,6 +108,51 @@ fn scratch_under_orbit_tmp_is_never_delivered() {
     }
 }
 
+/// A claimed `git_commit` refuses reserved artifact paths when the importer
+/// receives them directly, before changing the candidate commit.
+fn claimed_commit_refuses_reserved_artifact_names() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::claimed_commit_refuses_reserved_artifact_names"
+    )) {
+        return;
+    }
+
+    for path in ["review-plan.md", "review-report.json"] {
+        let temp = claimed_worktree();
+        let workspace = temp.path();
+        write(workspace, "src/new.rs", "pub fn added() {}\n");
+        let host = CommitTestHost::new(vec![claimed_task(&["dir:src"])], workspace.to_path_buf())
+            .with_claim_binding(CLAIMED_TASK_ID);
+        let mut input = claimed_commit_input(workspace);
+        input["implementation"]["task_artifacts"] = json!([{
+            "path": path,
+            "source_path": ".orbit/tmp/artifact.json"
+        }]);
+        let head = git_output(workspace, &["rev-parse", "HEAD"]).unwrap();
+
+        let error = git_commit(&host, &input)
+            .expect_err("the importer refuses the reserved review namespace")
+            .to_string();
+        assert!(
+            error.contains(&format!(
+                "task_artifacts path '{path}' is in the reserved review- namespace"
+            )),
+            "the importer identifies the reserved artifact path: {error}"
+        );
+        assert_eq!(
+            git_output(workspace, &["rev-parse", "HEAD"]).unwrap(),
+            head,
+            "a reserved artifact does not commit the candidate"
+        );
+        assert_eq!(
+            untracked_status(workspace),
+            "?? src/new.rs",
+            "a refused reserved artifact leaves the candidate untracked"
+        );
+    }
+}
+
 /// ORB-13990: the 2026-10-04 claim refusals. An implementer may create a path
 /// outside the frozen footprint (a new top-level `tests/` file, another
 /// crate): the claimed leaf commits it, and owner validation turns every
@@ -722,6 +767,10 @@ fn candidate_path_authority_contracts() {
             (
                 "scratch_under_orbit_tmp_is_never_delivered",
                 scratch_under_orbit_tmp_is_never_delivered,
+            ),
+            (
+                "claimed_commit_refuses_reserved_artifact_names",
+                claimed_commit_refuses_reserved_artifact_names,
             ),
             (
                 "claimed_new_paths_outside_the_footprint_deliver_and_request_owner_widening",

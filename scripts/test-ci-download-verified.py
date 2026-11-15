@@ -209,6 +209,44 @@ finally:
 '''
 
 
+# Deadline-boundary launcher: executes the public helper's stdin unchanged
+# with a virtual monotonic clock and mocked transport. The first completed
+# response is 504 after 0.05s, backoff consumes 1s, and the second completed
+# response is configurable (404 for the boundary, 504 for the exhausted
+# case) after 0.1s. Logging the completed 404 advances the clock by
+# FINAL_LOG_SECONDS, modelling process completion/observation overhead that
+# carries interpretation across the total deadline without claiming the
+# transfer exceeded its max-time. No network, real wait, or synthetic load.
+BOUNDARY_PYTHON = r'''
+import builtins, os, subprocess, sys, time
+from unittest.mock import patch
+source = sys.stdin.read()
+sys.argv = ["-", *sys.argv[2:]]
+second_http = os.environ.get("BOUNDARY_SECOND_HTTP", "404")
+clock = [0.0]
+calls = [0]
+def transport(command, **kwargs):
+    calls[0] += 1
+    if calls[0] == 1:
+        clock[0] += 0.05
+        return subprocess.CompletedProcess(command, 22, b"504")
+    clock[0] += 0.1
+    return subprocess.CompletedProcess(command, 22, second_http.encode())
+def sleep(seconds):
+    clock[0] += seconds
+real_print = builtins.print
+def print_with_delay(*args, **kwargs):
+    real_print(*args, **kwargs)
+    if args and "http='404'" in str(args[0]):
+        clock[0] += float(os.environ.get("FINAL_LOG_SECONDS", "0"))
+with patch.object(time, "monotonic", lambda: clock[0]), \
+        patch.object(time, "sleep", sleep), \
+        patch.object(subprocess, "run", transport), \
+        patch.object(builtins, "print", print_with_delay):
+    exec(compile(source, "ci-download-verified.sh:stdin", "exec"), {"__name__": "__main__"})
+'''
+
+
 def response(exit_code=0, http="200", body=BODY, **extra):
     row = {"exit": exit_code, "http": http, **extra}
     if body is not None:
@@ -224,6 +262,9 @@ def response(exit_code=0, http="200", body=BODY, **extra):
 HANG_QUIET_SECONDS = 120
 HANG_ABSOLUTE_SECONDS = 300
 SLOW_FIXTURE_SECONDS = 12
+# Bounded capture: a child writing forever must be stopped by bytes as well
+# as time, so run_step never buffers unbounded output in memory.
+MAX_STREAM_BYTES = 8 * 1024 * 1024
 
 
 def _read_chunk(stream):
@@ -243,6 +284,9 @@ def _take(stream, bucket):
     while True:
         chunk, eof = _read_chunk(stream)
         if chunk:
+            if sum(len(part) for part in bucket) + len(chunk) > MAX_STREAM_BYTES:
+                raise AssertionError(
+                    f"step output exceeded {MAX_STREAM_BYTES} bytes; capture is bounded")
             bucket.append(chunk)
             progressed = True
         if eof or not chunk:
@@ -362,7 +406,7 @@ class VerifiedDownloadTests(unittest.TestCase):
         return json.loads((self.root / "calls.json").read_text())
 
     def invoke(self, *, budget=60, digest=None, url=URL, deadline=False, stage="R",
-               hang_quiet=None, step="verified download"):
+               hang_quiet=None, step="verified download", cache_file=None, destination=None):
         env = self.env
         if deadline:
             deadline_bin = self.root / "deadline-bin"
@@ -375,9 +419,11 @@ class VerifiedDownloadTests(unittest.TestCase):
             env = dict(env, PATH=f"{deadline_bin}:{env['PATH']}",
                        DOWNLOAD_EXPECT_READY=stage,
                        ORBIT_CI_DOWNLOAD_FAKE_CLOCK=str(clock))
-        return run_step([str(HELPER), url, digest or hashlib.sha256(BODY).hexdigest(),
-                         str(self.destination), "--budget-seconds", str(budget)],
-                        env=env, text=True, step=step, hang_quiet=hang_quiet)
+        argv = [str(HELPER), url, digest or hashlib.sha256(BODY).hexdigest(),
+                str(destination or self.destination), "--budget-seconds", str(budget)]
+        if cache_file is not None:
+            argv += ["--cache-file", str(cache_file)]
+        return run_step(argv, env=env, text=True, step=step, hang_quiet=hang_quiet)
 
     def deadline_events(self, *, active_limit=2):
         events = json.loads((self.root / "deadline-events.json").read_text())
@@ -446,6 +492,108 @@ class VerifiedDownloadTests(unittest.TestCase):
         self.assertEqual(self.calls(), [], "an existing archive must not bypass verification")
         self.assertEqual(self.destination.read_bytes(), BODY)
 
+    def test_publication_races_and_cross_filesystem_cache(self):
+        # sitecustomize intercepts the actual helper's link at publication,
+        # deterministically placing an entry after its preflight check.
+        hooks = self.root / "hooks"
+        hooks.mkdir()
+        (hooks / "sitecustomize.py").write_text("""
+import errno, os
+from pathlib import Path
+real_link = os.link
+def link(src, dst, *args, **kwargs):
+    if str(dst) == os.environ.get('RACE_DEST'):
+        mode = os.environ['RACE_MODE']
+        if mode.startswith('exdev') and str(src) == os.environ.get('RACE_CACHE'):
+            raise OSError(errno.EXDEV, 'cross-device link')
+        race = mode.removeprefix('exdev-')
+        if race in ('file', 'symlink'):
+            if race == 'file':
+                Path(dst).write_bytes(b'sentinel')
+            else:
+                os.symlink(os.environ['RACE_TARGET'], dst)
+    return real_link(src, dst, *args, **kwargs)
+os.link = link
+""")
+        cache = self.root / "cache"
+        cache.write_bytes(BODY)
+        target = self.root / "target"
+        target.write_bytes(b'sentinel')
+        self.configure([response()])
+        for warm in (False, True):
+            for mode in ('file', 'symlink'):
+                with self.subTest(warm=warm, mode=mode):
+                    destination = self.root / f"race-{warm}-{mode}"
+                    self.env.update(PYTHONPATH=str(hooks), RACE_DEST=str(destination),
+                                    RACE_MODE=mode, RACE_TARGET=str(target), RACE_CACHE=str(cache))
+                    result = self.invoke(cache_file=cache if warm else None, destination=destination)
+                    self.assertNotEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(target.read_bytes(), b'sentinel')
+                    self.assertEqual(destination.read_bytes(), b'sentinel')
+                    self.assertEqual(destination.is_symlink(), mode == 'symlink')
+        for mode in ('file', 'symlink'):
+            destination = self.root / f'cross-device-race-{mode}'
+            self.env.update(RACE_DEST=str(destination), RACE_MODE=f'exdev-{mode}')
+            result = self.invoke(cache_file=cache, destination=destination)
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(destination.read_bytes(), b'sentinel')
+            self.assertEqual(destination.is_symlink(), mode == 'symlink')
+            self.assertEqual(target.read_bytes(), b'sentinel')
+        destination = self.root / 'cross-device'
+        self.env.update(RACE_DEST=str(destination), RACE_MODE='exdev')
+        result = self.invoke(cache_file=cache, destination=destination)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(destination.read_bytes(), BODY)
+
+    def test_cache_hit_restores_verified_archive_without_network(self):
+        cache_file = self.root / "tool-cache" / "archive"
+        self.configure([response()])
+        result = self.invoke(cache_file=cache_file)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(cache_file.read_bytes(), BODY, "a verified download must populate the cache")
+        self.assertEqual(len(self.calls()), 1)
+        self.destination.unlink()
+        restored = self.root / "restored"
+        result = self.invoke(cache_file=cache_file, destination=restored)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(restored.read_bytes(), BODY)
+        self.assertEqual(len(self.calls()), 1, "a cache hit must not reach the network")
+        self.assertIn("cache=hit", result.stderr)
+
+    def test_tampered_cached_archive_fails_without_network_or_publish(self):
+        cache_file = self.root / "tool-cache" / "archive"
+        cache_file.parent.mkdir(parents=True)
+        cache_file.write_bytes(b"tampered archive bytes")
+        self.configure([response()])
+        result = self.invoke(cache_file=cache_file)
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn("SHA-256 mismatch; refusing cached archive", result.stderr)
+        self.assertEqual(self.calls(), [], "a tampered cache entry must fail closed, not download")
+        self.assertFalse(self.destination.exists())
+        self.assert_clean()
+
+    def test_github_release_installs_restore_before_download_and_save_only_on_push(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+        checked = 0
+        for job in workflow["jobs"].values():
+            steps = job["steps"]
+            for index, step in enumerate(steps):
+                run = step.get("run") or ""
+                if "releases/download" not in run:
+                    continue
+                checked += 1
+                self.assertIn("--cache-file", run, step.get("name"))
+                restore = steps[index - 1]
+                self.assertTrue(restore.get("uses", "").startswith("actions/cache/restore@"),
+                                step.get("name"))
+                self.assertIn("LINUX_SHA256", restore["with"]["key"])
+                save = steps[index + 1]
+                self.assertTrue(save.get("uses", "").startswith("actions/cache/save@"),
+                                step.get("name"))
+                self.assertIn("github.event_name == 'push'", save["if"])
+                self.assertEqual(restore["with"], save["with"])
+        self.assertGreaterEqual(checked, 5)
+
     def test_invalid_public_inputs_are_refused_before_transport(self):
         for kwargs in ({"url": "http://example.invalid/x"}, {"url": "https://u:p@example.invalid/x"},
                        {"url": "https://[bad/x"}, {"digest": "bad"},
@@ -456,14 +604,90 @@ class VerifiedDownloadTests(unittest.TestCase):
                 self.assertEqual(self.calls(), [])
                 self.assertFalse(self.destination.exists())
 
-    def test_attempt_and_wall_bounds_stop_and_reap_transport(self):
-        self.configure([response(6, "000")])
+    def test_transient_responses_retry_until_the_budget_is_spent(self):
+        # Five transport failures on the virtual clock: 0.25s plus 1+2+3+4s of
+        # backoff, which leaves 1.75s of the budget, less than the next 5s.
+        for row in (response(22, "504"), response(6, "000")):
+            with self.subTest(row=row):
+                self.configure([row])
+                result = self.invoke(budget=12, deadline=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(len(self.calls()), 5)
+                self.assertEqual(self.backoffs(active_limit=12), [1, 2, 3, 4])
+                self.assertIn("ci-download: outcome=failed class=transient attempts=5",
+                              result.stderr)
+                self.assertFalse(self.destination.exists())
+                self.assert_clean()
+
+    def test_recovery_after_more_than_three_transient_responses(self):
+        self.configure([response(22, "504")] * 4 + [response()])
         result = self.invoke(deadline=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(len(self.calls()), 3)
-        self.assertEqual(self.backoffs(active_limit=4), [1, 2])
-        self.assertFalse(self.destination.exists())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.destination.read_bytes(), BODY)
+        self.assertEqual(self.backoffs(active_limit=12), [1, 2, 3, 4])
+        self.assertIn("ci-download: outcome=verified attempts=5", result.stderr)
+
+    def test_only_an_exhausted_transient_budget_is_declared_transient(self):
+        # A permanent answer ends at once and stays the change's failure, even
+        # after transient responses.
+        cases = (([response(22, "404")], 1),
+                 ([response(22, "504"), response(22, "404")], 2),
+                 ([response(22, "504"), response(body=b"corrupt")], 2))
+        for rows, attempts in cases:
+            with self.subTest(rows=rows):
+                self.configure(rows)
+                result = self.invoke(deadline=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(len(self.calls()), attempts)
+                self.assertIn(f"ci-download: outcome=failed class=permanent attempts={attempts}",
+                              result.stderr)
+                self.assertFalse(self.destination.exists())
+                self.assert_clean()
+
+    def test_final_permanent_response_at_deadline_stays_permanent(self):
+        # A conclusive 404 following a 504 stays permanent even when
+        # observation/logging carries processing across the total deadline.
+        # Budget stays 1.4s for every case: the boundary and the exhausted
+        # transient case share one deadline, extended for neither.
+        launcher_dir = self.root / "boundary-bin"
+        launcher_dir.mkdir()
+        launcher = launcher_dir / "python3"
+        launcher.write_text(f"#!{sys.executable}\n" + BOUNDARY_PYTHON)
+        launcher.chmod(0o755)
+        digest = hashlib.sha256(BODY).hexdigest()
+
+        def run_boundary(*, second_http, final_log_seconds, name):
+            destination = self.root / f"boundary-{second_http}-{name}"
+            env = dict(os.environ, PATH=f"{launcher_dir}:{os.environ['PATH']}",
+                       BOUNDARY_SECOND_HTTP=second_http,
+                       FINAL_LOG_SECONDS=final_log_seconds)
+            env.pop("ORBIT_CI_DOWNLOAD_FAKE_CLOCK", None)
+            return run_step([str(HELPER), URL, digest, str(destination),
+                             "--budget-seconds", "1.4"],
+                            env=env, text=True,
+                            step=f"boundary {second_http} log={final_log_seconds} {name}")
+
+        # Control: the same completed 404 comfortably inside the budget.
+        result = run_boundary(second_http="404", final_log_seconds="0", name="control")
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn("curl_exit=22 http='404'", result.stderr)
+        self.assertIn("ci-download: outcome=failed class=permanent attempts=2",
+                      result.stderr)
+        # Boundary: the same completed 404 observed across the deadline.
+        result = run_boundary(second_http="404", final_log_seconds="0.26", name="deadline")
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn("curl_exit=22 http='404'", result.stderr)
+        self.assertIn("ci-download: outcome=failed class=permanent attempts=2",
+                      result.stderr)
+        self.assertNotIn("class=transient", result.stderr)
+        # The exhausted transient budget at the same deadline stays transient.
+        result = run_boundary(second_http="504", final_log_seconds="0", name="exhausted")
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ci-download: outcome=failed class=transient attempts=2",
+                      result.stderr)
         self.assert_clean()
+
+    def test_attempt_and_wall_bounds_stop_and_reap_transport(self):
         for row in (response(6, "000"), response(stall=True)):
             with self.subTest(row=row):
                 self.configure([row])

@@ -17,15 +17,17 @@ use super::types::TaskBundleV2;
 use jsonl::scan_jsonl_records;
 use read::{read_required_bytes, read_required_text};
 
-pub(crate) use artifacts::copy_artifact_blobs;
+pub(crate) use artifacts::{
+    ManifestBlobReadFailure, copy_artifact_blobs, read_verified_manifest_blob,
+};
 pub(crate) use commit::{
     PENDING_WRITE_FILE_NAME, PendingWriteGuard, publish_envelope, recover_pending_bundle_at,
     recover_pending_write, truncate_jsonl_file,
 };
-pub(crate) use jsonl::{append_jsonl_row, append_jsonl_rows};
+pub(crate) use jsonl::append_jsonl_rows;
 pub(crate) use read::{
-    read_bundle_at, read_bundle_lightweight_at, read_comments_at, read_envelope_at, read_events_at,
-    read_search_docs_at,
+    read_artifact_manifest_at, read_bundle_at, read_bundle_lightweight_at, read_comments_at,
+    read_envelope_at, read_events_at, read_search_docs_at,
 };
 pub use stub::is_unpublished_stub;
 pub(crate) use stub::reap_unpublished_stub;

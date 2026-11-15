@@ -7,12 +7,13 @@
 use chrono::Utc;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{
-    AutoTaskAddParams, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, OrbitRuntime,
-    TaskComplexity, TaskPriority, TaskStatus, TaskType,
+    AutoTaskAddParams, OrbitRuntime, TaskComplexity, TaskPriority, TaskStatus, TaskType,
 };
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::JobRunStoreBackend;
-use orbit_types::workflow::{ActivityCrewDraw, PipelineState};
+use orbit_types::workflow::{
+    ActivityCrewDraw, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, PipelineState,
+};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -197,7 +198,13 @@ fn an_explicit_crew_beats_the_purpose_pool() {
     // A task filed for a purpose with its own crew keeps it.
     let task = fx.task(&["baseline-red-repair"], Some("pinned"));
     assert_eq!(task.crew.as_deref(), Some("pinned"));
-    assert_eq!(task.crew_source.as_deref(), Some("explicit"));
+    assert_eq!(
+        task.crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("explicit")
+    );
 
     // So does an auto-task that names a purpose and a crew.
     let minted = fx.mint(
@@ -206,7 +213,14 @@ fn an_explicit_crew_beats_the_purpose_pool() {
         Some("pinned"),
     );
     assert_eq!(minted.crew.as_deref(), Some("pinned"));
-    assert_eq!(minted.crew_source.as_deref(), Some("explicit"));
+    assert_eq!(
+        minted
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("explicit")
+    );
 }
 
 fn a_purpose_pool_beats_the_complexity_pool() {
@@ -226,7 +240,7 @@ fn a_purpose_pool_beats_the_complexity_pool() {
         [("purpose_claude", 1), ("purpose_codex", 1)],
     );
     assert_eq!(
-        draw.source,
+        draw.source.as_str(),
         format!("{PILOT}; native inspection, skipped: purpose_gemini")
     );
     for _ in 0..4 {
@@ -241,13 +255,16 @@ fn a_purpose_pool_beats_the_complexity_pool() {
         draws.keys().map(String::as_str).collect::<Vec<_>>(),
         [RECOVERY]
     );
-    assert_eq!(draws[RECOVERY].source, RECOVERY);
+    assert_eq!(draws[RECOVERY].source.as_str(), RECOVERY);
 
     // A task filed with a purpose's system tag draws from that purpose's pool.
     let task = fx.task(&["baseline-red-repair"], None);
     assert_eq!(task.crew.as_deref(), Some("purpose_claude"));
     assert_eq!(
-        task.crew_source.as_deref(),
+        task.crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("purpose:baseline_red_repair")
     );
 
@@ -255,7 +272,11 @@ fn a_purpose_pool_beats_the_complexity_pool() {
     let minted = fx.mint("purpose-chore", &["crew-purpose:baseline_red_repair"], None);
     assert_eq!(minted.crew.as_deref(), Some("purpose_claude"));
     assert_eq!(
-        minted.crew_source.as_deref(),
+        minted
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("purpose:baseline_red_repair")
     );
 
@@ -269,6 +290,7 @@ fn a_purpose_pool_beats_the_complexity_pool() {
             crew: "low_lane".into(),
             source: LOW.into(),
             eligible_pool: Vec::new(),
+            auto_effort: None,
         },
     );
     fx.jobs.write_run_state(&run, &state).unwrap();
@@ -282,7 +304,7 @@ fn an_unset_purpose_resolves_as_it_did_before_purposes() {
     let run = fx.run("task_pilot_pipeline");
     assert_eq!(fx.model_for(pilot_input(&run)), "fixture-low");
     assert_eq!(
-        fx.draws(&run)[PILOT].source,
+        fx.draws(&run)[PILOT].source.as_str(),
         format!("{LOW}; native inspection")
     );
 
@@ -291,11 +313,17 @@ fn an_unset_purpose_resolves_as_it_did_before_purposes() {
         fx.model_for(json!({"run_id": run, "crew_config_key": RECOVERY})),
         "fixture-medium"
     );
-    assert_eq!(fx.draws(&run)[RECOVERY].source, MEDIUM);
+    assert_eq!(fx.draws(&run)[RECOVERY].source.as_str(), MEDIUM);
 
     let task = fx.task(&["baseline-red-repair"], None);
     assert_eq!(task.crew.as_deref(), Some("medium_lane"));
-    assert_eq!(task.crew_source.as_deref(), Some("pool:medium"));
+    assert_eq!(
+        task.crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("pool:medium")
+    );
 
     // The existing per-purpose keys are the final-recovery and review pools.
     let view = orbit_core::application::config::effective_view(&fx.runtime).unwrap();

@@ -1,16 +1,18 @@
 pub(crate) mod admission_load_store;
-mod assistance;
 pub(crate) mod audit_event_store;
 pub(crate) mod backlog_forecast_store;
 pub(crate) mod codebase_facts_store;
 pub(crate) mod connection;
-pub(crate) mod crew_performance_store;
+mod crew_memory_store;
+mod delivery_run_load;
+mod evolution_store;
 mod experiment_assignments;
 pub(crate) mod experiment_store;
 pub(crate) mod invocation_store;
 pub(crate) mod job_run_store;
 pub(crate) mod landed_diff_store;
 pub mod migration;
+pub(crate) mod notice_store;
 pub(crate) mod plugin_store;
 pub(crate) mod provider_limit_store;
 pub(crate) mod read_pool;
@@ -110,5 +112,6 @@ mod codec {
     }
 }
 
+mod application_consent;
 #[cfg(test)]
 mod tests;

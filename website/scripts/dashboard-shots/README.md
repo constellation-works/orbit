@@ -5,9 +5,9 @@ running dashboard by `capture.mjs`. It only reads: it opens views and one
 run's detail. It never presses Approve, Ship, Start, or any other action.
 
 Regenerate them after a release that changes the dashboard, with the dashboard
-running (`orbit web serve`, or `orbit web connect <host>`). Five of the six
-come from synthetic data, so the published pages show no live task titles,
-user names, or host names:
+running (`orbit web serve`, or `orbit web connect <host>`). All six published
+images use synthetic data, so they show no live task titles, user names, or
+host names:
 
 ```bash
 npm --prefix .orbit/tmp/orbit-playwright install --no-save playwright
@@ -26,8 +26,9 @@ refresh clock come out the same on every capture. For the Drain shot only, the
 fixture holds admissions on a CPU throttle, so the Tasks dock shows its throttle
 note; the other captures keep an unthrottled host.
 
-The run detail uses a dated live capture. The script replaces its task,
-friction and run identifiers with demo labels in the capture DOM before
+The published run-detail image is a synthetic successful
+`task_pr_pipeline` sample. For a live run-detail capture, the script replaces
+identifier-shaped task, friction and run labels in the capture DOM before
 taking the screenshot; the server's records are unchanged. Pick a successful
 `task_pr_pipeline` run and capture it by id:
 
@@ -70,25 +71,30 @@ and text evidence under `.orbit/tmp/dashboard-capture-*` for inspection.
 This regression does not replace the rendered-pixel inspection below.
 
 The browser viewport is 1440 × 900 CSS pixels at device scale factor 2, and
-taller for the task list and the run detail (1600) and the Tasks dock (1800) so
-nothing is cut. Every crop stops above the log ticker along the bottom edge, which
-prints host paths. The Hosts crop also excludes the scope strip and trailing
-SSH error detail, which can contain host paths. Before committing, look at
+taller for Automation (1100), the task list and run detail (1600), and the
+Tasks dock (1800) so their panels fit. Every crop stops above the log ticker
+along the bottom edge, which prints host paths. The Hosts crop also excludes
+the scope strip and trailing SSH error detail, which can contain host paths.
+Before committing, look at
 each image for anything that shouldn't be public, including production task,
 friction or run identifiers, a task title or a user name. Inspect the rendered
 pixels even when the capture script sanitizes text.
 
 | File | Size (px) | Shows | Used on |
 |---|---|---|---|
-| `dashboard-tasks.png` | 2880 × 1732 | The whole Tasks view: top bar with host resources and the refresh clock, the rail, status cards, and the Drain dock | Quickstart, Use the Dashboard |
-| `dashboard-approve-ship.png` | 1648 × 1416 | The task list: Awaiting approval with **Approve**, In progress with **View run**, Backlog with its readiness strip and **Ship** | First Task |
-| `dashboard-run-detail.png` | 2396 × 1782 | A successful `task_pr_pipeline` run and its step timeline | First Task |
-| `dashboard-drain-card.png` | 720 × 2434 | The Tasks dock: Auto-drain status, throttle note and Start a window | Delivery Workflows, Use the Dashboard |
-| `dashboard-automation.png` | 2880 × 1732 | Automation → Routines with the sweep clock, the next hour, and each routine | Use the Dashboard, Schedule Recurring Work |
-| `dashboard-hosts.png` | 2348 × 498 | Settings → Hosts add control and host table with each host's health | Use the Dashboard |
+| `dashboard-tasks.png` | 2880 × 1732 | The Tasks view with status filters, task cards, the Drain dock, and host readings and clock in the rail foot | Quickstart, Use the Dashboard |
+| `dashboard-approve-ship.png` | 1744 × 988 | Task cards with **Approve**, **View run**, and **Ship** actions | First Task |
+| `dashboard-run-detail.png` | 2396 × 1892 | A synthetic successful `task_pr_pipeline` run, its Jobs › History back link, and 21-step timeline | First Task |
+| `dashboard-drain-card.png` | 720 × 1854 | The Tasks dock with its throttle status and 1–24 hour Start a window controls | Delivery Workflows, Use the Dashboard |
+| `dashboard-automation.png` | 2880 × 2092 | Automation → Routines with the sweep clock, filter, Next hour, Active group and collapsed Paused group | Use the Dashboard, Schedule Recurring Work |
+| `dashboard-hosts.png` | 2348 × 498 | Settings → Hosts add control and host table with local health and unreachable-host status | Use the Dashboard |
 
-Five were captured on 2026-10-10 from the redesigned dashboard (status-card
-task list, Drain and Log dock, full-width top bar). The Drain image was
-recaptured on 2026-10-28 after the standalone Drain page was removed. The run detail shows a
-red-CI fix, 21 steps in 20m 35s, with its artifact identifiers replaced by
-demo labels. Its counts are from that moment, not live.
+All six images were checked against the current dashboard on 2026-11-08. The
+Tasks, approval, Drain, Automation and Hosts images were regenerated with
+`--fixture-core`, which intercepts dashboard API reads and uses synthetic
+workspace and host data. The run-detail image is a synthetic successful
+`task_pr_pipeline` sample with demo task and host labels; its dates and timing
+are illustrative. For live run-detail captures, the script replaces
+identifier-shaped task, friction and run labels in the capture DOM. Inspect
+the rendered pixels for task titles, user names, host names and paths before
+publishing a live capture.

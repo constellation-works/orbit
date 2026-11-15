@@ -1,9 +1,11 @@
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::activity_v2::{ActivityV2, ActivityV2Spec, AgentLoopSpec};
+use crate::tool::{TOOL_ACTION_SEPARATOR, tool_call_name, tool_family, tool_family_action};
 
 /// Explicit list of permitted wildcard roots (§6 / §12 Q7).
 ///
@@ -104,14 +106,16 @@ impl ActivityToolDenyPolicy {
     /// The refusal a denied call surfaces.
     pub fn denial_message(&self, tool_name: &str) -> String {
         format!(
-            "tool '{tool_name}' is in the activity disallow list ({})",
+            "tool '{}' is in the activity disallow list ({})",
+            tool_call_name(tool_name),
             self.activity
         )
     }
 }
 
 /// Deny mode's concrete callable set: `registered_tools` minus every tool the
-/// disallow list covers, in registry order and deduplicated.
+/// disallow list covers, in registry order and deduplicated. A family the
+/// list covers only partly contributes its remaining `family:action` names.
 ///
 /// A deny-mode run also stamps this set as its legacy `ORBIT_ACTIVITY_TOOLS`
 /// allowlist, so an MCP server that predates deny mode enforces an equivalent
@@ -126,9 +130,9 @@ where
     let mut seen = BTreeSet::new();
     registered_tools
         .into_iter()
-        .filter(|tool| !tool_allowed(tool, disallow_list))
-        .filter(|tool| seen.insert(*tool))
-        .map(str::to_string)
+        .flat_map(|tool| callable_names(tool, |name| !tool_allowed(name, disallow_list)))
+        .filter(|tool| seen.insert(tool.to_string()))
+        .map(Cow::into_owned)
         .collect()
 }
 
@@ -169,7 +173,8 @@ pub fn validate_tool_allowlist(allowlist: &[String]) -> Result<(), ToolAllowlist
 
 /// Validate an activity allowlist against the registered tool surface.
 ///
-/// Concrete names must resolve exactly. Wildcards must use an approved root,
+/// Concrete names must resolve exactly; a `family:action` name needs its
+/// family registered and the action known. Wildcards must use an approved root,
 /// and must expand to at least one registered tool unless the root is an
 /// explicitly documented empty reservation.
 pub fn validate_tool_allowlist_against_registered_tools<'a, I>(
@@ -193,7 +198,13 @@ where
             continue;
         }
 
-        if !registered_tools.contains(entry.as_str()) {
+        let registered = match entry.split_once(TOOL_ACTION_SEPARATOR) {
+            Some((family, _)) => {
+                tool_family_action(entry).is_some() && registered_tools.contains(family)
+            }
+            None => registered_tools.contains(entry.as_str()),
+        };
+        if !registered {
             return Err(ToolAllowlistError::UnknownToolName {
                 entry: entry.clone(),
             });
@@ -292,16 +303,62 @@ fn proc_spawn_grant(allowlist: &[String]) -> Option<&str> {
 
 /// Runtime check: is `tool_name` permitted by `allowlist`?
 /// Empty allowlist means nothing is allowed (explicit policy per §6.1).
+///
+/// `tool_name` is a tool, a family action (`orbit.decision:raise`) or the
+/// operation serving one (`orbit.decision.raise`). A family action is covered
+/// by its family or by its own `family:action` entry; a bare family only by
+/// an entry covering every action.
 pub fn tool_allowed(tool_name: &str, allowlist: &[String]) -> bool {
+    if let Some(family) = tool_family(tool_name) {
+        return family.actions.iter().all(|action| {
+            allowlist
+                .iter()
+                .any(|entry| entry_matches(entry, action.operation))
+        });
+    }
     allowlist
         .iter()
         .any(|entry| entry_matches(entry, tool_name))
 }
 
-/// Does one allowlist entry — a concrete name or a wildcard root — cover
-/// `tool_name`?
+/// Does one allowlist entry — a concrete name, a `family:action` name or a
+/// wildcard root — cover `tool_name`?
 fn entry_matches(entry: &str, tool_name: &str) -> bool {
-    entry == tool_name || wildcard_prefix(entry).is_some_and(|prefix| tool_name.starts_with(prefix))
+    let wildcard =
+        |name: &str| wildcard_prefix(entry).is_some_and(|prefix| name.starts_with(prefix));
+    match tool_family_action(tool_name) {
+        Some((family, action)) => {
+            entry == family.name
+                || entry == family.qualified_action(action.action)
+                || wildcard(family.name)
+                || wildcard(action.operation)
+        }
+        None => entry == tool_name || wildcard(tool_name),
+    }
+}
+
+/// The policy names a registered tool contributes to an exact callable set:
+/// itself, or for a family whose actions `included` admits only partly,
+/// one `family:action` name per included action.
+fn callable_names<'a>(tool: &'a str, included: impl Fn(&str) -> bool) -> Vec<Cow<'a, str>> {
+    let Some(family) = tool_family(tool) else {
+        return if included(tool) {
+            vec![Cow::Borrowed(tool)]
+        } else {
+            Vec::new()
+        };
+    };
+    let actions = family
+        .actions
+        .iter()
+        .map(|action| family.qualified_action(action.action))
+        .filter(|name| included(name))
+        .collect::<Vec<_>>();
+    if actions.len() == family.actions.len() {
+        vec![Cow::Borrowed(tool)]
+    } else {
+        actions.into_iter().map(Cow::Owned).collect()
+    }
 }
 
 fn agent_loop_spec(activity: &ActivityV2) -> Option<&AgentLoopSpec> {

@@ -48,6 +48,54 @@ do not delete registry or identity files to get past them.
 A second host gets the shipped definitions from `orbit workspace init`, not from
 Git. Copy any local edits across deliberately.
 
+## Upgrading a workspace together
+
+Layout version 9 fences older Orbit clients that cannot preserve skipped-step
+checkpoint markers. Older writers drop the marker, and older readers restore a
+skipped step's null as an output on resume, changing downstream template
+behavior. The layout fence protects the workspace; the marker field itself is
+not necessarily rejected by older binaries. Layout version 8 also protects
+script output files and parallel script-branch checkpoints. Before any host
+opens or migrates a workspace to version 9, update the Orbit binary on every
+host that can access it, including replicas. Plan one coordinated rollout.
+Auto-task tool grants need the same lockstep: an older binary refuses a
+definition or settings file that sets `granted_tools`, so upgrade every host
+before setting a grant. See [Granting tools to every minted
+task](auto-tasks.md#granting-tools-to-every-minted-task) and inspect the
+stored grant with `orbit auto-task show <name>`.
+
+`orbit update` run inside an initialized workspace immediately runs
+`migrate --confirm` followed by `workspace sync` as post-replacement
+convergence. Run from a directory that is not inside any initialized workspace
+(with no `--root` or `ORBIT_ROOT` selecting one), both steps report skipped
+and no migration is applied. For the lockstep below, update every host first
+from outside the workspace, then migrate once:
+
+1. Inventory the owner and every host with a checkout that can open the
+   workspace. Stop active Orbit clients as required by the [upgrade
+   procedure](maintenance.md#persistent-mcp-clients-during-upgrades).
+2. On each host, from a directory that is not inside an initialized Orbit
+   workspace (for example `$HOME`), with no `--root` or `ORBIT_ROOT` override,
+   update Orbit while clients remain stopped. Check each installed
+   version with `orbit --version`; `orbit update --check` reports release
+   availability, not workspace compatibility. The JSON report showing
+   `"workspace_root": null` with the `migrate --confirm` and
+   `workspace sync` steps skipped is the expected signal that no migration
+   ran yet. Do not run `orbit update` from inside the shared workspace
+   checkout until every host is updated: that migrates the workspace on the
+   first host, ahead of the lockstep order, and the step 3 inspection then
+   reports nothing pending.
+3. After every host is on a compatible binary, use `orbit migrate` to inspect
+   pending changes and apply them with `orbit migrate --confirm` when needed.
+   Do not let an older host open a workspace after it reaches layout version 9.
+4. Run `orbit doctor` on each host and `orbit migrate` to confirm the workspace
+   opens cleanly and no migration remains pending. Reconnect clients only after
+   all hosts pass these checks.
+
+If the rollout is interrupted before migration, keep clients stopped until all
+hosts are updated. If any host still has an older binary after migration, update
+it before allowing it to open the workspace again.
+
 Task publications are the supported explicit snapshot path; ordinary source
 Git sync is not live task replication. Publication inspection preserves the
 snapshot's authority/freshness labels and does not import records.
@@ -96,20 +144,18 @@ orbit run auto --host <owner-name> --pull <workspace-name-or-ws_id> --for 8h
 Without `--host`, `--pull` requires the full host-qualified selector copied
 unchanged from federated discovery. Host-local commands such as `workspace`,
 `doctor` and `run show` do not accept this routing flag; use them on the
-execution host. Registration, the doctor's `hosts` row and the one-release
-legacy migration are in [remote-access.md](remote-access.md).
+execution host. Registration, the doctor's `hosts` row and retired
+destinations-file recovery are in [remote-access.md](remote-access.md).
 
 ## Scheduling and claims
 
 Cron routine definitions have no machine pin: every host with a registered owner
-checkout and an enabled clock evaluates them against its own store. These four
+checkout and an enabled clock evaluates them against its own store. These two
 seeded state routines declare `trigger.state.owner_machine` and
 `trigger.state.branch`:
 
 - `task-pilot`
-- `finding-verification`
-- `pilot-warning-triage`
-- `blocked-task-triage`
+- `resident-cycle`
 
 The pins are rendered from the seeding host's stable machine id and the
 registered base branch. Only that

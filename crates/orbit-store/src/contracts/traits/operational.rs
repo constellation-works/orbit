@@ -23,10 +23,11 @@ use crate::contracts::routine::{
 use crate::contracts::session_log::{SessionLogAppendParams, SessionLogEntry, SessionLogFilter};
 use crate::contracts::v2_audit::{
     V2AuditEventFilter, V2AuditEventInsertParams, V2AuditEventRow, V2AuditEventTailPage,
+    V2AuditKindForwardPayloads, V2AuditKindForwardQuery,
 };
 use crate::contracts::{
     AuditActorAggregate, AuditAttributionAggregate, AuditEventFilter, AuditEventInsertParams,
-    AuditRoleAggregate, AuditToolAggregate,
+    AuditRoleAggregate, AuditToolAggregate, AuditToolModelAggregate,
 };
 
 pub trait SessionLogStoreBackend: Send + Sync {
@@ -139,6 +140,18 @@ pub trait FrictionStoreBackend: Send + Sync {
         dedupe_key: &str,
         params: FrictionAddParams,
     ) -> Result<StoredFrictionRecord, OrbitError>;
+    /// Insert `params` unless a record listed by `filter` satisfies
+    /// `is_duplicate`; `Ok(None)` means a duplicate exists and nothing was
+    /// written. The list and the insert share one immediate write
+    /// transaction, so concurrent callers cannot both insert. Use it instead
+    /// of `add_or_reuse` when the duplicate test depends on more than the
+    /// body's dedupe key, such as the record's status.
+    fn add_unless_duplicate(
+        &self,
+        filter: &FrictionListFilter,
+        is_duplicate: &dyn Fn(&StoredFrictionRecord) -> bool,
+        params: FrictionAddParams,
+    ) -> Result<Option<StoredFrictionRecord>, OrbitError>;
     fn list(&self, filter: &FrictionListFilter) -> Result<Vec<StoredFrictionRecord>, OrbitError>;
     fn show(&self, id: &str) -> Result<Option<StoredFrictionRecord>, OrbitError>;
     /// Workspace IDs other than this store's that already hold `id`.
@@ -241,6 +254,13 @@ pub trait InvocationStoreBackend: Send + Sync {
         workspace: &str,
         run_id: &str,
     ) -> Result<Vec<crate::contracts::AgentExecutionRecord>, OrbitError>;
+    /// Launch identities in a workspace and date window, in launch order.
+    /// Unlike completed-invocation reads, this keeps launches whose
+    /// invocation never completed.
+    fn list_agent_executions(
+        &self,
+        query: &crate::contracts::AgentExecutionQuery,
+    ) -> Result<Vec<crate::contracts::AgentExecutionRecord>, OrbitError>;
 
     /// Records one invocation under `workspace_id`, the workspace whose run
     /// produced it. The caller supplies it from its own runtime binding, never
@@ -330,6 +350,17 @@ pub trait V2AuditStoreBackend: Send + Sync {
         body_kind: Option<&str>,
         per_run_limit: usize,
     ) -> Result<Vec<V2AuditEventRow>, OrbitError>;
+    /// Payload text for a kind-filtered forward scan, from one read snapshot.
+    ///
+    /// The window is the oldest `query.scan_limit` rows for the workspace,
+    /// run and source. Payloads come back only for `canonical_event_type` and
+    /// for event types outside `known_event_types`. `past_scan_limit` is
+    /// whether a further raw row exists; it does not depend on which payloads
+    /// were returned.
+    fn list_v2_audit_kind_forward_payloads(
+        &self,
+        query: &V2AuditKindForwardQuery<'_>,
+    ) -> Result<V2AuditKindForwardPayloads, OrbitError>;
     /// Run ids in `run_ids` that have at least one reconstructable v2 envelope
     /// row. Used to distinguish `unavailable` from `not_attempted`.
     fn list_v2_audit_run_ids_with_events(
@@ -354,6 +385,10 @@ pub trait AuditEventStoreBackend: Send + Sync {
         since: Option<&DateTime<Utc>>,
         tool: Option<&str>,
     ) -> Result<(i64, i64, i64, i64, f64, i64), OrbitError>;
+    /// Event count for `since`, without duration samples. Same population as
+    /// the total returned by [`Self::get_audit_event_stats`] when `tool` is
+    /// unset.
+    fn get_audit_event_count(&self, since: Option<&DateTime<Utc>>) -> Result<i64, OrbitError>;
     fn get_audit_event_durations(
         &self,
         since: Option<&DateTime<Utc>>,
@@ -379,6 +414,13 @@ pub trait AuditEventStoreBackend: Send + Sync {
         &self,
         since: &DateTime<Utc>,
     ) -> Result<Vec<AuditToolAggregate>, OrbitError>;
+    /// Callable tool calls in the same window, grouped by tool and
+    /// server-derived model. Does not change
+    /// [`Self::get_audit_event_aggregates_by_tool`].
+    fn get_audit_event_aggregates_by_tool_model(
+        &self,
+        since: &DateTime<Utc>,
+    ) -> Result<Vec<AuditToolModelAggregate>, OrbitError>;
     fn get_audit_event_aggregates_by_role(
         &self,
         since: &DateTime<Utc>,

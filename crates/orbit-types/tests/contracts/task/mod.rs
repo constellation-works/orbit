@@ -5,3 +5,4 @@ mod dependency_satisfaction;
 mod history_decisions;
 mod os_requirement;
 mod readiness;
+mod show_fields;

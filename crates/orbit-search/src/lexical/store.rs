@@ -1,9 +1,16 @@
 //! SQLite storage for task chunks and their FTS5 index.
-use super::{SOURCE_KIND_TASK, chunker::chunk_text, migration, task_fields::task_fields};
+use super::{
+    SOURCE_KIND_TASK,
+    chunker::chunk_text,
+    migration,
+    task_fields::{TaskSidecarSearchText, task_fields_with_sidecars},
+};
 use orbit_common::OrbitError;
+use orbit_common::text::contains_lowercased;
 use orbit_types::task::Task;
 use rusqlite::{Connection, params};
 use serde::Serialize;
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -12,6 +19,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 pub struct LexicalStore {
     conn: Arc<Mutex<Connection>>,
     fts_queries: Arc<AtomicU64>,
+    read_only: bool,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchIndexStats {
@@ -23,16 +31,22 @@ fn err(error: rusqlite::Error) -> OrbitError {
 }
 impl LexicalStore {
     pub fn open(path: &Path) -> Result<Self, OrbitError> {
-        let conn = orbit_common::storage::sqlite::open_private(path)?.connection;
+        let opened = orbit_common::storage::sqlite::open_private(path)?;
+        let mut read_only = opened.read_only;
+        let conn = opened.connection;
         if let Err(error) = migration::ensure_schema(&conn) {
             if !error.is_readonly_or_access_failure() || !migration::schema_present(&conn)? {
                 return Err(error);
             }
+            // The schema is already built, so reads proceed; a storage layer
+            // that refused the migration write will refuse index writes too.
+            read_only = true;
             tracing::warn!(%error, "search index migration requires writable storage");
         }
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             fts_queries: Arc::new(AtomicU64::new(0)),
+            read_only,
         })
     }
     pub fn open_read_only(path: &Path) -> Result<Self, OrbitError> {
@@ -41,6 +55,7 @@ impl LexicalStore {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             fts_queries: Arc::new(AtomicU64::new(0)),
+            read_only: true,
         })
     }
     pub fn open_in_memory() -> Result<Self, OrbitError> {
@@ -49,7 +64,15 @@ impl LexicalStore {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             fts_queries: Arc::new(AtomicU64::new(0)),
+            read_only: false,
         })
+    }
+    /// Whether this connection can never write: it was opened read-only, or
+    /// its storage refused writes at open (a read-only mount or sandbox).
+    /// Callers that index best-effort on every task write check this instead
+    /// of attempting a write that is known to fail. [ORB-24077]
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
     }
     pub(super) fn connection(&self) -> Arc<Mutex<Connection>> {
         Arc::clone(&self.conn)
@@ -75,19 +98,110 @@ impl LexicalStore {
             .map_err(err)
     }
     pub fn index_task(&self, task: &Task) -> Result<usize, OrbitError> {
+        self.index_task_with_sidecars(task, &TaskSidecarSearchText::default(), false)
+    }
+    /// [`Self::index_task`] also indexing the task's comment bodies and
+    /// artifact paths, and recording that coverage: search may then answer
+    /// this task's substring supplement from the index alone instead of
+    /// reading its bundle documents.
+    pub fn index_task_with_sidecar_text(
+        &self,
+        task: &Task,
+        sidecars: &TaskSidecarSearchText,
+    ) -> Result<usize, OrbitError> {
+        self.index_task_with_sidecars(task, sidecars, true)
+    }
+    fn index_task_with_sidecars(
+        &self,
+        task: &Task,
+        sidecars: &TaskSidecarSearchText,
+        sidecar_coverage: bool,
+    ) -> Result<usize, OrbitError> {
+        // Chunk first so a write that leaves indexed text unchanged (status,
+        // comment or history-only updates) skips the write transaction
+        // entirely instead of churning identical FTS postings.
+        let mut desired = desired_task_chunks(task, sidecars);
+        desired.sort();
         let mut conn = self.lock()?;
+        // Served by chunks_by_address(source_kind, source_id, field, chunk_idx).
+        let mut stored = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT field, chunk_idx, content FROM chunks \
+                     WHERE source_kind = ?1 AND source_id = ?2 \
+                     ORDER BY field, chunk_idx",
+                )
+                .map_err(err)?;
+            let rows = stmt
+                .query_map(params![SOURCE_KIND_TASK, task.id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })
+                .map_err(err)?;
+            let mut stored = Vec::new();
+            for row in rows {
+                stored.push(row.map_err(err)?);
+            }
+            stored
+        };
+        stored.sort();
+        // Any difference — including no stored chunks, so a task left
+        // unindexed by an earlier failure is still repaired by its next
+        // write — takes today's delete-and-insert path below. Unchanged
+        // chunks still record this call's coverage: chunk equality does not
+        // imply coverage equality (empty sidecars add no chunks), so a
+        // task-only write must drop sidecar coverage and a sidecar write
+        // must claim it without any chunk change.
+        if !stored.is_empty() && stored == desired {
+            record_coverage(&conn, &task.id, coverage_version(sidecar_coverage))?;
+            return Ok(stored.len());
+        }
         let tx = conn.transaction().map_err(err)?;
         tx.execute(
             "DELETE FROM chunks WHERE source_kind = ?1 AND source_id = ?2",
             params![SOURCE_KIND_TASK, task.id],
         )
         .map_err(err)?;
-        let count = insert_task(&tx, task)?;
+        let count = insert_task(&tx, task, sidecars)?;
+        record_coverage(&tx, &task.id, coverage_version(sidecar_coverage))?;
         tx.commit().map_err(err)?;
         Ok(count)
     }
     /// Replace the entire task corpus atomically, including stale sources.
     pub fn reindex_tasks(&self, tasks: &[Task]) -> Result<SearchIndexStats, OrbitError> {
+        let records = tasks
+            .iter()
+            .map(|task| (task, TaskSidecarSearchText::default(), false))
+            .collect::<Vec<_>>();
+        self.reindex_task_records(&records)
+    }
+    /// [`Self::reindex_tasks`] with each task's sidecar text where the
+    /// caller could read it: `Some` records sidecar coverage for that
+    /// task, `None` rebuilds it from its task fields at the lesser
+    /// coverage, all in the one rebuild transaction.
+    pub fn reindex_tasks_with_sidecar_text(
+        &self,
+        tasks: &[(Task, Option<TaskSidecarSearchText>)],
+    ) -> Result<SearchIndexStats, OrbitError> {
+        let records = tasks
+            .iter()
+            .map(|(task, sidecars)| {
+                (
+                    task,
+                    sidecars.clone().unwrap_or_default(),
+                    sidecars.is_some(),
+                )
+            })
+            .collect::<Vec<_>>();
+        self.reindex_task_records(&records)
+    }
+    fn reindex_task_records(
+        &self,
+        records: &[(&Task, TaskSidecarSearchText, bool)],
+    ) -> Result<SearchIndexStats, OrbitError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction().map_err(err)?;
         tx.execute(
@@ -95,23 +209,122 @@ impl LexicalStore {
             [SOURCE_KIND_TASK],
         )
         .map_err(err)?;
+        if migration::table_exists(&tx, "source_index_coverage")? {
+            tx.execute(
+                "DELETE FROM source_index_coverage WHERE source_kind = ?1",
+                [SOURCE_KIND_TASK],
+            )
+            .map_err(err)?;
+        }
         let mut chunks = 0;
-        for task in tasks {
-            chunks += insert_task(&tx, task)?;
+        for (task, sidecars, sidecar_coverage) in records {
+            chunks += insert_task(&tx, task, sidecars)?;
+            record_coverage(&tx, &task.id, coverage_version(*sidecar_coverage))?;
         }
         tx.commit().map_err(err)?;
         Ok(SearchIndexStats {
             chunks,
-            tasks: tasks.len(),
+            tasks: records.len(),
         })
     }
+    /// The task ids whose chunks carry sidecar coverage (comment bodies
+    /// and artifact paths): the tasks a substring search may answer from
+    /// this index without reading bundle documents. Coverage also claims
+    /// freshness: every write that changes searchable text replaces the
+    /// task's chunks (recording coverage anew) before it returns, so a
+    /// covered id's chunks hold its current text. Tasks indexed before
+    /// coverage was recorded, or only ever through [`Self::index_task`], are
+    /// absent until a sidecar-aware reindex or task write covers them.
+    pub fn sidecar_indexed_task_ids(&self) -> Result<BTreeSet<String>, OrbitError> {
+        let conn = self.lock()?;
+        if !migration::table_exists(&conn, "source_index_coverage")? {
+            return Ok(BTreeSet::new());
+        }
+        let mut stmt = conn
+            .prepare(
+                "SELECT source_id FROM source_index_coverage \
+                 WHERE source_kind = ?1 AND fields_version >= ?2",
+            )
+            .map_err(err)?;
+        let rows = stmt
+            .query_map(params![SOURCE_KIND_TASK, FIELDS_VERSION_SIDECARS], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(err)?;
+        let mut ids = BTreeSet::new();
+        for row in rows {
+            ids.insert(row.map_err(err)?);
+        }
+        Ok(ids)
+    }
+    /// The task ids with a chunk containing `query` as a substring, with the
+    /// bundle matcher's case-insensitive, diacritics-intact semantics.
+    /// ASCII queries of three or more characters go through the trigram
+    /// index as one phrase over the raw chunk text, so internal whitespace
+    /// must match exactly. Shorter queries (which form no trigram),
+    /// non-ASCII queries and stores opened read-only before the trigram
+    /// table existed scan chunk text in Rust with
+    /// [`contains_lowercased`]: SQLite's `lower()` folds ASCII only, while
+    /// the bundle matcher folds Unicode on both the stored text and the
+    /// query, and only the Rust scan makes the two sides equivalent for
+    /// needles such as `ÉN`. Still no bundle reads either way.
+    pub fn substring_task_ids(&self, query: &str) -> Result<BTreeSet<String>, OrbitError> {
+        let conn = self.lock()?;
+        let use_trigram = query.chars().count() >= 3
+            && query.is_ascii()
+            && migration::table_exists(&conn, "corpus_substring_fts")?;
+        if !use_trigram {
+            let lowered = query.to_lowercase();
+            let mut stmt = conn
+                .prepare("SELECT source_id, content FROM chunks WHERE source_kind = ?1")
+                .map_err(err)?;
+            let rows = stmt
+                .query_map(params![SOURCE_KIND_TASK], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(err)?;
+            let mut ids = BTreeSet::new();
+            for row in rows {
+                let (source_id, content) = row.map_err(err)?;
+                if contains_lowercased(&content, &lowered) {
+                    ids.insert(source_id);
+                }
+            }
+            return Ok(ids);
+        }
+        let needle = format!("\"{}\"", query.replace('"', "\"\""));
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT chunks.source_id FROM corpus_substring_fts \
+                 JOIN chunks ON chunks.id = corpus_substring_fts.rowid \
+                 WHERE corpus_substring_fts MATCH ?1 AND chunks.source_kind = ?2",
+            )
+            .map_err(err)?;
+        let rows = stmt
+            .query_map(params![needle, SOURCE_KIND_TASK], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(err)?;
+        let mut ids = BTreeSet::new();
+        for row in rows {
+            ids.insert(row.map_err(err)?);
+        }
+        Ok(ids)
+    }
     pub fn delete_source(&self, kind: &str, id: &str) -> Result<(), OrbitError> {
-        self.lock()?
-            .execute(
-                "DELETE FROM chunks WHERE source_kind = ?1 AND source_id = ?2",
+        let conn = self.lock()?;
+        conn.execute(
+            "DELETE FROM chunks WHERE source_kind = ?1 AND source_id = ?2",
+            params![kind, id],
+        )
+        .map_err(err)?;
+        if migration::table_exists(&conn, "source_index_coverage")? {
+            conn.execute(
+                "DELETE FROM source_index_coverage WHERE source_kind = ?1 AND source_id = ?2",
                 params![kind, id],
             )
             .map_err(err)?;
+        }
         Ok(())
     }
     pub fn stats(&self) -> Result<SearchIndexStats, OrbitError> {
@@ -129,21 +342,73 @@ impl LexicalStore {
             .map_err(err)
     }
 }
-fn insert_task(conn: &Connection, task: &Task) -> Result<usize, OrbitError> {
+/// Coverage of a task indexed from its [`Task`] fields alone.
+const FIELDS_VERSION_TASK_ONLY: i64 = 1;
+/// Coverage of a task also indexed with its comment bodies and artifact
+/// paths: every field the bundle matcher reads is in `chunks`. Version 2
+/// chunks joined words with single spaces and answered short needles with
+/// SQLite's ASCII-only `lower()`, so they do not preserve raw-whitespace
+/// or Unicode substring matches; only version 3 (raw-preserving chunks)
+/// counts as covered, and earlier rows fall back to the bundle matcher
+/// until a write or reindex rebuilds them.
+const FIELDS_VERSION_SIDECARS: i64 = 3;
+
+/// The coverage version an index write records: sidecar coverage only when
+/// the caller indexed the sidecar text.
+fn coverage_version(sidecar_coverage: bool) -> i64 {
+    if sidecar_coverage {
+        FIELDS_VERSION_SIDECARS
+    } else {
+        FIELDS_VERSION_TASK_ONLY
+    }
+}
+
+fn record_coverage(
+    conn: &Connection,
+    task_id: &str,
+    fields_version: i64,
+) -> Result<(), OrbitError> {
+    if !migration::table_exists(conn, "source_index_coverage")? {
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT INTO source_index_coverage(source_kind, source_id, fields_version) \
+         VALUES (?1, ?2, ?3) \
+         ON CONFLICT(source_kind, source_id) DO UPDATE SET fields_version = excluded.fields_version",
+        params![SOURCE_KIND_TASK, task_id, fields_version],
+    )
+    .map_err(err)?;
+    Ok(())
+}
+
+/// The `(field, chunk_idx, content)` rows [`insert_task`] would write for
+/// this task, in field order. The skip check in
+/// [`LexicalStore::index_task`] sorts a copy for comparison against the
+/// stored rows; the write path inserts this order unchanged.
+fn desired_task_chunks(
+    task: &Task,
+    sidecars: &TaskSidecarSearchText,
+) -> Vec<(String, i64, String)> {
+    let mut out = Vec::new();
+    for field in task_fields_with_sidecars(task, sidecars) {
+        for (idx, chunk) in chunk_text(&field.text).iter().enumerate() {
+            out.push((field.field.clone(), idx as i64, chunk.clone()));
+        }
+    }
+    out
+}
+
+fn insert_task(
+    conn: &Connection,
+    task: &Task,
+    sidecars: &TaskSidecarSearchText,
+) -> Result<usize, OrbitError> {
     let mut count = 0;
     let mut stmt = conn.prepare_cached("INSERT INTO chunks(source_kind, source_id, field, chunk_idx, content) VALUES (?1, ?2, ?3, ?4, ?5)").map_err(err)?;
-    for field in task_fields(task) {
-        for (idx, chunk) in chunk_text(&field.text).iter().enumerate() {
-            stmt.execute(params![
-                SOURCE_KIND_TASK,
-                task.id,
-                field.field,
-                idx as i64,
-                chunk
-            ])
+    for (field, idx, chunk) in desired_task_chunks(task, sidecars) {
+        stmt.execute(params![SOURCE_KIND_TASK, task.id, field, idx, chunk])
             .map_err(err)?;
-            count += 1;
-        }
+        count += 1;
     }
     Ok(count)
 }

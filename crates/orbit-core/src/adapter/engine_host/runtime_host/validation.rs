@@ -150,11 +150,6 @@ pub(super) fn generated_paths(runtime: &OrbitRuntime) -> Vec<orbit_engine::Gener
         .collect()
 }
 
-pub(super) fn agent_stall_window(runtime: &OrbitRuntime) -> Option<std::time::Duration> {
-    let minutes = runtime.context.agent_stall_minutes();
-    (minutes > 0).then(|| std::time::Duration::from_secs(u64::from(minutes) * 60))
-}
-
 pub(super) fn admit_owed_criteria(
     runtime: &OrbitRuntime,
     task_id: &str,

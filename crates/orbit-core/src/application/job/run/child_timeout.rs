@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 
 use super::actions::{CancellationRequest, cancellation_note};
-use super::owner::signal_run_owner_process;
+use super::owner::signal_run_owner_confirmed;
 use super::types::JobRunCancelResult;
 
 /// `source` recorded on the cancellation of a child its parent stopped
@@ -50,7 +50,7 @@ impl OrbitRuntime {
                 block_task: false,
                 keep_candidate: true,
             },
-            signal_run_owner_process,
+            signal_run_owner_confirmed,
             0,
         )
     }

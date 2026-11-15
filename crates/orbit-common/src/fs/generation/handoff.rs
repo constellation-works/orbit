@@ -70,10 +70,21 @@ fn installed_if_replaced() -> Option<PathBuf> {
 /// running image and supports `capability`. A candidate whose completed probe
 /// refused is probed again only once the installation changes again; one that
 /// did not answer in time is probed again at the next idle boundary.
+///
+/// Without a replacement, it is this process's own installed executable when
+/// an updater that renames nothing asked the participants already running it
+/// to hand over in place (see [`GenerationUpdate::acquire_current`]): the
+/// image is the one running, so it resumes whatever this process registered.
+///
+/// [`GenerationUpdate::acquire_current`]: super::GenerationUpdate::acquire_current
 pub fn handover_target(capability: Option<&str>) -> Option<PathBuf> {
     static REFUSED: Mutex<Option<RefusedKey>> = Mutex::new(None);
-    let installed = replaced_installation()?;
-    judge_candidate(&REFUSED, installed, capability, PROBE_TIMEOUT)
+    match replaced_installation() {
+        Some(installed) => judge_candidate(&REFUSED, installed, capability, PROBE_TIMEOUT),
+        None => super::admission::refresh_requested_for_this_process(capability)
+            .then(std::env::current_exe)
+            .and_then(Result::ok),
+    }
 }
 
 /// A refused candidate: its path, modification time and length.

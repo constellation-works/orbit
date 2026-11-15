@@ -36,6 +36,7 @@ pub(crate) const INVOCATION_INSERT_COLUMNS: &[&str] = &[
     "provider_cost_usd",
     "account",
     "long_prompt_requests_json",
+    "tool_calls_incomplete",
 ];
 
 /// `INSERT INTO invocations(...) VALUES (?1, ...)` rendered from
@@ -91,6 +92,7 @@ impl Store {
                 params.trace.provider_cost_usd,
                 params.account,
                 long_prompt_requests_json,
+                params.trace.tool_calls_incomplete,
             ],
         )
         .map_err(sqlite_store_error)?;

@@ -413,7 +413,7 @@ test('an unregistered checkout reads the owner the federated MCP names when owne
   on('process.run', (_$, e) => {
     ran.push([...e.argv])
     const reply = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
-    if (e.argv[0] === '/bin/sh' && (e.argv[2] ?? '').includes('mcp-destinations.toml')) return reply('[[destinations]]\nssh = "fed-box"\nmachine_id = "hm_1"\n')
+    if (e.argv[0] === '/bin/sh' && (e.argv[2] ?? '').includes('hosts.toml')) return reply('schema_version = 1\n[[hosts]]\nname = "fed-box"\ntask_prefix = "FB"\nssh = "fed-box"\nmachine_id = "hm_1"\n')
     if (e.argv[0] === 'git') return reply('/work/demo\n')
     if (e.argv[0] === 'ssh') return reply(JSON.stringify((e.argv.at(-1) ?? '').includes("'done'") ? [] : TASKS))
     return reply(JSON.stringify({ registered: false, workspace: null, checkout: null }))

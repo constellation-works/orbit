@@ -60,6 +60,7 @@ pub(super) fn settle_partition(
         match settle_task(
             context,
             applied,
+            partition.index,
             task_id,
             assessment,
             &prepared_before[task_id],

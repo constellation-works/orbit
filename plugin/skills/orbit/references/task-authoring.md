@@ -20,13 +20,42 @@ pickup. Do not confuse a task description with a design document or a transcript
   slice to demonstrate behavior that needs its downstream consumer: use the
   agreed interface and isolated fixtures, and assign end-to-end proof to integration.
 - **Decisions and constraints:** separate settled product choices from choices the
-  implementer can make. Include compatibility, authority, rollout or resource
-  constraints only where they affect this task. Ask for a consequential missing
-  decision; do not ask for permission to make ordinary implementation choices.
+  implementer can make. Before filing, resolve every consequential policy or
+  contract choice named by the task, including either/or policy, ownership or
+  sign-off, and contract-scope choices. Record the selected option and its
+  authority or basis in the description; acceptance criteria must describe that
+  outcome instead of asking the implementer to choose. If only an operator can
+  decide, make the handoff the task's explicit outcome: name the decision owner,
+  the choice or action they own, and what work waits for their answer. File a
+  finite-choice handoff as a human-crew decision task with `orbit.decision` (see
+  [Work only a human can do](#work-only-a-human-can-do)), and add a
+  dependency from the implementation task. Keep ordinary implementation choices
+  delegated.
+- **Data and contract semantics:** for analytics or listing tasks, state in the
+  acceptance criteria the denominator (or eligible record set), how absent, null
+  and empty values differ for relevant fields, and how legacy records are
+  treated. Example: “Completion rate uses all non-archived tasks; an absent or
+  null owner is unknown, an empty owner is unassigned, and legacy rows without
+  the owner field are unknown.”
 - **Acceptance:** define observable behavior and evidence, including important
   refusal/negative cases. Commands are validation methods, not substitutes for an
   expected result. Distinguish implemented, tested, merged and deployed when those
   differ; do not make an implementation task require an unauthorized live rollout.
+- **Timing and performance criteria:** a timing criterion must be stable under
+  re-measurement of an unchanged binary: repeated measurement of the same binary
+  on the same fixture must not be able to flip it across its bound. Specify a
+  re-measurement-stable protocol — a fixed fixture (same input, host class and
+  build), warmup and sample counts, the number of independent repetitions and
+  how they are aggregated, and a bound whose margin exceeds the spread shown by
+  repeated measurement of an unchanged binary (a no-change control) — or state
+  an absolute budget a lane can check deterministically (for example, p95 at
+  most a named duration over a named number of paced samples on the fixed
+  fixture). Never file a single warm p95 ratio at a hard threshold (such as
+  candidate/base <= 0.67 from one warm run each) as the sole acceptance gate;
+  a ratio may support a stable gate, but cannot be that gate on one measurement.
+  When no such stable bound is known yet, make the timing result informational,
+  gate on a deterministic proxy (operation, request or payload counts), or file
+  a measurement task first that establishes the fixture, spread and margin.
 
 Split work when independently deliverable outcomes or real dependency boundaries
 justify it. A coherent cross-layer change can remain one task; file count and
@@ -40,15 +69,17 @@ in the description or acceptance criteria, preferably also with
 `relations: [{"type":"resolves","target":"<friction-id>"}]`. Targets are
 workspace-local. Landing resolves open or triaged records, preserves their
 original bodies, and appends the task, delivered commit, PR number and time.
-Already-resolved records stay unchanged; the task history records resolutions
-and failed writes for retry.
+Already-resolved records stay unchanged. The move to `done` commits each target
+as owed in the task history, so a failed write or a crash is retried by the
+task's next write with the original delivery evidence.
 
 Treat a criterion such as "Friction <friction-id> is resolved with the merge
 sha" as a landing obligation. The implementer proves the repair and hands it
 off; the owner supplies the merge evidence after delivery. Do not ask a worker
 to obtain a future merge SHA or write the owner's friction corpus. Local and
 already-landed handoffs use the candidate or covering commit; a verified
-no-diff handoff uses its synchronized base. These paths record PR `none`.
+no-diff handoff uses its synchronized base, and a final recovery's completion
+uses the covering commit it verified. These paths record PR `none`.
 Every valid friction ID in the description or criteria is a resolution target,
 including background citations, so mention unrelated reports in comments
 instead. See [friction](friction.md) for workspace ownership and retry rules.
@@ -67,7 +98,8 @@ instead. See [friction](friction.md) for workspace ownership and retry rules.
    evidence: deterministic fixtures for service/time/filesystem behavior,
    required repository gates, and explicit platform or operator handoffs where
    necessary. See [task fields](task-fields.md) for `required_tools` and capabilities.
-4. Create through `orbit.task.add` with `model` attribution. Required inputs are
+4. Create through `orbit.task.add`. Attribution is the session, not a `model`
+   argument. Required inputs are
    title, description, workspace and assessed complexity (`low`, `medium`, `hard`,
    `xhard`). An orchestrator also sets `origin`: `operator_request` when a human
    asked for the work (in chat or elsewhere outside Orbit), or
@@ -80,7 +112,10 @@ instead. See [friction](friction.md) for workspace ownership and retry rules.
    Creation does not approve promotion, dispatch or completion.
 5. Read the returned ID using `fields: ["id"]` or a JSON parser. Never truncate a
    write response with `head`/`cut`. If the result is uncertain, list/search before
-   retrying: a lost reply does not mean the task was not created.
+   retrying: a lost reply does not mean the task was not created. `fields: ["id"]`
+   returns the bare ID and cannot carry the optional `warnings` metadata (see
+   Warnings below); omit `fields` when warnings matter. Never put `warnings`
+   in `fields`: it is not a task field, and the add is refused before it is stored.
 6. Wire `dependencies` (and any `child_of` relation) with `orbit.task.update`
    on the returned ID; creation refuses `dependencies`.
 
@@ -91,11 +126,56 @@ orbit tool run orbit.task.add --input '{
   "acceptance_criteria": ["<behavior and evidence>"],
   "context_files": ["file:<verified-modification-target>"],
   "workspace": "<discovered-selector>",
-  "complexity": "medium", "type": "feature", "model": "<agent-family>",
+  "complexity": "medium", "type": "feature",
   "origin": "operator_request", "orchestrator": "<your-crew>",
   "fields": ["id"]
 }'
 ```
+
+### Bound the footprint and evidence before filing
+
+File only work the pilot can assess. Before creating the task, establish both
+halves of its input:
+
+- **Bounded selectors.** Every `context_files` entry is a verified creation,
+  modification or deletion target at the scoped revision: an existing file,
+  directory or symbol confirmed by inspection, or a known new target filed
+  with `allow_missing_context` and a stated creation intent. See Modification
+  footprint below for granularity, companions and wiring. Never file a sweep
+  of a directory or crate, read-only background, tests or fixtures only
+  consulted, or a shared reference doc as the footprint; background belongs
+  in the description. A task whose preparation must select the exact batch
+  paths cannot be filed until that batch is reconciled from readable
+  sources — an oldest-first selection with uncovered history, an unreadable
+  predecessor ledger, an unresolvable release reference — has no verified
+  footprint yet. File the smallest bounded investigation that establishes it
+  instead of the full repair, or leave the repair unfiled until the sources
+  are readable. This does not apply to a worker-selected batch inside an
+  already declared bounded footprint: when the brief assigns batch selection
+  to the executing worker and the task already carries the bounded template
+  footprint that brief names as the lock, that declared bound is the verified
+  footprint, and an unread predecessor ledger alone is neither an
+  unestablished footprint nor a reason to file an investigation instead; the
+  worker reconciles inside the kept bound at run time.
+- **Readable evidence references.** Every run, log, commit, ledger, tag or
+  predecessor artifact the description or criteria names must be readable
+  through the task record or the lane's granted tools. Quote the failing
+  command and its tested commit rather than a truncated excerpt: a truncated
+  log with no commit identifies no repair. Record each ledger's dates and
+  sources rather than citing it alone: an unreconciled ledger verifies no
+  preparation-selected batch. Resolve release tags and predecessor artifacts
+  before filing. An unreadable footprint-defining reference is a filing
+  block. Make it readable or re-scope the task. Never file the repair
+  expecting the pilot to resolve it. Exception: for a worker-selected batch
+  inside an already declared bounded footprint, an unread predecessor ledger
+  alone does not block filing; disclose the gap and the brief's documented
+  fallbacks in the description instead.
+- **Check the pilot's answer.** After filing, read the task's readiness and
+  the pilot assessment. A `selectors`, `verified_no_diff` or
+  `host_operational` disposition with its lock footprint is the filing proof.
+  An `unassessed` recommendation, or a holding unestablished-footprint
+  finding, means the filing failed this section. Attach the missing
+  selectors or evidence and request a new pilot assessment.
 
 Write the title as a concrete outcome that fits the commit subject. The pipeline
 writes the title as `<type>: <title>` and cuts that part at 72 characters with
@@ -108,13 +188,56 @@ Assign `crew` to the actual intended implementer. If you will implement the task
 personally, use your own configured crew rather than the crew you would have
 chosen for delegation. On an authorized takeover, correct a stale assignment
 before continuing; do not leave another crew named for work it is not doing.
-`model` is tool-call provenance (agent family), while `orchestrator` identifies
-who prepared/supervised the work; neither substitutes for execution `crew`.
-On `orbit.task.add`, `model` may be your full model id (`claude-opus-5-5`):
-`created_by` keeps the family and the full id is recorded once as
-`created_by_model`.
-`model` never sets `orchestrator_model`: that comes from the `orchestrator`
-crew's configuration unless you override it.
+Session identity is tool-call provenance (agent family), while `orchestrator`
+identifies who prepared/supervised the work; neither substitutes for execution
+`crew`. A managed run's `ORBIT_AGENT_MODEL`, or CLI `--model`, may be a full
+model id (`claude-opus-5-5`): `created_by` keeps the family and the full id is
+recorded once as `created_by_model`. MCP schemas do not take `model`.
+`orchestrator_model` comes from the `orchestrator` crew's configuration unless
+you override it; a caller-supplied `model` never sets it.
+
+### Work only a human can do
+
+Credentials, approvals, physical access and operator-only decisions go to the
+human, not an agent. Set `crew` to the human-kind crew. Find it with
+`orbit config show`, which lists a human crew with provider `human`, or
+`orbit config get crews.<name>.kind` (answers `human`). Choose the sole human
+crew, or the one matching the affected operator; if several are ambiguous, use
+the fallback. A human crew never bypasses an agent gate: the task is never
+dispatched, and an agent still cannot close it.
+
+With no matching human crew, do not assign an agent. File a setup chore tagged
+`setup`, `needs-operator` and `no-auto-approve` that asks the operator to add
+a human crew (`orbit init --human-name <name>`), and leave it `proposed`.
+
+Keep the body short; nobody reads a wall of text. In plain words, it has:
+
+1. a 1-2 line what and why;
+2. numbered steps;
+3. every command in its own fenced `sh` block, ready to copy and run;
+4. a closing `Verify:` line with one fenced command.
+
+Put long evidence in a task artifact, not the body. Filing a human-crew task
+returns a warning for missing numbered steps, no fenced block, no `Verify`
+block, or a body over 2000 characters; fix the body with `orbit.task.update`.
+Example:
+
+````text
+Rotate the expired GitHub token on the CI host; CI sweeps fail without it.
+
+1. Create a token: https://github.com/settings/tokens (repo, workflow)
+2. Install it:
+
+```sh
+gh auth login --with-token < token.txt
+```
+
+Verify:
+
+```sh
+gh auth status
+```
+````
 
 Implicit complexity, tag and context-file edits preserve the crew and crew source
 of admitted work, including work awaiting setup, in progress or under review.
@@ -171,10 +294,21 @@ To route a task an auto-task or a sweep already minted, retag it with
 
 ```bash
 orbit tool run orbit.task.update --input '{"id": "<task-id>",
-  "tags": ["<existing tags>", "os:macos"], "workspace": "<selector>", "model": "<agent-family>"}'
+  "tags": ["<existing tags>", "os:macos"], "workspace": "<selector>"}'
 ```
 
 The next admission honours it. A task already running or claimed is not moved.
+
+## `no-drain` tag for orchestrator-owned work
+
+Tag a task `no-drain` when you file it for your own session to implement, so a
+live drain does not race you for it. No `orbit run auto` drain, pull-drain
+follower or automatic admission pass admits it (readiness reports
+`no_drain_tag`), and drain-window auto-approval never approves it — it implies
+`no-auto-approve`, though task-pilot may still assess it. An explicit
+`orbit run ship <id>` and an interactive claim still work. Remove the tag with
+`orbit.task.update` (full tag list without `no-drain`) to make it drain-eligible
+again.
 
 ## UI tag
 
@@ -193,7 +327,7 @@ start the task only on a host whose kit is verified, and an owner hands a
 pull-drain claim only to a follower that reports one. Elsewhere the task stays
 in `backlog` as `browser_kit_missing`, with the wait named in readiness,
 `orbit run show` and the dashboard Drain card (`waits for a host with the
-browser kit (ui)`, naming `orbit browser-kit install`), and `orbit doctor`
+browser kit (ui)`, naming `orbit config browser-kit install`), and `orbit doctor`
 warns on a host whose own kit is what the task waits for. The requirement
 combines with `os:` tags and the crew's executor OS: a host must satisfy all
 of them, and the OS wait is named first. Only the exact `ui` tag routes,
@@ -241,8 +375,9 @@ Either way the PR is gated only by the required hosted checks.
 
 Set them when you file the task, or as an operator. An agent's update, the
 implementer's own included, cannot add either tag to an existing task.
-Naming an agent model on the update is enough, even when the process has no
-agent environment.
+A session crew (`ORBIT_AGENT_*` or the `--orchestrator` crew), CLI `--model`,
+or an unadvertised tool `model` key counts as that agent, even when the
+process has no agent environment.
 
 A tag applies only while every path the final candidate changes matches
 `workflow.light_delivery_paths`. By default that is documentation, CI
@@ -331,6 +466,40 @@ exist follows the creation-intent rules below; without that authorization,
 name it as an evidence gap rather than declaring its missing selector, and
 never invent a filename.
 
+A builtin MCP tool surface change has companions that authors usually do not
+declare. When a plan adds, removes or renames a builtin MCP tool, changes its
+advertised placement, or changes its id route, locate these companions at the
+revision being scoped (`rg -l` on the named test or table, `rg --files` for a
+named golden file) and declare each as a `file:` selector in a workspace that
+keeps them. Four kinds apply:
+
+- The handwritten exact advertised-name list, asserted by the test
+  `canonical_builtin_definitions_preserve_the_exact_workspace_surface`, changes
+  with an advertised add, remove, rename or placement change. Its id-route
+  tables, asserted by `every_builtin_id_route_is_declared_and_preserves_the_former_tables`,
+  change with an id-route change. Declare that fixture for either.
+- The derived golden `authorization_matrix.json`, asserted by the test
+  `authorization_matrix_matches_live_registry`, has one row per registered
+  builtin, advertised or not, and per governed operation. Declare it when a
+  builtin tool is added, removed or renamed; placement and id-route changes alone
+  do not change it. Regenerate it with the workspace's documented golden command
+  and review the diff; never hand-edit it.
+- The handwritten `GOVERNED_TOOL_PLACEMENT` table, asserted against the live
+  registry in the same test module, must be inspected for each such plan. Declare
+  its file only when the table must change: a placement change, or a governed
+  tool operation added, removed or renamed.
+- The claimed-worker routing match in `worker_tools.rs`
+  (`src/adapter/tool_host/worker_tools.rs` in the `orbit-core` crate; declare
+  it as the workspace-relative `file:` selector for that path), routed by the
+  exhaustive `worker_route` match (`worker_tools.rs:51-150`; the file header
+  notes a new tool family or verb must be placed there before the crate
+  compiles). Declare its `file:` selector when the plan adds, removes or
+  renames a builtin orbit.* tool or verb. A placement or id-route change alone
+  does not change it.
+
+A body-only tool edit that keeps the name, verbs, placement and id route
+declares none of these.
+
 When the planned change establishes a new or renamed action, or a changed
 cross-module interface, follow it through the existing registration wiring
 it requires and declare the exact existing sites that source evidence shows
@@ -346,12 +515,26 @@ follows the creation-intent rules below; without that authorization, name it
 as an evidence gap rather than declaring its missing selector, and never
 predict an unspecified new filename.
 
+When the plan creates a new Rust source or test file in a directory whose
+existing declaration file (`main.rs`, `mod.rs`, `lib.rs` or `<dir>.rs`)
+must declare it with a `mod` statement, declare that existing file with
+`file:` and record the reason in the description or authoring evidence.
+The new file itself stays under the creation-authorization rule below; the
+declaration file exists at the pinned revision, so declaring it does not
+predict a new filename. Do not declare a declaration file for a file the
+build discovers automatically, such as a crate-root `tests/*.rs` binary.
+A body-only edit to an existing module adds no declaration selector.
+
 For review-filed tasks, task-pilot keeps selectors the finding names as change
 targets. It may omit a selector it verifies as read-only evidence or an
 incidental shared-doc touch by recording its exact selector and inspection
 reason in `context_evidence_dropped`. Apply validates each record against
 omitted, resolving review selectors and saves it in the assessment audit;
-unexplained omissions remain in filed order as `context_evidence_retained`.
+for `selectors`, unexplained omissions remain in filed order as
+`context_evidence_retained`. A `verified_no_diff` review assessment validates
+the same drop records against its prepared scope at the inspection revision,
+then keeps its empty footprint. Drop reasons do not replace the existing
+already-landed or invalid-finding proof.
 A record cannot override a proposed change target or an operator-declared
 creation target. Keep evidence references in the finding's description.
 
@@ -372,6 +555,36 @@ containment and file/directory kind are still checked, and comments, plans or
 agent proposals never grant intent. When task-pilot reports a missing selector
 that carries no such record, re-declare it through that update path.
 
+### Split, migration and other tasks that create files
+
+This rule binds every filer — an operator, an orchestrator, a review, QA or
+health sweep, and any other auto-task template — not only the implementer who
+later creates the file. Before calling `orbit.task.add` for a split, a move or
+migration, a deduplication that unifies copies into a new module, or any other
+task whose outcome creates a file:
+
+1. Scan the draft title, description, scope and acceptance criteria for every
+   path the task names as new, moved-to, split-out or to-be-created. Naming a
+   new file only in prose grants nothing.
+2. List each such path exactly once as its canonical `file:` selector (or
+   `dir:` for a new directory) in `context_files`, alongside the verified
+   existing targets, and file with `allow_missing_context: true`. That call —
+   not a later update, comment or plan — records `context_creation_authorized`
+   for each exact missing selector at filing time.
+3. If an exact destination cannot be named yet, do not file the task. Record
+   the unnamed destination as an evidence gap in your own execution summary or
+   artifact instead; never file first and leave task-pilot to hold promotion
+   for an operator to authorize a footprint the filer could have granted.
+4. Read the filed task back with `orbit.task.show` and confirm its history
+   carries the creation grant for each new path before recording the task as
+   filed. A filed task naming a new file with no such grant is a filing
+   defect: reauthorize it immediately through `orbit.task.update` with the
+   full `context_files` list plus `allow_missing_context: true`, and say so
+   in your summary.
+
+Omitting `allow_missing_context` is correct only when the task creates
+nothing: every `context_files` selector then names an existing target.
+
 A worker updating its own task through `orbit.task.update` or `orbit task
 update` from its run's linked worktree gets the existence relaxation
 automatically for that task, without recording creation intent, and the
@@ -385,6 +598,11 @@ on add, approval, or updates to status, tags, context files or complexity:
 a backlog task with no footprint; and on approval: task-pilot blockers).
 Comments and other metadata edits do not repeat the footprint warning;
 readiness remains visible in the task response. Warnings never refuse the write.
+`warnings` is optional write-response metadata: it is absent when empty and is
+returned only on an object response, so omit `fields` on the write to receive it.
+It is not a projection selector, so a request selecting `warnings` is refused
+before persistence; fix the request by dropping that selector rather than
+replaying a write that already succeeded.
 Missing-file selectors remain valid declarations; do not prune them because a
 checkout cannot yet resolve them. Empty context holds no context lock, so a
 drain or ship with more than one slot holds such a task: it waits for an
@@ -399,7 +617,7 @@ still holds its tasks until that run settles.
 empty `context_files` while a drain is live.** File it `proposed`, run the
 pilot or set selectors, then promote. On 2026-10-10 three tasks filed into a
 live four-slot drain's backlog with no selectors all edited
-`website/src/styles/custom.css` concurrently, and two of their runs were
+the website's then-shared stylesheet concurrently, and two of their runs were
 cancelled. Creation, approval and readiness-field updates warn when they leave
 such a task in the backlog.
 
@@ -411,6 +629,16 @@ blocks drain approval of a proposed task and is advisory in the backlog,
 where it names the missing file lock;
 `unassessed_complexity` blocks both. A `no-diff-expected` tag clears both.
 Read the gaps after filing and fix what blocks, or leave it to task-pilot.
+
+### When to skip the pilot
+
+Add `no-pilot` when filing a task only if its `context_files` footprint is exact,
+its complexity is assessed, its acceptance criteria are testable, and no dedupe
+question remains open. Leave the tag off when any of these is a guess. The tag
+opts out of the automatic pilot, not readiness checks or diff delivery; an
+operator can still request an explicit pilot. On a task a pilot has already
+assessed, the tag also lifts pilot admission holds, so adding it then is an
+operator's decision: an agent's update that adds it is refused.
 
 Put read-only designs, conventions and examples in prose links. A design document
 belongs in the footprint only if this task will change it. Cross-workspace edits

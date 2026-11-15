@@ -129,9 +129,9 @@ fn template_flags_preserve_unnamed_fields_and_full_tool_templates_still_replace(
     let replaced = fixture.json(&[
         "tool",
         "run",
-        "orbit.auto_task.update",
+        "orbit.auto_task",
         "--input",
-        r#"{"name":"field-patch","template":{"title":"Replacement title"}}"#,
+        r#"{"action":"update","name":"field-patch","template":{"title":"Replacement title"}}"#,
         "--json",
     ]);
     let template = &replaced["template"];
@@ -445,4 +445,46 @@ fn auto_task_settings_and_managed_bodies() {
         tracing::info!(case = name, "CLI contract row");
         check();
     }
+}
+
+/// The host-health body this change supersedes is already in body history
+/// (enabled-by-default revision). An install holding those bytes converges,
+/// and a copy an operator edited does not.
+#[test]
+fn host_health_previous_managed_body_converges_and_an_operator_edit_stays() {
+    let sources: Value = serde_json::from_str(include_str!(
+        "../fixtures/auto-task-body-history/sources.json"
+    ))
+    .unwrap();
+    let previous = sources["host-health"]["d0f99d14459ed86fb0873a5b49c18a3f13c22cc3"]
+        .as_str()
+        .expect("previous host-health body");
+    let fixture = Fixture::new();
+    let path = definition_path(&fixture, "host-health");
+    let bundled = fs::read_to_string(&path).unwrap();
+    assert_ne!(
+        previous, bundled,
+        "the shipped body must differ from the recorded previous body"
+    );
+    let seeded = fixture.json(&["auto-task", "show", "host-health", "--json"]);
+    assert_eq!(seeded["enabled"], true, "host-health still ships enabled");
+
+    let settings_edit = previous.replacen("  priority: medium", "  priority: high", 1);
+    assert_ne!(settings_edit, previous, "fixture must change a setting");
+    fs::write(&path, &settings_edit).unwrap();
+    let sync = fixture.json(&["workspace", "sync", "--json"]);
+    assert_eq!(sync_outcome(&sync, "host-health"), "migrated");
+    assert_eq!(fs::read_to_string(&path).unwrap(), bundled);
+    let shown = fixture.json(&["auto-task", "show", "host-health", "--json"]);
+    assert_eq!(shown["layering"]["body"], "managed");
+    assert_eq!(shown["enabled"], true);
+    assert_eq!(shown["template"]["priority"], "high");
+
+    let operator_edit = format!("# operator note: local procedure\n{previous}");
+    fs::write(&path, &operator_edit).unwrap();
+    let sync = fixture.json(&["workspace", "sync", "--json"]);
+    assert_eq!(sync_outcome(&sync, "host-health"), "preserved");
+    assert_eq!(fs::read_to_string(&path).unwrap(), operator_edit);
+    let shown = fixture.json(&["auto-task", "show", "host-health", "--json"]);
+    assert_eq!(shown["layering"]["body"], "forked");
 }

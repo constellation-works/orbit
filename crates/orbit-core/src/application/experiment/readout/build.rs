@@ -3,29 +3,93 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{ExperimentRecord, ExperimentStoreBackend as _};
+use orbit_types::workflow::TagInstructionRole;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::crew_memory::CREW_MEMORY_DREAM_TAG;
 use crate::application::experiment::assignment::{
     EXPLICIT_CREW_EXCLUSION, SURFACE_CONFLICT_EXCLUSION,
 };
-use crate::application::experiment::definition::{ExperimentOverlay, validate_metric};
+use crate::application::experiment::definition::{
+    ExperimentOverlay, Kind, METRIC_SPECS, experiment_metric_is_review_derived, metric_spec,
+    validate_metric,
+};
+use crate::application::experiment::memory_arm_names;
+use crate::application::experiment::overlay::instruction_role;
 use crate::application::experiment::readout::outcomes::{
-    METRIC_SPECS, Observed, Outcome, REGRESSION_WINDOW_DAYS, TaskOutcome, metric_spec,
+    Observed, Outcome, REGRESSION_WINDOW_DAYS, TaskOutcome,
 };
 
 use super::model::{
-    CrewCount, EXPERIMENT_READOUT_SCHEMA_VERSION, ExperimentReadout, GuardrailReadout, Lagging,
+    ArmDelivery, CrewCount, DreamingOverhead, EXPERIMENT_READOUT_SCHEMA_VERSION, ExperimentReadout,
+    GuardrailReadout, Lagging, MemoryRevisionStratum, MemoryTaskCapture, PerProtocolReadout,
     PrimaryObservation, ReadoutArm, ReadoutEnrollment, ReadoutExperiment, ReadoutMetric,
     ReadoutWarning, SAMPLE_RATIO_ALPHA, SampleRatio, SampleRatioSegment, SegmentCount,
 };
 use super::{metrics, stats, verdict};
+
+/// The dreaming cost a readout added, and where.
+struct DreamingAttribution {
+    arms: BTreeSet<String>,
+    /// The memory-arm tasks whose `cost_usd` carries a share.
+    measured: BTreeSet<String>,
+    summary: DreamingOverhead,
+}
+
+/// The label of the per-protocol view.
+const PER_PROTOCOL_LABEL: &str = "per-protocol (delivered runs only)";
+
+struct TreatmentRequirements {
+    roles: BTreeSet<TagInstructionRole>,
+    crew: bool,
+}
+
+/// Each non-control arm's dispatch roles, from its overlay definition: the
+/// roles whose steps must receive the overlay and succeed for a task to
+/// count as treated. Crew overlays additionally require admission evidence.
+fn arm_dispatch_roles(
+    record: &ExperimentRecord,
+) -> Result<BTreeMap<String, TreatmentRequirements>, OrbitError> {
+    let mut roles = BTreeMap::new();
+    for arm in record.arms.iter().filter(|arm| !arm.control) {
+        let overlay = ExperimentOverlay::parse(
+            &arm.name,
+            serde_json::from_str(&arm.overlay_json).map_err(|error| {
+                OrbitError::Store(format!("invalid experiment overlay: {error}"))
+            })?,
+        )?;
+        let targeted: BTreeSet<TagInstructionRole> = overlay
+            .dispatch_roles()
+            .into_iter()
+            .map(instruction_role)
+            .collect();
+        if !targeted.is_empty() || overlay.crew.is_some() {
+            roles.insert(
+                arm.name.clone(),
+                TreatmentRequirements {
+                    roles: targeted,
+                    crew: overlay.crew.is_some(),
+                },
+            );
+        }
+    }
+    Ok(roles)
+}
+
+/// The task received its arm's treatment in every role the overlay targets.
+fn delivered(task: &TaskOutcome, treatment: &TreatmentRequirements) -> bool {
+    task.admitted_treatment != Some(false)
+        && (!treatment.crew || task.admitted_treatment == Some(true))
+        && treatment.roles.is_subset(&task.delivered_roles)
+}
 
 fn build_readout(
     record: &ExperimentRecord,
     enrollment: ReadoutEnrollment,
     observed: &Observed,
     metric: Option<&str>,
+    min_delivered_rate: f64,
     now: DateTime<Utc>,
 ) -> Result<ExperimentReadout, OrbitError> {
     let experiment = &record.experiment;
@@ -53,10 +117,44 @@ fn build_readout(
         });
     }
 
+    let incomplete_first_edits = tasks
+        .iter()
+        .filter(|task| task.first_edit_trace_incomplete)
+        .count();
+    if incomplete_first_edits > 0 {
+        warnings.push(ReadoutWarning {
+            kind: "tool_trace_incomplete",
+            message: format!(
+                "{incomplete_first_edits} task(s) have a first implement invocation whose provider output outgrew the bounded capture, so only the end of its tool calls was kept. Their first-edit metrics are unmeasured."
+            ),
+        });
+    }
+    // A truncated later invocation leaves a complete first edit measured, so
+    // only the explorer uptake is in doubt for these tasks [ORB-20590].
+    let explorer_unobserved = tasks.iter().filter(|task| task.explorer_unobserved).count();
+    if explorer_unobserved > 0 {
+        warnings.push(ReadoutWarning {
+            kind: "explorer_trace_incomplete",
+            message: format!(
+                "{explorer_unobserved} task(s) have an implement invocation at or after assignment whose provider output outgrew the bounded capture, so only the end of its tool calls was kept. `tasks_with_explorer_call` cannot rule out an explorer call for the tasks counted in `tasks_explorer_unobserved`."
+            ),
+        });
+    }
+
+    let dispatch_roles = arm_dispatch_roles(record)?;
+    let shadow = record.experiment.mode == "shadow";
     let arms: Vec<ReadoutArm> = record
         .arms
         .iter()
-        .map(|arm| arm_readout(arm, tasks, observed.run_digests.get(&arm.name)))
+        .map(|arm| {
+            arm_readout(
+                arm,
+                tasks,
+                observed.run_digests.get(&arm.name),
+                dispatch_roles.get(&arm.name),
+                shadow,
+            )
+        })
         .collect();
     for arm in arms.iter().filter(|arm| arm.drifted) {
         warnings.push(ReadoutWarning {
@@ -114,25 +212,88 @@ fn build_readout(
         .primary_metric
         .as_deref()
         .and_then(|name| all_metrics.iter().find(|metric| metric.metric == name));
-    if let Some(primary) = primary
-        && !primary.measured
-    {
-        warnings.push(ReadoutWarning {
-            kind: "primary_unmeasured",
-            message: format!(
-                "the primary metric `{}` has no source series yet, so no verdict can be read on it",
+    if let Some(primary) = primary {
+        let active_arms: Vec<&str> = record
+            .arms
+            .iter()
+            .filter(|arm| arm.retired_segment.is_none())
+            .map(|arm| arm.name.as_str())
+            .collect();
+        let active_estimates: Vec<_> = primary
+            .arms
+            .iter()
+            .filter(|estimate| active_arms.contains(&estimate.arm.as_str()))
+            .collect();
+        let any_measured = active_estimates
+            .iter()
+            .any(|estimate| estimate.estimate.n > 0);
+        let unmeasured: Vec<_> = active_estimates
+            .iter()
+            .filter(|estimate| estimate.unmeasured > 0)
+            .collect();
+        let unmeasured_total: usize = unmeasured.iter().map(|estimate| estimate.unmeasured).sum();
+        if !any_measured && unmeasured_total > 0 {
+            let per_arm = unmeasured
+                .iter()
+                .map(|estimate| format!("`{}`: {}", estimate.arm, estimate.unmeasured))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut message = format!(
+                "the primary metric `{}` is unmeasured on every settled task in every active arm (settled and unmeasured per arm: {per_arm}), so no verdict can be read on it",
                 primary.metric
+            );
+            if experiment_metric_is_review_derived(&primary.metric)
+                && !tasks
+                    .iter()
+                    .filter(|task| active_arms.contains(&task.arm.as_str()))
+                    .any(|task| task.has_review_settlement)
+            {
+                message.push_str(": no enrolled task has a review gate settlement");
+            }
+            warnings.push(ReadoutWarning {
+                kind: "primary_all_unmeasured",
+                message,
+            });
+        }
+    }
+    let horizon_reached = verdict::horizon_reached(record, primary, horizon_at, now);
+    let undelivered = verdict::undelivered_reasons(&arms, min_delivered_rate, horizon_reached);
+    for reason in &undelivered {
+        warnings.push(ReadoutWarning {
+            kind: "undelivered",
+            message: format!(
+                "{reason}, below the {min_delivered_rate} minimum; the treatment did not reach enough of its runs, so no verdict is given"
             ),
         });
     }
-    let horizon_reached = verdict::horizon_reached(record, primary, horizon_at, now);
     let verdict = verdict::verdict(
         horizon_reached,
         sample_ratio.mismatch,
+        &undelivered,
         started_at.is_some(),
         primary,
         &guardrail_readouts,
     );
+    let per_protocol = experiment
+        .primary_metric
+        .as_deref()
+        .and_then(metric_spec)
+        .filter(|_| !dispatch_roles.is_empty())
+        .map(|spec| {
+            let delivered_tasks: Vec<TaskOutcome> = tasks
+                .iter()
+                .filter(|task| {
+                    dispatch_roles
+                        .get(&task.arm)
+                        .is_none_or(|roles| delivered(task, roles))
+                })
+                .cloned()
+                .collect();
+            PerProtocolReadout {
+                label: PER_PROTOCOL_LABEL,
+                metric: metrics::metric_readout(spec, record, control.as_deref(), &delivered_tasks),
+            }
+        });
     let mut primary_observations: Vec<PrimaryObservation> = experiment
         .primary_metric
         .as_deref()
@@ -140,13 +301,31 @@ fn build_readout(
         .map(|spec| {
             tasks
                 .iter()
-                .filter_map(|task| match task.values.get(spec.name) {
-                    Some(Outcome::Value(value)) => Some(PrimaryObservation {
-                        arm: task.arm.clone(),
-                        assigned_at: task.assigned_at,
-                        value: *value,
-                    }),
-                    _ => None,
+                .filter_map(|task| {
+                    if spec.kind == Kind::Ratio {
+                        // Per-line metrics are never stored in `values`:
+                        // carry the numerator and measured line pair so the
+                        // cumulative series can take a ratio of sums.
+                        // `included_pair` excludes zero-line, unavailable
+                        // and numerator-less tasks.
+                        return metrics::included_pair(task, spec.name).map(|pair| {
+                            PrimaryObservation {
+                                arm: task.arm.clone(),
+                                assigned_at: task.assigned_at,
+                                value: pair.numerator,
+                                lines: Some(pair.lines),
+                            }
+                        });
+                    }
+                    match task.values.get(spec.name) {
+                        Some(Outcome::Value(value)) => Some(PrimaryObservation {
+                            arm: task.arm.clone(),
+                            assigned_at: task.assigned_at,
+                            value: *value,
+                            lines: None,
+                        }),
+                        _ => None,
+                    }
                 })
                 .collect()
         })
@@ -171,6 +350,7 @@ fn build_readout(
             guardrails,
             min_sample: experiment.min_sample_per_arm,
             max_days: experiment.max_days,
+            min_delivered_rate,
             started_at: started_at.map(|at| at.to_rfc3339()),
             horizon_at: horizon_at.map(|at| at.to_rfc3339()),
         },
@@ -180,6 +360,7 @@ fn build_readout(
         sample_ratio,
         lagging,
         metrics,
+        per_protocol,
         guardrails: guardrail_readouts,
         verdict,
         warnings,
@@ -191,14 +372,24 @@ fn arm_readout(
     arm: &orbit_store::contracts::ExperimentArmRow,
     tasks: &[TaskOutcome],
     run_digests: Option<&BTreeSet<String>>,
+    dispatch_roles: Option<&TreatmentRequirements>,
+    shadow: bool,
 ) -> ReadoutArm {
     let mine: Vec<&TaskOutcome> = tasks.iter().filter(|task| task.arm == arm.name).collect();
     let mut segments: BTreeMap<u32, usize> = BTreeMap::new();
     let mut crews: BTreeMap<&str, usize> = BTreeMap::new();
     let mut assignment_digests = BTreeSet::new();
+    let mut tasks_with_explorer_call = 0usize;
+    let mut tasks_explorer_unobserved = 0usize;
     for task in &mine {
         *segments.entry(task.segment).or_default() += 1;
         *crews.entry(task.crew.as_str()).or_default() += 1;
+        if task.explorer_call {
+            tasks_with_explorer_call += 1;
+        }
+        if task.explorer_unobserved {
+            tasks_explorer_unobserved += 1;
+        }
         if let Some(digest) = &task.assignment_digest {
             assignment_digests.insert(digest.clone());
         }
@@ -217,13 +408,63 @@ fn arm_readout(
             .then(left.crew.cmp(&right.crew))
     });
     let run_digests: Vec<String> = run_digests.into_iter().flatten().cloned().collect();
+    let delivery = dispatch_roles.map(|roles| {
+        let delivered_count = mine.iter().filter(|task| delivered(task, roles)).count();
+        let pending = mine
+            .iter()
+            .filter(|task| !task.terminal && !delivered(task, roles))
+            .count();
+        let settled = mine.len() - pending;
+        ArmDelivery {
+            roles: roles
+                .roles
+                .iter()
+                .map(|role| role.as_str().to_string())
+                .collect(),
+            assigned: mine.len(),
+            delivered: delivered_count,
+            pending,
+            rate: (settled > 0).then(|| delivered_count as f64 / settled as f64),
+        }
+    });
+    let memory_captures: Vec<MemoryTaskCapture> = if shadow {
+        mine.iter()
+            .filter_map(|task| {
+                task.captured_memory
+                    .as_ref()
+                    .map(|memory| MemoryTaskCapture {
+                        task_id: task.task_id.clone(),
+                        digest: memory.digest.clone(),
+                        model: memory.model.clone(),
+                        model_revision: memory.model_revision,
+                        global_revision: memory.global_revision,
+                        renderer_version: memory.renderer_version,
+                        week: memory.week.clone(),
+                    })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let memory_capture_strata = if shadow {
+        captured_memory_strata(&mine)
+    } else {
+        Vec::new()
+    };
     ReadoutArm {
+        memory_strata: memory_strata(&mine),
+        memory_captures,
+        memory_capture_strata,
+        task_ids: mine.iter().map(|task| task.task_id.clone()).collect(),
+        dreaming_overhead: None,
         effort_breakdown: Vec::new(),
         name: arm.name.clone(),
         control: arm.control,
         weight: arm.weight,
         retired_segment: arm.retired_segment,
         n: mine.len(),
+        tasks_with_explorer_call,
+        tasks_explorer_unobserved,
         segments: segments
             .into_iter()
             .map(|(segment, n)| SegmentCount { segment, n })
@@ -232,7 +473,53 @@ fn arm_readout(
         drifted: assignment_digests.len() > 1 || run_digests.len() > 1,
         assignment_digests: assignment_digests.into_iter().collect(),
         run_digests,
+        delivery,
     }
+}
+
+/// An arm's captured tasks by revision week (shadow mode); distinct
+/// captured digests per week. Captured, not delivered.
+fn captured_memory_strata(tasks: &[&TaskOutcome]) -> Vec<MemoryRevisionStratum> {
+    let mut strata: BTreeMap<String, (usize, BTreeSet<String>)> = BTreeMap::new();
+    for memory in tasks
+        .iter()
+        .filter_map(|task| task.captured_memory.as_ref())
+    {
+        let stratum = strata
+            .entry(memory.week.clone().unwrap_or_else(|| "empty".into()))
+            .or_default();
+        stratum.0 += 1;
+        stratum.1.insert(memory.digest.clone());
+    }
+    strata
+        .into_iter()
+        .map(|(week, (tasks, digests))| MemoryRevisionStratum {
+            week,
+            tasks,
+            digests: digests.into_iter().collect(),
+        })
+        .collect()
+}
+
+/// An arm's tasks by the week of the crew memory revision they first
+/// received; empty for an arm whose tasks received no memory.
+fn memory_strata(tasks: &[&TaskOutcome]) -> Vec<MemoryRevisionStratum> {
+    let mut strata: BTreeMap<String, (usize, BTreeSet<String>)> = BTreeMap::new();
+    for memory in tasks.iter().filter_map(|task| task.memory.as_ref()) {
+        let stratum = strata
+            .entry(memory.week.clone().unwrap_or_else(|| "empty".into()))
+            .or_default();
+        stratum.0 += 1;
+        stratum.1.insert(memory.digest.clone());
+    }
+    strata
+        .into_iter()
+        .map(|(week, (tasks, digests))| MemoryRevisionStratum {
+            week,
+            tasks,
+            digests: digests.into_iter().collect(),
+        })
+        .collect()
 }
 
 /// Each segment's active-arm weights, from the start and reweight events.
@@ -330,12 +617,14 @@ impl OrbitRuntime {
             .iter()
             .filter(|row| row.arm.is_some() && !row.forced)
             .collect();
-        let observed = self.experiment_outcomes(
+        let mut observed = self.experiment_outcomes(
             &record.experiment.id,
             record.experiment.created_at,
             &enrolled,
             now,
+            record.experiment.mode == "shadow",
         )?;
+        let dreaming = self.attribute_dreaming_cost(&record, &mut observed.tasks, now)?;
         let excluded = |reason: &str| {
             rows.iter()
                 .filter(|row| row.arm.is_none() && row.exclusion_reason.as_deref() == Some(reason))
@@ -346,9 +635,18 @@ impl OrbitRuntime {
             forced_excluded: rows.iter().filter(|row| row.forced).count(),
             surface_conflict_excluded: excluded(SURFACE_CONFLICT_EXCLUSION),
             explicit_crew_excluded: excluded(EXPLICIT_CREW_EXCLUSION),
-            unreadable: enrolled.len() - observed.tasks.len(),
+            interactive_excluded: observed.interactive_excluded,
+            unreadable: enrolled.len() - observed.tasks.len() - observed.interactive_excluded,
         };
-        let mut readout = build_readout(&record, enrollment, &observed, metric, now)?;
+        let min_delivered_rate = super::super::EXPERIMENTS_MIN_DELIVERED_RATE;
+        let mut readout = build_readout(
+            &record,
+            enrollment,
+            &observed,
+            metric,
+            min_delivered_rate,
+            now,
+        )?;
         let facts = self.sqlite_store()?.list_invocation_accounting_facts(
             &orbit_store::contracts::InvocationAccountingQuery {
                 workspace_id: Some(self.stores().jobs().workspace_id().to_string()),
@@ -356,6 +654,42 @@ impl OrbitRuntime {
                 until: now,
             },
         )?;
+        if let Some(overhead) = &dreaming {
+            for arm in readout
+                .arms
+                .iter_mut()
+                .filter(|arm| overhead.arms.contains(&arm.name))
+            {
+                arm.dreaming_overhead = Some(DreamingOverhead {
+                    spread_over: observed
+                        .tasks
+                        .iter()
+                        .filter(|task| {
+                            task.arm == arm.name && overhead.measured.contains(&task.task_id)
+                        })
+                        .count(),
+                    ..overhead.summary.clone()
+                });
+            }
+            if overhead.summary.cost_usd > 0.0 && overhead.summary.per_task_usd.is_none() {
+                readout.warnings.push(ReadoutWarning {
+                    kind: "dreaming_cost_unattributed",
+                    message: format!(
+                        "crew memory dreaming cost ${:.4} could not be added to the memory arm's cost_usd yet: none of its tasks has a measured cost",
+                        overhead.summary.cost_usd
+                    ),
+                });
+            }
+            if overhead.summary.unpriced_tasks > 0 {
+                readout.warnings.push(ReadoutWarning {
+                    kind: "dreaming_cost_unpriced",
+                    message: format!(
+                        "{} crew memory dreaming task(s) have an unpriced invocation, so the dreaming cost added to the memory arm's cost_usd is a lower bound",
+                        overhead.summary.unpriced_tasks
+                    ),
+                });
+            }
+        }
         for arm in &mut readout.arms {
             let assigned = observed
                 .tasks
@@ -376,6 +710,71 @@ impl OrbitRuntime {
             .warnings
             .extend(self.crew_pool_mismatches(&record, &observed.tasks)?);
         Ok(readout)
+    }
+
+    /// Add the crew memory dreaming cost (design §6.4) to the memory arms'
+    /// `cost_usd`: every task tagged `crew-memory-dream` created between the
+    /// experiment's start and its end (or now), its complete cost spread
+    /// evenly over the memory arms' tasks with a measured cost. `None` for an
+    /// experiment without a memory arm, which carries no dreaming cost.
+    fn attribute_dreaming_cost(
+        &self,
+        record: &ExperimentRecord,
+        tasks: &mut [TaskOutcome],
+        now: DateTime<Utc>,
+    ) -> Result<Option<DreamingAttribution>, OrbitError> {
+        let arms = memory_arm_names(record)?;
+        if arms.is_empty() {
+            return Ok(None);
+        }
+        let started = record
+            .events
+            .iter()
+            .find(|event| event.kind == "started")
+            .map_or(record.experiment.created_at, |event| event.at);
+        let ended = record
+            .events
+            .iter()
+            .rev()
+            .find(|event| matches!(event.kind.as_str(), "concluded" | "abandoned"))
+            .map_or(now, |event| event.at);
+        let ids: BTreeSet<String> = self
+            .list_tasks_by_tags(&[CREW_MEMORY_DREAM_TAG.to_string()])?
+            .into_iter()
+            .filter(|task| task.created_at >= started && task.created_at < ended)
+            .map(|task| task.id)
+            .collect();
+        let (cost_usd, unpriced_tasks) = self.dreaming_spend(&ids, started)?;
+        let measured: BTreeSet<String> = tasks
+            .iter()
+            .filter(|task| {
+                arms.contains(&task.arm)
+                    && matches!(task.values.get("cost_usd"), Some(Outcome::Value(_)))
+            })
+            .map(|task| task.task_id.clone())
+            .collect();
+        let per_task_usd = (!measured.is_empty()).then(|| cost_usd / measured.len() as f64);
+        if let Some(share) = per_task_usd {
+            for task in tasks
+                .iter_mut()
+                .filter(|task| measured.contains(&task.task_id))
+            {
+                if let Some(Outcome::Value(cost)) = task.values.get_mut("cost_usd") {
+                    *cost += share;
+                }
+            }
+        }
+        Ok(Some(DreamingAttribution {
+            arms,
+            measured,
+            summary: DreamingOverhead {
+                dreaming_tasks: ids.len(),
+                unpriced_tasks,
+                cost_usd,
+                spread_over: 0,
+                per_task_usd,
+            },
+        }))
     }
 
     /// One `crew_mismatch` warning per analysed task whose crew is outside

@@ -10,10 +10,14 @@ mod classify;
 mod drains;
 mod job_port;
 mod limiters;
+mod live_agents;
 mod mode;
+mod pilot_coordination;
+mod projection;
 mod readiness;
 mod readiness_hosts;
 mod task_port;
+mod wave;
 mod window;
 
 pub(crate) use adopt::adopt_orphaned_deliveries;
@@ -23,4 +27,5 @@ pub(crate) use approvals::{
 pub(crate) use classify::classify_workspace_auto_tasks;
 #[cfg(feature = "test-support")]
 pub use classify::release_failure_hook::with_reservation_release_failure;
+pub use readiness::FleetReadinessFacts;
 pub(crate) use window::drain_window;

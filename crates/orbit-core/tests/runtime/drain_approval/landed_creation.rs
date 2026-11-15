@@ -150,7 +150,14 @@ fn landed_creation_is_held_without_losing_authority_or_redispatching() {
     assert!(
         comments
             .iter()
-            .any(|comment| comment.by == "task-pilot" && comment.message.contains(&evidence))
+            .filter(|comment| comment.by == "task-pilot")
+            .any(|comment| crate::task_pilot::pilot_audit(
+                &workspace.runtime,
+                &operator.id,
+                comment
+            )
+            .to_string()
+            .contains(&evidence))
     );
     workspace.finish(&drain, JobRunState::Success);
     let later = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));

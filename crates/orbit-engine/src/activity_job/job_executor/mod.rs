@@ -40,6 +40,7 @@ use super::dispatcher::{
 use crate::context::RuntimeHost;
 
 mod audit;
+mod auto_task;
 mod concurrency;
 mod exec_ctx;
 mod execute;
@@ -61,6 +62,7 @@ mod validate;
 mod tests;
 
 use self::audit::*;
+use self::auto_task::*;
 use self::concurrency::*;
 use self::exec_ctx::*;
 use self::fan_out::*;
@@ -96,6 +98,9 @@ pub struct JobOutcome {
     pub child_cancelled: bool,
     pub pipeline: Value,
     pub message: Option<String>,
+    /// The typed step-failure code of the step the run failed on, parsed
+    /// once at ingestion, when that failure declared one.
+    pub failure_code: Option<orbit_types::workflow::StepFailureCode>,
     /// [ORB-00414] Number of audit-write failures observed during the run.
     /// Non-zero means the audit trail is incomplete (see `degraded_audit`).
     pub audit_failures: u64,
@@ -108,6 +113,10 @@ pub struct JobOutcome {
     /// [ORB-10367] True when any telemetry write failed — the run's
     /// invocation/token accounting is incomplete, but its work is not.
     pub degraded_telemetry: bool,
+    /// [ORB-20158] The run parked on an `auto-task:` step: the host recorded
+    /// the park, the run stays live, and the owner clock resumes it. Not a
+    /// success and not a failure; the caller must not finalize it.
+    pub parked: Option<orbit_types::workflow::ParkedWait>,
 }
 
 #[derive(Debug, Clone)]

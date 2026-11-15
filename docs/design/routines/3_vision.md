@@ -1,8 +1,8 @@
 ---
 title: Routines — Vision
 owner: claude
-last_updated: 2026-10-26
-last_validated: 2026-10-26
+last_updated: 2026-11-03
+last_validated: 2026-11-05
 status: Draft
 feature: routines
 doc_role: vision
@@ -36,8 +36,7 @@ and validation evidence, not by drifting in.
    possible answer is owner placement for cron, which is not designed now.
    Automatic cross-host failover and state transfer remain unsupported for all variants.
 2. **Trigger extensions.** Delivery-trigger routines and auto-tasks, plus
-   `preparation_eligible`, `finding_unverified`, `pilot_warnings_held` and `block_escalated` state
-   routines, evaluate on
+   `preparation_eligible` and `resident_due` state routines, evaluate on
    the existing clock with durable batches and checkpoints. The current routine
    schema is in [2_design.md §1](./2_design.md#1-routine-definition), with persisted
    behavior in [§3.1](./2_design.md#31-delivery-and-state-evaluation); interval
@@ -65,6 +64,13 @@ and validation evidence, not by drifting in.
    next due) over the dashboard HTTP API [ORB-10138], so a stopped sweep is visible remotely
    without box ssh. True cross-host *aggregation* (one surface querying every box's store)
    remains open; state *sync* is still explicitly not the answer.
+7. **Resident orchestrators on the clock.** Done: the
+   [resident-orchestrator](../resident-orchestrator/2_design.md#42-fires) design's
+   `resident_due` state kind and seeded disabled `resident-cycle-<workspace>` routine are
+   implemented; the weekly `evolution-pass-<workspace>` routine added with them was removed in
+   [ORB-22844]. A resident is a state routine with a deterministic
+   observation, not a daemon, so it keeps the no-resident-daemon decision. Implemented by [ORB-21244] and
+   [ORB-21249].
 
 ### Graduated
 
@@ -137,6 +143,9 @@ External:
 
 ## Task References
 
+- [ORB-21244] implemented resident-orchestrator slice 3: the `resident_due` kind and cycle routine.
+- [ORB-21249] implemented resident-orchestrator slice 8: the evolution-pass routine.
+- [ORB-22844] removed the evolution-pass routine.
 - [ORB-10001] authored the routines design proposal (historical citation).
 - [ORB-10021] implemented routines v1 and its OS clock integration.
 - [ORB-10138] exposed routine and clock health through the dashboard API.

@@ -6,9 +6,9 @@
 // in app.js per the extraction contract; the call still fires exactly once at
 // page load). The module exports `initLogTail` and `fitLogPanelToViewport` for
 // the two call sites that remain in app.js (`refreshDashboard` and `setActiveTab`),
-// and `setDockMode` for the router to select the Drain, Locks held or Log view.
+// and `setDockMode` for the router to select the Drain, Fleet, Notices, Residents or Log view.
 
-import { bindTaskLink, el, fetchJson, formatClock, formatDateTime, onClockZoneChange, onWorkspaceChange, getHost, isHostUnavailable, withHost } from './common.js';
+import { bindTaskLink, el, fetchJson, formatClock, formatDateTime, onClockZoneChange, onWorkspaceChange, getHost, isHostUnavailable, isAggregateView, withHost } from './common.js';
 import { recordRoutedHref } from './router.js';
 
 const $ = (id) => document.getElementById(id);
@@ -51,7 +51,9 @@ let logSnapshotAttempt = 0;
 let logVisibilityWired = false;
 
 const LOG_PANEL_PREFS_KEY = "orbit.dashboard.logPanel";
-const DOCK_MODES = ["drain", "locks", "log"];
+// Visual order of the Tasks dock tabs. The arrow, Home and End keys walk this
+// list (wireDockModeToggle), so it must match the tablist's order in index.html.
+const DOCK_MODES = ["drain", "fleet", "notices", "residents", "log"];
 
 function loadLogPanelPrefs() {
   try {
@@ -137,11 +139,24 @@ export function fitLogPanelToViewport() {
 function applyDockMode() {
   const dock = $("side-dock");
   if (!dock) return;
+  if (isAggregateView() && !$("dock-tab-fleet")) {
+    const tab = el("button", { type: "button", role: "tab", class: "dock-seg", id: "dock-tab-fleet", "aria-selected": "false", "aria-controls": "dock-pane-fleet", text: "Fleet" });
+    tab.dataset.mode = "fleet";
+    tab.tabIndex = -1;
+    tab.addEventListener("click", () => chooseDockMode("fleet"));
+    $("dock-tab-drain").after(tab);
+    const pane = el("div", { class: "dock-pane", id: "dock-pane-fleet", role: "tabpanel", "aria-labelledby": "dock-tab-fleet" }, [
+      el("section", { class: "panel drain-card" }, [el("header", {}, [el("h2", { class: "drain-title", text: "Fleet drains" })]), el("div", { class: "body", id: "fleet-drains-body" })]),
+    ]);
+    pane.dataset.pane = "fleet";
+    $("dock-pane-drain").after(pane);
+  } else if (!isAggregateView()) {
+    $("dock-tab-fleet")?.remove();
+    $("dock-pane-fleet")?.remove();
+  }
   const modes = dockModes();
   const mode = shownDockMode();
-  const card = mode === "locks" ? mode : null;
-  dock.dataset.mode = card ? "drain" : mode;
-  dock.dataset.card = card || "drain";
+  dock.dataset.mode = mode;
   for (const btn of document.querySelectorAll("#dock-mode-toggle .dock-seg")) {
     const on = btn.dataset.mode === mode;
     btn.hidden = !modes.includes(btn.dataset.mode);
@@ -155,11 +170,21 @@ function applyDockMode() {
 }
 
 function dockModes() {
-  return DOCK_MODES;
+  return isAggregateView() ? DOCK_MODES : DOCK_MODES.filter(mode => mode !== "fleet");
 }
 
 function shownDockMode() {
-  return logPanelPrefs.dockMode;
+  return dockModes().includes(logPanelPrefs.dockMode) ? logPanelPrefs.dockMode : "drain";
+}
+
+/// Whether the Tasks dock is showing its Notices tab.
+export function noticesDockShown() {
+  return shownDockMode() === "notices";
+}
+
+/// Whether the Tasks dock is showing its Residents tab.
+export function residentsDockShown() {
+  return shownDockMode() === "residents";
 }
 
 export function chooseDockMode(mode) {
@@ -195,6 +220,12 @@ export function setDockMode(mode) {
   logPanelPrefs = { ...logPanelPrefs, dockMode: mode };
   saveLogPanelPrefs(logPanelPrefs);
   applyDockMode();
+  // Dialogs live outside their panes; a dock switch rewrites the hash
+  // without a hashchange, so leaving their tab closes them here.
+  for (const [view, id] of [["notices", "notices-post-dialog"], ["residents", "resident-start-dialog"]]) {
+    const dialog = $(id);
+    if (mode !== view && dialog?.open) dialog.close();
+  }
 }
 
 export function revealDockStart() {
@@ -202,6 +233,8 @@ export function revealDockStart() {
   const card = $("auto-drain-quick-start");
   if (dock?.dataset.revealStart !== "true" || !card || card.hidden || !card.getClientRects().length) return;
   delete dock.dataset.revealStart;
+  card.classList.add("drain-start-open");
+  $("auto-drain-start-toggle")?.setAttribute("aria-expanded", "true");
   card.scrollIntoView?.({ block: "nearest" });
 }
 
@@ -212,26 +245,110 @@ export function setDockRouteShown(shown) {
   $("tasks-main")?.classList.toggle("dock-route", Boolean(shown));
 }
 
-/// Level the active tab's first card with the first task block.
-/// `--tasks-dock-lead` on #tasks-dock is the room above #side-dock that takes,
-/// and tasks.css gives it to the fixed message area; the tab bar sits inside
-/// that room, above the line. It is measured from the dock's own top and the
-/// card's place inside #side-dock, neither of which the lead moves, so a
-/// repeat run settles on the same value.
+/// Place the filter bar, then level the active tab's first card with the
+/// first task block. The bar heads the list column, or spans the list and
+/// dock columns where that takes fewer rows (`placeTaskFilterBar`); either
+/// way the measurement below is relative to the dock's own top.
+/// `--tasks-dock-lead` on #tasks-dock is the room above #side-dock that
+/// takes, and tasks.css gives it to the fixed message area; the tab bar sits
+/// inside that room, above the line. It is measured from the dock's own top
+/// and the card's place inside #side-dock, neither of which the lead moves,
+/// so a repeat run settles on the same value. When the tab bar is taller than
+/// the room the filter bar leaves above the list, the dock has no room to
+/// give, so `--tasks-list-lead` on #tasks-panel lowers the list instead; the
+/// list's own lead is taken back out of the measurement.
 export function alignTasksDock() {
+  placeTaskFilterBar();
   const dock = $("tasks-dock");
   const body = $("tasks-body");
   const side = $("side-dock");
-  if (!dock || !body || !side || !dock.contains(side) || !side.getClientRects().length) return;
+  const panel = $("tasks-panel");
+  if (!dock || !body || !side || !panel) return;
+  const setLead = (node, name, value) => {
+    const current = parseFloat(node.style.getPropertyValue(name)) || 0;
+    if (Math.abs(value - current) >= 0.01) node.style.setProperty(name, `${value}px`);
+  };
+  const listLead = parseFloat(panel.style.getPropertyValue("--tasks-list-lead")) || 0;
+  // Without the dock beside the list (a phone, or an open task), the list
+  // keeps its own place.
+  if (!dock.contains(side) || !side.getClientRects().length) {
+    setLead(panel, "--tasks-list-lead", 0);
+    return;
+  }
   // The first status card starts at the list's top (its first child has no
   // margin, and notices sit in the message area), scrolled or not.
-  const current = parseFloat(dock.style.getPropertyValue("--tasks-dock-lead")) || 0;
-  const lead = Math.max(0, Math.round((body.getBoundingClientRect().top - dock.getBoundingClientRect().top - firstDockCardOffset(side)) * 100) / 100);
-  if (Math.abs(lead - current) >= 0.01) dock.style.setProperty("--tasks-dock-lead", `${lead}px`);
+  const room = Math.round((body.getBoundingClientRect().top - listLead - dock.getBoundingClientRect().top - firstDockCardOffset(side)) * 100) / 100;
+  setLead(dock, "--tasks-dock-lead", Math.max(0, room));
+  setLead(panel, "--tasks-list-lead", Math.max(0, -room));
+}
+
+// The filter bar spans the list and dock columns (`filter-spans` on
+// #tasks-main, tasks.css) only while the dock is beside the list and the
+// status chips would take more rows in the list column than across both
+// columns: the default chips wrapping at about 1024px while the space to
+// their right is empty. Where they fit the list column, the dock's tab bar
+// keeps its place level with them. The inputs are the chips' own widths and
+// the grid's column widths, none of which the placement changes, so the
+// decision is stable; a misjudged case wraps, it never overlaps.
+function placeTaskFilterBar() {
+  const main = $("tasks-main");
+  const filter = $("task-filter");
+  const bar = filter?.parentElement;
+  const list = main?.querySelector(":scope > .col-tasks");
+  const dock = $("tasks-dock");
+  const side = $("side-dock");
+  if (!main || !filter || !bar || !list || !dock) return;
+  let spans = false;
+  const beside = side && dock.contains(side) && dock.getClientRects().length && side.getClientRects().length
+    && !main.classList.contains("task-pane-open");
+  if (beside) {
+    const style = getComputedStyle(bar);
+    const inset = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+    const listRect = list.getBoundingClientRect();
+    const narrow = listRect.width - inset;
+    const wide = dock.getBoundingClientRect().right - listRect.left - inset;
+    const gap = parseFloat(getComputedStyle(filter).columnGap) || 0;
+    const widths = filterItemWidths(filter);
+    spans = widths.length > 0 && wrappedRows(widths, gap, wide) < wrappedRows(widths, gap, narrow);
+  }
+  main.classList.toggle("filter-spans", spans);
+}
+
+// The rendered widths of #task-filter's flex items: the chips inside the
+// chip groups (which are `display: contents`), More and the workspace filter.
+// Hidden items (quiet chips behind a closed More) take no room.
+function filterItemWidths(filter) {
+  const widths = [];
+  const visit = (node) => {
+    for (const child of node.children) {
+      if (getComputedStyle(child).display === "contents") visit(child);
+      else if (child.getClientRects().length) widths.push(child.getBoundingClientRect().width);
+    }
+  };
+  visit(filter);
+  return widths;
+}
+
+// How many rows a wrapping flex row of these widths takes in `room` pixels:
+// each row takes items while they fit, as flex-wrap lays them out. A fit
+// within a twentieth of a pixel counts as a wrap: sub-pixel widths make it a
+// coin toss, and a wrongly predicted wrap costs at most a spanning bar.
+function wrappedRows(widths, gap, room) {
+  let rows = 1;
+  let used = -gap;
+  for (const width of widths) {
+    if (used + gap + width > room - 0.05 && used > 0) {
+      rows += 1;
+      used = width;
+    } else {
+      used += gap + width;
+    }
+  }
+  return rows;
 }
 
 // How far below #side-dock's top the active tab's first shown card starts:
-// Auto-drain on Drain, Locks held on Locks held, the log on Log. The pane's
+// Auto-drain on Drain, the log on Log, the list on Notices. The pane's
 // scroll is added back so a scrolled Drain pane measures the same.
 function firstDockCardOffset(side) {
   const pane = [...side.querySelectorAll(":scope > .dock-pane")].find((node) => node.getClientRects().length);
@@ -240,11 +357,15 @@ function firstDockCardOffset(side) {
   return card.getBoundingClientRect().top + pane.scrollTop - side.getBoundingClientRect().top;
 }
 
-// Re-level whenever something above the first task block, or the dock itself,
-// changes size: the toolbar or status pills wrapping, the pager coming and
-// going, the dock coming back after a task closes, the tab bar changing height.
-// The create dialog is in the top layer and moves nothing. A tab switch re-levels from applyDockMode. Passing notices
-// sit in the message area and move nothing.
+// Re-place the filter bar and re-level whenever something above the first
+// task block, or the dock itself, changes size: the view's width, the status
+// chips wrapping, the dock coming back after a task closes, the tab bar
+// changing height. The chip set changing (More opening, a count or the
+// workspace filter coming and going) can change the bar's placement without
+// resizing anything watched, so the chips are watched for that too. The
+// create dialog is in the top layer and moves nothing. A tab switch re-levels
+// from applyDockMode. Passing notices sit in the message area and move
+// nothing.
 function wireDockAlignment() {
   const dock = $("tasks-dock");
   const panel = $("tasks-panel");
@@ -259,6 +380,15 @@ function wireDockAlignment() {
   resize.observe(dock);
   const head = dock.querySelector("#side-dock > .dock-head");
   if (head) resize.observe(head);
+  const main = $("tasks-main");
+  if (main) resize.observe(main);
+  const filter = $("task-filter");
+  if (filter) {
+    resize.observe(filter);
+    new MutationObserver(queue).observe(filter, {
+      subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["class", "hidden"],
+    });
+  }
   for (const node of panel.children) resize.observe(node);
   for (const node of panel.querySelectorAll(":scope > header > *")) resize.observe(node);
   queue();
@@ -284,22 +414,6 @@ function wireDockModeToggle() {
     chooseDockMode(mode);
     const btn = toggle.querySelector(`.dock-seg[data-mode="${mode}"]`);
     if (btn) btn.focus();
-  });
-}
-
-// The phone dock route's Back control drops only `dock=`, so the hash keeps the
-// list's filters and the router then shows the list.
-function wireDockBack() {
-  $("dock-back-tasks")?.addEventListener("click", () => {
-    const [route, query = ""] = window.location.hash.slice(1).split("?");
-    const params = new URLSearchParams(query);
-    params.delete("dock");
-    const rest = params.toString();
-    window.location.hash = rest ? `${route}?${rest}` : route;
-    // The hash change routes the list. Setting a fragment that is already the
-    // list's fires no hashchange, so mirror the list visibility here too; a
-    // router run stays idempotent.
-    setDockRouteShown(false);
   });
 }
 
@@ -374,7 +488,6 @@ function wireLogPanelPreferences() {
   if (logPanelPrefsWired) return;
   logPanelPrefsWired = true;
   wireDockModeToggle();
-  wireDockBack();
   applyDockMode();
 }
 
@@ -763,6 +876,11 @@ function writeLogCounts(counts) {
   const word = { err: "error", deny: "denial", warn: "warning" }[level];
   state.textContent = level ? `${counts[level]} ${word}${counts[level] === 1 ? "" : "s"}` : "";
   state.dataset.level = level;
+  const tab = $("dock-tab-log");
+  if (tab) {
+    tab.title = state.textContent;
+    tab.setAttribute("aria-label", state.textContent ? `Log: ${state.textContent}` : "Log");
+  }
 }
 
 function rememberStreamOffset(lastEventId) {
@@ -840,9 +958,15 @@ function connectLogStream() {
   logStream.onmessage = (e) => {
     logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
     setLogStreamConnected(true);
-    rememberStreamOffset(e.lastEventId);
+    let ev;
     try {
-      const ev = JSON.parse(e.data);
+      ev = JSON.parse(e.data);
+    } catch (err) {
+      console.error("Failed to parse SSE event", err);
+      rememberStreamOffset(e.lastEventId);
+      return;
+    }
+    try {
       noteLogStatusEvent(ev);
       if (logFollowTail) {
         const inner = $("logInner");
@@ -858,8 +982,12 @@ function connectLogStream() {
         bufferPausedLogEvent(ev);
       }
     } catch (err) {
-      console.error("Failed to parse SSE event", err);
+      // Do not advance the cursor: a reconnect replays this event instead
+      // of permanently dropping a line the render failed on.
+      console.error("Failed to render SSE event", err);
+      return;
     }
+    rememberStreamOffset(e.lastEventId);
   };
   logStream.onerror = () => {
     setLogStreamConnected(false);

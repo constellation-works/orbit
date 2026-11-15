@@ -128,7 +128,7 @@ impl IntakeServer {
             tracing::warn!(
                 peer_uid,
                 allowed_uid = self.peer_uid,
-                "lease intake refused a connection from a user other than lease.intake.peer_user"
+                "lease intake refused a connection from a user other than the intake peer user"
             );
             self.refuse(
                 &mut stream,
@@ -136,7 +136,7 @@ impl IntakeServer {
                     "peer_refused",
                     format!(
                         "uid {peer_uid} may not use the lease intake socket; only \
-                         lease.intake.peer_user may"
+                         the intake peer user may"
                     ),
                 ),
             )

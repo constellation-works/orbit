@@ -1,8 +1,8 @@
 ---
 title: "Scope: Condition triggers"
 owner: claude
-last_updated: 2026-10-30
-last_validated: 2026-10-30
+last_updated: 2026-11-08
+last_validated: 2026-11-03
 status: Draft
 stage: building
 next: "File phase 3: host scope and notifications"
@@ -26,7 +26,9 @@ expressions/scripts", for predicates only. The other non-goals stay: a generic e
 bus, scripts, arbitrary transition subscriptions, cross-host failover and a second
 scheduler.
 
-Bearing: Orbit already has these pieces, all read from source at `d0cfa7a04`.
+Bearing: the pre-condition baseline below was read at `d0cfa7a04`. The shipped
+phase-1 and phase-2 changes are recorded in [Phasing](#phasing); baseline claims
+about missing predicates or edge state describe the motivation, not current gaps.
 
 - **Two trigger carriers.** A routine (`.orbit/routines/*.yaml`) runs one catalog job.
   Its `trigger` takes one of `cron`, `deliveries_landed` or `state: {kind: …}`
@@ -38,14 +40,15 @@ Bearing: Orbit already has these pieces, all read from source at `d0cfa7a04`.
   unknown fields.
 - **Typed state kinds.** `StateTriggerKind`
   (`crates/orbit-types/src/workflow/automation/members.rs`) has these kinds:
-  `preparation_eligible`, `finding_unverified`, `pilot_warnings_held`,
-  `block_escalated`, `decision_requested`, and the retired `execution_failed`. Each
+  `preparation_eligible`, `decision_requested`, and the retired `block_escalated`,
+  `execution_failed`, `finding_unverified` and `pilot_warnings_held` (the last two retired
+  in [ORB-22844]). Each
   kind has one Core observation rule
   (`crates/orbit-core/src/application/automation/members/member_host/observation.rs`).
   The only configurable predicate is `PreparationEligibility`, a fixed struct of
   statuses, required tags, excluded tags and task types.
 - **One clock and one store.** `orbit clock tick` runs once per
-  `cadence_seconds` (default 60, `crates/orbit-core/src/application/routines/clock/settings.rs`).
+  `cadence_seconds` (default 60, `crates/orbit-clock/src/clock_settings.rs`).
   It visits each registered owner checkout on the host
   (`crates/orbit-automation/src/routines/loader.rs`) and evaluates routines and
   auto-tasks under a 5-minute `TICK_DEADLINE`
@@ -56,12 +59,12 @@ Bearing: Orbit already has these pieces, all read from source at `d0cfa7a04`.
 - **Keyed actions.** Members claim attempts with an `action_key`. Before a job is
   submitted, the job store resolves that key to any existing run
   (`automation_job_for_key`,
-  `crates/orbit-core/src/application/automation/members/member_host/host.rs`). Task
+  `crates/orbit-store/src/contracts/job_run.rs`). Task
   creation can reserve a key, its input digest and the task ID before it writes the
   bundle (`add_task_admitted_guarded`, `crates/orbit-core/src/application/task/add.rs`).
   Time-scheduled auto-tasks use a different method. They claim a slot in a cursor
   file before minting and then record the task ID
-  (`fire_slot`, `crates/orbit-automation/src/auto_tasks/scheduler.rs`).
+  (`fire_slot`, `crates/orbit-automation/src/auto_tasks/scheduler/locked.rs`).
 - **Host facts.** The host resource sampler measures CPU (load per core, and measured
   utilization), memory percent, Linux I/O pressure, and disk used percent. Disk is
   measured for the filesystem that holds each of three paths: the repository root,
@@ -73,9 +76,9 @@ Bearing: Orbit already has these pieces, all read from source at `d0cfa7a04`.
   `crates/orbit-config/src/registry/settings/machine.rs`, and
   `crates/orbit-runtime/src/host_resource/pressure.rs`).
 - **Authority.** The governed-operation catalog
-  (`crates/orbit-common/src/governance/authorization/catalog.rs`) marks routine and
+  (`crates/orbit-common/src/governance/authorization/catalog/types.rs`) marks routine and
   auto-task toggles and schedule edits from the dashboard as operator-only. The
-  `orbit.auto_task.add` and `orbit.auto_task.update` tools can be granted to agents
+  `orbit.auto_task` action `add` and `orbit.auto_task` action `update` tools can be granted to agents
   (`grants.rs`). Only the operator, or a registered channel's own plugin callback,
   can answer a decision request (`orbit.decision.submit`,
   [human decision channel](../human-decision-channel/2_design.md#3-delegated-human-authority)).
@@ -116,7 +119,7 @@ The current code shapes the fix in four ways:
   worktree GC (`worktree_gc_pipeline`) and store GC (`store_gc_pipeline`); every
   other routine, auto-task and recovery stays owner-only (`runs_in_replica`,
   `crates/orbit-core/src/application/routines/loader.rs`; `collect_host_routines`
-  consumed at `crates/orbit-core/src/application/routines/sweep.rs:217`).
+  consumed at `crates/orbit-core/src/application/routines/sweep.rs`).
 - **Any path to tag or publish must keep release authority with Daniel.** RELEASING.md
   and the constellation rules forbid an agent from tagging or publishing unasked.
   npm publish needs Daniel's OTP.
@@ -173,18 +176,18 @@ express:
   ([automation-triggers §3–5](../automation-triggers/2_design.md#3-delivery-identity-and-captured-coverage)).
   "Some deliveries landed" is easy to write as an expression. "Every landed commit
   was examined exactly once" is not.
-- **`preparation_eligible` and `finding_unverified` stay typed.** They key members on
-  a material fingerprint and settle each member through an accepted assessment or
-  verdict. A boolean can't supply a fingerprint or a receipt.
+- **`preparation_eligible` stays typed.** It keys members on
+  a material fingerprint and settles each member through an accepted assessment
+  (`finding_unverified`, which settled through a verdict, was retired in [ORB-22844]). A boolean can't supply a fingerprint or a receipt.
 - **`cron` and `every_minutes` stay typed.** They carry a slot identity and the
   `missed_run` policy. A `now`-based condition fires on an edge, not a slot, so it
   can't say "the 09:00 slot was missed".
-- **`pilot_warnings_held` and `block_escalated` are preset candidates.** Each has a
-  one-rule membership: the shared promotion predicate, or `triage_candidacy`. Each
-  settles from a marker
-  ([automation-triggers §6.1–6.2](../automation-triggers/2_design.md#61-pilot-warning-holds-pilot_warnings_held)).
-  They could become shipped condition presets such as
-  `task.status == 'blocked' && task.block.awaiting_triage`. Three things are needed
+- **`pilot_warnings_held` was a preset candidate** (`block_escalated`, its
+  `triage_candidacy` sibling, is retired, and [ORB-22844] retired `pilot_warnings_held`
+  itself; pilot-warning triage now starts from the dashboard's Triage action). It has a one-rule membership, the
+  shared promotion predicate, and settles from a marker
+  ([automation-triggers §6.1](../automation-triggers/2_design.md#61-pilot-warning-holds-pilot_warnings_held)).
+  It could become a shipped condition preset. Three things are needed
   first:
   1. those predicates exposed as computed, read-only task facts;
   2. a condition fire that can batch members into one job by crew (today
@@ -232,17 +235,28 @@ Every expression may also read the following. Nothing else is in the schema.
 | `file` (file scope) | `path`, `root`, `name`, `stem` (name without its final extension), `ext` (lower case, no dot), `size`, `mtime`, `stable` (bool), `fingerprint` | Root rescan |
 | `group` (file scope with `group_by: stem`) | `dir`, `stem`, `files` (list of `file`, at most 16), `stable` | Root rescan |
 | `now` | Timestamp of the pass, UTC. CEL's timezone accessors give local time. | Pass clock |
-| `self` | The definition's own history: `last_fired` (timestamp of the latest fire that admitted an action, optional), `last_minted` (timestamp of the latest acknowledged mint, optional; auto-tasks only), `last_minted_task` (ID, optional), `fires_24h` (int). Test the optional fields with `has()`. | The definition's fire records in its fenced checkpoint (§3) |
+| `self` | The definition's own history: `last_fired` (timestamp of the latest fire that admitted an action, optional), `last_minted` (timestamp of the latest acknowledged mint, optional; auto-tasks only), `last_minted_task` (ID, optional), `last_succeeded_at` (timestamp, optional; auto-tasks that declare a completion contract only), `fires_24h` (int). Test the optional fields with `has()`. | The definition's fire records in its fenced checkpoint (§3); `last_succeeded_at` is the `accepted_at` of the definition's latest accepted-result receipt, never task `done`, mint or merge state. No accepted result leaves it absent; an unreadable history makes any clause that reads it unknown (and enabling reports it unavailable), never "never succeeded". |
+| `auto_tasks['<name>']` | Another auto-task's accepted-result history: `last_succeeded_at` (timestamp, optional). The index must be a string-literal auto-task name. Readable from any condition and `when:` guard, so a routine can wait on a distinct definition's accepted result [ORB-22676]. | The same receipt history as `self.last_succeeded_at`, read by name. No accepted result leaves it absent. A name that does not resolve to a definition, a definition with no completion contract, and an unreadable history are unavailable: any clause that reads the name, `has()` included, is unknown, never "never succeeded". Task `done`, fires, mints and merges never move it. |
 
-**Proposed job-composition extension.**
-[Auto-task steps in existing jobs](../activity-job/specs/auto-task-step.md) reuse
-CEL for `wait_until` and `expire_when`, preserving the existing job `when` skip
-guard. The extension adds `board.empty` (the explicit unfinished-task view) and
-literal `auto_tasks['name']` accepted-completion reads for readiness triggers.
-Execution-local `self.prev`, `steps[...]`, `job` and typed `result` facts belong
-only to the new job wait/reuse environment. These are not part of the base schema
+**Job-composition extension: shipped.**
+The auto-task job step ([auto-task steps in existing jobs](../activity-job/specs/auto-task-step.md))
+is shipped. Its `wait_until` and `expire_when` reuse CEL, preserving the existing
+job `when` skip guard. The job wait environment those fields read also carries
+`board.empty` (the explicit unfinished-task view), which job `wait_until` accepts
+at load. Execution-local `self.prev`, `steps[...]`, `job` and typed `result` facts
+belong only to the job wait/reuse environment. These are not part of the base schema
 or already-filed condition-language phase-1 scope. They grant no free-text or
 arbitrary-artifact access. No new trigger carrier is needed.
+
+**Condition-trigger readiness: one field remains unshipped.**
+Accepted-result history is available to conditions as `self.last_succeeded_at`
+([ORB-20397]) and `auto_tasks['<name>'].last_succeeded_at` ([ORB-22676]). The
+release-readiness job/routine composition ([ORB-20166]) ships as a disabled,
+nonseeded example, installed only after owner prerequisites. The condition-level
+`board` still exposes only per-bucket `empty`, so its aggregate `board.empty`
+remains unshipped; the job wait environment has its own `board.empty`, as
+described above. Historical `reuse_when` matching is shipped in job steps
+([ORB-22649]).
 
 Rules:
 
@@ -372,7 +386,8 @@ Condition auto-tasks mint through the keyed task path, not the slot cursor
 recorded, for this kind.
 
 Fired-subject tombstones keep each fire for `fired_retention_days` (default 30)
-or up to the 1,000-record cap (`MEMBER_CAPACITY`, `members.rs`). This stops a file
+or up to the 1,000-record cap (`CONDITION_RETAINED_RECORDS`,
+`crates/orbit-types/src/workflow/automation/condition_state.rs`). This stops a file
 moved out and back in, or a task archived and restored, from firing again
 within the window. Missing or corrupt condition state fails closed as a
 diagnostic, never as a fresh baseline
@@ -451,7 +466,7 @@ is the shipped exception:
   both owner entries and replica checkouts and keeps only the replica-local cron
   routines targeting worktree GC or store GC (`collect_host_routines` and
   `runs_in_replica`, `crates/orbit-core/src/application/routines/loader.rs`,
-  consumed at `crates/orbit-core/src/application/routines/sweep.rs:217`).
+  consumed at `crates/orbit-core/src/application/routines/sweep.rs:255`).
   Delivery and state triggers stay owner-only even for those jobs.
 - Every coordination-state action write passes `ensure_coordination_task_write_permitted`
   (`crates/orbit-runtime/src/orbit_runtime/identity.rs`), so a replica checkout
@@ -496,9 +511,9 @@ side-effect-free and not Turing complete. Its only iteration is over finite
 collections, through macros. It has a gradual type system designed for checking
 against a declared environment, and it already gates admission in Kubernetes,
 Envoy and Firebase rules. The Rust implementation is the cel-rust project,
-published as the `cel` crate (`cel-interpreter` in older releases). Neither crate
-is an Orbit dependency today, so adding one follows the ARCHITECTURE.md dependency
-rule.
+published as the `cel` crate (`cel-interpreter` in older releases). The `cel` crate
+is already an Orbit dependency (`orbit-automation`), and `cel-interpreter` is not used.
+Adding or changing a dependency follows the ARCHITECTURE.md dependency rule.
 
 Orbit declares one CEL environment per scope: the variables and field types in
 §2, with no user-defined functions and no `dyn`. The admitted subset is literals,
@@ -528,9 +543,12 @@ module), against the scope's declared environment:
 - each admitted operator and function has its CEL overload signature, with no implicit
   numeric conversion; anything else, `matches()` and map literals included, is refused;
 - an optional field (`task.crew`, `task.parent_id`, `task.origin`, `self.last_fired`,
-  `self.last_minted`, `self.last_minted_task`) is read only where a `has()` test proves
+  `self.last_minted`, `self.last_minted_task`, `self.last_succeeded_at`,
+  `auto_tasks['<name>'].last_succeeded_at`) is read only where a `has()` test proves
   it present: on the right of `&&`, the right of `||` after `!has(...)`, or a guarded
   `?:` branch;
+- `auto_tasks[...]` takes a string literal that is a valid auto-task name, and `has()`
+  tests its field, never the index itself;
 - status literals compared with a task's `status`, and `board.by_status` keys, must be
   stored status spellings (`in_progress`, not `in-progress`);
 - comprehensions range only over lists, and the node limit counts the expanded AST.
@@ -579,7 +597,7 @@ already runs a job.
   independently, so a failed notification never re-mints. Two non-notify actions on
   one edge are two definitions with the same condition, each with its own edge state.
   A shared, named condition is an open question.
-  A routine can already target one job. The proposed auto-task step composes
+  A routine can already target one job. The shipped auto-task step composes
   named auto-tasks inside that job, not through an `actions[]` extension or a
   new auto-sequence trigger carrier.
 - **Task transitions stay pipeline-only.** No phase lets a condition move a task (for
@@ -665,7 +683,7 @@ two things:
    (workspace, host, file) can't use `approval: per_fire` in v1. Its
    operator-authority targets need the grant alone.
 
-**Protection from agent edits.** An agent with `orbit.auto_task.update`, or with
+**Protection from agent edits.** An agent with `orbit.auto_task` action `update`, or with
 write access to a definition file, can still edit a definition. Editing changes
 the digest, which voids the grant (`grant_stale`). The change is visible in
 explain, on the dashboard and in `routine list`, and nothing runs until an operator
@@ -817,7 +835,7 @@ What a false or unknown guard does depends on the kind:
   it, as catch-up already does. This is how the shipped preconditions
   `skip_if_unchanged` and `skip_unless_blocked_candidates` already treat a skip
   ("the slot is deliberately left unconsumed", `fire_locked`,
-  `crates/orbit-automation/src/auto_tasks/scheduler.rs`). So the example reads "once
+  `crates/orbit-automation/src/auto_tasks/scheduler/locked.rs`). So the example reads "once
   per night, at the first moment after 02:00 that the board is empty".
   `guard_miss: skip` consumes the slot instead, giving "only if empty at 02:00".
 - **`deliveries_landed`.** A false guard dispatches nothing. Pending deliveries and
@@ -854,7 +872,7 @@ through the records the first one's action leaves.
 - **Depth.** `depth` is the origin fire's depth plus one, and the chain-depth guard in
   §8 refuses fires past 5. Explain shows each fire's upstream chain (§9).
 - **Ordered work.** Multi-step work with retries and stops belongs in a job. One
-  trigger starts it, and the job's steps carry the order. The proposed
+  trigger starts it, and the job's steps carry the order. The shipped
   [auto-task step](../activity-job/specs/auto-task-step.md) binds or mints an
   existing auto-task and waits for accepted evidence. The existing sequential
   and parallel job structure controls ordering; a CEL wait does not remove that
@@ -874,8 +892,8 @@ through the records the first one's action leaves.
   is owed. A human can't stop the chain between A and B by acting on a record. A
   link held in memory doesn't survive a restart. The repository rule says
   activities never rely on agent output, only on the durable artifacts it leaves
-  (AGENTS.md, "Release and Orbit design rules"). Chaining through state follows that
-  rule.
+  (constellation root `AGENTS.md`, "Release and Orbit design rules"). Chaining
+  through state follows that rule.
 - **Time-correlation rules ("B fires within 1 hour of A").** They need a retained
   event window and its own identity rules. A condition over state already covers
   the real cases. For example,
@@ -1000,9 +1018,9 @@ target: job:release_pipeline     # workspace-defined; declares authority: operat
    revision `40`, the captured task fields, and `subject_freshness = 40`.
    Its fire ID is `F = sha256(consumer, epoch, task key, 40, arm sequence)`.
    Because the target declares `approval: per_fire`, the fire raises request `R`
-   on the task: "Release from this preparation? approve / dismiss". Mail delivers
-   it once the decision-mail transport ships. `R` binds
-   `(F, grant identity, grant digest, 40)`.
+   on the task: "Release from this preparation? approve / dismiss". With the decision
+   channel enabled, the implemented `orbit-decision-mail` transport delivers it.
+   `R` binds `(F, grant identity, grant digest, 40)`.
 4. The owner's `condition_fired(F)` is entry 41 and `decision_requested(R)` is
    entry 42. Raw history length is now 42 and `updated_at` may have advanced, but
    both entries are exempt under §7: current subject freshness is still 40, so
@@ -1067,10 +1085,12 @@ policy: {timeout_minutes: 30, overlap: forbid}
 What is missing:
 
 - **Notice delivery.** `notify` needs a no-answer *notice* record in the decision
-  channel, and a transport to deliver it. The `orbit-decision-mail` transport is a stub
-  today ([human decision channel](../human-decision-channel/1_scope.md)). Until it
-  ships, notices appear in the dashboard Automation view, in `orbit automation explain`
-  and in the clock log.
+  channel, and a transport to deliver it. The `orbit-decision-mail` transport is
+  implemented for decision requests and digests, behind the default-off decision channel
+  ([human decision channel](../human-decision-channel/1_scope.md), phases 4 and 5). It
+  does not by itself deliver `notify` notices: the no-answer notice record and its
+  integration are still missing. Until they ship, notices appear in the dashboard
+  Automation view, in `orbit automation explain` and in the clock log.
 - **Other mounts.** Reading a mount other than the three sampled paths needs a declared
   extra path.
 - **Follower hosts.** dk-server-1's worktrees are where the disk fills. Adding
@@ -1298,7 +1318,8 @@ target: job:media_ingest_pipeline    # workspace-defined
    - `orbit automation explain`, with clause trees over live state. Arm state, holds,
      fires and `self` history show as not yet tracked.
 
-   Operators see what would match before anything can fire.
+   Operators see what would match before anything can fire. Shipped in [ORB-19990];
+   phase 2 subsequently enabled task/workspace firing.
 2. **Firing for task and workspace scopes.** This phase adds:
    - condition state rows (migration), edges, holds, re-arm and fire identity;
    - keyed mint and job actions with the subject passed in;
@@ -1309,11 +1330,14 @@ target: job:media_ingest_pipeline    # workspace-defined
    - `self` fire history, own-task exclusion from `board` with `board_includes_own`,
      and `on_enable` on re-enable (phase 1 already parses and type-checks them).
 
-   Covers use case A. Shipped in [ORB-20156].
-3. **Host scope and notifications.** Host facts from the sampler, notice records in
+   Covers use case A. Shipped in [ORB-20156]. Follow-up [ORB-20263] also shipped the
+   load-time refusal of a condition matching its own template output; [ORB-20265]
+   repaired retained-state capacity handling, and [ORB-20266] included condition
+   runs in routine fire history.
+3. **Host scope and notifications — not filed.** Host facts from the sampler, notice records in
    the decision channel, the `notify` action, and `hosts:` (parsed since phase 1) with
    follower evaluation of host-local GC actions (§4). Covers use case C on the owner and on followers.
-4. **File scope.** This phase adds:
+4. **File scope — not filed.** This phase adds:
    - roots, the `watch_roots` allowlist, and the rescan manifest;
    - plugin-seeded templated roots checked against plugin grants;
    - `root_unreadable` reporting, including macOS privacy denials;
@@ -1321,13 +1345,13 @@ target: job:media_ingest_pipeline    # workspace-defined
      aggregates.
 
    Covers use case D, including the office intake, with rescan only.
-5. **High-authority actions.** The job `authority` and `approval` fields, operator
+5. **High-authority actions — not filed.** The job `authority` and `approval` fields, operator
    grants with digests, and the `trigger_action` decision gate. Covers use case B
    once a workspace defines its release job.
 6. **Later.** Each of these is filed only when needed:
    - task dirty-ID hints and OS file notifications;
    - notices from a follower-evaluated condition, relayed to the owner;
-   - presets for `pilot_warnings_held` and `block_escalated` (§1);
+   - a preset for pilot-warning holds (§1), should scheduled triage return;
 
 ## Open questions
 
@@ -1344,6 +1368,12 @@ target: job:media_ingest_pipeline    # workspace-defined
 4. **Federated reads.** Could a condition read another owner's workspace through
    federated MCP, with that owner's revisions in the fire identity? Leaning: no,
    until a use case needs it.
+5. **Waking resident orchestrators.** The
+   [resident-orchestrator](../resident-orchestrator/2_design.md#42-fires) design wakes a resident
+   through a typed `resident_due` kind, because it needs "anything in this set changed since my last
+   checkpoint", not a per-subject edge. A condition-triggered routine can still call
+   `orbit resident control wake` for situations the wake digest misses. Open: whether such wakes
+   should become a first-class `wake_resident` condition action.
 
 ### Resolved 2026-10-29
 
@@ -1421,11 +1451,19 @@ Daniel's answers, folded into the sections named:
 ## Task References
 
 - [ORB-19288] — designs condition triggers (this doc).
-- [ORB-19990] — phase 1: CEL schema, load-time checking and `orbit automation explain`.
-- [ORB-20156] — phase 2: firing for task and workspace scopes, `when:` guards, chains and `clear-stall`.
+- [ORB-19990] — shipped phase 1: CEL schema, load-time checking and `orbit automation explain`.
+- [ORB-20156] — shipped phase 2: firing for task and workspace scopes, `when:` guards, chains and `clear-stall`.
+- [ORB-20263] — shipped load-time refusal of conditions matching their own template output.
+- [ORB-20265] — bounded condition passes by retained-state capacity without losing pending work.
+- [ORB-20266] — included condition runs in routine fire history.
 - [ORB-12746] — added state-trigger batching (`batch_size`), which presets would need.
 - [ORB-15732] — recorded the 30-day, release-gated compatibility window.
 - [ORB-19214] — added the `not_before` scheduled hold, which `board.eligible` excludes.
 - [ORB-19206] — orbit-office orchestration that relayed the watched-folder intake requirements for use case D.
+- [ORB-22649] — shipped historical `reuse_when` matching in auto-task job steps.
+- [ORB-20166] — composed the release-readiness job and routine as a disabled, unseeded example.
+- [ORB-20397] — exposed `self.last_succeeded_at` from accepted-result history to conditions.
+- [ORB-22676] — exposed `auto_tasks['<name>'].last_succeeded_at` to routine conditions.
+- [ORB-22844] — retired the `finding_unverified` and `pilot_warnings_held` trigger sources with their routines.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

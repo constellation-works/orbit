@@ -3,7 +3,7 @@
 
 SQLite scans and flock waits on a tokio worker park the whole dashboard
 (F2026-07-119). Handlers must run that work through `blocking()`,
-`spawn_blocking`, or `run_blocking_check`. This scan is the regression
+`blocking_join()`, `spawn_blocking`, or `run_blocking_check`. This scan is the regression
 gate for that rule.
 
 Runs from `scripts/ci-guardrails.sh` (and `make ci-fast`).
@@ -24,7 +24,7 @@ from pathlib import Path
 
 SKIP_ASYNC_FNS = {"blocking"}
 
-OFFLOAD_CALLEES = ("blocking", "spawn_blocking", "run_blocking_check")
+OFFLOAD_CALLEES = ("blocking", "blocking_join", "spawn_blocking", "run_blocking_check")
 
 # Store / filesystem work that must not remain in an async handler body after
 # offload closures are masked. Keep this list specific: in-memory projections
@@ -165,7 +165,7 @@ def matching_paren(source: str, open_idx: int) -> int:
 
 
 def mask_offload_calls(source: str) -> str:
-    """Blank out `blocking(` / `spawn_blocking(` / `run_blocking_check(` calls."""
+    """Blank out calls to the known blocking-pool offload helpers."""
     chars = list(source)
     i = 0
     n = len(source)

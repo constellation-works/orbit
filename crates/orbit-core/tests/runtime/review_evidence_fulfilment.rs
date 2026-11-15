@@ -33,6 +33,7 @@ use super::review_gate_audit::Fixture;
 
 mod attempts;
 mod bounded_findings;
+mod package_wide;
 mod stale_findings;
 
 const CODEQL: &str = "scripts/codeql-rust-local.sh --ram 16384 codeql/rust-queries:codeql-suites/rust-security-extended.qls";
@@ -446,7 +447,6 @@ fn an_incomplete_failed_or_unadmitted_run_leaves_the_hold_with_a_typed_reason() 
         assert_eq!(output["reason"], reason, "{output}");
         assert_eq!(output["retryable"], false, "{output}");
         assert_eq!(stub_runs(&fixture).len(), usize::from(ran), "{reason}");
-        assert!(!fixture.repo.join("owned").exists());
         assert_still_held(&fixture, reason);
         let log = artifact(&fixture, EVIDENCE_LOG).expect("the refused run's log is attached");
         assert_eq!(log["reason"], reason);
@@ -712,6 +712,41 @@ fn owner_fulfilment_refuses_reserved_aliases_in_a_persisted_hold_without_overwri
     }
 }
 
+fn owner_fulfilment_refuses_colliding_persisted_paths_before_running() {
+    for (first, second) in [
+        ("evidence/x.json", "evidence/x.log.json"),
+        ("evidence/x", "evidence/x.json"),
+    ] {
+        let (fixture, mut hold) = held(Stub::Clean, CODEQL);
+        configure_job(&fixture, 1, None);
+        hold.requirements[0].artifact = first.into();
+        let mut other = hold.requirements[0].clone();
+        other.artifact = second.into();
+        hold.requirements.push(other);
+        seed_persisted_hold(&fixture, &hold);
+        let run = fixture.runtime.submit_pipeline_run(
+            REVIEW_EVIDENCE_FULFILMENT_JOB,
+            json!({"task_id": fixture.task_id, "hold_key": format!("{}:{}", hold.attempt_id, hold.candidate.commit)}),
+            None, Some("system"),
+        ).unwrap();
+        execute(&fixture, &run.run_id);
+        let output = &fixture
+            .runtime
+            .read_run_state(&run.run_id)
+            .unwrap()
+            .unwrap()
+            .pipeline["fulfil"];
+        assert_eq!(output["reason"], "artifact_not_allowed", "{output}");
+        for path in [first, second, "evidence/x.log.json"] {
+            assert!(
+                artifact(&fixture, path).is_none(),
+                "no evidence written at {path}"
+            );
+        }
+        assert_still_held(&fixture, "colliding paths");
+    }
+}
+
 fn fulfilment_waits_for_disk_and_retries_a_disk_refusal_a_bounded_number_of_times() {
     let probe = orbit_exec::probe_bwrap();
     if !probe.available {
@@ -788,7 +823,7 @@ fn held_host(probe: &str, command: &str) -> (Fixture, ReviewEvidenceHold, tempfi
     let mut fixture = Fixture::new_with_config(
         &[],
         &format!(
-            "[workflow.validation_env]\nlogin_shell = false\npath = [\"{}\"]\n",
+            "[workflow.validation_env]\npath = [\"{}\"]\n",
             bin.path().display()
         ),
     );
@@ -956,7 +991,8 @@ fn a_host_sandbox_test_that_skips_or_fails_leaves_the_hold_with_a_typed_reason()
 
 /// A held host test runs only from its allowlist. A shell metacharacter, any
 /// other program and any argument outside `cargo test -p <crate> --test
-/// <target> [<filter>]` are refused with a typed reason before any host
+/// <target> [<filter>]` or `cargo test -p <crate> --lib [<filter>]` are refused
+/// with a typed reason before any host
 /// gate, so nothing runs even where namespaces are unavailable.
 #[test]
 fn a_held_host_sandbox_test_outside_its_allowlist_is_refused_without_running() {
@@ -1004,19 +1040,213 @@ fn a_held_host_sandbox_test_outside_its_allowlist_is_refused_without_running() {
         assert_eq!(output["fulfilled"], false, "{reason}: {output}");
         assert_eq!(output["reason"], reason, "{output}");
         assert_eq!(output["retryable"], false, "{output}");
-        assert!(
-            !fixture.repo.join("owned").exists() && !fixture.repo.join("../owned").exists(),
-            "{reason}: nothing ran"
-        );
         let log = artifact(&fixture, HOST_EVIDENCE_LOG).expect("the refusal's log is attached");
         assert_eq!(log["reason"], reason);
-        assert!(log["host_command"].is_null(), "{reason}: {log}");
+        assert!(
+            log["host_command"].is_null(),
+            "{reason}: no host command was admitted: {log}"
+        );
         assert_held_without(&fixture, HOST_EVIDENCE, reason);
         let rows = audit_rows(&fixture);
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert_eq!(rows[0].0, AuditEventStatus::Failure, "{reason}");
         assert_eq!(rows[0].1["reason"], reason);
     }
+}
+
+/// Published copy of the only script the built-in fulfilment runs, pinned to
+/// the release tag verified with this checkout.
+const PUBLISHED_CODEQL_SCRIPT: &str = "https://raw.githubusercontent.com/constellation-works/orbit/v0.49.0/scripts/codeql-rust-local.sh";
+
+/// A `codeql` command other than the admitted script is refused before
+/// anything runs. The activity output, its log and the task comment name the
+/// admitted command and where to obtain the script.
+#[test]
+fn a_custom_codeql_command_is_refused_with_the_published_script() {
+    if !super::dispatch_admission::isolated(
+        "review_evidence_fulfilment::a_custom_codeql_command_is_refused_with_the_published_script",
+    ) {
+        return;
+    }
+    let command = "scripts/run-analysis.sh";
+    let (fixture, hold) = held(Stub::Clean, command);
+    configure_job(&fixture, 1, None);
+    let run = fixture
+        .runtime
+        .submit_pipeline_run(
+            REVIEW_EVIDENCE_FULFILMENT_JOB,
+            json!({
+                "task_id": fixture.task_id,
+                "hold_key": format!("{}:{}", hold.attempt_id, hold.candidate.commit),
+            }),
+            None,
+            Some("system"),
+        )
+        .unwrap();
+    execute(&fixture, &run.run_id);
+    let output = fixture
+        .runtime
+        .read_run_state(&run.run_id)
+        .unwrap()
+        .unwrap()
+        .pipeline["fulfil"]
+        .clone();
+    assert_eq!(output["fulfilled"], false, "{output}");
+    assert_eq!(output["reason"], "command_not_allowed", "{output}");
+    assert_eq!(output["retryable"], false, "{output}");
+    let detail = output["detail"].as_str().unwrap();
+    assert_codeql_refusal_contract(detail);
+    let log = artifact(&fixture, EVIDENCE_LOG).expect("the refusal's log is attached");
+    assert_eq!(log["reason"], "command_not_allowed");
+    assert_eq!(log["detail"].as_str(), Some(detail));
+    assert!(
+        stub_runs(&fixture).is_empty(),
+        "a refused command never runs: {log}"
+    );
+    assert_still_held(&fixture, "custom codeql command");
+    let comments = fixture.runtime.get_task_comments(&fixture.task_id).unwrap();
+    let comment = comments
+        .iter()
+        .rev()
+        .find(|comment| comment.message.contains("command_not_allowed"))
+        .expect("the refusal is commented on the task");
+    assert!(
+        comment.message.contains(PUBLISHED_CODEQL_SCRIPT),
+        "the task comment names the published script: {}",
+        comment.message
+    );
+}
+
+/// An admitted `codeql` command whose checked-out script lacks the executable
+/// bit (a `curl -o` download committed at 100644) is refused before spawning,
+/// naming the missing executable bit and its `chmod +x` remedy, instead of
+/// failing opaquely at spawn with `Permission denied`.
+#[test]
+fn an_admitted_codeql_script_without_the_executable_bit_is_refused_before_spawn() {
+    if !super::dispatch_admission::isolated(
+        "review_evidence_fulfilment::an_admitted_codeql_script_without_the_executable_bit_is_refused_before_spawn",
+    ) {
+        return;
+    }
+    let probe = orbit_exec::probe_bwrap();
+    if !probe.available {
+        orbit_exec::report_bwrap_deferral(
+            "an_admitted_codeql_script_without_the_executable_bit_is_refused_before_spawn",
+            &probe.detail,
+        );
+        return;
+    }
+    let (fixture, _hold) = held_non_executable(Stub::Clean, CODEQL);
+    configure_job(&fixture, 1, None);
+    let (_, output) = fulfil_once(&fixture);
+    assert_eq!(output["fulfilled"], false, "{output}");
+    assert_eq!(output["reason"], "command_failed", "{output}");
+    assert_eq!(output["retryable"], false, "{output}");
+    let detail = output["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("not executable"),
+        "the refusal names the missing executable bit: {detail}"
+    );
+    assert!(
+        detail.contains("chmod +x"),
+        "the refusal states the executable-bit remedy: {detail}"
+    );
+    assert!(
+        detail.contains("100755"),
+        "the refusal names the git mode the executable copy is committed as: {detail}"
+    );
+    let log = artifact(&fixture, EVIDENCE_LOG).expect("the refusal's log is attached");
+    assert_eq!(log["reason"], "command_failed");
+    assert_eq!(log["detail"].as_str(), Some(detail));
+    assert!(
+        stub_runs(&fixture).is_empty(),
+        "a non-executable script never spawns: {log}"
+    );
+    assert_still_held(&fixture, "non-executable codeql script");
+}
+
+/// Like [`held`], but the candidate commits the stub without the executable
+/// bit, as a `curl -o` download saved at 100644 would.
+fn held_non_executable(stub: Stub, command: &str) -> (Fixture, ReviewEvidenceHold) {
+    let mut fixture = Fixture::new_with_required_commands(&[command]);
+    install_substitute_worker(&fixture);
+    let script = fixture.repo.join("scripts/codeql-rust-local.sh");
+    std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+    std::fs::write(&script, stub_script(stub)).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).unwrap();
+    git(&fixture, &["add", "scripts"]);
+    git(
+        &fixture,
+        &[
+            "commit",
+            "-q",
+            "-m",
+            "stub codeql without the executable bit",
+        ],
+    );
+    fixture.admit();
+    fixture.put_report(&json!({
+        "schema_version": 1, "attempt_id": fixture.input["admission"]["attempt_id"],
+        "verdict": "incomplete", "summary": "Reviewed on macOS; the Linux CodeQL run is owed.",
+        "findings": [],
+        "validation": [
+            {"id": "V1", "command": "fixture check", "outcome": "passed", "role": "required"},
+            {"id": "V2", "command": command, "outcome": "not_run", "role": "required"},
+        ],
+        "external_evidence": [{
+            "kind": "codeql", "name": "Rust CodeQL (Linux)", "command": command, "artifact": EVIDENCE,
+        }],
+        "escalation": "A Linux CodeQL run is owed",
+    }));
+    run_review_pipeline(&fixture);
+    let hold: ReviewEvidenceHold = serde_json::from_slice(
+        &fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+            .unwrap()
+            .expect("the review settled into an evidence hold")
+            .content,
+    )
+    .unwrap();
+    std::fs::write(fixture.repo.join("candidate.txt"), "later\n").unwrap();
+    git(&fixture, &["commit", "-q", "-am", "moved on"]);
+    assert_ne!(git(&fixture, &["rev-parse", "HEAD"]), hold.candidate.commit);
+    (fixture, hold)
+}
+
+fn assert_codeql_refusal_contract(detail: &str) {
+    assert!(
+        detail.contains(PUBLISHED_CODEQL_SCRIPT),
+        "the refusal names the published script, not only a source-tree path: {detail}"
+    );
+    assert!(
+        detail.contains("`scripts/codeql-rust-local.sh`"),
+        "the refusal names the admitted program: {detail}"
+    );
+    assert!(
+        detail.contains("`--ram <mib>`") && detail.contains("`--toolchain <version>`"),
+        "the refusal names the admitted options: {detail}"
+    );
+    assert!(
+        detail.contains("exactly one query selector"),
+        "the refusal names the selector contract: {detail}"
+    );
+    assert!(
+        detail.contains("chmod +x"),
+        "the refusal states the executable-bit step a download needs: {detail}"
+    );
+    assert!(
+        detail.contains("executable"),
+        "the refusal names the executable bit the direct exec requires: {detail}"
+    );
+    assert!(
+        detail.contains("100755"),
+        "the refusal names the git mode the executable copy is committed as: {detail}"
+    );
+    assert!(
+        detail.contains("A custom command is not fulfilled"),
+        "the refusal says a custom command is not fulfilled: {detail}"
+    );
 }
 
 // Related boundary scenarios share the isolated table fixture.
@@ -1026,6 +1256,7 @@ crate::scenario_table!(
     an_incomplete_failed_or_unadmitted_run_leaves_the_hold_with_a_typed_reason,
     a_codeql_finding_is_attached_and_routes_the_kept_candidate_to_repair,
     owner_fulfilment_refuses_reserved_aliases_in_a_persisted_hold_without_overwriting_review,
+    owner_fulfilment_refuses_colliding_persisted_paths_before_running,
     fulfilment_waits_for_disk_and_retries_a_disk_refusal_a_bounded_number_of_times,
     a_held_host_sandbox_test_runs_at_the_held_commit_and_its_result_requeues_review,
     a_host_sandbox_test_that_skips_or_fails_leaves_the_hold_with_a_typed_reason

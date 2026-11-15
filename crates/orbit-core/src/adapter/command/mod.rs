@@ -16,9 +16,10 @@ pub use orbit_tools::tool_suggestions;
 #[cfg(unix)]
 pub(crate) use dispatch::RunDispatch;
 pub use dispatch::{
-    AuditContext, DryRunResult, ToolDispatchOutcome, ToolEntryPoint, audit_role_label,
-    audit_role_label_for_entry_point, execute_global_in_process_tool_dispatch,
-    mark_tool_audit_recorded, refuse_plugin_child_cli_command, take_tool_audit_recorded,
+    AuditContext, DryRunResult, GlobalAuditStoreCache, ToolDispatchOutcome, ToolEntryPoint,
+    audit_role_label, audit_role_label_for_entry_point, execute_global_in_process_tool_dispatch,
+    execute_global_in_process_tool_dispatch_with_audit_writer, mark_tool_audit_recorded,
+    refuse_plugin_child_cli_command, refuse_plugin_child_remote_callback, take_tool_audit_recorded,
     tool_suggestion_context, trusted_mcp_audit_context,
 };
 #[cfg(unix)]

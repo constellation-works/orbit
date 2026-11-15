@@ -4,25 +4,27 @@
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{
     FileLockOptions, FileLockProbe, HeldFileLock, atomic_write_text, atomic_write_text_volatile,
     hold_exclusive_file_lock_options, hold_step, probe_file_lock, sync_parent_dir,
-    with_exclusive_file_lock, with_shared_file_lock,
+    with_exclusive_file_lock, with_shared_file_lock, with_shared_file_lock_options,
 };
 use orbit_types::task::{
-    ArtifactManifestV2, TASK_ARTIFACT_MANIFEST_FILE_NAME, TASK_ARTIFACTS_DIR_NAME,
-    TASK_COMMENTS_FILE_NAME, TASK_ENVELOPE_FILE_NAME, TASK_EVENTS_FILE_NAME, TaskCommentRowV2,
-    TaskEnvelopeV2, TaskEventRowV2,
+    ArtifactManifestFileV2, ArtifactManifestV2, TASK_ARTIFACT_MANIFEST_FILE_NAME,
+    TASK_ARTIFACTS_DIR_NAME, TASK_COMMENTS_FILE_NAME, TASK_ENVELOPE_FILE_NAME,
+    TASK_EVENTS_FILE_NAME, TaskCommentRowV2, TaskEnvelopeV2, TaskEventRowV2,
 };
 
 use crate::driver::file::task_bundle::bundle_lock_target;
 use crate::driver::file::task_bundle::{
-    PENDING_WRITE_FILE_NAME, append_jsonl_row, append_jsonl_rows,
-    cleanup_partial_bundle_best_effort, is_unpublished_stub, publish_envelope, read_bundle_at,
-    read_bundle_lightweight_at, read_comments_at, read_envelope_at, read_events_at,
-    read_search_docs_at, recover_pending_write, write_bundle_at,
+    ManifestBlobReadFailure, PENDING_WRITE_FILE_NAME, append_jsonl_rows,
+    cleanup_partial_bundle_best_effort, is_unpublished_stub, publish_envelope,
+    read_artifact_manifest_at, read_bundle_at, read_bundle_lightweight_at, read_comments_at,
+    read_envelope_at, read_events_at, read_search_docs_at, read_verified_manifest_blob,
+    recover_pending_write, write_bundle_at,
 };
 pub(crate) use crate::driver::file::task_bundle::{TaskBundleV2, TaskDocumentV2, TaskSearchDocs};
 use crate::driver::sqlite::task_registry::{TaskBundleBinding, TaskRegistryStore};
@@ -32,6 +34,7 @@ use crate::fs::yaml::write_yaml_durable_with;
 /// ([`hold_step`]): opening, reading and decoding the bundle's files. A wait
 /// for the bundle's lock is a step of its own.
 const BUNDLE_READ_STEP: &str = "bundle read";
+const ARTIFACT_BLOB_READ_STEP: &str = "artifact blob read";
 const ENVELOPE_READ_STEP: &str = "envelope read";
 const SEARCH_DOCS_READ_STEP: &str = "search docs read";
 const SIDECAR_READ_STEP: &str = "sidecar read";
@@ -204,6 +207,26 @@ impl TaskBundleStoreV2 {
         })
     }
 
+    /// Wait up to `timeout` for this task's bundle writer to release its lock,
+    /// without holding the lock past the wait. Readers don't exclude each
+    /// other here and there is nothing to wait for when no writer holds it.
+    pub(crate) fn await_bundle_writer(
+        &self,
+        task_id: &str,
+        timeout: Duration,
+    ) -> Result<(), OrbitError> {
+        let bundle_dir = self.bundle_path(task_id)?;
+        with_shared_file_lock_options(
+            &bundle_lock_target(&bundle_dir),
+            "task artifact v2",
+            FileLockOptions {
+                timeout,
+                ..FileLockOptions::default()
+            },
+            || Ok(()),
+        )
+    }
+
     /// The caller has durably reserved this ID for one action and input digest.
     /// Re-enter after a crash under the canonical bundle lock. A readable bundle
     /// wins; unreadable bytes are retained for explicit recovery.
@@ -345,6 +368,63 @@ impl TaskBundleStoreV2 {
         read_bundle_lightweight_consistently(&bundle_dir)
     }
 
+    /// Read only a task's artifact manifest, under the same shared lock and
+    /// interrupted-commit refusal as a lightweight bundle read.
+    pub(crate) fn read_artifact_manifest(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<ArtifactManifestV2>, OrbitError> {
+        let bundle_dir = self.bundle_path(task_id)?;
+        read_artifact_manifest_consistently(&bundle_dir)
+    }
+
+    /// Read one manifest blob under the shared bundle lock.
+    ///
+    /// This does not open or hash the rest of the bundle, so it is not a
+    /// canonical or lightweight bundle read. It checks this file's size and
+    /// manifest sha256, and refuses an interrupted commit the same way a
+    /// bundle read does.
+    pub(crate) fn read_manifest_blob(
+        &self,
+        task_id: &str,
+        file: &ArtifactManifestFileV2,
+    ) -> Result<Vec<u8>, OrbitError> {
+        let bundle_dir = self.bundle_path(task_id)?;
+        if !bundle_dir.try_exists()? {
+            return Err(OrbitError::not_found(
+                orbit_common::NotFoundKind::Task,
+                task_id.to_string(),
+            ));
+        }
+        hold_step(ARTIFACT_BLOB_READ_STEP, || {
+            with_shared_file_lock(&bundle_lock_target(&bundle_dir), "task artifact v2", || {
+                refuse_interrupted_commit(&bundle_dir)?;
+                let artifact_dir = bundle_dir.join(TASK_ARTIFACTS_DIR_NAME);
+                let blob_path = artifact_dir.join(&file.blob);
+                let corrupt = |reason: String| OrbitError::TaskBundleCorrupt {
+                    task_id: task_id.to_string(),
+                    path: bundle_dir.to_string_lossy().into_owned(),
+                    reason: OrbitError::Store(reason).to_string(),
+                };
+                read_verified_manifest_blob(&artifact_dir, file).map_err(|failure| match failure {
+                    ManifestBlobReadFailure::Missing => corrupt(format!(
+                        "artifact manifest references missing file {}",
+                        blob_path.display()
+                    )),
+                    ManifestBlobReadFailure::SizeMismatch => corrupt(format!(
+                        "artifact manifest size mismatch for {}",
+                        blob_path.display()
+                    )),
+                    ManifestBlobReadFailure::DigestMismatch => corrupt(format!(
+                        "artifact manifest sha256 mismatch for {}",
+                        blob_path.display()
+                    )),
+                    ManifestBlobReadFailure::Error(error) => error,
+                })
+            })
+        })
+    }
+
     pub(crate) fn delete_bundle(&self, task_id: &str) -> Result<bool, OrbitError> {
         orbit_types::task::validate_orb_task_id(task_id)?;
         let bundle_dir = self.bundle_path(task_id)?;
@@ -443,6 +523,15 @@ impl TaskBundleStoreV2 {
     /// [`Self::read_bundle_if_settled`], which decides authoritatively and
     /// reports the failure itself.
     pub(crate) fn read_search_docs(&self, task_id: &str) -> Option<TaskSearchDocs> {
+        // One span per call on the task-query target, like the freshness
+        // span, so search cost audits can count bundle-document reads at
+        // the composed-runtime boundary.
+        let _span = orbit_common::tracing::trace_span!(
+            target: "orbit.store.task_query",
+            "task_search_docs_read",
+            task_id = %task_id,
+        )
+        .entered();
         let bundle_dir = self.bundle_path(task_id).ok()?;
         if !bundle_dir.try_exists().ok()? {
             return None;
@@ -496,6 +585,20 @@ impl TaskBundleStoreV2 {
             bundle_dir.join(TASK_EVENTS_FILE_NAME),
             bundle_dir.join(TASK_COMMENTS_FILE_NAME),
         ]))
+    }
+
+    /// The bundle directory a caller stamps instead of reading, under the
+    /// same settledness rule as [`Self::settled_log_paths`]: `None` while an
+    /// incomplete write is recorded for it or an interrupted commit awaits
+    /// replay.
+    pub(crate) fn settled_bundle_dir(&self, task_id: &str) -> Result<Option<PathBuf>, OrbitError> {
+        let bundle_dir = self.bundle_path(task_id)?;
+        if bundle_dir.join(PENDING_WRITE_FILE_NAME).try_exists()?
+            || has_interrupted_commit(&bundle_dir)?
+        {
+            return Ok(None);
+        }
+        Ok(Some(bundle_dir))
     }
 
     fn read_sidecar_if_settled<T>(
@@ -584,30 +687,6 @@ impl TaskBundleStoreV2 {
         )
     }
 
-    pub(crate) fn append_event(
-        &self,
-        task_id: &str,
-        event: &TaskEventRowV2,
-    ) -> Result<(), OrbitError> {
-        event.validate()?;
-        append_jsonl_row(
-            &self.bundle_path(task_id)?.join(TASK_EVENTS_FILE_NAME),
-            event,
-        )
-    }
-
-    pub(crate) fn append_comment(
-        &self,
-        task_id: &str,
-        comment: &TaskCommentRowV2,
-    ) -> Result<(), OrbitError> {
-        comment.validate()?;
-        append_jsonl_row(
-            &self.bundle_path(task_id)?.join(TASK_COMMENTS_FILE_NAME),
-            comment,
-        )
-    }
-
     /// Append `events` in order with one write and one sync.
     pub(crate) fn append_events(
         &self,
@@ -667,13 +746,17 @@ fn validate_envelope_for(task_id: &str, envelope: &TaskEnvelopeV2) -> Result<(),
 /// place atomically, so one file is always self-consistent, and the index
 /// validation that reads it on every listing pays nothing here.
 fn read_bundle_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitError> {
+    let _span = orbit_common::tracing::trace_span!(
+        target: "orbit.store.task_query", "task_bundle_canonical_read",
+    )
+    .entered();
     // A missing bundle cannot be in a lifecycle transition. Avoid asking the
     // shared-lock helper to create a stable lock target for a filtered miss.
     if !bundle_dir.try_exists()? {
         return read_bundle_at(bundle_dir);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     CANONICAL_BUNDLE_READS.with(|reads| reads.set(reads.get() + 1));
     hold_step(BUNDLE_READ_STEP, || {
         with_shared_file_lock(&bundle_lock_target(bundle_dir), "task artifact v2", || {
@@ -685,7 +768,11 @@ fn read_bundle_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitErro
 
 /// Same lock as [`read_bundle_consistently`], without hashing artifact blobs.
 fn read_bundle_lightweight_consistently(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitError> {
-    #[cfg(test)]
+    let _span = orbit_common::tracing::trace_span!(
+        target: "orbit.store.task_query", "task_bundle_lightweight_read",
+    )
+    .entered();
+    #[cfg(any(test, feature = "test-support"))]
     LIGHTWEIGHT_BUNDLE_READS.with(|reads| reads.set(reads.get() + 1));
     if !bundle_dir.try_exists()? {
         return read_bundle_lightweight_at(bundle_dir);
@@ -699,7 +786,24 @@ fn read_bundle_lightweight_consistently(bundle_dir: &Path) -> Result<TaskBundleV
     })
 }
 
-#[cfg(test)]
+/// Same lock as [`read_bundle_lightweight_consistently`], reading only the
+/// artifact manifest instead of assembling the whole bundle.
+fn read_artifact_manifest_consistently(
+    bundle_dir: &Path,
+) -> Result<Option<ArtifactManifestV2>, OrbitError> {
+    if !bundle_dir.try_exists()? {
+        return read_artifact_manifest_at(bundle_dir);
+    }
+
+    hold_step(BUNDLE_READ_STEP, || {
+        with_shared_file_lock(&bundle_lock_target(bundle_dir), "task artifact v2", || {
+            refuse_interrupted_commit(bundle_dir)?;
+            read_artifact_manifest_at(bundle_dir)
+        })
+    })
+}
+
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     /// Listing-path bundle reads on this thread, so tests can bound what a
     /// read costs while the generated index is degraded.
@@ -712,7 +816,7 @@ thread_local! {
 }
 
 fn read_bundle_tolerating_in_flight(bundle_dir: &Path) -> Result<Option<TaskBundleV2>, OrbitError> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     LISTING_BUNDLE_READS.with(|reads| reads.set(reads.get() + 1));
     match read_bundle_lightweight_consistently(bundle_dir) {
         Ok(bundle) => Ok(Some(bundle)),

@@ -5,6 +5,12 @@
 # second count, replaces that clock. The deadline self-test advances the file
 # so stop, reap, cancellation and backoff outcomes do not follow host
 # scheduling. Unset, the clock is time.monotonic and backoff is time.sleep.
+#
+# Transient responses retry until the budget is spent; every other failure ends
+# at once. The last line says which: `outcome=failed class=transient` when the
+# budget ran out on transient responses, `class=permanent` otherwise. A wrong
+# pin or a moved URL is the change's own failure, so a workspace declares only
+# the transient line in `workflow.ci_infrastructure_signatures`.
 set -euo pipefail
 exec python3 - "$@" <<'PY'
 import argparse
@@ -138,11 +144,22 @@ parser.add_argument("sha256")
 parser.add_argument("destination", type=Path, help="new file; existing destinations are refused")
 parser.add_argument("--budget-seconds", type=float, default=60,
                     help="total download/backoff/verification budget, >0 and <=60 (default: 60)")
+parser.add_argument("--cache-file", type=Path, default=None,
+                    help="verified archive restored from this file when present "
+                         "(SHA-256 still checked) and populated on a verified download")
 args = parser.parse_args()
 started = monotonic()
 deadline = started + args.budget_seconds
 attempts = 0
 outcome = "failed"
+saw_transient = False
+saw_definitive = False
+failure_class = "permanent"
+MAX_BACKOFF_SECONDS = 5
+
+
+class BudgetSpent(ValueError):
+    """The shared deadline ended the download, not a response."""
 
 
 def log(message):
@@ -152,12 +169,12 @@ def log(message):
 def remaining():
     seconds = deadline - monotonic()
     if seconds <= 0:
-        raise ValueError("total budget exhausted")
+        raise BudgetSpent("total budget exhausted")
     return seconds
 
 
 def download():
-    global attempts
+    global attempts, saw_transient, saw_definitive
     if not math.isfinite(args.budget_seconds) or not 0 < args.budget_seconds <= 60:
         raise ValueError("budget must be finite, >0 and <=60 seconds")
     url = urlsplit(args.url)
@@ -170,18 +187,56 @@ def download():
         raise ValueError("expected a pinned SHA-256 digest")
     if os.path.lexists(args.destination):
         raise ValueError("destination already exists; refusing stale bytes")
+    if args.cache_file is not None and args.cache_file == args.destination:
+        raise ValueError("cache file must differ from the destination")
+
+    def verified_digest(path):
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                remaining()
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    # Warm path: a restored archive is published only after the same SHA-256
+    # check as a download. A tampered cache entry fails closed instead of
+    # falling through to the network, so corruption is never masked.
+    if args.cache_file is not None and os.path.lexists(args.cache_file):
+        if verified_digest(args.cache_file) != args.sha256.lower():
+            raise ValueError("SHA-256 mismatch; refusing cached archive")
+        remaining()
+        try:
+            os.link(args.cache_file, args.destination)
+        except FileExistsError:
+            raise
+        except OSError:
+            # Copy onto the destination filesystem, then publish atomically.
+            # Copying directly to destination would overwrite a racing file or
+            # follow a racing symlink after the preflight check.
+            import shutil
+            with tempfile.TemporaryDirectory(prefix=".ci-download-", dir=args.destination.parent) as scratch:
+                candidate = Path(scratch) / "cached"
+                shutil.copyfile(args.cache_file, candidate)
+                if verified_digest(candidate) != args.sha256.lower():
+                    raise ValueError("SHA-256 mismatch; refusing cached archive")
+                remaining()
+                os.link(candidate, args.destination)
+        log("cache=hit outcome=verified")
+        return
 
     # Same filesystem as the destination: publish only verified bytes, without
     # overwriting an existing file. Never resume or append an earlier attempt.
     with tempfile.TemporaryDirectory(prefix=".ci-download-", dir=args.destination.parent) as scratch:
-        for attempt in range(1, 4):
+        attempt = 0
+        while True:
+            attempt += 1
             timeout = min(21, remaining())
             # Let curl report its explicit timeout exit before the process
             # watchdog fires. Only curl's conclusive exit 28 is retryable.
             curl_timeout = max(0.001, min(20, timeout - 0.1))
             attempts = attempt
             candidate = Path(scratch) / str(attempt)
-            log(f"attempt={attempt}/3 started remaining_seconds={remaining():.3f}")
+            log(f"attempt={attempt} started remaining_seconds={remaining():.3f}")
             command = [
                 "curl", "--disable", "--globoff", "--proto", "=https", "--proto-redir", "=https",
                 "--tlsv1.2", "--location", "--max-redirs", "5", "--fail",
@@ -196,39 +251,52 @@ def download():
                 # The transport wait kills and reaps curl before returning. No
                 # status means an inconclusive outcome, so do not retry it.
                 log(f"attempt={attempt} outcome=process_timeout seconds={monotonic() - attempt_started:.3f}")
-                raise ValueError("curl process deadline exceeded") from None
+                raise BudgetSpent("curl process deadline exceeded") from None
             status = result.stdout.decode("ascii", errors="replace")
             log(f"attempt={attempt} curl_exit={result.returncode} http={status!r} "
                 f"seconds={monotonic() - attempt_started:.3f}")
-            remaining()
-            if not re.fullmatch(r"[0-9]{3}", status):
-                raise ValueError("inconclusive HTTP status")
-            if result.returncode == 0 and 200 <= int(status) < 300:
-                digest = hashlib.sha256()
-                with candidate.open("rb") as stream:
-                    while chunk := stream.read(1024 * 1024):
-                        remaining()
-                        digest.update(chunk)
-                if digest.hexdigest() != args.sha256.lower():
-                    raise ValueError("SHA-256 mismatch; refusing download")
-                remaining()
-                os.link(candidate, args.destination)
-                log(f"attempt={attempt} outcome=verified")
-                return
+            conclusive = re.fullmatch(r"[0-9]{3}", status) is not None
             # Only explicit curl DNS/connect/timeout errors, or supported
             # transient HTTP failures. TLS, auth, partial transfers and every
             # unknown outcome fail closed. Never retry verification/install.
-            transient = (
+            transient = conclusive and (
                 result.returncode in (6, 7, 28) and (status == "000" or 200 <= int(status) < 400)
                 or result.returncode == 22 and int(status) in (429, 500, 502, 503, 504)
             )
+            if not conclusive:
+                raise ValueError("inconclusive HTTP status")
+            if result.returncode == 0 and 200 <= int(status) < 300:
+                # A definitive success ends transient retry: later budget
+                # exhaustion during verification is the change's failure.
+                saw_definitive = True
+                if verified_digest(candidate) != args.sha256.lower():
+                    raise ValueError("SHA-256 mismatch; refusing download")
+                remaining()
+                os.link(candidate, args.destination)
+                # Populate the cache with the same verified bytes. A store
+                # failure never fails a verified download; the next run
+                # simply misses again.
+                if args.cache_file is not None and not os.path.lexists(args.cache_file):
+                    try:
+                        args.cache_file.parent.mkdir(parents=True, exist_ok=True)
+                        os.link(candidate, args.cache_file)
+                        log("cache=stored")
+                    except OSError as store_error:
+                        log(f"cache=store_failed error={store_error}")
+                log(f"attempt={attempt} outcome=verified")
+                return
             if not transient:
                 raise ValueError("permanent or unsupported download failure")
-            if attempt == 3:
-                raise ValueError("attempt limit exhausted")
-            delay = attempt  # one and two seconds, within the same deadline
+            # Only transient responses reach the budget check: a conclusive
+            # permanent response above already raised, so the budget cannot
+            # mask it as BudgetSpent.
+            saw_transient = True
+            remaining()
+            # Growing, capped, within the same deadline: the deadline is the
+            # only limit on attempts.
+            delay = min(attempt, MAX_BACKOFF_SECONDS)
             if remaining() <= delay:
-                raise ValueError("total budget cannot accommodate backoff")
+                raise BudgetSpent("total budget cannot accommodate backoff")
             log(f"attempt={attempt} outcome=transient retry_delay_seconds={delay}")
             clock_sleep(delay)
 
@@ -238,8 +306,11 @@ try:
     outcome = "verified"
 except (OSError, ValueError) as error:
     log(f"failure={error}")
+    if isinstance(error, BudgetSpent) and saw_transient and not saw_definitive:
+        failure_class = "transient"
 finally:
-    log(f"outcome={outcome} attempts={attempts} total_seconds={monotonic() - started:.3f} "
+    detail = "" if outcome == "verified" else f" class={failure_class}"
+    log(f"outcome={outcome}{detail} attempts={attempts} total_seconds={monotonic() - started:.3f} "
         f"budget_seconds={args.budget_seconds}")
 sys.exit(0 if outcome == "verified" else 1)
 PY

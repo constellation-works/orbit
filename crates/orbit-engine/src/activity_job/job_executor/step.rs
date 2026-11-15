@@ -1,28 +1,60 @@
 use super::*;
 
 pub(super) fn run_step(step: &JobV2Step, ctx: &ExecCtx<'_>) -> Result<StepOutcome, DispatchError> {
-    // `when:` evaluated once, before retry. A skipped step doesn't retry.
-    if let Some(expr) = &step.when {
-        let tctx = ctx.template_ctx();
-        let matched = evaluate_bool_expr(expr, &tctx)
-            .map_err(|err| DispatchError::JobExecution(format!("when expr: {err}")))?;
-        if !matched {
-            emit_job_event_lossy(
-                &ctx.audit,
-                ctx.task_id(),
-                V2AuditEventKind::StepSkipped {
-                    step_id: step.id.clone(),
-                    reason: when_false_skip_reason(expr),
-                },
-            );
-            return Ok(StepOutcome {
-                success: true,
-                output: Value::Null,
-                message: None,
-            });
-        }
+    if step_skipped_by_when(step, ctx)? {
+        return Ok(skipped_step_outcome());
     }
+    run_admitted_step(step, ctx)
+}
 
+/// What a step its `when:` skipped returns: a successful no-op with a null
+/// output. It records no pipeline entry, so later templates see it absent.
+pub(super) fn skipped_step_outcome() -> StepOutcome {
+    StepOutcome {
+        failure_code: None,
+        success: true,
+        output: Value::Null,
+        message: None,
+    }
+}
+
+/// Evaluate the step's `when:` once, before retry (a skipped step doesn't
+/// retry). True when it is false: the skip is audited, and a skipped
+/// auto-task step recorded, before returning.
+pub(super) fn step_skipped_by_when(
+    step: &JobV2Step,
+    ctx: &ExecCtx<'_>,
+) -> Result<bool, DispatchError> {
+    let Some(expr) = &step.when else {
+        return Ok(false);
+    };
+    let tctx = ctx.template_ctx();
+    let matched = evaluate_bool_expr(expr, &tctx)
+        .map_err(|err| DispatchError::JobExecution(format!("when expr: {err}")))?;
+    if matched {
+        return Ok(false);
+    }
+    emit_job_event_lossy(
+        &ctx.audit,
+        ctx.task_id(),
+        V2AuditEventKind::StepSkipped {
+            step_id: step.id.clone(),
+            reason: when_false_skip_reason(expr),
+        },
+    );
+    // A skipped auto-task step stays `skipped` to later waits: a
+    // successful no-op is not accepted prerequisite evidence.
+    if let Some(name) = step.auto_task_name() {
+        record_skipped_auto_task_step(step, name, ctx)?;
+    }
+    Ok(true)
+}
+
+/// Run a step whose `when:` admitted it (or that has none).
+pub(super) fn run_admitted_step(
+    step: &JobV2Step,
+    ctx: &ExecCtx<'_>,
+) -> Result<StepOutcome, DispatchError> {
     let step_event_id = emit_job_event(
         &ctx.audit,
         ctx.task_id(),
@@ -33,8 +65,13 @@ pub(super) fn run_step(step: &JobV2Step, ctx: &ExecCtx<'_>) -> Result<StepOutcom
     .map_err(|e| DispatchError::AuditFailed(format!("{e:?}")))?;
     ctx.audit.push_parent_lossy(step_event_id);
 
+    // An auto-task step binds a task and waits for it; it has no retry or
+    // recovery activity, and a pass that cannot settle parks the run.
     let (result, lock_wait_ms) =
-        orbit_common::fs::lock_wait::measure(|| run_step_with_retry(step, ctx));
+        orbit_common::fs::lock_wait::measure(|| match step.auto_task_name() {
+            Some(name) => run_auto_task_step(step, name, ctx),
+            None => run_step_with_retry(step, ctx),
+        });
 
     ctx.audit.pop_parent_lossy();
     let (outcome_str, error_message) = match &result {
@@ -48,8 +85,11 @@ pub(super) fn run_step(step: &JobV2Step, ctx: &ExecCtx<'_>) -> Result<StepOutcom
         Err(error @ DispatchError::ChildRunCancelled { .. }) => {
             ("cancelled", Some(error.to_string()))
         }
+        Err(error @ DispatchError::AutoTaskParked(_)) => ("parked", Some(error.to_string())),
         Err(err) => ("error", Some(err.to_string())),
     };
+    let error_message =
+        error_message.map(|message| orbit_common::security::redaction::redact_all(&message));
     emit_job_event_lossy(
         &ctx.audit,
         ctx.task_id(),
@@ -111,10 +151,17 @@ pub(super) fn run_step_with_retry(
                 // Another try would spend another provider invocation on a
                 // stop the agent already declared. Nor is an upgrade refusal:
                 // the next attempt meets the same installed `orbit`.
-                if outcome.message.as_deref().is_some_and(|message| {
-                    orbit_types::workflow::is_task_blocked_by_agent(None, Some(message))
-                        || orbit_types::workflow::is_upgrade_pending(None, Some(message))
-                }) {
+                // Test the two classes directly: `unrepairable_failure` returns
+                // the first matching class, so a blocker whose evidence quotes
+                // another unrepairable marker would otherwise be missed here.
+                let error_code = outcome
+                    .failure_code
+                    .as_ref()
+                    .map(orbit_types::workflow::StepFailureCode::as_str);
+                let message = outcome.message.as_deref();
+                if orbit_types::workflow::is_task_blocked_by_agent(error_code, message)
+                    || orbit_types::workflow::is_upgrade_pending(error_code, message)
+                {
                     return recover_or_return_original(
                         step,
                         ctx,
@@ -173,6 +220,7 @@ pub(super) fn run_step_with_retry(
     let failure = match last_err {
         Some(err) => StepFailure::Error(err),
         None => StepFailure::Outcome(last_failed_outcome.unwrap_or(StepOutcome {
+            failure_code: None,
             success: false,
             output: Value::Null,
             message: None,
@@ -235,7 +283,7 @@ pub(super) fn emit_denied_if_applicable(
             task_id,
             V2AuditEventKind::StepDenied {
                 step_id: step_id.to_string(),
-                reason: err.to_string(),
+                reason: orbit_common::security::redaction::redact_all(&err.to_string()),
             },
         );
     }

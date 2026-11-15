@@ -1,9 +1,9 @@
 ---
 title: Auto-tasks — Overview
 owner: claude
-last_updated: 2026-10-30
-last_validated: 2026-10-29
-status: Accepted
+last_updated: 2026-11-10
+last_validated: 2026-11-10
+status: Implemented
 stage: shipped
 next: "—"
 feature: auto-tasks
@@ -13,7 +13,7 @@ summary: Dynamically-defined recurring task templates minted by the host clock t
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327, ORB-18069, ORB-18124, ORB-18125, ORB-18126, ORB-18127, ORB-18128, ORB-18129, ORB-18134]
+related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327, ORB-18069, ORB-18124, ORB-18125, ORB-18126, ORB-18127, ORB-18128, ORB-18129, ORB-18134, ORB-20704]
 ---
 
 # Auto-tasks — Overview
@@ -63,9 +63,9 @@ becomes just the first definition.
   are shown on the Operations auto-task panel, not on the routines surface.
 - **Listing state** — whether a definition fires on this host is decided once,
   in `OrbitRuntime::auto_task_listing_state`, and `orbit auto-task list`, MCP
-  `orbit.auto_task.list` (plain and bounded) and `GET /api/auto-tasks` render
-  that decision. It carries the effective enabled state (the toggle, or for
-  one release the deprecated `after-landing` policy), the skip reason when it
+  `orbit.auto_task` action `list` (plain and bounded) and `GET /api/auto-tasks` render
+  that decision. It carries the effective enabled state (the definition's own
+  `enabled` flag), the skip reason when it
   never fires here — its seeding plugin is off, or it is an enabled delivery
   definition another machine owns — and the schedule state with the next due
   slot. The CLI labels the row `inactive`, `skipped`, `enabled` or `disabled`
@@ -77,6 +77,18 @@ becomes just the first definition.
   and reasons, plus `load_errors_total` and `load_errors_truncated`; these
   diagnostics are independent of item pagination and `cursor_state_error`.
   If no definition loads and any fails, the list fails closed.
+- **Listing documents** — `application/auto_tasks/projection.rs` owns the
+  ordinary tool, CLI marker, bounded MCP and HTTP row profiles. These preserve
+  each surface's existing field set: ordinary rows serialize the full definition;
+  CLI rows add default inactive/skip markers after the audited tool call;
+  bounded rows omit the template and condition diagnostics; HTTP rows include
+  summaries and a partial template using the request's batched task metadata.
+  Only bounded description and target text is redacted and capped at 4096
+  UTF-8-safe bytes, with ` [display truncated]` appended when capped and no
+  whitespace trimming. Condition diagnostics are omitted on ordinary/CLI
+  non-condition rows and all bounded rows; HTTP always names `condition`, using
+  `null` for a non-condition schedule. Listing-state evaluation and request
+  costs remain separate from the row profiles.
 - **Dedupe & provenance** — each minted task carries an `auto-task:<name>` tag;
   `skip_if_open` uses that tag to avoid firing while a prior instance is open.
 - **Manual mint** — `orbit auto-task mint <name>` mints one task from a
@@ -87,13 +99,14 @@ becomes just the first definition.
   with deletion, so a definition removed before admission is not minted
   (ORB-10439, ORB-13432).
 - **Default catalog** — Orbit embeds a small catalog of workspace definitions.
-  Initialization materializes a missing catalog file under `.orbit/auto_tasks/`
-  but every default is `enabled: false`. Seeding neither mints a task nor
-  enables a routine or auto-task; an operator must explicitly enable the
-  definition or use the existing manual-mint surface. Re-initialization
-  preserves an existing definition byte-for-byte, including with workspace
-  reconciliation `--force`; destructive lower-level initialization reseeds
-  only because it recreates the Orbit directory.
+  Initialization materializes a missing catalog file under `.orbit/auto_tasks/`.
+  Every default is `enabled: false` except `host-health`, the one default that
+  ships enabled ([Enabled by default](#enabled-by-default-host-health)). Seeding
+  never mints a task; an operator must explicitly enable any other definition
+  or use the existing manual-mint surface. Re-initialization preserves an
+  operator-edited or workspace-authored definition byte-for-byte, including
+  with workspace reconciliation `--force`; destructive lower-level
+  initialization reseeds only because it recreates the Orbit directory.
 
 ## 3. At a Glance
 
@@ -114,11 +127,14 @@ becomes just the first definition.
 
 These YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. The directory also holds the retired
-`blocked-task-triage.yaml`, which `RETIRED_AUTO_TASK_FILES` registers instead. `orbit workspace init` materializes a
-missing file as `enabled: false`; re-init does not overwrite a workspace-authored
-definition of the same name.
+`blocked-task-triage.yaml`, which `RETIRED_AUTO_TASK_FILES` registers instead.
+A definition joins this catalog only on proven yield
+([promotion](#promotion-to-the-shipped-defaults)). `orbit workspace init` materializes a
+missing file as `enabled: false`, except `host-health`, which it writes enabled;
+re-init does not overwrite a workspace-authored definition of the same name.
 
 - `qa-sweep` — hands-on validation of recent changes (ORB-10148, embedded by ORB-10550).
+- `host-health` — enabled-by-default weekly review of host doctor findings, Orbit service logs, and read-only version, update and migration checks, with actionable operator resolution steps.
 - `friction-curation` — disabled-by-default daily evidence-first pass that deduplicates open
   friction records, re-verifies survivors against current behavior, resolves
   records that no longer reproduce, and files non-duplicate fix tasks for
@@ -127,10 +143,12 @@ definition of the same name.
   applicable application code, dependencies, secret handling, and configuration;
   each actionable finding is filed as a durable Orbit task, and a clean review
   is a successful no-op (ORB-10950).
-- `code-review` — disabled-by-default six-hourly review of commits merged
-  since the previous sweep's recorded cursor. Its cursor selector requires the
-  `auto-task:code-review` provenance tag, so only a minted sweep can be the
-  cursor task.
+- `code-review` — disabled-by-default six-hourly review of the tracked tree in
+  a two-module rotation, choosing the least recently reviewed modules. For each
+  behavior change, it uses tracked files to locate the repository's
+  documentation, website, and shipped-skill directories and searches them for
+  the old claim. Its cursor selector requires the `auto-task:code-review`
+  provenance tag, so only a minted sweep can be the cursor task [ORB-13636].
 - `full-code-review` — disabled-by-default, minted on demand (its monthly cron
   stays off until enabled). The minted coordinator pins one integration-branch
   commit and counts only source in programming or scripting languages, tests,
@@ -144,8 +162,10 @@ definition of the same name.
   code totals 25,000 lines or fewer, make it one area. Do not file an area under
   5,000 lines unless no in-bound merge is possible, and record the reason in
   `full-review-areas.json`. That artifact records the inventories, counts and
-  exclusions. It files one area-review
-  chore per bounded area tagged
+  exclusions. It files at most 24 area-review chores per run, ranking
+  hard-to-review areas (concurrency, persistence, security, process control)
+  first and then the least recently reviewed, and records the rest as `deferred`.
+  Each filed chore is one bounded area tagged
   `full-code-review` + `no-diff-expected` — never `code-review` — at `hard`
   complexity or below with no pinned crew. Area reviewers read every partition
   of at most 10,000 lines in full, recording file/range coverage and findings
@@ -154,7 +174,9 @@ definition of the same name.
   it. Incomplete coverage reports `review_incomplete` with uncovered partitions
   in the artifact and task comment. Findings are `bug`s tagged `code-review` +
   `full-code-review`, with source-file and matching test context selectors
-  [ORB-18948].
+  [ORB-18948]. Reviewers skip `nit` findings, anything already fixed at the
+  integration tip or tracked by any task, and re-search before retrying a
+  failed filing [ORB-20705].
 - `qa-full-sweep` — disabled-by-default, minted on demand (its monthly cron
   stays off until enabled). It is the hands-on counterpart of
   `full-code-review`: where `qa-sweep` validates only the changes since its
@@ -183,10 +205,12 @@ definition of the same name.
   after the areas, tagged `qa-full-sweep` + `qa-full-sweep-rollup` +
   `no-diff-expected` + `auto-task:qa-full-sweep`, with no crew and no `os:`
   tag. Its description and acceptance criteria carry an owner-evidence
-  contract: area-task status reads and each area's `qa-progress.json` are
-  evidence only the owner task store can produce, because a claimed
-  `orbit.task.show` or `orbit.task.artifact.get` refuses an id other than
-  the claimed task. Preparation records that contract as `required_machine`,
+  contract: area-task status reads and each area's `qa-progress.json` must
+  come from the owner task store. A claimed worker can read ordinary task
+  records and non-review artifacts for any task in its claimed workspace;
+  `review-*` artifact reads remain limited to the claimed task. This roll-up's
+  owner-local evidence requirement is a separate policy. Preparation records
+  that contract as `required_machine`,
   so a follower is not offered the roll-up and the owner's drain may start
   it. The coordinator sets the roll-up's `dependencies` to every area task
   with `orbit.task.update` on the owner, and finishes only when that field
@@ -205,21 +229,6 @@ definition of the same name.
   `sweep-cursor.json`, which the definition's `skip_if_unchanged` cursor
   (keyed on `qa-full-sweep-rollup`) reads to skip a tick when nothing has
   landed since.
-- `design-sync` — disabled-by-default reconciliation of at most three design
-  feature folders every 720 minutes, at medium complexity [ORB-18557]. Reads
-  `docs/design/CONVENTIONS.md` every run; without it, makes no edits or filings
-  and finishes as a successful no-op. Features with related task status
-  changes since their ledger date come first, oldest reconciliation first,
-  falling back to entry-doc validation and git dates. It checks stage, status,
-  next, phase/slice citations, implementation claims and Task References
-  against task records and code. Owner approval is required for `Accepted`;
-  integration-branch delivery is required for `shipped`. Design intent stays
-  intact: unexplained divergences get existing or proposed tasks, with at
-  most three filings per run. Frontmatter changes regenerate the doc index.
-  Each run attaches `design-sync-ledger.json` with per-feature outcomes and
-  cumulative state, including no-ops. It locks `dir:docs`; clean runs use
-  validated no-diff evidence. Mechanical documentation checks stay with
-  `doc-duties` at low complexity.
 - `doc-duties` — disabled-by-default daily validation of the
   least-recently-attempted tracked documentation. Candidates exclude generated
   and historical records, including paths in the repository's link-check or
@@ -242,7 +251,12 @@ definition of the same name.
   solely for this task. Its template locks `dir:docs` plus the tracked
   top-level `README.md` and `CONTRIBUTING.md` documents its brief validates
   (never the whole tree, which starves on a busy drain) and does not carry
-  `no-diff-expected`, since verified drift corrections produce diffs. Clean
+  `no-diff-expected`, since verified drift corrections produce diffs. The
+  executing worker selects the batch at run time. The task pilot keeps that
+  template footprint: it does not narrow the lock to a guessed batch or to
+  a document the brief excludes (generated indexes, archives, and records
+  the repository identifies as historical, including its link-check or
+  doc-index exclusion list). Clean
   batches use validated no-diff evidence.
 - `comment-hygiene` — disabled-by-default daily check of code comments, the
   counterpart of `doc-duties` for source files. At most six files and about
@@ -257,14 +271,17 @@ definition of the same name.
   pilot or operator) establishes the selected `file:` selectors before it
   reaches `backlog` — never a selector-free whole-tree holder in a drain
   (design §4e).
-- `run-failure-patterns` — disabled-by-default weekly, rate-driven scan of the
+- `run-failure-patterns` — disabled-by-default weekly, rate-driven scan [ORB-18556] of the
   workspace's own pipeline failures. It always analyses the 7 days before scan
   start (the prior cursor only splits out new-since-cursor occurrences) and
   also computes 30-day rates, storing per-job raw and folded failure rates with
   deltas in `run-failure-report.json` (schema version 2). On an owner it also
-  reads the failure and release settlements followers' claimed leaves sent,
+  reads the failure and release settlements followers' claimed leaves sent [ORB-14439],
   through `orbit run settlements --no-reconcile`, since those leaves never
-  enter the owner's run history. A follower settlement duplicates an owner
+  enter the owner's run history, and counts one as a failure only when its
+  typed `accounting.counts_as_failure` is true; designed holds, and runs or leaves an
+  Orbit upgrade paused (`upgrade_paused`), go to a
+  separate `held_7d` counter so raw occurrences reconcile [ORB-21840]. A follower settlement duplicates an owner
   history row only when all three match: the row's `executed_on.machine_id`
   equals the settlement's `machine_id`, the row's `run_id` equals the
   settlement's `leaf_run_id`, and the row's `task_ids` lists the settlement's
@@ -293,17 +310,41 @@ definition of the same name.
   without filing or attaching a cursor. The scan never mutates run state —
   its run and settlement reads pass `--no-reconcile`, so an orphaned run it
   lists is not finalized — and a pass with nothing new is a successful no-op
-  that still stores the report and cursor.
-- `backlog-hygiene` — disabled-by-default weekly, report-only scan of blocked,
-  orphaned in-progress/review, aged proposed, and dependency-unblocked idle
-  tasks. Its execution summary recommends human follow-up without changing task
-  status or dispatching work.
+  that still stores the report and cursor. File-wide fixes use `file:` context
+  selectors, with exclusions coming from the workspace's own agent guidance.
+- `pilot-block-patterns` — disabled-by-default daily upstream counterpart of
+  `run-failure-patterns`. A first pass, with no prior cursor, uses the 3 days
+  before scan start; a later pass uses the 14 days before scan start, unless the
+  prior cursor has `resume_after`, in which case the pass continues that window.
+  Candidates come from `escalation_triage_pipeline` and
+  `blocked_task_recovery_pipeline` run history plus current proposed and blocked
+  tasks, and a pass reads at most 60 tasks. A capped pass still completes, with
+  `pilot-block-report.json` marked `partial` and listing `read_tasks`, while
+  `pilot-block-cursor.json` carries `resume_after` and `resume_after_task`. It reads
+  the dispositions `escalation_triage_pipeline`
+  recorded (`pilot_warning_triaged` and, on older history, `blocked_task_triaged` markers
+  and comments, plus final-recovery decision cards, grouped first by their
+  recurring human actions), then untriaged
+  pilot holds and final-recovery escalations from task history, `pilot_warnings`
+  and run records. Each cause that recurs (at least 3 occurrences across 2
+  tasks) is routed to its source: the filer, the task-pilot activity, the
+  final-recovery activity, `run-failure-patterns` (where it only ensures a fix
+  is open) or host setup. It dedupes against open and 30-day-closed work, files
+  at most 5 `proposed` fixes per pass, compares groups with the prior pass's
+  `pilot-block-report.json`, and files a regression when a done fix did not
+  reduce its group. When the workspace maps a tracked corpus index and provides
+  the corpus script, it proposes every observed group in the corpus and
+  regenerates its index; otherwise it records the missing prerequisite and
+  leaves a clean worktree. It never acts on an individual blocked or held task, and
+  runs only on the owner (ORB-20516).
 - `delivery-code-review` — disabled-by-default review of newly landed
-  deliveries. Its `enabled` flag is the after-landing review switch
-  [ORB-13992]; the deprecated `operation.review_policy = after-landing`
-  enables a copy no operator has configured, which `list` and `show` report
-  as `effective_enabled`. The dashboard groups and toggles by that effective
-  value and keeps the raw flag as the compare-and-set token. The former
+  deliveries. For behavior changes, its instructions locate documentation,
+  website, and shipped-skill directories from tracked files and search them for
+  stale claims. Its `enabled` flag is the after-landing review switch
+  [ORB-13992]; the deprecated `operation.review_policy = after-landing` no
+  longer enables it. `list` and `show` still report `effective_enabled`, which
+  now equals `enabled`. The dashboard groups and toggles by that value and keeps
+  the raw flag as the compare-and-set token. The former
   `delivery-qa` default is retired and is not seeded;
   hands-on QA stays with `qa-sweep` (recent changes) and `qa-full-sweep`
   (the whole product at one commit).
@@ -365,7 +406,8 @@ definition of the same name.
   inventoried, but retirement tasks are filed only when the repository
   documents a support window; without one the inventory goes in the run
   summary and nothing is filed for retirement. Lint-suppression counting
-  belongs to the `suppression-ratchet` default. Each run files at most 6
+  belongs to a workspace's own `suppression-ratchet` definition, when it has
+  one. Each run files at most 6
   `proposed` tasks with `context_files` and a `spawned_from` relation to the
   minted chore, which is tagged `no-diff-expected` and never builds or runs
   tests.
@@ -391,49 +433,14 @@ definition of the same name.
   evidence, carrying the record between runs in a `path-risk.json` artifact.
   Each run files at most 3 `proposed` fixes, tagged `path-risk-review` and
   `no-auto-approve`, with `context_files` and a `spawned_from` relation to the
-  minted chore. A fix changes the mechanism behind its path class (a footprint
-  or lock rule, a generator check, or a split of a coupling hotspot), never one
-  regression. A workspace whose rankings all sit below `min_support` is a
-  successful no-op that reports each ranking's below-support counts and files
-  nothing.
+  minted chore. A split or new module names each file it creates in
+  `context_files` and is filed with `allow_missing_context: true`, so the task
+  carries `context_creation_authorized`. A fix changes the mechanism behind its
+  path class (a footprint or lock rule, a generator check, or a split of a
+  coupling hotspot), never one regression. A workspace whose rankings all sit
+  below `min_support` is a successful no-op that reports each ranking's
+  below-support counts and files nothing.
   The minted chore is tagged `no-diff-expected` and never builds or runs tests.
-- `ci-budget-watch` — disabled-by-default daily measurement of the main
-  hosted test job's elapsed time against the repository's documented CI
-  budget. It discovers the job from the CI workflow files (a gate job that
-  waits on the test jobs, otherwise the job whose steps run the test
-  suite) and the budget (figure, statistic, and population, with its
-  `file:line` source) from the agent guides, contributing guide, and docs;
-  with no documented budget it records the trend and files nothing, and
-  with no hosted CI or unreachable run history it is a successful no-op
-  that states the reason. Each run attaches `ci-budget-watch/report.md`
-  with the last 20 completed runs (SHA, run id, conclusion, elapsed
-  seconds), the trend against the previous report, and the measurement
-  gaps. When over budget it keeps exactly one open `ci-budget` task:
-  an existing open one is updated with the new measurements, otherwise
-  one `proposed` repair task is filed with acceptance criteria,
-  `context_files`, and a `spawned_from` relation. The minted chore is
-  tagged `no-diff-expected` and never edits source, CI, or tests.
-- `flaky-test-hunt` — disabled-by-default weekly hunt for flaky tests in
-  hosted CI history over a 14-day window, on the integration branch and
-  recent pull-request runs. It finds flakes through 2 signals: a failed
-  run followed by a succeeded rerun of the same SHA in the same
-  workflow, and a failed run on one integration-branch commit followed
-  by a succeeded run on its immediate child when the diff between the
-  2 SHAs changed no test file, same-package file, excerpt-named file,
-  or suite-composition file. Test names and bounded failure excerpts
-  come from the failed runs' logs; runs whose logs cannot be parsed
-  are recorded as gaps and contribute nothing. Each run attaches
-  `flaky-test-hunt.json` with the flake count per test, every
-  occurrence's run ids and SHAs, excluded candidates, gaps, and a diff
-  against the previous run, and files at most 4 `proposed` fix tasks,
-  highest flake count first, tagged `ci-flake` with the verified test
-  file as `context_files` and a `spawned_from` relation, deduplicated
-  against open `ci-flake` and CI-failure-sweep tasks. A filed task
-  requires the root cause fixed or the test deleted as redundant, and
-  rejects silent retries or quarantine without an exit plan. With no
-  hosted CI or unreachable run history it is a successful no-op that
-  states the reason. The minted chore is tagged `no-diff-expected`
-  and never builds or runs tests.
 - `agent-guidance-audit` — disabled-by-default audit every 3 days of agent
   guidance files: `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude/skills/`,
   `.agents/skills/`, `copilot-instructions.md` under `.github`, and Cursor rule
@@ -448,30 +455,8 @@ definition of the same name.
   minted chore. Stylistic rewrites are not filed. The chore is tagged
   `no-diff-expected` and does not edit the repository. A workspace-authored
   `skill-validation` definition is left in place.
-- `structure-sweep` — disabled-by-default weekly scan in one pass over
-  source files and test files. It records the thresholds in every run
-  summary (a non-test source file over 1,000 lines, a module index file
-  over 400 lines of mostly logic, and a test file over 2,000 lines),
-  discovers languages and source and test roots from tracked files, and
-  keys layout candidates to the detected language's convention, recording
-  rejected leads with a reason. Each run files at most 4 `proposed`
-  restructuring or test-reduction tasks, largest first and grouped by
-  package or subsystem, each with `context_files` and a `spawned_from`
-  relation to the minted chore, which is itself tagged `no-diff-expected`
-  and never builds or runs tests. A test-reduction task keeps that file's
-  coverage — every scenario survives or is named with a reason — and
-  reports the test count before and after.
-- `crew-ladder-review` — disabled-by-default monthly (`0 9 1 * *`, host-local)
-  medium no-diff chore, seeded through both shipped registries like the other
-  24 defaults. Reviews per-tier exact model/effort/digest mature ladder and
-  operator trial evidence. Every run attaches
-  `crew-ladder-review.json` and fetches the prior review for deltas. At most three
-  duplicate-checked proposed configuration revisions or bounded evaluation tasks
-  carry exact targets, evidence and `spawned_from`. It never changes live routing,
-  effort, ordering, mode, grading or experiment lifecycle. Shadow projections
-  cannot substitute for mature actual trial quality. See [monthly ladder review](../crew-ladder/1_scope.md#monthly-evidence-review).
 
-- `auto-task-yield-review` — disabled-by-default monthly review of whether
+- `auto-task-yield-review` — disabled-by-default monthly review [ORB-18135] of whether
   this workspace's enabled auto-task definitions pay for themselves. For
   each enabled definition over the last 30 days it reports minted chores
   by final status and no-op successes, cost per run from run evidence
@@ -490,40 +475,129 @@ definition of the same name.
   never edits, toggles or mints definitions; changing configuration is
   the operator's decision.
 
-- `workflow-health-audit` — disabled-by-default weekly (`medium`) owner-only
-  validation of every effective job and routine, including triggers, admission,
-  no-ops, failure/recovery and durable effects. Recent run evidence and safe
-  existing isolated fixtures establish per-definition results; missing proof
-  never counts as validation. Up to five deduplicated concrete repairs become
-  proposed tasks; other actionable obstacles become frictions. Complete
-  coverage and overflow remain in `workflow-health-audit.json`. It does not
-  fire production workflows, invoke providers or alter live run state.
+- `recovery-fault-audit` — disabled-by-default weekly bias check [ORB-23301]
+  of the `fault` every final-recovery decision records
+  ([model ranking §5.2](../model-ranking/2_design.md#52-fault-on-final-recoveries)).
+  It enumerates decisions through the blind `final_recovery` task-field
+  projection, samples 10 not audited before and not judged by the
+  auditor's own model family (`fault_judged_by`), and re-judges each from
+  the task's title, description, criteria, context files and the recorded
+  evidence, never reading the implementer's crew, provider or model. It
+  carries per-season judged and disagreed counts forward from the previous
+  `recovery-fault-audit.json`, reports each season's disagreement rate and
+  marks a season above 20% `suspended`, and files at most one proposed
+  rubric-revision task. Seasons are `season-0` until model ranking records
+  them. It ships with the fault record it audits rather than after proven
+  yield (see [Promotion](#promotion-to-the-shipped-defaults)): the design
+  makes the audit a condition of using the fault, so no workspace could
+  run it earlier. `auto-task-yield-review` measures it like any other
+  default. The minted chore is tagged `no-diff-expected`.
 
-- `suppression-ratchet` — disabled-by-default weekly (`hard`) static count of
-  lint suppressions, TODO/FIXME/HACK/XXX, ignored tests and language escape
-  hatches at one integration-branch SHA. Patterns follow detected languages;
-  package/area counts exclude vendored, generated and build output and split
-  justified from unjustified occurrences. `suppression-ratchet.json` carries
-  the baseline and comparison evidence; the first run files nothing. Later
-  runs file ratchet bugs naming introducing commits plus at most one small
-  reduction in the highest-churn eligible area, capped at three proposed tasks
-  with verified context and `spawned_from`. Categories are grouped when needed
-  to keep every increase covered within the cap. Justified occurrences are
-  never filed. This default owns suppression counting for the portable
-  `code-health-sweep`; the minted chore is `no-diff-expected` and never builds.
+- `regression-label-audit` — disabled-by-default weekly bias check [ORB-23842]
+  of the escape, nature and severity a `regression_from` link records.
+  `sample_size` (10) and `period_days` (7) are fields of the definition,
+  not constants in code. It samples that many links whose filing task was
+  created in the window, skipping links a previous audit judged and links
+  whose `created_by` or `created_by_model` names the auditor's own model
+  family — the same family test `recovery-fault-audit` applies to
+  `fault_judged_by`. The evidence packet is the filing and culprit tasks'
+  title, description, acceptance criteria and context files. It contains
+  neither the filer's labels nor any model, provider or crew name of the
+  filer or of the culprit's implementer or reviewer. The labels ride in the
+  `relations` field of every task-list response, so listing, the family
+  and window filters and the draw run in a helper script carried in the
+  brief, outside the judging model's context; the model sees only link
+  identity and the packet, and the helper reads the recorded labels only
+  after the model's second labels are saved [ORB-23925]. The run attaches
+  `regression-label-audit.json` with the second escape, nature and severity
+  and per-field agreement, and the execution summary reports the sample's
+  disagreement rate for each field. It writes only that artifact and its
+  own summary or comment. It ships with the labels it audits rather than
+  after proven yield, for the same reason as `recovery-fault-audit`: the
+  ranking charges on those labels, so no workspace could run the check
+  earlier. The minted chore is tagged `no-diff-expected`.
 
-The former `blocked-task-triage` default (an hourly reader of escalated blocks)
-is retired and is not seeded. The seeded `blocked_task_triage` routine replaces
-it: its `block_escalated` state trigger admits each escalated block episode once
-into the hard-tier `escalation_triage_pipeline`
-([automation triggers §6.2](../automation-triggers/2_design.md#62-escalated-blocks-block_escalated),
+The former `blocked-task-triage` default (an hourly reader of escalated blocks,
+shipped by [ORB-17245]) is retired and is not seeded. [ORB-17744] had moved it
+to an event trigger on the escalation job, and [ORB-20629] made final recovery
+the single decider for blocked tasks, so it no longer has a routine. Final
+recovery decides blocked tasks now: it runs
+bounded mechanical steps, then escalates or opens a decision card
+([automation triggers §6.2](../automation-triggers/2_design.md#62-retired-escalated-blocks-block_escalated),
 [distributed drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)).
 Its last template stays as retired provenance (`RETIRED_AUTO_TASK_FILES`), so
 `orbit workspace sync` retires a seeded copy, settings-only forks included,
-preserves an operator-edited one, and, when the copy was enabled, reports that
-the routine replaces it. Sync never enables the routine. The
+preserves an operator-edited one, and reports an enabled copy as superseded by
+final recovery. Sync does not enable a replacement routine. The
 `skip_unless_blocked_candidates` precondition stays available to
-workspace-authored definitions.
+workspace-authored definitions. The shipped `ci-failure-remediation` definition
+was removed earlier, with its asset and seeded copy ([ORB-11115]), and the
+runner-local CI reporter was reconciled with host-owned failure filing
+([ORB-11383]).
+
+## Promotion to the shipped defaults
+
+Every shipped default reaches every Orbit user, so the catalog holds only
+definitions that have proven their yield. A new recurring chore starts as a
+workspace-local definition (`orbit auto-task add`). It may be proposed for the
+shipped catalog only after it has shown yield in at least one workspace: tasks
+it filed that landed, or a diff of its own that merged, with a low share of
+duplicate or invalid rejections. `auto-task-yield-review` is the measure; its
+`auto-task-yield.json` reports those counts per definition over 30 days. The
+change that adds a default cites that evidence: the workspace, the window, the
+runs, the landed tasks or merged diffs, and the rejection share. A default
+that stops paying for itself is demoted the same way.
+
+In Orbit's own workspace, the workspace-authored `default-auto-task-audit`
+definition checks each newly shipped default against this rule and files a
+demotion proposal when the evidence is missing.
+
+### Enabled by default: host-health
+
+`host-health` is the one shipped default whose bundled body is `enabled: true`
+(Daniel's direction on ORB-21401, delivered by ORB-21596).
+`ENABLED_BY_DEFAULT_AUTO_TASKS` in `crates/orbit-core/src/application/auto_tasks/mod.rs`
+names it, and workspace sync refuses a bundled body whose `enabled` disagrees
+with that list, so every other default still ships disabled. Its yield evidence
+is the `ws_orbit` `auto-task-yield.json` of ORB-20991 (30 days to
+2026-11-01): 2 runs, no no-op runs, 4 filed tasks that all landed, and no
+duplicate or invalid rejections.
+
+Existing workspaces follow the "no operator has configured it" rule:
+
+- `orbit init`, which only creates absent defaults in registered workspaces,
+  leaves an existing `host-health.yaml` alone.
+- `orbit workspace sync` and `orbit workspace init` refresh a managed body that
+  still holds the bytes an earlier release wrote, so a never-edited, disabled
+  `host-health` becomes enabled there.
+- Once an operator has set the flag with `orbit auto-task toggle`, the
+  settings-table value decides, across sync and re-init. A body an operator
+  edited is a fork and keeps its bytes, and its own `enabled` value.
+
+The owner pin still holds: the host tick evaluates auto-tasks only for owner
+checkouts, a replica refuses `orbit auto-task mint`, and preparation records
+`required_machine` for the workspace owner, so a seeded replica neither mints
+nor runs it.
+
+### Demoted defaults
+
+A demoted default had not proven its yield and nothing replaced it.
+ORB-20704 demoted `backlog-hygiene`, `ci-budget-watch`, `crew-ladder-review`,
+`design-sync` (shipped by [ORB-18557]), `flaky-test-hunt`, `structure-sweep`,
+`suppression-ratchet` and `workflow-health-audit`. Their names are listed in
+`orbit_config::DEMOTED_DEFAULT_AUTO_TASKS`, which `seeding.auto_tasks`
+admission still accepts, and their templates are no longer embedded. ORB-22803 later
+retired `crew-ladder-review` with the crew ladder it reviewed: it moved to
+`RETIRED_DEFAULT_AUTO_TASKS` with its last shipped template embedded again, so
+`orbit workspace sync` removes unedited copies.
+
+Unlike a retired default, a demoted default's existing copy is kept. `orbit
+workspace sync` drops its managed-manifest provenance before reconciliation
+and reports one `migrated` action, leaving the file, its settings-table entry,
+its schedule and its cursor untouched. From then on the copy is a
+workspace-local definition: sync no longer refreshes it, `orbit auto-task show`
+reports its body as user-authored, and doctor does not report it as
+deprecated. The demoted bodies stay in `body-history.json`.
 
 ## Workspace-authored definitions in this repo
 
@@ -531,7 +605,8 @@ Orbit's own checkout also carries extra `.orbit/auto_tasks/` files that are
 **not** embedded defaults. They may be enabled, name a family-specific crew, or
 encode this repository's branches and gates. Re-init preserves them:
 
-- `model-price-audit`, `release-prep`, `skill-validation`, and
+- `model-price-audit`, `release-prep`, `skill-validation`,
+  `default-auto-task-audit` (which audits the shipped defaults), and
   this repository's configured copies of catalog names such as `code-review` and
   `security-review`.
 - `qa-full-sweep`, this repository's Orbit-specific pre-release sign-off
@@ -541,6 +616,9 @@ encode this repository's branches and gates. Re-init preserves them:
   retire it, and sync reports that it occupies the bundled default's name.
 
 ## Task References
+
+- ORB-20704 — Demoted eight unproven defaults to workspace-local, keeping
+  existing copies, and made proven yield the condition for shipping a default.
 
 - [ORB-18557] — Adds the portable design-sync default and its reconciliation ledger.
 
@@ -637,6 +715,8 @@ encode this repository's branches and gates. Re-init preserves them:
   `skip_unless_blocked_candidates` precondition.
 - ORB-17744 — Retired the `blocked-task-triage` default in favour of the
   `blocked_task_triage` routine on the escalation triage pipeline.
+- ORB-20629 — Retired that routine: final recovery is the single decider for
+  blocked tasks and opens the decision card.
 - ORB-11115 / ORB-11383 — Retired the shipped CI-failure auto-task;
   runner workflows only emit fail-open run/job/commit provenance, while the
   host-owned `ci_failure_sweep` routine performs durable CI-failure filing.
@@ -647,5 +727,27 @@ encode this repository's branches and gates. Re-init preserves them:
   diverged from what the docs stated.
 - ORB-19455 — corrected the follower-settlement dedupe rule to the three-part
   machine, run and task match.
+- [ORB-10318] — added the recurring learning-deprecation review, which reports
+  stale candidates through `execution_summary`.
+- [ORB-10348] — generalized the learning-deprecation review into
+  artifact-deprecation-review, which sweeps codebase comments for stale
+  artifact references.
+- [ORB-10446] — renamed `orbit auto-task generate` to `orbit auto-task mint`.
+- [ORB-20516] — shipped `pilot-block-patterns`, which identifies recurring
+  task-pilot warnings and post-recovery blocks and routes fixes to their source.
+- [ORB-20705] — cut `full-code-review`'s 56% rejected-filing rate, including the
+  re-search before a retried filing.
+- [ORB-20991] — ran the auto-task yield review whose 30-day
+  `auto-task-yield.json` is host-health's yield evidence.
+- [ORB-21401] — recorded Daniel's direction to make host-health a default
+  auto-task (on-call, 2026-11-02).
+- [ORB-21596] — shipped host-health enabled by default, through
+  `ENABLED_BY_DEFAULT_AUTO_TASKS`.
+- [ORB-21840] — separated follower review-decision holds from failure
+  accounting, with a separate `held_7d` counter.
+- [ORB-23301] — Shipped the disabled weekly `recovery-fault-audit` default
+  with the fault final recovery records.
+- [ORB-23842] — Shipped the disabled weekly `regression-label-audit` default,
+  a blind cross-family sample of regression escape, nature and severity.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

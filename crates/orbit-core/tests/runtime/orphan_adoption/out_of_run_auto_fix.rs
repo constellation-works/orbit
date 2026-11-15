@@ -53,9 +53,21 @@ fn rereviewed_leaf_job() -> String {
     .to_string()
 }
 
+/// How a delivered leaf ended.
+#[derive(Clone, Copy)]
+pub(super) enum LeafEnd {
+    /// Its completion step failed.
+    Failed,
+    /// It succeeded at review without running completion.
+    Review,
+    /// Its completion step held the run with this delivery refusal code, an
+    /// hour ago.
+    Held(&'static str),
+}
+
 /// How a stopped leaf left its task.
 #[derive(Clone, Copy)]
-enum Shelf {
+pub(super) enum Shelf {
     /// In review, as a timed-out completion leaves it.
     Review,
     /// Blocked by the leaf's final-recovery escalation.
@@ -68,14 +80,14 @@ enum Shelf {
     OptedOut,
 }
 
-struct Leaf {
-    task: String,
-    run: String,
-    head: String,
-    number: u64,
+pub(super) struct Leaf {
+    pub(super) task: String,
+    pub(super) run: String,
+    pub(super) head: String,
+    pub(super) number: u64,
 }
 
-fn fixture() -> Fixture {
+pub(super) fn fixture() -> Fixture {
     fixture_with(&repair_leaf_job())
 }
 
@@ -91,6 +103,37 @@ impl Fixture {
     /// promoted pull request `number` on its Orbit branch, then failed in
     /// completion and left the task on `shelf`.
     fn stopped_leaf(&self, number: u64, completion: &str, shelf: Shelf) -> Leaf {
+        self.delivered_leaf(number, completion, shelf, LeafEnd::Failed)
+    }
+
+    /// A task whose delivery leaf, started without `--complete`, opened and
+    /// promoted pull request `number` and then succeeded, leaving the task
+    /// in review: its completion step never ran.
+    fn review_leaf(&self, number: u64) -> Leaf {
+        self.delivered_leaf(number, "review", Shelf::Review, LeafEnd::Review)
+    }
+
+    pub(super) fn delivered_leaf(
+        &self,
+        number: u64,
+        completion: &str,
+        shelf: Shelf,
+        end: LeafEnd,
+    ) -> Leaf {
+        self.delivered_leaf_after(None, number, completion, shelf, end)
+    }
+
+    /// As [`Self::delivered_leaf`], for a task that already records the
+    /// closed pull request `earlier` from a discarded candidate, so `number`
+    /// is its second recorded `github-pr`.
+    fn delivered_leaf_after(
+        &self,
+        earlier: Option<u64>,
+        number: u64,
+        completion: &str,
+        shelf: Shelf,
+        end: LeafEnd,
+    ) -> Leaf {
         let task = self
             .runtime
             .add_task(TaskAddParams {
@@ -99,6 +142,10 @@ impl Fixture {
                 acceptance_criteria: vec!["Its PR lands.".into()],
                 plan: "Deliver it.".into(),
                 status: Some(TaskStatus::Backlog),
+                external_refs: earlier
+                    .map(|number| ExternalRef::github_pr(number.to_string()).unwrap())
+                    .into_iter()
+                    .collect(),
                 tags: matches!(shelf, Shelf::OptedOut)
                     .then(|| "no-auto-approve".to_string())
                     .into_iter()
@@ -142,17 +189,32 @@ impl Fixture {
             state.record_pipeline_output(id, output.clone());
             self.step(&run, index, id, JobRunState::Success, None);
         }
-        // Production checkpoints only a step that succeeded, so the failed
-        // `complete_pr` leaves no entry in `step_states`.
-        self.jobs.write_run_state(&run, &state).unwrap();
-        self.step(
-            &run,
-            4,
-            "complete_pr",
-            JobRunState::Failed,
-            Some("pr_checks_failed"),
-        );
-        self.fail(&run);
+        match end {
+            LeafEnd::Failed => {
+                // Production checkpoints only a step that succeeded, so the
+                // failed `complete_pr` leaves no entry in `step_states`.
+                self.jobs.write_run_state(&run, &state).unwrap();
+                self.step(
+                    &run,
+                    4,
+                    "complete_pr",
+                    JobRunState::Failed,
+                    Some("pr_checks_failed"),
+                );
+                self.fail(&run);
+            }
+            LeafEnd::Review => {
+                // A review delivery skips `complete_pr` and ends `success`.
+                state.record_step(4, JobRunState::Skipped, None, None);
+                self.jobs.write_run_state(&run, &state).unwrap();
+                self.step(&run, 4, "complete_pr", JobRunState::Skipped, None);
+                self.succeed(&run);
+            }
+            LeafEnd::Held(code) => {
+                self.jobs.write_run_state(&run, &state).unwrap();
+                self.hold(&run, 4, code);
+            }
+        }
         self.runtime
             .apply_task_automation_update(
                 &task,
@@ -216,6 +278,39 @@ impl Fixture {
             .unwrap();
     }
 
+    /// `run`'s completion step at `index` holds it with the delivery refusal
+    /// `code`, an hour ago, as a fail-closed completion decision does.
+    pub(super) fn hold(&self, run: &str, index: usize, code: &str) {
+        let current = self.jobs.get_job_run(run).unwrap().unwrap();
+        if current.state == JobRunState::Pending {
+            self.jobs
+                .mark_job_run_running(run, Utc::now(), std::process::id())
+                .unwrap();
+        }
+        self.step(run, index, "complete_pr", JobRunState::Failed, Some(code));
+        self.jobs
+            .finalize_job_run(
+                run,
+                JobRunState::Held,
+                Utc::now() - chrono::TimeDelta::hours(1),
+                None,
+            )
+            .unwrap();
+    }
+
+    /// `run` ends `success`, as a delivery that stopped at review does.
+    fn succeed(&self, run: &str) {
+        let current = self.jobs.get_job_run(run).unwrap().unwrap();
+        if current.state == JobRunState::Pending {
+            self.jobs
+                .mark_job_run_running(run, Utc::now(), std::process::id())
+                .unwrap();
+        }
+        self.jobs
+            .finalize_job_run(run, JobRunState::Success, Utc::now(), None)
+            .unwrap();
+    }
+
     /// A delivery run of `input` that ended `success`, as an ordinary
     /// delivery does.
     fn finish_delivery(&self, input: Value) -> String {
@@ -235,7 +330,14 @@ impl Fixture {
 
     /// The forge reports `leaf`'s pull request open at `head_sha`, opened by
     /// `author`, conflicting and with `failed` required checks.
-    fn blocked(&self, leaf: &Leaf, head_sha: &str, author: &str, conflict: bool, failed: &[&str]) {
+    pub(super) fn blocked(
+        &self,
+        leaf: &Leaf,
+        head_sha: &str,
+        author: &str,
+        conflict: bool,
+        failed: &[&str],
+    ) {
         self.forge.0.lock().unwrap().blockers.insert(
             leaf.number,
             PullRequestBlockers {
@@ -250,6 +352,35 @@ impl Fixture {
                 failed_required_checks: failed.iter().map(|name| name.to_string()).collect(),
                 pending_required_checks: Vec::new(),
                 passed_required_checks: Vec::new(),
+            },
+        );
+    }
+
+    /// The forge reports required checks on `leaf`'s open pull request at
+    /// `head_sha`: `passed` have finished and `pending` are still running.
+    /// Replaces an earlier [`Self::blocked`] row for the same pull request.
+    pub(super) fn report_required_checks(
+        &self,
+        leaf: &Leaf,
+        head_sha: &str,
+        author: &str,
+        passed: &[&str],
+        pending: &[&str],
+    ) {
+        self.forge.0.lock().unwrap().blockers.insert(
+            leaf.number,
+            PullRequestBlockers {
+                pull: ForgePullRequest {
+                    number: leaf.number,
+                    head_branch: leaf.head.clone(),
+                    body: format!("Delivers {}.", leaf.task),
+                    author: author.to_string(),
+                },
+                head_sha: head_sha.to_string(),
+                conflicting: false,
+                failed_required_checks: Vec::new(),
+                pending_required_checks: pending.iter().map(|name| (*name).to_string()).collect(),
+                passed_required_checks: passed.iter().map(|name| (*name).to_string()).collect(),
             },
         );
     }
@@ -291,14 +422,14 @@ impl Fixture {
     }
 }
 
-fn started<'a>(pass: &'a Value, task: &str) -> Option<&'a Value> {
+pub(super) fn started<'a>(pass: &'a Value, task: &str) -> Option<&'a Value> {
     pass["auto_fix"]["started"]
         .as_array()?
         .iter()
         .find(|entry| entry["task_id"] == task)
 }
 
-fn repair_skip(pass: &Value, task: &str) -> Option<String> {
+pub(super) fn repair_skip(pass: &Value, task: &str) -> Option<String> {
     pass["auto_fix"]["skipped"]
         .as_array()?
         .iter()
@@ -381,6 +512,26 @@ fn a_conflicting_pull_request_its_delivery_blocked_is_handed_back_for_an_auto_fi
     let again = fx.pass(&drain, "review", true);
     assert_eq!(again["auto_fix"]["started"], json!([]), "{again}");
     assert_eq!(fx.retries(&leaf.run).len(), 1);
+}
+
+/// A requeued task keeps its closed earlier pull request and appends the
+/// fresh one: the repair pass observes and hands back the latest recorded
+/// pull request, not the closed first one.
+fn a_requeued_tasks_repair_observes_its_latest_recorded_pull_request() {
+    let fx = fixture();
+    let leaf = fx.delivered_leaf_after(Some(79), 82, "review", Shelf::Escalated, LeafEnd::Failed);
+    // Only the fresh pull request is open and conflicting.
+    fx.blocked(&leaf, "bbb2", "orbit-bot", true, &[]);
+    let drain = fx.drain();
+
+    let pass = fx.pass(&drain, "review", true);
+    let entry = started(&pass, &leaf.task).unwrap_or_else(|| panic!("{pass}"));
+    assert_eq!(entry["pr_number"], "82", "{pass}");
+    assert_eq!(
+        fx.retries(&leaf.run).len(),
+        1,
+        "the stopped leaf is resumed"
+    );
 }
 
 fn skipped_repairs_are_checkpointed_and_visible_in_readiness() {
@@ -1118,10 +1269,53 @@ fn one_tasks_repair_starts_without_a_drain_and_refusals_are_typed() {
     assert_eq!(resumed.input.as_ref().unwrap()["completion"], "done");
 }
 
+/// [ORB-23003] A dashboard or `orbit run ship` delivery without `--complete`
+/// succeeds at review; its red pull request is handed back by Fix PR, while a
+/// drain pass still repairs only stopped leaves.
+fn fix_pr_hands_back_a_red_pull_request_a_review_delivery_left() {
+    let fx = fixture();
+    let shipped = fx.review_leaf(131);
+    fx.blocked(&shipped, "ggg1", "orbit-bot", false, &["Test"]);
+    // A stopped leaf nominates the drain pass; the shipped task's leaf did
+    // not stop, so the pass leaves it alone.
+    let stopped = fx.stopped_leaf(132, "review", Shelf::Review);
+    fx.blocked(&stopped, "ggg2", "orbit-bot", true, &[]);
+    let drain = fx.drain();
+    let pass = fx.pass(&drain, "review", true);
+    assert!(started(&pass, &stopped.task).is_some(), "{pass}");
+    assert!(started(&pass, &shipped.task).is_none(), "{pass}");
+    assert!(fx.retries(&shipped.run).is_empty(), "{pass}");
+
+    let readiness = fx
+        .runtime
+        .task_pr_auto_fix_readiness(&shipped.task, false)
+        .unwrap();
+    assert_eq!(readiness["available"], true, "{readiness}");
+    assert_eq!(readiness["blocker"], "failed_checks", "{readiness}");
+    let started = fx
+        .runtime
+        .start_task_pr_auto_fix(&shipped.task, false, Some("dashboard"))
+        .unwrap();
+    let retries = fx.retries(&shipped.run);
+    assert_eq!(retries.len(), 1, "{started}");
+    let input = retries[0].input.as_ref().unwrap();
+    assert_eq!(input["auto_fix"], true, "{input}");
+    assert_eq!(
+        input["completion"], "review",
+        "the repair never gains merge authority the delivery lacked"
+    );
+    assert_eq!(
+        input["out_of_run_auto_fix"]["failed_checks"],
+        json!(["Test"])
+    );
+}
+
 crate::scenario_table!(
     out_of_run_auto_fix_scenarios,
     one_tasks_repair_starts_without_a_drain_and_refusals_are_typed,
+    fix_pr_hands_back_a_red_pull_request_a_review_delivery_left,
     a_conflicting_pull_request_its_delivery_blocked_is_handed_back_for_an_auto_fix,
+    a_requeued_tasks_repair_observes_its_latest_recorded_pull_request,
     a_repair_reruns_the_completion_round_that_published_the_pull_requests_head,
     a_repair_reruns_the_second_round_when_it_is_the_one_that_failed,
     a_repair_does_not_count_a_skipped_republication_as_published,
@@ -1215,8 +1409,9 @@ fn idle_pass_reads_only_stopped_leaf_tasks_and_sees_new_candidates() {
         );
         assert_eq!(
             selections.load(Ordering::Relaxed),
-            2,
-            "idle adoption probes only stopped-leaf bindings, not unrelated closed history"
+            0,
+            "idle adoption requests metadata only for stopped-leaf tasks now in \
+             review/blocked/backlog, not unrelated closed history"
         );
     }
     // A second runtime publishes the status change: no process-local cache may

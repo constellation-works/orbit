@@ -27,7 +27,11 @@ def production_lines(path: Path):
             in_test_module = True
             brace_depth = line.count("{") - line.count("}")
             continue
-        if pending_test_module and re.search(r"\bmod\s+\w+\s*;", line):
+        # cfg applies to the next item, not a later module. Keep it across
+        # blank/comment/attribute lines only; a test-only use/fn/const consumes it.
+        item = strip_line_comment(line).strip()
+        item = re.sub(r"#\[[^\]]*\]", "", item).strip()
+        if pending_test_module and item:
             pending_test_module = False
 
         if in_test_module:
@@ -63,7 +67,8 @@ def main() -> int:
     violations = []
     for source_root in SOURCE_ROOTS:
         for path in source_root.rglob("*.rs"):
-            if "tests" in path.parts:
+            relative = path.relative_to(ROOT)
+            if "tests" in relative.parts:
                 continue
             for line_number, line in production_lines(path):
                 # Internal provenance belongs in ordinary source comments, which
@@ -73,7 +78,7 @@ def main() -> int:
                     continue
                 if match := CONCRETE_ID.search(code):
                     violations.append(
-                        f"{path.relative_to(ROOT)}:{line_number}: concrete artifact ID {match.group(0)!r} in a shipped string literal"
+                        f"{relative}:{line_number}: concrete artifact ID {match.group(0)!r} in a shipped string literal"
                     )
 
     if violations:

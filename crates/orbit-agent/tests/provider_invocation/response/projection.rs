@@ -18,7 +18,10 @@ mod antigravity {
             }
         })
         .to_string();
-        let normalized = normalize_cli_stdout("antigravity", stdout.as_bytes());
+        let normalized = normalize_cli_stdout(
+            orbit_types::workflow::activity_job::Provider::Antigravity,
+            stdout.as_bytes(),
+        );
         assert!(normalized.is_empty());
     }
 
@@ -38,8 +41,11 @@ mod antigravity {
         })
         .to_string();
 
-        let diagnostic = antigravity_terminal_error_diagnostic("antigravity", stdout.as_bytes())
-            .expect("terminal error");
+        let diagnostic = antigravity_terminal_error_diagnostic(
+            orbit_types::workflow::activity_job::Provider::Antigravity,
+            stdout.as_bytes(),
+        )
+        .expect("terminal error");
         assert_eq!(
             diagnostic,
             "Antigravity terminal error: timeout waiting for response"
@@ -49,7 +55,13 @@ mod antigravity {
 
         assert!(diagnostic.contains("timeout waiting for response"));
         assert!(!diagnostic.contains(&response));
-        assert!(antigravity_terminal_error_diagnostic("claude", stdout.as_bytes()).is_none());
+        assert!(
+            antigravity_terminal_error_diagnostic(
+                orbit_types::workflow::activity_job::Provider::Claude,
+                stdout.as_bytes()
+            )
+            .is_none()
+        );
     }
 }
 
@@ -57,8 +69,14 @@ mod claude {
     use orbit_agent::project_cli_response;
 
     fn projected(stdout: &str) -> String {
-        String::from_utf8(project_cli_response("claude", stdout.as_bytes()).into_owned())
-            .expect("utf8 projected response")
+        String::from_utf8(
+            project_cli_response(
+                orbit_types::workflow::activity_job::Provider::Claude,
+                stdout.as_bytes(),
+            )
+            .into_owned(),
+        )
+        .expect("utf8 projected response")
     }
 
     const ENVELOPE: &str = r#"{"schemaVersion":1,"status":"success","result":{},"error":null}"#;
@@ -109,8 +127,14 @@ mod codex {
     use orbit_agent::project_cli_response;
 
     fn projected(stdout: &str) -> String {
-        String::from_utf8(project_cli_response("codex", stdout.as_bytes()).into_owned())
-            .expect("utf8 projected response")
+        String::from_utf8(
+            project_cli_response(
+                orbit_types::workflow::activity_job::Provider::Codex,
+                stdout.as_bytes(),
+            )
+            .into_owned(),
+        )
+        .expect("utf8 projected response")
     }
 
     #[test]
@@ -137,8 +161,14 @@ mod copilot {
     use orbit_types::tool::ExecutionResult;
 
     fn normalized(stdout: &str) -> String {
-        String::from_utf8(normalize_cli_stdout("copilot", stdout.as_bytes()).into_owned())
-            .expect("utf8 normalized stdout")
+        String::from_utf8(
+            normalize_cli_stdout(
+                orbit_types::workflow::activity_job::Provider::Copilot,
+                stdout.as_bytes(),
+            )
+            .into_owned(),
+        )
+        .expect("utf8 normalized stdout")
     }
 
     fn exec_result(stdout: &str, stderr: &str, exit_code: i32) -> ExecutionResult {
@@ -165,8 +195,8 @@ mod copilot {
             "data": {"content": String::from_utf8(
                 Agent::new(&AgentConfig::cli("copilot").expect("Copilot config"))
                     .expect("Copilot adapter")
-                    .invoke(AgentRequest::activity("fixture", br#"{"schemaVersion":1,"input":{}}"#.to_vec()))
-                    .expect("Copilot invocation").0.stdin,
+                    .invoke(AgentRequest::activity(br#"{"schemaVersion":1,"input":{}}"#.to_vec()))
+                    .expect("Copilot invocation").stdin,
             ).expect("utf8 prompt")},
         });
         let stdout = format!("{prompt_echo}\n");
@@ -193,8 +223,14 @@ mod grok {
     const FAILURE: &str = r#"{"schemaVersion":1,"status":"failed","result":{},"error":{"code":"final_failure","message":"the final answer failed","details":null}}"#;
 
     fn projected(stdout: &str) -> String {
-        String::from_utf8(project_cli_response("grok", stdout.as_bytes()).into_owned())
-            .expect("utf8 projected response")
+        String::from_utf8(
+            project_cli_response(
+                orbit_types::workflow::activity_job::Provider::Grok,
+                stdout.as_bytes(),
+            )
+            .into_owned(),
+        )
+        .expect("utf8 projected response")
     }
 
     fn exec_result(stdout: String, exit_code: i32) -> ExecutionResult {
@@ -206,6 +242,33 @@ mod grok {
             exit_code: Some(exit_code),
             duration_ms: 1,
             output: None,
+        }
+    }
+
+    #[test]
+    fn grok_multiline_direct_envelope_preserves_nested_event_result() {
+        let multiline = r#"{
+"schemaVersion":1,
+"status":"success",
+"result":{
+"items":[
+{"type":"text","data":"ordinary task result"}
+]
+},
+"error":null
+}"#;
+        let expected: serde_json::Value = serde_json::from_str(multiline).unwrap();
+        let compact = expected.to_string();
+
+        for stdout in [compact.as_str(), multiline] {
+            let response = projected(stdout);
+            assert_eq!(response, stdout, "direct envelope stays intact");
+            let exec = exec_result(response, 0);
+            let parsed = ParsedStdout::parse(&exec.stdout);
+            parsed.response_envelope_protocol_check().unwrap();
+            let (envelope, status, _) = parsed.parse_and_validate(&exec).unwrap();
+            assert_eq!(status, AgentResponseStatus::Success);
+            assert_eq!(envelope.result.as_ref(), Some(&expected["result"]));
         }
     }
 
@@ -230,6 +293,63 @@ mod grok {
 
         assert_eq!(status, AgentResponseStatus::Success);
         assert_eq!(envelope.result.expect("result")["source"], "final-text");
+    }
+
+    #[test]
+    fn grok_malformed_stream_cannot_promote_tool_or_reasoning_envelope() {
+        const TOOL_ENVELOPE: &str = r#"{"schemaVersion":1,"status":"success","result":{"claimed":"tool-output"},"error":null}"#;
+        // Tool-only stream (no assistant text) quoting a success envelope,
+        // plus reasoning quoting it, each with one non-JSON line appended.
+        let tool_stream = [
+            serde_json::json!({"type": "tool_call", "toolCallId": "1", "toolName": "read"}).to_string(),
+            serde_json::json!({"type": "tool_call_update", "toolCallId": "1", "rawOutput": TOOL_ENVELOPE}).to_string(),
+            "warning".to_string(),
+        ]
+        .join("\n");
+        let thought_stream = [
+            serde_json::json!({"type": "tool_call", "toolCallId": "1", "toolName": "read"})
+                .to_string(),
+            serde_json::json!({"type": "thought", "data": TOOL_ENVELOPE}).to_string(),
+            "warning".to_string(),
+        ]
+        .join("\n");
+        // Even a genuine text chunk is discarded once the stream is malformed.
+        let text_stream = [
+            serde_json::json!({"type": "text", "data": TOOL_ENVELOPE}).to_string(),
+            serde_json::json!({"type": "tool_call", "toolCallId": "1", "toolName": "read"})
+                .to_string(),
+            "warning".to_string(),
+        ]
+        .join("\n");
+        for (case, stdout) in [
+            ("tool rawOutput", tool_stream.as_str()),
+            ("thought", thought_stream.as_str()),
+            ("text with malformed line", text_stream.as_str()),
+        ] {
+            let response = projected(stdout);
+            assert!(
+                response.is_empty(),
+                "{case}: projected must be empty, got {response}"
+            );
+            let exec = exec_result(response.clone(), 0);
+            let parsed = ParsedStdout::parse(&exec.stdout);
+            assert!(
+                parsed.response_envelope_protocol_check().is_err(),
+                "{case}: tool/reasoning envelope must not satisfy completion"
+            );
+            assert!(
+                parsed.parse_and_validate(&exec).is_err(),
+                "{case}: tool/reasoning envelope must not provide the result"
+            );
+        }
+        // Control: the same tool-only stream without the malformed line also
+        // yields no completion (empty answer, no text events).
+        let clean_tool_stream = [
+            serde_json::json!({"type": "tool_call", "toolCallId": "1", "toolName": "read"}).to_string(),
+            serde_json::json!({"type": "tool_call_update", "toolCallId": "1", "rawOutput": TOOL_ENVELOPE}).to_string(),
+        ]
+        .join("\n");
+        assert!(projected(&clean_tool_stream).is_empty());
     }
 
     #[test]
@@ -295,7 +415,11 @@ fn the_newest_assistant_message_is_read_from_each_output_shape() {
     ];
     for (provider, stdout, expected) in cases {
         assert_eq!(
-            latest_assistant_message(provider, stdout.as_bytes()).as_deref(),
+            latest_assistant_message(
+                orbit_types::workflow::activity_job::Provider::parse(provider).unwrap(),
+                stdout.as_bytes()
+            )
+            .as_deref(),
             expected,
             "{provider} output: {stdout}"
         );

@@ -25,9 +25,9 @@ template:
     - Use the registered Orbit tool surface. List sweep tasks already in flight with
       `orbit tool run orbit.task.list --input '{"status":["backlog","in-progress","proposed","blocked","review"],"type":"chore","tag":["qa-full-sweep","no-diff-expected"],"model":"<agent-family>"}'`.
       File an area task with
-      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"<medium|hard>","type":"chore","tags":["qa-full-sweep","no-diff-expected"],"context_files":["dir:<source or documentation directory implementing the area>"],"required_tools":["orbit.search","orbit.task.add","orbit.task.show","orbit.task.artifact.get","orbit.task.artifact.put"],"relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"medium","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"<medium|hard>","type":"chore","tags":["qa-full-sweep","no-diff-expected"],"context_files":["dir:<source or documentation directory implementing the area>"],"required_tools":["orbit.search","orbit.task.add","orbit.task.show","orbit.task.artifact:get","orbit.task.artifact:put"],"relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"medium","workspace":"<current workspace path>","model":"<agent-family>"}'`.
       File the roll-up task with
-      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"low","type":"chore","tags":["qa-full-sweep","qa-full-sweep-rollup","no-diff-expected","auto-task:qa-full-sweep"],"required_tools":["orbit.task.show","orbit.task.artifact.get","orbit.task.artifact.put"],"relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"medium","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"low","type":"chore","tags":["qa-full-sweep","qa-full-sweep-rollup","no-diff-expected","auto-task:qa-full-sweep"],"required_tools":["orbit.task.show","orbit.task.artifact:get","orbit.task.artifact:put"],"relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"medium","workspace":"<current workspace path>","model":"<agent-family>"}'`.
       Do not use direct lifecycle CLI subcommands; they skip agent provenance.
     - Area tasks carry exactly the tags `qa-full-sweep` and `no-diff-expected`,
       complexity `hard` at most (never `xhard`), and no `crew`, so each is
@@ -97,7 +97,7 @@ template:
     scenario with `id`, `description`, `required` and `capabilities`) and
     `exclusions` (each with the excluded surface and its `reason`). Attach it
     to this coordinator task with
-    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/qa-full-sweep-inventory.json","path":"qa-full-sweep-inventory.json","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this task ID>","source_path":".orbit/tmp/qa-full-sweep-inventory.json","path":"qa-full-sweep-inventory.json","model":"<agent-family>"}'`.
     After filing, add each area's `task_id` and the `rollup_task_id` to the
     file and attach it again under the same name.
 
@@ -122,7 +122,7 @@ template:
     > Before starting, list this area's task artifacts with
     > `orbit tool run orbit.task.show --input '{"id":"<this area task ID>","field":"artifacts","model":"<agent-family>"}'`.
     > If `qa-progress.json` exists, retrieve it with
-    > `orbit tool run orbit.task.artifact.get --input '{"id":"<this area task ID>","path":"qa-progress.json","model":"<agent-family>"}'`.
+    > `orbit tool run orbit.task.artifact --input '{"action":"get","id":"<this area task ID>","path":"qa-progress.json","model":"<agent-family>"}'`.
     > A resumed or re-crewed run continues from that artifact, keeping every
     > recorded outcome and filed finding, instead of starting over. Verify its
     > pinned SHA, area and scenario list match this task. A present but
@@ -159,8 +159,8 @@ template:
     > `PLAYWRIGHT_MODULE` and `PLAYWRIGHT_BROWSERS_PATH`. Also forward
     > `LD_LIBRARY_PATH` and `FONTCONFIG_FILE` on Linux when it sets them;
     > macOS needs no Linux loader or font inputs. Read the shared kit without
-    > modifying it, and never run `orbit browser-kit` from the worker. When
-    > the variable is absent, record `orbit browser-kit install` as the host
+    > modifying it, and never run `orbit config browser-kit` from the worker. When
+    > the variable is absent, record `orbit config browser-kit install` as the host
     > fix in the capability probe. If no kit is usable, discover the current
     > repository's own documented disposable Playwright/Chromium recipe and
     > use it only when it exists and the repository's workspace guide permits
@@ -193,7 +193,7 @@ template:
     >
     > `.orbit/tmp/` is cleared with the worktree, so attach the screenshots
     > that evidence a UI scenario as task artifacts with
-    > `orbit tool run orbit.task.artifact.put --input '{"id":"<this area task ID>","source_path":".orbit/tmp/<file>","path":"screenshots/<view>-<theme>-<width>.png","model":"<agent-family>"}'`:
+    > `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this area task ID>","source_path":".orbit/tmp/<file>","path":"screenshots/<view>-<theme>-<width>.png","model":"<agent-family>"}'`:
     > each view in every theme it supports and, for a responsive layout, at
     > 375px. Keep each under the 1 MiB artifact limit (a viewport capture
     > rather than full-page, or JPEG or WebP when a PNG is too large), name
@@ -209,7 +209,7 @@ template:
     > log artifact name), any `missing_capability`, and the `finding_task_id`
     > for a filed failure. Attach it before the first scenario and again after
     > each scenario and each filed finding with
-    > `orbit tool run orbit.task.artifact.put --input '{"id":"<this area task ID>","source_path":".orbit/tmp/qa-progress.json","path":"qa-progress.json","model":"<agent-family>"}'`.
+    > `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this area task ID>","source_path":".orbit/tmp/qa-progress.json","path":"qa-progress.json","model":"<agent-family>"}'`.
     > Attach referenced logs the same way.
     >
     > A scenario that needs a capability this run lacks (authentication, an
@@ -260,34 +260,10 @@ template:
     > `severity` is how much the defect matters, on the one scale findings and
     > regression links share; a new link without it is refused. Rate the worst
     > real impact the evidence shows, not the size of the fix, and take the lower
-    > level when torn:
-    > - `critical`: data loss or corruption, a security hole, every drain halted, or silently wrong results (a migration drops task history).
-    > - `high`: a core workflow broken with no workaround (every `ui` delivery fails at handoff).
-    > - `medium`: a feature broken or wrong in a real path, with a workaround (`--json` drops a field the plain output shows).
-    > - `low`: an edge case, a misleading message or a minor UX defect (an error names the wrong flag).
-    > - `nit`: wording or doc drift, cosmetic, no behavior impact (a stale sentence in a reference doc).
-    > Choose `unclassified` rather than guess. `nature` is what kind of regression
-    > the link records:
-    > - `broke_existing`: the culprit broke behavior that worked before it landed.
-    > - `defect_in_new`: the defect is in code the culprit itself introduced.
-    > - `incomplete`: the culprit shipped without part of what its task required.
-    > - `merge_reintroduced`: a merge restored code or assets an earlier change had removed.
-    > - `contract_drift`: docs, schemas or a contract drifted from the behavior the culprit shipped.
-    > - `unclassified`: the evidence does not settle the nature.
-    > `escape` is why the delivery gates missed it. Inspect the tests and gate
-    > selection at the culprit commit: use `no_test` when no test exercises the
-    > broken behavior there, and `test_not_selected` when a covering test exists
-    > but the culprit's gates did not run it. Use `unclassified` only when the
-    > evidence does not settle the escape, and state the unresolved evidence in
-    > the finding's description. Mere visibility in the diff is not evidence
-    > for `review_missed` when no test exercises the broken behavior.
-    > - `no_test`: no test exercised the broken behavior at the culprit commit.
-    > - `test_not_selected`: a covering test existed at the culprit commit but its gates did not run it.
-    > - `platform_only`: it shows only on a platform or host the gates did not exercise.
-    > - `review_missed`: it was visible in the diff and review did not flag it.
-    > - `spec_ambiguous`: the task or spec left the expected behavior open to the shipped reading.
-    > - `nondeterministic`: it depends on timing, ordering or environment and passed when gated.
-    > - `unclassified`: the evidence does not settle the escape; state why in the finding.
+    > level when torn. Choose `unclassified` rather than guess. The scale and the
+    > `nature` and `escape` values are the Severity rubric and `regression_from`
+    > fields in the installed `orbit` skill's `references/task-fields.md`; use only
+    > those values and its guidance for choosing the escape.
     >
     > Finish only when every scenario has a recorded outcome; recording a
     > `FAIL`, `BLOCKED` or `NOT_RUN` honestly completes this task, and the
@@ -352,16 +328,17 @@ template:
     >
     > Execute on the owning machine. Each area's status is an
     > `orbit.task.show` of that area task, and each area's progress is an
-    > `orbit.task.artifact.get` of that area task's `qa-progress.json`. Both
-    > reads are evidence only the owner task store can produce. A claimed
-    > follower refuses each of them because the request names a task other
-    > than the claimed task. Declaring `orbit.task.show` and
-    > `orbit.task.artifact.get` does not authorize those reads and does not
-    > widen what the broker accepts. Preparation must record
+    > `orbit.task.artifact` action `get` of that area task's `qa-progress.json`. Both
+    > reads must come from the owner task store under this roll-up's contract.
+    > A claimed worker can read ordinary task records and non-review artifacts
+    > for any task in its claimed workspace; `review-*` artifact reads remain
+    > limited to the claimed task. This roll-up's owner-local evidence
+    > requirement is separate from that broker scope. Preparation must record
     > `required_machine` for this owner-evidence contract before admission,
     > so a follower is not offered this roll-up; the owner's own drain may
-    > start it, and on the owner those reads stay authorized. Do not guess a
-    > missing artifact, substitute another host's copy, or record `PASS`
+    > start it. Declaring these tools does not widen broker scope or relax the
+    > owner-local evidence requirement. Do not guess a missing artifact,
+    > substitute another host's copy, or record `PASS`
     > from anything except the owner-local reads below. Routing grants no
     > additional tool scope.
     >
@@ -370,7 +347,7 @@ template:
     > `kind: qa_areas_open` naming the open areas.
     >
     > For each area, retrieve its `qa-progress.json` with
-    > `orbit tool run orbit.task.artifact.get --input '{"id":"<area task ID>","path":"qa-progress.json","model":"<agent-family>"}'`.
+    > `orbit tool run orbit.task.artifact --input '{"action":"get","id":"<area task ID>","path":"qa-progress.json","model":"<agent-family>"}'`.
     > An area whose artifact is missing, unreadable, names another SHA or
     > area, or leaves a listed scenario without an outcome counts as
     > incomplete.
@@ -382,7 +359,7 @@ template:
     > `pinned_sha`, `decision`, and per area its task ID, the count of
     > required scenarios by outcome, and every non-`PASS` required scenario
     > with its outcome and finding task ID. Attach it with
-    > `orbit tool run orbit.task.artifact.put --input '{"id":"<this roll-up task ID>","source_path":".orbit/tmp/qa-full-sweep-decision.json","path":"qa-full-sweep-decision.json","model":"<agent-family>"}'`.
+    > `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this roll-up task ID>","source_path":".orbit/tmp/qa-full-sweep-decision.json","path":"qa-full-sweep-decision.json","model":"<agent-family>"}'`.
     > Then record the swept commit as this task's cursor:
     > write `{"schema_version":1,"ref":"<integration branch>","cursor":"<full SHA>"}`
     > to `.orbit/tmp/sweep-cursor.json` and attach it as `sweep-cursor.json`
@@ -399,9 +376,13 @@ template:
     the decision was executed on the owning machine from that machine's
     area-task statuses and per-area `qa-progress.json` artifacts, and
     preparation recorded `required_machine` for this owner-evidence contract
-    before admission. A follower claim is not evidence: claimed
-    `orbit.task.show` and `orbit.task.artifact.get` of another task are
-    refused, and supported tool names do not authorize them.
+    before admission. A follower claim is not evidence for this decision.
+    A claimed worker may read ordinary task records and non-review artifacts,
+    including another task's `qa-progress.json`, for any task in the claimed
+    workspace. That permission does not satisfy this roll-up: the decision
+    still requires the owner-local reads named above. Another task's `review-*`
+    artifacts stay refused. Supported tool names do not authorize the
+    owner-local evidence or those review artifacts.
 
     ## Finish
 
@@ -428,7 +409,7 @@ template:
   - orbit.task.add
   - orbit.task.list
   - orbit.task.update
-  - orbit.task.artifact.put
+  - orbit.task.artifact:put
   priority: medium
   complexity: medium
   status: backlog

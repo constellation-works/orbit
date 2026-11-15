@@ -3,15 +3,16 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::process::identity::{ProcessLiveness, is_stable_token, probe_process_liveness};
-use orbit_store::contracts::TaskReservationReleaseReason;
+use orbit_store::contracts::{AuditEventStoreBackend, TaskReservationReleaseReason};
 use orbit_types::record::OrbitEvent;
-use orbit_types::workflow::{JobRun, JobRunState};
+use orbit_types::workflow::{JobRun, JobRunState, OPERATOR_STOPPED_ERROR_CODE};
 
 use crate::OrbitRuntime;
 use crate::application::job::log_best_effort;
-use crate::application::job::pipeline::reconciled_worker_exit_clause;
 
 use super::WORKER_TERMINATED_ERROR_CODE;
+#[cfg(unix)]
+use super::actions::cancellation_is_settling;
 #[cfg(unix)]
 use super::owner::OwnerIdentity;
 use super::owner::{
@@ -19,6 +20,7 @@ use super::owner::{
     running_run_owner_is_stale, running_run_owner_stale_reason, stale_job_run_message,
     stale_pending_run_message,
 };
+use super::worker_exit::{self, reconciled_worker_exit_clause, recorded_host_manager_stop};
 
 /// Call-scoped reuse of healthy owner classifications.
 ///
@@ -105,6 +107,7 @@ impl OrbitRuntime {
             .list_all_pending_or_running_runs()?
             .into_iter()
             .filter(|run| run.state == JobRunState::Running && running_run_owner_is_stale(run))
+            .filter(|run| !self.job_run_is_parked(run))
             .collect())
     }
 
@@ -119,6 +122,18 @@ impl OrbitRuntime {
             .into_iter()
             .filter(|run| pending_run_stale_reason(run).is_some())
             .collect())
+    }
+
+    /// [ORB-20158] Whether `run` is live and parked on an auto-task step: its
+    /// worker exited on purpose and the owner clock resumes it, so its dead
+    /// owner is not worker loss. An unreadable state is not a park.
+    fn job_run_is_parked(&self, run: &JobRun) -> bool {
+        run.state == JobRunState::Running
+            && self
+                .read_run_state(&run.run_id)
+                .ok()
+                .flatten()
+                .is_some_and(|state| state.parked_wait().is_some())
     }
 
     pub(crate) fn reconcile_stale_job_runs(
@@ -208,7 +223,7 @@ impl OrbitRuntime {
         if pass.has_healthy(run) {
             return Ok(false);
         }
-        if stale_job_run_diagnostic(run).is_none() {
+        if stale_job_run_diagnostic(run).is_none() || self.job_run_is_parked(run) {
             if !run.state.is_terminal() {
                 pass.remember_healthy(run);
             }
@@ -227,7 +242,9 @@ impl OrbitRuntime {
     /// Interrupted runs are resumable from their step checkpoints via
     /// `orbit job resume <run_id>`. [ORB-12969] Their coupled `in-progress`
     /// tasks are blocked with a `workflow_run_interrupted` note naming the run
-    /// and error code; the resume re-admits them.
+    /// and error code; the resume re-admits them. A running worker whose
+    /// recorded exit shows the host manager sent the terminating signal is
+    /// `held` under `operator_stopped` instead, and is not a failure.
     fn finalize_orphaned_job_run_with_provider_probe<P>(
         &self,
         run_id: &str,
@@ -246,11 +263,26 @@ impl OrbitRuntime {
         let Some((error_code, message)) = stale_job_run_diagnostic(&current) else {
             return Ok(false);
         };
+        if self.job_run_is_parked(&current) {
+            return Ok(false);
+        }
+        #[cfg(unix)]
+        if self.cancellation_owns_outcome(&current.run_id) {
+            return Ok(false);
+        }
         if !self.provider_evidence_allows_orphan_finalization(&current.run_id, provider_probe) {
             return Ok(false);
         }
 
-        let finished_at = self.orphaned_run_finished_at(&current);
+        let observed_exit_at = self.orphaned_worker_exit_at(&current);
+        let finished_at = observed_exit_at.unwrap_or_else(Utc::now);
+        let message = if observed_exit_at.is_none() {
+            format!(
+                "{message}; finish time is orphan detection time (upper bound; worker exit time unobserved)"
+            )
+        } else {
+            message
+        };
         let duration_ms = current.started_at.map(|started_at| {
             finished_at
                 .signed_duration_since(started_at)
@@ -260,19 +292,29 @@ impl OrbitRuntime {
         // [ORB-15314] Keep a stopped reviewer's repair locally; reconciling
         // also runs when a workspace opens, so it pushes nothing.
         self.keep_interrupted_review(&current, false);
+        // Keep the stopped worker's candidate under its rescue ref before
+        // finalization, while its worktree still exists; a later sweep may
+        // remove that worktree, and the ref is what survives it.
+        let rescue_clause = self.keep_rescue_candidate(&current);
+        // A host-manager stop is classified only from an exit row already
+        // recorded. Reconciliation that wins before that row exists still
+        // writes `interrupted` / `worker_terminated`. The supervisor can name
+        // the sender afterwards and cannot change the terminal state.
+        let (state, error_code, message) =
+            orphan_settlement(self.stores().audit_events(), &current, error_code, message);
         // [ORB-12969] The diagnostic is handed to finalization so the coupled
         // tasks' interruption block names the error code; the step itself is
-        // recorded below, only once the interrupted write has won.
+        // recorded below, only once the terminal write has won.
         // The same call freezes a claimed leaf's settlement. Supply the exit
         // evidence now: enriching only the later step cannot amend the outbox.
-        let settlement_message =
-            match reconciled_worker_exit_clause(self.stores().audit_events(), &current) {
-                Some(clause) => format!("{message}; {clause}"),
-                None => message.clone(),
-            };
+        let settlement_message = append_run_clauses(
+            &message,
+            reconciled_worker_exit_clause(self.stores().audit_events(), &current),
+            rescue_clause.as_deref(),
+        );
         let changed = self.finalize_job_run_with_reservation_cleanup_and_diagnostic(
             &current.run_id,
-            JobRunState::Interrupted,
+            state,
             finished_at,
             duration_ms,
             TaskReservationReleaseReason::StaleRunReconciled,
@@ -285,16 +327,17 @@ impl OrbitRuntime {
         let Some(finalized) = self.get_job_run_backend(&current.run_id)? else {
             return Ok(false);
         };
-        if finalized.state != JobRunState::Interrupted || finalized.finished_at.is_none() {
+        if finalized.state != state || finalized.finished_at.is_none() {
             return Ok(false);
         }
 
-        // [ORB-17179] Read only now that the interrupted write has won, so an
+        // [ORB-17179] Read only now that the terminal write has won, so an
         // exit the worker's supervisor recorded meanwhile is still named.
-        let message = match reconciled_worker_exit_clause(self.stores().audit_events(), &current) {
-            Some(clause) => format!("{message}; {clause}"),
-            None => message,
-        };
+        let message = append_run_clauses(
+            &message,
+            reconciled_worker_exit_clause(self.stores().audit_events(), &current),
+            rescue_clause.as_deref(),
+        );
         let step_started_at = current.started_at.unwrap_or(current.scheduled_at);
         log_best_effort(
             "record reconciliation diagnostic",
@@ -305,15 +348,32 @@ impl OrbitRuntime {
                 finished_at,
                 Some(&error_code),
                 &message,
-                JobRunState::Interrupted,
+                state,
             ),
         );
         self.record_event(OrbitEvent::JobRunCompleted {
             job_id: current.job_id.clone(),
             run_id: current.run_id.clone(),
-            state: JobRunState::Interrupted.to_string(),
+            state: state.to_string(),
         })?;
         Ok(true)
+    }
+
+    /// A cancel's signal makes the owner read as gone before the canceller has
+    /// looked at the run again. That dead owner is the cancellation working, not
+    /// worker loss, so its outcome stays `cancelled`, with the operator's task
+    /// disposition, rather than `interrupted`. Unreadable evidence defers.
+    #[cfg(unix)]
+    fn cancellation_owns_outcome(&self, run_id: &str) -> bool {
+        cancellation_is_settling(self.stores().audit_events(), run_id).unwrap_or_else(|error| {
+            tracing::warn!(
+                target: "orbit.core.job_run",
+                run_id,
+                %error,
+                "orphan finalization deferred: cancellation evidence unreadable",
+            );
+            true
+        })
     }
 
     /// A stale owner is not sufficient to condemn a run while any durable,
@@ -394,36 +454,26 @@ impl OrbitRuntime {
         guard == ProviderFinalizationGuard::Clear
     }
 
-    /// When an orphaned run actually stopped doing work.
-    ///
-    /// [ORB-10594] The sweep can notice a dead owner arbitrarily long after the
-    /// fact — orphan scans only run when some process opens the workspace — so
-    /// stamping `Utc::now()` records the moment of *detection*, not the end of
-    /// work, and inflates `duration_ms` by the whole detection lag. The run's
-    /// own audit trail stops when its work stopped, so its last event is the
-    /// better estimate. Falls back to now when the run left no trail, and
-    /// never accepts a timestamp outside `[started_at, now]` so a clock skew or
-    /// a back-dated event cannot produce a negative or absurd duration.
-    fn orphaned_run_finished_at(&self, run: &JobRun) -> DateTime<Utc> {
+    /// A matching supervisor's exit observation, if recorded within the run's
+    /// lifetime. The last activity is only a lower bound: a deterministic step
+    /// can run silently for minutes, then fail to persist its outcome under
+    /// contention. Without an observed exit, reconciliation uses detection
+    /// time and labels that upper bound rather than inventing an early exit.
+    fn orphaned_worker_exit_at(&self, run: &JobRun) -> Option<DateTime<Utc>> {
         let now = Utc::now();
         let floor = run.started_at.unwrap_or(run.scheduled_at);
-        self.last_run_activity_at(&run.run_id)
+        worker_exit::recorded_worker_exit(self.stores().audit_events(), &run.run_id, run.pid?)
             .unwrap_or_else(|error| {
                 tracing::debug!(
                     target: "orbit.core.job_run",
                     run_id = %run.run_id,
                     error = %error,
-                    "orphaned run audit trail unreadable; stamping detection time",
+                    "orphaned worker exit unreadable; stamping detection time",
                 );
                 None
             })
-            .filter(|activity| *activity >= floor && *activity <= now)
-            .unwrap_or(now)
-    }
-
-    /// Timestamp of the most recent audit event recorded for a run.
-    fn last_run_activity_at(&self, run_id: &str) -> Result<Option<DateTime<Utc>>, OrbitError> {
-        self.latest_run_audit_timestamp(run_id)
+            .map(|exit| exit.observed_at)
+            .filter(|observed| *observed >= floor && *observed <= now)
     }
 
     pub(super) fn reconcile_job_run_records_with_pass(
@@ -485,6 +535,52 @@ impl OrbitRuntime {
             }
         }
         Ok(None)
+    }
+}
+
+/// `message` with each present clause appended, in order.
+fn append_run_clauses(
+    message: &str,
+    exit_clause: Option<String>,
+    rescue_clause: Option<&str>,
+) -> String {
+    let mut message = message.to_string();
+    for clause in exit_clause.as_deref().into_iter().chain(rescue_clause) {
+        message = format!("{message}; {clause}");
+    }
+    message
+}
+
+/// `held` / `operator_stopped` when `run`'s recorded exit is a host-manager
+/// stop; otherwise the stale diagnostic's interrupted failure.
+fn orphan_settlement(
+    audit_events: &dyn AuditEventStoreBackend,
+    run: &JobRun,
+    error_code: String,
+    message: String,
+) -> (JobRunState, String, String) {
+    let host_stop =
+        error_code == WORKER_TERMINATED_ERROR_CODE && recorded_host_manager_stop(audit_events, run);
+    if host_stop {
+        (
+            JobRunState::Held,
+            OPERATOR_STOPPED_ERROR_CODE.to_string(),
+            host_manager_stop_message(&message),
+        )
+    } else {
+        (JobRunState::Interrupted, error_code, message)
+    }
+}
+
+fn host_manager_stop_message(message: &str) -> String {
+    const INTERRUPTED: &str =
+        "marked interrupted because recorded worker process is no longer alive";
+    const HELD: &str = "marked held because the host manager stopped its worker";
+    match message.split_once(INTERRUPTED) {
+        Some((head, tail)) => format!("{head}{HELD}{tail}"),
+        None => {
+            format!("job run marked held because the host manager stopped its worker; {message}")
+        }
     }
 }
 

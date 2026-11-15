@@ -296,6 +296,236 @@ fn write_provider_script(path: &Path, mutate_cwd: bool, primary_drift: Option<&P
     write_executable(path, &body);
 }
 
+/// [ORB-21352] A write-granting sandboxed dispatch gives the child a
+/// `CARGO_DENY_DB_PATH` under the run's scratch dir, created by dispatch,
+/// and sets no disable-fetch variable.
+#[cfg(target_os = "linux")]
+#[test]
+fn write_granting_dispatch_injects_cargo_deny_db_path_under_scratch() {
+    let exercise = write_granting_cargo_deny_exercise;
+    if probe_bwrap().available {
+        exercise();
+    } else {
+        crate::activity_job::cli_runner::spawn::with_post_run_guard_without_user_namespace(
+            exercise,
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn write_granting_cargo_deny_exercise() {
+    let temp = tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    fs::create_dir_all(&workspace).expect("workspace");
+    let workspace = workspace.canonicalize().expect("canonical workspace");
+    let script = workspace.join("grok");
+    write_env_probe_script(&script);
+    let audit_root = temp.path().join("audit");
+    let audit = persisted_writer(&audit_root, "job-cargo-deny-writer", "grok:grok-build");
+    let root = workspace.display().to_string();
+    let sandbox = ResolvedSandbox {
+        kind: ExecutorSandboxKind::LinuxBwrap,
+        fs_profile: ResolvedFsProfile {
+            name: "implementer".to_string(),
+            read: vec!["/**".to_string()],
+            modify: vec![
+                format!("{root}/**"),
+                format!("!{root}/.orbit/**"),
+                format!("{root}/.orbit/tmp/**"),
+            ],
+        },
+        allow_fallback: false,
+        managed_worktree: true,
+        runtime_write_authority: Vec::new(),
+        mask: None,
+    };
+
+    let outcome = run_cli_backend(
+        &TestHost::with_command(script.display().to_string()).with_sandbox(sandbox),
+        &test_agent_loop_spec_for("grok", Duration::from_secs(15)),
+        "test_activity",
+        "job-cargo-deny-writer",
+        audit,
+        &serde_json::json!({
+            "prompt": "hi",
+            "workspace_path": workspace,
+        }),
+        Some("implementer"),
+    )
+    .expect("write-granting dispatch completes");
+
+    let expected = workspace.join(".orbit/tmp/cargo-deny-advisory-db");
+    assert!(
+        expected.is_dir(),
+        "dispatch creates the advisory database directory"
+    );
+    assert_eq!(
+        outcome.output["cargo_deny_db_path"],
+        expected.display().to_string(),
+        "the child receives the per-run advisory database path"
+    );
+    assert_eq!(
+        outcome.output["cargo_deny_disable_fetch"], "",
+        "the injection sets no CARGO_DENY_DISABLE_FETCH"
+    );
+    assert_eq!(
+        outcome.output["orbit_cargo_deny_disable_fetch"], "",
+        "the injection sets no ORBIT_CARGO_DENY_DISABLE_FETCH"
+    );
+}
+
+/// [ORB-21352] A profile that grants no scratch writes gains no advisory
+/// path and no created directory; cargo-deny there still fails closed.
+#[cfg(target_os = "linux")]
+#[test]
+fn read_only_dispatch_injects_no_cargo_deny_db_path() {
+    let exercise = read_only_cargo_deny_exercise;
+    if probe_bwrap().available {
+        exercise();
+    } else {
+        crate::activity_job::cli_runner::spawn::with_post_run_guard_without_user_namespace(
+            exercise,
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_only_cargo_deny_exercise() {
+    // Bubblewrap mounts a private tmpfs over /tmp, and this reviewer profile
+    // binds nothing writable, so a fixture under /tmp is hidden from the
+    // probe and the child never runs. Root the fixture on disk outside /tmp,
+    // as the sandbox tests do.
+    let scratch = orbit_common::fs::path::ensure_orbit_scratch_dir(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."),
+    )
+    .expect("scratch dir");
+    let temp = tempfile::Builder::new()
+        .prefix("read-only-cargo-deny-")
+        .tempdir_in(scratch)
+        .expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    fs::create_dir_all(&workspace).expect("workspace");
+    let workspace = workspace.canonicalize().expect("canonical workspace");
+    let script = workspace.join("grok");
+    write_env_probe_script(&script);
+    let audit_root = temp.path().join("audit");
+    let audit = persisted_writer(&audit_root, "job-cargo-deny-reviewer", "grok:grok-build");
+    let sandbox = ResolvedSandbox {
+        kind: ExecutorSandboxKind::LinuxBwrap,
+        fs_profile: ResolvedFsProfile {
+            name: "reviewer".to_string(),
+            read: vec!["/**".to_string()],
+            modify: Vec::new(),
+        },
+        allow_fallback: false,
+        managed_worktree: true,
+        runtime_write_authority: Vec::new(),
+        mask: None,
+    };
+
+    let outcome = run_cli_backend(
+        &TestHost::with_command(script.display().to_string()).with_sandbox(sandbox),
+        &test_agent_loop_spec_for("grok", Duration::from_secs(15)),
+        "test_activity",
+        "job-cargo-deny-reviewer",
+        audit,
+        &serde_json::json!({
+            "prompt": "hi",
+            "workspace_path": workspace,
+        }),
+        Some("reviewer"),
+    )
+    .expect("read-only dispatch completes");
+
+    assert_eq!(
+        outcome.output["cargo_deny_db_path"], "",
+        "a read-only profile receives no advisory database path"
+    );
+    assert!(
+        !workspace.join(".orbit/tmp/cargo-deny-advisory-db").exists(),
+        "dispatch creates no advisory database directory for a read-only profile"
+    );
+}
+
+/// [ORB-21352] When the per-run advisory directory cannot be created,
+/// dispatch fails instead of skipping the advisory check.
+#[cfg(target_os = "linux")]
+#[test]
+fn uncreatable_cargo_deny_db_path_fails_dispatch() {
+    let exercise = uncreatable_cargo_deny_exercise;
+    if probe_bwrap().available {
+        exercise();
+    } else {
+        crate::activity_job::cli_runner::spawn::with_post_run_guard_without_user_namespace(
+            exercise,
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn uncreatable_cargo_deny_exercise() {
+    let temp = tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    fs::create_dir_all(workspace.join(".orbit/tmp")).expect("scratch");
+    let workspace = workspace.canonicalize().expect("canonical workspace");
+    fs::write(
+        workspace.join(".orbit/tmp/cargo-deny-advisory-db"),
+        "not a directory",
+    )
+    .expect("block the advisory database path");
+    let script = workspace.join("grok");
+    write_env_probe_script(&script);
+    let audit_root = temp.path().join("audit");
+    let audit = persisted_writer(&audit_root, "job-cargo-deny-blocked", "grok:grok-build");
+    let root = workspace.display().to_string();
+    let sandbox = ResolvedSandbox {
+        kind: ExecutorSandboxKind::LinuxBwrap,
+        fs_profile: ResolvedFsProfile {
+            name: "implementer".to_string(),
+            read: vec!["/**".to_string()],
+            modify: vec![
+                format!("{root}/**"),
+                format!("!{root}/.orbit/**"),
+                format!("{root}/.orbit/tmp/**"),
+            ],
+        },
+        allow_fallback: false,
+        managed_worktree: true,
+        runtime_write_authority: Vec::new(),
+        mask: None,
+    };
+
+    let error = run_cli_backend(
+        &TestHost::with_command(script.display().to_string()).with_sandbox(sandbox),
+        &test_agent_loop_spec_for("grok", Duration::from_secs(15)),
+        "test_activity",
+        "job-cargo-deny-blocked",
+        audit,
+        &serde_json::json!({
+            "prompt": "hi",
+            "workspace_path": workspace,
+        }),
+        Some("implementer"),
+    )
+    .expect_err("an uncreatable advisory directory fails dispatch");
+
+    let DispatchError::CliInvocationPermanent(message) = &error else {
+        panic!("creation failure stays permanent: {error}");
+    };
+    assert!(
+        message.contains("create cargo-deny advisory database dir"),
+        "{message}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+fn write_env_probe_script(path: &Path) {
+    write_executable(
+        path,
+        "#!/bin/sh\ncat > /dev/null\nprintf '{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"cargo_deny_db_path\":\"%s\",\"cargo_deny_disable_fetch\":\"%s\",\"orbit_cargo_deny_disable_fetch\":\"%s\"},\"error\":null}\\n' \"$CARGO_DENY_DB_PATH\" \"${CARGO_DENY_DISABLE_FETCH:-}\" \"${ORBIT_CARGO_DENY_DISABLE_FETCH:-}\"\n",
+    );
+}
+
 #[cfg(target_os = "linux")]
 fn write_guard_script(path: &Path) {
     write_executable(

@@ -115,7 +115,7 @@ pub const CLAIMED_MODE_DENIED_TOOLS: &[&str] = &["orbit.task.update"];
 pub const AGENT_CONTRACT_TOOLS: &[&str] = &[
     "orbit.task.show",
     "orbit.task.update",
-    "orbit.task.artifact.put",
+    "orbit.task.artifact:put",
 ];
 
 /// The coordination tools a claimed worker on another machine than its owner
@@ -124,8 +124,9 @@ pub const AGENT_CONTRACT_TOOLS: &[&str] = &[
 /// route needs, so these calls cross the broker instead, each scoped by the
 /// broker's own records to the claimed task or its workspace for search/list.
 /// The list is closed; any other coordination tool from such a worker's sandbox
-/// is refused.
-pub const CLAIMED_OWNER_TOOLS: [&str; 7] = [
+/// is refused. Entries are operation names: a family tool is an owner tool
+/// for exactly the actions whose operations are listed.
+pub const CLAIMED_OWNER_TOOLS: [&str; 10] = [
     "orbit.task.show",
     "orbit.search",
     "orbit.task.list",
@@ -133,10 +134,30 @@ pub const CLAIMED_OWNER_TOOLS: [&str; 7] = [
     "orbit.friction.add",
     "orbit.task.artifact.get",
     "orbit.task.artifact.put",
+    "orbit.notice.post",
+    "orbit.notice.show",
+    "orbit.notice.close",
 ];
 
-/// Whether `tool` is one of the [`CLAIMED_OWNER_TOOLS`].
+/// Whether `tool` reaches only [`CLAIMED_OWNER_TOOLS`]: an operation or a
+/// `family:action` policy name on the list, or a family whose every action
+/// is.
 #[must_use]
 pub fn is_claimed_owner_tool(tool: &str) -> bool {
-    CLAIMED_OWNER_TOOLS.contains(&tool)
+    super::tool_policy_operations(tool)
+        .iter()
+        .all(|operation| CLAIMED_OWNER_TOOLS.contains(operation))
+}
+
+/// Whether a claimed leaf on another machine than its owner can reach
+/// `tool`. A local tool (`proc.spawn`, `github.*`, a plugin tool) runs in
+/// the leaf or through its run's broker, so a leaf reaches it. An Orbit
+/// workspace tool is served from the owner's state, so a remote leaf
+/// reaches it only when it crosses the coordinator, which is exactly
+/// [`CLAIMED_OWNER_TOOLS`] — the same list the leaf-side refusal in the
+/// claimed-owner bridge and the sandboxed owner route is built from, so
+/// admission and that refusal cannot drift.
+#[must_use]
+pub fn is_claimed_leaf_reachable_tool(tool: &str) -> bool {
+    !tool.starts_with("orbit.") || is_claimed_owner_tool(tool)
 }

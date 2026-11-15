@@ -9,7 +9,9 @@
 use orbit_common::OrbitError;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::operation::{OperationInput, OperationVerb};
-use orbit_store::contracts::{AdmissionRequest, ClaimAttribution, ClaimMutation};
+use orbit_store::contracts::{
+    AdmissionRequest, ClaimAttribution, ClaimMutation, PROVIDER_DEFAULT_REPORTED_EFFORT,
+};
 use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
@@ -33,6 +35,7 @@ pub(super) fn dispatch(
         DrainVerb::ClaimBind => claim_bind(runtime, session, &input),
         DrainVerb::ClaimSettle => claim_settle(runtime, session, &input),
         DrainVerb::Claims => claims(runtime),
+        DrainVerb::ClaimEffort => claim_effort(runtime, session, &input),
     }
 }
 
@@ -62,6 +65,7 @@ pub(super) fn prepare_input(verb: DrainVerb, input: &mut Value) -> Result<(), Or
         | DrainVerb::ReceiptLookup
         | DrainVerb::ClaimBind
         | DrainVerb::ClaimSettle
+        | DrainVerb::ClaimEffort
         | DrainVerb::Claims => Ok(()),
     }
 }
@@ -155,6 +159,7 @@ fn claim_settle(
         crew_model: optional_string(input, "crew_model"),
         branch: optional_string(input, "branch"),
         worktree_path: optional_string(input, "worktree_path"),
+        reasoning_effort: reported_effort(input),
     };
     let result = runtime.serve_claim_settle(
         session,
@@ -163,6 +168,29 @@ fn claim_settle(
         settlement,
         attribution,
     )?;
+    serde_json::to_value(result).map_err(|error| OrbitError::Store(error.to_string()))
+}
+
+/// `orbit.drain.claim.effort`: a follower's late report of a settled leaf's
+/// effort [ORB-24115] and model [ORB-24150].
+fn claim_effort(
+    runtime: &OrbitRuntime,
+    session: &ToolSessionContext,
+    input: &OperationInput,
+) -> Result<Value, OrbitError> {
+    let input = input.as_value();
+    let claim_id = orbit_tools::require_str(input, "claim_id")?;
+    let run_id = orbit_tools::require_str(input, "run_id")?;
+    let effort = reported_effort(input).ok_or_else(|| {
+        OrbitError::InvalidInput("`reasoning_effort` is required and must not be empty".into())
+    })?;
+    let crew = optional_string(input, "crew");
+    let model = input
+        .get("crew_model")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let result =
+        runtime.serve_claim_effort_with_crew(session, &claim_id, &run_id, effort, crew, model)?;
     serde_json::to_value(result).map_err(|error| OrbitError::Store(error.to_string()))
 }
 
@@ -204,6 +232,17 @@ fn optional_string(input: &Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+/// The leaf's reported reasoning effort in the scorecards' encoding: absent
+/// when the key is (unknown, as an older follower sends), `Some(None)` for
+/// [`PROVIDER_DEFAULT_REPORTED_EFFORT`] (the tool input drops a `null`, so the
+/// provider default travels by name), else the trimmed wire name.
+/// Attribution only: an empty value reports nothing rather than refusing the
+/// settlement.
+fn reported_effort(input: &Value) -> Option<Option<String>> {
+    let name = optional_string(input, "reasoning_effort")?;
+    Some((name != PROVIDER_DEFAULT_REPORTED_EFFORT).then_some(name))
 }
 
 /// A malformed version field is invalid input, not a compatibility comparison.

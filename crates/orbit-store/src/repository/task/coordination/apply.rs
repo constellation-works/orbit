@@ -213,22 +213,36 @@ impl TaskCommitBoundary {
         if BoundaryDepth::active(&self.partition_dir) {
             return Ok(());
         }
+        if self.has_unowned_unsettled_commit()? {
+            return self.recover();
+        }
+        Ok(())
+    }
+
+    /// Whether an unsettled journal row's lease nobody holds: its committer
+    /// is gone, whether it left a dead lease file or a host crash lost the
+    /// lease's (unsynced) name while its decision survived.
+    pub(super) fn has_unowned_unsettled_commit(&self) -> Result<bool, OrbitError> {
         for record in self
             .store
             .unsettled_task_commit_journal(&self.workspace_id)?
         {
             if probe_file_lock(&self.commit_lease(&record.task_id)?)? != FileLockProbe::Held {
-                return self.recover();
+                return Ok(true);
             }
         }
-        Ok(())
+        Ok(false)
     }
 
     /// Whether a commit in this partition was interrupted: a lease its dead
-    /// committer left, or the pending marker older versions held for the
-    /// whole of a commit.
+    /// committer left, the pending marker older versions held for the
+    /// whole of a commit, or an unsettled journal row whose lease nobody
+    /// holds (including one whose lease name a host crash lost).
     pub(super) fn interrupted_commit(&self) -> Result<bool, OrbitError> {
-        Ok(self.dead_commit_lease()? || self.pending_marker_path().try_exists()?)
+        if self.dead_commit_lease()? || self.pending_marker_path().try_exists()? {
+            return Ok(true);
+        }
+        self.has_unowned_unsettled_commit()
     }
 
     /// Whether any task's commit lease outlived its committer. Staged leases

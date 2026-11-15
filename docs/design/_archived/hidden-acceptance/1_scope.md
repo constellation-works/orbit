@@ -22,7 +22,7 @@ defects without repairing them. [Automation triggers](../../automation-triggers/
 provide the `deliveries_landed` schedule that `delivery-code-review` uses for
 after-landing review. The [plugin standard](../../plugins/1_scope.md) lets a plugin ship
 tools, auto-tasks, jobs and a private `{{plugin_state}}` directory from one manifest.
-[Finding verification](../../finding-verification/1_overview.md) establishes that a review-filed
+[Finding verification](../finding-verification/1_overview.md) establishes that a review-filed
 defect is confirmed before it becomes work. This scope builds on all four and changes
 none of their contracts.
 
@@ -35,8 +35,7 @@ check, but today the implementer writes the exam:
 
 - **The scenarios live in the implementer's tree.** `scripts/qa-full-sweep-inventory.json`
   holds 89 scenarios: 52 are `cargo-test` pointers into the repository's own test
-  suites, 22 are commands (17 of which run in-repo test scripts such as
-  `crates/orbit-web/tests/http_api/dashboard_agents_browser.mjs`), 14 are harness
+  suites, 22 are commands (17 of which run in-repo test scripts), 14 are harness
   builtins and 1 is a recorded coverage gap. A worker that changes a behaviour can
   change the test that checks it in the same diff.
 - **A guard forces that co-edit.** The inventory pins `surface_contracts.sha256` over
@@ -86,7 +85,7 @@ A scenario record:
 id: acc-task-requeue-after-block       # stable, never reused
 story: "An operator requeues a blocked task and it runs again on the next drain."
 spec_refs: [ORB-NNNNN#ac-2, docs/guides/task-lifecycle.md]   # what it was derived from
-surfaces: ["cli:task", "mcp:orbit_task_requeue"]
+surfaces: ["cli:task", "mcp:orbit_task_recover action requeue"]
 capability: local                       # local | browser | macos | linux | provider
 setup: [...]                            # public commands that build the starting state
 steps: [...]                            # public commands or tool calls

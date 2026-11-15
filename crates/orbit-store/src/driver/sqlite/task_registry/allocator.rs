@@ -404,9 +404,23 @@ impl TaskRegistryStore {
 
     /// Ensure the allocator will not hand out any id `< min_next`. Never lowers
     /// the counter. Used after import/reindex to move `next_number` past the
-    /// highest landed id.
+    /// highest landed id, and on every writable runtime build to re-apply
+    /// `tasks.id_start`.
     pub fn bump_allocator_to_at_least(&self, min_next: u32) -> Result<(), OrbitError> {
         let target = min_next;
+        // Re-applying an already-satisfied floor is an observation. The counter
+        // only moves forward, so a committed `next_number >= target` stays
+        // valid and needs no write transaction. BEGIN IMMEDIATE here is what
+        // made a fresh read-only `orbit.task.show` fail with `database is
+        // locked` while another process held the registry write lock.
+        {
+            let conn = self.read()?;
+            let previous = read_allocator_next_number(&conn)?;
+            if target <= previous {
+                return Ok(());
+            }
+        }
+
         let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         let tx = conn

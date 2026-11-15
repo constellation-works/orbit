@@ -205,15 +205,17 @@ fn allowed_subtrees_in(
     let mut grants = Vec::new();
     for child in children_under(workspace_root, dir)? {
         if rules.allows(&relative_to(workspace_root, &child)?)? {
-            grants.extend(grant_read_tree(workspace_root, &child, rules, reach)?);
+            grants.extend(
+                grant_read_tree(workspace_root, &child, rules, reach)?
+                    .into_iter()
+                    .map(LandlockPathGrant::enumerated),
+            );
         } else if child.is_dir() {
-            grants.extend(allowed_subtrees_in(
-                workspace_root,
-                &child,
-                rules,
-                reach,
-                walked,
-            )?);
+            grants.extend(
+                allowed_subtrees_in(workspace_root, &child, rules, reach, walked)?
+                    .into_iter()
+                    .map(LandlockPathGrant::enumerated),
+            );
         }
     }
     Ok(grants)
@@ -310,7 +312,11 @@ fn carve_out_unlistable_in(
     }
     let mut grants = Vec::new();
     for child in children_under(root, root)? {
-        grants.extend(carve_out_unlistable_in(&child, denied, walked)?);
+        grants.extend(
+            carve_out_unlistable_in(&child, denied, walked)?
+                .into_iter()
+                .map(LandlockPathGrant::enumerated),
+        );
     }
     Ok(grants)
 }
@@ -356,7 +362,11 @@ fn carve_out_boundary_in(
     }
     let mut grants = Vec::new();
     for child in children_under(root, root)? {
-        grants.extend(carve_out_boundary_in(&child, unlistable, listable, walked)?);
+        grants.extend(
+            carve_out_boundary_in(&child, unlistable, listable, walked)?
+                .into_iter()
+                .map(LandlockPathGrant::enumerated),
+        );
     }
     Ok(grants)
 }
@@ -398,55 +408,59 @@ pub(super) fn carve_out_grants(
 /// `unlistable` or `listable`.
 ///
 /// A read-write directory grant includes read rights and applies to
-/// everything beneath the directory, so a write root at or above a read deny
-/// would undo the read carve. That directory is granted write rights only.
-/// Each child that does not meet a restriction is granted read-write in its
-/// own right. A
+/// everything beneath the directory, so a write root at, above or inside a
+/// read restriction would undo the read carve. Such a root is granted write
+/// rights only. Each child that does not meet a restriction is granted
+/// read-write in its own right. A
 /// restriction that does not exist yet still removes read from its
 /// ancestors, so a name created there after spawn is not readable either.
 /// Write rights cannot be taken back from a descendant once an ancestor has
 /// them: the excluded subtree stays writable.
+///
+/// `reallowed` holds the read roots the boundary names strictly inside an
+/// `unlistable` path. A write root at or beneath one of them is already
+/// readable through that read root, so it is granted read-write whole.
 pub(super) fn carve_out_write(
     root: &Path,
     unlistable: &BTreeSet<PathBuf>,
     listable: &BTreeSet<PathBuf>,
+    reallowed: &BTreeSet<PathBuf>,
 ) -> Result<Vec<LandlockPathGrant>, OrbitError> {
-    // A write root nested inside a broader deny, with no restriction beneath
-    // it, does not expose the rest of that deny. The plugin's own state
-    // directory is that case: `state/plugins` is unreadable, and
-    // `state/plugins/<ns>` stays read-write.
-    if nested_write_island(root, unlistable, listable) {
+    // The one write root a restriction does not withhold read from is one the
+    // boundary re-allows for reading by name: the plugin's own state
+    // directory, `state/plugins/<ns>` inside the unreadable `state/plugins`.
+    // Any other write root inside a restriction stays write-only, or its
+    // grant would reopen what the read restriction withholds [ORB-20350].
+    if reallowed_write_island(root, unlistable, listable, reallowed) {
         return Ok(vec![whole_write_grant(root)]);
     }
     carve_out_write_in(root, unlistable, listable, &mut BTreeSet::new())
 }
 
-/// Whether compiling `path` has to withhold read because a restriction is at
-/// or beneath it. A write root merely nested inside a broader deny does not.
+/// Whether compiling `path` has to withhold read because it meets a
+/// restriction. A write root inside a read root the boundary re-allows does
+/// not.
 pub(super) fn write_read_is_carved(
     path: &Path,
     unlistable: &BTreeSet<PathBuf>,
     listable: &BTreeSet<PathBuf>,
+    reallowed: &BTreeSet<PathBuf>,
 ) -> bool {
     overlaps_read_restriction(path, unlistable, listable)
-        && !nested_write_island(path, unlistable, listable)
+        && !reallowed_write_island(path, unlistable, listable, reallowed)
 }
 
-/// `path` is strictly inside some restriction and is not itself at or above one.
-fn nested_write_island(
+/// `path` is at or beneath a `reallowed` read root and is not itself at or
+/// above a restriction.
+fn reallowed_write_island(
     path: &Path,
     unlistable: &BTreeSet<PathBuf>,
     listable: &BTreeSet<PathBuf>,
+    reallowed: &BTreeSet<PathBuf>,
 ) -> bool {
-    let inside = strictly_inside(path, unlistable) || strictly_inside(path, listable);
+    let inside = reallowed.iter().any(|root| path.starts_with(root));
     let covers = covers_restriction(path, unlistable) || covers_restriction(path, listable);
     inside && !covers
-}
-
-fn strictly_inside(path: &Path, restrictions: &BTreeSet<PathBuf>) -> bool {
-    restrictions
-        .iter()
-        .any(|restriction| path != restriction && path.starts_with(restriction))
 }
 
 fn covers_restriction(path: &Path, restrictions: &BTreeSet<PathBuf>) -> bool {
@@ -475,7 +489,11 @@ fn carve_out_write_in(
     }
     let mut grants = vec![LandlockPathGrant::write_only_tree(root.to_path_buf())];
     for child in children_under(root, root)? {
-        grants.extend(carve_out_write_in(&child, unlistable, listable, walked)?);
+        grants.extend(
+            carve_out_write_in(&child, unlistable, listable, walked)?
+                .into_iter()
+                .map(LandlockPathGrant::enumerated),
+        );
     }
     Ok(grants)
 }
@@ -550,7 +568,11 @@ fn carve_out_beneath(
 
     let mut grants = vec![LandlockPathGrant::list_only(root.to_path_buf())];
     for child in children_under(root, root)? {
-        grants.extend(carve_out_beneath(&child, denied, reach, walked)?);
+        grants.extend(
+            carve_out_beneath(&child, denied, reach, walked)?
+                .into_iter()
+                .map(LandlockPathGrant::enumerated),
+        );
     }
     Ok(grants)
 }

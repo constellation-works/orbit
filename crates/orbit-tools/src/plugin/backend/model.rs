@@ -30,6 +30,36 @@ pub(super) const ORBIT_TOOLS_GLOBAL_WRITE_FILES: &[&str] = &[
     ".generation-admission.lock",
 ];
 
+/// The product-identity marker file Orbit reads in an Orbit root and in every
+/// physical ancestor of one before it opens state (`orbit-core`'s
+/// `application::workspace::product_profile`). Named here because a confined
+/// `orbit tool run` performs that check too: the sandbox grants the child read
+/// on each marker that exists above its roots, and nothing else there.
+pub const ORBIT_PRODUCT_MARKER: &str = ".orbit-product";
+
+/// Every regular-file product marker ([`ORBIT_PRODUCT_MARKER`]) in a physical
+/// ancestor of `roots`, excluding each root's own, in the order Orbit's
+/// product check visits them. A confined `orbit` needs read on exactly these
+/// files to open state beneath `roots`. A missing or non-file marker is left
+/// off: the check either skips it or refuses on its own, and a Landlock rule
+/// cannot bind a name that does not exist.
+pub fn orbit_product_markers_above_roots(roots: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
+    let mut markers = Vec::new();
+    for root in roots {
+        let physical = physical_with_missing_tail(&root);
+        for ancestor in physical.ancestors().skip(1) {
+            let marker = ancestor.join(ORBIT_PRODUCT_MARKER);
+            let is_file = std::fs::symlink_metadata(&marker)
+                .map(|metadata| metadata.file_type().is_file())
+                .unwrap_or(false);
+            if is_file && !markers.contains(&marker) {
+                markers.push(marker);
+            }
+        }
+    }
+    markers
+}
+
 /// Host-owned trees beneath the global root that no plugin child may read,
 /// whatever else it was granted.
 ///
@@ -63,6 +93,7 @@ pub(super) const ORBIT_TOOLS_GLOBAL_WRITE_FILES: &[&str] = &[
 /// `context.secrets`.
 pub(super) const PLUGIN_GLOBAL_READ_DENY_DIRS: &[&str] = &[
     "state/plugin-callbacks",
+    "state/application-consents",
     "plugins/.grants",
     "state/plugins",
     PLUGIN_SECRET_STORE_DIR,
@@ -89,6 +120,21 @@ pub fn plugin_grant_witness_relative(plugin: &str) -> PathBuf {
     Path::new("plugins")
         .join(PLUGIN_GRANT_WITNESS_DIR)
         .join(format!("{plugin}.json"))
+}
+
+/// Host-owned directory beside the grant witnesses, holding one link per
+/// granted `requires.programs` name in each plugin's subdirectory. Each link
+/// points at the recorded executable, so a child's `PATH` can resolve the
+/// declared name whatever the symlink layout on the operator's `PATH` was.
+/// The plugin is granted read on it and never write, so it cannot re-point a
+/// granted name; only the host writes these links.
+pub const PLUGIN_PROGRAM_LINK_DIR: &str = ".programs";
+
+/// Where `plugin`'s program links sit, relative to the global root.
+pub fn plugin_program_links_relative(plugin: &str) -> PathBuf {
+    Path::new("plugins")
+        .join(PLUGIN_PROGRAM_LINK_DIR)
+        .join(plugin)
 }
 
 /// The same narrowing for the workspace's `.orbit/`: the stores a callback
@@ -390,9 +436,10 @@ pub struct PluginBackendSpec {
 pub struct RenderedFsRoots {
     pub read: Vec<PathBuf>,
     pub write: Vec<PathBuf>,
+    pub write_files: Vec<PathBuf>,
 }
 
-/// Render both filesystem permission lists through one path-resolution rule.
+/// Render the filesystem permission lists through one path-resolution rule.
 ///
 /// Relative roots belong to the plugin that declared them, so every phase
 /// resolves them against `plugin_root`; they must never inherit the host
@@ -413,6 +460,12 @@ pub fn render_fs_roots(
             vars,
             &spec.plugin_root,
             "spec.permissions.fs.write",
+        )?,
+        write_files: render_root_list(
+            &spec.permissions.fs.write_files,
+            vars,
+            &spec.plugin_root,
+            "spec.permissions.fs.write_files",
         )?,
     })
 }
@@ -518,6 +571,43 @@ pub(super) fn scope_fs_roots(
                 field: format!("{field}[{index}]"),
                 declared: declared.get(index).cloned().unwrap_or_default(),
             });
+        }
+    }
+    effective
+}
+
+/// Exact files can be covered by a directory grant or the identical file;
+/// a grant naming something below a requested file never opens that child.
+pub(super) fn scope_fs_files(
+    requested: &[PathBuf],
+    declared: &[String],
+    granted: Option<&[PathBuf]>,
+    field: &str,
+    dropped: &mut Vec<DroppedFsRoot>,
+) -> Vec<EffectiveRoot> {
+    let mut effective = Vec::new();
+    for (index, path) in requested.iter().enumerate() {
+        let physical = physical_with_missing_tail(path);
+        let covered = granted.is_none_or(|roots| {
+            roots
+                .iter()
+                .any(|root| physical.starts_with(physical_with_missing_tail(root)))
+        });
+        let field = format!("{field}[{index}]");
+        let declared = declared.get(index).cloned().unwrap_or_default();
+        if covered {
+            if !effective
+                .iter()
+                .any(|root: &EffectiveRoot| root.path == *path)
+            {
+                effective.push(EffectiveRoot {
+                    path: path.clone(),
+                    field,
+                    declared,
+                });
+            }
+        } else {
+            dropped.push(DroppedFsRoot { field, declared });
         }
     }
     effective

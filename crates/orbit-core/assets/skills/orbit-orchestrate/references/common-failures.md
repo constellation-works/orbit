@@ -10,7 +10,7 @@ Symptoms:
 
 - A gate, auto, or task run repeatedly emits `task.locks.reserve.denied`.
 - Conflicts name `held_by: "reservation"` with the same `held_by_id` on each retry.
-- The dashboard’s **Locks held** card, `orbit task locks list`, or reservation-store inspection shows the blocking reservation belongs to a different task that is already `done`, `rejected`, `archived`, or otherwise no longer active.
+- `orbit task locks list`, the lock holders listed in the Drain readiness groups, or reservation-store inspection shows the blocking reservation belongs to a different task that is already `done`, `rejected`, `archived`, or otherwise no longer active.
   `failed` is a run state, not a task lifecycle status.
 - The reservation has `owner_run_id: null`, so terminal run cleanup cannot release it by owner.
 
@@ -18,7 +18,7 @@ Confirm:
 
 ```bash
 orbit task locks list --json
-orbit tool run orbit.task.show --full --input '{"id":"<blocking_task_id>","model":"<agent-family>"}'
+orbit tool run orbit.task.show --full --input '{"id":"<blocking_task_id>"}'
 orbit audit list --tool orbit.task.locks.reserve --kind task_reservation --status denied --json \
   | rg '<reservation_id>|task.locks.reserve.denied|<blocked_task_id>'
 ```
@@ -84,7 +84,7 @@ Confirm:
 orbit run show <run_id> --json
 git -C <workspace_path> status --short --branch
 git -C <workspace_path> rev-list --left-right --count <base_ref>...HEAD
-orbit tool run orbit.task.show --full --input '{"id":"<task_id>","model":"<agent-family>"}'
+orbit tool run orbit.task.show --full --input '{"id":"<task_id>"}'
 ```
 
 Solution:

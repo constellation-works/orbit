@@ -1,6 +1,7 @@
 //! The bounded refill pass: reconcile what is owed, then request new claims.
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::security::token;
 use orbit_store::contracts::{AdmissionReceipt, AdmissionRequest, PullDestination};
 
 use super::{PullDrain, Reconciled, RefillPass};
@@ -120,11 +121,7 @@ impl PullDrain<'_> {
             }
             // Allocate identity before fitting, so capacity can be held in
             // the same host transaction that computes the request's fit.
-            let mut bytes = [0_u8; 16];
-            getrandom::fill(&mut bytes).map_err(|error| {
-                OrbitError::Execution(format!("allocate pull request identity: {error}"))
-            })?;
-            let request_id: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+            let request_id = token::random_hex(16)?;
             // Rebuild every time: earlier leaves can change crew exclusions
             // and the host forecast before this request is made.
             let Some(mut request) = template(&request_id)? else {

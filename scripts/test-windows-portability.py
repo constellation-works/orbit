@@ -77,6 +77,23 @@ class PortabilityTests(unittest.TestCase):
             with self.subTest(tree=tree):
                 self.check_tree(tree, 0)
 
+    def test_inline_and_raw_path_attributes_follow_the_module_gate(self):
+        """Unix-gated external, inline #[path], and raw #[path] trees are the
+        same edge. The same trees without the gate stay rejected."""
+        helper = "src/platform/helper.rs"
+        declarations = (
+            '#[path = "platform/helper.rs"] mod helper;',
+            '#[path = r"platform/helper.rs"] mod helper;',
+            '#[path = r#"platform/helper.rs"#] mod helper;',
+            '#[path = "platform\\u{2f}helper.rs"] mod helper;',
+            '#[path = "platform"] mod renamed { mod helper; }',
+        )
+        for declaration in declarations:
+            with self.subTest(declaration=declaration):
+                gated = {"src/lib.rs": "#[cfg(unix)] " + declaration, helper: IMPORT}
+                self.check_tree(gated, 0)
+                self.check_tree({"src/lib.rs": declaration, helper: IMPORT}, 1)
+
     def test_cargo_test_and_custom_library_roots_resolve_sibling_modules(self):
         for root in ("tests/suite.rs", "src/custom.rs"):
             with self.subTest(root=root):
@@ -115,6 +132,50 @@ class PortabilityTests(unittest.TestCase):
                     "src/lib.rs": f'#[cfg(unix)] #[path = "../{folder}/helper.rs"] mod helper;',
                     f"{folder}/helper.rs": INCIDENTS[1],
                 }, 0)
+
+    def test_redirected_module_children_inherit_the_gate(self):
+        for declaration, child in (("mod child;", "src/helpers/child.rs"),
+                                   ("mod nested { mod child; }", "src/helpers/nested/child.rs")):
+            with self.subTest(declaration=declaration):
+                files = {"src/lib.rs": '#[cfg(unix)] #[path = "helpers/provider.rs"] mod helper;',
+                         "src/helpers/provider.rs": declaration, child: INCIDENTS[1]}
+                self.check_tree(files, 0)
+                files["src/lib.rs"] = files["src/lib.rs"].replace("#[cfg(unix)] ", "")
+                self.check_tree(files, 1)
+
+    def test_ordinary_and_redirected_contexts_keep_their_own_children(self):
+        files = {"src/lib.rs": '#[cfg(unix)] mod provider;\n#[path = "provider.rs"] mod redirected;',
+                 "src/provider.rs": "mod child;", "src/provider/child.rs": INCIDENTS[1],
+                 "src/child.rs": "pub fn portable() {}"}
+        self.check_tree(files, 0)
+        files["src/lib.rs"] = 'mod provider;\n#[cfg(unix)] #[path = "provider.rs"] mod redirected;'
+        self.check_tree(files, 1)
+        files["src/provider/child.rs"], files["src/child.rs"] = files["src/child.rs"], INCIDENTS[1]
+        self.check_tree(files, 0)
+        files["src/lib.rs"] = files["src/lib.rs"].replace("#[cfg(unix)] ", "")
+        self.check_tree(files, 1)
+
+    def test_redirected_module_does_not_claim_an_ordinary_context_orphan(self):
+        self.check_tree({
+            "src/lib.rs": '#[cfg(unix)] #[path = "helpers/provider.rs"] mod helper;',
+            "src/helpers/provider.rs": "mod child;",
+            "src/helpers/child.rs": "pub fn portable() {}",
+            "src/helpers/provider/child.rs": INCIDENTS[1],
+        }, 1)
+
+    def test_redirected_child_can_also_be_an_independent_cargo_target(self):
+        files = {"Cargo.toml": '[package]\nname = "fixture"\nversion = "0.1.0"\n'
+                              '[[test]]\nname = "child"\npath = "src/helpers/child.rs"\n',
+                 "src/lib.rs": '#[cfg(unix)] #[path = "helpers/provider.rs"] mod helper;',
+                 "src/helpers/provider.rs": "mod child;",
+                 "src/helpers/child.rs": "mod nested;", "src/helpers/nested.rs": INCIDENTS[1],
+                 "src/helpers/child/nested.rs": INCIDENTS[1]}
+        self.check_tree(files, 1)
+        files["Cargo.toml"] = files["Cargo.toml"].split("[[test]]")[0]
+        # Without the target, the now-unreferenced sibling is still checked.
+        self.check_tree(files, 1)
+        files.pop("src/helpers/nested.rs")
+        self.check_tree(files, 0)
 
     def test_cfg_logic_and_cfg_attr_do_not_confuse_runtime_conditions(self):
         allowed = (

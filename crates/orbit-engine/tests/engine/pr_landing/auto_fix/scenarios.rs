@@ -1,6 +1,9 @@
 //! Resumed auto-fix authority through the public job and PR boundaries.
 
 use super::*;
+use orbit_types::workflow::{
+    PR_AUTO_FIX_BASE_RED_EVENT, PrAutoFixBaseRed, PrAutoFixReadDeferral, PrAutoFixReadReset,
+};
 use std::io::Write as _;
 
 type JobResult = Result<orbit_engine::JobOutcome, DispatchError>;
@@ -143,6 +146,294 @@ fn run_repair_job(host: &DeliveryHost, input: Value) -> JobResult {
         json!({}),
         None,
     )
+}
+
+/// Completion whose conflict leaf cannot be redirected: no top-level step
+/// declares `step_failure_recovery`.
+fn unrouted_repair_job(input: Value) -> orbit_types::workflow::JobV2 {
+    job_asset(json!([
+        {"id":"commit","target":"activity:checkpoint"},
+        {"id":"complete_pr","target":"activity:pr_complete","recovery_activity":"pr_conflict_recovery","default_input":input}
+    ]))
+}
+
+fn run_unrouted_repair_job(host: &DeliveryHost, input: Value) -> JobResult {
+    run_job(
+        host,
+        unrouted_repair_job(input),
+        REPAIR_ACTS,
+        RUN_ID,
+        json!({}),
+        None,
+    )
+}
+
+/// Completion with no declared recovery at the step or job level: neither the
+/// `complete_pr` step nor the job names a `recovery_activity` [ORB-23232].
+fn undeclared_recovery_repair_job(input: Value) -> orbit_types::workflow::JobV2 {
+    job_asset(json!([
+        {"id":"commit","target":"activity:checkpoint"},
+        {"id":"complete_pr","target":"activity:pr_complete","default_input":input}
+    ]))
+}
+
+fn run_undeclared_recovery_repair_job(host: &DeliveryHost, input: Value) -> JobResult {
+    run_job(
+        host,
+        undeclared_recovery_repair_job(input),
+        REPAIR_ACTS,
+        RUN_ID,
+        json!({}),
+        None,
+    )
+}
+
+/// An admitted check-repair handoff at attempt 1 of budget 3, through the
+/// public job run. A configured check-repair activity receives it; if that
+/// activity runs and fails, the in-budget handoff holds the run instead of
+/// ending it as a `pr_complete` failure [ORB-23738]. With none
+/// configured, the in-budget handoff holds the run. An exhausted repair
+/// budget still fails it. Adding recovery after the hold cannot re-admit
+/// the same head, even from a new delivery run.
+#[test]
+fn admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget() {
+    auto_fix_table(
+        "auto_fix::admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget",
+        "routed recovery_failed held exhausted",
+        |case, row| {
+            let (fx, host) = docs_only_pr(row);
+            let mode = if case == "recovery_failed" {
+                "recovery_fails"
+            } else {
+                "repair"
+            };
+            host.script("test_ci_repair", json!({"mode":mode}));
+            host.script(
+                "test_checkpoint",
+                json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
+            );
+            host.require_commands(&["test \"$(cat src/contract)\" = fixed"]);
+            fx.script_checks(&["source_contract"]);
+            if case == "exhausted" {
+                seed_spent(&host, 1, PrAutoFixBlocker::FailedChecks, RUN_ID);
+            }
+            let input = auto_fix_input(&fx);
+            let outcome = if matches!(case, "routed" | "recovery_failed") {
+                run_repair_job(&host, input)
+            } else {
+                run_unrouted_repair_job(&host, input)
+            };
+            match case {
+                "routed" => {
+                    let result = outcome.expect("in-budget handoff enters check repair");
+                    assert!(
+                        result.success,
+                        "configured check repair must not end as a pr_complete failure: {result:?}"
+                    );
+                    assert!(
+                        scripted_ran(&host, "test_ci_repair"),
+                        "the check-repair activity must run"
+                    );
+                    assert_eq!(repair_attempts(&host).len(), 1, "{case}");
+                    let head = fx.head();
+                    assert_green_repair_published(
+                        &fx,
+                        &host,
+                        &result.pipeline["complete_pr"]["merge"],
+                        &head,
+                        case,
+                    );
+                }
+                "recovery_failed" => {
+                    let error = outcome.expect_err("a failed recovery holds the in-budget handoff");
+                    match error {
+                        DispatchError::DeliveryRefused {
+                            refusal, message, ..
+                        } => {
+                            assert_eq!(
+                                refusal,
+                                orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                                "{message}"
+                            );
+                            assert!(
+                                message.contains("attempt 1 of 3"),
+                                "in-budget handoff must stay on the hold: {message}"
+                            );
+                            assert!(is_check_repair(&message), "{message}");
+                        }
+                        other => panic!("expected a typed hold, got {other}"),
+                    }
+                    assert!(
+                        scripted_ran(&host, "test_ci_repair"),
+                        "the check-repair activity must run"
+                    );
+                    assert_eq!(repair_attempts(&host).len(), 1, "{case}");
+                    assert!(repair_pushes(&host).is_empty(), "{case}");
+                    assert_eq!(fx.head(), fx.candidate, "{case}");
+                    assert_eq!(fx.remote_tip(BRANCH), fx.candidate, "{case}");
+                    assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+                }
+                "held" => {
+                    let error = outcome.expect_err("absent activity holds the in-budget handoff");
+                    assert_eq!(
+                        error.failure_code(),
+                        "delivery_check_repair_activity_absent",
+                        "{error}"
+                    );
+                    match error {
+                        DispatchError::DeliveryRefused {
+                            refusal, message, ..
+                        } => {
+                            assert_eq!(
+                                refusal,
+                                orbit_types::workflow::DeliveryRefusal::CheckRepairActivityAbsent,
+                                "{message}"
+                            );
+                            assert!(
+                                message.contains("attempt 1 of 3"),
+                                "in-budget handoff must stay on the hold: {message}"
+                            );
+                            assert!(is_check_repair(&message), "{message}");
+                        }
+                        other => panic!("expected a typed hold, got {other}"),
+                    }
+                    assert!(
+                        !scripted_ran(&host, "test_ci_repair"),
+                        "no repair agent runs when the activity is absent"
+                    );
+                    assert_eq!(repair_attempts(&host).len(), 1, "{case}");
+                    assert_eq!(fx.head(), fx.candidate, "{case}");
+                    assert_eq!(fx.remote_tip(BRANCH), fx.candidate, "{case}");
+                    assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+
+                    // The missing activity did not undo admission. A new
+                    // delivery with recovery configured must explain why
+                    // the same head still cannot enter repair.
+                    let attempts = repair_attempts(&host);
+                    let retry_run = "jrun-recovery-configured";
+                    assert_ne!(attempts[0].run_id, retry_run);
+                    host.tasks
+                        .lock()
+                        .unwrap()
+                        .get_mut(TASK_ID)
+                        .unwrap()
+                        .job_run_id = Some(retry_run.into());
+                    let mut input = auto_fix_input(&fx);
+                    input["run_id"] = json!(retry_run);
+                    input["job_run_id"] = json!(retry_run);
+                    let retry_error = run_job(
+                        &host,
+                        repair_job(input),
+                        REPAIR_ACTS,
+                        retry_run,
+                        json!({}),
+                        None,
+                    )
+                    .expect_err("a new run on the admitted head holds as a duplicate");
+                    assert_eq!(
+                        retry_error.failure_code(),
+                        "delivery_repair_dispatched",
+                        "{retry_error}"
+                    );
+                    assert!(!scripted_ran(&host, "test_ci_repair"));
+                    assert_eq!(repair_attempts(&host), attempts);
+                    assert!(repair_pushes(&host).is_empty());
+                    assert_eq!(fx.head(), fx.candidate);
+                    assert_eq!(fx.remote_tip(BRANCH), fx.candidate);
+                    assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+                    assert!(
+                        retry_error
+                            .to_string()
+                            .contains("repair and publish a new head"),
+                        "a held admission needs an actionable remedy, not a wait for a repair that never ran: {retry_error}"
+                    );
+                }
+                "exhausted" => {
+                    let error = match outcome {
+                        Ok(result) => {
+                            assert!(!result.success, "{result:?}");
+                            result.message.unwrap_or_default()
+                        }
+                        Err(error) => {
+                            assert!(
+                                !matches!(error, DispatchError::DeliveryRefused { .. }),
+                                "an exhausted repair budget is a failure, not a hold: {error}"
+                            );
+                            error.to_string()
+                        }
+                    };
+                    assert!(
+                        error.contains("auto_fix_budget_exhausted"),
+                        "{case}: {error}"
+                    );
+                    assert!(
+                        !scripted_ran(&host, "test_ci_repair"),
+                        "an exhausted budget does not enter check repair"
+                    );
+                    assert_eq!(repair_attempts(&host).len(), 3, "{case}");
+                    assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+                }
+                other => panic!("unknown case {other}"),
+            }
+        },
+    );
+}
+
+/// An admitted in-budget check-repair handoff on a completion step that
+/// declares no recovery, in a job with no job-level recovery, holds the run
+/// as `delivery_check_repair_activity_absent` with no repair agent run
+/// [ORB-23232].
+#[test]
+fn admitted_check_repair_handoff_without_declared_recovery_holds() {
+    const CASE: &str = "undeclared-recovery-hold";
+    isolated(
+        "auto_fix::admitted_check_repair_handoff_without_declared_recovery_holds",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let (fx, host) = docs_only_pr(row);
+                host.script("test_ci_repair", json!({"mode":"repair"}));
+                host.script(
+                    "test_checkpoint",
+                    json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
+                );
+                host.require_commands(&["test \"$(cat src/contract)\" = fixed"]);
+                fx.script_checks(&["source_contract"]);
+                let input = auto_fix_input(&fx);
+                let outcome = run_undeclared_recovery_repair_job(&host, input);
+                let error = outcome.expect_err("absent recovery holds the in-budget handoff");
+                assert_eq!(
+                    error.failure_code(),
+                    "delivery_check_repair_activity_absent",
+                    "{error}"
+                );
+                match error {
+                    DispatchError::DeliveryRefused {
+                        refusal, message, ..
+                    } => {
+                        assert_eq!(
+                            refusal,
+                            orbit_types::workflow::DeliveryRefusal::CheckRepairActivityAbsent,
+                            "{message}"
+                        );
+                        assert!(
+                            message.contains("attempt 1 of 3"),
+                            "in-budget handoff must stay on the hold: {message}"
+                        );
+                        assert!(is_check_repair(&message), "{message}");
+                    }
+                    other => panic!("expected a typed hold, got {other}"),
+                }
+                assert!(
+                    !scripted_ran(&host, "test_ci_repair"),
+                    "no repair agent runs when the activity is absent"
+                );
+                assert_eq!(repair_attempts(&host).len(), 1, "{CASE}");
+                assert_eq!(fx.head(), fx.candidate, "{CASE}");
+                assert_eq!(fx.remote_tip(BRANCH), fx.candidate, "{CASE}");
+                assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, CASE);
+            });
+        },
+    );
 }
 
 /// Repair input with an explicit watch budget. The prerequisite clock and the
@@ -321,6 +612,27 @@ fn docs_only_pr(row: &std::path::Path) -> (Fixture, DeliveryHost) {
     (fx, host)
 }
 
+/// A docs-only PR whose base also tracks the one-character file `x`.
+fn one_char_pr(row: &std::path::Path) -> (Fixture, DeliveryHost) {
+    let mut fx = Fixture::new(row);
+    fs::create_dir_all(fx.repo.join(".git/info")).unwrap();
+    fs::write(fx.repo.join(".git/info/exclude"), ".orbit/\n").unwrap();
+    fx.commit_files_on_base(&[("src/contract", "broken\n"), ("x", "original\n")]);
+    git(&fx.repo, &["reset", "--hard", BASE]);
+    fx.base_sha = fx.head();
+    delete_remote_branch(&fx, BRANCH);
+    fx.candidate = fx.commit("README.md", "documentation only\n");
+    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+    host.set_context_files(TASK_ID, &["file:README.md"]);
+    action(
+        &host,
+        "pr_open",
+        &fx.open_input(&fx.candidate, &fx.base_sha),
+    )
+    .unwrap();
+    (fx, host)
+}
+
 // A successful publication checkpoint deliberately keeps H0 when completion
 // fails after repairing it. Resume executes completion as R2, retaining R0's
 // task/worktree ownership but inheriting only its durable ancestor authority.
@@ -372,6 +684,15 @@ pub(super) fn seed_auto_fix_history(
     event: &str,
     note: &impl serde::Serialize,
 ) {
+    seed_auto_fix_history_decision(host, event, note, None);
+}
+
+fn seed_auto_fix_history_decision(
+    host: &DeliveryHost,
+    event: &str,
+    note: &impl serde::Serialize,
+    decision: Option<TaskDecision>,
+) {
     host.history
         .lock()
         .unwrap()
@@ -385,7 +706,7 @@ pub(super) fn seed_auto_fix_history(
             from_status: None,
             to_status: None,
             operation_id: None,
-            decision: None,
+            decision,
         });
 }
 
@@ -619,6 +940,82 @@ fn auto_fix_resume_publishes_source_admitted_local_repair_safely() {
     );
 }
 
+/// [ORB-23445] A repaired head adopted or published after the original
+/// push checkpoint must be re-evaluated against `completion.hold` before
+/// any merge: the original head changes only a safe file, while the
+/// repaired candidate may add a held path.
+#[test]
+fn completion_hold_reevaluated_for_repaired_heads() {
+    auto_fix_table(
+        "auto_fix::completion_hold_reevaluated_for_repaired_heads",
+        "published_held published_safe local_held local_safe",
+        |case, row| {
+            let fx = Fixture::new(row);
+            let host = auto_fix_resume_fixture(&fx, RUN_ID);
+            let held = case.ends_with("held");
+            let repair_file = if held {
+                "risky/auth.rs"
+            } else {
+                "safe/repair.txt"
+            };
+            let repair = if case.starts_with("published") {
+                let repair = fx.commit(repair_file, "repair\n");
+                seed_auto_fix_history(
+                    &host,
+                    PR_AUTO_FIX_PUSHED_EVENT,
+                    &PrAutoFixPush {
+                        pr_number: PR_NUMBER.into(),
+                        from_head_sha: fx.candidate.clone(),
+                        to_head_sha: repair.clone(),
+                        blocker: PrAutoFixBlocker::FailedChecks,
+                        run_id: RUN_ID.into(),
+                    },
+                );
+                git(&fx.repo, &["reset", "--hard", &fx.candidate]);
+                repair
+            } else {
+                let path = fx.repo.join(repair_file);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(&path, "repair\n").unwrap();
+                git(&fx.repo, &["add", repair_file]);
+                git(&fx.repo, &["commit", "-m", "admitted local repair"]);
+                host.require_commands(&[&format!("test -f {repair_file}")]);
+                fx.head()
+            };
+            fx.script_checks(&["success"]);
+            host.set_completion_hold_rules(vec![orbit_types::workflow::CompletionHoldRule {
+                name: Some("risky-paths".into()),
+                paths: vec!["risky/**".into()],
+                ..Default::default()
+            }]);
+            let mut input = fx.complete_ungated_input();
+            input["auto_fix"] = json!(true);
+            let output = action_ok(&host, "pr_complete", &input);
+            if held {
+                assert_eq!(output["held_task_ids"], json!([TASK_ID]), "{case}");
+                assert_eq!(output["completed_task_ids"], json!([]), "{case}");
+                assert_eq!(output["completion_hold"]["rule"], "risky-paths", "{case}");
+                assert_eq!(output["completion_hold"]["pattern"], "risky/**", "{case}");
+                assert_eq!(
+                    output["completion_hold"]["matched"], "risky/auth.rs",
+                    "{case}"
+                );
+                assert!(
+                    host.history(TASK_ID)
+                        .iter()
+                        .any(|entry| entry.event == orbit_types::workflow::COMPLETION_HELD_EVENT),
+                    "{case}: hold must be recorded"
+                );
+                assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+            } else {
+                assert_eq!(output["completed_task_ids"], json!([TASK_ID]), "{case}");
+                assert_eq!(fx.merge_requests(), squash(&repair), "{case}");
+                assert_eq!(host.status(TASK_ID), TaskStatus::Done, "{case}");
+            }
+        },
+    );
+}
+
 // CI API answers belong to the same bare-remote head read by the forge.
 // Unlike a scripted green status, source_contract evaluates the published tree.
 pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> Option<Value> {
@@ -640,6 +1037,34 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
     let aggregate = host.scripted.lock().unwrap()["test_ci_repair"]["aggregate"]
         .as_str()
         .map(ToOwned::to_owned);
+    let repair_mode = host.scripted.lock().unwrap()["test_ci_repair"]["mode"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    // The rerun attempt visible to the planner. A delayed rerun still shows
+    // its original attempt on the first status read after the send and a
+    // later attempt from the second read on; a plain red rerun has already
+    // advanced when its send returns.
+    let rerun_attempt = |forge: &std::path::Path, mode: &str| -> u64 {
+        if let Some(attempt) = fs::read_to_string(forge.join("rerun-attempt"))
+            .ok()
+            .and_then(|value| value.trim().parse().ok())
+        {
+            return attempt;
+        }
+        if mode.starts_with("no_edit_delayed")
+            && let Some(sent) = fs::read_to_string(forge.join("rerun-sent-reads"))
+                .ok()
+                .and_then(|value| value.trim().parse::<usize>().ok())
+        {
+            let reads = fs::read_to_string(forge.join("reads"))
+                .ok()
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            return if reads >= sent + 2 { 2 } else { 1 };
+        }
+        1
+    };
     let contract = |commit: &str| git(&host.repo, &["show", &format!("{commit}:src/contract")]);
     match operation {
         "pr.required_checks" => {
@@ -656,7 +1081,9 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
             };
             let conclusion = if observed == "pending" {
                 ""
-            } else if observed == "success" {
+            } else if observed == "success"
+                || (observed == "source_contract" && contract(head) == "fixed")
+            {
                 "SUCCESS"
             } else {
                 "FAILURE"
@@ -704,7 +1131,16 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
                 contract(commit)
             };
             let run = u64::from_str_radix(&commit[..12], 16).unwrap();
-            let test = json!({"name":"test","workflow":"CI","status":"completed","conclusion":if contents == "fixed" {"success"} else {"failure"},"run_id":run,"job_id":run+1,"failed_step":"source contract"});
+            let attempt = rerun_attempt(&forge, &repair_mode);
+            if repair_mode == "no_edit_delayed_green"
+                && attempt == 1
+                && forge.join("rerun-sent-reads").exists()
+            {
+                // The original attempt was observed after the send; the
+                // later rerun attempt passes on the next status read.
+                fs::write(forge.join("checks"), "success\n").unwrap();
+            }
+            let test = json!({"name":"test","workflow":"CI","status":"completed","conclusion":if contents == "fixed" {"success"} else {"failure"},"run_id":run,"job_id":run+1,"run_attempt":attempt,"failed_step":"source contract"});
             let jobs = match aggregate.as_deref() {
                 Some(aggregate) => {
                     let mut jobs = vec![
@@ -723,6 +1159,34 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
         "ci.job_log" => Some(
             json!({"log":"error: src/contract: expected fixed, found broken\nsource contract failed"}),
         ),
+        // The no-edit rerun's authenticated plan, echoing the exact roots
+        // the planner classified from the jobs and logs above.
+        "ci.rerun_plan" if repair_mode.starts_with("no_edit") => Some(json!({"plan":{
+            "schema_version":1, "repository":"orbit/test", "repository_id":500,
+            "pr_number":input["pr"], "head_sha":input["head_sha"],
+            "head_branch":input["head_branch"], "base_branch":input["base_branch"],
+            "accepted_base":input["accepted_base"], "run_id":input["run_id"],
+            "run_attempt":rerun_attempt(&forge, &repair_mode), "workflow_id":900, "roots":input["roots"],
+            "failed_jobs":[{"id":input["roots"][0]["job_id"]}],
+            "authentication":{},
+        }})),
+        // Sending the rerun flips the forge's checks only on the green row;
+        // the red row's rerun concludes with the same source-contract failure.
+        "ci.rerun_failed" if repair_mode.starts_with("no_edit") => {
+            if repair_mode == "no_edit_green" {
+                fs::write(forge.join("checks"), "success\n").unwrap();
+            } else if repair_mode == "no_edit_red" {
+                fs::write(forge.join("rerun-attempt"), "2\n").unwrap();
+            } else if repair_mode.starts_with("no_edit_delayed") {
+                let reads = fs::read_to_string(forge.join("reads")).unwrap_or_else(|_| "0".into());
+                fs::write(
+                    forge.join("rerun-sent-reads"),
+                    format!("{}\n", reads.trim()),
+                )
+                .unwrap();
+            }
+            Some(json!({"stdout":"", "stderr":""}))
+        }
         "ci.check_annotations" => {
             let aggregate = aggregate.unwrap_or_default();
             let head = input["head_sha"].as_str().unwrap();
@@ -785,6 +1249,25 @@ pub(super) fn perform_ci_repair(
         .insert("test_ci_repair".into(), input.clone());
     let error = input["error_message"].as_str().unwrap();
     assert!(is_check_repair(error), "{mode}: {error}");
+    if mode == "recovery_fails" {
+        // The recovery activity is dispatched and returns an unsuccessful outcome.
+        return Err(DispatchError::DeterministicActionFailed {
+            action: "test_ci_repair".into(),
+            message: "scripted check repair failed".into(),
+        });
+    }
+    if mode.starts_with("no_edit") {
+        // The failure is not the candidate's: no edit, no scope record.
+        return Ok(json!({"summary":"failure is not caused by the candidate; no edit"}));
+    }
+    if mode == "one_char_modified" {
+        fs::write(host.repo.join("x"), "changed\n").unwrap();
+        return Ok(json!({"summary":"edit one-character tracked file without a scope record"}));
+    }
+    if mode == "one_char_deleted" {
+        fs::remove_file(host.repo.join("x")).unwrap();
+        return Ok(json!({"summary":"delete one-character tracked file without a scope record"}));
+    }
     let report = error
         .split("before writing retry, write ")
         .nth(1)
@@ -938,6 +1421,13 @@ fn docs_only_auto_fix_repairs_shared_source_and_watches_published_green_head() {
                     _ => "CI repair scope",
                 };
                 assert!(error.contains(expected), "{mode}: {error}");
+                if mode == "missing" {
+                    assert!(
+                        error.contains("wrote no scope record")
+                            && !error.contains("No such file or directory"),
+                        "an edit with no scope record refuses in words, not as an OS error: {error}"
+                    );
+                }
                 if matches!(mode, "budget" | "review_required") {
                     assert!(
                         !host
@@ -969,6 +1459,124 @@ fn docs_only_auto_fix_repairs_shared_source_and_watches_published_green_head() {
                 }
             );
             assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, mode);
+        },
+    );
+}
+
+/// A check repair that modifies or deletes the tracked one-character file
+/// `x` and writes no scope record is refused as an unexplained edit: no
+/// no-edit history, no rerun and no commit.
+#[test]
+fn missing_scope_one_char_check_repair_is_refused_as_unexplained_edit() {
+    auto_fix_table(
+        "auto_fix::missing_scope_one_char_check_repair_is_refused_as_unexplained_edit",
+        "one_char_modified one_char_deleted",
+        |mode, row| {
+            let (fx, host) = one_char_pr(row);
+            host.script("test_ci_repair", json!({"mode":mode}));
+            host.script(
+                "test_checkpoint",
+                json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
+            );
+            host.require_commands(&["true"]);
+            fx.script_checks(&["source_contract"]);
+            let outcome = run_repair_job(&host, auto_fix_input(&fx));
+            let error = match outcome {
+                Ok(result) => {
+                    assert!(!result.success, "{mode}: {result:?}");
+                    result.message.unwrap_or_default()
+                }
+                Err(error) => error.to_string(),
+            };
+            assert!(error.contains("wrote no scope record"), "{mode}: {error}");
+            let history = host.history(TASK_ID);
+            assert!(
+                !history.iter().any(|entry| {
+                    entry.event == orbit_types::workflow::PR_AUTO_FIX_NO_EDIT_RERUN_EVENT
+                }),
+                "{mode}: an unexplained one-character edit records no no-edit rerun"
+            );
+            assert_eq!(
+                history
+                    .iter()
+                    .filter(|entry| entry.event == "ci_check_rerun")
+                    .count(),
+                0,
+                "{mode}: an unexplained one-character edit sends no rerun"
+            );
+            assert_eq!(repair_attempts(&host).len(), 1, "{mode}");
+            assert_candidate_head_unchanged(&fx, mode);
+            assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, mode);
+        },
+    );
+}
+
+/// A check repair that makes no edit and writes no scope record reruns the
+/// failed checks once on the unchanged head instead of blocking. A green
+/// rerun clears the head; a red rerun stops in words. The delayed rows keep
+/// showing the original failed attempt on the first read after the send:
+/// that observation alone must not stop, resend or admit another repair,
+/// and only the later attempt's result decides. The spent repair attempt
+/// and the one recorded rerun bound every row.
+#[test]
+fn no_edit_check_repair_reruns_failed_checks_once() {
+    auto_fix_table(
+        "auto_fix::no_edit_check_repair_reruns_failed_checks_once",
+        "no_edit_green no_edit_red no_edit_delayed_green no_edit_delayed_red",
+        |mode, row| {
+            let (fx, host) = docs_only_pr(row);
+            host.script("test_ci_repair", json!({"mode":mode}));
+            host.script(
+                "test_checkpoint",
+                json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
+            );
+            host.require_commands(&["true"]);
+            fx.script_checks(&["source_contract"]);
+            let outcome = run_repair_job(&host, auto_fix_input(&fx));
+            let history = host.history(TASK_ID);
+            let reruns = history
+                .iter()
+                .filter(|entry| entry.event == "ci_check_rerun")
+                .count();
+            assert!(
+                history.iter().any(|entry| {
+                    entry.event == orbit_types::workflow::PR_AUTO_FIX_NO_EDIT_RERUN_EVENT
+                }),
+                "{mode}: the no-edit repair is recorded"
+            );
+            assert_eq!(reruns, 1, "{mode}: exactly one rerun is sent");
+            assert_eq!(repair_attempts(&host).len(), 1, "{mode}");
+            assert_candidate_head_unchanged(&fx, mode);
+            if mode.contains("green") {
+                let result = outcome.expect(mode);
+                assert!(result.success, "{result:?}");
+                assert_eq!(
+                    result.pipeline["complete_pr"]["merge"]["reason"], "auto_fix_mergeable",
+                    "{mode}"
+                );
+                assert_eq!(
+                    result.pipeline["complete_pr"]["merge"]["head_sha"], fx.candidate,
+                    "{mode}: the green rerun clears the unchanged head"
+                );
+            } else {
+                let error = match outcome {
+                    Ok(result) => {
+                        assert!(!result.success, "{mode}: {result:?}");
+                        result.message.unwrap_or_default()
+                    }
+                    Err(error) => error.to_string(),
+                };
+                assert!(
+                    error.contains("made no edit and wrote no scope record")
+                        && error.contains("failed again"),
+                    "{mode}: {error}"
+                );
+                assert!(
+                    !error.contains("No such file or directory"),
+                    "{mode}: {error}"
+                );
+                assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, mode);
+            }
         },
     );
 }
@@ -1465,9 +2073,12 @@ fn auto_fix_watches_required_running_beside_optional_failure() {
                 [
                     ("PR status".into(), 15_000),
                     ("PR required checks".into(), 15_000),
+                    // [ORB-24403] The second BLOCKED poll still shows the
+                    // cached required check pending, so it reads no
+                    // required checks; the success poll reads fresh.
                     ("PR status".into(), 10_000),
-                    ("PR required checks".into(), 10_000),
-                    ("PR status".into(), 5_000)
+                    ("PR status".into(), 5_000),
+                    ("PR required checks".into(), 5_000)
                 ],
                 "all observations consume the original absolute completion deadline"
             );
@@ -2219,8 +2830,214 @@ fn auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure() {
     );
 }
 
-/// A base hold must survive the public job boundary, including a conflicting
-/// PR and jobs with retry, step, final and failure recovery configured.
+#[test]
+fn auto_fix_repairs_untouched_failure_on_green_base_first_poll() {
+    auto_fix_table(
+        "auto_fix::auto_fix_repairs_untouched_failure_on_green_base_first_poll",
+        "green_base",
+        |case, row| {
+            let (fx, host) = docs_only_pr(row);
+            let log = "error: source failure\n --> src/contract:1:1\n";
+            plant_commit_ci(&fx, &fx.candidate, 11, "failure", log);
+            plant_commit_ci(&fx, &fx.base_sha, 21, "success", log);
+            fx.script_checks(&["failure"]);
+            let reads = fx.status_reads();
+            let error = action(
+                &host,
+                "pr_complete",
+                &waited_auto_fix_input(&fx, 15, Some(5)),
+            )
+            .expect_err(case)
+            .to_string();
+            assert!(is_check_repair(&error), "{error}");
+            assert_eq!(repair_attempts(&host).len(), 1);
+            assert_eq!(fx.status_reads() - reads, 1);
+            assert!(
+                !host
+                    .history(TASK_ID)
+                    .iter()
+                    .any(|entry| entry.event == "pr_auto_fix_base_red")
+            );
+        },
+    );
+}
+
+/// A provider-reported mergeable head still needs its own green required CI.
+/// Base attribution cannot turn a latest failing check into permission to merge.
+#[test]
+fn regression_latest_required_failure_blocks_merge_until_passing_head_rerun() {
+    auto_fix_table(
+        "auto_fix::regression_latest_required_failure_blocks_merge_until_passing_head_rerun",
+        "clean_failure unstable_failure stale_rollup",
+        |case, row| {
+            let (fx, host) = docs_only_pr(row);
+            plant_older_green_base(&fx);
+            fx.script_checks(&[if case == "stale_rollup" {
+                "success"
+            } else {
+                case
+            }]);
+            // The head's history keeps the failed run after a rerun replaces
+            // it in the rollup.
+            let required = |conclusion: &str| required_test_check(&fx, conclusion, &["test"]);
+            fx.write_forge(
+                "required-policy",
+                json!({"data":{"repository":required("FAILURE")}}).to_string(),
+            );
+            let input = fx.complete_ungated_input();
+            let error = action(&host, "pr_complete", &input).expect_err(case);
+            assert!(
+                error.to_string().contains("required check 'test' failed"),
+                "{case}: {error}"
+            );
+            assert!(
+                fx.merge_requests().is_empty(),
+                "{case}: red head must never merge"
+            );
+            assert_candidate_head_unchanged(&fx, case);
+            for unpassed in ["SKIPPED", "NEUTRAL"] {
+                fx.write_forge(
+                    "required-policy",
+                    json!({"data":{"repository":required(unpassed)}}).to_string(),
+                );
+                let mut immediate = input.clone();
+                immediate["max_wait_seconds"] = json!(0);
+                action(&host, "pr_complete", &immediate)
+                    .expect_err("a skipped or neutral rerun did not pass the failed check");
+                assert!(
+                    fx.merge_requests().is_empty(),
+                    "{case}: {unpassed} cannot clear the failed check"
+                );
+            }
+            fx.write_forge(
+                "required-policy",
+                json!({"data":{"repository":required("SUCCESS")}}).to_string(),
+            );
+            fx.script_checks(&["success"]);
+            let result = action_ok(&host, "pr_complete", &input);
+            assert_eq!(result["merge"]["merged"], true, "{case}");
+            assert_landed_exactly(&fx, &host, &fx.candidate, case);
+        },
+    );
+}
+
+/// The required-check read of `fx.candidate` with one required `test` run
+/// concluding `conclusion`, and `failed` naming every check with a failed run
+/// on that head, superseded runs included.
+fn required_test_check(fx: &Fixture, conclusion: &str, failed: &[&str]) -> Value {
+    json!({
+        "pullRequest":{"headRefOid":fx.candidate,"commits":{"nodes":[{"commit":{
+            "oid":fx.candidate,"statusCheckRollup":{"contexts":{
+                "pageInfo":{"hasNextPage":false},"nodes":[{
+                    "name":"test","isRequired":true,"status":"COMPLETED","conclusion":conclusion
+                }]
+            }},
+            "checkSuites":{"pageInfo":{"hasNextPage":false},"nodes":[{"checkRuns":{
+                "pageInfo":{"hasNextPage":false},
+                "nodes":failed.iter().map(|name| json!({"name":name})).collect::<Vec<_>>()
+            }}]}
+        }}]}}
+    })
+}
+
+/// [ORB-20615] A docs-only head reports its required check skipped, and
+/// branch protection calls the PR mergeable. With no failed run of that check
+/// on the head, completion merges it; a failure of another check does not
+/// count. History the provider truncated proves nothing and still refuses.
+#[test]
+fn regression_never_failed_skipped_required_check_merges_mergeable_head() {
+    auto_fix_table(
+        "auto_fix::regression_never_failed_skipped_required_check_merges_mergeable_head",
+        "skipped neutral truncated_history",
+        |case, row| {
+            let (fx, host) = docs_only_pr(row);
+            let conclusion = if case == "neutral" {
+                "neutral"
+            } else {
+                "skipped"
+            };
+            fx.script_checks(&[conclusion]);
+            let mut required = required_test_check(&fx, &conclusion.to_uppercase(), &["coverage"]);
+            if case == "truncated_history" {
+                required["pullRequest"]["commits"]["nodes"][0]["commit"]["checkSuites"]["pageInfo"]
+                    ["hasNextPage"] = json!(true);
+            }
+            fx.write_forge(
+                "required-policy",
+                json!({"data":{"repository":required}}).to_string(),
+            );
+            let mut input = fx.complete_ungated_input();
+            input["max_wait_seconds"] = json!(0);
+            if case == "truncated_history" {
+                let error = action(&host, "pr_complete", &input).expect_err(case);
+                assert!(
+                    error.to_string().contains("has no successful run"),
+                    "{case}: {error}"
+                );
+                assert!(fx.merge_requests().is_empty(), "{case}");
+                return;
+            }
+            let result = action_ok(&host, "pr_complete", &input);
+            assert_eq!(result["merge"]["merged"], true, "{case}: {result}");
+            assert_landed_exactly(&fx, &host, &fx.candidate, case);
+        },
+    );
+}
+
+/// Independent recovery still records suspicion, once per exact failure even
+/// when a later poll observes a newer base tip.
+#[test]
+fn regression_base_suspect_history_deduplicates_across_base_tips() {
+    isolated(
+        "auto_fix::regression_base_suspect_history_deduplicates_across_base_tips",
+        |row| {
+            let (fx, host) = docs_only_pr(row);
+            plant_older_green_base(&fx);
+            host.script(
+                "test_checkpoint",
+                json!({"workspace_path":fx.repo,"base_sha":fx.base_sha}),
+            );
+            host.script(
+                "test_final_decision",
+                json!({"decision":"escalate","diagnosis":"source failure","human_action":"repair"}),
+            );
+            let mut input = waited_auto_fix_input(&fx, 0, None);
+            input["auto_fix"] = json!(false);
+            for run in [RUN_ID, "jrun-new-base"] {
+                if run != RUN_ID {
+                    fx.advance_base();
+                    host.set_status(TASK_ID, TaskStatus::Review);
+                }
+                let result = run_job(
+                    &host,
+                    green_base_hold_job(&input),
+                    &green_base_hold_activities(),
+                    run,
+                    json!({"task_ids":[TASK_ID]}),
+                    None,
+                );
+                assert!(
+                    !matches!(&result, Ok(outcome) if outcome.success),
+                    "{run}: {result:?}"
+                );
+                assert!(!scripted_ran(&host, "test_final_decision"));
+                assert_eq!(
+                    host.history(TASK_ID)
+                        .iter()
+                        .filter(|entry| entry.event == "ci_base_suspect")
+                        .count(),
+                    1,
+                    "one suspicion per head/check/signature, including a new base tip"
+                );
+                assert!(fx.merge_requests().is_empty());
+            }
+        },
+    );
+}
+
+/// A known-red-base hold survives the public job boundary, including a
+/// conflicting PR and configured recovery hooks. Source suspicion instead
+/// admits repair without granting merge permission.
 #[test]
 fn base_check_holds_never_dispatch_candidate_recovery() {
     auto_fix_table(
@@ -2281,7 +3098,7 @@ fn base_check_holds_never_dispatch_candidate_recovery() {
             let mut job = job_asset(json!([
                 {"id":"commit", "target":"activity:checkpoint", "recovery_activity":"step_failure_recovery"},
                 {"id":"complete_pr", "target":"activity:pr_complete", "recovery_activity":"pr_conflict_recovery", "default_input":input,
-                 "retry":{"max_attempts":if case == "candidate" { 1 } else { 2 },"initial_backoff_ms":1}}
+                 "retry":{"max_attempts":if case.ends_with("red") { 2 } else { 1 },"initial_backoff_ms":1}}
             ]));
             job.failure_activity = Some("unexpected_failure".into());
             job.final_recovery_activity = Some("unexpected_final".into());
@@ -2300,12 +3117,65 @@ fn base_check_holds_never_dispatch_candidate_recovery() {
                 json!({}),
                 None,
             );
-            if case == "candidate" {
+            if case == "dirty_suspect" {
+                let error = result.expect_err(case).to_string();
                 assert!(
-                    scripted_ran(&host, "unexpected_step"),
-                    "candidate checks still dispatch recovery: {result:?}"
+                    error.contains("branch has merge conflicts"),
+                    "{case}: {error}"
                 );
-                assert_eq!(repair_attempts(&host).len(), 1);
+                assert!(
+                    repair_attempts(&host).len() == 1,
+                    "a green-base source failure admits one check repair even beside a reported conflict"
+                );
+                assert_no_unexpected_ran(
+                    &host,
+                    &["unexpected_step", "unexpected_conflict", "unexpected_final"],
+                    case,
+                );
+                assert!(
+                    scripted_ran(&host, "unexpected_failure"),
+                    "{case}: the ordinary failure handler receives a conflict that is not a base hold"
+                );
+                assert!(
+                    !host
+                        .history(TASK_ID)
+                        .iter()
+                        .any(|entry| entry.event == "pr_auto_fix_base_red")
+                );
+                assert_nothing_landed(&fx, &host, TaskStatus::Review, case);
+                return;
+            }
+            if !case.ends_with("red") {
+                assert!(
+                    scripted_ran(&host, "unexpected_step")
+                        || scripted_ran(&host, "unexpected_conflict"),
+                    "{case}: candidate checks still dispatch recovery: {result:?}"
+                );
+                assert!(
+                    !host
+                        .history(TASK_ID)
+                        .iter()
+                        .any(|entry| entry.event == "pr_auto_fix_base_red"),
+                    "{case}: suspicion must not be recorded as a known-red base: {result:?}"
+                );
+                assert!(
+                    fx.merge_requests().is_empty(),
+                    "{case}: recovery grants no merge"
+                );
+                if !case.starts_with("dirty_") {
+                    // The stub recovery makes no edit, so completion retries
+                    // on the unchanged head; on the then-dirty row that retry
+                    // also admits the conflict repair. The source (failed
+                    // checks) repair itself is still admitted exactly once.
+                    assert_eq!(
+                        repair_attempts(&host)
+                            .iter()
+                            .filter(|attempt| attempt.blocker == PrAutoFixBlocker::FailedChecks)
+                            .count(),
+                        1,
+                        "{case}: one source repair"
+                    );
+                }
                 return;
             }
             let error = result.expect_err(case);
@@ -2352,75 +3222,6 @@ fn base_check_holds_never_dispatch_candidate_recovery() {
                     .any(|entry| entry.event == "pr_auto_fix_base_red"),
                 "{case}"
             );
-            if case == "suspect" {
-                // An unrelated push run on the same head is not a
-                // rerun of the recorded failure: it still holds and
-                // spends no repair attempt.
-                let candidate_dir = fx.forge.join("commit-ci").join(&fx.candidate);
-                rewrite_forge_json(&candidate_dir.join("jobs.json"), |jobs| {
-                    jobs["jobs"][0]["id"] = json!(32);
-                    jobs["jobs"][0]["started_at"] = json!("2026-10-27T05:02:00Z");
-                    jobs["jobs"][0]["completed_at"] = json!("2026-10-27T05:03:00Z");
-                });
-                rewrite_forge_json(&candidate_dir.join("runs.json"), |runs| {
-                    runs["workflow_runs"][0]["id"] = json!(3);
-                    runs["workflow_runs"][0]["run_attempt"] = json!(1);
-                    runs["workflow_runs"][0]["event"] = json!("push");
-                    runs["workflow_runs"][0]["run_started_at"] = json!("2026-10-27T05:02:00Z");
-                });
-                fs::write(candidate_dir.join("run_id"), "3").unwrap();
-                let mut unrelated = auto_fix_input(&fx);
-                unrelated["run_id"] = json!("jrun-unrelated-run");
-                let error = action(&host, "pr_complete", &unrelated).unwrap_err();
-                assert!(
-                    (error.to_string().contains("base_red")
-                        || error.to_string().contains("base-suspect"))
-                        && !is_check_repair(&error.to_string()),
-                    "unrelated push run cannot admit repair: {error}"
-                );
-                assert!(
-                    repair_attempts(&host).is_empty(),
-                    "unrelated push run spends no repair attempt"
-                );
-                // A later watcher re-observes the held PR. A base pass
-                // alone still holds; the unchanged-head rerun must fail
-                // the same signature before repair admission.
-                let candidate_dir = fx.forge.join("commit-ci").join(&fx.candidate);
-                rewrite_forge_json(&candidate_dir.join("jobs.json"), |jobs| {
-                    jobs["jobs"][0]["id"] = json!(13);
-                    jobs["jobs"][0]["started_at"] = json!("2026-10-27T05:02:00Z");
-                    jobs["jobs"][0]["completed_at"] = json!("2026-10-27T05:03:00Z");
-                });
-                rewrite_forge_json(&candidate_dir.join("runs.json"), |runs| {
-                    runs["workflow_runs"][0]["id"] = json!(11);
-                    runs["workflow_runs"][0]["run_attempt"] = json!(2);
-                    runs["workflow_runs"][0]["run_started_at"] = json!("2026-10-27T05:02:00Z");
-                    runs["workflow_runs"][0]["event"] = json!("pull_request");
-                    runs["workflow_runs"][0]["pull_requests"] = json!([{"number": 42}]);
-                });
-                fs::write(candidate_dir.join("run_id"), "11").unwrap();
-                let base_dir = fx.forge.join("commit-ci").join(&fx.base_sha);
-                rewrite_forge_json(&base_dir.join("jobs.json"), |jobs| {
-                    jobs["jobs"][0]["started_at"] = json!("2026-10-27T04:58:00Z");
-                });
-                rewrite_forge_json(&base_dir.join("runs.json"), |runs| {
-                    runs["workflow_runs"][0]["status"] = json!("completed");
-                    runs["workflow_runs"][0]["conclusion"] = json!("success");
-                    runs["workflow_runs"][0]["run_started_at"] = json!("2026-10-27T04:58:00Z");
-                });
-                fx.write_forge(
-                    "base-push-runs.json",
-                    fs::read_to_string(base_dir.join("runs.json")).unwrap(),
-                );
-                let mut next = auto_fix_input(&fx);
-                next["run_id"] = json!("jrun-base-recheck");
-                let error = action(&host, "pr_complete", &next).unwrap_err();
-                assert!(
-                    is_check_repair(&error.to_string()),
-                    "same-signature PR rerun plus green base releases the hold: {error}"
-                );
-                assert_eq!(repair_attempts(&host).len(), 1);
-            }
         },
     );
 }
@@ -2491,7 +3292,7 @@ fn open_moved_base_ci(row: &std::path::Path) {
 fn auto_fix_holds_an_inherited_failure_until_the_base_proves_it() {
     auto_fix_table(
         "auto_fix::auto_fix_holds_an_inherited_failure_until_the_base_proves_it",
-        "skipped_tip_green_parent skipped_tip_red_parent skipped_tip_unproven pending_tip_unreadable_tip pending_tip_unreadable_fork_point",
+        "skipped_tip_green_parent skipped_tip_red_parent skipped_tip_unproven pending_tip_unreadable_tip pending_tip_unreadable_fork_point pending_tip_unreadable_fork_point:legacy_rich pending_tip_unreadable_fork_point:legacy_minimal pending_tip_unreadable_fork_point:typed_conflicting_note",
         |case, row| {
             let _timer = RowTimer::start(case);
             inherited_failure_case(row, case);
@@ -2500,7 +3301,9 @@ fn auto_fix_holds_an_inherited_failure_until_the_base_proves_it() {
 }
 
 fn inherited_failure_case(row: &std::path::Path, case: &str) {
+    let (case, storage) = case.split_once(':').unwrap_or((case, "typed"));
     let (fx, host) = opened_review(row);
+    let host = std::rc::Rc::new(host);
     let shared = "error[E0433]: cannot find module `broken_base`\n";
     let pair = case.starts_with("pending_tip");
     let failing: &[(&str, &str)] = if pair {
@@ -2557,7 +3360,70 @@ fn inherited_failure_case(row: &std::path::Path, case: &str) {
     }
     let input = waited_auto_fix_input(&fx, 30, Some(5));
     let reads_before = fx.status_reads();
-    let result = super::complete_with_logical_clock(&host, &input);
+    let clock = std::rc::Rc::new(std::cell::Cell::new(1_000_000_u64));
+    let now = std::rc::Rc::clone(&clock);
+    let waited = std::rc::Rc::clone(&clock);
+    let stored = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let stored_on_wait = std::rc::Rc::clone(&stored);
+    let waiting_host = std::rc::Rc::clone(&host);
+    let storage_on_wait = storage.to_owned();
+    let legacy_rich = json!({"failed_head": fx.candidate, "landed_base": tip,
+        "base_branch": BASE, "source": "latest_push", "path": "known_red_base",
+        "checks": [{"base_commit": fork_point}]})
+    .to_string();
+    let result = orbit_engine::test_support::with_prerequisite_clock(
+        move || {
+            let current = now.get();
+            now.set(current + 1);
+            current
+        },
+        |_, _| {},
+        || {
+            orbit_engine::test_support::with_vcs_retry_wait(
+                move |duration| {
+                    waited.set(waited.get() + u64::try_from(duration.as_millis()).unwrap());
+                    if stored_on_wait.borrow().is_some() || storage_on_wait == "typed" {
+                        return;
+                    }
+                    // Reopen exactly the state an older process would have left,
+                    // before the next poll loses access to fork-point evidence.
+                    let mut history = waiting_host.history.lock().unwrap();
+                    let entry = history
+                        .get_mut(TASK_ID)
+                        .unwrap()
+                        .iter_mut()
+                        .find(|entry| entry.event == PR_AUTO_FIX_BASE_RED_EVENT)
+                        .unwrap();
+                    let record = PrAutoFixBaseRed::from_entry(entry).unwrap();
+                    assert!(matches!(
+                        entry.decision,
+                        Some(TaskDecision::PrAutoFixBaseRed(_))
+                    ));
+                    assert_eq!(
+                        serde_json::from_str::<Value>(entry.note.as_deref().unwrap()).unwrap(),
+                        serde_json::to_value(&record).unwrap(),
+                        "new notes retain the historical payload"
+                    );
+                    match storage_on_wait.as_str() {
+                        "legacy_rich" => {
+                            entry.note = Some(legacy_rich.clone());
+                            entry.decision = None;
+                        }
+                        "legacy_minimal" => entry.decision = None,
+                        "typed_conflicting_note" => {
+                            entry.note = Some(
+                                json!({"failed_head": "other-head", "reason": "diagnostic only"})
+                                    .to_string(),
+                            );
+                        }
+                        _ => panic!("unknown storage {storage_on_wait}"),
+                    }
+                    *stored_on_wait.borrow_mut() = Some(entry.clone());
+                },
+                || action(&host, "pr_complete", &input),
+            )
+        },
+    );
     let polls = fx.status_reads() - reads_before;
     let history = host.history(TASK_ID);
     let attempts = repair_attempts(&host);
@@ -2567,9 +3433,44 @@ fn inherited_failure_case(row: &std::path::Path, case: &str) {
     );
     let base_red = history
         .iter()
-        .filter(|entry| entry.event == "pr_auto_fix_base_red")
-        .filter_map(|entry| serde_json::from_str::<Value>(entry.note.as_deref()?).ok())
+        .filter_map(PrAutoFixBaseRed::from_entry)
         .collect::<Vec<_>>();
+    if let Some(stored) = stored.borrow().as_ref() {
+        assert!(
+            history.iter().any(|entry| entry == stored),
+            "{storage}: no legacy rewrite"
+        );
+    }
+    for entry in history
+        .iter()
+        .filter(|entry| entry.event == PR_AUTO_FIX_BASE_RED_EVENT)
+    {
+        let record = PrAutoFixBaseRed::from_entry(entry).unwrap();
+        assert_eq!(
+            record.failed_head, fx.candidate,
+            "{storage}: only the recorded head is held"
+        );
+        if storage == "typed" {
+            assert!(matches!(
+                entry.decision,
+                Some(TaskDecision::PrAutoFixBaseRed(_))
+            ));
+            // These are the original json! layouts, including insertion
+            // order: serde_json uses preserve_order in this workspace.
+            let legacy_note = if let Some(reason) = &record.reason {
+                json!({"failed_head": record.failed_head, "reason": reason})
+            } else {
+                json!({"failed_head": record.failed_head, "landed_base": record.landed_base,
+                    "base_branch": record.base_branch, "source": record.source,
+                    "checks": record.checks, "path": record.path})
+            };
+            assert_eq!(
+                entry.note.as_deref().unwrap(),
+                legacy_note.to_string(),
+                "the additive decision leaves note bytes and dedupe unchanged"
+            );
+        }
+    }
     let refresh = history
         .iter()
         .find(|entry| entry.event == "pr_auto_fix_base_refresh")
@@ -2609,8 +3510,11 @@ fn inherited_failure_case(row: &std::path::Path, case: &str) {
         assert!(refresh.is_none(), "{case}: no green base, no refresh");
         if case == "skipped_tip_red_parent" {
             assert!(
-                base_red.iter().any(|note| note["path"] == "known_red_base"
-                    && note["checks"][0]["base_commit"] == fork_point.as_str()),
+                base_red
+                    .iter()
+                    .any(|record| record.path.as_deref() == Some("known_red_base")
+                        && record.checks.as_ref().unwrap()[0]["base_commit"]
+                            == fork_point.as_str()),
                 "{case}: the newest red commit decides: {base_red:?}"
             );
         } else {
@@ -2731,11 +3635,12 @@ fn plant_oversized_base_ci(fx: &Fixture, collection: &str) {
     }
 }
 
-/// Projected provider failures must remain errors and cannot spend a repair.
+/// Invalid projected base evidence stays an adapter error. It cannot establish
+/// a known-red base or suppress a repair whose own source evidence is complete.
 #[test]
-fn auto_fix_refuses_unreadable_or_incomplete_projected_ci() {
+fn auto_fix_repairs_without_treating_unreadable_base_as_known_red() {
     auto_fix_table(
-        "auto_fix::auto_fix_refuses_unreadable_or_incomplete_projected_ci",
+        "auto_fix::auto_fix_repairs_without_treating_unreadable_base_as_known_red",
         "missing_runs malformed_runs incomplete_runs unreadable_jobs incomplete_jobs object_jobs",
         |case, row| {
             let (fx, host) = docs_only_pr(row);
@@ -2795,20 +3700,29 @@ fn auto_fix_refuses_unreadable_or_incomplete_projected_ci() {
                 );
             }
             let error = action(&host, "pr_complete", &auto_fix_input(&fx)).unwrap_err();
-            assert!(!is_check_repair(&error.to_string()), "{case}: {error}");
+            assert!(is_check_repair(&error.to_string()), "{case}: {error}");
+            assert_eq!(
+                repair_attempts(&host).len(),
+                1,
+                "{case}: complete head evidence admits repair"
+            );
             assert!(
-                repair_attempts(&host).is_empty(),
-                "{case}: unread evidence spends no repair"
+                !host
+                    .history(TASK_ID)
+                    .iter()
+                    .any(|entry| entry.event == "pr_auto_fix_base_red")
             );
             assert_nothing_landed(&fx, &host, TaskStatus::Review, case);
         },
     );
 }
 
-/// An older green base permits a PR rerun, but cannot by itself admit either
-/// the auto-fix repair or completion's independent final recovery. Oversized
-/// workflow and job payloads exercise the normal 1 MiB process capture bound;
-/// only the same-PR later attempt may reach final recovery. The refused row is
+/// Auto-fix admits source repair on an older green base without a repeat.
+/// This job declares no `step_failure_recovery`, so that in-budget handoff
+/// holds the run in review and does not enter final recovery. Independent
+/// final recovery still requires the same-PR later attempt when auto-fix is
+/// off. Oversized workflow and job payloads exercise the normal 1 MiB process
+/// capture bound without gating auto-fix. The refused-history row is
 /// the former `held_first_failure_survives_a_refused_history_write` scenario:
 /// a refused first-failure record still holds and dispatches no recovery.
 #[test]
@@ -2859,6 +3773,47 @@ fn older_green_base_holds_recovery_until_matching_pr_rerun() {
                         !matches!(&result, Ok(outcome) if outcome.success),
                         "{detail}"
                     );
+                    if auto_fix {
+                        let error = result.expect_err(
+                            "{detail}: an absent check-repair activity holds the source repair",
+                        );
+                        assert_eq!(
+                            error.failure_code(),
+                            "delivery_check_repair_activity_absent",
+                            "{detail}: {error}"
+                        );
+                        match &error {
+                            DispatchError::DeliveryRefused {
+                                refusal, message, ..
+                            } => {
+                                assert_eq!(
+                                    *refusal,
+                                    orbit_types::workflow::DeliveryRefusal::CheckRepairActivityAbsent,
+                                    "{detail}: {message}"
+                                );
+                                assert!(
+                                    is_check_repair(message),
+                                    "{detail}: the hold keeps the admitted source repair: {message}"
+                                );
+                            }
+                            other => panic!("{detail}: expected a typed hold, got {other}"),
+                        }
+                        assert!(
+                            !scripted_ran(&host, "test_final_decision"),
+                            "{detail}: the hold does not enter final recovery"
+                        );
+                        assert_eq!(repair_attempts(&host).len(), 1, "{detail}");
+                        assert!(
+                            !host.history(TASK_ID).iter().any(|entry| matches!(
+                                entry.event.as_str(),
+                                "pr_auto_fix_base_red"
+                            )),
+                            "{detail}: suspicion does not gate repair"
+                        );
+                        assert_no_context_widening(&host, &context, &detail);
+                        assert_nothing_landed(&fx, &host, TaskStatus::Review, &detail);
+                        return;
+                    }
                     assert!(
                         !scripted_ran(&host, "test_final_decision"),
                         "{detail}: an older green base alone cannot dispatch final recovery: {result:?}"
@@ -3018,8 +3973,12 @@ fn auto_fix_settles_staggered_required_failures_before_repair_and_final_recovery
             // A fresh admission exercises final recovery's independent
             // observation of both failures. Reusing the earlier ledger
             // is now a typed repair-dispatched hold and cannot recover.
+            // The budget is spent, so the settled failures fail on the
+            // ordinary path to final recovery instead of holding as an
+            // admitted check repair [ORB-23232].
             let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
             host.publish_pr(TASK_ID);
+            seed_spent(&host, 1, PrAutoFixBlocker::FailedChecks, RUN_ID);
             host.script(
                 "test_checkpoint",
                 json!({"workspace_path":fx.repo,"base_sha":fx.base_sha}),
@@ -3219,6 +4178,181 @@ fn unreadable_log_hold(row: &std::path::Path, case: &str) {
     assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
 }
 
+/// [ORB-21412] An empty or truncated required-checks answer, or a failed
+/// read reporting `unexpected end of JSON input`, is retried a bounded
+/// number of times: a transient bad answer recovers without stopping
+/// auto-fix, and a persistent one holds the run as inconclusive evidence
+/// (retryable by the next auto-fix pass) with the cause named.
+#[test]
+fn auto_fix_retries_unavailable_required_check_evidence_and_holds_when_persistent() {
+    auto_fix_table(
+        "auto_fix::auto_fix_retries_unavailable_required_check_evidence_and_holds_when_persistent",
+        "empty truncated fail recovered persistent_empty persistent_fail",
+        required_check_evidence_case,
+    );
+}
+
+/// [ORB-21766] A transient (TLS) required-checks read failure after a
+/// completion mutation was already recorded (post-recovery) holds as
+/// inconclusive check evidence, not a plain auto-fix stop: the read is
+/// read-only, so the next pass can re-read the forge and reconcile any
+/// earlier mutation from the PR status.
+#[test]
+fn auto_fix_holds_transient_required_checks_after_completion_mutation() {
+    auto_fix_table(
+        "auto_fix::auto_fix_holds_transient_required_checks_after_completion_mutation",
+        "tls_after_mutation",
+        |case, row| {
+            let (fx, host) = opened_review(row);
+            fx.script_checks(&["success"]);
+            seed_auto_fix_history(
+                &host,
+                orbit_types::workflow::PR_COMPLETION_MUTATION_STARTED_EVENT,
+                &json!({"run_id": RUN_ID, "operation": "merge"}),
+            );
+            fx.script_required_check_outcomes(&["tls"]);
+            let error = action(&host, "pr_complete", &auto_fix_input(&fx)).unwrap_err();
+            let refusal = orbit_types::workflow::DeliveryRefusal::CheckEvidenceInconclusive;
+            assert!(
+                matches!(&error, orbit_common::OrbitError::DeliveryRefused { refusal: actual, .. } if *actual == refusal),
+                "{case}: transient required-checks read must hold, not stop: {error}"
+            );
+            assert!(
+                error.to_string().contains("TLS handshake timeout"),
+                "{case}: {error}"
+            );
+            assert_eq!(
+                orbit_types::workflow::HeldFailure::of(
+                    Some(refusal.error_code()),
+                    Some(&error.to_string())
+                ),
+                Some(orbit_types::workflow::HeldFailure::DeliveryRefused(refusal)),
+                "{case}: the run holds for the next auto-fix pass"
+            );
+            assert!(repair_attempts(&host).is_empty(), "{case}");
+            assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+        },
+    );
+}
+
+/// [ORB-21436] A completion deadline expiring during the auto-fix
+/// required-checks read carries its own typed refusal: the run holds as
+/// `CompletionBudgetExpired`, not as inconclusive check evidence.
+#[test]
+fn auto_fix_required_checks_read_budget_expiry_holds_as_budget_expired() {
+    auto_fix_table(
+        "auto_fix::auto_fix_required_checks_read_budget_expiry_holds_as_budget_expired",
+        "expired",
+        |case, row| {
+            const START: u64 = 1_000_000;
+            let (fx, host) = opened_review(row);
+            fx.script_checks(&["success"]);
+            let input = waited_auto_fix_input(&fx, 5, Some(5));
+            let clock = std::rc::Rc::new(std::cell::Cell::new(START));
+            let sampled = std::rc::Rc::clone(&clock);
+            let expiring = std::rc::Rc::clone(&clock);
+            let observed = std::rc::Rc::new(std::cell::Cell::new(false));
+            let seen = std::rc::Rc::clone(&observed);
+            let result = orbit_engine::test_support::with_prerequisite_clock(
+                move || sampled.get(),
+                move |label, _remaining| {
+                    if label == "PR required checks" {
+                        seen.set(true);
+                        expiring.set(START + 5_001);
+                    }
+                },
+                || action(&host, "pr_complete", &input),
+            );
+            assert!(
+                observed.get(),
+                "{case}: the required-checks read carries the completion deadline"
+            );
+            let error = result.unwrap_err();
+            assert!(
+                matches!(
+                    &error,
+                    orbit_common::OrbitError::DeliveryRefused {
+                        refusal: orbit_types::workflow::DeliveryRefusal::CompletionBudgetExpired,
+                        ..
+                    }
+                ),
+                "{case}: {error}"
+            );
+            assert!(repair_attempts(&host).is_empty(), "{case}");
+            assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+        },
+    );
+}
+
+fn required_check_evidence_case(case: &str, row: &std::path::Path) {
+    let (fx, host) = opened_review(row);
+    fx.script_checks(&["success"]);
+    match case {
+        "empty" | "truncated" | "fail" => {
+            fx.script_required_check_outcomes(&[case, "success"]);
+            let answer = run_private_vcs_operation(
+                "pr.required_checks",
+                &json!({"pr": "42", "workspace_path": fx.repo}),
+            )
+            .unwrap();
+            assert!(answer["pull_request"].is_object(), "{case}: {answer}");
+            assert_eq!(fx.required_check_reads(), 2, "{case}: one bounded retry");
+        }
+        "recovered" => {
+            fx.script_required_check_outcomes(&["empty", "success"]);
+            let completed = action(&host, "pr_complete", &auto_fix_input(&fx)).unwrap();
+            assert_eq!(
+                completed["merge"]["reason"], "auto_fix_mergeable",
+                "{case}: {completed}"
+            );
+            assert!(repair_attempts(&host).is_empty(), "{case}");
+            assert_eq!(fx.required_check_reads(), 2, "{case}");
+        }
+        "persistent_empty" | "persistent_fail" => {
+            let outcome = if case == "persistent_empty" {
+                "empty"
+            } else {
+                "fail"
+            };
+            fx.script_required_check_outcomes(&[outcome]);
+            let error = action(&host, "pr_complete", &auto_fix_input(&fx)).unwrap_err();
+            let refusal = orbit_types::workflow::DeliveryRefusal::CheckEvidenceInconclusive;
+            assert!(
+                matches!(&error, orbit_common::OrbitError::DeliveryRefused { refusal: actual, .. } if *actual == refusal),
+                "{case}: {error}"
+            );
+            assert!(
+                error
+                    .to_string()
+                    .contains("required-check evidence is unavailable"),
+                "{case}: {error}"
+            );
+            if case == "persistent_fail" {
+                assert!(
+                    error.to_string().contains("unexpected end of JSON input"),
+                    "{case}: {error}"
+                );
+            }
+            assert_eq!(
+                orbit_types::workflow::HeldFailure::of(
+                    Some(refusal.error_code()),
+                    Some(&error.to_string())
+                ),
+                Some(orbit_types::workflow::HeldFailure::DeliveryRefused(refusal)),
+                "{case}: the run holds for the next auto-fix pass"
+            );
+            assert_eq!(
+                fx.required_check_reads(),
+                3,
+                "{case}: the bounded attempt ceiling"
+            );
+            assert!(repair_attempts(&host).is_empty(), "{case}");
+            assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+        }
+        _ => unreachable!(),
+    }
+}
+
 /// The provider's authenticated primary rate-limit answer to a failed-job log
 /// read, as `gh run view --log-failed` renders it [ORB-20178].
 const RATE_LIMITED_LOG: &str = "failed to get run log: HTTP 403: API rate limit exceeded for \
@@ -3233,8 +4367,8 @@ const RATE_LIMITED_LOG: &str = "failed to get run log: HTTP 403: API rate limit 
 fn auto_fix_waits_out_a_throttled_failed_log_read_within_the_completion_deadline() {
     auto_fix_table(
         "auto_fix::auto_fix_waits_out_a_throttled_failed_log_read_within_the_completion_deadline",
-        "retry_after unknown_reset resumed head_moved persistent beyond_deadline forbidden \
-         bad_credentials unauthenticated",
+        "retry_after unknown_reset resumed typed_resume unrelated_decision head_moved persistent \
+         beyond_deadline forbidden bad_credentials unauthenticated",
         throttled_log_case,
     );
 }
@@ -3303,6 +4437,46 @@ fn nested_base_log_throttle_defers_the_bound_prerequisite_read() {
     );
 }
 
+/// A wait this run recorded carries the typed decision, and its note is
+/// still the pre-decision JSON of that same record.
+fn assert_produced_deferral(entry: &TaskHistoryEntry) {
+    let Some(TaskDecision::PrAutoFixReadDeferred(typed)) = &entry.decision else {
+        panic!("a new read deferral is a typed decision: {entry:?}");
+    };
+    let legacy_shape = json!({
+        "execution": typed.execution,
+        "pr": typed.pr,
+        "head_sha": typed.head_sha,
+        "repository": typed.repository,
+        "run_id": typed.run_id,
+        "job_id": typed.job_id,
+        "run_attempt": typed.run_attempt,
+        "attempt": typed.attempt,
+        "observed_at_ms": typed.observed_at_ms,
+        "not_before_ms": typed.not_before_ms,
+        "deadline_ms": typed.deadline_ms,
+        "reset": match typed.reset {
+            PrAutoFixReadReset::Provider => "provider",
+            PrAutoFixReadReset::Unknown => "unknown",
+        },
+        "retry_after_seconds": typed.retry_after_seconds,
+        "reset_epoch_seconds": typed.reset_epoch_seconds,
+        "resource": typed.resource,
+        "principal": typed.principal,
+        "request_id": typed.request_id,
+        "diagnostic": typed.diagnostic,
+    });
+    assert_eq!(
+        entry.note.as_deref(),
+        Some(serde_json::to_string(&legacy_shape).unwrap().as_str()),
+        "the note stays the pre-decision JSON shape"
+    );
+    assert!(
+        typed.run_attempt.is_none(),
+        "this fixture names no run attempt"
+    );
+}
+
 fn throttled_log_case(case: &str, row: &std::path::Path) {
     const START_MS: u64 = 1_000_000;
     let (fx, host) = opened_review(row);
@@ -3339,8 +4513,10 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
             format!("{RATE_LIMITED_LOG}\nRetry-After: 1"),
             Some(START_MS + 1_000),
         ),
-        "unknown_reset" => (RATE_LIMITED_LOG.to_string(), Some(START_MS + 60_000)),
-        "resumed" => (RATE_LIMITED_LOG.to_string(), Some(START_MS + 200_000)),
+        "unknown_reset" | "unrelated_decision" => {
+            (RATE_LIMITED_LOG.to_string(), Some(START_MS + 60_000))
+        }
+        "resumed" | "typed_resume" => (RATE_LIMITED_LOG.to_string(), Some(START_MS + 200_000)),
         "persistent" => (RATE_LIMITED_LOG.to_string(), None),
         "beyond_deadline" => (format!("{RATE_LIMITED_LOG}\nRetry-After: 900"), None),
         "forbidden" => (
@@ -3374,19 +4550,60 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
     if let Some(until) = until {
         fs::write(ci.join("log-fault-until"), until.to_string()).unwrap();
     }
-    if case == "resumed" {
+    if case == "resumed" || case == "typed_resume" || case == "unrelated_decision" {
         // An earlier process of this run recorded the wait and was
-        // interrupted before it ended.
-        seed_auto_fix_history(
-            &host,
-            "pr_auto_fix_read_deferred",
-            &json!({
-                "execution": RUN_ID, "pr": PR_NUMBER, "head_sha": fx.candidate,
-                "repository": null, "run_id": 11, "job_id": 12, "run_attempt": null,
-                "attempt": 1, "observed_at_ms": START_MS - 60_000,
-                "not_before_ms": START_MS + 200_000, "reset": "unknown",
-            }),
-        );
+        // interrupted before it ended. `resumed` is that note with no
+        // decision. `typed_resume` stores a contradictory note beside the
+        // decision that actually binds the wait. `unrelated_decision` puts
+        // another decision on the same note, which must not be read as one.
+        let legacy_note = json!({
+            "execution": RUN_ID, "pr": PR_NUMBER, "head_sha": fx.candidate,
+            "repository": null, "run_id": 11, "job_id": 12, "run_attempt": null,
+            "attempt": 1, "observed_at_ms": START_MS - 60_000,
+            "not_before_ms": START_MS + 200_000, "reset": "unknown",
+        });
+        let (note, decision) = if case == "typed_resume" {
+            let typed = PrAutoFixReadDeferral {
+                execution: RUN_ID.into(),
+                pr: PR_NUMBER.into(),
+                head_sha: fx.candidate.clone(),
+                repository: None,
+                run_id: 11,
+                job_id: 12,
+                run_attempt: None,
+                attempt: 1,
+                observed_at_ms: START_MS - 60_000,
+                not_before_ms: Some(START_MS + 200_000),
+                deadline_ms: START_MS + 600_000,
+                reset: PrAutoFixReadReset::Unknown,
+                retry_after_seconds: None,
+                reset_epoch_seconds: None,
+                resource: "unavailable".into(),
+                principal: "unavailable".into(),
+                request_id: "unavailable".into(),
+                diagnostic: Some("typed diagnostic".into()),
+            };
+            (
+                json!({
+                    "execution": RUN_ID, "pr": PR_NUMBER, "head_sha": fx.candidate,
+                    "repository": null, "run_id": 11, "job_id": 12, "run_attempt": null,
+                    "attempt": 9, "observed_at_ms": START_MS - 60_000,
+                    "not_before_ms": START_MS, "reset": "unknown",
+                    "diagnostic": "note diagnostic must not bind the wait",
+                }),
+                Some(TaskDecision::PrAutoFixReadDeferred(typed)),
+            )
+        } else if case == "unrelated_decision" {
+            (
+                legacy_note,
+                Some(TaskDecision::DrainApprovalHeld {
+                    classification: "other".into(),
+                }),
+            )
+        } else {
+            (legacy_note, None)
+        };
+        seed_auto_fix_history_decision(&host, "pr_auto_fix_read_deferred", &note, decision);
     }
     fx.script_checks(&["failure"]);
     let input = waited_auto_fix_input(&fx, if case == "nested_base" { 10 } else { 600 }, Some(5));
@@ -3458,12 +4675,15 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
         .filter_map(|call| call.strip_prefix("wait "))
         .map(|millis| millis.parse::<u64>().unwrap())
         .collect::<Vec<_>>();
-    let deferrals = host
+    let deferral_entries: Vec<_> = host
         .history(TASK_ID)
         .into_iter()
         .filter(|entry| entry.event == "pr_auto_fix_read_deferred")
-        .map(|entry| serde_json::from_str::<Value>(entry.note.as_deref().unwrap()).unwrap())
-        .collect::<Vec<_>>();
+        .collect();
+    let deferrals: Vec<Value> = deferral_entries
+        .iter()
+        .map(|entry| serde_json::from_str(entry.note.as_deref().unwrap()).unwrap())
+        .collect();
     let polls = fx.status_reads() - reads_before;
     match case {
         "nested_base" => {
@@ -3476,6 +4696,13 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
             assert_eq!(deferrals[0]["head_sha"], fx.candidate);
             assert_eq!(deferrals[0]["run_id"], 21);
             assert_eq!(deferrals[0]["job_id"], 22);
+            assert_produced_deferral(&deferral_entries[0]);
+            assert_eq!(
+                PrAutoFixReadDeferral::from_entry(&deferral_entries[0])
+                    .expect("typed base deferral")
+                    .run_id,
+                21
+            );
             assert!(
                 waits
                     .first()
@@ -3489,7 +4716,7 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
             );
             assert!(repair_attempts(&host).is_empty());
         }
-        "retry_after" | "unknown_reset" | "resumed" => {
+        "retry_after" | "unknown_reset" | "resumed" | "typed_resume" | "unrelated_decision" => {
             let error = result.expect_err(case).to_string();
             assert!(is_check_repair(&error), "{case}: {error}");
             assert!(
@@ -3501,7 +4728,7 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
             assert_eq!(attempts[0].head_sha, fx.candidate, "{case}");
             let expected_wait = match case {
                 "retry_after" => 120_000,
-                "unknown_reset" => 60_000,
+                "unknown_reset" | "unrelated_decision" => 60_000,
                 _ => 200_000,
             };
             let [wait] = waits.as_slice() else {
@@ -3524,15 +4751,69 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
                     .iter()
                     .filter(|call| *call == "run view")
                     .count()
-                    <= usize::from(case != "resumed"),
+                    <= usize::from(case != "resumed" && case != "typed_resume"),
                 "{case}: the first throttled answer ends the poll's log reads: {calls:?}"
             );
-            if case == "resumed" {
+            if case == "resumed" || case == "typed_resume" {
                 assert!(
                     !calls[..first_wait].iter().any(|call| call == "run view"),
                     "{case}: no log read before the recorded not-before: {calls:?}"
                 );
                 assert_eq!(deferrals.len(), 1, "{case}: no new deferral is recorded");
+                let entry = &deferral_entries[0];
+                let typed = PrAutoFixReadDeferral::from_entry(entry)
+                    .expect("the recorded wait is readable");
+                assert_eq!(typed.run_id, 11, "{case}");
+                assert_eq!(typed.job_id, 12, "{case}");
+                assert_eq!(typed.run_attempt, None, "{case}");
+                assert_eq!(typed.attempt, 1, "{case}");
+                assert_eq!(typed.reset, PrAutoFixReadReset::Unknown, "{case}");
+                assert_eq!(
+                    typed.effective_not_before_ms(),
+                    START_MS + 200_000,
+                    "{case}"
+                );
+                if case == "resumed" {
+                    assert!(
+                        entry.decision.is_none(),
+                        "{case}: the legacy note has no decision"
+                    );
+                    assert!(typed.diagnostic.is_none(), "{case}");
+                } else {
+                    assert_eq!(
+                        typed.diagnostic.as_deref(),
+                        Some("typed diagnostic"),
+                        "{case}"
+                    );
+                    let note = entry.note.as_deref().expect("note");
+                    assert!(
+                        note.contains("note diagnostic must not bind the wait"),
+                        "{case}: the note keeps the contradictory diagnostic"
+                    );
+                    assert_ne!(
+                        note,
+                        serde_json::to_string(&typed).unwrap(),
+                        "{case}: the decision, not the note, bound the wait"
+                    );
+                    assert!(
+                        !error.contains("note diagnostic must not bind the wait"),
+                        "{case}: diagnostic text did not become the outcome"
+                    );
+                }
+            } else if case == "unrelated_decision" {
+                assert_eq!(
+                    deferrals.len(),
+                    2,
+                    "{case}: the note was not a deferral: {deferrals:?}"
+                );
+                assert!(
+                    PrAutoFixReadDeferral::from_entry(&deferral_entries[0]).is_none(),
+                    "{case}: another decision is not read from the note"
+                );
+                assert_produced_deferral(&deferral_entries[1]);
+                assert_eq!(deferrals[1]["attempt"], 1, "{case}");
+                assert_eq!(deferrals[1]["run_id"], 11, "{case}");
+                assert_eq!(deferrals[1]["job_id"], 12, "{case}");
             } else {
                 let [deferral] = deferrals.as_slice() else {
                     panic!("{case}: one durable deferral: {deferrals:?}");
@@ -3566,6 +4847,7 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
                         .contains("API rate limit exceeded"),
                     "{case}: the original diagnostic is kept: {deferral}"
                 );
+                assert_produced_deferral(&deferral_entries[0]);
             }
         }
         _ => {
@@ -3593,6 +4875,8 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
                         !calls[wait..].iter().any(|call| call == "run view"),
                         "{case}: the replaced head's log is never read again: {calls:?}"
                     );
+                    assert_eq!(deferral_entries.len(), 1, "{case}");
+                    assert_produced_deferral(&deferral_entries[0]);
                 }
                 "persistent" => {
                     assert_eq!(
@@ -3601,6 +4885,9 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
                         "{case}: bounded conservative backoff with an unknown reset"
                     );
                     assert_eq!(deferrals.len(), 3, "{case}: each wait is recorded");
+                    for entry in &deferral_entries {
+                        assert_produced_deferral(entry);
+                    }
                     assert!(
                         error.contains("API rate limit exceeded")
                             && error.contains("could not be read"),
@@ -3702,12 +4989,15 @@ fn moved_base_log_throttle_retains_its_deadline_and_exact_read_identity() {
                 },
             );
             assert!(result.is_err(), "the red base is never merged");
-            let deferrals = host
+            let deferral_entries: Vec<_> = host
                 .history(TASK_ID)
                 .into_iter()
                 .filter(|entry| entry.event == "pr_auto_fix_read_deferred")
-                .map(|entry| serde_json::from_str::<Value>(entry.note.as_deref().unwrap()).unwrap())
-                .collect::<Vec<_>>();
+                .collect();
+            let deferrals: Vec<Value> = deferral_entries
+                .iter()
+                .map(|entry| serde_json::from_str(entry.note.as_deref().unwrap()).unwrap())
+                .collect();
             if case == "deadline" {
                 assert!(
                     deferrals.is_empty(),
@@ -3726,9 +5016,20 @@ fn moved_base_log_throttle_retains_its_deadline_and_exact_read_identity() {
                     1,
                     "one durable wait for the moved-base diagnosis"
                 );
+                let run_id = if fault_head { 11 } else { 31 };
+                let job_id = if fault_head { 12 } else { 32 };
                 assert_eq!(deferrals[0]["head_sha"], fx.candidate);
-                assert_eq!(deferrals[0]["run_id"], if fault_head { 11 } else { 31 });
-                assert_eq!(deferrals[0]["job_id"], if fault_head { 12 } else { 32 });
+                assert_eq!(deferrals[0]["run_id"], run_id);
+                assert_eq!(deferrals[0]["job_id"], job_id);
+                assert_produced_deferral(&deferral_entries[0]);
+                let typed = PrAutoFixReadDeferral::from_entry(&deferral_entries[0])
+                    .expect("typed moved-base deferral");
+                assert_eq!(typed.head_sha, fx.candidate);
+                assert_eq!(typed.run_id, run_id);
+                assert_eq!(typed.job_id, job_id);
+                assert_eq!(typed.run_attempt, None);
+                assert_eq!(typed.reset, PrAutoFixReadReset::Provider);
+                assert!(typed.effective_not_before_ms() < typed.deadline_ms);
                 assert!(
                     host.history(TASK_ID)
                         .iter()
@@ -3748,6 +5049,69 @@ fn moved_base_log_throttle_retains_its_deadline_and_exact_read_identity() {
             );
             assert_eq!(fx.remote_tip(BASE), tip);
             assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+        },
+    );
+}
+
+/// A required waiter should hand the repair the authenticated dependency's failure.
+#[test]
+fn auto_fix_includes_authenticated_waiter_dependency_failure() {
+    auto_fix_table(
+        "auto_fix::auto_fix_includes_authenticated_waiter_dependency_failure",
+        "valid large malformed forged",
+        |case, row| {
+            let (fx, host, _) = super::ci_rerun::fixture(row);
+            let path = fx.forge.join("retry-config.json");
+            let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            config["required"] = json!(["lint"]);
+            if case == "forged" {
+                config["changed_helper"] = json!(true);
+            }
+            fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
+            let mut dependency_log =
+                "test\tTests\terror: distinctive dependency failure\n".to_string();
+            if case == "large" {
+                dependency_log.push_str(&"test\tTests\tmore diagnostic output\n".repeat(120));
+            }
+            fs::write(fx.forge.join("retry-log-1000"), dependency_log).unwrap();
+            if case == "malformed" {
+                fs::write(fx.forge.join("retry-log-1001"),
+                    "lint\tWait\terror: waiter fallback\nlint\tWait\torbit-dependency-evidence:{invalid}\n").unwrap();
+            }
+            let mut input = fx.complete_ungated_input();
+            input["auto_fix"] = json!(true);
+            input["completion"] = json!("review");
+            let error = super::complete_with_logical_clock(&host, &input)
+                .unwrap_err()
+                .to_string();
+            assert!(is_check_repair(&error), "{case}: {error}");
+            if matches!(case, "valid" | "large") {
+                assert!(
+                    error.contains("distinctive dependency failure") && error.contains("CI / test"),
+                    "{error}"
+                );
+                let excerpt = error.split_once("log excerpt:\n").unwrap().1;
+                assert!(
+                    excerpt.len() <= 2048,
+                    "dependency excerpt exceeds the per-job limit: {}",
+                    excerpt.len()
+                );
+            } else {
+                assert!(!error.contains("distinctive dependency failure"), "{error}");
+                assert!(
+                    error.contains(if case == "malformed" {
+                        "waiter fallback"
+                    } else {
+                        "orbit-dependency-evidence"
+                    }),
+                    "{error}"
+                );
+            }
+            assert!(
+                error.len() < 12000,
+                "repair evidence remains bounded: {}",
+                error.len()
+            );
         },
     );
 }

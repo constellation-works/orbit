@@ -1,25 +1,17 @@
-//  Run ids are minted per workspace, so two workspaces submitting in the same
-//  minute hold the same id. An invocation recorded under one workspace's run
-//  never reaches the other's run listing or reliability counts.
+// Historical run ids can collide across workspaces. Keep their invocation
+// listings and reliability counts partitioned even though new allocations
+// now reserve identities across the host's shared store.
 
-/// A store where workspaces `ws_a` and `ws_b` each hold a run with the same
-/// id. Retries once if the two submissions straddle a minute boundary.
+/// Replay a historical collision through the public import/upsert boundary.
 fn colliding_runs() -> (Store, String) {
-    for _ in 0..3 {
-        let store = Store::open_in_memory().expect("memory store");
-        let submit = |workspace: &str| {
-            workspace_job_run_store(store.clone(), workspace)
-                .insert_job_run("job", 1, Utc::now(), None, None)
-                .expect("insert run")
-                .run_id
-        };
-        let a = submit("ws_a");
-        let b = submit("ws_b");
-        if a == b {
-            return (store, a);
-        }
-    }
-    panic!("two workspaces submitting in one minute mint the same run id");
+    let store = Store::open_in_memory().expect("memory store");
+    let run = workspace_job_run_store(store.clone(), "ws_a")
+        .insert_job_run("job", 1, Utc::now(), None, None)
+        .expect("insert run");
+    store
+        .upsert_job_run_for_workspace("ws_b", &run, None)
+        .expect("import legacy colliding run");
+    (store, run.run_id)
 }
 
 fn record_invocation(store: &Store, workspace_id: &str, run_id: &str, activity_id: &str) {
@@ -43,6 +35,9 @@ fn record_invocation(store: &Store, workspace_id: &str, run_id: &str, activity_i
 
 #[test]
 fn colliding_run_ids_keep_invocations_in_their_own_workspace() {
+    if !provider_ledger_isolated("colliding_run_ids_keep_invocations_in_their_own_workspace") {
+        return;
+    }
     let (store, run_id) = colliding_runs();
     record_invocation(&store, "ws_b", &run_id, "implement_one");
     let since = Utc::now() - invocation_workspace_scope_Duration::hours(1);
@@ -86,9 +81,9 @@ fn colliding_run_ids_keep_invocations_in_their_own_workspace() {
 }
 
 #[test]
-fn stored_sol_costs_preserve_history_and_start_current_rates_at_verified_observation() {
+fn stored_sol_costs_preserve_history_and_reprice_from_the_august_21_cut() {
     if !provider_ledger_isolated(
-        "stored_sol_costs_preserve_history_and_start_current_rates_at_verified_observation",
+        "stored_sol_costs_preserve_history_and_reprice_from_the_august_21_cut",
     ) {
         return;
     }
@@ -111,13 +106,14 @@ fn stored_sol_costs_preserve_history_and_start_current_rates_at_verified_observa
         ("2026-07-17T00:00:00Z", Some(old_cost)),
         ("2026-07-29T23:59:59.999999999Z", Some(old_cost)),
         ("2026-07-30T00:00:00Z", Some(old_cost)),
-        // No calendar-date convention has authorized historical repricing.
+        // Reviewer decision 2026-11-01: the July 30 row holds until the
+        // August 21 cut, then the cut rates apply with no unpriced gap.
         ("2026-08-20T23:59:59.999999999Z", Some(old_cost)),
-        ("2026-08-21T00:00:00Z", Some(old_cost)),
-        ("2026-08-22T04:00:04.449861486Z", Some(old_cost)),
-        ("2026-09-21T23:59:59.999999999Z", Some(old_cost)),
-        ("2026-09-22T00:00:00Z", None),
-        ("2026-10-23T03:09:14.111506999Z", None),
+        ("2026-08-21T00:00:00Z", Some(current_cost)),
+        ("2026-08-22T04:00:04.449861486Z", Some(current_cost)),
+        ("2026-09-21T23:59:59.999999999Z", Some(current_cost)),
+        ("2026-09-22T00:00:00Z", Some(current_cost)),
+        ("2026-10-23T03:09:14.111506999Z", Some(current_cost)),
         ("2026-10-23T03:09:14.111507Z", Some(current_cost)),
         ("2026-10-23T03:09:14.111507001Z", Some(current_cost)),
         // [ORB-19680] Before the prompt-size tier's observation boundary,

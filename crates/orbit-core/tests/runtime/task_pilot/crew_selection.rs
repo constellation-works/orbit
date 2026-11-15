@@ -69,6 +69,9 @@ fn task(workspace: &Workspace, explicit: bool) -> Task {
         .unwrap()
 }
 
+// ORB-24687: pilots cannot read workspace config in the inspection checkout.
+// A complete assessment without a crew must still apply and rerate via the
+// host pools, retaining explicit pins.
 fn assess(workspace: &Workspace, task: &Task, complexity: TaskComplexity) -> Value {
     let prepared = workspace.prepare(&[&task.id]);
     let applied = workspace.action(
@@ -80,7 +83,7 @@ fn assess(workspace: &Workspace, task: &Task, complexity: TaskComplexity) -> Val
                 "task_id": task.id,
                 "context_files_before": task.context_files,
                 "context_files_after": task.context_files,
-                "disposition": "selectors", "recommended_crew": if complexity == TaskComplexity::Hard { "hard_lane" } else { "low_lane" },
+                "disposition": "selectors",
                 "recommended_complexity": complexity.as_str(), "confidence": "high",
                 "assessment_rationale": "Assess the fixture tier.",
                 "validation_approach": "Observe crew assignment and run admission.",
@@ -131,7 +134,10 @@ fn pilot_redraws_automatic_assignments_and_preserves_add_and_update_pins() {
         }
         assert_eq!(task.crew.as_deref(), Some("low_lane"));
         assert_eq!(
-            task.crew_source.as_deref(),
+            task.crew_source
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
             Some(if pin == "pool" {
                 "pool:low"
             } else if pin == "default" {
@@ -148,7 +154,14 @@ fn pilot_redraws_automatic_assignments_and_preserves_add_and_update_pins() {
         assert_eq!(rerated.complexity, Some(TaskComplexity::Hard));
         if pin == "pool" || pin == "default" {
             assert_eq!(rerated.crew.as_deref(), Some("hard_lane"));
-            assert_eq!(rerated.crew_source.as_deref(), Some("pool:hard"));
+            assert_eq!(
+                rerated
+                    .crew_source
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .as_deref(),
+                Some("pool:hard")
+            );
             let history = workspace.runtime.get_task_history(&task.id).unwrap();
             let note = history
                 .iter()
@@ -165,7 +178,14 @@ fn pilot_redraws_automatic_assignments_and_preserves_add_and_update_pins() {
             assert_eq!(redraws(&workspace, &task), 1);
         } else {
             assert_eq!(rerated.crew.as_deref(), Some("low_lane"));
-            assert_eq!(rerated.crew_source.as_deref(), Some("explicit"));
+            assert_eq!(
+                rerated
+                    .crew_source
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .as_deref(),
+                Some("explicit")
+            );
             assert_eq!(redraws(&workspace, &task), 0);
         }
         // Restart preserves the provenance; another same-tier assessment
@@ -221,7 +241,14 @@ fn complexity_update_redraws_automatic_assignments_and_clear_draws_current_tier(
             )
             .unwrap();
         assert_eq!(cleared.crew.as_deref(), Some("hard_lane"));
-        assert_eq!(cleared.crew_source.as_deref(), Some("pool:hard"));
+        assert_eq!(
+            cleared
+                .crew_source
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("pool:hard")
+        );
     }
 }
 
@@ -262,7 +289,13 @@ fn admission_recovers_automatic_history_and_reports_current_tier_selection() {
                 .unwrap();
         }
         if pin == "default" {
-            assert_eq!(task.crew_source.as_deref(), Some("default"));
+            assert_eq!(
+                task.crew_source
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .as_deref(),
+                Some("default")
+            );
             // The tier is unchanged, but its formerly empty pool now has a
             // crew. Admission must treat the fallback as automatic too.
             let config = workspace.repo.join(".orbit/config.toml");
@@ -375,7 +408,14 @@ fn admission_recovers_automatic_history_and_reports_current_tier_selection() {
             );
         } else {
             assert_eq!(persisted.crew.as_deref(), Some("hard_lane"));
-            assert_eq!(persisted.crew_source.as_deref(), Some("redraw:pool"));
+            assert_eq!(
+                persisted
+                    .crew_source
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .as_deref(),
+                Some("redraw:pool")
+            );
         }
     }
 }

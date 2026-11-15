@@ -7,8 +7,6 @@ use serde_json::Value;
 #[derive(Debug, Clone, Default)]
 pub struct TemplateContext {
     pub input: Value,
-    pub env: HashMap<String, String>,
-    pub workspace_path: Option<String>,
     pub item: Option<Value>,
     pub iteration: Option<u32>,
     /// Accumulated outputs from completed steps, keyed by step id (or
@@ -50,11 +48,6 @@ where
 }
 
 fn resolve_token(token: &str, ctx: &TemplateContext) -> Result<String, OrbitError> {
-    if token == "workspace_path" {
-        return ctx.workspace_path.clone().ok_or_else(|| {
-            OrbitError::InvalidInput("workspace_path is unavailable in this context".to_string())
-        });
-    }
     if token == "item" {
         return resolve_input_path(ctx.item.as_ref(), &[]);
     }
@@ -71,27 +64,22 @@ fn resolve_token(token: &str, ctx: &TemplateContext) -> Result<String, OrbitErro
         .ok_or_else(|| OrbitError::InvalidInput("empty template token".to_string()))?;
     let path = parts.collect::<Vec<_>>();
     if path.is_empty() {
-        return Err(OrbitError::InvalidInput(format!(
-            "template token '{token}' must include a key path"
-        )));
+        return match namespace {
+            "input" | "steps" => Err(OrbitError::InvalidInput(format!(
+                "template token '{token}' must include a key path"
+            ))),
+            other => Err(OrbitError::InvalidInput(format!(
+                "unknown template namespace: {other}"
+            ))),
+        };
     }
 
     match namespace {
         "input" => resolve_input_path(Some(&ctx.input), &path),
         "item" => resolve_input_path(ctx.item.as_ref(), &path),
-        "env" => {
-            if path.len() != 1 {
-                return Err(OrbitError::InvalidInput(format!(
-                    "env template token '{token}' must reference a single variable"
-                )));
-            }
-            ctx.env.get(path[0]).cloned().ok_or_else(|| {
-                OrbitError::InvalidInput(format!("missing environment variable '{}'", path[0]))
-            })
-        }
         "steps" => {
             // steps.<step_id>.<namespace>.<field>...
-            // where <namespace> is "state" or "output".
+            // where <namespace> is "state", "output" or "files".
             if path.len() < 2 {
                 return Err(OrbitError::InvalidInput(format!(
                     "steps template token '{token}' must be steps.<id>.state.<field> or steps.<id>.output.<field>"
@@ -116,18 +104,58 @@ fn resolve_token(token: &str, ctx: &TemplateContext) -> Result<String, OrbitErro
                         resolve_input_path(Some(sub_value), &path[2..])
                     }
                 }
+                "files" => resolve_step_files(step_id, step_value, &path[2..], token),
                 other => Err(OrbitError::InvalidInput(format!(
-                    "unknown steps sub-namespace '{other}' in '{token}'; expected 'state' or 'output'"
+                    "unknown steps sub-namespace '{other}' in '{token}'; expected 'state', 'output' or 'files'"
                 ))),
             }
         }
-        "secrets" => Err(OrbitError::InvalidInput(
-            "secrets namespace is not yet supported".to_string(),
-        )),
         other => Err(OrbitError::InvalidInput(format!(
             "unknown template namespace: {other}"
         ))),
     }
+}
+
+/// `steps.<id>.files[.<name or index>[.<field>]]`: the output files a
+/// script step kept, as `[{name, path, bytes, media_type, sha256}]`. A file
+/// is selected by its name (which may itself contain dots, such as
+/// `shot.png`; the longest matching name wins) or its zero-based position;
+/// a step that kept no files has none to resolve.
+fn resolve_step_files(
+    step_id: &str,
+    step_value: &Value,
+    path: &[&str],
+    token: &str,
+) -> Result<String, OrbitError> {
+    let files = step_value.get("files").ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "step '{step_id}' kept no output files for '{token}'"
+        ))
+    })?;
+    if path.is_empty() {
+        return resolve_input_path(Some(files), &[]);
+    }
+    let entries = files.as_array().map(Vec::as_slice).unwrap_or_default();
+    for taken in (1..=path.len()).rev() {
+        let name = path[..taken].join(".");
+        if let Some(file) = entries
+            .iter()
+            .find(|file| file.get("name").and_then(Value::as_str) == Some(name.as_str()))
+        {
+            return resolve_input_path(Some(file), &path[taken..]);
+        }
+    }
+    let file = path[0]
+        .parse::<usize>()
+        .ok()
+        .and_then(|index| entries.get(index))
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(format!(
+                "step '{step_id}' kept no output file '{}' for '{token}'",
+                path[0]
+            ))
+        })?;
+    resolve_input_path(Some(file), &path[1..])
 }
 
 fn resolve_input_path(input: Option<&Value>, path: &[&str]) -> Result<String, OrbitError> {

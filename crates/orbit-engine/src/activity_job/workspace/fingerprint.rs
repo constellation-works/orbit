@@ -870,6 +870,11 @@ fn git_output_with_optional_stdin(
     args: &[&str],
     stdin: Option<&[u8]>,
 ) -> Result<GitBytesOutcome, DispatchError> {
+    // Git runs with `root` as its working directory, so a removed checkout
+    // makes the spawn fail with ENOENT, which reads as a missing `git` binary.
+    if !root.is_dir() {
+        return Err(missing_worktree_error(root));
+    }
     let output = git_run_bytes(root, args, stdin).map_err(|error| {
         DispatchError::CliInvocationPermanent(format!(
             "snapshot Git state in '{}': {error}",
@@ -885,6 +890,25 @@ fn git_output_with_optional_stdin(
         });
     }
     Ok(output)
+}
+
+/// A snapshot whose worktree directory is gone. The reason repeats the
+/// final-recovery guard's `workspace_path ... is not a directory` refusal
+/// (`declared_pair.rs`), so dispatch and recovery name the same condition.
+fn missing_worktree_error(root: &Path) -> DispatchError {
+    DispatchError::WorktreeIntegrity {
+        code: "worktree_mismatch",
+        diagnostic: serde_json::json!({
+            "code": "worktree_mismatch",
+            "reason": format!(
+                "worktree is missing: workspace_path '{}' is not a directory",
+                root.display()
+            ),
+            "requested_workspace_path": root.display().to_string(),
+            "automatic_reconciliation": false,
+        })
+        .to_string(),
+    }
 }
 
 pub(crate) fn git_command_error(

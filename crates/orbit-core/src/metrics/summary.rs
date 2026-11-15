@@ -51,7 +51,7 @@ pub fn aggregate(runs: &[JobRun]) -> KnowledgeStatsSummary {
         .iter()
         .filter_map(|m| m.compression_ratio)
         .collect::<Vec<_>>();
-    // Historical only: new runs no longer populate this gauge (ORB-10828).
+    // Rows without a stored gauge are skipped (ORB-10828).
     let double_read_values = metrics
         .iter()
         .filter_map(|m| m.double_read_rate)
@@ -127,6 +127,6 @@ fn percentile(sorted: &[f64], pct: usize) -> f64 {
     sorted[index]
 }
 
-pub(crate) fn ratio(numerator: u64, denominator: u64) -> Option<f64> {
+fn ratio(numerator: u64, denominator: u64) -> Option<f64> {
     (denominator != 0).then_some(numerator as f64 / denominator as f64)
 }

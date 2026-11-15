@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# DESTRUCTIVE: force-removes every worktree except the invoking tree and
+# force-deletes every local branch except main and agent-main, with no
+# merged/dirty check, confirmation or dry-run. Run only when that
+# indiscriminate scope is intended.
 
 set -euo pipefail
 
@@ -11,12 +15,10 @@ git worktree prune
 echo "Removing worktrees..."
 main_path=$(pwd)
 
-git worktree list --porcelain | awk '
-    /^worktree / { path = substr($0, 10) }
-    /^branch / { branch = substr($0, 8); sub(/^refs\/heads\//, "", branch) }
-    /^$/ { print path "\t" branch; path = ""; branch = "" }
-    END { if (path != "") print path "\t" branch }
-' | while IFS=$'\t' read -r wt_path branch; do
+failures=0
+failed_items=()
+
+while IFS=$'\t' read -r wt_path branch; do
     # Skip the main working tree
     if [[ "$wt_path" == "$main_path" ]]; then
         continue
@@ -28,15 +30,36 @@ git worktree list --porcelain | awk '
     fi
 
     echo "Removing worktree: $wt_path (branch: ${branch:-detached})"
-    git worktree remove --force "$wt_path" || true
-done
+    if ! git worktree remove --force "$wt_path"; then
+        echo "cleanup-branches: failed to remove worktree: $wt_path" >&2
+        failed_items+=("worktree: $wt_path")
+        failures=$((failures + 1))
+    fi
+done < <(git worktree list --porcelain | awk '
+    /^worktree / { path = substr($0, 10) }
+    /^branch / { branch = substr($0, 8); sub(/^refs\/heads\//, "", branch) }
+    /^$/ { print path "\t" branch; path = ""; branch = "" }
+    END { if (path != "") print path "\t" branch }
+')
 
 echo "Removing branches..."
-git for-each-ref --format '%(refname:short)' refs/heads/ | while read -r branch; do
+while read -r branch; do
     if [[ "$branch" != "main" && "$branch" != "agent-main" ]]; then
         echo "Deleting branch: $branch"
-        git branch -D "$branch" || true
+        if ! git branch -D "$branch"; then
+            echo "cleanup-branches: failed to delete branch: $branch" >&2
+            failed_items+=("branch: $branch")
+            failures=$((failures + 1))
+        fi
     fi
-done
+done < <(git for-each-ref --format '%(refname:short)' refs/heads/)
+
+if [[ "$failures" -ne 0 ]]; then
+    echo "cleanup-branches: $failures removal(s) failed:" >&2
+    for item in "${failed_items[@]}"; do
+        echo "  $item" >&2
+    done
+    exit 1
+fi
 
 echo "Cleanup complete."

@@ -47,7 +47,9 @@ pub struct TaskFacts {
 }
 
 /// The `board` aggregates. A count left `None` could not be read and makes
-/// any expression that reads it unknown.
+/// any expression that reads it unknown, `has()` included. That is not
+/// absence: a missing optional `self` or step field is absence, and `has()`
+/// of it is false.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BoardFacts {
     pub by_status: BTreeMap<String, i64>,
@@ -67,7 +69,27 @@ pub struct SelfFacts {
     pub last_fired: Option<DateTime<Utc>>,
     pub last_minted: Option<DateTime<Utc>>,
     pub last_minted_task: Option<String>,
+    /// When the definition's declared completion contract last accepted a
+    /// result; absent when it has accepted none or declares no contract.
+    pub last_succeeded_at: Option<DateTime<Utc>>,
+    /// Why the accepted-result history could not be read. Distinct from an
+    /// absent `last_succeeded_at`: a read of the field is then unknown, never
+    /// "never succeeded".
+    pub last_succeeded_unreadable: Option<String>,
     pub fires_24h: i64,
+}
+
+/// One named auto-task's accepted-result history, read as
+/// `auto_tasks['<name>']`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AcceptedHistoryFacts {
+    /// When the definition's declared completion contract last accepted a
+    /// result; absent when the readable history holds none.
+    pub last_succeeded_at: Option<DateTime<Utc>>,
+    /// Why the history is unavailable: no such definition, no completion
+    /// contract, or a history that could not be read. Any read of this name,
+    /// `has()` included, is then unknown, never "never succeeded".
+    pub unavailable: Option<String>,
 }
 
 /// Everything an expression reads except its subject.
@@ -78,6 +100,57 @@ pub struct ConditionFacts {
     /// The `tasks['<ID>']` cross-reads that exist; a missing ID is unknown.
     pub tasks: BTreeMap<String, TaskFacts>,
     pub self_facts: SelfFacts,
+    /// The `auto_tasks['<name>']` histories gathered; a name left out is
+    /// unknown.
+    pub auto_tasks: BTreeMap<String, AcceptedHistoryFacts>,
+}
+
+/// One auto-task step as a job wait reads it (`self.prev`, `steps['<id>']`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepFacts {
+    /// An `AUTO_TASK_STEP_STATUSES` spelling.
+    pub status: String,
+    pub end_time: Option<DateTime<Utc>>,
+    pub task_id: Option<String>,
+}
+
+/// The candidate accepted result a `reuse_when` reads as `result`: the
+/// definition's latest receipt, under the field names the checker types.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResultFacts {
+    /// An `AutoTaskResultStatus` spelling.
+    pub status: String,
+    pub revision: Option<String>,
+    pub completed_at: DateTime<Utc>,
+    pub contract: String,
+    pub definition_digest: String,
+    pub task_id: String,
+    pub run_id: Option<String>,
+}
+
+/// Everything a job wait expression (`wait_until`, `expire_when`,
+/// `reuse_when`, `spec.expire_when`) reads for one step pass
+/// (`docs/design/activity-job/specs/auto-task-step.md` §2).
+#[derive(Debug, Clone)]
+pub struct JobWaitFacts {
+    pub now: DateTime<Utc>,
+    pub board: BoardFacts,
+    /// `board.empty`; `None` when a count it needs could not be read, which
+    /// makes a read of `board.empty`, `has()` included, unknown.
+    pub board_empty: Option<bool>,
+    pub tasks: BTreeMap<String, TaskFacts>,
+    pub job_started_at: DateTime<Utc>,
+    pub job_source_revision: Option<String>,
+    pub wait_started_at: DateTime<Utc>,
+    pub status: String,
+    pub task_id: Option<String>,
+    pub prev: Option<StepFacts>,
+    pub steps: BTreeMap<String, StepFacts>,
+    /// The candidate a `reuse_when` judges, left unbound everywhere else.
+    /// The caller judges no candidate when the definition has no accepted
+    /// result, and holds when its history is unreadable, so an unbound
+    /// `result` never stands for either.
+    pub result: Option<ResultFacts>,
 }
 
 /// A three-valued result.
@@ -148,6 +221,10 @@ pub struct TopLevelClause {
 /// Binds facts as CEL variables once per explain, and the subject per call.
 pub struct ConditionEvaluator {
     context: Context<'static, 'static>,
+    /// Read paths that could not be read, with why: any clause that reads
+    /// one, or anything under it, is unknown even under `has()` or a
+    /// short-circuit that would skip it.
+    unavailable: Vec<(String, String)>,
 }
 
 impl ConditionEvaluator {
@@ -171,14 +248,104 @@ impl ConditionEvaluator {
             ),
         );
         context.add_variable_from_value("self", self_value(&facts.self_facts));
-        Self { context }
+        // An unavailable history is left unbound as well, so even a read the
+        // path check missed cannot see an empty, "never succeeded" history.
+        context.add_variable_from_value(
+            "auto_tasks",
+            map_value(
+                facts
+                    .auto_tasks
+                    .iter()
+                    .filter(|(_, history)| history.unavailable.is_none())
+                    .map(|(name, history)| (name.clone(), accepted_history_value(history))),
+            ),
+        );
+        let mut unavailable = unread_board_aggregates(&facts.board);
+        if let Some(why) = &facts.self_facts.last_succeeded_unreadable {
+            unavailable.push((SELF_LAST_SUCCEEDED.to_string(), why.clone()));
+        }
+        for (name, history) in &facts.auto_tasks {
+            if let Some(why) = &history.unavailable {
+                unavailable.push((auto_task_history_path(name), why.clone()));
+            }
+        }
+        Self {
+            context,
+            unavailable,
+        }
+    }
+
+    /// Bind a job wait's facts [ORB-20158]. Evaluate with `truth(_, None)`.
+    pub fn for_job_wait(facts: &JobWaitFacts) -> Self {
+        let mut env = cel::Env::stdlib();
+        if let Err(error) = env.add_extension(cel::extensions::strings) {
+            tracing::warn!(%error, "condition string functions unavailable");
+        }
+        let mut context = Context::with_env(Arc::new(env));
+        context.add_variable_from_value("now", timestamp(facts.now));
+        let mut board = board_fields(&facts.board);
+        if let Some(empty) = facts.board_empty {
+            board.push(("empty".to_string(), Value::Bool(empty)));
+        }
+        context.add_variable_from_value("board", map_value(board));
+        context.add_variable_from_value(
+            "tasks",
+            map_value(
+                facts
+                    .tasks
+                    .iter()
+                    .map(|(id, task)| (id.clone(), task_value(task))),
+            ),
+        );
+        let mut job = vec![("started_at".to_string(), timestamp(facts.job_started_at))];
+        if let Some(revision) = &facts.job_source_revision {
+            job.push(("source_revision".to_string(), string(revision)));
+        }
+        context.add_variable_from_value("job", map_value(job));
+        let mut own = vec![
+            (
+                "wait_started_at".to_string(),
+                timestamp(facts.wait_started_at),
+            ),
+            ("status".to_string(), string(&facts.status)),
+        ];
+        if let Some(task) = &facts.task_id {
+            own.push(("task_id".to_string(), string(task)));
+        }
+        if let Some(prev) = &facts.prev {
+            own.push(("prev".to_string(), step_value(prev)));
+        }
+        context.add_variable_from_value("self", map_value(own));
+        context.add_variable_from_value(
+            "steps",
+            map_value(
+                facts
+                    .steps
+                    .iter()
+                    .map(|(id, step)| (id.clone(), step_value(step))),
+            ),
+        );
+        if let Some(result) = &facts.result {
+            context.add_variable_from_value("result", result_value(result));
+        }
+        let mut unavailable = unread_board_aggregates(&facts.board);
+        if facts.board_empty.is_none() {
+            unavailable.push((
+                "board.empty".to_string(),
+                UNREAD_BOARD_AGGREGATE.to_string(),
+            ));
+        }
+        Self {
+            context,
+            unavailable,
+        }
     }
 
     /// The whole expression's value for one subject (`None` for workspace
     /// scope).
     pub fn truth(&self, expression: &CheckedExpression, subject: Option<&TaskFacts>) -> Truth {
         let scope = self.scope(subject);
-        resolve(&expression.ast, &scope)
+        resolve(&expression.ast, &scope, &self.unavailable)
     }
 
     /// Each top-level `&&` conjunct's value, for closest-miss ranking.
@@ -193,7 +360,7 @@ impl ConditionEvaluator {
             .into_iter()
             .map(|conjunct| TopLevelClause {
                 text: text.of(conjunct),
-                value: resolve(conjunct, &scope),
+                value: resolve(conjunct, &scope, &self.unavailable),
             })
             .collect()
     }
@@ -206,7 +373,7 @@ impl ConditionEvaluator {
     ) -> ClauseNode {
         let scope = self.scope(subject);
         let text = SourceText::new(expression);
-        clause_node(&expression.ast, &scope, &text)
+        clause_node(&expression.ast, &scope, &text, &self.unavailable)
     }
 
     fn scope(&self, subject: Option<&TaskFacts>) -> Context<'_, 'static> {
@@ -218,7 +385,68 @@ impl ConditionEvaluator {
     }
 }
 
-fn resolve(expr: &IdedExpr, context: &Context<'_, '_>) -> Truth {
+/// The definition's own accepted-result history, as `self` reads it.
+const SELF_LAST_SUCCEEDED: &str = "self.last_succeeded_at";
+
+/// Why a board aggregate left `None` could not be read. The concrete store
+/// error stays on the gatherer's unavailable notes; this is the evaluator's
+/// reason, shared by conditions, guards, explain and job waits.
+const UNREAD_BOARD_AGGREGATE: &str = "could not be read";
+
+/// Board aggregates a `None` count leaves unread. The field stays out of the
+/// bound map, and the path is unavailable so `has()` is unknown rather than
+/// false. Optional self, job and step fields are not aggregates: a missing
+/// one is absence, and `has()` of it is false.
+fn unread_board_aggregates(board: &BoardFacts) -> Vec<(String, String)> {
+    [
+        ("board.eligible", board.eligible.is_none()),
+        ("board.backlog", board.backlog.is_none()),
+        ("board.in_progress", board.in_progress.is_none()),
+        ("board.blocked", board.blocked.is_none()),
+        ("board.review", board.review.is_none()),
+        ("board.open_runs", board.open_runs.is_none()),
+        ("board.drain_running", board.drain_running.is_none()),
+    ]
+    .into_iter()
+    .filter(|(_, unread)| *unread)
+    .map(|(path, _)| (path.to_string(), UNREAD_BOARD_AGGREGATE.to_string()))
+    .collect()
+}
+
+/// The read path of one named auto-task's history, as [`path_of`] spells it.
+fn auto_task_history_path(name: &str) -> String {
+    format!("auto_tasks['{name}']")
+}
+
+/// The unavailable path a read falls under, with why: the path itself or
+/// anything below it, bare or under `has()`.
+fn unavailable_read<'u>(
+    read: &str,
+    unavailable: &'u [(String, String)],
+) -> Option<(&'u str, &'u str)> {
+    let path = read
+        .strip_prefix("has(")
+        .and_then(|inner| inner.strip_suffix(')'))
+        .unwrap_or(read);
+    unavailable.iter().find_map(|(root, why)| {
+        let below = path
+            .strip_prefix(root.as_str())
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(['.', '[']));
+        below.then_some((root.as_str(), why.as_str()))
+    })
+}
+
+fn resolve(expr: &IdedExpr, context: &Context<'_, '_>, unavailable: &[(String, String)]) -> Truth {
+    if !unavailable.is_empty() {
+        let mut reads = Vec::new();
+        collect_reads(expr, &mut Vec::new(), &mut reads);
+        if let Some((root, why)) = reads
+            .iter()
+            .find_map(|(path, _)| unavailable_read(path, unavailable))
+        {
+            return Truth::Unknown(format!("{root} is unavailable: {why}"));
+        }
+    }
     match Value::resolve(expr, context) {
         Ok(Value::Bool(true)) => Truth::True,
         Ok(Value::Bool(false)) => Truth::False,
@@ -234,8 +462,13 @@ fn unknown_reason(error: &cel::ExecutionError) -> String {
     }
 }
 
-fn clause_node(expr: &IdedExpr, context: &Context<'_, '_>, text: &SourceText) -> ClauseNode {
-    let truth = resolve(expr, context);
+fn clause_node(
+    expr: &IdedExpr,
+    context: &Context<'_, '_>,
+    text: &SourceText,
+    unavailable: &[(String, String)],
+) -> ClauseNode {
+    let truth = resolve(expr, context, unavailable);
     let chain = ["_&&_", "_||_"].into_iter().find(|operator| {
         matches!(&expr.expr, Expr::Call(call)
                 if call.target.is_none() && call.func_name == *operator)
@@ -245,11 +478,11 @@ fn clause_node(expr: &IdedExpr, context: &Context<'_, '_>, text: &SourceText) ->
             Some(if operator == "_&&_" { "and" } else { "or" }),
             flatten(expr, operator)
                 .into_iter()
-                .map(|operand| clause_node(operand, context, text))
+                .map(|operand| clause_node(operand, context, text, unavailable))
                 .collect(),
             Vec::new(),
         ),
-        None => (None, Vec::new(), operands(expr, context)),
+        None => (None, Vec::new(), operands(expr, context, unavailable)),
     };
     ClauseNode {
         text: text.of(expr),
@@ -262,10 +495,14 @@ fn clause_node(expr: &IdedExpr, context: &Context<'_, '_>, text: &SourceText) ->
 }
 
 /// The variables an expression may read from outside a comprehension.
-const ROOTS: &[&str] = &["task", "tasks", "board", "self", "now"];
+const ROOTS: &[&str] = &["task", "tasks", "auto_tasks", "board", "self", "now"];
 
 /// The maximal reads in a leaf clause, each with its value.
-fn operands(expr: &IdedExpr, context: &Context<'_, '_>) -> Vec<OperandValue> {
+fn operands(
+    expr: &IdedExpr,
+    context: &Context<'_, '_>,
+    unavailable: &[(String, String)],
+) -> Vec<OperandValue> {
     let mut reads = Vec::new();
     collect_reads(expr, &mut Vec::new(), &mut reads);
     let mut seen = Vec::<String>::new();
@@ -276,6 +513,13 @@ fn operands(expr: &IdedExpr, context: &Context<'_, '_>) -> Vec<OperandValue> {
                 return None;
             }
             seen.push(path.clone());
+            if let Some((_, why)) = unavailable_read(&path, unavailable) {
+                return Some(OperandValue {
+                    path,
+                    value: serde_json::Value::Null,
+                    unavailable: Some(why.to_string()),
+                });
+            }
             let (value, unavailable) = match Value::resolve(read, context) {
                 Ok(value) => (json_value(&value), None),
                 Err(cel::ExecutionError::NoSuchKey(_)) => {
@@ -517,6 +761,10 @@ pub(crate) fn task_value(task: &TaskFacts) -> Value {
 }
 
 fn board_value(board: &BoardFacts) -> Value {
+    map_value(board_fields(board))
+}
+
+fn board_fields(board: &BoardFacts) -> Vec<(String, Value)> {
     let int_map = |values: &BTreeMap<String, i64>| {
         map_value(
             values
@@ -543,6 +791,17 @@ fn board_value(board: &BoardFacts) -> Value {
     if let Some(running) = board.drain_running {
         fields.push(("drain_running".to_string(), Value::Bool(running)));
     }
+    fields
+}
+
+fn step_value(step: &StepFacts) -> Value {
+    let mut fields = vec![("status".to_string(), string(&step.status))];
+    if let Some(at) = step.end_time {
+        fields.push(("end_time".to_string(), timestamp(at)));
+    }
+    if let Some(task) = &step.task_id {
+        fields.push(("task_id".to_string(), string(task)));
+    }
     map_value(fields)
 }
 
@@ -557,7 +816,38 @@ fn self_value(facts: &SelfFacts) -> Value {
     if let Some(task) = &facts.last_minted_task {
         fields.push(("last_minted_task".to_string(), string(task)));
     }
+    if let Some(at) = facts.last_succeeded_at {
+        fields.push(("last_succeeded_at".to_string(), timestamp(at)));
+    }
     map_value(fields)
+}
+
+fn result_value(result: &ResultFacts) -> Value {
+    let mut fields = vec![
+        ("status".to_string(), string(&result.status)),
+        ("completed_at".to_string(), timestamp(result.completed_at)),
+        ("contract".to_string(), string(&result.contract)),
+        (
+            "definition_digest".to_string(),
+            string(&result.definition_digest),
+        ),
+        ("task_id".to_string(), string(&result.task_id)),
+    ];
+    if let Some(revision) = &result.revision {
+        fields.push(("revision".to_string(), string(revision)));
+    }
+    if let Some(run) = &result.run_id {
+        fields.push(("run_id".to_string(), string(run)));
+    }
+    map_value(fields)
+}
+
+fn accepted_history_value(history: &AcceptedHistoryFacts) -> Value {
+    map_value(
+        history
+            .last_succeeded_at
+            .map(|at| ("last_succeeded_at".to_string(), timestamp(at))),
+    )
 }
 
 /// A CEL value as JSON: timestamps in RFC 3339, durations in CEL's seconds

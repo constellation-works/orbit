@@ -30,8 +30,9 @@ fn git(deadline: Deadline, workspace: &Path, args: &[&str]) -> Result<String, Or
 
 /// Only literal PR synchronize triggers, branch selectors and unconditional
 /// jobs with the existing literal-name/single-axis matrix semantics, plus the
-/// adapter's finite live-PR read condition and its exact change-scope gate, are
-/// known. Other conditions refuse.
+/// adapter's finite live-PR read condition and its exact change-scope gate
+/// (alone, or with up to four sibling jobs behind that same gate also needed),
+/// are known. Other conditions refuse.
 fn emitted(source: &str, branch: &str) -> Result<Vec<String>, OrbitError> {
     let workflow: Value = serde_yaml::from_str(source).map_err(|_| unreadable("workflow YAML"))?;
     let event = workflow
@@ -285,16 +286,10 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
         unreadable,
     )?;
     let old_base = required_string(input, "accepted_base")?;
-    if !super::super::git::git_command_success(
-        workspace,
-        &["merge-base", "--is-ancestor", old_base, &base_sha],
-    )? || !super::super::git::git_command_success(
-        workspace,
-        &["merge-base", "--is-ancestor", old_base, head],
-    )? || super::super::git::git_command_success(
-        workspace,
-        &["merge-base", "--is-ancestor", &base_sha, head],
-    )? {
+    if !crate::executor::automation::vcs::git::is_ancestor(workspace, old_base, &base_sha)?
+        || !crate::executor::automation::vcs::git::is_ancestor(workspace, old_base, head)?
+        || crate::executor::automation::vcs::git::is_ancestor(workspace, &base_sha, head)?
+    {
         return Err(unreadable("base is not a fresh descendant advance"));
     }
     let merged = git(
@@ -632,7 +627,23 @@ pub(super) fn current_gates(input: &Value) -> Result<Value, OrbitError> {
         .iter()
         .filter(|gate| !gate_present(gate, checks, statuses))
         .collect();
+    let failed_workflow_runs =
+        super::failed_workflow::failed_workflow_evidence(deadline, workspace, &current)?;
+    // [ORB-24457] Whether this head has a workflow run, and whether any of
+    // those runs is still waiting for or on a runner. The engine treats any
+    // present run as checks still pending; only `present: false` is the
+    // dropped-event absence completion re-requests checks for.
+    let workflow_runs = complete_list(&current.runs, "workflow_runs")?;
+    let head_workflow_run = json!({
+        "present": !workflow_runs.is_empty(),
+        "pending": workflow_runs.iter().any(|run| {
+            matches!(
+                run["status"].as_str(),
+                Some("queued" | "pending" | "waiting" | "requested" | "in_progress")
+            )
+        }),
+    });
     Ok(
-        json!({"gates_passed":passed,"required":current.required,"missing":missing,"policy":current.policy,"policy_revisions":revisions,"checks":current.checks,"statuses":current.statuses}),
+        json!({"gates_passed":passed,"required":current.required,"missing":missing,"policy":current.policy,"policy_revisions":revisions,"checks":current.checks,"statuses":current.statuses,"failed_workflow_runs":failed_workflow_runs,"head_workflow_run":head_workflow_run}),
     )
 }

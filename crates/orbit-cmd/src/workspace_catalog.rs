@@ -1,10 +1,10 @@
 //! Registry-backed resolution for Core's federated-search scope.
 //!
-//! Core owns the fan-out, fusion, and attribution; it deliberately owns no
-//! workspace catalog, because `orbit-registry` sits above it in the crate
-//! graph. This module is the composition point that closes that gap: it turns
-//! a [`WorkspaceScope`] into registered checkouts and opens a runtime for one
-//! [ORB-11027].
+//! Core owns federated-search fan-out, fusion, and attribution, and receives a
+//! [`WorkspaceCatalog`] as part of runtime composition. This module implements
+//! that interface with the machine's workspace registry and registered runtime
+//! factory; `orbit-cmd` attaches it to composed runtimes. Core also directly
+//! depends on Registry for its registry-backed application operations.
 //!
 //! It adds no dependency edge — `orbit-cmd` already joins Core to Registry.
 
@@ -124,6 +124,48 @@ impl RegistryWorkspaceCatalog {
 }
 
 impl WorkspaceCatalog for RegistryWorkspaceCatalog {
+    fn attention_registered_hosts(
+        &self,
+    ) -> Result<Vec<orbit_types::tool::AttentionHost>, OrbitError> {
+        let registry = orbit_registry::hosts::load_host_registry(&self.global_root)?;
+        Ok(registry
+            .hosts()
+            .entries()
+            .iter()
+            .map(|host| orbit_types::tool::AttentionHost {
+                machine_id: host.machine_id.clone(),
+                name: host.name.clone(),
+            })
+            .collect())
+    }
+
+    fn attention_doctor_checks(
+        &self,
+        runtime: &orbit_core::runtime::RuntimeKernel,
+    ) -> Result<Option<Vec<orbit_types::tool::AttentionHealthCheck>>, OrbitError> {
+        use crate::doctor::{DoctorCommands, WorkspaceDoctorStatus};
+        let runtime = OrbitRuntime::from_kernel_ref(runtime);
+        Ok(Some(
+            runtime
+                .doctor_workspace_with_depth(false)?
+                .into_iter()
+                .filter_map(|row| {
+                    let status = match row.status {
+                        WorkspaceDoctorStatus::Error => "error",
+                        WorkspaceDoctorStatus::Warning => "warning",
+                        _ => return None,
+                    };
+                    Some(orbit_types::tool::AttentionHealthCheck {
+                        check: row.check_name,
+                        status: status.into(),
+                        message: row.message,
+                        remediation: row.remediation,
+                    })
+                })
+                .collect(),
+        ))
+    }
+
     fn resolve_scope(
         &self,
         scope: &WorkspaceScope,
@@ -170,6 +212,19 @@ impl WorkspaceCatalog for RegistryWorkspaceCatalog {
             .collect();
         self.remember(&selected);
         Ok(targets)
+    }
+
+    fn open_observational(
+        &self,
+        target: &FederatedWorkspaceTarget,
+    ) -> Result<RuntimeKernel, OrbitError> {
+        let resolved = self.resolve_target(target)?;
+        RegisteredRuntimeFactory::open_registered_checkout_observational(
+            &self.global_root,
+            &resolved.workspace,
+            &resolved.checkout,
+        )
+        .map(OrbitRuntime::into_kernel)
     }
 
     fn open(&self, target: &FederatedWorkspaceTarget) -> Result<RuntimeKernel, OrbitError> {

@@ -199,10 +199,16 @@ impl<L: DuplicateTaskLookup + ?Sized> DuplicateTaskLookup for CauseCheckedLookup
     fn list_tasks(&self) -> Result<Rc<[Task]>, OrbitError> {
         self.inner.list_tasks()
     }
+    fn list_task_metadata(&self) -> Result<Rc<[Task]>, OrbitError> {
+        self.inner.list_task_metadata()
+    }
     fn get_task(&self, id: &str) -> Result<Task, OrbitError> {
         self.inner.get_task(id)
     }
     fn get_task_comments(&self, id: &str) -> Result<Rc<[TaskComment]>, OrbitError> {
         self.inner.get_task_comments(id)
+    }
+    fn searchable_text(&self, task: &Task) -> Result<Rc<str>, OrbitError> {
+        self.inner.searchable_text(task)
     }
 }

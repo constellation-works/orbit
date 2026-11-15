@@ -12,10 +12,11 @@
 //! that plugin's diagnostic and leaves every other plugin untouched.
 
 use std::path::{Component, Path, PathBuf};
+use std::time::SystemTime;
 
 use orbit_common::protocol::yaml::{parse_auto_task_yaml, parse_routine_yaml};
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
-use orbit_tools::plugin::LoadedPlugin;
+use orbit_tools::plugin::{LoadedPlugin, manifest_digest};
 use orbit_types::plugin::plugin_provenance_label;
 use orbit_types::workflow::{
     AutoTaskDefinition, JobV2, JobV2Step, JobV2StepBody, RoutineDefinition,
@@ -49,6 +50,57 @@ pub struct PluginDefinitionSet {
     pub auto_tasks: Vec<PluginDefinition<AutoTaskDefinition>>,
 }
 
+/// One definition file as it was read: the facts the process cache compares
+/// before reusing a parsed set.
+///
+/// `modified`, `len`, `is_file` and `is_symlink` are the same facts as the
+/// manifest stamp. `digest` is the file bytes, so a same-length edit or a
+/// permission change cannot keep a stale parse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RecordedDefinitionRead {
+    pub path: PathBuf,
+    pub modified: Option<SystemTime>,
+    pub len: u64,
+    pub is_file: bool,
+    pub is_symlink: bool,
+    pub digest: String,
+}
+
+impl RecordedDefinitionRead {
+    fn capture(path: &Path, yaml: &str) -> Option<Self> {
+        let metadata = std::fs::symlink_metadata(path).ok()?;
+        Some(Self {
+            path: path.to_path_buf(),
+            modified: metadata.modified().ok(),
+            len: metadata.len(),
+            is_file: metadata.is_file(),
+            is_symlink: metadata.file_type().is_symlink(),
+            digest: manifest_digest(yaml.as_bytes()),
+        })
+    }
+}
+
+/// Stamp one definition file by reading it.
+///
+/// `None` when the file cannot be read or statted. This is the cache's
+/// freshness check. A hit does not parse the file again.
+pub(crate) fn definition_file_stamp(path: &Path) -> Option<RecordedDefinitionRead> {
+    let yaml = std::fs::read_to_string(path).ok()?;
+    RecordedDefinitionRead::capture(path, &yaml)
+}
+
+/// Definition files in the order [`load_plugin_definitions`] reads them.
+pub(crate) fn plugin_definition_paths(plugin: &LoadedPlugin) -> impl Iterator<Item = &Path> {
+    plugin
+        .definitions
+        .activities
+        .iter()
+        .chain(plugin.definitions.jobs.iter())
+        .chain(plugin.definitions.routines.iter())
+        .chain(plugin.definitions.auto_tasks.iter())
+        .map(PathBuf::as_path)
+}
+
 /// Parse and check every definition file a plugin ships.
 ///
 /// `shipped_jobs` are the job names this binary ships, which a plugin routine
@@ -59,17 +111,30 @@ pub fn load_plugin_definitions(
     plugin: &LoadedPlugin,
     shipped_jobs: &[&str],
 ) -> Result<PluginDefinitionSet, String> {
+    load_plugin_definitions_recording(plugin, shipped_jobs, None)
+}
+
+/// [`load_plugin_definitions`] that also records each file it read.
+///
+/// The process cache stores those records and skips this function while they
+/// still match. Callers that do not care pass `reads: None`.
+pub(crate) fn load_plugin_definitions_recording(
+    plugin: &LoadedPlugin,
+    shipped_jobs: &[&str],
+    reads: Option<&mut Vec<RecordedDefinitionRead>>,
+) -> Result<PluginDefinitionSet, String> {
+    let mut log = DefinitionReadLog { reads };
     let namespace = plugin.namespace();
     let mut set = PluginDefinitionSet::default();
 
     for path in &plugin.definitions.activities {
-        let yaml = read_definition(path)?;
+        let yaml = log.read(path)?;
         let asset = load_activity_asset(&yaml)
             .map_err(|error| refusal(path, format!("is not a valid activity asset: {error}")))?;
         set.activities.push((asset.name, path.clone()));
     }
     for path in &plugin.definitions.jobs {
-        let yaml = read_definition(path)?;
+        let yaml = log.read(path)?;
         let asset = load_job_asset(&yaml)
             .map_err(|error| refusal(path, format!("is not a valid job asset: {error}")))?;
         validate_job_activity_references(
@@ -83,7 +148,7 @@ pub fn load_plugin_definitions(
     }
 
     for path in &plugin.definitions.routines {
-        let yaml = read_definition(path)?;
+        let yaml = log.read(path)?;
         let definition = parse_routine_yaml(&yaml)
             .map_err(|error| refusal(path, format!("is not a valid routine: {error}")))?;
         if definition.enabled {
@@ -117,7 +182,7 @@ pub fn load_plugin_definitions(
     }
 
     for path in &plugin.definitions.auto_tasks {
-        let yaml = read_definition(path)?;
+        let yaml = log.read(path)?;
         let definition = parse_auto_task_yaml(&yaml)
             .map_err(|error| refusal(path, format!("is not a valid auto-task: {error}")))?;
         if definition.enabled {
@@ -217,8 +282,34 @@ fn collect_step_activity_references<'a>(
     Ok(())
 }
 
-fn read_definition(path: &Path) -> Result<String, String> {
-    std::fs::read_to_string(path).map_err(|error| refusal(path, format!("cannot be read: {error}")))
+/// Reads definition files for one [`load_plugin_definitions_recording`] call.
+struct DefinitionReadLog<'a> {
+    reads: Option<&'a mut Vec<RecordedDefinitionRead>>,
+}
+
+impl DefinitionReadLog<'_> {
+    fn read(&mut self, path: &Path) -> Result<String, String> {
+        read_definition(path, self.reads.as_deref_mut())
+    }
+}
+
+/// Read one definition file.
+///
+/// When `reads` is set, a successful read is recorded for the process cache.
+/// The error text is the diagnostic an operator sees; it does not change
+/// because a stamp was recorded.
+fn read_definition(
+    path: &Path,
+    reads: Option<&mut Vec<RecordedDefinitionRead>>,
+) -> Result<String, String> {
+    let yaml = std::fs::read_to_string(path)
+        .map_err(|error| refusal(path, format!("cannot be read: {error}")))?;
+    if let Some(reads) = reads
+        && let Some(stamp) = RecordedDefinitionRead::capture(path, &yaml)
+    {
+        reads.push(stamp);
+    }
+    Ok(yaml)
 }
 
 fn refusal(path: &Path, message: String) -> String {

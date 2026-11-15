@@ -27,12 +27,13 @@
 //!    hosted check is classified first ([`checks`]): a failure
 //!    inherited from the base updates the branch onto the current base once,
 //!    and one that still fails there on a base tip where the same job passes
-//!    stops for the one automatic repair; a transient one is rerun once, and
-//!    one the candidate caused stops for the same single repair [ORB-15956]
-//!    [ORB-16322]. Once that repair is spent, a candidate-caused failure
-//!    stops for a requeue: the owner store ends the claim and returns the
-//!    task to the backlog with the candidate and the failure evidence, so its
-//!    next run repairs that candidate [ORB-16890].
+//!    stops for the one automatic repair [ORB-16322]; a transient one is
+//!    rerun once. A candidate-caused failure stops for a requeue, whether or
+//!    not an automatic repair was spent: the owner store ends the claim and
+//!    returns the task to the backlog with the candidate and the failure
+//!    evidence, so its next run repairs that candidate [ORB-15956]
+//!    [ORB-16890]. A spent repair of an inherited failure requeues the same
+//!    way [ORB-16890].
 //! 4. **Settle every run.** A provider transport failure (a TLS or request
 //!    timeout, a reset connection, a 5xx) that interrupts a pass before it
 //!    records a merge intent or requests a check recovery is retried
@@ -53,6 +54,10 @@ mod local;
 mod observe;
 mod pull_request;
 mod record;
+mod review_watch;
 mod run;
+mod wait_gate;
+pub use wait_gate::landing_wait_gate_cleared;
 
+pub(in crate::executor::automation) use review_watch::pr_checks_watch;
 pub(in crate::executor::automation) use run::handoff_land;

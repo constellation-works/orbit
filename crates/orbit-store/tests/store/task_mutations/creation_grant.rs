@@ -68,15 +68,18 @@ fn rescope(
     context_files: &[&str],
     authorize: &[&str],
 ) -> Result<(), OrbitError> {
-    store.document.update_task_document(
-        id,
-        TaskDocumentUpdateParams {
-            actor: "operator".to_string(),
-            context_files: Some(scope(context_files)),
-            context_creation: scope(authorize),
-            ..Default::default()
-        },
-    )
+    store
+        .document
+        .update_task_document(
+            id,
+            TaskDocumentUpdateParams {
+                actor: "operator".to_string(),
+                context_files: Some(scope(context_files)),
+                context_creation: scope(authorize),
+                ..Default::default()
+            },
+        )
+        .map(|_| ())
 }
 
 fn pilot_write(

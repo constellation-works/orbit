@@ -140,7 +140,15 @@ spec:
     `current_failures`, so filing escalates it instead of deferring it again.
     When no GitHub client is available or authenticated the snapshot carries
     `collected: false` and gathers nothing further, so a caller can never
-    mistake it for a clean CI result.
+    mistake it for a clean CI result. When GitHub rate-limits any read for
+    the host's account, the first such answer stops every later GitHub read
+    and the snapshot carries `collected: false`, `outcome_hint:
+    rate_limited` and `rate_limit` (`not_before_ms`, `not_before`, and the
+    provider's `retry_after_seconds` and `reset_epoch_seconds`); retryable
+    history is left untouched. The not-before is kept in
+    `<data root>/state/ci_failure_sweep/rate_limit.json`, and a sweep that
+    starts before it reads nothing from GitHub and reports the same
+    snapshot.
   input_schema_json:
     type: object
     properties:

@@ -1,26 +1,29 @@
 //! Average normalized tokens per task over time, by complexity and tag
 //! cohort, for Analytics › Metrics.
 //!
-//! Each terminal task counts once, in the bucket of its index `updated_at`
-//! (the completions series uses the same time; a later comment or artifact
-//! on the terminal bundle moves it). Its total is every managed invocation
-//! linked to it, whenever that invocation ran, so spend recorded while the
-//! task was in flight never lands in an earlier bucket.
+//! Each terminal task counts once, in the bucket of its durable terminal
+//! transition (the completions series uses the same time; a later write on the
+//! terminal bundle does not move it). A task whose history has no such
+//! transition is left out and counted in `undated_tasks`. Its total is every
+//! managed invocation linked to it, whenever that invocation ran, so spend
+//! recorded while the task was in flight never lands in an earlier bucket.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use axum::extract::Query;
+use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_core::OrbitRuntime;
 use orbit_core::metrics::cost::{TaskTokenSpend, TaskTokenTotals};
 use orbit_types::task::{TaskStatus, UNSET_BUCKET, complexity_bucket_ord};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::sync::Arc;
 
 use super::super::{DiagnosticsQuery, map_runtime_error};
 use super::metrics::DiagnosticsRange;
 use super::trend::{TrendWindow, trend_range};
-use crate::state::Ws;
+use crate::runtime_memo::DASHBOARD_POLL_MEMO_TTL;
+use crate::state::{DashboardState, Ws};
 
 /// Complexities a request may name; `unassessed` is an alias of the unset
 /// bucket.
@@ -141,6 +144,7 @@ fn parse_filters(q: &TaskTokensQuery) -> Result<Filters, orbit_core::OrbitError>
 }
 
 pub(in crate::api) async fn diagnostics_task_tokens(
+    State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Query(q): Query<TaskTokensQuery>,
 ) -> Response {
@@ -157,13 +161,44 @@ pub(in crate::api) async fn diagnostics_task_tokens(
         Ok(range) => range,
         Err(error) => return map_runtime_error(error),
     };
-    match super::super::blocking("task token trend", move || {
-        task_token_trend(&runtime, &range, &filters)
-    })
-    .await
+    // Normalized key over every parameter that changes the result. Filter
+    // parsing above rejects invalid inputs before the memo, so errors are
+    // never cached.
+    let complexities = filters
+        .complexities
+        .as_ref()
+        .map(|set| set.iter().copied().collect::<Vec<_>>().join(","))
+        .unwrap_or_default();
+    let key_payload = match serde_json::to_string(&(
+        &range.key,
+        if filters.done_only { "done" } else { "all" },
+        if filters.implement_only {
+            "implement"
+        } else {
+            "all"
+        },
+        &complexities,
+        &filters.tags,
+        &filters.model,
+    )) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return map_runtime_error(orbit_core::OrbitError::Execution(format!(
+                "failed to serialize task_tokens memo key: {error}"
+            )));
+        }
+    };
+    let key = ("task_tokens".to_string(), key_payload);
+    let compute_runtime = Arc::clone(&runtime);
+    match state
+        .metrics_trends_memo()
+        .get_or_compute(&runtime, key, DASHBOARD_POLL_MEMO_TTL, move || {
+            task_token_trend(&compute_runtime, &range, &filters)
+        })
+        .await
     {
-        Ok(value) => Json(value).into_response(),
-        Err(response) => *response,
+        Ok(served) => (served.age_header(), Json((*served.body).clone())).into_response(),
+        Err(error) => map_runtime_error(error),
     }
 }
 
@@ -259,21 +294,36 @@ fn task_token_trend(
     range: &DiagnosticsRange,
     filters: &Filters,
 ) -> Result<Value, orbit_core::OrbitError> {
-    let transitions: Vec<_> = runtime
-        .task_terminal_transitions(TrendWindow::read_since_with_day_lead(range))?
-        .into_iter()
-        .filter(|row| !filters.done_only || row.status == TaskStatus::Done)
+    let dates = runtime.task_terminal_dates(TrendWindow::read_since_with_day_lead(range))?;
+    let in_outcome = |status: TaskStatus| !filters.done_only || status == TaskStatus::Done;
+    let transitions: Vec<_> = dates
+        .dated
+        .iter()
+        .filter(|row| in_outcome(row.task.status))
         .collect();
-    let window = TrendWindow::with_day_lead(range, transitions.first().map(|row| row.at));
+    let window = TrendWindow::with_day_lead(range, transitions.first().map(|row| row.terminal_at));
     let wanted = |complexity: &str| {
         filters
             .complexities
             .as_ref()
             .is_none_or(|selected| selected.contains(complexity))
     };
+    let undated_tasks = dates
+        .undated
+        .iter()
+        .filter(|task| {
+            in_outcome(task.status)
+                && wanted(task.complexity.as_str())
+                && window.may_hold_undated(task.at)
+        })
+        .count();
     let in_window: Vec<_> = transitions
         .iter()
-        .filter_map(|row| window.bucket_of(row.at).map(|index| (index, row)))
+        .filter_map(|row| {
+            window
+                .bucket_of(row.terminal_at)
+                .map(|index| (index, &row.task))
+        })
         .filter(|(_, row)| wanted(row.complexity.as_str()))
         .collect();
     // A window with no tasks draws nothing, so its lead is never read.
@@ -282,7 +332,11 @@ fn task_token_trend(
     } else {
         transitions
             .iter()
-            .filter_map(|row| window.lead_bucket_of(row.at).map(|index| (index, row)))
+            .filter_map(|row| {
+                window
+                    .lead_bucket_of(row.terminal_at)
+                    .map(|index| (index, &row.task))
+            })
             .filter(|(_, row)| wanted(row.complexity.as_str()))
             .collect()
     };
@@ -438,6 +492,7 @@ fn task_token_trend(
         "series": series,
         "total": overall.to_json(),
         "excluded_other_model": other_model,
+        "undated_tasks": undated_tasks,
         "available_tags": tags
             .into_iter()
             .map(|(tag, tasks)| json!({ "tag": tag, "tasks": tasks }))

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise affected-crate test selection and execution at the script boundary."""
 
+import contextlib
 import hashlib
 import json
 import os
@@ -13,9 +14,27 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 
 
 SCRIPTS = Path(__file__).resolve().parent
+
+
+def stop_owned_helper(proc, child_pid_paths=()):
+    """Ask the helper to clean its own children, then reap the helper."""
+    if proc.returncode is not None:
+        return
+    # A PID file does not reserve a child's group, even if the helper is
+    # still alive. SIGTERM lets run_observed clean up its own unreaped child.
+    with contextlib.suppress(ProcessLookupError):
+        proc.send_signal(signal.SIGTERM)
+    try:
+        proc.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        if proc.returncode is None:
+            with contextlib.suppress(OSError):
+                proc.kill()
+            proc.communicate()
 
 
 def assert_phase_sums(testcase, summary):
@@ -51,7 +70,9 @@ class AffectedTestGateTests(unittest.TestCase):
     """Exercise the gate against real Git diffs and a non-compiling Cargo fixture."""
 
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
+        scratch = SCRIPTS.parent / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(dir=scratch)
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         (self.root / "scripts").mkdir()
@@ -85,7 +106,7 @@ class AffectedTestGateTests(unittest.TestCase):
             (crate / "Cargo.toml").write_text(f'[package]\nname = "{name}"\nversion = "0.1.0"\n')
             (crate / "src/lib.rs").write_text("// fixture\n")
             packages.append(dict(id=name, name=name, manifest_path=str(crate / "Cargo.toml"),
-                                 targets=[dict(name=name.replace("-", "_"), kind=["lib"], doctest=True)],
+                                 targets=[dict(name=name.replace("-", "_"), kind=["lib"], doctest=False)],
                                  dependencies=[dict(name=target, kind=kind, rename=rename,
                                                     path=str(self.root / "crates" / target))
                                                for target, kind, rename in edges]))
@@ -133,26 +154,18 @@ elif arguments[0] == "tree":
         features.add(os.environ["GUARD_TEST_TREE_WORKSPACE_ONLY"])
     features = sorted(features)
     print("tokio v1.0.0\t" + ",".join(features))
-    print("tokio v1.0.0\t" + ",".join(features) + " (*)")
+    # A repeat prints only when another crate reaches the dependency. Colored
+    # output wraps its marker in escapes, as CI's CARGO_TERM_COLOR=always does.
+    colored = os.environ.get("CARGO_TERM_COLOR") == "always" and "--color" not in arguments
+    if len(selected) > 1:
+        print("tokio v1.0.0\t" + ",".join(features) + (" \x1b[33m\x1b[2m(*)\x1b[39m\x1b[22m" if colored else " (*)"))
 elif arguments == ["nextest", "--version"]:
     sys.exit(int(os.environ.get("GUARD_TEST_NO_NEXTEST", "0")))
 elif "--doc" in arguments:
-    if os.environ.get("GUARD_TEST_TIMINGS"):
-        selected = [arguments[index + 1] for index, argument in enumerate(arguments) if argument == "-p"]
-        metadata = json.load(open(os.environ["GUARD_TEST_METADATA"]))
-        seconds_for = {"orbit-core": "0.02", "orbit-cli": "0.03", "orbit_tools": "0.04"}
-        if os.environ.get("GUARD_TEST_DOC_NO_REPORT"):
-            print("    Finished `test` profile in 0.09s", flush=True)
-        else:
-            emit_timings([{"name": name, "duration": 0.05} for name in selected if name in seconds_for])
-        for package in metadata["packages"]:
-            name = package["name"]
-            if name in selected and name in seconds_for:
-                seconds = seconds_for[name]
-                target = next(target for target in package["targets"] if target["doctest"])
-                print(f"   Doc-tests {target['name']}", flush=True)
-                print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in %ss" % seconds, flush=True)
-    sys.exit(int(os.environ.get("GUARD_TEST_DOC_EXIT", "0")))
+    # Doctests are disabled workspace-wide; the gate must never request --doc.
+    # Fail the fixture loudly so a regression cannot pass silently.
+    print("ci-test-affected fixture: --doc must never be requested (doctests disabled)", flush=True)
+    sys.exit(99)
 else:
     metadata = json.load(open(os.environ["GUARD_TEST_METADATA"]))
     selected = [arguments[index + 1] for index, argument in enumerate(arguments) if argument == "-p"]
@@ -309,10 +322,10 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
         self.assertFalse(any("--no-fail-fast" in call for call in self.calls()),
                          "a renamed test must be checked before any remaining tests run")
 
-    def test_a_workflow_edit_is_checked_even_when_no_crate_is_selected(self):
+    def test_a_workflow_edit_selects_its_reader_and_checks_macos_filters(self):
         (self.root / ".github/workflows").mkdir(parents=True)
         (self.root / ".github/workflows/ci-macos.yml").write_text("name: macOS Platform\n")
-        self.assertEqual(self.selected(), [])
+        self.assertIn("orbit-engine", self.selected())
         result = self.gate(GUARD_TEST_MACOS_EXIT="7")
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertEqual(self.macos_checks(), 1)
@@ -349,6 +362,56 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
                 self.git("checkout", "--", path)
         (self.root / "scripts/build-budget.py").write_text("changed\n")
         self.assertEqual(self.selected(), sorted(set(self.core_dependents + ["orbit-engine"])))
+
+    def test_repository_readers_select_their_cargo_tests(self):
+        readers = {
+            "scripts/test-qa-full-sweep.py": self.core_dependents,
+            "scripts/ci-test-affected.py": self.core_dependents,
+            "scripts/check_npm_package.py": self.core_dependents,
+            "crates/orbit-core/assets/executors/codex.yaml": self.core_dependents,
+            "crates/orbit-engine/tests/engine/pr_landing/fixtures/base-refresh-forge.sh": sorted({*self.core_dependents, "orbit-engine"}),
+            "scripts/ci-await-jobs.py": sorted({*self.core_dependents, "orbit-engine"}),
+            ".github/workflows/ci.yml": sorted({*self.core_dependents, "orbit-engine"}),
+            ".github/workflows/ci-macos.yml": sorted({*self.core_dependents, "orbit-engine"}),
+            ".github/workflows/website-check.yml": sorted({*self.core_dependents, "orbit-engine"}),
+            ".github/workflows/codeql.yml": sorted({*self.core_dependents, "orbit-engine"}),
+            "scripts/release-readiness-adapter.py": sorted({*self.core_dependents, "orbit-engine"}),
+            "examples/release-readiness/scripts/release-readiness.yaml": sorted({*self.core_dependents, "orbit-engine"}),
+            "docs/design/auto-tasks/1_overview.md": self.core_dependents,
+            "plugin/skills/orbit-setup/references/auto-tasks.md": self.core_dependents,
+            "crates/orbit-tools/tests/fixtures/plugins/uv-example/plugin.yaml": ["orbit-cli", "orbit-tools"],
+        }
+        for relative, expected in readers.items():
+            with self.subTest(path=relative):
+                path = self.root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                previous = path.read_text() if path.exists() else None
+                path.write_text((previous or "") + "# changed\n")
+                try:
+                    self.assertEqual(self.selected(), expected)
+                    if relative == "scripts/test-qa-full-sweep.py":
+                        paths = self.root / ".scratch/changed-paths"
+                        paths.parent.mkdir(exist_ok=True)
+                        paths.write_text(relative + "\n")
+                        original = self.metadata.read_text()
+                        metadata = json.loads(original)
+                        for name in ("orbit-auth", "orbit-exec", "orbit-policy", "orbit-store"):
+                            metadata["workspace_members"].append(name)
+                            metadata["packages"].append(dict(
+                                id=name, name=name, manifest_path=str(self.root / "crates" / name / "Cargo.toml"),
+                                dependencies=[], targets=[dict(name=name, kind=["lib"], doctest=False)]))
+                        self.metadata.write_text(json.dumps(metadata))
+                        try:
+                            result = self.gate("--pull-request-scope", str(paths))
+                        finally:
+                            self.metadata.write_text(original)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertIn("orbit-core", result.stdout.splitlines()[0])
+                finally:
+                    if previous is None:
+                        path.unlink()
+                    else:
+                        path.write_text(previous)
 
     def test_unknown_declared_reader_fails_closed(self):
         metadata = json.loads(self.metadata.read_text())
@@ -387,32 +450,52 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
 
         # orbit-cli alone resolves tokio without orbit-web's dev-dependency feature.
         self.assertEqual(build("orbit-cli", {"orbit-web": ["test-util"]}),
-                         ["orbit-cli orbit-web", "-p orbit-cli -p orbit-web --lib --bins --tests"])
+                         ["orbit-cli orbit-web", "-p orbit-cli -p orbit-web --bins --tests"])
         self.assertEqual(build("orbit-cli", {"orbit-web": ["test-util"], "orbit-cmd": ["io-util"]})[0],
                          "orbit-cli orbit-cmd orbit-web")
-        self.assertEqual(build("orbit-tools"), ["orbit-tools", "-p orbit-tools --lib --bins --tests"],
+        self.assertEqual(build("orbit-tools"), ["orbit-tools", "-p orbit-tools --bins --tests"],
                          "a selection that already resolves the workspace's features builds alone")
+        # [ORB-22077] CI colors Cargo's output. A colored repeat marker must not
+        # read as a feature gap: it added three needless anchors to hosted builds.
+        self.assertEqual(build("orbit-tools", CARGO_TERM_COLOR="always"),
+                         ["orbit-tools", "-p orbit-tools --bins --tests"])
         # A crate the checkout lacks, or a gap no member closes, builds the workspace.
         self.assertEqual(build("orbit-retired")[0], "workspace")
         self.assertEqual(build("orbit-cli", GUARD_TEST_TREE_WORKSPACE_ONLY="signal")[0], "workspace")
 
-    def test_full_test_targets_and_doctests_run_under_build_admission(self):
+    def test_disabled_lib_harness_is_omitted_from_build_and_runtime_selectors(self):
+        # A library with test=false (as in cargo metadata) must not be forced
+        # back by an explicit --lib; --tests retains enabled lib unit tests.
+        metadata = json.loads(self.metadata.read_text())
+        for package in metadata["packages"]:
+            if package["name"] == "orbit-tools":
+                package["targets"] = [dict(name="orbit_tools", kind=["lib"], doctest=False, test=False)]
+        self.metadata.write_text(json.dumps(metadata))
+        result = self.gate("--test-build-packages", "orbit-tools")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines()[:2],
+                         ["orbit-tools", "-p orbit-tools --bins --tests"])
+        (self.root / "crates/orbit-tools/src/lib.rs").write_text("// changed\n")
+        result = self.gate()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any("--lib" in call for call in self.calls()),
+                         "explicit --lib would rebuild the disabled empty lib harness")
+
+    def test_full_test_targets_run_under_build_admission(self):
         self.touch_core()
         result = self.gate()
         self.assertEqual(result.returncode, 0, result.stderr)
         package_flags = [argument for name in self.core_dependents for argument in ("-p", name)]
-        runtime = ["nextest", "run", "--timings", "--no-fail-fast", "--success-output", "immediate", *package_flags, "--lib", "--bins", "--tests"]
-        docs = ["test", "--timings", "--no-fail-fast", *package_flags, "--doc"]
+        runtime = ["nextest", "run", "--timings", "--no-fail-fast", "--success-output", "immediate", *package_flags, "--bins", "--tests"]
         calls = self.calls()
         self.assertEqual(calls[1:], [["nextest", "--version"],
-                                    ["build-budget", "--", "cargo", *runtime], runtime,
-                                    ["build-budget", "--", "cargo", *docs], docs])
+                                    ["build-budget", "--", "cargo", *runtime], runtime])
+        self.assertFalse(any("--doc" in call for call in self.calls()))
 
-    def test_test_failures_propagate_including_cargo_fallback_and_doctests(self):
+    def test_test_failures_propagate_including_cargo_fallback(self):
         self.touch_core()
         for environment, code in ((dict(GUARD_TEST_EXIT="17"), 17),
-                                  (dict(GUARD_TEST_EXIT="18", GUARD_TEST_NO_NEXTEST="1"), 18),
-                                  (dict(GUARD_TEST_DOC_EXIT="19"), 19)):
+                                  (dict(GUARD_TEST_EXIT="18", GUARD_TEST_NO_NEXTEST="1"), 18)):
             with self.subTest(environment=environment):
                 self.log.write_text("")
                 result = self.gate(**environment)
@@ -420,19 +503,18 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
                 tests = [call for call in self.calls() if call[0] in {"test", "nextest"}
                          and call != ["nextest", "--version"]]
                 self.assertTrue(tests)
-                if "GUARD_TEST_EXIT" in environment:
-                    self.assertTrue(all("--doc" not in call for call in tests))
+                self.assertTrue(all("--doc" not in call for call in tests))
                 if "GUARD_TEST_NO_NEXTEST" in environment:
                     self.assertEqual(tests[0][0], "test")
 
-    def test_bin_only_selection_skips_inapplicable_doctest_command(self):
+    def test_no_selection_requests_doctests(self):
         metadata = json.loads(self.metadata.read_text())
         for package in metadata["packages"]:
             if package["name"] == "orbit-cli":
                 package["targets"] = [dict(name="orbit-cli", kind=["bin"], doctest=False)]
         self.metadata.write_text(json.dumps(metadata))
         (self.root / "crates/orbit-cli/src/lib.rs").write_text("// bin-only fixture change\n")
-        result = self.gate(GUARD_TEST_DOC_EXIT="19")
+        result = self.gate()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(any(call[:2] == ["nextest", "run"] for call in self.calls()))
         self.assertFalse(any("--doc" in call for call in self.calls()))
@@ -455,7 +537,7 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
                 result = self.gate(ORBIT_WORKER_CONTEXT_REQUIRED="1", ORBIT_RUN_ID="jrun-fixture",
                                    GUARD_TEST_PROBE_WORKER_MARKER="1", **environment)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertTrue(any("--doc" in call for call in self.calls()))
+                self.assertFalse(any("--doc" in call for call in self.calls()))
 
     def summarized(self, **environment):
         summary = self.root / ".scratch/summary.json"
@@ -469,8 +551,7 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
         result, summary = self.summarized()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(summary, dict(schema_version=1, tests_run=len(self.core_dependents), executed_tests=[f"{name} a" for name in self.core_dependents], selection=dict(
-            packages=self.core_dependents, target_flags=["--lib", "--bins", "--tests"],
-            doctest_packages=self.core_dependents), command=None, base=self.base, exit_code=0, notices=[],
+            packages=self.core_dependents, target_flags=["--bins", "--tests"]), command=None, base=self.base, exit_code=0, notices=[],
             compile_ms=None, test_ms=None, package_timings=None))
         # A failing run still reports what it selected and ran.
         result, failed = self.summarized(GUARD_TEST_EXIT="17")
@@ -496,12 +577,12 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
         result, summary = self.summarized(**timed)
         self.assertEqual(result.returncode, 0, result.stderr)
         assert_phase_sums(self, summary)
-        self.assertEqual(summary["compile_ms"], 1100)
-        self.assertEqual(summary["test_ms"], 150)
+        self.assertEqual(summary["compile_ms"], 1000)
+        self.assertEqual(summary["test_ms"], 100)
         self.assertEqual(summary["package_timings"], [
-            dict(package="orbit-cli", compile_ms=150, test_ms=40),
+            dict(package="orbit-cli", compile_ms=100, test_ms=10),
             dict(package="orbit-cmd", compile_ms=200, test_ms=20),
-            dict(package="orbit-core", compile_ms=350, test_ms=50),
+            dict(package="orbit-core", compile_ms=300, test_ms=30),
             dict(package="orbit-web", compile_ms=400, test_ms=40),
         ])
         # A failing run still reports the timings of the tests it did run.
@@ -524,51 +605,34 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
         self.assertTrue(all(entry["test_ms"] is None for entry in fallback["package_timings"]))
         self.assertEqual(sum(entry["compile_ms"] for entry in fallback["package_timings"]), fallback["compile_ms"])
 
-    def test_cargo_fallback_keeps_libtest_time_when_doctests_follow(self):
+    def test_cargo_fallback_reports_libtest_time_only(self):
         # cargo test cannot attribute its libtest time to a package, so no row
-        # claims it. The doctests that follow are still per package, and they
-        # add to the total without replacing the libtest time.
+        # claims it. Doctests are disabled, so nothing follows to add to it.
         self.touch_core()
         directory = str(self.root / "target" / "cargo-timings")
         result, summary = self.summarized(GUARD_TEST_NO_NEXTEST="1", GUARD_TEST_TIMINGS="1",
                                           GUARD_TEST_TIMING_DIR=directory)
         self.assertEqual(result.returncode, 0, result.stderr)
         assert_phase_sums(self, summary)
-        # 50 ms of libtest runtime, plus 30 ms (orbit-cli) and 20 ms (orbit-core) of doctests.
-        self.assertEqual(summary["test_ms"], 100)
+        # 50 ms of libtest runtime and no doctest command.
+        self.assertEqual(summary["test_ms"], 50)
         self.assertTrue(all(entry["test_ms"] is None for entry in summary["package_timings"]))
+        self.assertFalse(any("--doc" in call for call in self.calls()))
 
-    def test_doctest_target_names_resolve_to_package_rows(self):
-        metadata = json.loads(self.metadata.read_text())
-        for package in metadata["packages"]:
-            if package["name"] == "orbit-cli":
-                package["targets"][0]["name"] = "custom_documentation"
-                manifest = Path(package["manifest_path"])
-                manifest.write_text(manifest.read_text() + '\n[lib]\nname = "custom_documentation"\n')
-            elif package["name"] == "orbit-tools":
-                # Underscores in package names are valid; replacing them with
-                # hyphens would assign this duration to a different identity.
-                package["name"] = "orbit_tools"
-        self.metadata.write_text(json.dumps(metadata))
-        selected = ["orbit-cli", "orbit-core", "orbit_tools"]
-        for no_report in ("", "1"):
-            with self.subTest(doctest_compile_report=not bool(no_report)):
-                result, summary = self.summarized(
-                    ORBIT_VALIDATION_SELECTION=json.dumps(dict(packages=selected)),
-                    GUARD_TEST_TIMINGS="1", GUARD_TEST_TIMING_DIR=str(self.root / "target/cargo-timings"),
-                    GUARD_TEST_DOC_NO_REPORT=no_report)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                assert_phase_sums(self, summary)
-                self.assertEqual(summary["package_timings"], [
-                    dict(package="orbit-cli", compile_ms=130 if no_report else 150, test_ms=40),
-                    dict(package="orbit-core", compile_ms=330 if no_report else 350, test_ms=50),
-                    dict(package="orbit_tools", compile_ms=130 if no_report else 150, test_ms=50),
-                ])
+    def test_selection_carries_no_doctest_packages(self):
+        # Doctests are disabled: the selection has no doctest packages and the
+        # gate never invokes `cargo test --doc`.
+        self.touch_core()
+        result, summary = self.summarized()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("doctest_packages", summary["selection"])
+        self.assertFalse(any("--doc" in call for call in self.calls())
+                         )
 
     def test_summary_records_what_a_deferral_handoff_derives_from(self):
         # [ORB-15516] Orbit derives an implementer's deferred-sandbox record
         # from the summary: the gate's command, its base, its final exit
-        # status (doctests included) and every notice its tests printed.
+        # status and every notice its tests printed.
         self.touch_core()
         notice = "DEFERRED: bubblewrap unavailable: fixture: No permissions to create new namespace"
         result, summary = self.summarized(ORBIT_VALIDATION_GATE="make ci-test-affected",
@@ -576,7 +640,7 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((summary["command"], summary["base"], summary["exit_code"], summary["notices"]),
                          ("make ci-test-affected", self.base, 0, [notice]))
-        result, failed = self.summarized(GUARD_TEST_NOTICE=notice, GUARD_TEST_DOC_EXIT="19")
+        result, failed = self.summarized(GUARD_TEST_NOTICE=notice, GUARD_TEST_EXIT="19")
         self.assertEqual(result.returncode, 19, result.stderr)
         self.assertEqual((failed["exit_code"], failed["notices"]), (19, [notice]))
         result, explicit = self.summarized(CI_TEST_BASE="agent-main")
@@ -611,8 +675,8 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
 
     def test_a_failing_tests_selection_replays_only_those_tests(self):
         # [ORB-15328] A base replay of a failed candidate's tests builds only
-        # the packages their binary ids name, filters to those tests, skips
-        # doctests, and still reports the selection it was handed.
+        # the packages their binary ids name, filters to those tests,
+        # and still reports the selection it was handed.
         self.touch_core()
         _, candidate = self.summarized()
         tests = ["orbit-core::runtime suite::broken", "orbit-cli suite::other"]
@@ -655,7 +719,7 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
         result, replay = self.summarized(ORBIT_VALIDATION_SELECTION=json.dumps(bare), GUARD_TEST_NO_NEXTEST="1")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(replay["selection"], bare)
-        [run] = [call for call in self.calls() if call[:1] == ["test"] and "--doc" not in call]
+        [run] = [call for call in self.calls() if call[:1] == ["test"]]
         self.assertEqual([run[index + 1] for index, argument in enumerate(run) if argument == "-p"],
                          self.core_dependents)
         self.assertEqual(run[run.index("--"):], ["--", "--exact", "suite::broken", "--test-threads", "1"])
@@ -875,6 +939,7 @@ class ObservedPipeDrainTests(unittest.TestCase):
                         "import os, signal; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
                         "os.write(1, b'ready\\n'); signal.pause()"], os.environ)
                 except SystemExit as caught:
+                    (root / "child.pid").unlink(missing_ok=True)
                     (root / "result.json").write_text(json.dumps({
                         "code": caught.code, "returncode": children[0].poll(),
                         "signal_restored": signal.getsignal(signal.SIGTERM) == previous}))
@@ -893,18 +958,7 @@ class ObservedPipeDrainTests(unittest.TestCase):
                 self.assertEqual(result, {"code": 128 + signal.SIGTERM,
                                           "returncode": -signal.SIGKILL, "signal_restored": True})
             finally:
-                # A helper that exited early may still have a live child in
-                # its separate session. Clean that session regardless of the
-                # helper's status before discarding its PID record.
-                pid_path = root / "child.pid"
-                if pid_path.exists():
-                    try:
-                        os.killpg(int(pid_path.read_text()), signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                if proc.poll() is None:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                    proc.communicate()
+                stop_owned_helper(proc, [root / "child.pid"])
 
     def test_relay_failures_stop_backpressured_child_and_pipe_holding_grandchild(self):
         scratch = SCRIPTS.parent / ".orbit" / "tmp"
@@ -973,7 +1027,7 @@ class ObservedPipeDrainTests(unittest.TestCase):
                 children = []
                 real_popen = subprocess.Popen
                 def recording_popen(*args, **kwargs):
-                    kwargs["pass_fds"] = (ack_read, ready_write)
+                    kwargs["pass_fds"] = tuple(kwargs.get("pass_fds") or ()) + (ack_read, ready_write)
                     child = real_popen(*args, **kwargs)
                     children.append(child)
                     (root / "child.pid").write_text(str(child.pid))
@@ -1019,6 +1073,8 @@ class ObservedPipeDrainTests(unittest.TestCase):
                     grandchild_pid = int((root / "grandchild.pid").read_text())
                     reaped, status = os.waitpid(grandchild_pid, 0)
                     result["grandchild_killed"] = reaped == grandchild_pid and os.waitstatus_to_exitcode(status) == -signal.SIGKILL
+                for name in ("child.pid", "grandchild.pid"):
+                    (root / name).unlink(missing_ok=True)
                 (root / "result.json").write_text(json.dumps(result))
                 # Restore real streams before Python's final flush.
                 sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
@@ -1034,28 +1090,7 @@ class ObservedPipeDrainTests(unittest.TestCase):
                     try:
                         stdout, stderr = proc.communicate(timeout=self.DEADLINE_SECONDS)
                     except subprocess.TimeoutExpired:
-                        # The child's session is separate from the helper's.
-                        # Clean both before reporting a regression; this timer
-                        # is independent of the measured propagation latency.
-                        for pid_path in (root / "child.pid", root / "grandchild.pid"):
-                            if pid_path.exists():
-                                try:
-                                    os.killpg(int(pid_path.read_text()), signal.SIGKILL)
-                                except ProcessLookupError:
-                                    # The pre-repair implementation left the
-                                    # child in the helper's group. Kill it by
-                                    # PID so the helper can still reap it.
-                                    try:
-                                        os.kill(int(pid_path.read_text()), signal.SIGKILL)
-                                    except ProcessLookupError:
-                                        pass
-                        # Killing the child lets even the broken implementation
-                        # finish joining and the helper reap its grandchild.
-                        try:
-                            proc.communicate(timeout=self.DEADLINE_SECONDS)
-                        except subprocess.TimeoutExpired:
-                            os.killpg(proc.pid, signal.SIGKILL)
-                            proc.communicate()
+                        stop_owned_helper(proc, [root / "child.pid", root / "grandchild.pid"])
                         self.fail("run_observed hung after a relay failure with a full pipe")
                     self.assertEqual(proc.returncode, 0, (stdout + stderr).decode(errors="replace"))
                     result = json.loads((root / "result.json").read_text())
@@ -1142,6 +1177,7 @@ class ObservedPipeDrainTests(unittest.TestCase):
                 return child
             module.subprocess.Popen = recording_popen
             code, output = module.run_observed([sys.executable, "-u", sys.argv[2]], os.environ)
+            Path(sys.argv[3]).with_suffix(".pid").unlink(missing_ok=True)
             Path(sys.argv[3]).write_text(json.dumps({"exit_code": code, "output": output}))
         ''').lstrip("\n"))
         proc = subprocess.Popen(
@@ -1150,22 +1186,7 @@ class ObservedPipeDrainTests(unittest.TestCase):
         try:
             stdout, stderr = proc.communicate(timeout=self.DEADLINE_SECONDS)
         except subprocess.TimeoutExpired:
-            pid_path = result_path.with_suffix(".pid")
-            if pid_path.exists():
-                pid = int(pid_path.read_text())
-                try:
-                    os.killpg(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    try:
-                        os.kill(pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-            # Allow the helper to reap the separate child session first.
-            try:
-                proc.communicate(timeout=self.DEADLINE_SECONDS)
-            except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
-                proc.communicate()
+            stop_owned_helper(proc, [result_path.with_suffix(".pid")])
             self.fail("run_observed blocked past its deadline on a partial stdout line "
                       "while stderr held more than a pipe of data")
         self.assertEqual(proc.returncode, 0, stderr.decode("utf-8", errors="replace"))
@@ -1193,6 +1214,222 @@ class ObservedPipeDrainTests(unittest.TestCase):
         self.assertIn("STDERR_MARK|", relayed_err)
         self.assertIn("STDERR_END", relayed_err)
         self.assertNotIn("PARTIAL_STDOUT|", relayed_err)
+
+    def test_reaped_leader_is_not_signaled_after_its_group_id_is_released(self):
+        """A group signal after wait must still name the original reservation.
+
+        The modeled command kills its group; its former anchor is already
+        reaped. Only the supervisor's unreaped leader can reserve the ID.
+        No process is started and no ID is reused.
+        """
+        import importlib.util
+        from types import SimpleNamespace
+
+        spec = importlib.util.spec_from_file_location(
+            "ci_test_affected_ownership", SCRIPTS / "ci-test-affected.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        state = {
+            "reserved": True, "owner": "original", "anchor_alive": False,
+            "leader_unreaped": True, "pid": 4242,
+        }
+        signals = []
+        foreign = []
+
+        class Pipe:
+            def __init__(self, line):
+                self.line = line
+
+            def readline(self):
+                line, self.line = self.line, b""
+                return line
+
+            def close(self):
+                return None
+
+        class Process:
+            def __init__(self):
+                self.pid = state["pid"]
+                self.args = ["observed"]
+                self.returncode = None
+                self.stdout = Pipe(b"line\n")
+                self.stderr = Pipe(b"")
+
+            def wait(self, timeout=None):
+                self.returncode = 0
+                state["leader_unreaped"] = False
+                if not state["anchor_alive"]:
+                    state["reserved"] = False
+                    state["owner"] = "replacement"
+                return 0
+
+            def kill(self):
+                if not state["leader_unreaped"]:
+                    foreign.append(("kill", self.pid, state["owner"]))
+                self.returncode = -signal.SIGKILL
+                state["leader_unreaped"] = False
+
+        def fake_fork():
+            # Model the command killing its group and init reaping the anchor
+            # before cleanup, while the leader is still our unreaped child.
+            state["anchor_alive"] = False
+            return 1
+
+        def fake_killpg(pid, sig):
+            owned = state["reserved"] and pid == state["pid"] and state["owner"] == "original"
+            record = (pid, sig, state["owner"], state["anchor_alive"], state["leader_unreaped"])
+            if owned:
+                signals.append(record)
+            else:
+                foreign.append(record)
+            if sig == signal.SIGKILL:
+                state["anchor_alive"] = False
+                state["reserved"] = False
+                state["owner"] = "released"
+
+        def fake_popen(*args, **kwargs):
+            preexec = kwargs.get("preexec_fn")
+            if preexec is not None:
+                preexec()
+            return Process()
+
+        next_fd = 100
+        opened = set()
+
+        def fake_pipe():
+            nonlocal next_fd
+            read_fd, write_fd = next_fd, next_fd + 1
+            next_fd += 2
+            opened.update((read_fd, write_fd))
+            return read_fd, write_fd
+
+        def fake_close(fd):
+            opened.discard(fd)
+
+        class Relay:
+            def write(self, raw):
+                raise OSError("injected relay failure")
+
+            def flush(self):
+                return None
+
+        class Sink:
+            def write(self, raw):
+                return len(raw)
+
+            def flush(self):
+                return None
+
+        originals = {
+            "fork": module.os.fork,
+            "killpg": module.os.killpg,
+            "pipe": module.os.pipe,
+            "close": module.os.close,
+            "set_inheritable": module.os.set_inheritable,
+            "Popen": module.subprocess.Popen,
+            "stdout": module.sys.stdout,
+            "stderr": module.sys.stderr,
+        }
+        module.os.fork = fake_fork
+        module.os.killpg = fake_killpg
+        module.os.pipe = fake_pipe
+        module.os.close = fake_close
+        module.os.set_inheritable = lambda fd, inheritable: None
+        module.subprocess.Popen = fake_popen
+        module.sys.stdout = SimpleNamespace(buffer=Relay(), write=lambda text: None, flush=lambda: None)
+        module.sys.stderr = SimpleNamespace(buffer=Sink(), write=lambda text: None, flush=lambda: None)
+        try:
+            with self.assertRaises(OSError) as caught:
+                module.run_observed(["observed"], {})
+        finally:
+            module.os.fork = originals["fork"]
+            module.os.killpg = originals["killpg"]
+            module.os.pipe = originals["pipe"]
+            module.os.close = originals["close"]
+            module.os.set_inheritable = originals["set_inheritable"]
+            module.subprocess.Popen = originals["Popen"]
+            module.sys.stdout = originals["stdout"]
+            module.sys.stderr = originals["stderr"]
+        self.assertEqual(str(caught.exception), "injected relay failure")
+        self.assertEqual(signals, [
+            (4242, signal.SIGTERM, "original", False, True),
+            (4242, signal.SIGKILL, "original", False, True),
+        ])
+        self.assertEqual(foreign, [])
+
+    @unittest.skipUnless(sys.platform == "linux", "requires waitid WNOWAIT")
+    def test_self_killed_group_keeps_unreaped_leader_until_escalation(self):
+        import importlib.util
+        from types import SimpleNamespace
+
+        spec = importlib.util.spec_from_file_location(
+            "ci_test_affected_self_kill", SCRIPTS / "ci-test-affected.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        real_popen = subprocess.Popen
+        children = []
+        signals = []
+        original = BrokenPipeError("relay failure after group death")
+
+        def recording_popen(*args, **kwargs):
+            child = real_popen(*args, **kwargs)
+            children.append(child)
+            return child
+
+        class Relay:
+            def write(self, raw):
+                # Observe exit without reaping; the command has killed its
+                # whole group before the supervisor starts cleanup.
+                os.waitid(os.P_PID, children[0].pid, os.WEXITED | os.WNOWAIT)
+                raise original
+
+            def flush(self):
+                pass
+
+        class Sink:
+            def write(self, raw):
+                return len(raw)
+
+            def flush(self):
+                pass
+
+        def intercepted_killpg(pid, sig):
+            # This succeeds only while the leader remains our unreaped child.
+            info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
+            signals.append((sig, info.si_pid))
+
+        with mock.patch.object(module.subprocess, "Popen", side_effect=recording_popen), \
+             mock.patch.object(module.os, "killpg", side_effect=intercepted_killpg), \
+             mock.patch.object(module.sys, "stdout", SimpleNamespace(buffer=Relay())), \
+             mock.patch.object(module.sys, "stderr", SimpleNamespace(buffer=Sink())):
+            with self.assertRaises(BrokenPipeError) as caught:
+                module.run_observed([sys.executable, "-c",
+                    "import os, signal; os.write(1, b'ready\\n'); "
+                    "os.killpg(os.getpgrp(), signal.SIGKILL)"], os.environ)
+        self.assertIs(caught.exception, original)
+        self.assertEqual(signals, [(signal.SIGTERM, children[0].pid),
+                                   (signal.SIGKILL, children[0].pid)])
+        self.assertEqual(children[0].returncode, -signal.SIGKILL)
+
+    def test_fixture_cleanup_terms_live_helper_and_leaves_reaped_alone(self):
+        """Cleanup signals only the live helper itself, via SIGTERM."""
+        reaped = mock.Mock()
+        reaped.returncode = 0
+        reaped.pid = 4242
+        stop_owned_helper(reaped, [])
+        reaped.send_signal.assert_not_called()
+        reaped.communicate.assert_not_called()
+        live = mock.Mock()
+        live.returncode = None
+        live.pid = 4242
+        live.communicate.return_value = (b"", b"")
+        with tempfile.TemporaryDirectory() as temporary:
+            pid_path = Path(temporary) / "child.pid"
+            pid_path.write_text("5252")
+            stop_owned_helper(live, [pid_path])
+        live.send_signal.assert_called_once_with(signal.SIGTERM)
+        live.communicate.assert_called_once_with(timeout=5)
+
 
 
 if __name__ == "__main__":

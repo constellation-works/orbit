@@ -62,7 +62,7 @@ pub(crate) fn pilot_blocker_task_ids(assessment: &Value) -> BTreeSet<String> {
         .flatten()
         .filter_map(Value::as_str)
         .flat_map(|text| text.split(|character| !task_id_character(character)))
-        .filter(|id| id.starts_with("ORB-") && is_valid_orb_task_id(id))
+        .filter(|id| is_valid_orb_task_id(id))
         .map(str::to_string)
         .collect()
 }
@@ -198,7 +198,7 @@ impl OrbitRuntime {
     /// approval output. A newer assessment replaces these warnings, including
     /// a clean assessment; ordinary comments do not supersede the receipt.
     pub fn task_pilot_blocker_warnings(&self, id: &str) -> Result<Vec<String>, OrbitError> {
-        let comments = self.get_task_comments(id)?;
+        let comments = self.get_task_pilot_comments(id)?;
         for (_, receipt) in super::pilot_receipts(&comments) {
             // A malformed id is not an applied receipt. An unreadable body is
             // skipped so an older readable receipt can still supply warnings.

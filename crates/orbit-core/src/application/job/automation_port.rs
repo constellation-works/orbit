@@ -17,7 +17,8 @@ use crate::runtime::engine::crew::BundleCrews;
 /// Automation reads job code calls, implemented by `automation`.
 pub(in crate::application) trait JobAutomationPort {
     /// Whether `run`, starting with `input`, may name tasks whose crews
-    /// differ: only the live task-pilot preparation attempt's own run may.
+    /// differ: only the live task-pilot preparation run and task-auto's
+    /// singleton dispatcher partition before task work starts.
     fn run_bundle_crews(&self, run: &JobRun, input: &Value) -> BundleCrews;
 
     /// The repository this workspace's source names, or `None` when it

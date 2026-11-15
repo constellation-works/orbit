@@ -32,7 +32,7 @@ template:
       list them with
       `orbit tool run orbit.task.show --input '{"id":"<id>","field":"artifacts","model":"<agent-family>"}'`
       and fetch the rotation record with
-      `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"reviewed-modules.json","model":"<agent-family>"}'`
+      `orbit tool run orbit.task.artifact --input '{"action":"get","id":"<id>","path":"reviewed-modules.json","model":"<agent-family>"}'`
       only when that listing names `reviewed-modules.json`.
       Search existing coverage with
       `orbit tool run orbit.search --input '{"query":"<distinctive symptom, symbol, or file terms>","kind":"task","all":true,"model":"<agent-family>"}'`
@@ -174,8 +174,9 @@ template:
     - documentation and skill claims: for each documentation or skill sentence
       in the reviewed range that states a limit, default, config key, flag,
       ordering, or error behavior, open the source it describes and confirm
-      the sentence; for each behavior change, search `docs/`, `website/`, and
-      `crates/orbit-core/assets/skills/` for the old claim.
+      the sentence; for each behavior change, use tracked files to locate this
+      repository's documentation, website, and shipped-skill directories, then
+      search them for the old claim.
 
     If full reading of a selected module cannot be met, do not record that
     module as reviewed and do not claim a clean no-op for it: return
@@ -208,7 +209,7 @@ template:
     line that looks wrong but is guarded elsewhere is not a finding. Search
     open Orbit tasks tagged `code-review` before filing; skip duplicates.
     Give each confirmed finding a severity — `critical`, `high`,
-    `medium`, `low` or `nit`, by the rubric under the classification below —
+    `medium`, `low` or `nit`, by the Severity rubric in the installed `orbit` skill's `references/task-fields.md` —
     used as its `regression.severity` and as the filed task's priority (`low`
     for `nit`), file:line evidence at the pinned SHA, the `code-review` tag,
     and its module's ID. A grouped cleanup link takes the highest grouped
@@ -239,34 +240,10 @@ template:
     `severity` is how much the defect matters, on the one scale findings and
     regression links share; a new link without it is refused. Rate the worst
     real impact the evidence shows, not the size of the fix, and take the lower
-    level when torn:
-    - `critical`: data loss or corruption, a security hole, every drain halted, or silently wrong results (a migration drops task history).
-    - `high`: a core workflow broken with no workaround (every `ui` delivery fails at handoff).
-    - `medium`: a feature broken or wrong in a real path, with a workaround (`--json` drops a field the plain output shows).
-    - `low`: an edge case, a misleading message or a minor UX defect (an error names the wrong flag).
-    - `nit`: wording or doc drift, cosmetic, no behavior impact (a stale sentence in a reference doc).
-    Choose `unclassified` rather than guess. `nature` is what kind of regression
-    the link records:
-    - `broke_existing`: the culprit broke behavior that worked before it landed.
-    - `defect_in_new`: the defect is in code the culprit itself introduced.
-    - `incomplete`: the culprit shipped without part of what its task required.
-    - `merge_reintroduced`: a merge restored code or assets an earlier change had removed.
-    - `contract_drift`: docs, schemas or a contract drifted from the behavior the culprit shipped.
-    - `unclassified`: the evidence does not settle the nature.
-    `escape` is why the delivery gates missed it. Inspect the tests and gate
-    selection at the culprit commit: use `no_test` when no test exercises the
-    broken behavior there, and `test_not_selected` when a covering test exists
-    but the culprit's gates did not run it. Use `unclassified` only when the
-    evidence does not settle the escape, and state the unresolved evidence in
-    the finding's description. Mere visibility in the diff is not evidence
-    for `review_missed` when no test exercises the broken behavior.
-    - `no_test`: no test exercised the broken behavior at the culprit commit.
-    - `test_not_selected`: a covering test existed at the culprit commit but its gates did not run it.
-    - `platform_only`: it shows only on a platform or host the gates did not exercise.
-    - `review_missed`: it was visible in the diff and review did not flag it.
-    - `spec_ambiguous`: the task or spec left the expected behavior open to the shipped reading.
-    - `nondeterministic`: it depends on timing, ordering or environment and passed when gated.
-    - `unclassified`: the evidence does not settle the escape; state why in the finding.
+    level when torn. Choose `unclassified` rather than guess. The scale and the
+    `nature` and `escape` values are the Severity rubric and `regression_from`
+    fields in the installed `orbit` skill's `references/task-fields.md`; use only
+    those values and its guidance for choosing the escape.
 
     ## Findings that narrow a shared invariant
 
@@ -287,7 +264,7 @@ template:
 
     On every completed run, write the rotation record to
     `.orbit/tmp/reviewed-modules.json` and attach it with
-    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/reviewed-modules.json","path":"reviewed-modules.json","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this task ID>","source_path":".orbit/tmp/reviewed-modules.json","path":"reviewed-modules.json","model":"<agent-family>"}'`.
     Its shape is
     `{"schema_version":1,"ref":"<integration branch>","pinned_sha":"<full 40-character commit SHA>","modules":[{"id":"<module ID>","selectors":["<selector>"],"line_count":123,"filed_finding_ids":["<filed task ID>"]}],"exclusions":[{"path":"<path>","reason":"<reason>"}]}`.
     List exactly the modules this run fully reviewed (both selected modules,
@@ -305,7 +282,7 @@ template:
     `{"schema_version":1,"ref":"<integration branch>","cursor":"<full 40-character commit SHA>"}`
     to a gitignored scratch file inside the checkout (for example
     `.orbit/tmp/sweep-cursor.json`) and attach it with
-    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/sweep-cursor.json","path":"sweep-cursor.json","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this task ID>","source_path":".orbit/tmp/sweep-cursor.json","path":"sweep-cursor.json","model":"<agent-family>"}'`.
     `orbit tool show <tool.name>` prints the tool's schema.
     Write it on every completed run, including a run with no confirmed
     findings: the commit it names is the pinned SHA this run examined, and a
@@ -334,8 +311,8 @@ template:
   required_tools:
   - orbit.search
   - orbit.task.add
-  - orbit.task.artifact.get
-  - orbit.task.artifact.put
+  - orbit.task.artifact:get
+  - orbit.task.artifact:put
   - orbit.task.list
   - orbit.task.show
   priority: medium

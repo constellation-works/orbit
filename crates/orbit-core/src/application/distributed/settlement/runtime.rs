@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use orbit_common::{OrbitError, RemoteToolCode};
 use orbit_store::contracts::{ClaimMutation, LocalPullPhase};
+use orbit_types::identity::same_crew_family;
 use orbit_types::workflow::{
     CrewExclusion, CrewExclusionSource, PullAuthExclusion, PullCrewPreflight,
 };
@@ -295,8 +296,9 @@ impl crate::OrbitRuntime {
             // excluded; [ORB-17288] of that provider account, that is: a crew
             // that sets `env` is its own account and alone excluded, and a
             // crew without one excludes the provider's other crews without
-            // one. Capacity stays on the named crew: another model may
-            // still have room. Provider labels are parsed, so `anthropic`
+            // one. Capacity stays on the named crew's family (its base and
+            // `@<effort>` references [ORB-20400]): another model may still
+            // have room. Provider labels are parsed, so `anthropic`
             // groups with `claude`. [ORB-14697] A usage limit excludes nothing
             // here: the leaf recorded it in this host's provider-limit store,
             // whose reading excludes the provider's crews below until it
@@ -436,9 +438,9 @@ impl crate::OrbitRuntime {
             }
         }
         let timed = |crew: &str| {
-            excluded
-                .iter()
-                .any(|exclusion| exclusion.crew == crew && exclusion.until.is_some())
+            excluded.iter().any(|exclusion| {
+                same_crew_family(&exclusion.crew, crew) && exclusion.until.is_some()
+            })
         };
         // The crews the window can run once every timed exclusion lifts.
         // Review is not delivery admission, so a provider limit does not
@@ -449,9 +451,9 @@ impl crate::OrbitRuntime {
                 .runnable
                 .iter()
                 .filter(|crew| {
-                    !excluded
-                        .iter()
-                        .any(|exclusion| &exclusion.crew == *crew && exclusion.until.is_none())
+                    !excluded.iter().any(|exclusion| {
+                        same_crew_family(&exclusion.crew, crew) && exclusion.until.is_none()
+                    })
                 })
                 .cloned()
                 .collect()
@@ -466,16 +468,11 @@ impl crate::OrbitRuntime {
             .and_then(|run| run.input)
             .unwrap_or(serde_json::Value::Null);
         let allowlist = self.crew_allowlist_from_input(&input)?;
-        let unlimited = reviewable.as_ref().map(|crews| {
-            crews
-                .iter()
-                .filter(|crew| !timed(crew))
-                .cloned()
-                .collect::<Vec<_>>()
-        });
-        let runnable = match &allowlist {
-            None => unlimited,
-            Some(allowlist) => Some(match &unlimited {
+        // Use the same effective provider/model/account authority for diagnostics
+        // and admission, including effort-qualified references.
+        let permitted = match &allowlist {
+            None => reviewable.clone(),
+            Some(allowlist) => Some(match &reviewable {
                 Some(crews) => crews
                     .iter()
                     .filter(|crew| self.crew_allowlist_permits(allowlist, crew))
@@ -484,11 +481,18 @@ impl crate::OrbitRuntime {
                 None => allowlist
                     .names()
                     .into_iter()
-                    .filter(|crew| !excluded.iter().any(|exclusion| exclusion.crew == *crew))
+                    .filter(|crew| {
+                        !excluded.iter().any(|exclusion| {
+                            same_crew_family(&exclusion.crew, crew) && exclusion.until.is_none()
+                        })
+                    })
                     .map(ToOwned::to_owned)
                     .collect(),
             }),
         };
+        let runnable = permitted
+            .as_ref()
+            .map(|crews| crews.iter().filter(|crew| !timed(crew)).cloned().collect());
         // [ORB-17773] Per-crew weekly pressure from this host's own
         // readings, recomputed each pass like the limit gate above. Under
         // `static` nothing is reported, so admission and offer order are
@@ -524,6 +528,7 @@ impl crate::OrbitRuntime {
                     .collect()
             }),
             reviewable,
+            permitted,
             default_crew,
             excluded,
             auth_exclusions,
@@ -568,7 +573,7 @@ impl crate::OrbitRuntime {
             .stores()
             .jobs()
             .get_job_run(leaf)?
-            .map(|run| run.finished_at.or(run.started_at).unwrap_or(run.created_at)))
+            .map(|run| run.recency_at()))
     }
 
     /// `failed` plus every configured crew on the same provider account:
@@ -576,14 +581,18 @@ impl crate::OrbitRuntime {
     /// as a crew that sets `env` is its own account, that shares `failed`'s
     /// account. A crew with `env` is alone on its account; one without
     /// shares the provider's default login with the others without. An
-    /// unparsable or unknown crew stays a single name.
+    /// unparsable or unknown crew stays a single name. [ORB-20400] The window
+    /// matches each name by crew family, so excluding `opus` also keeps every
+    /// `opus@<effort>` reference off the failed account.
     fn crews_sharing_account(&self, failed: &str) -> Vec<String> {
         let registry = self.context.settings().crews();
-        let Some((provider, account)) = registry.get(failed).and_then(|crew| {
-            orbit_types::workflow::Provider::parse(&crew.assignment.provider)
-                .ok()
-                .map(|provider| (provider, crew.account()))
-        }) else {
+        let Some((provider, account)) = orbit_types::identity::find_crew(failed, registry)
+            .and_then(|crew| {
+                orbit_types::workflow::Provider::parse(&crew.assignment.provider)
+                    .ok()
+                    .map(|provider| (provider, crew.account().map(ToOwned::to_owned)))
+            })
+        else {
             return vec![failed.to_string()];
         };
         let mut names = registry
@@ -591,7 +600,7 @@ impl crate::OrbitRuntime {
             .filter(|crew| {
                 orbit_types::workflow::Provider::parse(&crew.assignment.provider).ok()
                     == Some(provider)
-                    && crew.account() == account
+                    && crew.account() == account.as_deref()
             })
             .map(|crew| crew.name.clone())
             .collect::<Vec<_>>();
@@ -664,6 +673,13 @@ pub(crate) fn is_delivery_refusal_code(code: Option<&str>) -> bool {
 }
 
 pub(crate) fn is_owner_refusal(error: &OrbitError) -> bool {
+    // A preserved JSON-RPC answer (`-32602` included) stays an owner-side
+    // failure for settlement, reconcile and bind pacing, as it was when it
+    // surfaced as an unreachable destination. Only the late-effort classifier
+    // reads it as structured data.
+    if error.is_json_rpc_refusal() {
+        return false;
+    }
     matches!(error, OrbitError::DeliveryRefused { .. })
         || matches!(error, OrbitError::RemoteTool { code, .. }
             if orbit_types::workflow::DeliveryRefusal::from_error_code(code.as_str()).is_some())

@@ -2,47 +2,23 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
 use orbit_types::task::{
-    DefectSeverity, RegressionClassification, TaskComplexity, TaskOrigin, TaskStatus,
-    is_no_diff_expected,
+    DefectSeverity, RegressionClassification, TaskComplexity, TaskStatus, is_no_diff_expected,
 };
 use orbit_types::workflow::ReviewVerdict;
+use serde::{Deserialize, Serialize};
 
 use super::super::attribution::{Charge, Credit};
 use super::super::records::Cause;
 use super::super::roles::pilot_warnings::Warnings;
 use super::super::roles::pilots::Graded;
+use super::invocations::AgentInvocationFacts;
+use super::launches::AgentLaunchFacts;
 use crate::application::task::FindingVerdict;
 
 /// How far back the scan reads. Every window, `all` included, fits inside it.
 pub(in crate::application::agents) const SCAN_DAYS: i64 = 90;
-/// The jobs whose runs implement a task: the PR and local delivery leaves,
-/// owned or claimed.
-pub(super) const IMPLEMENTATION_JOBS: &[&str] = &[
-    "task_pr_pipeline",
-    "task_local_pipeline",
-    "task_claimed_pr_pipeline",
-    "task_claimed_local_pipeline",
-];
-/// Leads of the review gate's settlement comment, before the attempt id.
-pub(super) const SETTLEMENT_LEADS: &[&str] = &[
-    "before-PR review settled attempt `",
-    "before-landing review settled attempt `",
-];
-/// The settlement comment's reviewer line, before the crew name.
-pub(super) const REVIEWER_LINE: &str = "- Reviewer: crew `";
-/// The settlement comment's line naming the reviewed implementation commit.
-pub(super) const IMPLEMENTATION_LINE: &str = "- Implementation: `";
-/// The settlement comment's line naming the final candidate commit.
-pub(super) const FINAL_CANDIDATE_LINE: &str = "- Final candidate: `";
-/// The settlement comment's line with the reviewer's runtime in seconds.
-pub(super) const RUNTIME_LINE: &str = "- Reviewer runtime: ";
-/// A finding's sub-line naming the paths a fixed finding changed.
-pub(super) const CHANGED_LINE: &str = "- Changed: ";
-/// A finding's sub-line naming the paths an open or disposed finding cites.
-pub(super) const CITED_LINE: &str = "- Cited: ";
-
 /// A recorded occurrence that counts against some role, or against none.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Problem {
     /// The description or acceptance criteria edited after the first
     /// implementation run started; counted once per task.
@@ -52,9 +28,6 @@ pub enum Problem {
     CriteriaBlock,
     /// A final-recovery escalation whose diagnosis cites the criteria.
     CriteriaEscalation,
-    /// A confirmed task-pilot hold on an unattainable specification, counted
-    /// once per task unless its confirming event already has a spec charge.
-    PilotWarning,
     /// An implementation run after the task's first.
     RepeatRun,
     /// A `[BLOCKED]` PR a failure handoff published.
@@ -96,7 +69,6 @@ impl Problem {
             Problem::SpecEdit => "spec_edit",
             Problem::CriteriaBlock => "criteria_block",
             Problem::CriteriaEscalation => "criteria_escalation",
-            Problem::PilotWarning => "pilot_warning",
             Problem::RepeatRun => "repeat_run",
             Problem::BlockedPr => "blocked_pr",
             Problem::UnmergedPr => "unmerged_pr",
@@ -115,7 +87,7 @@ impl Problem {
     }
 
     /// Rework: a repeat run, a `[BLOCKED]` or unmerged PR, or a requeue.
-    pub fn is_rework(self) -> bool {
+    pub(crate) fn is_rework(self) -> bool {
         matches!(
             self,
             Problem::RepeatRun
@@ -128,20 +100,55 @@ impl Problem {
 
 /// Who did a piece of work: the crew and model a job run recorded, and the
 /// run. Each is `None` when nothing records it.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(in crate::application::agents) struct Runner {
     pub(in crate::application::agents) crew: Option<String>,
     pub(in crate::application::agents) model: Option<String>,
     pub(in crate::application::agents) run_id: Option<String>,
+    /// The reasoning effort a pulled attempt's follower reported on its claim
+    /// settlement, in the shared encoding (`Some(None)` is the provider
+    /// default); `None` when it reported none. Used only when the owner holds
+    /// no invocation evidence of its own for the attempt's run. Serialized in
+    /// three states: absent is `None`, `null` is `Some(None)`, a name is
+    /// `Some(Some(name))`; a derived `Option<Option<_>>` writes both `None`
+    /// and `Some(None)` as `null` and the stored-facts cache would lose the
+    /// provider default on reload [ORB-24640].
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "reported_effort_three_state"
+    )]
+    pub(in crate::application::agents) reported_effort: Option<Option<String>>,
+}
+
+/// Deserialize a present reported effort, `null` included, as `Some`; an
+/// absent one stays `None` through `#[serde(default)]`. The same three-state
+/// contract as the claim settlement's reported effort.
+fn reported_effort_three_state<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 /// One implementation attempt: a run span from task history, and the job
 /// run that worked it when one is found.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::application::agents) struct Attempt {
     pub(in crate::application::agents) start: DateTime<Utc>,
     pub(in crate::application::agents) end: Option<DateTime<Utc>>,
     pub(in crate::application::agents) runner: Runner,
+    /// Whether a job worked the attempt: a local implementation run matched
+    /// it, or a claim's `pulled_by` opened it on another machine. An attempt
+    /// an interactive session opened by moving the task has neither.
+    pub(in crate::application::agents) job: bool,
+    /// Whether a local implementation run matched it, so this machine
+    /// holds the run's own records.
+    pub(in crate::application::agents) local: bool,
+    /// Whether the attempt is an implementer unit. `false` only when its
+    /// local run provably launched no implementer (see
+    /// [`super::implementer`]).
+    pub(in crate::application::agents) implementer: bool,
     /// The task's tags as of this attempt's start, replayed from its
     /// `tags_changed` history: a tag added later does not reclassify work
     /// already admitted.
@@ -154,10 +161,42 @@ impl Attempt {
     pub(in crate::application::agents) fn no_diff(&self) -> bool {
         is_no_diff_expected(&self.tags)
     }
+
+    /// Whether this attempt counts as implementation work: an implementer
+    /// unit that was not `no-diff-expected` work when admitted.
+    pub(in crate::application::agents) fn implements(&self) -> bool {
+        self.implementer && !self.no_diff()
+    }
+}
+
+/// How a task was executed, derived from its implementation attempts; no
+/// agent sets it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum ExecutionMode {
+    /// Its final implementation attempt (the landed one, else the latest)
+    /// was worked by a job.
+    Managed,
+    /// It reached review or done, but its final attempt had no job: the work
+    /// was done in an interactive session, which records no run telemetry.
+    Interactive,
+    /// Neither yet: not implemented, or worked interactively and not yet in
+    /// review. Counted in no execution population.
+    Unclassified,
+}
+
+impl ExecutionMode {
+    /// The mode's wire name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExecutionMode::Managed => "managed",
+            ExecutionMode::Interactive => "interactive",
+            ExecutionMode::Unclassified => "unclassified",
+        }
+    }
 }
 
 /// A problem as the task's records show it, before it has an owner.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::application::agents) struct Record {
     pub(in crate::application::agents) problem: Problem,
     pub(in crate::application::agents) at: DateTime<Utc>,
@@ -169,7 +208,7 @@ pub(in crate::application::agents) struct Record {
 }
 
 /// What a review finding's settlement records about it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(in crate::application::agents) enum FindingState {
     /// Left open: it blocks a `reject`.
     Open,
@@ -180,7 +219,7 @@ pub(in crate::application::agents) enum FindingState {
 }
 
 /// One finding of a settled review.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::application::agents) struct Finding {
     pub(in crate::application::agents) severity: String,
     pub(in crate::application::agents) state: FindingState,
@@ -191,7 +230,7 @@ pub(in crate::application::agents) struct Finding {
 }
 
 /// How the run after a `reject` turned out for the findings it left open.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(in crate::application::agents) enum RejectOutcome {
     /// No review settled after it yet.
     Pending,
@@ -207,27 +246,14 @@ pub(in crate::application::agents) enum RejectOutcome {
     },
 }
 
-/// One task's mock comparison review of record, for reviewer scoring
-/// under purpose `visual_review` (visual-review design §11.4): the
-/// reviewer's crew and each finding's verification verdict. A CONFIRMED
-/// finding scores at its verified severity; a REJECTED one counts as
-/// other rejected review findings do.
-#[derive(Debug, Clone)]
-pub(in crate::application::agents) struct VisualReviewFacts {
-    pub(in crate::application::agents) at: DateTime<Utc>,
-    pub(in crate::application::agents) reviewer_crew: Option<String>,
-    /// `(verdict, severity of record, title)` per finding: the verified
-    /// severity for a CONFIRMED finding, else the reviewer's.
-    pub(in crate::application::agents) findings: Vec<(FindingVerdict, String, String)>,
-    /// Mocks shown to the reviewer with no CONFIRMED finding at `medium`
-    /// or above on this first candidate: the implementer's credit.
-    pub(in crate::application::agents) mocks_matched: usize,
-}
-
-/// One settled review gate attempt, from its settlement comment.
-#[derive(Debug, Clone)]
+/// One settled review gate attempt, read at the task history boundary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::application::agents) struct Review {
     pub(in crate::application::agents) attempt_id: String,
+    /// The review step that produced the settlement, as invocations
+    /// record it (`review`, `landing_review`); `None` when the
+    /// settlement names no known gate.
+    pub(in crate::application::agents) activity_id: Option<String>,
     pub(in crate::application::agents) at: DateTime<Utc>,
     pub(in crate::application::agents) verdict: ReviewVerdict,
     /// The reviewer's crew and model as the settlement names them.
@@ -273,7 +299,7 @@ impl Review {
 
 /// A finding a review job filed as a `bug` task, and what finding
 /// verification decided about it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::application::agents) struct FiledFinding {
     /// The review task it was spawned from.
     pub(in crate::application::agents) filer: Option<String>,
@@ -296,16 +322,11 @@ pub(in crate::application::agents) struct RegressionLink {
     pub(in crate::application::agents) classification: RegressionClassification,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::application::agents) struct TaskFacts {
     pub(in crate::application::agents) id: String,
     pub(in crate::application::agents) title: String,
     pub(in crate::application::agents) status: TaskStatus,
-    /// The task's orchestrator attribution, when it names one.
-    pub(in crate::application::agents) orchestrator: Option<String>,
-    /// The orchestrator's model recorded when the task was created.
-    pub(in crate::application::agents) orchestrator_model: Option<String>,
-    pub(in crate::application::agents) origin: Option<TaskOrigin>,
     /// The task's tags, for task-type classification.
     pub(in crate::application::agents) tags: Vec<String>,
     /// The task's context-file selectors, for task-type classification.
@@ -320,13 +341,12 @@ pub(in crate::application::agents) struct TaskFacts {
     /// The attempt whose candidate landed: the last one started before the
     /// task was done.
     pub(in crate::application::agents) final_attempt: Option<usize>,
+    /// Managed, interactive or unclassified, from the attempts.
+    pub(in crate::application::agents) execution: ExecutionMode,
     /// When the task was last done.
     pub(in crate::application::agents) landed_at: Option<DateTime<Utc>>,
     pub(in crate::application::agents) records: Vec<Record>,
     pub(in crate::application::agents) reviews: Vec<Review>,
-    /// The mock comparison review of record (`visual/review.json`), when
-    /// this `verify-mock-ui` task has one.
-    pub(in crate::application::agents) visual_review: Option<VisualReviewFacts>,
     /// Set when the task is a finding a review job filed.
     pub(in crate::application::agents) filed: Option<FiledFinding>,
     /// How each task-pilot assessment's warnings settled.
@@ -362,18 +382,23 @@ pub(in crate::application::agents) fn filing_attempt<'a>(
 /// One scan of a workspace: every role and the attribution strip slice it.
 #[derive(Debug)]
 pub struct AgentFacts {
-    pub(in crate::application::agents) invocations:
-        Vec<orbit_store::contracts::InvocationAccountingFact>,
+    pub(in crate::application::agents) invocations: AgentInvocationFacts,
+    /// Launch records of the scan window, including launches whose
+    /// invocation never completed.
+    pub(in crate::application::agents) launches: AgentLaunchFacts,
     pub(in crate::application::agents) computed_at: DateTime<Utc>,
     pub(in crate::application::agents) tasks_scanned: usize,
     pub(in crate::application::agents) tasks: Vec<TaskFacts>,
     pub(in crate::application::agents) charges: Vec<Charge>,
     pub(in crate::application::agents) run_costs: BTreeMap<String, Option<f64>>,
     pub(in crate::application::agents) credits: Vec<Credit>,
+    /// Every typed `regression_from` link in the workspace, each observed
+    /// when its regressing task was created.
+    pub(in crate::application::agents) regressions: Vec<RegressionLink>,
     /// Lines added plus deleted from the experiment outcome's landed diff rows.
     pub(in crate::application::agents) landed_lines: BTreeMap<String, u64>,
     /// The configured task types used for comparable diff sizes.
-    pub(in crate::application::agents) performance_types: Vec<orbit_config::CrewPerformanceType>,
+    pub(in crate::application::agents) performance_types: Vec<orbit_config::TaskTypeDefinition>,
     /// Each pilot assessment of a scanned done task, graded.
     pub(in crate::application::agents) pilots: Vec<Graded>,
 }
@@ -392,7 +417,8 @@ impl AgentFacts {
 }
 
 /// A job run that implemented a task.
-pub(super) struct RunRecord {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::application::agents) struct RunRecord {
     pub(super) started_at: DateTime<Utc>,
     pub(super) finished_at: Option<DateTime<Utc>>,
     pub(super) runner: Runner,

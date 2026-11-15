@@ -93,9 +93,7 @@ A claimed leaf validates, replays sandbox deferrals and trusts baseline reruns
 against that capture, not against the follower's own lists. A refusal names
 the gate list it checked and its source. A claim from an older owner that
 captured no gates falls back to the follower's lists with a warning.
-A leftover `~/.orbit/mcp-callers.toml` or `~/.orbit/mcp-ssh-acceptance/` is
-ignored: `orbit doctor` warns; delete the files. Deny a caller by removing its
-key from `~/.ssh/authorized_keys`.
+Deny a caller by removing its key from `~/.ssh/authorized_keys`.
 
 Per-host compiler capacity is independent of drain slots. Keep the shared
 build-budget defaults (two heavy slots, four Cargo jobs) unless the operator
@@ -157,7 +155,8 @@ Tagged `no-diff-expected` tasks are claimable and hand off `NoDiff` with no
 PR; a review needs no report and runs no required validation or replay, which
 the owner accepts while its copy of the task keeps the tag, and a tagged claim
 that changes code is refused as `no_diff_expected_changed`. An ordinary claim that proves its
-implementation changes nothing may also hand off `NoDiff`. In claimed mode the implementer writes the verifier report
+implementation changes nothing may also hand off `NoDiff`. Unless it returns the
+`already_resolved` outcome below, its implementer writes the verifier report
 and its logs beneath `.orbit/tmp/` and returns `no_diff_artifacts` scratch
 references; commit imports and verifies them through the claim. Required
 ledgers, screenshots and other task artifacts use a separate
@@ -169,13 +168,31 @@ artifact paths, naming the path. Task artifacts cannot use either clean-tree
 report name or a report's declared log names, and cannot use the reserved
 `review-` namespace (any ASCII case), which only the review gate writes;
 `no_diff_artifacts` remains limited to the report and its logs. Owner mode
-uses `orbit.task.artifact.put`.
+uses `orbit.task.artifact` action `put`.
 The owner rechecks the report against its live base before authorized completion
-without a PR. A changed base or evidence requires fresh validation. When the tests that
+without a PR. A changed base or evidence requires fresh validation.
+
+The report-free alternative is the `already_resolved` outcome. When the tests that
 show the base resolves the task run only outside the agent sandbox, the
-implementer also names them as `already_resolved` `cargo test` selectors, and
-`claim_validate` replays each on the base on the claim host; a failing or empty
-replay never completes the task. A handoff may also carry `owed_criteria`:
+implementer may return `already_resolved`
+`{"selectors": ["cargo test -p <crate> --test <target> [<filter>]"]}` or
+`{"selectors": ["cargo test -p <crate> --lib [<filter>]"]}` with its
+execution summary and no `no_diff_artifacts`. Commit settles that as
+`verified_already_resolved`, embedding the selectors and summary, when neither
+clean-tree report artifact exists, and the leaf hands off `NoDiff` without a PR.
+The claim host then runs the required commands on the base and replays each
+selector outside the agent sandbox before handoff, pinning the passing logs. A
+failing replay fails the claim, as does one that runs no test or prints a skip;
+an empty selector list or a selector outside that grammar is refused before
+anything runs. A candidate that also changes the base is refused for this
+outcome. The owner accepts the checkpoint only when it names this task and its
+pinned base and its selectors still admit.
+
+Artifact-backed evidence stays authoritative. A verifier report or already-landed
+report that the implementer supplies is imported and verified first, and a
+malformed or failed report is refused rather than replaced by selectors. A
+summary alone, with neither a report nor selectors, is refused. A handoff may
+also carry `owed_criteria`:
 criteria the owner's pilot typed `post_deploy`, which only the deployed build
 can evidence. The owner refuses the settlement when its own pilot finding does
 not type each one, and otherwise lands the handoff with the task left in
@@ -242,7 +259,7 @@ returns.
   `--force` stops that drain's leaves too and returns their tasks to the
   backlog. A leaf it cannot confirm stopped keeps its claim, is listed under
   `unstopped_leaves`, and fails the command. The MCP stop
-  (`orbit.workflow.auto`, `action: "stop"`) takes the same `force`.
+  (`orbit.workflow` action `auto`, `mode: "stop"`) takes the same `force`.
   `run auto --stop --json`, the MCP stop and the dashboard's stop return one
   result: `outcome`, `pull_settlements`, and per coordinator its `run_id`,
   `job_id`, `outcome`, `remaining_children` (`run_id`, `job_name`, `phase`,
@@ -356,6 +373,60 @@ claims needs no operator capability:
 orbit run settlements --since 7d --no-reconcile --json
 ```
 
+Rows list newest first. `--no-reconcile` reports stored claim records as-is: it
+skips recovery of an interrupted coordination commit and fails instead while
+one is pending. EVIDENCE is the most specific class a settlement carried;
+claims settled before the owner recorded settlements read as `unrecorded`
+unless their release kept a class. The `--json` shape is
+`{"settlements":[{task_id, claim_id, machine_id, machine_name, drain_run_id,
+leaf_run_id, phase, last_event, settled_at, kind, evidence, failure_class,
+review_decision_pending, crew, crew_model, failed_step_id, reason,
+run_evidence, accounting}]}`.
+
+`review_decision_pending` marks a before-landing review refusal awaiting a
+recorded decision: the claim still fails and blocks the task, but failure scans
+count it separately. Older records without the flag read as false.
+
+Each settlement's `accounting` (`{outcome, counts_as_failure, reason}`) says how
+a failure scan counts it, derived from its typed kind, class, pending-decision
+flag and the leaf's recorded step code, never its reason: `outcome` is `failure`,
+`review_decision_hold` (the pending decision above), `evidence_hold`,
+`operator_cancel`, `upgrade_paused` (a `transient` settlement whose leaf recorded
+`upgrade_quiesce`: an Orbit upgrade paused it), `baseline_red` or `unrecorded`, with `counts_as_failure`
+(true for `failure`, `baseline_red` and `unrecorded`) and a `reason` token
+naming the deciding evidence, such as
+`review_decision_pending_without_candidate_failure` for a flag on a settlement
+that cannot be that hold. It changes nothing about the claim or its task.
+
+Each settlement's `run_evidence` is the leaf's own run record
+(`{provenance, recorded_at, job_id, build, build_state, root_cause,
+root_cause_state}`): `job_id`, `build` and failing step (`root_cause`), sent
+with the settlement and kept in an immutable row beside the claim. `provenance` is `settlement` (sent with the settlement),
+`hydrated` (read from the follower by `orbit run settlements-hydrate`) or null
+(none held); `build_state` and `root_cause_state` are `recorded` or `unrecorded`,
+and `unrecorded` is never filled from the owner's or a current build or from the
+settlement's text. For a claim settled before a follower sent it, an operator on
+the owner reads it from the follower:
+
+```bash
+orbit run settlements-hydrate --follower-workspace <workspace> [--claim <id>] [--task <id>] [--limit 25] [--after <claim-id>] [--recheck] [--json]
+```
+
+Operator-only and bounded (default 25, at most 100); an agent, managed scan or
+claimed worker is refused, and the scan above stays read-only with no operator
+capability. The follower's run must be the claim's bound run, on its machine,
+terminal, a claimed-leaf job for exactly its task, and its admitting drain must
+pull from this owner. The result is immutable `hydrated` evidence; no claim, task
+or run changes. Per claim the outcome is `hydrated`, `replayed` (same fact held),
+`conflict` (different evidence held, which stands), `mismatch`, `absent` (the
+follower holds no such run; legacy evidence stays `unrecorded`), `unreachable`
+(ask again later) or `no_leaf_run`. When more claims are selected than the
+limit, `remaining` counts the rest and `next_after_claim_id` names the page's
+last claim; repeat with `--after <that claim-id>` and the same filters to
+visit them all, unsuccessful outcomes and `--recheck` alike. A live run is a
+`mismatch`: hydrate after the leaf has ended. The JSON report is
+`{"rows":[{"task_id","claim_id","machine_id","leaf_run_id","outcome","detail"}],"remaining","next_after_claim_id"}`.
+
 The owner's dashboard reads the same claim state, plus the accepted handoff,
 inside the task detail (`orbit web serve --operator`, then
 `GET /api/distributed/claims?task=<task-id>`). The endpoint accepts
@@ -408,21 +479,31 @@ is refused while the claim is active.
 
 Revocation and recovery are supported operator commands with matching operator
 tools. Both require trusted operator authority, are unavailable to managed runs,
-take a required reason, and replay when the same `--request` key is resubmitted
-with the same input:
+take a required reason of at most 2000 bytes, and replay when the same `--request`
+key is resubmitted with the same input. The `--request` key is 1 to 128 bytes of
+ASCII letters, digits, `-` or `_` after trimming; the owner refuses any other key
+before it records anything:
 
 ```bash
 orbit task revoke-handoff <handoff-id> --candidate <commit> --base <commit> --reason <reason> --request <key>
-orbit task recover-claim <claim-id> --phase <phase> --status blocked|backlog --reason <reason> --request <key>
+orbit task recover-claim <claim-id> --phase <phase> --status <status> --reason <reason> --request <key>
 ```
 
-- `revoke-handoff` (`orbit.task.revoke_handoff`) cancels the pending landing
+- `revoke-handoff` (`orbit.task.recover` action `revoke_handoff`) cancels the pending landing
   request for the accepted candidate and base you name. The task stays in
   `review`.
-- `recover-claim` (`orbit.task.recover_claim`) revokes the live claim,
+- `recover-claim` (`orbit.task.recover` action `recover_claim`) revokes the live claim,
   invalidates pending landing authority and releases its reservation in one
-  transaction. It moves the task to `blocked` to diagnose or `backlog` to retry.
-  Pass the claim phase you observed; a claim that moved on is refused.
+  transaction, and moves the task to the status you choose: `blocked` to
+  diagnose, `backlog` to retry, or `review`, `done`, `archived`, `rejected` or
+  `someday`. The target must be a status the task lifecycle allows from the
+  task's current one (`in-progress` for a running claim, `review` for a
+  handed-off one, `blocked` for a failed one), and recovery never leaves the
+  task `in-progress`. `done` follows only `review` and keeps the ordinary
+  completion gates (an execution summary or successful run, any owed
+  post-deploy measurement, applied mutation proposals). A refused target names
+  the rule. Pass the claim phase you observed; a claim that moved on is
+  refused.
 
 Both refuse with `stale_claim` when the owner moved on, and a replica refuses
 them with `replica_checkout`. A returning worker after revocation receives

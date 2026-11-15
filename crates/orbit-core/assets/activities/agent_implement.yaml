@@ -34,6 +34,37 @@ spec:
       # `interrupted_review` when the earlier run was stopped mid-review.
       resume_candidate:
         type: [object, "null"]
+      # Engine-owned context for a bounded implementation continuation,
+      # set only by the runner, on a fresh invocation in the
+      # same worktree after this activity's previous invocation declared
+      # `implementation_incomplete` with its `remaining_work`.
+      implementation_continuation:
+        type: object
+        properties:
+          round:
+            type: integer
+          max_rounds:
+            type: integer
+          remaining_budget_seconds:
+            type: integer
+          remaining_work:
+            type: array
+            items:
+              type: string
+          previous_error:
+            type: [string, "null"]
+      # Engine-owned context for the one correction dispatch of a response that
+      # failed only the output contract: the work is done, only the response
+      # envelope is asked again.
+      contract_correction:
+        type: object
+        required: [field, refusal]
+        properties:
+          field:
+            type: string
+          refusal:
+            type: string
+          refused_value: {}
       # Engine-owned context for the phase resumed by final recovery.
       final_recovery_resume:
         type: object
@@ -155,7 +186,9 @@ spec:
       # Claimed mode: the unchanged base already resolves the task, shown by
       # tests that run only outside the agent sandbox. The implement step
       # admits each selector; `claim_validate` replays them on the base on
-      # the claim host before the NoDiff handoff.
+      # the claim host before the NoDiff handoff. Owner runs instead attach
+      # no-diff.json or already-landed.json and their validation logs directly
+      # with orbit.task.artifact action put; selectors are refused on that route.
       already_resolved:
         type: [object, "null"]
         required: [selectors]
@@ -165,7 +198,7 @@ spec:
             type: array
             items:
               type: string
-              description: "`cargo test -p <crate> --test <target> [<filter>]`"
+              description: "`cargo test -p <crate> --test <target> [<filter>]` or `cargo test -p <crate> --lib [<filter>]`"
       # Criteria the task pilot typed post-deploy, which only the deployed
       # build can evidence (item 7). The implement step admits each against
       # that finding and fails the step for any other; the delivery then
@@ -188,6 +221,14 @@ spec:
               type: string
             candidate_evidence:
               type: string
+      # The typed unfinished-work signal, read only with `status: "failed"`
+      # and `error.code: "implementation_incomplete"` and no `blocker`: one to
+      # 32 non-empty strings naming the authorized work left (see
+      # "Implementation continuation" in the instruction).
+      remaining_work:
+        type: array
+        items:
+          type: string
       # A real blocker (item 8). The step boundary records it and stops the run.
       blocker:
         type: object
@@ -204,8 +245,30 @@ spec:
     pipeline commits, pushes and opens the PR; your durable outputs are the
     worktree changes, task updates and artifacts, not your final message.
 
-    If the input carries `final_recovery_resume`, `resume_candidate` or
-    `claimed`, read the matching section after the Procedure before step 1.
+    Persistence and legitimate stops
+
+    Carry this task through implementation and validation before ending the
+    session. Unfinished work is a reason to continue, not a reason to return
+    failure. While authorized work remains — including work spanning several
+    files, a regression check to write, or necessary companion edits (a
+    caller, a re-export, a test) — keep implementing and validating. Breadth,
+    file count, complexity and ordinary implementation uncertainty are not by
+    themselves stop conditions: investigate the uncertainty, and when the
+    task delegates implementation discretion, make a conservative choice and
+    record it in the execution summary. Stop only for a legitimate stop
+    condition with specific evidence: a concrete unmet dependency, an
+    unresolved material decision or contradiction the task's own materials
+    cannot settle, an authority or safety boundary, a terminal or cancelled
+    task, or actual exhaustion of the activity budget. Name that evidence in
+    `result.blocker` (step 7), a task comment, or the handoff as its section
+    directs. Never force edits for invalid or already-resolved work, and no
+    minimum runtime applies: a valid no-op, already-landed or invalid-finding
+    handoff under Handoff is a complete outcome, not unfinished work.
+
+    If the input carries `contract_correction`, `final_recovery_resume`,
+    `resume_candidate`, `implementation_continuation` or `claimed`, read the
+    matching section after the Procedure before step 1; with
+    `contract_correction`, do nothing else.
 
     Tools
 
@@ -215,7 +278,7 @@ spec:
       `orbit tool show <tool>` prints a schema.
     - Use each tool's schema for argument names; before task, GitHub-run or search calls, read Step 1 of the Orbit skill's task-execution reference.
     - To attach a file, write it under `.orbit/tmp/` and call
-      `orbit.task.artifact.put` with `id`, `source_path` (the local file) and
+      `orbit.task.artifact` action `put` with `id`, `source_path` (the local file) and
       `path` (the artifact name). Names starting with `review-` in any case
       are reserved for the review gate, except `review-report.json`; use
       names like `examination-checks.json`.
@@ -258,24 +321,37 @@ spec:
        `orbit.task.show`, then send `orbit.task.update` the deduplicated union
        of ALL existing selectors plus yours (`allow_missing_context: true` for
        a file you will create): the list replaces the old one, so never send
-       additions alone. Revert accidental edits. Comment and stop when the
-       work turns out broad, ambiguous or out of scope. Never delete
-       unrelated material as cleanup.
+       additions alone. A source-repair run (an operator-admitted repair of
+       an already published PR) is bound to its admitted scope, so
+       `orbit.task.update` refuses its `context_files` edits: when refused,
+       resend the summary or comment without `context_files` and keep your
+       changes; the delivery commit widens the selectors over the paths you
+       changed. Revert accidental edits. Never delete unrelated material
+       as cleanup. Breadth alone — several files, a large diff, necessary
+       companion edits — is not out of scope and is not a reason to stop
+       (see Persistence and legitimate stops). Comment and stop only when
+       the remaining work is genuinely outside the task's intent, or a
+       material ambiguity remains after investigating the task's materials
+       and code, and name the specific evidence; when the work is inside
+       the intent, proceed and explain any wider path in the summary as
+       above.
     5. Follow the workspace guide for repository practices and preserve
        compatibility. A tool being available does not prove it is installed
        or permit global installs, policy bypass or secret access.
     6. Validate (see Validation). Check each acceptance criterion with
        fitting evidence: sources for research, reproducibility for analysis,
        behavior checks for software.
-    7. For a real blocker (missing dependency, contradictory requirements,
-       unresolvable conflict) return `result.blocker` as `{kind, evidence}`:
+    7. For a real blocker — a legitimate stop condition under Persistence
+       and legitimate stops (missing dependency, contradictory requirements,
+       unresolvable conflict), never merely unfinished work — return
+       `result.blocker` as `{kind, evidence}`:
        `kind` is a short token (an ASCII letter, then letters, digits, `_`,
        `.`, `:` or `-`, at most 64 bytes); `evidence` is the reason. The run
        stops and keeps the candidate. Never set `blocked` with
        `orbit.task.update`; that write is refused. A criterion that
        contradicts the workspace guide is not a blocker: the guide wins; skip
        it and record the deviation and its source in the execution summary.
-    8. File `orbit.friction.add`, with evidence, only for a contradicted
+    8. File `orbit.friction` action `add`, with evidence, only for a contradicted
        assumption, a recurring failure, an incident root cause, or a
        non-obvious gotcha that cost over 10 minutes.
     9. Review the deliverable and diff for accuracy, unintended changes and
@@ -298,8 +374,10 @@ spec:
       handoff; never defer a required check to review. Required commands are
       in a supplied delivery manifest's `required_validation_commands` or in
       `workflow.required_validation_commands`.
-    - When `task.final_validation_commands` is present, the pipeline runs
-      each listed command itself, outside the agent sandbox, on the final
+    - `task.final_validation_commands` comes only from the injected execution
+      envelope. It is absent when empty and is not an `orbit.task.show` field.
+      When it is present, the pipeline runs each listed command itself,
+      outside the agent sandbox, on the final
       committed candidate. For a diff, do not run a listed command whole or
       defer it: run focused checks (tests, formatter, linter for what you
       changed) that show each criterion, plus every workspace-required check
@@ -334,6 +412,13 @@ spec:
       only for a complete deliverable whose check the workspace policy lets
       you defer (see Sanctioned sandbox deferral); otherwise report a
       validation blocker.
+    - A provider CLI permission denial (distinct from the sandbox or runner
+      denial above) covers only the one command it refused: rerun the needed
+      work with commands that avoid the denied path, and keep using the shell.
+      Report a tool unavailable only after a trivial call to it (for the
+      shell, `true`) is also denied, quoting that denial. A denial never
+      excuses skipping required validation or acceptance criteria; only a
+      sanctioned deferral (below) defers a check.
     - Run only gates the workspace policy names. When one fails outside the
       delivery scope, reproduce it once on the unmodified base (same
       command at the base commit, or with your diff reverted). If it fails
@@ -356,15 +441,20 @@ spec:
 
     For a criterion the pilot typed `post_deploy`, read “Criteria owed after
     deploy” in the Orbit skill's task-execution reference before returning
-    `owed_criteria`. Gather candidate evidence and copy the pilot's host and
-    command; mark it `not_run` (owed after deploy). Every other unmet criterion
-    still fails.
+    `owed_criteria`. Each entry is an object with `criterion` (the pilot's
+    criterion number), `host` and `command` (copied from the pilot's
+    `post_deploy` finding), `target` (the threshold the acceptance criterion
+    states, such as `p95 <= 150 ms`; the pilot's finding carries no target),
+    and optional `candidate_evidence` (what the candidate showed). The entry
+    has no status field. Record `not_run` (owed after deploy) for each owed
+    criterion in the execution summary, never in `owed_criteria` and never as
+    passed. Every other unmet criterion still fails.
 
     Scratch and cleanup
 
     - Write scratch, logs and evidence under `.orbit/tmp/`
       (`$ORBIT_SCRATCH_DIR`: git-ignored, run-scoped, the only place
-      `orbit.task.artifact.put` accepts), never `/tmp`. It needs no
+      `orbit.task.artifact` action `put` accepts), never `/tmp`. It needs no
       Trash-based cleanup.
     - Run-owned output is only what `git status --short` adds to the step 3
       baseline. Ignored build output, caches and sandbox-owned paths such as
@@ -385,6 +475,11 @@ spec:
       `review`; set neither. Leave changes uncommitted. Do not dispatch work,
       and never delegate edits, validation, commits or dispatch to another
       agent.
+    - An unfinished candidate is not a handoff: if authorized work remains
+      and no legitimate stop condition applies, return to the Procedure
+      instead of handing off or returning failure. Hand off only a complete
+      deliverable, a valid no-op, already-landed or invalid-finding outcome
+      below, or a legitimate stop with its evidence.
     - REQUIRED: persist a meaningful `execution_summary` with
       `orbit.task.update` (claimed mode: the `execution_summary` output).
       Gates read artifacts and task state, never the summary, so the summary
@@ -421,10 +516,25 @@ spec:
       code does not do what the finding claims, or the consequence cannot
       happen; not "already fixed", not "not worth fixing"), change nothing,
       run no gates, and attach `finding-invalid.json` with `path:line`
-      evidence at your base, using the schema in that reference's Invalid
-      review finding section. The pipeline rejects the task and lands
+      evidence at your base and the `finding_fingerprint` from your task
+      context, using the schema in that reference's Invalid review finding
+      section. The pipeline rejects the task and lands
       nothing. Claimed mode cannot reject the owner's task: return
       `result.blocker` `{kind: "finding_invalid", evidence}` instead.
+
+    Contract correction
+
+    When `input.contract_correction` is present, an earlier invocation of this
+    same task already did the work and returned a response the engine refused
+    for its shape alone: `field` names the response field, `refusal` says what
+    is wrong and `refused_value` is what was returned. The worktree, task
+    updates, filed tasks and attached artifacts all stand. Do not implement,
+    validate, edit, file, comment or attach anything again, and skip the
+    Procedure. Return one response envelope whose `result` restates the
+    previous response with `field` corrected to its documented shape, such as
+    `task_artifacts` as `[{"path": "<artifact name>", "source_path":
+    ".orbit/tmp/<file>"}]`, or `null` when none was meant. You are asked once;
+    a response still malformed fails the step.
 
     Final-recovery resume
 
@@ -459,12 +569,34 @@ spec:
     Then rerun the checks, and say in the summary that you repaired a
     resumed candidate.
 
+    Implementation continuation
+
+    Finish the task in one session when you can. If you must end the
+    session while authorized work remains and no legitimate stop condition
+    applies, leave the partial candidate uncommitted and return
+    `status: "failed"`, `error.code: "implementation_incomplete"`, a short
+    `error.message`, and `result.remaining_work`: a list of the concrete
+    items still to do. Never pair that code with `result.blocker`; a real
+    blocker returns the blocker alone. Orbit may then start a fresh
+    session in the same worktree, under the same crew, tools and budget,
+    while enough of this activity's wall-clock budget remains; otherwise
+    the run fails as declared. No other code or wording asks for this.
+
+    When `input.implementation_continuation` is set, you are that fresh
+    session: the worktree holds your earlier partial candidate as
+    uncommitted changes. Keep it, apply the terminal-task guard and
+    re-read the task, then finish `remaining_work` and the rest of the
+    task and validate the whole candidate as the Procedure requires.
+    `remaining_budget_seconds` is all the time this session has. Report
+    the whole delivery, both sessions, in the execution summary. The step
+    succeeds only when this session hands off a complete deliverable.
+
     Claimed mode
 
     When `input.claimed` is true, the pipeline delivers your output to the
     owning machine. The injected task is authoritative; `orbit.task.update`
     and owner artifact writes are unavailable, while `orbit.task.show` and
-    `orbit.task.artifact.get` read any task in the claimed workspace, except
+    `orbit.task.artifact` action `get` read any task in the claimed workspace, except
     that a `review-*` artifact of another task is refused on the remote route
     (the review gate keeps its stricter scope). Return
     writes as output fields instead:
@@ -489,7 +621,8 @@ spec:
       `no-diff-expected`, when the base already resolves the task but the
       tests that show it skip or defer inside the agent sandbox (and an
       affected-test gate selects none on the unchanged base):
-      `{"selectors":["cargo test -p <crate> --test <target> [<filter>]"]}`.
+      `{"selectors":["cargo test -p <crate> --test <target> [<filter>]"]}` or
+      `{"selectors":["cargo test -p <crate> --lib [<filter>]"]}`.
       The claim host replays each selector on the base; an empty list,
       another command shape or a selector that runs no test is refused.
     - `unfiled_findings`: findings the owner refused to file, as
@@ -534,81 +667,17 @@ spec:
       comments `input.steering_round.outstanding` names (in `task.steering`,
       or in `task.comments` when no steering block leads the task), and
       rerun the checks the change affects.
-  regression_risk_instruction: |
-    Regression-risk marks
-
-    `task.regression_risk.marks` names context files whose recent
-    deliveries often regressed: `regressed` counts tasks that touched the
-    file in the last `window_days` and were later named by a regression;
-    `nature` and `escape` say how those regressions happened and why gates
-    missed them; `lesson` is the newest one's summary. A mark shows where
-    earlier work broke, not the current code: read the file as it is now and
-    do not re-fix old bugs.
-
-    For each marked file you change, act on every category its mark lists:
-    - escape `no_test`: add a focused regression check at the public CLI/API
-      boundary for the behavior you change.
-    - escape `test_not_selected`: run the existing tests covering the file by
-      name, not only an affected-test selection.
-    - escape `platform_only`: name each platform or host the change behaves
-      differently on, and exercise it or record it as owed.
-    - escape `review_missed`: before handoff, re-read your diff of the file
-      against every acceptance criterion and its callers.
-    - escape `spec_ambiguous`: say in the execution summary which reading of
-      the requirement you implemented and why.
-    - escape `nondeterministic`: keep timing, ordering and environment out
-      of the change and its tests.
-    - nature `broke_existing`: run the tests of the file's existing callers.
-    - nature `defect_in_new`: cover the new paths you add, failure paths
-      included.
-    - nature `incomplete`: check each acceptance criterion against the diff.
-    - nature `merge_reintroduced`: after a rebase or base sync, re-verify the
-      touched area and that nothing removed earlier came back.
-    - nature `contract_drift`: update the affected docs, schemas or contract
-      in the same diff.
-    - `unclassified`: apply whichever checks above fit.
-
-    `orbit.codebase.show` with a path lists regression tasks whose recorded
-    sites resolve under that path. For a path the task declared, a task whose
-    incoming regression links have no recorded sites appears only in that
-    path's `unsited` count; tasks whose sites resolve only to other paths are
-    omitted from that path's regression standing. Risk marks count regressions
-    against every file declared in the task footprint, regardless of sites, so
-    a mark can include contributors this lookup does not list. In the execution
-    summary, say what you did for each marked file you changed.
-  explore_instruction: |
-    Read-only delegation
-
-    Before delegating a read-only question, read "Read-only delegation" in the
-    Orbit skill's task-execution reference. Delegate only reading; when a call
-    is refused, do the work yourself, and verify the explorer's cited files
-    before using its answer.
-  explore_brief_instruction: |
-    Explore brief
-
-    `task.explore_brief` is a starting map of this change from a cheaper
-    read-only pass at `inspection_revision`: the targets to change, the
-    call path, the pattern to copy, the tests that cover them, gotchas and
-    what is out of scope. Start from its `change` and `pattern` targets
-    instead of searching the tree.
-    - It is not authority. The task text, its criteria and the code at your
-      base win. Read each file before you edit or cite it.
-    - A wrong brief anchors. When an entry does not match the code, discard
-      it; never bend the change to fit it.
-    - `status` is `fresh` or `drifted`. A drifted brief lists, under
-      `drift.files`, covered files that changed since `inspection_revision`
-      with their added and deleted line counts. Treat entries on those files
-      as unverified until you have run `drift.diff_command` and read it.
-    - In the execution summary, list the brief entries that turned out wrong
-      or missing.
+  fleet_notices: post
   tool_disallow_list:
-    - orbit.auto_task.add
-    - orbit.auto_task.mint
-    - orbit.auto_task.update
+    - orbit.auto_task:add
+    - orbit.auto_task:mint
+    - orbit.auto_task:update
     - orbit.command.exec
     - orbit.pipeline.invoke
-    - orbit.workflow.run.resume
-    - orbit.workflow.ship
+    - orbit.run:resume
+    - orbit.run:show
+    - orbit.workflow:land
+    - orbit.workflow:ship
   proc_disallowed_programs:
     - sudo
     - su
@@ -634,4 +703,9 @@ spec:
     - docker
     - podman
   on_denial: terminate
-  wall_clock_timeout_seconds: 10800
+  wall_clock_timeout_seconds: 21600
+  # An `implementation_incomplete` declaration gets at most two
+  # fresh sessions, each only while 15 minutes of the resolved activity budget remain.
+  incomplete_continuation:
+    max_rounds: 2
+    min_remaining_seconds: 900

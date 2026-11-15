@@ -187,3 +187,119 @@ async fn routine_health_clock_token_for_each_status_combination() {
         assert_eq!(report["clock"]["health"], health, "{case}");
     }
 }
+
+/// Build the in-memory runtime, machine identity and stubbed clock a governed
+/// `POST /routines/clock` needs, served with `--operator` as given.
+#[cfg(unix)]
+fn clock_fixture(operator: bool) -> (Arc<OrbitRuntime>, DashboardState, String) {
+    let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
+    orbit_registry::ensure_machine_identity(&runtime.global_root(), || {
+        Ok(orbit_registry::NewMachineIdentity {
+            name: "clock-fixture".to_string(),
+            task_prefix: "CF".to_string(),
+        })
+    })
+    .expect("ensure machine identity");
+    let state = DashboardState::single(runtime.clone());
+    state.set_operator_session(operator);
+    state.set_clock_status_hook(Arc::new(|| {
+        Ok(ClockStatus {
+            configured_cadence_seconds: 300,
+            effective_cadence_seconds: Some(300),
+            enabled: true,
+            loaded: true,
+            running: Some(true),
+            schedulable: true,
+            health_issue: None,
+            last_tick_at: None,
+            next_tick_at: None,
+            platform: "test",
+        })
+    }));
+    state.set_clock_mutation_hook(Arc::new(|| Ok(())));
+    let machine_name = orbit_cmd::registry_routines::routine_statuses(&runtime.global_root())
+        .expect("routine status")
+        .machine_name;
+    (runtime, state, machine_name)
+}
+
+/// A curl-shaped governed POST: a valid loopback Host and matching Origin, no
+/// Fetch-Metadata and no other credential.
+#[cfg(unix)]
+fn forged_clock_disable(machine_name: &str) -> Request<Body> {
+    Request::builder()
+        .method(Method::POST)
+        .uri("/routines/clock?workspace=default")
+        .header(header::HOST, "localhost:7878")
+        .header(header::ORIGIN, "http://localhost:7878")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "action": "disable",
+                "machine_name": machine_name,
+                "expected_enabled": true,
+                "expected_cadence_seconds": 300,
+            })
+            .to_string(),
+        ))
+        .expect("request")
+}
+
+#[cfg(unix)]
+fn clock_audit_rows(runtime: &OrbitRuntime) -> Vec<orbit_types::telemetry::AuditEvent> {
+    runtime
+        .list_audit_events(None, None, None, None, 20)
+        .expect("list audit events")
+        .into_iter()
+        .filter(|event| {
+            event.command == "dashboard.operations"
+                && event.target_type.as_deref() == Some(DASHBOARD_CLOCK_SERVICE.id)
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+fn assert_on_terminal() {
+    use std::io::IsTerminal;
+    assert!(
+        std::io::stdin().is_terminal() && std::io::stderr().is_terminal(),
+        "the fixture must give the server a terminal on stdin and stderr"
+    );
+}
+
+// ORB-23047: `web connect --no-operator` spawns `web serve` behind `ssh -tt`,
+// so the server has a pty on stdin and stderr. That terminal resolved the
+// dashboard caller as an interactive-terminal operator, and every governed
+// write a local process forged (loopback Host and Origin, no credential) went
+// through from the "read-only" session, audited as a person at the terminal.
+#[cfg(unix)]
+#[tokio::test]
+async fn non_operator_dashboard_on_a_terminal_refuses_governed_writes() {
+    if !super::test_support::enter_isolated_child_on_terminal(
+        module_path!(),
+        "non_operator_dashboard_on_a_terminal_refuses_governed_writes",
+    ) {
+        return;
+    }
+    assert_on_terminal();
+    let _env = orbit_common::test_env::scoped([(OPERATOR_OVERRIDE_ENV, None)]);
+    let (runtime, state, machine_name) = clock_fixture(false);
+    let response = router(state.clone())
+        .with_state(state)
+        .oneshot(forged_clock_disable(&machine_name))
+        .await
+        .expect("response");
+    assert_eq!(
+        response.status(),
+        StatusCode::FORBIDDEN,
+        "the server's terminal must not grant a --no-operator dashboard"
+    );
+    let body = body_json(response).await;
+    assert_eq!(body["code"], "authorization_denied");
+    assert_eq!(body["provenance"], "unknown");
+
+    let audits = clock_audit_rows(&runtime);
+    assert_eq!(audits.len(), 1);
+    assert_eq!(audits[0].status, AuditEventStatus::Denied);
+    assert_eq!(audits[0].subcommand.as_deref(), Some("unknown"));
+}

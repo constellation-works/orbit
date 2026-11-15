@@ -3,7 +3,7 @@ use std::path::Path;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::{TaskComment, TaskStatus};
-use orbit_types::workflow::ReviewGateAdmissionOutput;
+use orbit_types::workflow::{FailureHandoffDecision, ReviewGateAdmissionOutput};
 use serde_json::{Value, json};
 
 use crate::context::{ReviewReleaseRequest, RuntimeHost, TaskAutomationUpdate};
@@ -183,9 +183,9 @@ pub(super) fn preserve_completion_failure<H: RuntimeHost + ?Sized>(
     Ok(json!({
         "phase": "failure_handoff",
         "decision": if landing_review.is_some() {
-            "landing_review_failure"
+            FailureHandoffDecision::LandingReviewFailure.as_str()
         } else {
-            "review_completion_failure"
+            FailureHandoffDecision::ReviewCompletionFailure.as_str()
         },
         "reason": landing_review,
         "reviewer_push": reviewer_push,
@@ -310,7 +310,7 @@ pub(super) fn refuse_foreign_rebase<H: RuntimeHost + ?Sized>(
 
     Ok(json!({
         "phase": "failure_handoff",
-        "decision": "foreign_rebase_refused",
+        "decision": FailureHandoffDecision::ForeignRebaseRefused.as_str(),
         "task_id": task.id,
         "handoff_run_id": run_id,
         "failed_step_id": failed_step_id,

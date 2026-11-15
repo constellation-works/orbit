@@ -11,11 +11,15 @@ stability = "internal"
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+
 [features]
 clap = ["orbit-types/clap"]
 # Test-only hooks for downstream crates' tests (`orbit_core::test_support`).
 # Enable it only from `[dev-dependencies]`, never in a shipped build.
 test-support = [
+  "orbit-common/test-support",
   "orbit-engine/test-support",
   "orbit-runtime/test-support",
   "orbit-store/test-support",
@@ -29,6 +33,7 @@ base64.workspace = true
 blake3.workspace = true
 chrono.workspace = true
 fs2.workspace = true
+orbit-clock = { path = "../orbit-clock" }
 orbit-common = { path = "../orbit-common" }
 orbit-config = { path = "../orbit-config" }
 orbit-types = { path = "../orbit-types" }
@@ -39,8 +44,6 @@ orbit-registry = { path = "../orbit-registry" }
 orbit-runtime = { path = "../orbit-runtime" }
 orbit-store = { path = "../orbit-store" }
 orbit-tools = { path = "../orbit-tools" }
-regex.workspace = true
-reqwest.workspace = true
 rsa.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true
@@ -69,3 +72,4 @@ rsa.workspace = true
 sha2.workspace = true
 base64.workspace = true
 tracing-subscriber.workspace = true
+regex.workspace = true

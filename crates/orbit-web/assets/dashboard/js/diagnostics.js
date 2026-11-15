@@ -11,17 +11,27 @@
 // Uses `el`, `syncNodes` from `./common.js` (re-defines $ locally, as other
 // extracted modules do).
 //
-// Cross helpers (fmtRelative, fmtDuration, truncate, setActiveTab,
-// navigateToRun) are provided via ctx. The row click uses setActiveTab
-// (preserving the ?step= query for run-detail pre-expansion) rather than
-// navigateToRun to ensure identical behavior to before the split.
+// Cross helpers (setActiveTab, navigateToRun) are provided via ctx. The row
+// click uses setActiveTab (preserving the ?step= query for run-detail
+// pre-expansion) rather than navigateToRun, so it matches the pre-split behavior.
 
-import { panelCanRender, resetPanel, el, syncNodes, getWindow, getWorkspace, formatDateTime, listItems, runHref } from './common.js';
+import { panelCanRender, resetPanel, el, syncNodes, getWindow, getWorkspace, formatAge, formatDateTime, listItems, bindRunLink, truncate } from './common.js';
 import { renderIncidents } from './incidents.js';
 
 const $ = (id) => document.getElementById(id);
 
 let agentDiagnosticsOpen = false;
+
+// Ordinary error cards are paged in the browser. The fetch cap stays a separate
+// control (Load more errors). Phone cards are several hundred pixels tall, so
+// the page is shorter there than the desktop table rows.
+const ERRORS_PAGE_PHONE = 4;
+const ERRORS_PAGE_DESKTOP = 8;
+const ERRORS_PHONE_QUERY = "(max-width: 600px)";
+let errorsPageStart = 0;
+let errorsPageScope = "";
+let lastErrorsCtx = null;
+let errorsMediaBound = false;
 
 function shortenWorktreePaths(message) {
   return String(message || "").replace(/(?:\/[\w.@~+-]+)+\/\.orbit\/state\/worktrees\/[^\s/:"'<>]+\/?/g, "[worktree]/");
@@ -46,17 +56,9 @@ function hasCtx(ctx, key) {
 }
 
 // A relative age names its absolute instant in the cell's title.
-function relativeCell(ctx, v, td) {
+function relativeCell(v, td) {
   if (td && v) td.title = formatDateTime(v);
-  return fmtRelativeValue(ctx, v);
-}
-
-function fmtRelativeValue(ctx, v) {
-  return hasCtx(ctx, "fmtRelative") ? ctx.fmtRelative(v) : (v || "-");
-}
-
-function truncateValue(ctx, s, n = 220) {
-  return hasCtx(ctx, "truncate") ? ctx.truncate(s, n) : String(s || "").slice(0, n);
+  return formatAge(v);
 }
 
 // `actor_identity` is the persisted ActorIdentity enum: a flat label string,
@@ -78,7 +80,7 @@ function errorRunLabel(row) {
 
 function runDashboardLink(runId, workspaceId) {
   const link = el("a", { class: "mono", text: runId, title: `Open ${runId}` });
-  link.href = runHref(runId, { workspace: workspaceId });
+  bindRunLink(link, runId, { workspace: workspaceId || getWorkspace() });
   return link;
 }
 
@@ -92,12 +94,6 @@ function truncatedMessageNote(row, ctx) {
   const workspaceId = row.workspace_id || getWorkspace();
   const link = runDashboardLink(row.job_run, workspaceId);
   link.textContent = "Open the run";
-  link.addEventListener("click", event => {
-    event.stopPropagation();
-    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
-    event.preventDefault();
-    if (hasCtx(ctx, "navigateToRun")) ctx.navigateToRun(row.job_run, workspaceId);
-  });
   return el("p", { class: "error-message-note" }, ["The feed shows the start of this long message. ", link, " for the full text."]);
 }
 
@@ -110,7 +106,7 @@ function errorMessageDisclosure(value, row, ctx, td) {
   const summary = el("summary");
   summary.appendChild(el("span", {
     class: "error-message-preview",
-    text: truncateValue(ctx, shortened, 220),
+    text: truncate(shortened, 220),
   }));
   details.appendChild(summary);
   details.appendChild(el("div", { class: "error-message-full", text: full }));
@@ -127,11 +123,13 @@ function errorColumnHasData(rows, key) {
   });
 }
 
+// More errors may exist when a source stopped short of the window start, or
+// when the feed filled its row cap (which leaves `coverage_since` at `since`).
 function loadMoreErrorsLink(payload, ctx) {
-  if (!errorsCoverageLabel(payload)) return null;
   const url = new URL(window.location.href);
   const configured = Number.parseInt(url.searchParams.get("diag") || "50", 10);
   const current = Number.isInteger(configured) && configured > 0 ? configured : 50;
+  if (!errorsCoverageLabel(payload) && listItems(payload).length < current) return null;
   const next = Math.min(current + 50, 200);
   if (next <= current) return null;
   url.searchParams.set("diag", String(next));
@@ -153,7 +151,7 @@ function loadMoreErrorsLink(payload, ctx) {
 
 function getDiagErrorsColumns(ctx) {
   return [
-    { key: "ts", label: "time", num: false, render: (v, _row, td) => relativeCell(ctx, v, td) },
+    { key: "ts", label: "time", num: false, render: (v, _row, td) => relativeCell(v, td) },
     { key: "source", label: "source", num: false },
     {
       key: "job_run",
@@ -164,12 +162,6 @@ function getDiagErrorsColumns(ctx) {
         if (!runId) return errorRunLabel(row);
         const workspaceId = row.workspace_id || getWorkspace();
         const link = runDashboardLink(runId, workspaceId);
-        link.addEventListener("click", event => {
-          event.stopPropagation();
-          if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
-          event.preventDefault();
-          if (hasCtx(ctx, "navigateToRun")) ctx.navigateToRun(runId, workspaceId);
-        });
         return link;
       },
     },
@@ -238,7 +230,9 @@ function renderDiagnosticsTable(rows, columns, ctx, emptyText, { cards = false, 
       tr.appendChild(td);
     }
     tr.dataset.key = `diag-${row.ts || ''}-${row.job_run || row.affiliation || ''}-${row.step || i}-${row.command || actorIdentityLabel(row.actor_identity) || ''}`;
-    tr.dataset.hash = JSON.stringify(row);
+    // Include the displayed relative age so syncNodes rebuilds the row when
+    // the age advances instead of reusing the first-render age forever.
+    tr.dataset.hash = `${JSON.stringify(row)}|${row.ts ? formatAge(row.ts) : ''}`;
     if (row.affiliation === "unaffiliated") {
       tr.classList.add("unaffiliated");
     }
@@ -269,6 +263,102 @@ function errorsCoverageLabel(payload) {
   return `covers since ${formatDateTime(payload.coverage_since)}`;
 }
 
+function errorsPageSize() {
+  if (typeof window.matchMedia !== "function") return ERRORS_PAGE_DESKTOP;
+  return window.matchMedia(ERRORS_PHONE_QUERY).matches ? ERRORS_PAGE_PHONE : ERRORS_PAGE_DESKTOP;
+}
+
+function syncErrorsPageScope() {
+  const scope = `${getWorkspace() || ""}|${getWindow()}`;
+  if (scope === errorsPageScope) return;
+  errorsPageScope = scope;
+  errorsPageStart = 0;
+}
+
+function alignErrorsPageStart(length, size) {
+  if (length <= 0) return 0;
+  const last = Math.floor((length - 1) / size) * size;
+  const aligned = Math.floor(Math.max(0, errorsPageStart) / size) * size;
+  return Math.min(aligned, last);
+}
+
+function focusErrorsPageButton(direction) {
+  const body = $("diag-body");
+  if (!body) return;
+  const preferred = direction
+    ? body.querySelector(`.diagnostics-errors-page-button[data-page="${direction}"]:not(:disabled)`)
+    : null;
+  const target = preferred || body.querySelector(".diagnostics-errors-page-button:not(:disabled)");
+  if (!target) return;
+  try {
+    target.focus({ preventScroll: true });
+  } catch (_) {
+    target.focus();
+  }
+}
+
+function moveErrorsPage(direction) {
+  errorsPageStart += direction === "next" ? errorsPageSize() : -errorsPageSize();
+  if (lastErrorsCtx) renderDiagnostics(lastErrorsCtx);
+  // The click removes the button that received it. Focus the replacement
+  // after the browser has finished leaving the detached control.
+  requestAnimationFrame(() => focusErrorsPageButton(direction));
+}
+
+function errorsPageButton(label, direction, disabled) {
+  const button = el("button", {
+    class: "diagnostics-errors-page-button",
+    type: "button",
+    text: label,
+    "aria-label": direction === "next" ? "Next errors" : "Previous errors",
+  });
+  button.disabled = disabled;
+  button.dataset.page = direction;
+  button.addEventListener("click", () => {
+    if (button.disabled) return;
+    moveErrorsPage(direction);
+  });
+  return button;
+}
+
+// The pager stays outside the table body: renderDiagnosticsTable replaces
+// that element's children, which would drop the controls on the next paint.
+function errorsPageControls(ordinary, start, end) {
+  const nav = el("nav", { class: "diagnostics-errors-pager", "aria-label": "Error pages" });
+  nav.append(
+    errorsPageButton("Previous", "previous", start === 0),
+    el("span", {
+      class: "diagnostics-errors-page-status",
+      role: "status",
+      text: `Showing ${start + 1}–${end} of ${ordinary.length}`,
+    }),
+    errorsPageButton("Next", "next", end >= ordinary.length),
+  );
+  return nav;
+}
+
+function errorsCountText(rows, ordinary, start, end, paged) {
+  const windowLabel = `window ${getWindow()}`;
+  if (!paged) return `${rows.length} error events · ${windowLabel}`;
+  const range = `Showing ${start + 1}–${end} of ${ordinary.length}`;
+  const fetched = rows.length === ordinary.length ? "" : ` · ${rows.length} error events`;
+  return `${range}${fetched} · ${windowLabel}`;
+}
+
+function bindErrorsPageMedia() {
+  if (errorsMediaBound || typeof window.matchMedia !== "function") return;
+  const query = window.matchMedia(ERRORS_PHONE_QUERY);
+  const onChange = () => {
+    if (!lastErrorsCtx) return;
+    const sub = lastErrorsCtx.getActiveDiagSubtab ? lastErrorsCtx.getActiveDiagSubtab() : "errors";
+    if (sub !== "errors") return;
+    renderDiagnostics(lastErrorsCtx);
+  };
+  if (typeof query.addEventListener === "function") query.addEventListener("change", onChange);
+  else if (typeof query.addListener === "function") query.addListener(onChange);
+  errorsMediaBound = true;
+}
+
 function renderDiagnostics(ctx = {}) {
   const sub = ctx.getActiveDiagSubtab ? ctx.getActiveDiagSubtab() : "errors";
   const last = ctx.getLastDiagnostics ? ctx.getLastDiagnostics() : { errors: [], incidents: null };
@@ -285,9 +375,18 @@ function renderDiagnostics(ctx = {}) {
   }
 
   const rows = listItems(last.errors);
+  lastErrorsCtx = ctx;
+  bindErrorsPageMedia();
+  syncErrorsPageScope();
+  const ordinary = rows.filter(row => !recoverableAgentDiagnostic(row));
+  const size = errorsPageSize();
+  const paged = ordinary.length > size;
+  const start = paged ? alignErrorsPageStart(ordinary.length, size) : 0;
+  errorsPageStart = start;
+  const end = paged ? Math.min(start + size, ordinary.length) : ordinary.length;
   const count = $("diag-count");
   const coverage = errorsCoverageLabel(last.errors);
-  count.textContent = `${rows.length} error events · window ${getWindow()}${coverage ? ` · ${coverage}` : ""}`;
+  count.textContent = `${errorsCountText(rows, ordinary, start, end, paged)}${coverage ? ` · ${coverage}` : ""}`;
   count.title = coverage
     ? "Most recent step and event failures; log retention or the stderr read cap leaves the start of the selected window unread. Capped by the diag URL parameter (default 50)."
     : "Most recent step and event failures in the selected window; capped by the diag URL parameter (default 50).";
@@ -300,9 +399,11 @@ function renderDiagnostics(ctx = {}) {
     ["ts", "source", "job_run", "message"].includes(column.key) || errorColumnHasData(rows, column.key));
   const main = el("div", { class: "diagnostics-errors-main" });
   const internal = rows.filter(recoverableAgentDiagnostic);
-  renderDiagnosticsTable(rows.filter(row => !recoverableAgentDiagnostic(row)), columns, ctx,
+  renderDiagnosticsTable(paged ? ordinary.slice(start, end) : ordinary, columns, ctx,
     rows.length ? "No other error events in this window." : "No error events in this window.", { cards: true, body: main });
-  const children = [main];
+  const children = [];
+  if (paged) children.push(errorsPageControls(ordinary, start, end));
+  children.push(main);
   if (internal.length) {
     const details = el("details", { class: "agent-diagnostics" });
     details.open = agentDiagnosticsOpen;

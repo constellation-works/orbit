@@ -1,7 +1,8 @@
 ---
 type: design
 summary: "Spec: Audit Coverage Matrix"
-last_validated: 2026-10-29
+last_updated: 2026-11-03
+last_validated: 2026-11-03
 ---
 
 # Spec: Audit Coverage Matrix
@@ -18,6 +19,7 @@ Every Orbit operation that touches code, task state, persistent runtime state, e
 |-----------------|------------------------|----------------|
 | Top-level CLI command | Command audit row | command, subcommand, role, status, duration, cwd |
 | Orbit tool mutation | Command audit row or targeted runtime row | tool/action name, target type/id, actor, status |
+| Application-authorized tool invocation | Command audit row | application id, non-secret consent provenance, scope index, entry/callback flag, tool/action, status |
 | MCP tool preflight or dispatch | Command audit row | tool, status, trusted workspace/caller/process, transport, full capability set, origin session, unique call id, optional run/lease |
 | Task lifecycle update | Command/tool audit plus task history | task id, actor, status transition or document field changed |
 | Task lock reservation/check/release | Targeted command audit row | reservation target, files payload, status, conflict/denial state |
@@ -25,7 +27,7 @@ Every Orbit operation that touches code, task state, persistent runtime state, e
 | Activity/job step | V2 envelope audit row | run id, step id, outcome or skip/retry reason |
 | Filesystem policy decision inside v2 run | V2 envelope audit row | profile, op, path, allowed, matched rule |
 | Filesystem or proc-spawn policy denial live projection | Global tracing JSONL | target, tool, path, profile, matched_rule |
-| Friction task submission live projection | Global tracing JSONL | target, task_id, agent, model, summary |
+| Friction record submission live projection | Global tracing JSONL | target, workspace_id, friction_id, task_id, agent, model, summary |
 | HTTP provider turn | Loop audit row plus blob store | run id, session id, provider, model, request/response blob hashes |
 | Tool call inside HTTP loop | Loop audit row plus blob store | run id, session id, tool name, input/output blob hashes, outcome |
 | CLI backend provider invocation | V2 envelope audit row | provider, redacted argv, stdin/stdout/stderr blob refs, timeout, exit code |
@@ -38,11 +40,12 @@ Every Orbit operation that touches code, task state, persistent runtime state, e
 - A provider request or response must not be stored inline in a command audit row.
 - A policy or allowlist denial must record both the denied subject and the reason.
 - Live tracing projections must be additional to canonical audit, error, log, or scoreboard writes.
+- A friction submission projects `orbit.friction.reported` once after its canonical transaction commits (projection restored by [ORB-21797]), with a redacted title and no body. Reports outside a task carry an empty `task_id`; rejected writes, receipt replays and dedupe reuse emit no successful-submission event.
 - A task-state mutation must leave task history or document metadata in addition to any audit row.
 - New operation classes must update this matrix in the same PR that introduces the operation.
 - Registry-backed and in-process MCP tools must have parity for preflight denial, runtime success, and tool failure, with one trusted call context across the path.
 - MCP initialize/tool JSON cannot become trusted audit identity, capability, transport, or correlation; malicious-payload wire tests must pin this boundary.
-- MCP capability, workspace, binding, role, owner, placement, and unknown-name denials produce exactly one row with the call's `mcp_call_id` ([event-schema.md](./event-schema.md)) before runtime/store mutation; checkoutless/global denials use the global coordination audit database.
+- MCP capability, workspace, binding, role, owner, placement, and unknown-name denials produce exactly one row carrying the call's per-call `trace_id` ([event-schema.md](./event-schema.md)) before runtime/store mutation; checkoutless/global denials use the global coordination audit database.
 
 ## Known Gaps
 
@@ -50,7 +53,6 @@ Every Orbit operation that touches code, task state, persistent runtime state, e
 - Some deterministic automation actions rely on enclosing job context rather than dedicated targeted audit rows.
 - CLI backend tool allowlists are recorded as harness-delegated advisories, not enforced Orbit denials.
 - Command audit stdout/stderr fields exist but are not broadly populated.
-- Friction report submissions have no active producer for the live `orbit.friction.reported` JSONL event; the CLI and web formatters retain only its renderer.
 
 ## Review Checklist
 
@@ -66,3 +68,10 @@ When reviewing a change that mutates code or state, ask:
 ## Agent Signature
 
 Last revised by codex for [ORB-10262].
+
+## Task References
+
+- **[ORB-10262]** — Historical capability/placement preflight work, no longer part of the v1 MCP execution path.
+- [ORB-21797] — Restored the friction live-tracing projection.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -27,13 +27,17 @@ use serde_json::{Value, json};
 
 use super::RoleSpec;
 use super::pilot_warnings::{self, CONFIRMED, DISMISSED, MISSED, SETTLED_UNIT, WarningRow};
-use crate::application::agents::AgentFacts;
-use crate::application::agents::attribution::row_key;
+use crate::application::agents::effort::{
+    EffortSource, MainActivity, MainInvocationUnit, ModelEffortKey, main_effort_with_source,
+    model_effort_key,
+};
 use crate::application::agents::facts::TaskFacts;
 use crate::application::agents::score::{
-    Denominator, Occurrence, RowInput, Stat, Tally, Term, number,
+    Denominator, Occurrence, RowInput, Stat, Tally, Term, number, sample_units,
 };
+use crate::application::agents::{AgentFacts, ExecutionScope, WindowBounds};
 use crate::application::codebase::{Anchor, Contest, HeldWait, PilotEvidence, PilotRun};
+use crate::application::statistics;
 
 pub(super) const ROLE: RoleSpec = RoleSpec {
     unit: "assessed tasks",
@@ -331,13 +335,37 @@ pub(in crate::application::agents) struct Graded {
 }
 
 impl Graded {
-    /// The row the assessment counts in.
-    pub(in crate::application::agents) fn key(&self) -> (String, String) {
+    /// The row the assessment counts in: its model and the recorded effort
+    /// of its pilot run's main piloting invocation.
+    pub(in crate::application::agents) fn key(&self, facts: &AgentFacts) -> ModelEffortKey {
+        self.key_with_source(facts).0
+    }
+
+    /// [`Graded::key`] and the source that decided the effort.
+    fn key_with_source(&self, facts: &AgentFacts) -> (ModelEffortKey, EffortSource) {
         let run = self.run.as_ref();
-        row_key(
-            run.and_then(|run| run.crew.as_deref()),
-            run.and_then(|run| run.model.as_deref()),
+        let (effort, source) = main_effort_with_source(
+            facts,
+            MainInvocationUnit {
+                run_id: self.run_id().as_deref(),
+                activity: MainActivity::Pilot,
+                task_id: Some(&self.task_id),
+                model: run.and_then(|run| run.model.as_deref()),
+                activity_id: run.and_then(|run| run.activity_id.as_deref()),
+                after: None,
+                until: None,
+                reported: None,
+                crew: run.and_then(|run| run.crew.as_deref()),
+            },
+        );
+        (
+            model_effort_key(run.and_then(|run| run.model.as_deref()), effort),
+            source,
         )
+    }
+
+    pub(in crate::application::agents) fn crew(&self) -> Option<&str> {
+        self.run.as_ref().and_then(|run| run.crew.as_deref())
     }
 
     pub(in crate::application::agents) fn run_id(&self) -> Option<String> {
@@ -409,7 +437,7 @@ pub(in crate::application::agents) fn grade_all(evidence: PilotEvidence) -> Vec<
         .collect()
 }
 
-type Key = (String, String);
+type Key = ModelEffortKey;
 
 /// The tier a task was assessed at, as an index into [`TIERS`].
 fn tier_index(complexity: Option<TaskComplexity>) -> Option<usize> {
@@ -476,7 +504,12 @@ fn observed_tiers<'a>(
 
 /// One row per pilot crew and model over the assessments written in the
 /// window.
-fn rows(facts: &AgentFacts, since: DateTime<Utc>, min_support: usize) -> Vec<RowInput<'_>> {
+fn rows(
+    facts: &AgentFacts,
+    window: WindowBounds,
+    min_support: usize,
+    _execution: ExecutionScope,
+) -> Vec<RowInput<'_>> {
     let tasks: BTreeMap<&str, &TaskFacts> = facts
         .tasks
         .iter()
@@ -485,7 +518,7 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>, min_support: usize) -> Vec<Row
     let assessed: Vec<(&Graded, &TaskFacts)> = facts
         .pilots
         .iter()
-        .filter(|graded| graded.at >= since)
+        .filter(|graded| window.admits(graded.at))
         .filter_map(|graded| Some((graded, *tasks.get(graded.task_id.as_str())?)))
         .collect();
     let tiers = observed_tiers(facts, &assessed);
@@ -498,9 +531,11 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>, min_support: usize) -> Vec<Row
         .collect();
     let mut work: BTreeMap<Key, Vec<(&Graded, &TaskFacts)>> = BTreeMap::new();
     for (graded, task) in assessed {
-        work.entry(graded.key()).or_default().push((graded, task));
+        work.entry(graded.key(facts))
+            .or_default()
+            .push((graded, task));
     }
-    let mut warnings = pilot_warnings::rows(facts, since);
+    let mut warnings = pilot_warnings::rows(facts, window);
     for key in warnings.keys() {
         work.entry(key.clone()).or_default();
     }
@@ -531,6 +566,7 @@ fn row_input<'a>(
 ) -> RowInput<'a> {
     let mut denominators = warnings.denominators();
     let warning_stats = warnings.stats();
+    let settled_units = warnings.settled_units.clone();
     let mut tallies: BTreeMap<&'static str, Tally<'a>> = warnings.tallies;
     let mut pilot = Score::default();
     let mut author = Score::default();
@@ -560,6 +596,7 @@ fn row_input<'a>(
             }
             tallies.entry("f1_lift").or_default().add(
                 task,
+                &task.id,
                 lift,
                 Some(Occurrence {
                     at: graded.at,
@@ -573,6 +610,7 @@ fn row_input<'a>(
             if assessed_tier == observed_tier {
                 tallies.entry("tier_calibration").or_default().add(
                     task,
+                    &task.id,
                     1.0,
                     Some(Occurrence {
                         at: graded.at,
@@ -585,6 +623,7 @@ fn row_input<'a>(
         for (path, contest) in &graded.costly {
             tallies.entry("costly_misses").or_default().add(
                 task,
+                &task.id,
                 1.0,
                 Some(Occurrence {
                     at: contest.at,
@@ -596,6 +635,7 @@ fn row_input<'a>(
         for wait in &graded.waits {
             tallies.entry("lock_wait_hours").or_default().add(
                 task,
+                &task.id,
                 wait.wait_ms as f64 / 3_600_000.0,
                 Some(Occurrence {
                     at: wait.started_at,
@@ -620,11 +660,7 @@ fn row_input<'a>(
         })
     };
     let mut durations: Vec<f64> = runs.values().filter_map(|seconds| *seconds).collect();
-    durations.sort_by(f64::total_cmp);
-    let median = (!durations.is_empty()).then(|| {
-        let middle = durations.len() / 2;
-        (durations[middle] + durations[(durations.len() - 1) / 2]) / 2.0
-    });
+    let median = statistics::median(&mut durations);
     let selectors: usize = assessed
         .iter()
         .map(|(graded, _)| graded.pilot.declared)
@@ -665,9 +701,60 @@ fn row_input<'a>(
         "too_easy": too_easy,
         "too_hard": too_hard,
     });
+    let mut crews: BTreeSet<String> = assessed
+        .iter()
+        .filter_map(|(graded, _)| graded.crew().map(str::to_string))
+        .collect();
+    crews.extend(warnings.crews.iter().cloned());
+    let crews: Vec<String> = crews.into_iter().collect();
+    let assessed_ids: BTreeSet<&str> = assessed.iter().map(|(_, task)| task.id.as_str()).collect();
+    // Warnings settle independently of the assessed cohort: tasks that are
+    // older, unlanded or assessed under another row still feed the warning
+    // terms and their denominator, so they stay in the interval's evidence.
+    let mut exposure_units = sample_units(
+        settled_units
+            .keys()
+            .filter(|id| !assessed_ids.contains(id.as_str()))
+            .cloned(),
+        TERMS,
+        &tallies,
+    );
+    let mut sample_units = sample_units(
+        assessed.iter().map(|(_, task)| task.id.clone()),
+        TERMS,
+        &tallies,
+    );
+    for unit in &mut sample_units {
+        if tiers.contains_key(unit.id.as_str()) {
+            unit.denominator_terms.insert("tier_calibration", 1);
+        }
+    }
+    for unit in sample_units.iter_mut().chain(&mut exposure_units) {
+        if let Some(&settled) = settled_units.get(&unit.id) {
+            unit.denominator_terms.extend(
+                [CONFIRMED, DISMISSED, MISSED]
+                    .into_iter()
+                    .map(|term| (term, settled)),
+            );
+        }
+    }
     RowInput {
-        crew: row.0,
-        model: row.1,
+        escaped_regressions_fallback: None,
+        crew: crews
+            .first()
+            .cloned()
+            .unwrap_or_else(|| crate::application::agents::CREW_UNKNOWN.to_string()),
+        crews,
+        effort_sources: assessed
+            .iter()
+            .fold(BTreeMap::new(), |mut sources, (graded, _)| {
+                *sources
+                    .entry(graded.key_with_source(facts).1.as_str())
+                    .or_default() += 1;
+                sources
+            }),
+        model: row.0,
+        effort: row.1,
         units,
         runs_without_model,
         provisional: None,
@@ -676,6 +763,8 @@ fn row_input<'a>(
         reviewed_units: None,
         unjudged: false,
         denominators,
+        sample_units,
+        exposure_units,
         stats: [
             stat(
                 "recall_percent",

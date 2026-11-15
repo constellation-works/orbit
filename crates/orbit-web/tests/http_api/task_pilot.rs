@@ -100,6 +100,20 @@ fn run_pilot_refuses_without_submitting_or_changing_the_task() {
             ] {
                 assert_eq!(fixture.runtime.get_task(&task.id).unwrap().status, status);
             }
+
+            // A submission renders the shared core result under the dashboard's
+            // names, now with its queue position [ORB-22908]. The seeded live
+            // pilot run holds the job's slot, so this one waits behind it.
+            let fresh = add("fresh for a pilot", TaskStatus::Proposed);
+            let response = operator.send("POST", &pilot_uri(&fresh.id), json!({}));
+            assert_eq!(response.status().as_u16(), 200);
+            let submitted: serde_json::Value = response.json().unwrap();
+            assert_eq!(submitted["task_id"], json!(fresh.id), "{submitted}");
+            assert_eq!(submitted["job_id"], "task_pilot_pipeline", "{submitted}");
+            assert_eq!(submitted["state"], "queued", "{submitted}");
+            assert!(submitted["run_id"].is_string(), "{submitted}");
+            assert!(submitted["submitted_at"].is_string(), "{submitted}");
+            assert_eq!(submitted["queue_position"], 1, "{submitted}");
         },
     );
 }

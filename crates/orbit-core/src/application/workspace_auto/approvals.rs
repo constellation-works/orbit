@@ -8,14 +8,30 @@
 //! live pilot carries is held as `pilot_running` and never selected again
 //! while that pilot runs.
 //!
-//! Selection only decides who is worth a pilot. Approval itself happens in
-//! the task-pilot apply boundary under the drain's verified authority, so the
-//! qualification checked here is a cost filter, not the gate. A task the
-//! pilot held is not piloted again until it changes: the pilot entry that
-//! records the hold stays the newest in its history. A pilot that finished
+//! Selection decides who is worth a pilot. A task assigned to a human crew
+//! is operator work: it is reported as `human_crew` and never selected, so
+//! this drain does not dispatch a pilot for it or record a hold. A proposed
+//! task whose latest certified assessment came from an explicit or routine
+//! pilot, and is still
+//! fresh, is approved here without another provider call. A drain child that
+//! stood down cannot claim that receipt as an unfinished approval. A stale
+//! one (its description or criteria changed after the assessment) is selected
+//! again for a fresh pilot like a new proposal, unless a live execution claim
+//! holds it; one with a holding warning stays proposed and is not selected again.
+//! Every other approval happens in the task-pilot apply boundary under the
+//! drain's verified authority, so the qualification checked here is a cost
+//! filter, not the gate. Targeted task ids and promotion authority are not a
+//! new pilot request. A task the pilot held is not piloted again until it
+//! changes: the pilot entry that records the hold stays the newest in its
+//! history. A pilot that finished
 //! without deciding about a task (a failed or stale pilot) is recorded on that
 //! task when the drain that ran it records its approvals, so no later drain
-//! pilots the task again until it changes either. A pilot that failed on a
+//! pilots the task again until it changes either. The same recording covers
+//! an applied assessment whose approval did not complete: it stays
+//! `pilot_unresolved` until the task changes or an operator approves it. A
+//! fresh explicit or routine assessment is not that failure. This drain
+//! promotes it, and a finished child that stood down after the explicit
+//! apply does not hold or record the task as unresolved. A pilot that failed on a
 //! provider outage or missing inspection-capable crew is not recorded, so the
 //! next drain retries it. Creation-grant rows are not changes here: every write
 //! to a task holding a grant appends one after its own entry to re-seal it.
@@ -24,56 +40,39 @@
 //! `pilot_verified_no_diff` with the pilot's evidence. An approval pass
 //! archives one Orbit automation filed once its cited commits are proven on
 //! the base branch; the read-only readiness view only reports it.
-//!
-//! While the workspace sets `[review] verify_findings`, a review-filed bug
-//! without a CONFIRMED verification verdict is held as
-//! `unverified_review_finding` before it costs a pilot: approval would refuse
-//! it anyway, and the detail names the verification job.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
-use orbit_types::task::{
-    CONTEXT_CREATION_AUTHORIZED_EVENT, NO_AUTO_APPROVE_TAG, Task, TaskHistoryEntry, TaskStatus,
-    TaskType,
-};
-use orbit_types::workflow::{
-    ChildDispatchPhase, DrainApprovalReport, DrainHoldFinding, DrainWaitingTask, JobRunState,
-    PipelineState, ProviderFailureClass,
-};
+use orbit_types::task::{NO_AUTO_APPROVE_TAG, NO_DRAIN_TAG, Task, TaskStatus};
+use orbit_types::workflow::{DrainHoldFinding, DrainWaitingTask};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::INSPECTION_CREW_UNAVAILABLE;
 use crate::application::task::{
-    NoDiffClosure, PILOT_VERIFIED_NO_DIFF, PILOT_WARNING_TRIAGED_EVENT, SYSTEM_ACTOR_LABEL,
-    TaskListFilter, TaskRecordUpdateParams, TaskRecords, UNVERIFIED_REVIEW_FINDING, metadata_task,
+    NoDiffClosure, PILOT_VERIFIED_NO_DIFF, TaskAutomationPort, TaskListFilter, metadata_task,
 };
 use crate::runtime::engine::crew::normalized_task_crew;
 
-use super::classify::templated_u64;
 use super::drains::{drain_run_id, live_admissions_stop};
 use crate::application::task::pilot::{
-    approval_disqualification, approved_by_drain, held_classification, task_pilot_warnings,
+    ExplicitAssessmentReuse, FOOTPRINT_UNRESOLVED, UNRESOLVED_PILOT_EVENT,
+    approval_disqualification, classify_explicit_assessment_reuse, held_classification,
+    live_execution_claim_tasks, promote_reusable_assessment, task_pilot_warnings,
+    unresolved_pilot_run_id,
 };
 
 /// Most proposed tasks one pass pilots; the rest wait for the next pass.
 const MAX_CANDIDATES_PER_PASS: usize = 10;
-/// History event the drain records, by `system`, on a proposed task whose
-/// task-pilot run finished without deciding about it. Its note names the run.
-/// Later drains hold the task on it until a real change, whichever drain
-/// dispatched that pilot [ORB-19544].
-const UNRESOLVED_PILOT_EVENT: &str = "task_pilot_unresolved";
 /// Bounded lists on the durable report; totals sit beside them.
-const REPORTED_TASKS: usize = 20;
-const PILOT_JOB: &str = "task_pilot_pipeline";
+pub(super) const REPORTED_TASKS: usize = 20;
 /// How often a wait re-reads whether the drain's pilot is still live.
-const PILOT_WAIT_POLL: Duration = Duration::from_secs(1);
+pub(super) const PILOT_WAIT_POLL: Duration = Duration::from_secs(1);
 /// Longest a single wait may block, matching the `sleep` activity's bound.
-const MAX_PILOT_WAIT_SECONDS: u64 = 3600;
+pub(super) const MAX_PILOT_WAIT_SECONDS: u64 = 3600;
 
 /// One qualifying proposed task.
 #[derive(Debug, Clone)]
@@ -89,6 +88,9 @@ pub(super) struct ApprovalSnapshot {
     pub(super) held: Vec<DrainWaitingTask>,
     /// Tasks this pass archived as proven already fixed.
     pub(super) closed: Vec<String>,
+    /// Fresh explicit or routine assessments this pass can approve without
+    /// another pilot. Not candidates: a drain child must not assess them again.
+    pub(super) reusable: Vec<String>,
 }
 
 impl ApprovalSnapshot {
@@ -103,7 +105,7 @@ impl ApprovalSnapshot {
 }
 
 /// The workspace's `proposed` tasks, as envelope metadata.
-fn proposed_tasks(runtime: &OrbitRuntime) -> Result<Vec<Task>, OrbitError> {
+pub(super) fn proposed_tasks(runtime: &OrbitRuntime) -> Result<Vec<Task>, OrbitError> {
     Ok(runtime
         .task_candidates(
             &TaskListFilter {
@@ -121,7 +123,7 @@ fn proposed_tasks(runtime: &OrbitRuntime) -> Result<Vec<Task>, OrbitError> {
 /// Classify the workspace's `proposed` tasks against the drain's task-pilot
 /// children `pilots`. With `close`, a proven `verified_no_diff` task Orbit
 /// automation filed is archived instead of held.
-fn approval_snapshot(
+pub(super) fn approval_snapshot(
     runtime: &OrbitRuntime,
     mut proposed: Vec<Task>,
     pilots: &[PilotChild],
@@ -136,7 +138,13 @@ fn approval_snapshot(
         candidates: Vec::new(),
         held: Vec::new(),
         closed: Vec::new(),
+        reusable: Vec::new(),
     };
+    let holders = runtime.pilot_preparation_holders()?;
+    // A stale assessment on a claimed task keeps holding: the claim is still
+    // executing against the meaning the claim froze. Everywhere else a stale
+    // assessment is a repilot candidate below, not an operator hold.
+    let claimed_tasks = live_execution_claim_tasks(runtime)?;
     for task in proposed {
         let held = |reason: &str, detail: Option<String>, findings: Vec<DrainHoldFinding>| {
             DrainWaitingTask {
@@ -147,9 +155,24 @@ fn approval_snapshot(
                 findings,
             }
         };
+        // Operator work. Prepare excludes the same tasks; skipping them here
+        // keeps a drain from dispatching a pilot that can only exclude them
+        // and then record a hold the pilot must not write.
+        if let Some(human) = runtime.human_crew(task.crew.as_deref()) {
+            snapshot.held.push(held(
+                "human_crew",
+                Some(format!(
+                    "assigned to human crew `{}`; operator work the task pilot does not assess",
+                    human.name
+                )),
+                Vec::new(),
+            ));
+            continue;
+        }
         let disqualified =
             approval_disqualification(&task.tags, &task.context_files, task.complexity);
         if disqualified != Some(NO_AUTO_APPROVE_TAG)
+            && disqualified != Some(NO_DRAIN_TAG)
             && let Some((_, finding)) =
                 runtime.verified_no_diff(&task.id, task.status, &task.tags)?
         {
@@ -183,35 +206,21 @@ fn approval_snapshot(
             snapshot.held.push(held(reason, None, Vec::new()));
             continue;
         }
-        if task.task_type == TaskType::Bug
-            && let Some(hold) = runtime.unverified_finding_hold(&runtime.get_task(&task.id)?)?
-        {
-            snapshot.held.push(held(
-                UNVERIFIED_REVIEW_FINDING,
-                Some(hold.detail()),
-                Vec::new(),
-            ));
-            continue;
-        }
         let history = runtime.get_task_history(&task.id)?;
         let latest = history
             .iter()
             .rev()
             .find(|entry| !is_decision_neutral(entry));
         if let Some(entry) = latest.filter(|entry| entry.event == "task_pilot_applied")
-            && let Some(classification) = held_classification(runtime, entry)
+            && let Some(classification) = held_classification(entry)
+            && !(classification == "changed_since_pilot" && !claimed_tasks.contains(&task.id))
         {
-            let findings = if classification == "warnings" {
+            let findings = if matches!(classification, "warnings" | FOOTPRINT_UNRESOLVED) {
                 task_pilot_warnings(
                     task.status,
-                    &runtime.get_task_comments(&task.id)?,
+                    &runtime.get_task_pilot_comments(&task.id)?,
                     &task.dependencies(),
-                    &|id: &str| {
-                        matches!(
-                            runtime.get_task(id),
-                            Ok(found) if found.status == TaskStatus::Done
-                        )
-                    },
+                    &|id: &str| runtime.warning_prerequisite_is_done(id),
                 )
             } else {
                 Vec::new()
@@ -248,6 +257,77 @@ fn approval_snapshot(
             ));
             continue;
         }
+        // Nor is one an explicit or routine pilot is running: the child this
+        // pass would dispatch could only stand down.
+        if let Some(run_id) = live_pilot_run(runtime, &holders, &task.id)? {
+            snapshot.held.push(held(
+                "pilot_running",
+                Some(format!("task-pilot run {run_id} is assessing it")),
+                Vec::new(),
+            ));
+            continue;
+        }
+        // A certified explicit receipt owns its assessment. A drain child
+        // may have stood down while that receipt was being applied, so its
+        // submission time alone cannot make the assessment unresolved.
+        match classify_explicit_assessment_reuse(runtime, &task)? {
+            ExplicitAssessmentReuse::Promote { .. } => {
+                snapshot.reusable.push(task.id);
+                continue;
+            }
+            ExplicitAssessmentReuse::Hold { reason, detail } => {
+                // The task's meaning changed after its certified assessment
+                // and no claim holds it: queue a fresh pilot like a new
+                // proposal instead of holding for an operator repilot. The
+                // unresolved-pilot checks below still hold it when that
+                // repilot already failed.
+                if reason == "changed_since_pilot" && !claimed_tasks.contains(&task.id) {
+                    // Fall through to the unresolved checks and candidacy.
+                } else {
+                    let findings = if matches!(reason, "warnings" | FOOTPRINT_UNRESOLVED) {
+                        task_pilot_warnings(
+                            task.status,
+                            &runtime.get_task_pilot_comments(&task.id)?,
+                            &task.dependencies(),
+                            &|id: &str| runtime.warning_prerequisite_is_done(id),
+                        )
+                    } else {
+                        Vec::new()
+                    };
+                    snapshot.held.push(held(reason, detail, findings));
+                    continue;
+                }
+            }
+            ExplicitAssessmentReuse::NotReusable => {}
+        }
+        // An applied assessment with no hold whose task is still proposed
+        // was promoted on paper but its approval did not complete (for
+        // example a deterministic apply failure after the pilot write).
+        // Hold it for the operator instead of piloting it again on every
+        // drain pass [ORB-21172]. A fresh explicit or routine assessment
+        // is this drain's to promote: a finished child that stood down
+        // after that apply must not hide the reuse [ORB-21206]. A drain
+        // child's own unapproved apply is not reusable, so it stays held.
+        if let Some(entry) = latest.filter(|entry| entry.event == "task_pilot_applied")
+            && held_classification(entry).is_none()
+            && let Some(pilot) = pilots.iter().find(|pilot| {
+                !pilot.is_live()
+                    && pilot.task_ids.contains(&task.id)
+                    && entry.at >= pilot.submitted_at
+            })
+            && !reusable_explicit_promotion(runtime, &task)?
+        {
+            snapshot.held.push(held(
+                "pilot_unresolved",
+                Some(format!(
+                    "task-pilot run {} applied its assessment but approval did not complete; \
+                     edit the task or approve it to retry",
+                    pilot.run_id
+                )),
+                Vec::new(),
+            ));
+            continue;
+        }
         let changed_at = latest.map(|entry| entry.at);
         // An undecided pilot an earlier drain recorded holds the task until a
         // real change, even though no pilot of this drain ran it.
@@ -262,7 +342,7 @@ fn approval_snapshot(
                 "pilot_unresolved",
                 Some(format!(
                     "task-pilot run {} left no decision; edit the task or approve it to retry",
-                    unresolved_run_id(entry).unwrap_or_else(|| "unknown".to_string())
+                    unresolved_pilot_run_id(entry).unwrap_or(Cow::Borrowed("unknown"))
                 )),
                 Vec::new(),
             ));
@@ -291,296 +371,14 @@ fn approval_snapshot(
     Ok(snapshot)
 }
 
-/// One task-pilot child this drain dispatched.
-struct PilotChild {
-    run_id: String,
-    /// The tasks it was asked to pilot, from its own run input.
-    task_ids: Vec<String>,
-    submitted_at: DateTime<Utc>,
-    /// Its terminal state; `None` while it is pending or running.
-    finished: Option<JobRunState>,
-    /// Whether the drain still has to record what it approved. Recording
-    /// closes the dispatch, so each pilot is counted once.
-    unrecorded: bool,
-    /// Whether a step failed for a task-independent reason, such as a provider
-    /// outage or missing inspection-capable crew. Such a pilot says nothing
-    /// about its tasks, so it is never recorded against them.
-    task_independent_failure: bool,
-}
-
-impl PilotChild {
-    fn is_live(&self) -> bool {
-        self.finished.is_none()
-    }
-
-    fn awaits_recording(&self) -> bool {
-        self.unrecorded && !self.is_live()
-    }
-}
-
-/// The task-pilot children this drain dispatched, live and finished.
-fn pilot_children(runtime: &OrbitRuntime, run_id: &str) -> Result<Vec<PilotChild>, OrbitError> {
-    let Some(state) = runtime.stores().jobs().read_run_state(run_id)? else {
-        return Ok(Vec::new());
-    };
-    let mut pilots = Vec::new();
-    for child in state
-        .child_dispatches
-        .iter()
-        .filter(|child| child.job_name == PILOT_JOB)
-    {
-        let Some(run) = runtime.stores().jobs().get_job_run(&child.child_run_id)? else {
-            continue;
-        };
-        let task_ids = run
-            .input
-            .as_ref()
-            .and_then(|input| input.get("task_ids"))
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
-            .collect();
-        let task_independent_failure = run.steps.iter().any(|step| {
-            is_task_independent_pilot_failure(
-                step.error_code.as_deref(),
-                step.error_message.as_deref(),
-            )
-        });
-        pilots.push(PilotChild {
-            run_id: run.run_id,
-            task_ids,
-            submitted_at: child.submitted_at,
-            finished: run.state.is_terminal().then_some(run.state),
-            unrecorded: child.phase.is_open(),
-            task_independent_failure,
-        });
-    }
-    Ok(pilots)
-}
-
-/// Whether `entry` leaves the question "what did the task's last change
-/// decide?" unanswered: a context grant, the triage of a warning hold, or an
-/// undecided-pilot record. None of these is a change to the task.
-fn is_decision_neutral(entry: &TaskHistoryEntry) -> bool {
-    entry.event == CONTEXT_CREATION_AUTHORIZED_EVENT
-        || entry.event == PILOT_WARNING_TRIAGED_EVENT
-        || entry.event == UNRESOLVED_PILOT_EVENT
-}
-
-/// The run an undecided-pilot record names.
-fn unresolved_run_id(entry: &TaskHistoryEntry) -> Option<String> {
-    entry
-        .note
-        .as_deref()
-        .and_then(|note| serde_json::from_str::<Value>(note).ok())
-        .and_then(|note| note["pilot_run_id"].as_str().map(str::to_string))
-}
-
-/// Whether an earlier unresolved-pilot marker names a failure the task could
-/// not affect, so configuration can release the hold without a task edit.
-fn unresolved_pilot_failed_independently(
-    runtime: &OrbitRuntime,
-    entry: &TaskHistoryEntry,
-) -> Result<bool, OrbitError> {
-    let Some(run_id) = unresolved_run_id(entry) else {
-        return Ok(false);
-    };
-    let Some(run) = runtime.stores().jobs().get_job_run(&run_id)? else {
-        return Ok(false);
-    };
-    Ok(run.steps.iter().any(|step| {
-        is_task_independent_pilot_failure(step.error_code.as_deref(), step.error_message.as_deref())
-    }))
-}
-
-/// Whether a pilot step failed for a reason unrelated to the task's content.
-/// The inspection-crew marker may appear inside a wrapped executor diagnostic.
-fn is_task_independent_pilot_failure(
-    error_code: Option<&str>,
-    error_message: Option<&str>,
-) -> bool {
-    ProviderFailureClass::of(error_code, error_message).is_some()
-        || error_message.is_some_and(|message| message.contains(INSPECTION_CREW_UNAVAILABLE))
-}
-
-/// Record, on each proposed task, a finished pilot of this drain that decided
-/// nothing about it: no change to the task since the pilot was submitted and
-/// no apply after it. A pilot that failed on a provider outage or missing
-/// inspection-capable crew says nothing about the task, so it is left
-/// unrecorded and the next drain retries it.
-/// Best effort, like the report: a task that cannot be recorded is piloted
-/// again by a later drain.
-fn record_unresolved_pilots(runtime: &OrbitRuntime, pilots: &[PilotChild]) {
-    for pilot in pilots
-        .iter()
-        .filter(|pilot| pilot.awaits_recording() && !pilot.task_independent_failure)
-    {
-        for task_id in &pilot.task_ids {
-            if let Err(error) = record_unresolved_pilot(runtime, task_id, pilot) {
-                tracing::warn!(
-                    target: "orbit.core.job_run",
-                    task_id = %task_id,
-                    run_id = %pilot.run_id,
-                    %error,
-                    "drain could not record a task-pilot run that left no decision"
-                );
-            }
-        }
-    }
-}
-
-fn record_unresolved_pilot(
-    runtime: &OrbitRuntime,
-    task_id: &str,
-    pilot: &PilotChild,
-) -> Result<(), OrbitError> {
-    if runtime.get_task(task_id)?.status != TaskStatus::Proposed {
-        return Ok(());
-    }
-    let history = runtime.get_task_history(task_id)?;
-    let latest = history
-        .iter()
-        .rev()
-        .find(|entry| !is_decision_neutral(entry));
-    if latest.is_some_and(|entry| entry.at >= pilot.submitted_at) {
-        return Ok(());
-    }
-    let now = Utc::now();
-    runtime.stores().task_records().update(
-        task_id,
-        TaskRecordUpdateParams {
-            actor: SYSTEM_ACTOR_LABEL.to_string(),
-            append_history: vec![TaskHistoryEntry {
-                at: now,
-                by: SYSTEM_ACTOR_LABEL.to_string(),
-                event: UNRESOLVED_PILOT_EVENT.to_string(),
-                note: Some(json!({ "pilot_run_id": pilot.run_id }).to_string()),
-                from_status: None,
-                to_status: None,
-                operation_id: None,
-                decision: None,
-            }],
-            // Only a task still proposed takes the record: a write that moved
-            // it on wins, and the pilot is then no longer this drain's concern.
-            expected_status: Some(vec![TaskStatus::Proposed]),
-            ..Default::default()
-        },
-    )?;
-    Ok(())
-}
-
-fn read_pilots(
-    runtime: &OrbitRuntime,
-    action: &str,
-    run_id: &str,
-) -> Result<Vec<PilotChild>, DispatchError> {
-    pilot_children(runtime, run_id).map_err(|error| {
-        DispatchError::action_failed(action, format!("read task-pilot children: {error}"))
-    })
-}
-
-/// The tasks this drain approved, read back from the approve transition's
-/// history note rather than from the pilot's output.
-fn approved_by(runtime: &OrbitRuntime, run_id: &str, task_ids: &[String]) -> Vec<String> {
-    task_ids
-        .iter()
-        .filter(|task_id| {
-            runtime
-                .get_task(task_id)
-                .is_ok_and(|task| task.status != TaskStatus::Proposed)
-                && runtime.get_task_history(task_id).is_ok_and(|history| {
-                    history.iter().any(|entry| {
-                        entry.event == "proposal_approved"
-                            && entry
-                                .note
-                                .as_deref()
-                                .is_some_and(|note| approved_by_drain(note, run_id))
-                    })
-                })
-        })
-        .cloned()
-        .collect()
-}
-
-/// A finished pilot and the tasks this drain approved through it.
-struct RecordedPilot {
-    run_id: String,
-    status: JobRunState,
-    approved: Vec<String>,
-}
-
-/// Replace the held view and add the pass's closed tasks and each finished
-/// pilot's approvals to the drain's durable report. Recording a pilot closes
-/// its dispatch in the same write, and a pilot already closed adds nothing,
-/// so no approval is counted twice.
-/// Best effort, like the admission pass record: a drain that cannot write its
-/// report must still approve and admit work, and a pilot it failed to record
-/// is recorded by a later pass.
-fn record_report(
-    runtime: &OrbitRuntime,
-    run_id: &str,
-    snapshot: &ApprovalSnapshot,
-    pilots: &[RecordedPilot],
-) {
-    let closed = &snapshot.closed;
-    let held_by_reason = snapshot.held_by_reason();
-    let result =
-        runtime
-            .stores()
-            .jobs()
-            .update_run_state(run_id, &mut |_, state: &mut PipelineState| {
-                let mut approved = Vec::new();
-                for pilot in pilots {
-                    let open = state
-                        .child_dispatches
-                        .iter()
-                        .any(|child| child.child_run_id == pilot.run_id && child.phase.is_open());
-                    if open {
-                        approved.extend(pilot.approved.iter().cloned());
-                        state.advance_child_dispatch(
-                            &pilot.run_id,
-                            ChildDispatchPhase::Terminal,
-                            Some(pilot.status.to_string()),
-                            None,
-                        );
-                    }
-                }
-                let report = state
-                    .pull_drain
-                    .drain_approvals
-                    .get_or_insert_with(DrainApprovalReport::default);
-                report.recorded_at = Some(Utc::now());
-                report.approved_total += approved.len() as u64;
-                report.approved.extend(approved);
-                let excess = report.approved.len().saturating_sub(REPORTED_TASKS);
-                report.approved.drain(..excess);
-                report.closed_total += closed.len() as u64;
-                report.closed.extend(closed.iter().cloned());
-                let excess = report.closed.len().saturating_sub(REPORTED_TASKS);
-                report.closed.drain(..excess);
-                report.held = snapshot.held.iter().take(REPORTED_TASKS).cloned().collect();
-                report.held_total = snapshot.held.len() as u64;
-                report.held_by_reason = held_by_reason.clone();
-                Ok(())
-            });
-    if let Err(error) = result {
-        tracing::warn!(
-            target: "orbit.core.job_run",
-            run_id,
-            %error,
-            "drain could not record its proposed-task approvals; run show will not list them"
-        );
-    }
-}
-
-fn held_json(snapshot: &ApprovalSnapshot) -> Value {
+pub(super) fn held_json(snapshot: &ApprovalSnapshot) -> Value {
     json!({
         "closed": snapshot.closed,
         "held": snapshot.held.iter().take(REPORTED_TASKS).collect::<Vec<_>>(),
         "held_total": snapshot.held.len(),
         "held_by_reason": snapshot.held_by_reason(),
+        "awaiting_reuse": snapshot.reusable.iter().take(REPORTED_TASKS).collect::<Vec<_>>(),
+        "awaiting_reuse_total": snapshot.reusable.len(),
     })
 }
 
@@ -626,12 +424,32 @@ pub(crate) fn select_proposed_approvals(
     let pilot_live = !live_pilot_run_ids.is_empty();
     // A stopped drain admits nothing, so it approves and closes nothing either.
     let admissions_stopped = live_admissions_stop(runtime, input).is_some();
-    let snapshot = proposed_tasks(runtime)
+    let mut snapshot = proposed_tasks(runtime)
         .and_then(|proposed| approval_snapshot(runtime, proposed, &pilots, !admissions_stopped))
         .map_err(|error| {
             DispatchError::action_failed(action, format!("read proposed tasks: {error}"))
         })?;
-    record_report(runtime, run_id, &snapshot, &[]);
+    let mut reused = Vec::new();
+    // While this drain's own pilot is live, leave a certified assessment
+    // proposed. The next pass approves it once that pilot has finished.
+    if !admissions_stopped && !pilot_live && !snapshot.reusable.is_empty() {
+        for task_id in &snapshot.reusable {
+            if promote_reusable_assessment(runtime, run_id, task_id).map_err(|error| {
+                DispatchError::action_failed(
+                    action,
+                    format!("reuse assessment for {task_id}: {error}"),
+                )
+            })? {
+                reused.push(task_id.clone());
+            }
+        }
+        snapshot = proposed_tasks(runtime)
+            .and_then(|proposed| approval_snapshot(runtime, proposed, &pilots, !admissions_stopped))
+            .map_err(|error| {
+                DispatchError::action_failed(action, format!("read proposed tasks: {error}"))
+            })?;
+    }
+    record_report(runtime, run_id, &snapshot, &[], &reused);
     let task_ids = if admissions_stopped || pilot_live {
         Vec::new()
     } else {
@@ -659,100 +477,10 @@ pub(crate) fn select_proposed_approvals(
     output["live_pilot_run_ids"] = json!(live_pilot_run_ids);
     output["pilot_finished"] = json!(pilots.iter().any(PilotChild::awaits_recording));
     output["task_ids"] = json!(task_ids);
+    output["reused"] = json!(reused);
+    output["reused_count"] = json!(reused.len());
     output["drain_promotion"] = json!({ "run_id": run_id });
     Ok(output)
-}
-
-/// Record every finished pilot of this drain not recorded yet: which of the
-/// tasks in its own run input this drain approved, and the refreshed held
-/// view. The pass that sees a pilot finish runs this before admission, so
-/// the tasks it approved are admitted in that same pass.
-pub(crate) fn record_proposed_approvals(
-    runtime: &OrbitRuntime,
-    action: &str,
-    input: &Value,
-) -> Result<Value, DispatchError> {
-    let run_id = drain_run_id(input).ok_or_else(|| {
-        DispatchError::action_failed(action, "the drain run id is unavailable".to_string())
-    })?;
-    let pilots = read_pilots(runtime, action, run_id)?;
-    record_unresolved_pilots(runtime, &pilots);
-    let recorded = pilots
-        .iter()
-        .filter(|pilot| pilot.awaits_recording())
-        .filter_map(|pilot| {
-            Some(RecordedPilot {
-                run_id: pilot.run_id.clone(),
-                status: pilot.finished?,
-                approved: approved_by(runtime, run_id, &pilot.task_ids),
-            })
-        })
-        .collect::<Vec<_>>();
-    let admissions_stopped = live_admissions_stop(runtime, input).is_some();
-    let snapshot = proposed_tasks(runtime)
-        .and_then(|proposed| approval_snapshot(runtime, proposed, &pilots, !admissions_stopped))
-        .map_err(|error| {
-            DispatchError::action_failed(action, format!("read proposed tasks: {error}"))
-        })?;
-    record_report(runtime, run_id, &snapshot, &recorded);
-    let approved = recorded
-        .iter()
-        .flat_map(|pilot| pilot.approved.iter().cloned())
-        .collect::<Vec<_>>();
-    let mut output = held_json(&snapshot);
-    output["approved_count"] = json!(approved.len());
-    output["approved"] = json!(approved);
-    output["pilots"] = recorded
-        .iter()
-        .map(|pilot| {
-            json!({
-                "run_id": pilot.run_id,
-                "status": pilot.status.to_string(),
-                "approved": pilot.approved,
-            })
-        })
-        .collect();
-    Ok(output)
-}
-
-/// Block until no task-pilot child of this drain is live, or until
-/// `timeout_seconds` passes. Inside the loop it bounds the wait by the poll
-/// interval, so admission still runs that often; after the loop it keeps the
-/// drain alive until its last pilot finishes, because the pilot's apply step
-/// refuses the authority of a drain that has ended.
-pub(crate) fn await_approval_pilot(
-    runtime: &OrbitRuntime,
-    action: &str,
-    input: &Value,
-) -> Result<Value, DispatchError> {
-    let run_id = drain_run_id(input).ok_or_else(|| {
-        DispatchError::action_failed(action, "the drain run id is unavailable".to_string())
-    })?;
-    let timeout_seconds = templated_u64(action, input, "timeout_seconds", 0)?;
-    if timeout_seconds > MAX_PILOT_WAIT_SECONDS {
-        return Err(DispatchError::action_failed(
-            action,
-            format!("`timeout_seconds` must be at most {MAX_PILOT_WAIT_SECONDS}"),
-        ));
-    }
-    let timeout = Duration::from_secs(timeout_seconds);
-    let started_at = Instant::now();
-    loop {
-        let live = read_pilots(runtime, action, run_id)?
-            .into_iter()
-            .filter(PilotChild::is_live)
-            .map(|pilot| pilot.run_id)
-            .collect::<Vec<_>>();
-        let waited = started_at.elapsed();
-        if live.is_empty() || waited >= timeout {
-            return Ok(json!({
-                "pilot_live": !live.is_empty(),
-                "live_pilot_run_ids": live,
-                "waited_seconds": waited.as_secs_f64(),
-            }));
-        }
-        std::thread::sleep(PILOT_WAIT_POLL.min(timeout - waited));
-    }
 }
 
 /// Readiness's view of `--approve-proposed` for the status drain: what it
@@ -793,7 +521,12 @@ pub(super) fn readiness_approvals(
     } else {
         Vec::new()
     };
-    let snapshot = approval_snapshot(runtime, proposed, &pilot_children(runtime, run_id)?, false)?;
+    let snapshot = approval_snapshot(
+        runtime,
+        proposed,
+        &pilot_children(runtime, run_id, false)?,
+        false,
+    )?;
     let mut value = held_json(&snapshot);
     value["closed"] = json!(report.closed);
     value["closed_total"] = json!(report.closed_total);
@@ -804,3 +537,9 @@ pub(super) fn readiness_approvals(
     value["awaiting_pilot"] = json!(snapshot.candidates.len());
     Ok(value)
 }
+
+use super::pilot_coordination::{
+    PilotChild, is_decision_neutral, live_pilot_run, pilot_children, read_pilots, record_report,
+    reusable_explicit_promotion, unresolved_pilot_failed_independently,
+};
+pub(crate) use super::pilot_coordination::{await_approval_pilot, record_proposed_approvals};

@@ -1,12 +1,295 @@
 use std::path::Path;
 
 use super::{
-    ArtifactOrigin, ClaimRefusalKind, DecisionRefusalCode, FrictionNotLocal, HostRegistryCode,
-    NotFoundKind, OrbitError, PrivateVcsFailure, RemoteToolCode, SqliteContention, StorageLayer,
-    WorkspaceClaimHeld,
+    ArtifactOrigin, ClaimRefusalKind, DecisionRefusalCode, ForceOverridableKind,
+    ForceOverridableRefusal, ForgePushHoldFailure, FrictionNotLocal, HostRegistryCode,
+    NotFoundKind, NoticeRefusalCode, OrbitError, PrivateVcsFailure, RemoteToolCode,
+    SourceRepairAuthorityRefusal, SourceRepairRunStateRefusal, SqliteContention, StorageLayer,
+    TaskPilotRefusalCode, WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
 };
 
+/// The JSON-RPC invalid-params code. An owner whose internal drain
+/// registry predates an operation answers it with this code.
+pub const JSON_RPC_INVALID_PARAMS_CODE: i64 = -32602;
+
+/// The structured `message` field of the legacy invalid-params reply for an
+/// unknown internal drain operation. Compared as a whole structured field,
+/// never searched inside a formatted message.
+const UNKNOWN_INTERNAL_DRAIN_OPERATION_RPC_MESSAGE: &str = "unknown internal drain operation";
+
 impl OrbitError {
+    /// Stable machine-readable code shared by Orbit error surfaces.
+    pub fn wire_code(&self) -> &str {
+        match self {
+            OrbitError::NoJobRuns => const { RemoteToolCode::NotFound.as_str() },
+            OrbitError::NotFound { kind, .. } => match kind {
+                NotFoundKind::Tool => "tool_not_found",
+                NotFoundKind::Task
+                | NotFoundKind::Friction
+                | NotFoundKind::Artifact
+                | NotFoundKind::Skill
+                | NotFoundKind::Job
+                | NotFoundKind::JobRun
+                | NotFoundKind::Workspace => const { RemoteToolCode::NotFound.as_str() },
+            },
+            OrbitError::PolicyDenied(_) => const { RemoteToolCode::PolicyDenied.as_str() },
+            OrbitError::CapabilityDenied(_) => const { RemoteToolCode::CapabilityDenied.as_str() },
+            OrbitError::UnknownSelector(_) => "unknown_selector",
+            OrbitError::AmbiguousDestination(_) => "ambiguous_destination",
+            OrbitError::UnreachableDestination(_) => "unreachable_destination",
+            OrbitError::StaleRoute(_) => "stale_route",
+            OrbitError::UnhealthyCheckout(_) => "unhealthy_checkout",
+            OrbitError::ToolNotOnThisHost(_) => "tool_not_on_this_host",
+            OrbitError::CapabilityRefused(_) => {
+                const { RemoteToolCode::CapabilityRefused.as_str() }
+            }
+            OrbitError::ProtocolSkew(_) => const { RemoteToolCode::ProtocolSkew.as_str() },
+            OrbitError::DecisionRefused { code, .. } => code.as_str(),
+            OrbitError::NoticeRefused { code, .. } => code.as_str(),
+            OrbitError::TaskPilotRefused { code, .. } => code.as_str(),
+            OrbitError::HostRegistry { code, .. } => code.as_str(),
+            OrbitError::PluginDisabledInWorkspace { .. } => "plugin_disabled_in_workspace",
+            OrbitError::PluginDisabledOnHost { .. } => "plugin_disabled_on_host",
+            OrbitError::PluginBuildConsentRequired(_) => "build_consent_required",
+            OrbitError::PluginBuildConsentUnavailable(_) => "build_consent_unavailable",
+            OrbitError::PluginBuildFetchUnsupported(_) => "build_fetch_unsupported_on_macos",
+            OrbitError::HostConfiguration { .. } => {
+                const { RemoteToolCode::HostConfiguration.as_str() }
+            }
+            OrbitError::ForceOverridable(_) => "force_overridable",
+            OrbitError::InvalidInput(_)
+            | OrbitError::InvalidInputDiagnostic { .. }
+            | OrbitError::ClaimRefused { .. } => const { RemoteToolCode::InvalidInput.as_str() },
+            OrbitError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
+            OrbitError::SensitiveInput { .. } => "sensitive_input",
+            OrbitError::SkillValidation(_) | OrbitError::JobValidation(_) => "validation_failed",
+            OrbitError::SourceRepairRunStateRefused { .. } => "validation_failed",
+            OrbitError::SourceRepairAuthorityRefused(code) => {
+                if code.reports_as_execution() {
+                    "execution_failed"
+                } else {
+                    "validation_failed"
+                }
+            }
+            OrbitError::JobRunStateTransition(_) => "invalid_transition",
+            // [ORB-10965] Not "invalid_transition": a duplicate start losing to the
+            // incumbent owner is an expected race, and the caller yields rather
+            // than treating its own request as malformed.
+            OrbitError::JobRunStartConflict(_) => "job_run_start_conflict",
+            // [ORB-11253, ORB-12260] A compare-and-set revision conflict on a
+            // run-control update or operation grant transition.
+            OrbitError::JobRunControlConflict(_) => "conflict",
+            OrbitError::DependencyNotDelivered { .. } => "dependency_not_delivered",
+            OrbitError::ShipRunInFlight { .. } => "ship_run_in_flight",
+            OrbitError::PrForgeRemoteMissing { .. } => "pr_forge_remote_missing",
+            OrbitError::TaskScheduled { .. } => "task_scheduled",
+            OrbitError::ResumeRunInFlight { .. } => "resume_run_in_flight",
+            OrbitError::WorkspaceClaimHeld(_) => "workspace_claim_held",
+            OrbitError::RemoteArtifactUnavailable { .. } => "remote_artifact_unavailable",
+            OrbitError::ArtifactNotLocal { .. } => "artifact_not_local",
+            OrbitError::FrictionNotLocal(_) => "friction_not_local",
+            OrbitError::AgentProtocolViolation(_) => "agent_protocol_violation",
+            OrbitError::UnsupportedAgentProvider(_) => "unsupported_provider",
+            OrbitError::OwnerUnavailable(_) => "owner_unavailable",
+            OrbitError::OwnerNegotiation(_) => "owner_negotiation",
+            OrbitError::OutcomeUnknown { .. } => "outcome_unknown",
+            OrbitError::RemoteTool { code, .. } => code.as_str(),
+            OrbitError::DeliveryRefused { refusal, .. } => refusal.error_code(),
+            OrbitError::Execution(_)
+            | OrbitError::UpgradeAdmissionRefused(_)
+            | OrbitError::PrivateVcs(_)
+            | OrbitError::ForgeUnavailable(_)
+            | OrbitError::WorkflowEvidenceUnavailable(_)
+            | OrbitError::ExecutionTimeout { .. } => "execution_failed",
+            OrbitError::ProcessTimeout { .. } => "process_timeout",
+            OrbitError::TaskBundleCorrupt { .. } => "task_bundle_corrupt",
+            OrbitError::Store(_) => "store_error",
+            // [ORB-15088] Retryable, unlike `internal_error`: a pull follower
+            // retries an owner read that lost only to a lock-wait deadline and
+            // never mistakes it for a failure of its candidate.
+            OrbitError::FileLockTimeout(_) | OrbitError::SqliteContention(_) => {
+                LOCK_BUSY_ERROR_CODE
+            }
+            OrbitError::WorkspaceError(_) => "workspace_error",
+            OrbitError::Io(_) => "io_error",
+            OrbitError::Migration(_) => "migration_failed",
+            OrbitError::StorageAccessDenied { .. } => "storage_access_denied",
+            OrbitError::StorageLockBusy { layer, .. } => layer.error_code(),
+            OrbitError::CallbackWorkspaceOutsideSandbox(_) => "callback_workspace_outside_sandbox",
+            OrbitError::WorkerContainmentUnavailable { .. } => "worker_containment_unavailable",
+            OrbitError::TmpGcActiveRuns { .. } => "tmp_gc_active_runs",
+            OrbitError::SystemIdentityTagDropped { .. } => "system_identity_tag_dropped",
+            OrbitError::CandidateAbsorbed(_)
+            | OrbitError::DesktopWriteAccepted { .. }
+            | OrbitError::PullRequestMergeabilityUnknown { .. }
+            | OrbitError::RecoverableVcsConflict(_)
+            | OrbitError::RunCancellationIncomplete { .. }
+            | OrbitError::RunProviderTeardownUnconfirmed { .. }
+            | OrbitError::TaskRevisionConflict { .. } => "internal_error",
+        }
+    }
+
+    /// Structured error details shared by Orbit error surfaces.
+    pub fn wire_details(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut fields = serde_json::Map::new();
+        if let Some((host, path, _)) = self.host_configuration_details() {
+            fields.insert("host".to_string(), serde_json::json!(host));
+            fields.insert("path".to_string(), serde_json::json!(path));
+        }
+        if let Some(did_you_mean) = self.did_you_mean() {
+            fields.insert("did_you_mean".to_string(), serde_json::json!(did_you_mean));
+        }
+        if let Some(artifact_origin) = self.artifact_origin() {
+            fields.insert(
+                "artifact_origin".to_string(),
+                serde_json::json!(artifact_origin),
+            );
+        }
+        if let Some(refusal) = self.force_overridable() {
+            fields.insert(
+                "guard".to_string(),
+                serde_json::json!(refusal.kind.as_str()),
+            );
+            if let Some(run_id) = &refusal.run_id {
+                fields.insert("run_id".to_string(), serde_json::json!(run_id));
+            }
+            if let Some(run_state) = &refusal.run_state {
+                fields.insert("run_state".to_string(), serde_json::json!(run_state));
+            }
+            if let Some(task_status) = &refusal.task_status {
+                fields.insert("task_status".to_string(), serde_json::json!(task_status));
+            }
+        }
+        if let Some((task_id, run_id)) = self.ship_run_in_flight() {
+            fields.insert("task_id".to_string(), serde_json::json!(task_id));
+            fields.insert("run_id".to_string(), serde_json::json!(run_id));
+        }
+        if let OrbitError::TaskCompletionLiveRun { task_id, run_id } = self {
+            fields.insert("task_id".to_string(), serde_json::json!(task_id));
+            fields.insert("run_id".to_string(), serde_json::json!(run_id));
+        }
+        if let Some((source_run_id, run_id)) = self.resume_run_in_flight() {
+            fields.insert(
+                "source_run_id".to_string(),
+                serde_json::json!(source_run_id),
+            );
+            fields.insert("run_id".to_string(), serde_json::json!(run_id));
+        }
+        if let Some((task_id, path, reason)) = self.task_bundle_corruption() {
+            fields.insert("task_id".to_string(), serde_json::json!(task_id));
+            fields.insert("path".to_string(), serde_json::json!(path));
+            fields.insert("reason".to_string(), serde_json::json!(reason));
+        }
+        if let Some(details) = self.friction_not_local_details() {
+            fields.insert(
+                "friction_id".to_string(),
+                serde_json::json!(details.friction_id),
+            );
+            fields.insert("task_id".to_string(), serde_json::json!(details.task_id));
+            fields.insert(
+                "workspace_id".to_string(),
+                serde_json::json!(details.workspace_id),
+            );
+            fields.insert("found_in".to_string(), serde_json::json!(details.found_in));
+        }
+        if let OrbitError::TmpGcActiveRuns { run_ids } = self {
+            fields.insert("run_ids".to_string(), serde_json::json!(run_ids));
+        }
+        if let Some(tag) = self.dropped_system_tag() {
+            fields.insert("tag".to_string(), serde_json::json!(tag));
+        }
+        fields
+    }
+
+    /// Preserve a destination's JSON-RPC error answer as structured data.
+    ///
+    /// The numeric `code` and string `message` fields are kept typed in the
+    /// [`Self::RemoteTool`] payload (`rpc_code` / `rpc_message`), so callers
+    /// classify from those fields rather than a formatted string. The
+    /// formatted text stays only as the human-readable detail.
+    pub fn json_rpc_refusal(machine_id: &str, method: &str, error: &serde_json::Value) -> Self {
+        let rpc_code = error.get("code").and_then(serde_json::Value::as_i64);
+        let rpc_message = error
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let code = match rpc_code {
+            Some(JSON_RPC_INVALID_PARAMS_CODE) => RemoteToolCode::InvalidInput,
+            Some(-32601) => RemoteToolCode::NotFound,
+            Some(other) => RemoteToolCode::Other(format!("json_rpc_{other}")),
+            None => RemoteToolCode::Other("json_rpc_error".to_string()),
+        };
+        let mut payload = serde_json::json!({
+            "code": code.as_str(),
+            "message": rpc_message,
+            "rpc_message": rpc_message,
+        });
+        if let Some(rpc_code) = rpc_code {
+            payload["rpc_code"] = serde_json::json!(rpc_code);
+        }
+        if let Some(data) = error.get("data") {
+            payload["rpc_data"] = data.clone();
+        }
+        Self::RemoteTool {
+            code,
+            message: format!("{machine_id}: '{method}' failed: {error}"),
+            payload,
+        }
+    }
+
+    /// Whether this error is a preserved JSON-RPC refusal.
+    pub fn is_json_rpc_refusal(&self) -> bool {
+        matches!(self, Self::RemoteTool { payload, .. } if payload.get("rpc_message").is_some())
+    }
+
+    /// Whether this is the legacy owner's unknown-internal-drain-operation
+    /// refusal, decided from its structured RPC code and message fields.
+    pub fn is_unknown_internal_drain_operation(&self) -> bool {
+        match self {
+            Self::RemoteTool { payload, .. } => {
+                payload.get("rpc_code").and_then(serde_json::Value::as_i64)
+                    == Some(JSON_RPC_INVALID_PARAMS_CODE)
+                    && payload
+                        .get("rpc_message")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(UNKNOWN_INTERNAL_DRAIN_OPERATION_RPC_MESSAGE)
+            }
+            _ => false,
+        }
+    }
+
+    /// The typed step-failure code this error carries, parsed once where a
+    /// step failure is ingested from an `OrbitError`.
+    ///
+    /// An ordinary remote-tool failure contributes its wire code verbatim. The
+    /// owner-route variants — a destination that cannot be reached, an
+    /// owner that is unavailable or cannot be negotiated with, a stale
+    /// route to it — are the [`StepFailureCode::OwnerRouteUnavailable`]
+    /// the claimed worker's owner route raises; their messages are kept
+    /// as they are, and the typing happens here instead of in a bracketed
+    /// marker stamped into the text. A preserved JSON-RPC refusal also
+    /// classifies as [`StepFailureCode::OwnerRouteUnavailable`], keeping
+    /// the typing it had before PR #9155 preserved it as a remote-tool reply.
+    ///
+    /// [`StepFailureCode::OwnerRouteUnavailable`]: orbit_types::workflow::StepFailureCode::OwnerRouteUnavailable
+    pub fn step_failure_code(&self) -> Option<orbit_types::workflow::StepFailureCode> {
+        if self.is_json_rpc_refusal() {
+            return Some(orbit_types::workflow::StepFailureCode::OwnerRouteUnavailable);
+        }
+        match self {
+            Self::RemoteTool { code, .. } => {
+                Some(orbit_types::workflow::StepFailureCode::parse(code.as_str()))
+            }
+            Self::UnreachableDestination(_)
+            | Self::OwnerUnavailable(_)
+            | Self::StaleRoute(_)
+            | Self::OwnerNegotiation(_) => {
+                Some(orbit_types::workflow::StepFailureCode::OwnerRouteUnavailable)
+            }
+            _ => None,
+        }
+    }
+
     /// Construct a decision refusal without encoding its classification in prose.
     pub fn decision_refused(code: DecisionRefusalCode, message: impl Into<String>) -> Self {
         Self::DecisionRefused {
@@ -15,11 +298,35 @@ impl OrbitError {
         }
     }
 
+    /// Construct a fleet-notice refusal with its stable code.
+    pub fn notice_refused(code: NoticeRefusalCode, message: impl Into<String>) -> Self {
+        Self::NoticeRefused {
+            code,
+            message: message.into(),
+        }
+    }
+
+    /// Construct an explicit task-pilot submission refusal with its stable code.
+    pub fn task_pilot_refused(code: TaskPilotRefusalCode, message: impl Into<String>) -> Self {
+        Self::TaskPilotRefused {
+            code,
+            message: message.into(),
+        }
+    }
+
+    /// Construct the unavailable-evidence failure of a workflow prerequisite read.
+    pub fn workflow_evidence_unavailable(reason: impl Into<String>) -> Self {
+        Self::WorkflowEvidenceUnavailable(WorkflowEvidenceUnavailable {
+            reason: reason.into(),
+        })
+    }
+
     /// Whether this is a policy denial, including a typed decision-channel refusal.
     pub fn is_policy_denial(&self) -> bool {
         match self {
             Self::PolicyDenied(_) => true,
             Self::DecisionRefused { code, .. } => code.is_policy_denial(),
+            Self::NoticeRefused { code, .. } => code.is_policy_denial(),
             _ => false,
         }
     }
@@ -58,6 +365,44 @@ impl OrbitError {
             id: id.into(),
             guidance: Some(guidance.into()),
         }
+    }
+
+    /// Construct a typed host-configuration error naming the host and file.
+    pub fn host_configuration(
+        host: impl Into<String>,
+        path: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::HostConfiguration {
+            host: host.into(),
+            path: path.into(),
+            message: message.into(),
+        }
+    }
+
+    /// The `(host, path, message)` of a host-configuration error, if it is one.
+    pub fn host_configuration_details(&self) -> Option<(&str, &str, &str)> {
+        match self {
+            Self::HostConfiguration {
+                host,
+                path,
+                message,
+            } => Some((host, path, message)),
+            _ => None,
+        }
+    }
+
+    /// Whether this is a typed host-configuration error, including one a
+    /// remote owner reported as `host_configuration`.
+    pub fn is_host_configuration(&self) -> bool {
+        matches!(
+            self,
+            Self::HostConfiguration { .. }
+                | Self::RemoteTool {
+                    code: RemoteToolCode::HostConfiguration,
+                    ..
+                }
+        )
     }
 
     pub fn invalid_input_with_suggestions(
@@ -212,6 +557,45 @@ impl OrbitError {
         }
     }
 
+    /// The delivery push the forge held, if this is one.
+    pub fn forge_push_hold(&self) -> Option<&ForgePushHoldFailure> {
+        match self {
+            Self::ForgeUnavailable(failure) => Some(failure),
+            _ => None,
+        }
+    }
+
+    /// The named source-repair authority refusal, if this is one.
+    pub fn source_repair_authority_refusal(&self) -> Option<SourceRepairAuthorityRefusal> {
+        match self {
+            Self::SourceRepairAuthorityRefused(code) => Some(*code),
+            _ => None,
+        }
+    }
+
+    /// The run-state reason of a source-repair refusal, if this is one.
+    pub fn source_repair_run_state_refusal(&self) -> Option<SourceRepairRunStateRefusal> {
+        match self {
+            Self::SourceRepairRunStateRefused { reason, .. } => Some(*reason),
+            _ => None,
+        }
+    }
+
+    /// The message of a job-validation refusal: a [`Self::JobValidation`],
+    /// or a typed source-repair refusal that reports as one. Callers that
+    /// answer job-validation refusals specially use this so the typed
+    /// refusal keeps the treatment its untyped predecessor had.
+    pub fn job_validation_message(&self) -> Option<std::borrow::Cow<'_, str>> {
+        match self {
+            Self::JobValidation(message) => Some(message.as_str().into()),
+            Self::SourceRepairAuthorityRefused(code) if !code.reports_as_execution() => {
+                Some(code.message().into())
+            }
+            Self::SourceRepairRunStateRefused { message, .. } => Some(message.as_str().into()),
+            _ => None,
+        }
+    }
+
     /// Translate a filesystem write failure.
     ///
     /// EROFS/EACCES name `path` and hint that this is likely a sandbox or
@@ -294,6 +678,43 @@ impl OrbitError {
         Self::ClaimRefused {
             kind,
             message: kind.message().to_string(),
+        }
+    }
+
+    /// A refusal `--force` overrides: a run still owns the task.
+    pub fn force_overridable_run_owned(
+        run_id: impl Into<String>,
+        run_state: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::ForceOverridable(Box::new(ForceOverridableRefusal {
+            kind: ForceOverridableKind::RunStillOwnsTask,
+            message: message.into(),
+            run_id: Some(run_id.into()),
+            run_state: Some(run_state.into()),
+            task_status: None,
+        }))
+    }
+
+    /// A refusal `--force` overrides: delete outside `proposed`/`rejected`.
+    pub fn force_overridable_delete(
+        task_status: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::ForceOverridable(Box::new(ForceOverridableRefusal {
+            kind: ForceOverridableKind::DeleteOutsideProposedOrRejected,
+            message: message.into(),
+            run_id: None,
+            run_state: None,
+            task_status: Some(task_status.into()),
+        }))
+    }
+
+    /// The force-overridable refusal, if this is one.
+    pub fn force_overridable(&self) -> Option<&ForceOverridableRefusal> {
+        match self {
+            Self::ForceOverridable(refusal) => Some(refusal),
+            _ => None,
         }
     }
 

@@ -74,11 +74,6 @@ impl RuntimeKernel {
         self.context.codex_execution_policy()
     }
 
-    /// `execution.proc_spawn_max_timeout_minutes`, in milliseconds.
-    pub fn proc_spawn_max_timeout_ms(&self) -> u64 {
-        self.context.proc_spawn_max_timeout_ms()
-    }
-
     pub fn list_executor_defs(
         &self,
     ) -> Result<Vec<orbit_types::workflow::ExecutorDef>, OrbitError> {

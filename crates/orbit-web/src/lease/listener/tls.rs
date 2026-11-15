@@ -4,15 +4,14 @@ use std::fs::File;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
-use super::config::refused;
-use orbit_config::LeaseListenerTlsSettings;
+use super::config::{LeaseListenerTlsSettings, refused};
 use orbit_core::OrbitError;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 
 pub(super) fn load_listener_tls(
     settings: &LeaseListenerTlsSettings,
 ) -> Result<Arc<rustls::ServerConfig>, OrbitError> {
-    let invalid = |detail| refused(&format!("lease.listener.tls: {detail}"));
+    let invalid = |detail| refused(&format!("tls: {detail}"));
     let cert_file = File::open(&settings.cert)
         .map_err(|error| invalid(format!("cannot open cert {}: {error}", settings.cert)))?;
     let key_file = File::open(&settings.key)

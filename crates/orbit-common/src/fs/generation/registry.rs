@@ -28,8 +28,8 @@ use serde::{Deserialize, Serialize};
 
 use super::identity::{Access, CompatibilityIdentity};
 use super::paths::validated_generation_root;
-use super::refusal::refusal;
-use crate::OrbitError;
+use super::refusal;
+use crate::{OrbitError, UpgradeAdmissionRefusalKind};
 
 const PARTICIPANTS_DIR: &str = ".generation-participants";
 const PENDING_RECORD: &str = ".generation-pending.json";
@@ -352,6 +352,13 @@ pub struct PendingSwitch {
     pub requested_at: DateTime<Utc>,
     /// When the waiter gives up and refuses.
     pub deadline: DateTime<Utc>,
+    /// Set by an updater that renames nothing: it asks the long-lived
+    /// participants already running `digest` as `target` to hand over to
+    /// their own installed executable, so the generation is proven free of
+    /// every other holder before it is re-pinned. Builds that predate it read
+    /// the record without the field, as a switch to their own identity.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub refresh: bool,
 }
 
 /// The waiter's hold on the pending record. Dropping it clears the switch.
@@ -376,7 +383,10 @@ pub(super) fn claim_pending(
     let root = validated_generation_root(root)?;
     let path = root.join(PENDING_RECORD);
     if !path.starts_with(&root) {
-        return Err(refusal("pending record path escapes the root"));
+        return Err(refusal::upgrade_admission_refusal(
+            UpgradeAdmissionRefusalKind::Other,
+            "pending record path escapes the root",
+        ));
     }
     let mut file = OpenOptions::new()
         .read(true)
@@ -385,27 +395,43 @@ pub(super) fn claim_pending(
         .truncate(false)
         .open(&path)
         .map_err(|error| {
-            refusal(format!(
-                "cannot record the pending generation switch: {error}"
-            ))
+            refusal::upgrade_admission_refusal(
+                UpgradeAdmissionRefusalKind::Other,
+                format!("cannot record the pending generation switch: {error}"),
+            )
         })?;
     // A `pending_switch` reader holds the record shared for an instant; only a
     // claim that outlasts a short retry is another waiter's.
     let settle = std::time::Instant::now() + CLAIM_SETTLE;
     while FileExt::try_lock_exclusive(&file).is_err() {
         if std::time::Instant::now() >= settle {
-            return Err(refusal("another generation switch is already pending"));
+            return Err(refusal::upgrade_admission_refusal(
+                UpgradeAdmissionRefusalKind::Other,
+                "another generation switch is already pending",
+            ));
         }
         std::thread::sleep(Duration::from_millis(1));
     }
     let claim = PendingClaim {
-        file: file.try_clone().map_err(refusal)?,
+        file: file.try_clone().map_err(|error| {
+            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+        })?,
     };
-    let encoded = serde_json::to_vec(switch).map_err(refusal)?;
-    file.seek(SeekFrom::Start(0)).map_err(refusal)?;
-    file.write_all(&encoded).map_err(refusal)?;
-    file.set_len(encoded.len() as u64).map_err(refusal)?;
-    crate::fs::io::sync_file_data(&file).map_err(refusal)?;
+    let encoded = serde_json::to_vec(switch).map_err(|error| {
+        refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+    })?;
+    file.seek(SeekFrom::Start(0)).map_err(|error| {
+        refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+    })?;
+    file.write_all(&encoded).map_err(|error| {
+        refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+    })?;
+    file.set_len(encoded.len() as u64).map_err(|error| {
+        refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+    })?;
+    crate::fs::io::sync_file_data(&file).map_err(|error| {
+        refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+    })?;
     Ok(claim)
 }
 

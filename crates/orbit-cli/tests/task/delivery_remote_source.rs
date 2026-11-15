@@ -720,6 +720,7 @@ fn put_coverage(
     )
     .unwrap();
     let input = json!({
+        "action": "put",
         "id": action_id,
         "source_path": "automation-coverage.json",
         "path": "automation-coverage.json",
@@ -727,7 +728,7 @@ fn put_coverage(
     })
     .to_string();
     fixture
-        .command(&["tool", "run", "orbit.task.artifact.put", "--input", &input])
+        .command(&["tool", "run", "orbit.task.artifact", "--input", &input])
         .env("ORBIT_MANAGED_RUN_CONTEXT", "1")
         .env("ORBIT_RUN_ID", run_id)
         .assert()

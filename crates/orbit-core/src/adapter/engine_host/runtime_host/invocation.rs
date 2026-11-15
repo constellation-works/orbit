@@ -53,22 +53,6 @@ pub(super) fn persist_invocation_trace(
             DispatchError::JobExecution(format!("persist invocation trace: {error}"))
         })?;
 
-    let existing = runtime
-        .get_job_run_backend(job_run_id)
-        .map_err(|error| {
-            DispatchError::JobExecution(format!("read job run for knowledge metrics: {error}"))
-        })?
-        .and_then(|run| run.knowledge_metrics);
-    if let Some(metrics) = crate::metrics::merge_invocation_trace(existing.as_ref(), trace) {
-        runtime
-            .stores()
-            .jobs()
-            .record_job_run_knowledge_metrics(job_run_id, metrics)
-            .map_err(|error| {
-                DispatchError::JobExecution(format!("record job-run knowledge metrics: {error}"))
-            })?;
-    }
-
     Ok(())
 }
 

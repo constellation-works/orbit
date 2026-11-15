@@ -22,11 +22,110 @@ pass = ["GLOBAL_TOKEN"]
 fn global_plugin_enablement_is_refused_at_load() {
     let global = tempdir().expect("global tempdir");
     let workspace = tempdir().expect("workspace tempdir");
-    write_config(global.path(), "[plugin_enablement]\ngraph = false\n");
+    write_config(
+        global.path(),
+        "[machine]\nname = \"owner-host\"\n\n[plugin_enablement]\ngraph = false\n",
+    );
 
     let error = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
         .expect_err("a global toggle table is refused");
-    assert!(matches!(error, orbit_common::OrbitError::InvalidInput(_)));
+    // [ORB-20766] The refusal is a typed host-configuration error naming the
+    // host and file, not the caller's invalid_input: a follower whose remote
+    // call the owner serves did nothing wrong.
+    assert!(
+        matches!(error, orbit_common::OrbitError::HostConfiguration { .. }),
+        "{error:?}"
+    );
+    assert!(error.is_host_configuration(), "{error:?}");
+    let (host, path, message) = error
+        .host_configuration_details()
+        .expect("host configuration details");
+    assert_eq!(host, "owner-host");
+    assert!(path.ends_with("config.toml"), "{path}");
+    assert!(message.contains("[plugin_enablement]"), "{message}");
+    assert!(message.contains("--scope workspace"), "{message}");
+
+    // The wire form a follower receives, and the final-recovery
+    // classification of the ORB-20736 tag-instructions failure.
+    let remote = orbit_common::OrbitError::RemoteTool {
+        code: orbit_common::RemoteToolCode::from("host_configuration"),
+        message: error.to_string(),
+        payload: serde_json::json!({}),
+    };
+    assert!(remote.is_host_configuration(), "{remote:?}");
+    assert_eq!(
+        orbit_types::workflow::TransientInfrastructure::of_action_failure(
+            "agent_implement",
+            &format!("load tag instructions for `agent_implement` (run jrun-1): {remote}"),
+        ),
+        Some(orbit_types::workflow::TransientInfrastructure::HostConfiguration)
+    );
+    // A plain invalid_input remote failure is not infrastructure.
+    assert_eq!(
+        orbit_types::workflow::TransientInfrastructure::of_action_failure(
+            "agent_implement",
+            "load tag instructions for `agent_implement` (run jrun-1): remote tool failed \
+             (invalid_input): bad request",
+        ),
+        None
+    );
+    // A genuine host-configuration error is still recognised on the
+    // dispatch routes that surface it: a delivery action's own error and the
+    // typed local display.
+    for (action, message) in [
+        (
+            "git_push",
+            "execution failed: remote tool failed (host_configuration): bad config",
+        ),
+        (
+            "git_push",
+            "host configuration error on host 'owner-host' in '/x/config.toml': bad",
+        ),
+    ] {
+        assert_eq!(
+            orbit_types::workflow::TransientInfrastructure::of_action_failure(action, message),
+            Some(orbit_types::workflow::TransientInfrastructure::HostConfiguration),
+            "{message}"
+        );
+    }
+    // [ORB-20788] Validation failures whose command or output merely quote
+    // the marker are the candidate's, not host-configuration outages.
+    for (action, message) in [
+        (
+            "candidate_validate",
+            "execution failed: required validation 'printf remote tool failed \
+             (host_configuration); exit 1' on candidate abc (exit 1; no failing test \
+             named). The required validation did not pass.",
+        ),
+        (
+            "candidate_validate",
+            "execution failed: required validation 'make test' on candidate abc (exit 1): \
+             host configuration error on host 'h' in 'p': remote tool failed \
+             (host_configuration)",
+        ),
+        (
+            "agent_implement",
+            "agent said: remote tool failed (host_configuration)",
+        ),
+        (
+            "agent_implement",
+            "load tag instructions for `x` (run r): remote tool failed (invalid_input): \
+             remote tool failed (host_configuration)",
+        ),
+    ] {
+        assert_eq!(
+            orbit_types::workflow::TransientInfrastructure::of_action_failure(action, message),
+            None,
+            "{message}"
+        );
+    }
+
+    // The doctor-facing probe finds the same table without loading config.
+    let misplaced =
+        orbit_config::misplaced_global_plugin_enablement(&global.path().join("config.toml"))
+            .expect("probe")
+            .expect("misplaced");
+    assert_eq!(misplaced.host, "owner-host");
 
     // A global-only runtime reads no workspace layer, so it has no toggles
     // even when the one file it reads is the global file.

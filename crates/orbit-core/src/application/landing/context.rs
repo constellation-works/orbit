@@ -22,18 +22,6 @@ impl OrbitRuntime {
     ) -> Result<HandoffLandingContext, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let (claim, accepted) = self.landing_claim(handoff_id)?;
-        let receipt = self.claim_receipt(&accepted.handoff.claim_id)?;
-        if receipt
-            .visual_review
-            .as_ref()
-            .is_some_and(|contract| contract.mode == orbit_types::task::VisualReviewMode::Live)
-            || (self.visual_review_settings().mode == orbit_types::task::VisualReviewMode::Live
-                && orbit_types::task::has_verify_mock_ui_tag(
-                    &self.get_task(&accepted.handoff.task_id)?.tags,
-                ))
-        {
-            return Err(OrbitError::CapabilityDenied("visual_live_claim_unsupported: accepted live handoff has no owner-verified visual-resolution proof".into()));
-        }
         // [ORB-15677] The hosted checks the accepted review owed the owner,
         // read from the certificate the handoff pinned and acceptance judged.
         let owed_hosted_checks = self
@@ -58,12 +46,14 @@ impl OrbitRuntime {
             handoff_id: accepted.handoff_id,
             task_id: accepted.handoff.task_id,
             claim_id: accepted.handoff.claim_id,
+            producing_run_id: accepted.handoff.run_id,
             candidate: accepted.handoff.candidate,
             unresolved_merge_intent: claim.unresolved_merge_intent,
             workspace_path: self.paths().repo_root.clone(),
             owed_hosted_checks,
             // [ORB-15956] A repair claim has spent the one automatic repair.
             automatic_repair_spent: claim.claim.repair.is_some() || requeued,
+            owner_distributed_completion_done: self.owner_completion_authority().is_some(),
         })
     }
 
@@ -180,9 +170,7 @@ impl OrbitRuntime {
             context =
                 context.with_handoff_observation(self.landing_observation(update, &accepted)?);
         }
-        self.stores()
-            .tasks()
-            .mutate_execution_claim(Some(&context), &mutation_id, &mutation)?;
+        self.mutate_execution_claim(Some(&context), &mutation_id, &mutation)?;
         if let Some(previous_task) = previous_task {
             let task = self.get_task(&previous_task.id)?;
             self.record_resolves_side_effects(previous_task.status, &task);
@@ -205,7 +193,7 @@ impl OrbitRuntime {
             .ok_or_else(|| missing_attempt(handoff_id))?
             .attempt;
         let digest = orbit_common::security::release::sha256_hex(reason.as_bytes());
-        self.stores().tasks().mutate_execution_claim(
+        self.mutate_execution_claim(
             Some(&context),
             &format!("landing-wait:{handoff_id}:{attempt}:{digest}"),
             &ClaimMutation::RecordLandingWait {
@@ -232,13 +220,43 @@ impl OrbitRuntime {
             .ok_or_else(|| missing_attempt(handoff_id))?
             .attempt;
         let digest = orbit_common::security::release::sha256_hex(note.as_bytes());
-        self.stores().tasks().mutate_execution_claim(
+        self.mutate_execution_claim(
             Some(&context),
             &format!("landing-history:{handoff_id}:{attempt}:{event}:{digest}"),
             &ClaimMutation::RecordLandingHistory {
                 handoff_id: handoff_id.to_string(),
                 event: event.to_string(),
                 note: note.to_string(),
+            },
+        )?;
+        Ok(())
+    }
+
+    /// [ORB-24233] Record the completion hold of a live landing attempt through
+    /// its claim: the `completion_held` history entry and the system comment.
+    /// The store admits it only while the claim is handed off to that attempt,
+    /// so the owner's landing never sends an unscoped task write.
+    pub(crate) fn record_handoff_landing_completion_hold(
+        &self,
+        handoff_id: &str,
+        history: &orbit_types::task::TaskHistoryEntry,
+        comment: &str,
+    ) -> Result<(), OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        let (claim, _) = self.landing_claim(handoff_id)?;
+        let context = self.landing_invocation(&claim);
+        let attempt = self
+            .landing_attempt(handoff_id)?
+            .ok_or_else(|| missing_attempt(handoff_id))?
+            .attempt;
+        let digest = orbit_common::security::release::sha256_hex(comment.as_bytes());
+        self.mutate_execution_claim(
+            Some(&context),
+            &format!("landing-completion-hold:{handoff_id}:{attempt}:{digest}"),
+            &ClaimMutation::RecordLandingCompletionHold {
+                handoff_id: handoff_id.to_string(),
+                history: history.clone(),
+                comment: comment.to_string(),
             },
         )?;
         Ok(())

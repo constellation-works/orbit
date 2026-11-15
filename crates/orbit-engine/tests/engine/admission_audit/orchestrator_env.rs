@@ -40,8 +40,13 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
     );
     let audit_root = temp.path().join("audit");
     let audit = persisted_writer(&audit_root, "job-agent-tools", "grok:grok-build");
-    let host = TestHost::with_command(script.display().to_string())
-        .with_additional_tools(&["orbit.workflow.run.show", "orbit.workflow.run.list"]);
+    let host = TestHost::with_command(script.display().to_string()).with_additional_tools(&[
+        "orbit.workflow.run.show",
+        "orbit.workflow.run.list",
+        "orbit.run:observe",
+        "orbit.run:list",
+        "orbit.decision:list",
+    ]);
     let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(10));
     spec.tool_disallow_list = Some(Vec::new());
 
@@ -78,6 +83,9 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
         .expect("effective activity tools");
     assert!(effective_tools.contains(&"orbit.workflow.run.show".to_string()));
     assert!(effective_tools.contains(&"orbit.workflow.run.list".to_string()));
+    assert!(effective_tools.contains(&"orbit.run:observe".to_string()));
+    assert!(effective_tools.contains(&"orbit.run:list".to_string()));
+    assert!(effective_tools.contains(&"orbit.decision:list".to_string()));
 
     let provider_input = persisted_blobs(&audit_root)
         .read(&stdin_blob_ref)
@@ -97,6 +105,18 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
     );
     assert!(
         !tools.contains(&serde_json::json!("orbit.workflow.run.list")),
+        "{tools:?}"
+    );
+    assert!(
+        !tools.contains(&serde_json::json!("orbit.run:observe")),
+        "{tools:?}"
+    );
+    assert!(
+        !tools.contains(&serde_json::json!("orbit.run:list")),
+        "{tools:?}"
+    );
+    assert!(
+        tools.contains(&serde_json::json!("orbit.decision:list")),
         "{tools:?}"
     );
     assert!(
@@ -219,7 +239,7 @@ fail() {
   exit 1
 }
 [ "$ORBIT_ACTIVITY_TOOL_POLICY" = "deny" ] || fail policy_marker_missing
-[ "$ORBIT_ACTIVITY_TOOLS_DENY" = "orbit.workflow.ship,proc.*,orbit.task.update" ] || fail claimed_disallow_list_missing
+[ "$ORBIT_ACTIVITY_TOOLS_DENY" = "orbit.workflow:ship,proc.*,orbit.task.update" ] || fail claimed_disallow_list_missing
 [ "$ORBIT_ACTIVITY_TOOLS" = "orbit.task.show,orbit.search,github.run.list" ] || fail claimed_task_read_unavailable
 printf '%s\n' '{"schemaVersion":1,"status":"success","result":{"policy":"ok"},"error":null}'
 "#,
@@ -231,7 +251,7 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{"policy":"ok"},"e
     );
     let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(5));
     spec.tool_disallow_list = Some(vec![
-        "orbit.workflow.ship".to_string(),
+        "orbit.workflow:ship".to_string(),
         "proc.*".to_string(),
     ]);
 
@@ -274,12 +294,97 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{"policy":"ok"},"e
         tool_disallow_list.as_deref(),
         Some(
             [
-                "orbit.workflow.ship".to_string(),
+                "orbit.workflow:ship".to_string(),
                 "proc.*".to_string(),
                 "orbit.task.update".to_string(),
             ]
             .as_slice()
         )
+    );
+}
+
+/// A host-suppressed tool leaves the effective baseline and also enters
+/// the deny list the child receives, because deny mode ignores the legacy
+/// allowlist. A retained read stays callable.
+#[test]
+fn run_cli_backend_stamps_suppressed_tools_in_child_deny_list() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::run_cli_backend_stamps_suppressed_tools_in_child_deny_list"
+    )) {
+        return;
+    }
+
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("grok");
+    write_executable(
+        &script,
+        r#"#!/bin/sh
+cat > /dev/null
+fail() {
+  printf '%s\n' "{\"schemaVersion\":1,\"status\":\"failed\",\"error\":{\"code\":\"$1\",\"message\":\"$1\",\"details\":null}}"
+  exit 1
+}
+[ "$ORBIT_ACTIVITY_TOOL_POLICY" = "deny" ] || fail policy_marker_missing
+[ "$ORBIT_ACTIVITY_TOOLS_DENY" = "orbit.workflow:ship,orbit.notice.post,orbit.notice.show,orbit.notice.close" ] || fail suppressed_deny_list_missing
+[ "$ORBIT_ACTIVITY_TOOLS" = "orbit.task.show,orbit.search,proc.spawn,github.run.list,orbit.notice.list" ] || fail suppressed_effective_tools_wrong
+printf '%s\n' '{"schemaVersion":1,"status":"success","result":{"policy":"ok"},"error":null}'
+"#,
+    );
+    let audit = persisted_writer(
+        &temp.path().join("audit"),
+        "job-suppressed-deny",
+        "grok:grok-build",
+    );
+    let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(5));
+    spec.tool_disallow_list = Some(vec!["orbit.workflow:ship".to_string()]);
+    let host = TestHost::with_command(script.display().to_string())
+        .with_additional_tools(&[
+            "orbit.notice.post",
+            "orbit.notice.show",
+            "orbit.notice.close",
+            "orbit.notice.list",
+        ])
+        .with_suppressed_tools(&[
+            "orbit.notice.post",
+            "orbit.notice.show",
+            "orbit.notice.close",
+        ]);
+
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "agent_implement",
+        "job-suppressed-deny",
+        audit.clone(),
+        &serde_json::json!({"prompt": "hi"}),
+        None,
+    )
+    .expect("run succeeds");
+    assert!(
+        outcome.success,
+        "child had an unexpected suppressed-tool policy: {:?}",
+        outcome.output
+    );
+    let tool_disallow_list = audit
+        .events_snapshot()
+        .expect("audit snapshot")
+        .into_iter()
+        .find_map(|event| match event.kind {
+            V2AuditEventKind::ToolAllowlistHarnessDelegated {
+                tool_disallow_list, ..
+            } => tool_disallow_list,
+            _ => None,
+        })
+        .expect("tool allowlist audit event");
+    assert_eq!(
+        tool_disallow_list,
+        [
+            "orbit.workflow:ship".to_string(),
+            "orbit.notice.post".to_string(),
+            "orbit.notice.show".to_string(),
+            "orbit.notice.close".to_string(),
+        ]
     );
 }
 
@@ -359,6 +464,7 @@ fn experiment_tool_overlay(add: &[&str], remove: &[&str]) -> ExperimentActivityO
         tools_add: add.iter().map(|tool| (*tool).to_string()).collect(),
         tools_remove: remove.iter().map(|tool| (*tool).to_string()).collect(),
         skills: Vec::new(),
+        memory: None,
     }
 }
 
@@ -644,6 +750,51 @@ fn run_cli_backend_redacts_live_env_values_in_stored_blobs() {
             "{key} should include env redaction marker: {text}"
         );
     }
+}
+
+/// [ORB-24556] An accepted envelope whose `result` names `provider` and
+/// `exit_code` cannot replace the supervisor's values or list them as the
+/// agent's answer. A non-colliding key stays the agent's answer.
+#[test]
+fn run_cli_backend_keeps_orbit_owned_output_over_an_agent_result() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::run_cli_backend_keeps_orbit_owned_output_over_an_agent_result"
+    )) {
+        return;
+    }
+
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("grok");
+    write_executable(
+        &script,
+        r##"#!/bin/sh
+cat >/dev/null
+printf '%s\n' '{"schemaVersion":1,"status":"success","result":{"provider":"spoofed","exit_code":7,"marker":"kept"},"error":null}'
+"##,
+    );
+    let audit_root = temp.path().join("audit");
+    let audit = persisted_writer(&audit_root, "job-orbit-owned-output", "grok:grok-build");
+
+    let outcome = run_cli_backend(
+        &TestHost::with_command(script.display().to_string()),
+        &test_agent_loop_spec_for("grok", Duration::from_secs(10)),
+        "test_activity",
+        "job-orbit-owned-output",
+        audit,
+        &serde_json::json!({"prompt": "hi"}),
+        None,
+    )
+    .expect("run succeeds");
+
+    assert!(outcome.success, "{:?}", outcome.message);
+    assert_eq!(outcome.output["provider"], serde_json::json!("grok"));
+    assert_eq!(outcome.output["exit_code"], serde_json::json!(0));
+    assert_eq!(outcome.output["marker"], serde_json::json!("kept"));
+    assert_eq!(
+        outcome.output["response_result_fields"],
+        serde_json::json!(["marker"])
+    );
 }
 
 /// [ORB-14090] A provider that dirties its read-only inspection checkout still

@@ -2,7 +2,9 @@ use orbit_common::OrbitError;
 use orbit_common::governance::authorization::agent_context_declared;
 use orbit_engine::TaskActivityUpdate;
 use orbit_types::identity::{all_agent_families, infer_agent_family_from_model};
-use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{CrewSource, Task, TaskHistoryEntry, TaskStatus};
+
+use crate::application::task::TaskRow;
 
 use super::super::helpers::SYSTEM_ACTOR_LABEL;
 use super::super::params::TaskUpdateParams;
@@ -20,7 +22,8 @@ pub(super) enum StatusAuthority {
     Internal,
     /// Attributed operator and agent surfaces — the CLI `task update`, the
     /// dashboard, and the registered `orbit.task.update` tool. The lifecycle
-    /// table and local run ownership decide.
+    /// table and local run ownership decide, except that an operator's move of
+    /// a human crew's task skips the table and its evidence gates.
     Lifecycle,
     /// A human overriding the table or local run ownership from the bare CLI or the dashboard,
     /// recorded in task history as
@@ -53,8 +56,13 @@ pub(super) struct TaskUpdateContext {
 
 /// A locked write's result plus what the after-lock side effects need: the
 /// status it replaced and the status note it recorded.
+///
+/// `row` is the post-write bundle when that write did not attach evidence.
+/// A later status transition can append history outside the lock, so callers
+/// drop the row when the status changed and read again for a full response.
 pub(super) struct LockedTaskUpdate {
     pub(super) task: Task,
+    pub(super) row: Option<TaskRow>,
     pub(super) previous_status: TaskStatus,
     pub(super) status_note: Option<String>,
 }
@@ -64,7 +72,7 @@ pub(in crate::application::task) struct ValidatedTaskFieldEdits {
     /// Set when this write assigned a crew explicitly or drew a replacement;
     /// the caller includes the draw source in the change history [ORB-12717].
     pub(in crate::application::task) crew_assignment: Option<CreationCrewAssignment>,
-    pub(in crate::application::task) crew_source: Option<Option<String>>,
+    pub(in crate::application::task) crew_source: Option<Option<CrewSource>>,
     pub(in crate::application::task) crew_redraw_history: Option<TaskHistoryEntry>,
     /// Set when this write changes `granted_tools`: the stored grant it
     /// replaces and the run/claim state the change window admitted it in.
@@ -145,14 +153,26 @@ impl OrbitRuntime {
         agent: Option<String>,
         model: Option<String>,
     ) -> Result<Task, OrbitError> {
+        Ok(self
+            .update_task_with_identity_applied(id, params, agent, model)?
+            .0)
+    }
+
+    pub(in crate::application::task) fn update_task_with_identity_applied(
+        &self,
+        id: &str,
+        params: TaskUpdateParams,
+        agent: Option<String>,
+        model: Option<String>,
+    ) -> Result<(Task, Option<TaskRow>), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        self.update_task_with_context(
+        self.update_task_applied(
             id,
             params,
             TaskUpdateContext {
                 operator_decision_authority: agent.is_none()
                     && model.is_none()
-                    && self.actor().kind == crate::context::ActorKind::Human,
+                    && self.actor().kind == crate::runtime::context::ActorKind::Human,
                 agent,
                 model,
                 status_authority: StatusAuthority::Lifecycle,
@@ -184,6 +204,70 @@ impl OrbitRuntime {
         )
     }
 
+    /// Apply an admitted application call as `application:<id>`. `note` is
+    /// the status-change note; `expected_status` is the status admission saw,
+    /// rechecked under the task lock so a move between admission and write
+    /// refuses instead of applying on changed state.
+    pub(crate) fn update_task_as_application(
+        &self,
+        id: &str,
+        params: TaskUpdateParams,
+        actor_label: String,
+        note: Option<String>,
+        expected_status: Option<TaskStatus>,
+    ) -> Result<Task, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        self.update_task_with_context(
+            id,
+            params,
+            TaskUpdateContext {
+                status_note: note,
+                actor_override: Some(actor_label),
+                expected_status,
+                operator_decision_authority: true,
+                status_authority: StatusAuthority::Lifecycle,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Bookkeeping status move for a precedent answer or its reversal.
+    ///
+    /// Internal authority, actor `precedent`, and the precedent bookkeeping
+    /// note. This is not the human funnel: it does not record a human-crew
+    /// bypass, and the note keeps the move from permanently superseding the
+    /// decision request.
+    pub(crate) fn update_task_as_precedent(
+        &self,
+        id: &str,
+        params: TaskUpdateParams,
+    ) -> Result<Task, OrbitError> {
+        self.update_task_as_decision_automation(id, params, orbit_types::task::PRECEDENT_ACTOR)
+    }
+
+    /// Apply the bookkeeping write of an automation decision answer (the
+    /// `precedent` or `model` actor) or its reversal, writing as `actor`.
+    /// Status moves carry the bookkeeping note, so a reversal that restores
+    /// the status makes the request readable as open again.
+    pub(crate) fn update_task_as_decision_automation(
+        &self,
+        id: &str,
+        params: TaskUpdateParams,
+        actor: &str,
+    ) -> Result<Task, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        self.update_task_with_context(
+            id,
+            params,
+            TaskUpdateContext {
+                status_note: Some(orbit_types::task::PRECEDENT_BOOKKEEPING_NOTE.to_string()),
+                actor_override: Some(actor.to_string()),
+                status_authority: StatusAuthority::Internal,
+                ..Default::default()
+            },
+        )
+    }
+
     /// The human escape hatch behind `orbit task update --force`: apply the
     /// update even when the lifecycle table or local run ownership refuses
     /// the status change, and record the override in task history.
@@ -199,14 +283,26 @@ impl OrbitRuntime {
         agent: Option<String>,
         model: Option<String>,
     ) -> Result<Task, OrbitError> {
+        Ok(self
+            .force_update_task_with_identity_applied(id, params, agent, model)?
+            .0)
+    }
+
+    pub(in crate::application::task) fn force_update_task_with_identity_applied(
+        &self,
+        id: &str,
+        params: TaskUpdateParams,
+        agent: Option<String>,
+        model: Option<String>,
+    ) -> Result<(Task, Option<TaskRow>), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        self.update_task_with_context(
+        self.update_task_applied(
             id,
             params,
             TaskUpdateContext {
                 operator_decision_authority: agent.is_none()
                     && model.is_none()
-                    && self.actor().kind == crate::context::ActorKind::Human,
+                    && self.actor().kind == crate::runtime::context::ActorKind::Human,
                 agent,
                 model,
                 status_authority: StatusAuthority::Forced,
@@ -246,9 +342,9 @@ impl OrbitRuntime {
         model: Option<String>,
         status_note: Option<String>,
         owner: Option<String>,
-    ) -> Result<Task, OrbitError> {
+    ) -> Result<(Task, Option<TaskRow>), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        self.update_task_with_context(
+        self.update_task_applied(
             id,
             params,
             TaskUpdateContext {

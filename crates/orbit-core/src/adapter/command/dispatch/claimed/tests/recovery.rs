@@ -136,6 +136,7 @@ impl Leaf {
             caller_before_pr: true,
             review_gate: true,
             selective_review: false,
+            visual_resolution: 0,
             ..admission_request(
                 "request-1".into(),
                 AdmissionRunContext {
@@ -260,6 +261,7 @@ impl Leaf {
             .jobs()
             .update_run_state(&self.leaf, &mut |_, state| {
                 state.final_recovery = Some(FinalRecoveryCheckpoint {
+                    fault: Default::default(),
                     key: FinalRecoveryKey {
                         run_id: leaf.clone(),
                         attempt: 1,
@@ -482,9 +484,10 @@ fn a_claimed_leafs_final_recovery_reads_its_review_evidence_and_delivery_through
         .list_audit_events(None, Some(GET.to_string()), None, None, 20)
         .unwrap();
     assert!(
-        rows.iter().all(|row| row.brokered
-            && row.task_id.as_deref() == Some(TASK)
-            && row.activity_id.as_deref() == Some(FINAL_RECOVERY_ACTIVITY)),
+        !rows.is_empty()
+            && rows.iter().all(|row| row.brokered
+                && row.task_id.as_deref() == Some(TASK)
+                && row.activity_id.as_deref() == Some(FINAL_RECOVERY_ACTIVITY)),
         "the broker audits each read for the recovering activity: {rows:?}"
     );
 }
@@ -666,6 +669,7 @@ fn final_recovery_reads_only_while_its_leaf_and_recovery_are_live() {
     fixture.set_recovery(Some(FinalRecoveryDecision::Escalate {
         diagnosis: "decided".into(),
         human_action: "look".into(),
+        summary: None,
     }));
     refused_with(
         read(&fixture, &broker),

@@ -1,25 +1,41 @@
 ---
 title: "Scope: backlog forecast v2 from drain admission"
 owner: claude
-last_updated: 2026-10-30
-last_validated: 2026-10-30
+last_updated: 2026-11-08
+last_validated: 2026-11-08
 status: Draft
 stage: building
 next: "Residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) are not filed"
 feature: backlog-forecast
 doc_role: scope
 type: design
-summary: "Scope: simulate real drain admission, review modes, retry outcomes, host resource fit and regression rework; expose task riskiness and score each forecast model version separately"
+summary: "Scope: simulate real drain admission, review modes, retry outcomes, host resource fit and regression rework; expose task riskiness, score each forecast model version separately, and correct per-metric quantiles from scored residuals"
 tags: [backlog-forecast, backlog-forecast-v2, analytics-metrics]
 ---
 
 # Scope: backlog forecast v2 from drain admission
 
-Status: v1 shipped in [ORB-18385]; v2 scoped by [ORB-18685], with six implementation tasks below. The per-task riskiness estimator shipped in [ORB-18690], [ORB-18686] shipped the admission factor, [ORB-18687] shipped review-mode sampling, [ORB-18688] shipped attempt outcomes and blocked returns, [ORB-18689] shipped enforce-mode resource fit as `MODEL_VERSION` **6**, [ORB-18853] keeps sub-second and same-instant blocked returns drawable as `MODEL_VERSION` **7**, [ORB-18856] counts censored blocked waits in return-wait totals as `MODEL_VERSION` **8**, [ORB-18691] ships one generation of regression rework and donor-based arrivals as `MODEL_VERSION` **9**, and [ORB-18859] stores retry-inclusive per-task work and spend as `MODEL_VERSION` **10** (see [Shipped so far](#shipped-so-far)); the explicitly listed residual rules remain planned. “v2” names the feature revision; implementations increment `MODEL_VERSION` from the value they find.
+Status: v1 shipped in [ORB-18385]; v2 scoped by [ORB-18685], with six implementation tasks below. The per-task riskiness estimator shipped in [ORB-18690], [ORB-18686] shipped the admission factor, [ORB-18687] shipped review-mode sampling, [ORB-18688] shipped attempt outcomes and blocked returns, [ORB-18689] shipped enforce-mode resource fit as `MODEL_VERSION` **6**, [ORB-18853] keeps sub-second and same-instant blocked returns drawable as `MODEL_VERSION` **7**, [ORB-18856] counts censored blocked waits in return-wait totals as `MODEL_VERSION` **8**, [ORB-18691] ships one generation of regression rework and donor-based arrivals as `MODEL_VERSION` **9**, and [ORB-18859] stores retry-inclusive per-task work and spend as `MODEL_VERSION` **10** (see [Shipped so far](#shipped-so-far)). [ORB-20673] shifts each attempt by a residual correction as `MODEL_VERSION` **15**, [ORB-20728] counts one residual per distinct task as `MODEL_VERSION` **16**, [ORB-20729] applies that correction to the full-script total as `MODEL_VERSION` **17**, and [ORB-21949] fits it and scores task-level calibration on one forecast per task, withholding a cohort whose held-out p90 coverage drops, as `MODEL_VERSION` **18**. The explicitly listed residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) remain planned. “v2” names the feature revision; implementations increment `MODEL_VERSION` from the value they find.
 
-Bearing: Orbit records managed invocations, task status history, leaf occupancy, admission decisions and host resource profiles. The shared service is `crates/orbit-core/src/application/task/backlog_forecast/`, with sampling in `backlog_forecast/model.rs`, scenario aggregation in `backlog_forecast/simulation.rs`, synthetic bundles in `backlog_forecast/rework.rs`, and scoring in `backlog_forecast/scoring.rs`. It serves the owner sweep clock and `crates/orbit-web/src/api/diagnostics/backlog_forecast/`. The drain already owns the admission rules this forecast must reuse ([auto-concurrency](../auto-concurrency/2_design.md), [distributed drain](../distributed-drain/1_overview.md)).
+Bearing: Orbit records managed invocations, task status history, leaf occupancy, admission decisions and host resource profiles. The shared service is `crates/orbit-core/src/application/backlog_forecast/`, with sampling in `backlog_forecast/model.rs`, scenario aggregation in `backlog_forecast/simulation.rs`, synthetic bundles in `backlog_forecast/rework.rs`, and scoring in `backlog_forecast/scoring.rs`. It serves the owner sweep clock and `crates/orbit-web/src/api/diagnostics/backlog_forecast/`. The drain already owns the admission rules this forecast must reuse ([auto-concurrency](../auto-concurrency/2_design.md), [distributed drain](../distributed-drain/1_overview.md)).
 
 ## Shipped so far
+
+Model **19** separates drain completion from spending estimates. Pending tasks
+whose effective `not_before` is in the future and tasks admission excludes with
+`no-drain` stay outside the drain simulation. The admission exclusion rule is
+shared, and frozen schedule overrides still apply. Already-running work stays
+in the drain. Held tasks retain standalone full-script work-hour, token and
+USD estimates in task rows, complexity rows and spending totals; their future
+regression follow-up is outside this drain. `drain_tasks` counts the time-to-drain
+population; `tasks` still counts the spending population. `drain_hold` records
+each held task's scheduled start or admission exclusion reason and detail in
+predictions and stored task rows. The Forecast tab lists these holds separately
+and the drain card summarizes them. A dependency on held work remains
+unforecastable, so it cannot silently run before its prerequisite. Stored holds
+also exclude that work and its future regressions from drain-time actuals;
+its own spending remains in cost and token actuals. Earlier versions retain
+their original population and are calibrated separately.
 
 Riskiness estimator 2 [ORB-19361] is model version **12**: regression rework
 draws from the size-based estimate (below) with no other forecast change.
@@ -71,9 +87,10 @@ with empty selectors made the whole workspace unavailable.
   counts the gaps relevant to the scenario's members by reason.
   `coverage.regression_history_missing` counts those tasks.
 - **Storage.** Stored model-13 rows stay readable and scored under their
-  own version. The default read serves only a model-14 snapshot, so a
-  fresh model-13 row is recomputed live, under the unchanged hourly write
-  rule.
+  own version. While 14 was current, the default read served only a
+  model-14 snapshot, so a fresh model-13 row was recomputed live, under
+  the unchanged hourly write rule. Model 17 keeps that rule for its own
+  snapshot.
 
 Stored read path [ORB-19615], with no model version change: the default
 read serves the newest stored forecast instead of recomputing it.
@@ -104,16 +121,124 @@ read serves the newest stored forecast instead of recomputing it.
   through the same transaction, so it never replaces or bypasses the newest
   row and the hourly cadence calibration relies on is unchanged. The hourly
   refresh is the existing owner sweep-tick write; there is no second writer.
-- **Dashboard.** Analytics › Forecast shows the forecast's source and age
-  (`Stored 23 min ago` or `Live`) beside a Refresh control that sends
-  `refresh=1`. The Calibration card keeps the absolute latest stored time
-  and notes when its scores are the stored ones.
+- **Dashboard.** Analytics › Forecast's header shows the forecast's source and
+  age (`Stored 23 min ago` or `Live`) beside a Refresh control that sends
+  `refresh=1`. The Accuracy tab's Stored forecasts section, under Details,
+  keeps the absolute latest stored time and notes when its scores are the
+  stored ones.
+
+Residual correction [ORB-20673] counts one residual per distinct task as
+model version **16** [ORB-20728], applies to the full script as model
+version **17** [ORB-20729], and reads one documented forecast per task with
+a held-out p90 check as model version **18** [ORB-21949]. The simulation still resamples delivery
+history. Before a script is scheduled, a log-affine map learned from
+scored per-task residuals is applied once per metric to the script's
+uncorrected full-script total, and its steps are scaled so their
+corrected sum equals that corrected total. Model 16 applied the map to
+each attempt step instead, so with non-zero spread the corrected steps
+did not sum to the correction of the total the residuals were trained
+on. Drain time, cost and tokens inherit the shift, including generated
+rework and arrival draws, because the schedule charges the corrected
+attempts.
+
+- **Fit.** For each metric (work hours, tokens, USD) and complexity, training
+  uses only stored forecasts of the current model version. A residual is
+  `ln(actual / base p50)`. Each distinct task contributes one forecast, and
+  so one residual per metric, from the **task population**
+  `first_not_started_forecast_per_task`: the earliest stored forecast of
+  this version that is eligible for the task (see No leakage) and was taken
+  while the task was not in progress (its stored `in_progress` is not
+  `true`). A forecast taken after work started predicts only the work left,
+  so its residual reads the remainder as the whole task; it is not a
+  sample. A later copy of the same task is not a second sample, and the
+  same timestamp keeps the first read. A task seen only in progress is not
+  a residual. Model 15 counted every stored copy, so one task that sat
+  through enough hourly snapshots could meet the minimum by itself and was
+  weighted once per snapshot. Models 16 and 17 kept the latest eligible
+  forecast per task, which on live data was disproportionately an
+  in-progress one and moved the work-hours p50 below the base. The bias is the exponentially
+  weighted mean of the kept residuals. The p50 adjustment is their weighted
+  0.5 quantile, and the p90 adjustment is the weighted 0.9 quantile of
+  `ln(actual / base p90)` (the p50 quantile when no positive base p90 was
+  stored). Weight is `0.5` raised to `age_days / 14`: the half-life is
+  **14 days**, and each task is weighted once. A residual older than **90
+  days** is dropped. Both log adjustments, and the shift applied to a draw,
+  are clamped to `±ln(10)`. The map is
+  `ln(x') = ln(x) + q50 + spread * (ln(x) - ln(center))`. `spread` is
+  `(q90 - q50) / ln(base p90 / base p50)` when that log ratio exceeds 0.05,
+  otherwise 0, so a cohort with no stored spread is the multiplier
+  `exp(q50)`. `center` is the weighted median of the base p50.
+- **Minimum n.** `n` is the number of distinct tasks in the cohort. A cohort
+  with fewer than **8** is reported and not applied (`withheld:
+  "below_min_n"`), even when those tasks appear in many stored forecasts.
+  Those draws stay uncorrected. `weight` is the sum of the kept residuals'
+  weights, one per task.
+- **Held-out p90.** A cohort that meets the minimum is checked out of sample
+  before it is applied. Each kept task with a positive base p90 is held out
+  in turn: the cohort is refitted without it, and the task counts as a base
+  hit when its actual is at or under its base p90 and as a corrected hit
+  when it is at or under that base p90 mapped by the refitted terms. These
+  are unweighted task counts. When the corrected coverage is below both the
+  base coverage and the **90%** target, the cohort is not applied
+  (`withheld: "p90_holdout"`) and its draws stay uncorrected. A correction
+  that narrows an over-wide base toward 90% still applies; its `holdout`
+  shows the lower coverage.
+- **No leakage.** A task trains a forecast only when it is done, its
+  complexity still matches the stored bucket, and its durable done time is
+  strictly after that forecast's `forecast_at`, within 90 days, and not
+  after the forecast being computed. Tasks in the forecast being computed
+  are excluded, so its own outcome cannot train it. Whole-forecast totals
+  are evaluation only and are never training inputs.
+- **Base quantiles.** Each stored task keeps the served quantiles, which
+  hit rates read, and `forecast.base`, the uncorrected full-script
+  quantiles. The next fit reads `base` when that object is present, so it
+  does not treat an already-corrected quantile as the raw prediction. A
+  row with no `base` object is an uncorrected prediction, and its stored
+  quantiles are the base.
+- **Forgetting.** The 14-day half-life and the 90-day window are the
+  memory. The fit is one pass over the forecasts scoring already loaded
+  (the newest 60 rows, plus up to 60 mature snapshots per version). It is
+  recomputed for each forecast. There is no incremental table and no
+  migration. A version bump starts with no correction: version 18 does not
+  inherit version 17's residuals, version 17 did not inherit version 16's,
+  version 16 did not inherit version 15's,
+  and version 15 did not inherit version 14's.
+- **Earlier versions.** Scoring branches are unchanged apart from the task
+  population below. Versions before 15 keep their own hour measure and hit
+  rates under `calibration.by_model_version`. Model 15's correction rows
+  stay scored under version 15 and do not train version 16; model 16's rows
+  likewise do not train version 17, nor model 17's version 18.
+- **Payload.** `inputs.correction` reports `half_life_days`, `window_days`,
+  `min_n`, `max_abs_log_adjust`, `population`
+  (`first_not_started_forecast_per_task`), `p90_holdout_target` and one
+  cohort per complexity and metric (`n`, `weight`, `applied`, `withheld`
+  (`null`, `below_min_n` or `p90_holdout`), `holdout` (`method:
+  "leave_one_out"`, `n`, `base_under_p90`, `corrected_under_p90`, or
+  `null` below the minimum), and the terms when `n > 0`). `n` counts
+  distinct tasks. `timing.correction_ms` is how long that pass took.
+  `assumptions.residual_correction` is `per_metric_complexity_log_affine`.
+- **Survivorship.** Training uses only tasks that reached done inside the
+  window. Work still in progress, rejected, or censored past the window is
+  not a residual, so the correction does not see effort that never settled.
+- **Calibration population.** `calibration.task_level` counts each task
+  once per model version, on the same population: its first stored forecast
+  of that version taken while it was not in progress, among the forecasts
+  that score it, and not taken after its done time. `calibration.task_population`
+  and each `by_model_version` row name it. `task_level_by_complexity` is a
+  list, in complexity order, of `{complexity, hours, tokens, usd}` with the
+  same `n`, `under_p50` and `under_p90`. This applies to every version's
+  task-level rates, so versions compare on one population; each version
+  keeps its own hour measure and exclusions. The per-forecast `residual`
+  series still reads every task each forecast scored. Analytics › Forecast's
+  Accuracy tab names the population and shows the per-complexity rates in
+  its Calibration detail section.
 
 Scheduled starts [ORB-19215] are model version **11**, admission factor revision
 **2**. Each pending task waits until its `not_before` instant before entering
 an admission pass. The event loop advances to that instant even with no running
 work; dependency and capacity waits can delay it further. `wait_hours.scheduled`
-counts the hold. An operator override for that exact schedule removes the hold;
+counts the hold in models 11–18; model 19 instead reports future-scheduled
+initial tasks outside the drain as described above. An operator override for that exact schedule removes the hold;
 a task already running keeps its observed start. Synthetic arrivals and follow-ups
 do not inherit their historical donor's schedule. Calibration remains separate
 from earlier model versions.
@@ -125,7 +250,7 @@ from earlier model versions.
 - **Simulation.** `backlog_forecast/schedule.rs` seeds the in-progress tasks at t=0, then advances to the next completion, pilot deadline or arrival up to the 90-day horizon (100,000 events; past that the run counts as `simulation_truncated`). Each event walks the pending queue in dispatch order through the adapter's pass.
 - **Response.** `forecast` (and `if_approved`) add `effective_parallelism`, `critical_path_hours`, `wait_hours` (summed task-hours, `basis: "summed_task_hours"`, by first failing gate: `dependency`, `lock`, `reservation`, `footprint`, `capacity`), `completion_probability`, `drain_probability`, `not_expected_to_drain`, `horizon_hours`, `simulation_truncated`, `schedulable_subset` and `task_predictions` (start hours and rank, started and completion probability, `unforecastable` reason). An unforecastable task nulls the full totals; `schedulable_subset` carries the rest with its numerator and denominator. `coverage` adds `dependency_unforecastable` (with `dependency_unforecastable_reasons`), `unverifiable_dependencies` and `review_lock_overlaps`. Stored snapshots add each task's dependencies, footprint hash, unforecastable reason, start quantiles and completion probability; `task_predictions` is response-only.
 - **Scoring.** The top-level hit rates are the current model version's; `calibration.by_model_version` holds each version's own. With one factor revision per version, `by_factor_revision` is not added yet.
-- **Analytics › Forecast** shows the parallelism and critical-path tiles, drain and completion probabilities, the schedulable-subset note, a wait table, the predicted schedule in dispatch order (task titles linking to the task) and per-version calibration.
+- **Analytics › Forecast** shows effective parallelism and the critical path in the Time to drain info icon, drain and completion probabilities (that icon, and each task's Finishes column), the schedulable-subset note, a collapsed wait breakdown, the predicted schedule in dispatch order (task titles linking to the task) and per-version calibration on the Accuracy tab.
 - **Latency.** On dk-server-1, release build, a 200-task backlog (10% without context files, 10% directory selectors, every fifth depending on an earlier task, mixed priorities, 5 slots, 40 history deliveries) at 1000 iterations: HTTP p50 0.280 s, p95 0.310 s; simulation about 0.27 s and preparation about 6 ms; peak RSS +12.8 MB. At 400 tasks p95 is 1.21 s (pairwise passes grow quadratically), so 200 is the measured limit for the 1-second target.
 
 Interim limits until the remaining factors land: review lock holders are counted in coverage, not simulated (`assumptions.review_lock_holders: "not_modelled"`); arrivals and rework use historical donor locks (model 9, below); static eligibility (complexity, pilot, route, crew, OS and label gates), published resumes and leaf-occupancy lineage are not replayed (`static_eligibility: "not_modelled"`), and the census and expiry inputs are frozen at forecast time.
@@ -136,6 +261,7 @@ Interim limits until the remaining factors land: review lock holders are counted
 - Pending and proposed tasks resolve the current review snapshot through the review admission authority, with delivery-route conflicts and unsupported custom routes reported as unknown. In-progress tasks retain their run's captured admission. Pending `no-diff-expected` tasks assume the no-diff exemption; `skip-review` alone cannot prove a future candidate stays inside light-delivery paths, so the forecast conservatively retains policy until a run records a verified exemption. The prediction and stored task carry `review_mode`, `review_mode_source`, `review_mode_fallback` and `cell_samples`.
 - At five rows per pool, resolution tries complexity/crew/mode, complexity/mode, then workspace/mode, before dropping mode and trying the original complexity/crew, complexity and workspace pools. An unassessed task has no complexity to match, so it samples workspace/mode first and every delivery only once that mode is thin. The response's basis values are `cell`, `review_complexity`, `review_workspace`, `mode_pooled_cell`, `complexity`, `workspace` and `none`. Metric redraws stay inside that same resolved pool. Unknown mode is missing evidence and always uses the explicit mode-pooled fallback.
 - Backlog and proposed coverage add `review_mode_fallbacks` (tasks whose resolution dropped mode, including no history), `review_mode_unknown` (tasks with an unknown assumption) and `history_review_mode_unknown` (history deliveries with unknown evidence). `inputs.history_review_modes` reports the historical mode counts. Existing thin-cell, complexity and workspace counts include the corresponding mode-preserving fallback levels.
+- A historical checkpoint the strict decoder rejects (`invalid pipeline_state_json`, including an empty value) does not fail the forecast. That run's review evidence is `unknown`, distinct from a missing checkpoint row. `inputs.review_evidence_gaps` lists each affected run with its store reason and `coverage_gap: review_checkpoint_unreadable`; `coverage.review_checkpoint_unreadable` (and the same count on `proposed_coverage`) is the number of those runs. The delivery keeps its recorded spend. The gap is not classified as no review, a verified exemption, a completed review, or zero cost, including when a step row looks exempt, a selective receipt would have been not-required, or a running task captured another admission. Direct checkpoint reads still reject the invalid JSON and leave the stored bytes unchanged. The sampling model version stays 17: valid history is selected as before. The forecast page shows the partial-history note and the remaining quantiles together. A stored snapshot from before this field omits the key, and the page does not invent a zero row for it.
 
 This factor retains v1's completed-delivery sampling unit, invocation union hours and in-progress spent subtraction. It changes sample selection, not event scheduling.
 
@@ -208,6 +334,8 @@ A read-only, admission-faithful forecast: p50/p90 elapsed time to drain, USD and
 - **Storage.** A stored task's `forecast` is those quantiles under `work_hours`, `tokens` and `usd`, replacing models 1–9's single-delivery `hours`, `tokens` and `usd` draw. With one task and no arrivals they equal the cohort's initial-work totals.
 - **Scoring.** From model 10 a done task's actual tokens and USD are every invocation after the forecast. Its actual work hours are the hold of each attempt that settled without delivering after the forecast, from admission or the forecast, plus the delivery's invocation hours since the last such settlement; without readable status history, every post-forecast invocation counts as the delivery. Older snapshots are still read and scored under their stored `hours` measure. `calibration.task_hours_measure` and each `by_model_version` row name the measure (`attempt_work_hours` or `delivery_hours`); `task_level.hours` keeps its key.
 
+- **Residual series.** Each `calibration.forecasts[]` row carries `residual`: per metric (`hours`, `tokens`, `usd`) the `median` and count `n` of its scored tasks' `ln(actual / p50)`, and `time_to_drain_hours`, the same log ratio for a forecast scored whole. A value is absent where the actual or p50 is not positive. It reads the actuals and quantiles the hit rates use, so it adds no scoring pass.
+
 Remaining feature-level limits after model 10: review residual/support phases, run-lineage rather than status-history episode evidence, provider holds, retained review locks, completion Brier scores, dependency/footprint rescope exclusions, execution-host/factor calibration partitions and revision-keyed facts caches are still unshipped. Donor history is the measured completed-delivery subset, not every filing. Generated-node materialization is bounded at 10,000 per iteration and uses precomputed overlap rows; dense arrival streams can cost more than the default no-arrivals scenario. Limits null affected time/spend draws and increment `simulation_truncated`.
 
 ## Shape
@@ -264,7 +392,7 @@ Paths beginning `admission/` above are under `crates/orbit-core/src/application/
 
 The cell becomes **complexity × effective crew pool × actual enforced review mode**, with modes `none`, `before_pr`, `before_landing`, `mixed` and `unknown`. `mixed` means attempts in one delivery used different enforced modes; it is history, not a pending policy choice. After-landing `delivery-code-review` tasks are separate work, not a before-landing mode on their originating delivery.
 
-`InvocationRecord` (`crates/orbit-store/src/contracts/invocation.rs`) carries `job_run_id`, `activity_id` and task linkage, but **no review-timing flag**. The accounting fact and `InvocationSpend` projections retain the run/activity IDs without hydrating tool traces. Join those workspace-scoped projections to the run's captured `ReviewAdmission` (`crates/orbit-types/src/workflow/review/admission.rs`) and actual step execution. `agent_review_repair` is used by both the `review` and `landing_review` steps in `assets/jobs/task_pr_pipeline.yaml`; its activity name alone cannot distinguish timing. A linked reviewer invocation plus the captured timing/step evidence classifies the layer actually run. Use verified no-diff/light-delivery exemptions as `none`; absence of an invocation alone proves neither exemption nor no-review. Missing or contradictory joins yield `unknown`, counted in coverage. No new historical flag is assumed.
+`InvocationRecord` (`crates/orbit-store/src/contracts/invocation.rs`) carries `job_run_id`, `activity_id` and task linkage, but **no review-timing flag**. The accounting fact and `InvocationSpend` projections retain the run/activity IDs without hydrating tool traces. Join those workspace-scoped projections to the run's captured `ReviewAdmission` (`crates/orbit-types/src/workflow/review/admission.rs`) and actual step execution. `agent_review_repair` is used by both the `review` and `landing_review` steps in `crates/orbit-core/assets/jobs/task_pr_pipeline.yaml`; its activity name alone cannot distinguish timing. A linked reviewer invocation plus the captured timing/step evidence classifies the layer actually run. Use verified no-diff/light-delivery exemptions as `none`; absence of an invocation alone proves neither exemption nor no-review. Missing or contradictory joins yield `unknown`, counted in coverage. No new historical flag is assumed.
 
 For pending work resolve current effective review admission with `crates/orbit-core/src/application/review/admission.rs`, including route, host-specific before-landing policy and applicable exemptions. A running task retains its captured admission even if configuration changed. Returns capture the current snapshot policy for a new attempt; prior spend retains its historical mode. Record the assumed mode and source per task.
 
@@ -298,7 +426,7 @@ An owner-local forecast uses the owner's execution data. A live pull/follower dr
 
 Riskiness is its own task API/UI feature, consumed unchanged by the forecast. It estimates the chance that a completed task is later named by at least one `regression_from` relation. It is an observed, windowed probability, not a causal assessment or a replacement for admission. Reuse the shared `CodebaseFacts` and `RegressionFilter` of `application/codebase/`, and the landed-delivery diff rows of `diff_stats.rs`; do not scrape rendered prompt marks or rebuild a competing regression ledger.
 
-Use the configured `workflow.regression_risk.window_days` (default 30) and `min_support` (default 5), not the mark threshold/max-files truncation. Each completed task is one denominator observation, and one numerator observation if any regression link names it, however many fixes/files it has. Retain the existing durable done-time/window semantics. Expose support/window and the observation cutoff: recent deliveries have had less time to reveal defects, and unfiled regressions are invisible.
+Use a 30-day window and a minimum support of 5 (configurable as `workflow.regression_risk.window_days` and `min_support` until [ORB-22806] fixed them), not the mark threshold/max-files truncation. Each completed task is one denominator observation, and one numerator observation if any regression link names it, however many fixes/files it has. Retain the existing durable done-time/window semantics. Expose support/window and the observation cutoff: recent deliveries have had less time to reveal defects, and unfiled regressions are invisible.
 
 Estimator **2** ([ORB-19361]) fits risk on task size alone. Backtests over eleven weekly folds of Orbit's own history (about 4,550 test tasks, 13.8% regressed) gave AUC 0.64 for estimator 1 (the maximum shrunk per-file rate plus a crew × complexity odds shift, with a Brier score worse than the constant base rate), 0.704 for the declared file count, 0.714 for the diff's file count and 0.737 for lines changed; a crew term added +0.004, within noise, and per-file attribution added nothing over size.
 
@@ -307,9 +435,9 @@ Estimator **2** ([ORB-19361]) fits risk on task size alone. Backtests over eleve
 3. **No estimate.** A fit needs at least `min_support` observations, regressed and clean ones, and a finite optimum (a size threshold separating regressed from clean tasks has none). Large coefficients alone are not separation: nearby sizes can need a steep but finite slope, which the mean-centered fit keeps. Without a fit the state is `insufficient_history` and `probability` is null. A task with **no context_files** and no resolvable diff returns `state = no_footprint`; a non-path footprint returns `unsupported_footprint`. No-estimate states never display as “low” or as zero.
 4. **Calibration evidence.** Each estimate carries `size_band`: the window's done tasks on the same basis at least this size, how many regressed, and their rate.
 
-Task row: an estimated row shows a percentage, with a `~` marker when some selectors name no path; a row without an estimate has no risk part. Task detail and the estimated row's tooltip: probability, basis and size, size-band evidence, any basis fallback, fit support, window/cutoff and the workspace base rate; no file or crew attribution. The detail's Risk chip shows the same value, or “No estimate” with the reason in its tooltip; only an estimated task shows the collapsible breakdown. Task list/detail APIs expose the same `riskiness` object and estimator version; it is derived, not a persisted task policy field. Batch/cache shared facts for task lists so scores do not introduce per-row history scans or delay task mutations. Existing hotspot prompt marks keep their own threshold and purpose.
+Task row: an estimated row shows a percentage, with a `~` marker when some selectors name no path; a row without an estimate has no risk part. Task detail and the estimated row's tooltip: probability, basis and size, size-band evidence, any basis fallback, fit support, window/cutoff and the workspace base rate; no file or crew attribution. The detail's Risk chip shows the same value, or “No estimate” with the reason in its tooltip; only an estimated task shows the collapsible breakdown. Task list/detail APIs expose the same `riskiness` object and estimator version; it is derived, not a persisted task policy field. Batch/cache shared facts for task lists so scores do not introduce per-row history scans or delay task mutations. Hotspot prompt marks kept their own threshold and purpose until [ORB-22806] removed them.
 
-Shipped in [ORB-18690] as estimator version 1, replaced in [ORB-19361] by estimator version **2**, and in [ORB-19376] by estimator version **3**, which keeps finite fits at nearby sizes (`TASK_RISKINESS_ESTIMATOR_VERSION`), in `crates/orbit-core/src/application/codebase/riskiness.rs`. `OrbitRuntime::task_riskiness_model` reads the windowed regression facts (`scan_regressions`), the landed-delivery diff rows and the review candidates' diffs once, fits both bases, and `TaskRiskinessModel::estimate` scores any number of tasks from that model without another history read. It reads `window_days` and `min_support` from `workflow.regression_risk` regardless of its `enabled` switch, which governs only the prompt marks. The `riskiness` object carries:
+Shipped in [ORB-18690] as estimator version 1, replaced in [ORB-19361] by estimator version **2**, and in [ORB-19376] by estimator version **3**, which keeps finite fits at nearby sizes (`TASK_RISKINESS_ESTIMATOR_VERSION`), in `crates/orbit-core/src/application/codebase/riskiness.rs`. `OrbitRuntime::task_riskiness_model` reads the windowed regression facts (`scan_regressions`), the landed-delivery diff rows and the review candidates' diffs once, fits both bases, and `TaskRiskinessModel::estimate` scores any number of tasks from that model without another history read. It observes the trailing `RISKINESS_WINDOW_DAYS` (30) and needs `RISKINESS_MIN_SUPPORT` (5) observations to fit; both were `workflow.regression_risk` keys until [ORB-22806] removed prompt marks and fixed them at their defaults. The `riskiness` object carries:
 
 - `estimator_version`, `state` (`estimated`, `no_footprint`, `unsupported_footprint`, `insufficient_history`), `probability` (null without an estimate), and `support_state` (`full`, or `partial` when a declared count omits pathless selectors).
 - `basis` (`declared_files` or `diff_lines`), `basis_fallback` (`no_resolvable_diff`, `diff_history_insufficient` or null), `size`, `fit` `{observations, regressed, intercept, slope}` and `size_band` `{tasks, regressed, rate}`; `basis`, `size` and `fit` are present for `estimated` and `insufficient_history`, and `size_band` only for `estimated`.
@@ -331,7 +459,7 @@ Model one generation of new regressions in v2; do not recursively spawn fixes of
 
 ### Arrivals without invented whole-tree locks
 
-Default remains **no exogenous arrivals**. Always show seven-day filing and done rates, filings split into auto-task, sweep and other. `arrivals=on` generates Poisson filings at the measured rate until the scenario first drains, subject to the 90-day horizon. Regression follow-ups already scheduled by the model are future work: a gap before their detection is not a final drain. Exclude explicitly modelled regression-fix filings from the exogenous rate to avoid counting them twice; report gross and adjusted rates.
+Default remains **no exogenous arrivals**. Always show seven-day filing and done rates, filings split into auto-task, sweep and other. `arrivals=on` generates Poisson filings at the measured rate until the scenario first drains, subject to the 90-day horizon and the [cost bounds](#cost-bounds-and-optional-surface-isolation): filings are drawn in growing batches, so a run that drains early never generates what it would not consume. Regression follow-ups already scheduled by the model are future work: a gap before their detection is not a final drain. Exclude explicitly modelled regression-fix filings from the exogenous rate to avoid counting them twice; report gross and adjusted rates.
 
 An arrival has no known future selectors. Sample its source class and a **latent historical footprint donor**, jointly with work class/complexity/crew, from filings with recorded footprints; precompute each donor's conflict row against initial tasks and other donors with the real lock predicates. This bootstraps the empirical conflict rate and correlated surfaces, rather than assigning every arrival a literal whole-tree lock. No fabricated selectors are persisted. Choose donors with at least five samples per source class, else the workspace donor pool; report the fallback. If no usable footprint donors exist, the arrivals scenario's admission estimate is unavailable and counted as `arrival_conflict_unknown`; do not treat arrivals as conflict-free. Preserve observed no-diff frequency as a separate donor class.
 
@@ -346,13 +474,14 @@ Retain existing fields and document changed semantics with the new model version
 | Field | Meaning |
 |---|---|
 | `inputs.admission_factors`, `inputs.execution_host`, `inputs.capacity_as_of` | Enabled factor revisions, stable execution location and evidence age/source. Retain `concurrency_source` and `auto_concurrency_mode`. |
+| `inputs.correction`, `timing.correction_ms` | The residual correction in use: half-life, window, minimum n, clamp, and each cohort's terms, weight, distinct-task count and whether it was applied. `correction_ms` is the fit. Cohorts below the minimum stay in the payload and leave draws unchanged. |
 | `inputs.resource_fit` | Applied/shadow/off/unavailable status, thresholds, profile support/fallbacks, host capacity source; no claim of enforce fit with unknown host data. |
 | `forecast.effective_parallelism` | p50/p90 of integrated occupied leaf slots divided by elapsed simulated scenario time (to drain or horizon). At most N except explicitly recorded initial oversubscription; zero for no work. It is not a new admission setting. |
 | `forecast.critical_path_hours` | p50/p90 of longest dependency-path duration, including sampled return/review waits, ignoring contention between independent paths. A lower bound on elapsed drain time, null for an unresolved path. |
 | `forecast.wait_hours` | p50/p90 by dependency, lock, footprint, reservation, resource, return and review reason. Attribute overlapping gate waits once using admission's first failing gate; distinguish summed task waits from elapsed wall time. |
 | `forecast.completion_probability`, `forecast.drain_probability`, `forecast.not_expected_to_drain` | Initial-cohort completion probability, full-scenario drain probability, and expected initial incomplete count at 90 days; include horizon and censored/unsupported counts. |
 | `forecast.task_predictions[].predicted_start_hours`, `forecast.task_predictions[].predicted_start_rank` | p50/p90 first-start delay and ordinal in simulated dispatches, with p(started by horizon); simultaneous starts break ties by shared dispatch order. Running tasks start at 0/rank 0; tasks that never start contribute null mass. |
-| `forecast.task_predictions[].completion_probability`, `forecast.task_predictions[].basis`, `forecast.task_predictions[].riskiness` | Per-task outcome probability; duration/review/outcome/profile support and fallbacks; the shared riskiness object. Internal task identifiers remain API linkage, never display copy. |
+| `forecast.task_predictions[].completion_probability`, `forecast.task_predictions[].basis`, `forecast.task_predictions[].complexity`, `forecast.task_predictions[].riskiness` | Per-task outcome probability; the complexity bucket it samples under; duration/review/outcome/profile support and fallbacks; the shared riskiness object. Internal task identifiers remain API linkage, never display copy. |
 | `forecast.regression_rework` | Expected new follow-ups, work/cost/token quantiles, generation limit, detection-outside-horizon count and prior/bundle support. |
 | `coverage`, `proposed_coverage` additions | `dependency_unforecastable`, `unverifiable_dependencies`, `review_mode_fallbacks`, `review_mode_unknown`, outcome/censoring/return-tail gaps, profile/host gaps, `risk_prior_fallbacks`, `risk_unestimated` and arrival conflict gaps. Retain v1 coverage keys and their definitions. |
 | `calibration.by_model_version`, `calibration.by_factor_revision` | Coverage/calibration with actual sample counts for comparable versions and factor configurations; never one blended v1/v2 accuracy percentage. |
@@ -365,13 +494,14 @@ Retain `backlog_forecasts` (introduced by store migration v62) and `BacklogForec
 
 Persist the additive response inputs and per-task predictions: snapshot status/dependencies/footprint hash, phase/review basis, start distributions, completion probabilities, riskiness estimator version and expected synthetic work. Store the factor manifest alongside numeric `model_version`; old rows lacking these fields remain readable under their original measure. Do not rewrite old predictions with today's risk, policy or task metadata.
 
-**Bump once per landed forecast factor**, in integration order: (1) dependencies/locks/footprint/reservations/dispatch, (2) review-mode cells, (3) outcome/return phases, (4) resource fit, (5) regression rework. The standalone task-riskiness feature versions its estimator independently; when consumed or recalibrated in forecasts it also bumps `model_version`. Record each factor's own revision in `inputs.admission_factors` so reordered implementations remain identifiable. Further changes to sampling, fallback, timing, risk priors or quantile/scoring meaning require another bump, including bug fixes that alter predictions. Display-only changes do not. Never reuse a version for different enabled factors. Sequential hourly snapshots allow factor effects to be compared with support/changed-workload caveats, not claimed as causal ablations.
+**Bump once per landed forecast factor**, in integration order: (1) dependencies/locks/footprint/reservations/dispatch, (2) review-mode cells, (3) outcome/return phases, (4) resource fit, (5) regression rework. The standalone task-riskiness feature versions its estimator independently; when consumed or recalibrated in forecasts it also bumps `model_version`. Record each factor's own revision in `inputs.admission_factors` so reordered implementations remain identifiable. Further changes to sampling, fallback, timing, risk priors or quantile/scoring meaning require another bump, including bug fixes that alter predictions. Model 15 is that bump for the residual correction. Model 16 [ORB-20728] recounts it by distinct task, one residual from the latest eligible forecast, so repeated snapshots cannot satisfy the minimum. Model 17 [ORB-20729] applies it to the full-script total and distributes it over the steps. Model 18 [ORB-21949] fits it on the first not-started forecast per task and withholds a cohort that lowers held-out p90 coverage. None adds an admission factor. Display-only changes do not. Never reuse a version for different enabled factors. Sequential hourly snapshots allow factor effects to be compared with support/changed-workload caveats, not claimed as causal ablations.
 
 Keep the newest-60-snapshot read for v1 scoring and recent v2 provisional diagnostics. For v2 horizon metrics also read up to the newest 60 mature snapshots per model version, with `forecast_at` at least 90 days old; otherwise hourly snapshots would age out of a 60-row window before they were ever scoreable. Cache these bounded maturity reads and report their window/counts. Partition calibration by model version/factor manifest and execution-host/mode. Keep v1 scoring unchanged: invocation-union hours and its original exclusions. For v2:
 
 - Per-task work/spend uses post-forecast episode/invocation usage, including failed/abandoned attempts. Score predicted first start/rank from durable admission timestamps, and completion probability as a binary outcome at the 90-day cutoff (Brier score plus observed frequency by probability band). Still-pending young cohorts are censored, not misses or successes.
 - A full drain requires every initial task and attributable synthetic follow-up counterpart to finish. A blocked task is pending; rejected/archived is an absorbing incomplete outcome. Do not call an empty active queue settled/done. Time-to-drain calibration uses completed, fully covered cohorts and also reports non-drain rate at the horizon, so successful cohorts alone cannot conceal survivorship.
 - Match actual follow-ups by `regression_from` to the snapshot's initial task set and sampled generation policy; score aggregate rework count/hours/cost, not fictional synthetic IDs. Include follow-ups filed after the original backlog first went empty. Rework-inclusive drain/spend calibration stays provisional until the 90-day observation cutoff, even if initial work finished early. Do not add a real initial fix twice. Exogenous-arrivals scenarios are not stored/scored canonically.
+- **Baseline calibration.** [ORB-21950] scores the pre-regression baseline independently while adjusted totals are withheld. `calibration.forecast_level.adjusted` names the existing whole-forecast hit rates for drain time, tokens and USD; the direct metric fields remain aliases for those adjusted rates. `calibration.forecast_level.pre_regression_baseline` independently scores the stored baseline quantiles for the same metrics, each with its own `n`, `under_p50` and `under_p90`. Both compare against the same observed outcome, including regression follow-ups within the 90-day window: baseline accuracy measures the prediction actually shown when adjusted totals are withheld, including the effect of omitted regression work. The dashboard labels both populations and shows their counts and rates. No baseline is substituted for an adjusted prediction, no baseline is fabricated for older rows that lack one, and missing quantiles leave that metric unscored with null rates at `n=0`. Settlement, non-drain handling, exclusions and model-version partitions are unchanged; initial completion does not settle a forecast early because later regression filings still count.
 - Validate critical-path and effective-parallelism diagnostics only when evidence from admission, phase, and lock release suffices; otherwise count `unscorable_schedule`. Attribute observed first-gate waits only when the admission records support them; do not manufacture them from invocation gaps.
 - Report p50/p90 coverage fractions and sample counts for each measure. Exclude deleted/re-scoped tasks with explicit reasons, including material dependency/footprint/complexity changes; missing actual metrics are unscorable. A genuine blocked or rejected outcome is **not** a metadata exclusion. If any initial task is excluded, no whole-cohort time/cost accuracy claim is made. Durable done time (legacy last-invocation-end fallback flagged separately) remains the completion source, never `updated_at`.
 
@@ -380,6 +510,12 @@ Keep the newest-60-snapshot read for v1 scoring and recent v2 provisional diagno
 Collect task/registry/history/run/review/resource/regression facts once, cache by their revisions and host evidence timestamp, and materialize compact sampling pools. Precompute canonical lock surfaces and pairwise conflicts (O(T²) bits for T initial/support tasks, with indexed donor rows); build dependency adjacency/indegrees once. A 200-task matrix needs about 5 KiB of bits. Reservations and occupancy consume these precomputed relationships through the shared adapter, not repeated selector expansion. Reuse deterministic seeds keyed by model/factor/input fingerprint; iteration order, clocks and mutable live reads cannot change a fixed snapshot's result.
 
 Each of 1000 iterations is an event-driven pass over compact data, without polling or full task rescans for every simulated minute: resource checks schedule only relevant minute/deadline events. Bound each iteration to 10,000 generated nodes and 100,000 events plus the 90-day horizon; a limit hit counts `simulation_truncated`, with affected drain-time and spend draws unavailable, never a plausible partial total. Cache donor conflict rows lazily within the snapshot, not per iteration. Record preparation/simulation timing and peak memory for a representative 200-task backlog at 1000 iterations; implementation target is p95 under 1 second on the recorded host, without synthetic host load. Record larger-backlog limits honestly before raising bounds.
+
+A scenario with arrivals (`arrivals=on`, a measured rate above zero and at least one donor) has stricter bounds, because the dashboard abandons a read at 30 seconds and a blocking computation keeps running after its client disconnects. Other forecasts are unaffected: they read no clock and draw the same numbers.
+
+- **Generation.** A run still undrained when its filings reach the 10,000-node limit is cut. Reaching the limit is not itself a cut: a run that drains on the filings already drawn is complete. Drains need a moment with nothing running, so at high offered load (300 one-hour filings a day is about 12.5 tasks running on average) no run drains before the limit, and a cut is the expected answer.
+- **Compute.** The simulation stops at 20 seconds of wall time from the start of the forecast (`ARRIVALS_COMPUTE_BUDGET`), checked between runs, between batches and every 256 events. Only whether a scenario is cut can depend on the clock; a complete result stays a function of its snapshot.
+- **Response.** The first cut stops that scenario. It adds `simulation_cut` with `reason` (`generated_limit`, `event_limit` or `compute_budget`), `iterations`, `iterations_completed`, `generated_limit` and `compute_budget_seconds`, and sets `unavailable.simulation_cut`. Every figure drawn from its runs is withheld as null, whichever bound fired and however many runs had finished, since they are not a sample of all of them, and it has no `pre_regression_baseline`. A scenario that was not cut omits both fields. Arrival scenarios are never stored, so `MODEL_VERSION` is unchanged.
 
 Forecast work stays on the blocking compute path, outside task commit-boundary/admission locks. The Tasks drain card loads the optional forecast independently after primary controls/data; no awaiting it in the shared refresh barrier, no retry loop on the controls path. Cache/coalesce identical reads, ignore stale responses after workspace/navigation changes, and leave one muted unavailable line on failure. Riskiness uses a shared facts cache, not per-row scans. Public-boundary verification of optional forecast latency/failure and existing task callers is required in the implementation; this doc-only scope adds no speculative source-text tests.
 
@@ -407,6 +543,7 @@ No new admission settings. `lookback_days`, `concurrency` and `arrivals=on` reta
 - **Risk support.** Regression reporting is delayed/incomplete. Maximum-anchor combination and shrunk crew/complexity odds are a bounded heuristic, not a calibrated causal model. Broad/unsupported footprints and thin fix history weaken or remove the estimate; one generation omits later rework.
 - **Arrivals.** Poisson filings and historical latent footprints approximate future work. Unsupported conflict history makes the scenario unavailable; it does not justify serializing every arrival or assuming none conflict.
 - **Clock and scoring availability.** A stopped/exhausted owner sweep clock delays hourly samples; canonical reads can fill a free slot. Version-separated calibration and 90-day outcomes need enough settled evidence. Sparse version cohorts cannot establish which factor improved accuracy.
+- **Done-task survivorship.** The residual correction trains only on tasks that reached done after the forecast that predicted them. Censored, rejected and still-running work is not a residual, so a cohort that finishes only its easier tasks can look less biased than the work still open.
 
 ## Phasing
 
@@ -439,6 +576,10 @@ All six implementation tasks carry `backlog-forecast-v2` and depend on this scop
 | [ORB-19376] | Shipped: riskiness estimator 3 keeps finite fits at nearby sizes (centered covariate, threshold separation check), so they estimate instead of falling back (model 13). |
 | [ORB-18691] | Shipped: risk-driven regression bundles, donor admission/arrivals, expected rework, and 90-day mature aggregate scoring (model 9, factor 1); also depends on [ORB-18690]. |
 | [ORB-19961] | Shipped: legacy fix footprints recovered from durable history, classified fix-history gaps and exclusions, and support scoped to the sampled pool (model 14, regression rework factor 2). |
+| [ORB-20673] | Shipped: per-metric, per-complexity residual correction on simulated draws, with a 14-day half-life, a 90-day window, a minimum of 8 residuals, and uncorrected fallback below that (model 15). |
+| [ORB-20728] | Shipped: the residual correction keeps one residual per distinct task (the latest eligible forecast), so `n` and weight count independent tasks and a repeated snapshot cannot meet the minimum of 8 (model 16). |
+| [ORB-20729] | Shipped: the residual correction is applied to the full-script total and distributed over its steps, matching the full-task totals it is trained on (model 17). |
+| [ORB-21949] | Shipped: the correction and task-level calibration read one forecast per task (the first taken before work started), calibration reports per-complexity hit rates, and a cohort whose leave-one-out p90 coverage falls below the base and 90% is withheld (model 18). |
 
 ## Task References
 
@@ -460,5 +601,10 @@ All six implementation tasks carry `backlog-forecast-v2` and depend on this scop
 - [ORB-19615] — serves the default read from the stored snapshot, with `refresh=1` for a live recompute.
 - [ORB-19961] — recovers legacy fix history and scopes regression support to the sampled pool (model 14).
 - [ORB-19963] — explains unavailable forecasts and labels the pre-regression baseline in the dashboard.
+- [ORB-20673] — corrects bias and quantiles from scored per-task residuals (model 15).
+- [ORB-20728] — counts residual-correction samples by distinct task (model 16).
+- [ORB-20729] — applies the residual correction to the full-script total (model 17).
+- [ORB-21949] — fits and scores task-level calibration on the first not-started forecast per task (model 18).
+- [ORB-21950] — scores the pre-regression baseline calibration independently while adjusted totals are withheld.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

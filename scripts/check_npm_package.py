@@ -74,6 +74,9 @@ def inspect_archive(repo, archive):
     missing = set(RUNTIME_FILES) - files.keys()
     if missing:
         raise ValueError(f"missing packed runtime files: {sorted(missing)}")
+    extras = set(files) - set(RUNTIME_FILES)
+    if extras:
+        raise ValueError(f"unexpected packed runtime files: {sorted(extras)}")
     if any(files[name]["size"] == 0 for name in RUNTIME_FILES):
         raise ValueError("packed runtime files must be nonempty")
     return files

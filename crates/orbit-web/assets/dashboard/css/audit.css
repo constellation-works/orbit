@@ -139,31 +139,8 @@ tr.audit-detail-row td {
 .codebase-views a.on { color: var(--fg); border-bottom-color: var(--accent); }
 .codebase-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding-bottom: 2px; }
 .codebase-controls[hidden] { display: none; }
-.codebase-segs {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 2px;
-  padding: 3px;
-  background: var(--bg-sunk);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-}
-.codebase-seg {
-  min-height: 34px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--fg-dim);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-}
-.codebase-seg:hover { color: var(--fg); background: var(--bg-hover); }
-.codebase-seg.on { background: #1f252d; color: var(--fg); box-shadow: inset 0 0 0 1px #313842; }
-.codebase-segs.small .codebase-seg { min-height: 30px; padding: 0 10px; font-size: 12.5px; }
+.codebase-controls .mx-seg-btn { min-height: 34px; }
+.codebase-locks .mx-seg-btn { min-height: 30px; padding: 0 10px; font-size: 12.5px; }
 .codebase-min { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--fg-dim); }
 .codebase-select {
   min-height: 34px;
@@ -223,13 +200,13 @@ tr.audit-detail-row td {
 .codebase-hot-sub { display: block; color: var(--fg-mute); font-weight: 400; }
 .codebase-hot-section { padding: 18px 14px 8px; font-size: 11.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--fg-mute); }
 tr + tr > .codebase-hot-section { border-top: 1px solid var(--hair); }
-.codebase-hot-row > td { border-top: 1px solid #1b1f25; }
+.codebase-hot-row > td { border-top: 1px solid var(--hair); }
 .codebase-hot-row:hover > td { background: #151a20; }
 td.codebase-hot-path { min-width: 220px; padding: 9px 14px; }
 td.codebase-cell-td { padding: 5px 8px; }
 .codebase-path-link { display: block; color: var(--fg); text-decoration: none; }
 .codebase-path-link:hover .codebase-path-base { color: var(--accent-hover); text-decoration: underline; }
-.codebase-cell { display: inline-flex; align-items: baseline; gap: 6px; min-width: 112px; padding: 6px 10px; border-radius: 6px; color: #f2f4f7; white-space: nowrap; }
+.codebase-cell { display: inline-flex; align-items: baseline; gap: 6px; min-width: 112px; padding: 6px 10px; border-radius: 6px; color: var(--fg-strong); white-space: nowrap; }
 .codebase-cell.empty { color: var(--fg-mute); background: none; }
 .codebase-cell-rate { font-weight: 600; font-variant-numeric: tabular-nums; }
 .codebase-cell-frac { font-family: var(--font-mono); font-size: 12px; color: #dfe3e8; }
@@ -275,7 +252,7 @@ td.codebase-empty { padding: 16px 14px; }
   justify-content: center;
   min-height: 36px;
   padding: 0 14px;
-  border: 1px solid #2e343c;
+  border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: #161a1f;
   color: var(--fg);
@@ -321,23 +298,23 @@ td.codebase-empty { padding: 16px 14px; }
 .codebase-related-list,
 .codebase-pair-list,
 .codebase-lock-list { margin: 0; padding: 0; list-style: none; }
-.codebase-task { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; border-top: 1px solid #1b1f25; }
+.codebase-task { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--hair); }
 .codebase-task:first-child { border-top: 0; }
 .codebase-task-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
 .codebase-task-link { font-family: var(--font-mono); font-size: 12.5px; color: var(--accent); }
-.codebase-crew { padding: 0 8px; border: 1px solid #2e343c; border-radius: 999px; font-size: 11.5px; color: var(--fg-dim); }
+.codebase-crew { padding: 0 8px; border: 1px solid var(--border-strong); border-radius: 999px; font-size: 11.5px; color: var(--fg-dim); }
 .codebase-task-title { font-size: 13px; color: var(--fg); overflow-wrap: anywhere; }
-.codebase-task-by { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding-left: 12px; border-left: 2px solid #2e343c; font-size: 12px; color: var(--fg-dim); }
+.codebase-task-by { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding-left: 12px; border-left: 2px solid var(--border-strong); font-size: 12px; color: var(--fg-dim); }
 .codebase-by-dim::before { content: "·"; margin-right: 6px; color: var(--fg-mute); }
 /* Regression sites: a chip per site on a regressed task, and the file view's
    Symbols list, one expandable row per site. */
 .codebase-task-sites { display: flex; flex-wrap: wrap; gap: 6px; }
-.codebase-site { display: inline-flex; align-items: baseline; gap: 6px; max-width: 100%; padding: 1px 8px; border: 1px solid #2e343c; border-radius: var(--radius-sm); background: var(--bg); font-size: 12px; }
+.codebase-site { display: inline-flex; align-items: baseline; gap: 6px; max-width: 100%; padding: 1px 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg); font-size: 12px; }
 .codebase-site-name { font-family: var(--font-mono); color: var(--fg); overflow-wrap: anywhere; }
 .codebase-site-kind { font-size: 11.5px; color: var(--fg-mute); }
 .codebase-body > .codebase-file-symbols { flex: 1 1 100%; }
 .codebase-symbols { margin: 0; padding: 0; list-style: none; }
-.codebase-symbol { border-top: 1px solid #1b1f25; }
+.codebase-symbol { border-top: 1px solid var(--hair); }
 .codebase-symbol:first-child { border-top: 0; }
 .codebase-symbol-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 8px 0; cursor: pointer; }
 .codebase-symbol-name { font-family: var(--font-mono); font-size: 13px; color: var(--fg); overflow-wrap: anywhere; }
@@ -345,7 +322,7 @@ td.codebase-empty { padding: 16px 14px; }
 .codebase-symbol-count { margin-left: auto; font-size: 12px; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
 .codebase-symbol-tasks { display: flex; flex-direction: column; gap: 8px; margin: 0 0 10px 12px; padding: 8px 10px; list-style: none; border: 1px solid var(--border); border-left: 2px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg); }
 .codebase-symbol-task { display: flex; flex-direction: column; gap: 6px; }
-.codebase-related-row { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-top: 1px solid #1b1f25; --cb-color: var(--accent); }
+.codebase-related-row { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-top: 1px solid var(--hair); --cb-color: var(--accent); }
 .codebase-related-row:first-child { border-top: 0; padding-top: 0; }
 .codebase-related-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .codebase-related-top .codebase-path-link { min-width: 0; }
@@ -358,13 +335,18 @@ td.codebase-empty { padding: 16px 14px; }
 .codebase-related-evidence .codebase-task-link { display: block; padding: 3px 0; font-family: inherit; overflow-wrap: anywhere; }
 
 /* Coupling & locks. */
+/* Align bounded previews; expanded lists keep their own natural height. */
+.panel > .body.codebase-body[data-view="coupling"]:not(:has(.codebase-list-toggle[aria-expanded="true"])) { align-items: stretch; }
 .codebase-body > .codebase-pairs,
-.codebase-body > .codebase-locks { flex: 1 1 480px; }
+.codebase-body > .codebase-locks { flex: 1 1 480px; display: flex; flex-direction: column; }
+.codebase-list-footer { display: flex; flex-direction: column; gap: 10px; margin-top: auto; padding: 12px 16px 14px; }
+.codebase-list-footer:empty { display: none; }
+.codebase-list-disclosure { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
 .codebase-toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--fg-dim); cursor: pointer; }
 .codebase-check { width: 16px; height: 16px; accent-color: var(--accent); }
 .codebase-pair-row,
 .codebase-release-row,
-.codebase-lock-row { padding: 12px 16px; border-top: 1px solid #1b1f25; }
+.codebase-lock-row { padding: 12px 16px; border-top: 1px solid var(--hair); }
 .codebase-pair-list > :first-child,
 .codebase-lock-list > :first-child { border-top: 0; }
 .codebase-pair-row { display: flex; align-items: center; gap: 16px; --cb-color: var(--accent); }
@@ -372,7 +354,7 @@ td.codebase-empty { padding: 16px 14px; }
 .codebase-pair-second { display: block; }
 .codebase-pair-arrow { color: var(--fg-mute); font-family: var(--font-mono); }
 .codebase-pair-figure { flex: none; width: 120px; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
-.codebase-release-row { display: flex; flex-direction: column; gap: 6px; background: #0f1216; }
+.codebase-release-row { display: flex; flex-direction: column; gap: 6px; background: var(--bg-sunk); }
 .codebase-release-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
 .codebase-release-title { font-weight: 500; color: var(--fg); }
 .codebase-release-range { font-family: var(--font-mono); font-size: 13px; color: var(--fg-dim); }
@@ -383,22 +365,13 @@ td.codebase-empty { padding: 16px 14px; }
 .codebase-lock-total { flex: none; font-weight: 600; color: var(--fg); }
 .codebase-lock-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 
-/* Regression-risk marks. */
-.codebase-risk-table { border-collapse: collapse; font-size: 12.5px; }
-.codebase-risk-table th { padding: 6px 10px; font-weight: 500; color: var(--fg-mute); text-align: left; text-transform: none; letter-spacing: normal; }
-.codebase-risk-table thead th { white-space: nowrap; }
-.codebase-risk-table td { padding: 6px 10px; border-top: 1px solid #1f252d; white-space: nowrap; color: var(--fg-dim); }
-.codebase-risk-table tbody th { border-top: 1px solid #1f252d; max-width: 420px; overflow-wrap: anywhere; }
-.codebase-risk-table .codebase-risk-total th { color: var(--fg); }
-.codebase-risk-none { font-style: italic; }
-
 @media (max-width: 520px) {
   .codebase-head { padding: 12px 12px 0; }
   .panel > .body.codebase-body { padding: 12px; gap: 12px; }
   .codebase-search { flex-basis: 100%; }
   .codebase-pair-row { flex-direction: column; align-items: stretch; gap: 8px; }
   .codebase-pair-figure { width: auto; align-items: flex-start; }
-  .codebase-box-head, .codebase-box-body, .codebase-task, .codebase-pair-row, .codebase-release-row, .codebase-lock-row { padding-left: 12px; padding-right: 12px; }
+  .codebase-box-head, .codebase-box-body, .codebase-task, .codebase-pair-row, .codebase-release-row, .codebase-lock-row, .codebase-list-footer { padding-left: 12px; padding-right: 12px; }
 }
 
 /* Reliability > Tools summary: one column of cards. On a wide screen the
@@ -414,15 +387,15 @@ td.codebase-empty { padding: 16px 14px; }
   background: var(--bg);
 }
 @media (min-width: 1500px) {
-  /* Rows: status note, rate card, one row per side card, then a flexible row
-     that takes the rest of the table's height. The table and last present
-     side card stretch to the shared bottom; earlier side cards keep their
-     own heights. Margins rather than row gaps space the cards, so a card
-     that is absent leaves no gap. */
+  /* Rows: status note, one row per side card, then a flexible row that takes
+     the rest of the table's height. The table and last present side card
+     stretch to the shared bottom; earlier side cards keep their own heights.
+     Margins rather than row gaps space the cards, so a card that is absent
+     leaves no gap. */
   #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) {
     display: grid;
     grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-    grid-template-rows: repeat(7, auto) 1fr;
+    grid-template-rows: repeat(6, auto) 1fr;
     column-gap: 16px;
     row-gap: 0;
     padding-bottom: 0;
@@ -430,13 +403,12 @@ td.codebase-empty { padding: 16px 14px; }
   }
   #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > * { grid-column: 1 / -1; margin-bottom: 16px; }
   #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-panel-status] { grid-row: 1; }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="tool-call-failure-rate"] { grid-row: 2; }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="tool-call-failures-by-tool"] { grid-column: 1; grid-row: 3 / -1; align-self: stretch; }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="failures-by-tool"] { grid-column: 2; grid-row: 3; }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="failure-categories"] { grid-column: 2; grid-row: 4; }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="lifecycle-diagnostics"] { grid-column: 2; grid-row: 5; }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="duration-by-tool"] { grid-column: 2; grid-row: 6; }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="mcp-vs-cli"] { grid-column: 2; grid-row: 7; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="tool-call-failures-by-tool"] { grid-column: 1; grid-row: 2 / -1; align-self: stretch; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="failures-by-tool"] { grid-column: 2; grid-row: 2; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="failure-categories"] { grid-column: 2; grid-row: 3; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="lifecycle-diagnostics"] { grid-column: 2; grid-row: 4; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="duration-by-tool"] { grid-column: 2; grid-row: 5; }
+  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="mcp-vs-cli"] { grid-column: 2; grid-row: 6; }
   /* syncNodes preserves addCard order: side cards follow the table. A status
      note has no data-key and must not prevent the last card from stretching. */
   #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > :is(
@@ -527,22 +499,23 @@ td.codebase-empty { padding: 16px 14px; }
 .summary-table tr.clickable { cursor: pointer; }
 .summary-table tr.clickable:hover td { background: rgba(110, 159, 255, 0.08); color: var(--accent-hover); }
 
-/* Failures-by-Tool health cards */
-.audit-summary-container {
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 16px;
-}
-.summary-title {
-  margin: 0 0 14px 0;
+/* Failures-by-Tool health cards. The cards wrap in a flex row rather than a
+   fixed grid: a card that ends a row alone grows to the full row, so no card
+   sits beside empty space whatever the width or card count. */
+.audit-summary-card .tool-health-body {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 .tool-health-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 12px;
 }
 .health-card {
+  flex: 1 1 240px;
+  min-width: 0;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -557,18 +530,20 @@ td.codebase-empty { padding: 16px 14px; }
 .health-card .card-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 6px;
 }
 .health-card .tool-name {
+  flex: 1 1 100%;
+  min-width: 0;
   font-family: var(--font-mono);
   font-weight: 600;
   font-size: 12px;
   color: var(--fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 .health-card .status-badge {
   font-family: var(--font-mono);
@@ -587,16 +562,16 @@ td.codebase-empty { padding: 16px 14px; }
   font-size: 11px;
   color: var(--fg-dim);
 }
+/* Headline failure rate: the first line of the per-tool failures panel. The
+   info icon's 44px target hangs past the line, so its negative margins keep
+   the line's height. */
 .tool-call-failure-rate {
+  display: flex;
+  align-items: center;
   font: 12px var(--font-mono);
   color: var(--fg);
-  padding: 12px 12px 4px;
-}
-.tool-call-failure-rate-note {
-  padding: 0 12px 12px;
-  font-family: var(--font-sans);
-  font-size: 11px;
-  color: var(--fg-dim);
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid var(--border);
 }
 .lifecycle-failure-counts {
   font: 12px var(--font-mono); color: var(--fg); overflow-wrap: anywhere; margin-bottom: 6px;

@@ -67,6 +67,9 @@ impl PluginManifest {
         for (index, path) in self.spec.permissions.fs.write.iter().enumerate() {
             validate_template(path, &format!("spec.permissions.fs.write[{index}]"))?;
         }
+        for (index, path) in self.spec.permissions.fs.write_files.iter().enumerate() {
+            validate_template(path, &format!("spec.permissions.fs.write_files[{index}]"))?;
+        }
         for (index, name) in self.spec.permissions.env_pass.iter().enumerate() {
             let field = format!("spec.permissions.env_pass[{index}]");
             if name.trim().is_empty() || name.contains('=') {

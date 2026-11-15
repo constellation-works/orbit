@@ -4,6 +4,7 @@ members = [
   "crates/orbit-auth",
   "crates/orbit-automation",
   "crates/orbit-cli",
+  "crates/orbit-clock",
   "crates/orbit-cmd",
   "crates/orbit-common",
   "crates/orbit-config",
@@ -34,13 +35,13 @@ codegen-units = 1
 strip = "symbols"
 
 [workspace.package]
-version = "0.40.0"
+version = "0.50.0"
 edition = "2024"
 license = "MIT"
 # MSRV [ORB-10010]: edition 2024 requires >= 1.85; the highest `rust-version`
 # among locked dependencies is 1.88 (time, cookie_store, ort), and workspace
 # code uses the file-locking API (`File::unlock`) stabilized in 1.89. Enforced
-# by the `msrv` job in .github/workflows/ci.yml (keep its MSRV env var in sync).
+# by the `msrv` job in .github/workflows/msrv.yml (keep its MSRV env var in sync).
 rust-version = "1.89"
 
 # Workspace-wide lint config. Each crate opts in via `[lints] workspace = true`.
@@ -60,7 +61,7 @@ missing_docs = "warn"
 
 [workspace.dependencies]
 assert_cmd = "2"
-base64 = "0.22"
+base64 = "0.23"
 # Condition triggers parse and evaluate CEL predicates [ORB-19990]. Orbit owns
 # the type checker over the parsed AST (the crate ships none); regex and the
 # encoder extension stay off because `matches()` is refused.
@@ -71,7 +72,7 @@ chrono-tz = "0.10"
 # `string` lets a command or argument be built from an owned `String`, which
 # the plugin-derived `orbit <ns> <verb>` groups need: their names come from
 # installed manifests at startup, not from literals in this source tree.
-clap = { version = "4.5", features = ["derive", "env", "string"] }
+clap = { version = "4.5", features = ["derive", "env", "string", "wrap_help"] }
 croner = "3"
 flate2 = "1"
 fs2 = "0.4"

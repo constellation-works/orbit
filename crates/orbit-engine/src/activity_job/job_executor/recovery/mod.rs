@@ -9,6 +9,7 @@ mod input;
 mod invocation;
 mod observation;
 mod retry;
+mod unrepairable;
 
 use super::*;
 
@@ -19,10 +20,9 @@ pub(super) use input::{
     redacted_recovery_diagnostic,
 };
 pub(super) use invocation::crew_overridden_recovery_spec;
+use orbit_types::workflow::STEP_FAILURE_RECOVERY_ACTIVITY;
 pub(super) use retry::{StepFailure, recover_or_return_original};
-
-const PR_CONFLICT_RECOVERY_ACTIVITY: &str = "pr_conflict_recovery";
-const STEP_FAILURE_RECOVERY_ACTIVITY: &str = "step_failure_recovery";
+pub(super) use unrepairable::{UnrepairableFailure, unrepairable_failure};
 /// The pool step-failure and PR conflict recovery draw their crew from: the
 /// failure-recovery purpose pool. While it is unset the host draws from the
 /// medium complexity pool [ORB-15663]: recovery diagnoses a failure in work of
@@ -32,7 +32,8 @@ const RECOVERY_CREWS_KEY: &str = "workflow.purpose_crews.failure_recovery";
 
 /// The job's `step_failure_recovery`, resolved from the first top-level step
 /// that declares it: the repair an `--auto-fix` check failure is routed to.
-/// A job none of whose steps declares it routes no check repair.
+/// A job none of whose steps declares it routes no check repair; that
+/// in-budget handoff holds the run.
 pub(super) fn check_repair_activity(job: &JobV2) -> Option<ResolvedRecoveryActivity> {
     job.steps.iter().find_map(|step| {
         match (

@@ -32,7 +32,7 @@ use super::super::baseline::{
     BaseCommandResult, FAILING_TESTS_KEY, cached_base_check, compare_claimed_with_base_until,
     compare_with_base_until, hold_failures, known_red, run_validation_command_until,
 };
-use super::super::git::{BaseSyncMode, git_command_success, resolve_worktree_start_point};
+use super::super::git::{BaseSyncMode, resolve_worktree_start_point};
 use super::super::required::command::{VALIDATION_TIMEOUT_MS, ValidationSummary};
 
 /// The share of a [`ReplayBudget`] reserved for the base replay: one part in
@@ -642,23 +642,20 @@ pub fn verify_claimed_known_red_base(
                 "this owner could not read its base '{base_branch}': {error}"
             ))
         })?;
-    match git_command_success(
-        workspace_path,
-        &[
-            "merge-base",
-            "--is-ancestor",
-            "--end-of-options",
-            base_sha,
-            &tip,
-        ],
-    ) {
+    // The tip is a fully qualified ref (ORB-24726); name the branch the way
+    // the owner configured it, `agent-main` or `origin/agent-main`.
+    let shown = tip
+        .strip_prefix("refs/heads/")
+        .or_else(|| tip.strip_prefix("refs/remotes/"))
+        .unwrap_or(&tip);
+    match crate::executor::automation::vcs::git::is_ancestor(workspace_path, base_sha, &tip) {
         Ok(true) => Ok(()),
         Ok(false) => Err(Inconclusive(format!(
-            "base {base_sha} is not in the history of this owner's {tip}, so its failures are \
+            "base {base_sha} is not in the history of this owner's {shown}, so its failures are \
              not the integration branch's"
         ))),
         Err(error) => Err(Inconclusive(format!(
-            "this owner could not place base {base_sha} in {tip}: {error}"
+            "this owner could not place base {base_sha} in {shown}: {error}"
         ))),
     }
 }

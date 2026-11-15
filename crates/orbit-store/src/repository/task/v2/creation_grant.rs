@@ -21,15 +21,17 @@ pub(super) fn creation_state(bundle: &TaskBundleV2) -> ContextCreationState {
     )
 }
 
-/// Append the grant row the next envelope revision requires, if any, to the
-/// open bundle write. Call before the envelope is republished.
+/// Push the grant row the next envelope revision requires, if any, into
+/// `pending_events` (and onto `bundle.events`, so later rows keep their
+/// ids and order). The caller appends the batch once, before the envelope
+/// is republished.
 pub(super) fn append_creation_grant(
-    store: &TaskBundleStoreV2,
     bundle: &mut TaskBundleV2,
     next_context_files: &[String],
     authorize: &[String],
     actor: &str,
     updated_at: DateTime<Utc>,
+    pending_events: &mut Vec<TaskEventRowV2>,
 ) -> Result<(), OrbitError> {
     let Some(mut grant) = creation_state(bundle).next_grant(
         &bundle.envelope.id,
@@ -56,7 +58,7 @@ pub(super) fn append_creation_grant(
         operation_id: None,
         decision: None,
     };
-    store.append_event(&bundle.envelope.id, &event)?;
+    pending_events.push(event.clone());
     bundle.events.push(event);
     Ok(())
 }

@@ -33,7 +33,12 @@ pub(super) const TOKEN_HEX_LEN: usize = TOKEN_BYTES * 2;
 /// this process read before it is rejected.
 pub(super) const MAX_SESSION_BYTES: usize = 8 * 1024;
 
-/// Version 3 records carry their own token, which is what lets a child verify
+/// Version 5 marks an application invocation that may carry constrained
+/// evidence (entry bindings, text digests, the predicate it was admitted on)
+/// and a pin slot; a reader that only knows version 4 would ignore them.
+/// Version 4 binds an optional application scope so an older reader cannot
+/// ignore it and answer completion calls under a wider callback allowlist.
+/// Version 3 records carried their own token, which is what lets a child verify
 /// that the descriptor it holds is the record the host wrote for it — the
 /// token names the file, and only the host can put a file under that name.
 /// Records carry the session's effective tool ceiling from version 2 on. A
@@ -44,7 +49,13 @@ pub(super) const MAX_SESSION_BYTES: usize = 8 * 1024;
 /// this host cannot read is counted stale by `orbit plugin doctor` and swept
 /// when the next backend starts, so refusing it never leaves an orphan no
 /// surface mentions [ORB-12879].
-pub(super) const SESSION_SCHEMA_VERSION: u32 = 3;
+pub(super) const SESSION_SCHEMA_VERSION: u32 = 5;
+
+/// The previous schema, still read so callbacks from backends a pre-upgrade
+/// host started keep resolving, application-bound ones included: its
+/// invocation reads with the newer fields defaulted, so it carries no pin and
+/// matches exactly what it was admitted for.
+pub(super) const PREVIOUS_SESSION_SCHEMA_VERSION: u32 = 4;
 
 /// Live callback session the host minted for one backend child.
 #[derive(Debug)]
@@ -66,6 +77,12 @@ pub struct PluginCallbackSession {
 /// The plugin a resolved callback belongs to, and what that session may do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginCallbackIdentity {
+    /// Workspace the host used to render the backend sandbox, when recorded.
+    pub workspace_root: Option<PathBuf>,
+    /// The host actually spawned this backend without filesystem confinement.
+    pub unconfined: bool,
+    /// Application authority minted by the host for this child, if any.
+    pub application: Option<Box<orbit_types::tool::ApplicationInvocation>>,
     /// This session's plugin identity, exactly like the identity behind a
     /// call the plugin made directly — except `grants` is always empty: a
     /// callback's authority is `effective_tools`, minted from the spawning
@@ -89,6 +106,12 @@ impl PluginCallbackIdentity {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct SessionRecord {
+    #[serde(default)]
+    pub(super) workspace_root: Option<PathBuf>,
+    #[serde(default)]
+    pub(super) unconfined: bool,
+    #[serde(default)]
+    pub(super) application: Option<Box<orbit_types::tool::ApplicationInvocation>>,
     pub(super) schema_version: u32,
     pub(super) plugin: String,
     pub(super) version: String,
@@ -106,6 +129,53 @@ pub(super) struct SessionRecord {
 }
 
 impl PluginCallbackSession {
+    /// Record the workspace used to render this backend's sandbox before spawn.
+    /// Older records omit this binding and cannot preflight explicit selectors.
+    pub fn bind_workspace_root(
+        &mut self,
+        root: Option<&Path>,
+        unconfined: bool,
+    ) -> Result<(), OrbitError> {
+        self.record.unconfined = unconfined;
+        self.record.workspace_root =
+            root.map(|root| std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf()));
+        if session_bytes(&self.record)?.len() > MAX_SESSION_BYTES {
+            return Err(OrbitError::InvalidInput(
+                "callback workspace binding exceeds the session byte limit".into(),
+            ));
+        }
+        rewrite_session_in_place(&self.path, &self.record)
+    }
+
+    /// Bind completion authority before spawning a child. The app credential
+    /// is never delivered: this reference works only inside this host record.
+    pub fn bind_application(
+        &mut self,
+        invocation: Option<&orbit_types::tool::ApplicationInvocation>,
+    ) -> Result<(), OrbitError> {
+        if invocation.is_none() && self.record.application.is_none() {
+            return Ok(());
+        }
+        // A pin is host-route state, never part of what the child is handed.
+        // The entry dispatch's execution id is, so each callback audit row
+        // can be listed from that entry.
+        self.record.application = invocation.cloned().map(|mut invocation| {
+            invocation.callback = true;
+            invocation.pinned_task = None;
+            if invocation.entry_execution_id.is_none() {
+                invocation.entry_execution_id =
+                    orbit_common::observability::audit_id::current_dispatch_execution_id();
+            }
+            Box::new(invocation)
+        });
+        if session_bytes(&self.record)?.len() > MAX_SESSION_BYTES {
+            return Err(OrbitError::InvalidInput(
+                "application callback scope exceeds the session byte limit".into(),
+            ));
+        }
+        rewrite_session_in_place(&self.path, &self.record)
+    }
+
     /// Create the session file and return a guard that unlinks it on drop.
     ///
     /// `effective_tools` is the spawning caller's intersection — what this
@@ -140,6 +210,9 @@ impl PluginCallbackSession {
             let token = random_token()?;
             let path = dir.join(&token);
             let record = SessionRecord {
+                workspace_root: None,
+                unconfined: false,
+                application: None,
                 schema_version: SESSION_SCHEMA_VERSION,
                 plugin: provenance.name.clone(),
                 version: provenance.version.clone(),
@@ -214,7 +287,7 @@ impl PluginCallbackSession {
     }
 
     /// Give the child a route back to `host` for the callbacks only the host
-    /// can answer ([`super::HOST_ROUTED_CALLBACK_TOOLS`]), when this session's
+    /// can answer (`super::host_route::routes_on_host`), when this session's
     /// ceiling admits one of them and the caller supplied a host. Calls on the
     /// route are answered under this session for as long as it lives.
     ///
@@ -231,7 +304,7 @@ impl PluginCallbackSession {
                 .record
                 .effective_tools
                 .iter()
-                .any(|tool| super::is_host_routed_callback_tool(tool))
+                .any(|tool| super::host_route::routes_on_host(&self.record, tool))
         {
             self.host_route = Some(super::host_route::HostRoute::start(
                 self.record.clone(),

@@ -1,6 +1,3 @@
-#![allow(missing_docs)]
-#![allow(clippy::expect_used, clippy::unwrap_used)]
-
 //! `orbit workspace init --preset` refuses a plugin-seeded `[enable]` name
 //! whose file is missing or does not load before bootstrap, config, registration
 //! or provenance. A valid seeded preset still applies and records provenance.

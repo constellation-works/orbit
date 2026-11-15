@@ -1,4 +1,5 @@
 //! Framing diagnostics through the exported SSH transport, with no live host.
+//! The same scripted-peer approach carries the legacy internal-drain RPC refusal.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -20,13 +21,16 @@ const STDERR_SECRET: &str = "STDERR_SECRET_MUST_NOT_ESCAPE";
 const PEER: &str = r#"#!/usr/bin/env python3
 import json, os, sys
 case = os.environ['ORBIT_OVERSIZED_LINE_FIXTURE']
-with open('peer.pid', 'w') as file:
+fixture = os.environ['ORBIT_FIXTURE_DIR']
+with open(os.path.join(fixture, 'cwd'), 'w') as file:
+    file.write(os.getcwd())
+with open(os.path.join(fixture, 'peer.pid'), 'w') as file:
     file.write(str(os.getpid()))
 for line in sys.stdin:
     request = json.loads(line)
     if 'id' not in request:
         continue
-    with open('journal', 'a') as file:
+    with open(os.path.join(fixture, 'journal'), 'a') as file:
         file.write(request['method'] + '\n')
     if request['method'] == 'initialize' and case != 'initialize':
         result = {'protocolVersion': request['params']['protocolVersion']}
@@ -48,7 +52,7 @@ for line in sys.stdin:
         sys.stdout.write(prefix + 'PAYLOAD_SECRET_MUST_NOT_ESCAPE' + 'x' * 1100 + suffix)
         sys.stdout.flush()
         for remaining in sys.stdin:
-            with open('journal', 'a') as file:
+            with open(os.path.join(fixture, 'journal'), 'a') as file:
                 file.write('unexpected-replay\n')
         sys.exit(0)
     print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}), flush=True)
@@ -60,74 +64,109 @@ fn oversized_lines_retain_safe_uncorrelated_context_without_replay() {
         exercise(&case);
         return;
     }
-    for case in [
-        "notification",
-        "peer-request",
-        "unparseable",
-        "bad-projection",
-        "metadata",
-        "initialize",
-        "normal",
-    ] {
-        let fixture = tempfile::tempdir().unwrap();
-        let bin = fixture.path().join("bin");
-        fs::create_dir(&bin).unwrap();
-        let peer = bin.join("ssh");
-        fs::write(&peer, PEER).unwrap();
-        fs::set_permissions(&peer, fs::Permissions::from_mode(0o700)).unwrap();
-        let output = orbit_common::process::run_bounded(
-            Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "oversized_lines::oversized_lines_retain_safe_uncorrelated_context_without_replay",
-                    "--nocapture",
-                ])
-                .current_dir(fixture.path())
-                .env(CHILD, case)
-                .env("HOME", fixture.path())
-                .env(
-                    "PATH",
-                    format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
-                ),
-            Duration::from_secs(15),
-        )
-        .unwrap();
-        let captured = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        for secret in [PAYLOAD_SECRET, ARGUMENT_SECRET, STDERR_SECRET] {
+    for long_home in [false, true] {
+        for case in [
+            "notification",
+            "peer-request",
+            "unparseable",
+            "bad-projection",
+            "metadata",
+            "initialize",
+            "normal",
+        ] {
+            let fixture = tempfile::Builder::new()
+                .prefix("orbit-oversized-lines-")
+                .tempdir_in("/tmp")
+                .unwrap();
+            let home = if long_home {
+                let home = fixture.path().join("h".repeat(100));
+                fs::create_dir(&home).unwrap();
+                home
+            } else {
+                fixture.path().to_path_buf()
+            };
+            let expected_ssh_cwd = if long_home {
+                home.join(".orbit/ssh")
+            } else {
+                fixture.path().to_path_buf()
+            };
+            let bin = fixture.path().join("bin");
+            fs::create_dir(&bin).unwrap();
+            let peer = bin.join("ssh");
+            fs::write(&peer, PEER).unwrap();
+            fs::set_permissions(&peer, fs::Permissions::from_mode(0o700)).unwrap();
+            let output = orbit_common::process::run_bounded(
+                Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "oversized_lines::oversized_lines_retain_safe_uncorrelated_context_without_replay",
+                        "--nocapture",
+                    ])
+                    .current_dir(fixture.path())
+                    .env(CHILD, case)
+                    .env("ORBIT_FIXTURE_DIR", fixture.path())
+                    .env("HOME", &home)
+                    .env(
+                        "PATH",
+                        format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+                    ),
+                Duration::from_secs(15),
+            )
+            .unwrap();
+            let captured = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            for secret in [PAYLOAD_SECRET, ARGUMENT_SECRET, STDERR_SECRET] {
+                assert!(
+                    !captured.contains(secret),
+                    "{case}: diagnostic logs leaked a secret"
+                );
+            }
             assert!(
-                !captured.contains(secret),
-                "{case}: diagnostic logs leaked a secret"
+                output.status.success(),
+                "{case} with {} HOME: {captured}",
+                if long_home { "long" } else { "short" }
+            );
+            let actual_ssh_cwd = fs::read_to_string(fixture.path().join("cwd")).unwrap();
+            assert_eq!(
+                std::path::PathBuf::from(actual_ssh_cwd),
+                expected_ssh_cwd.canonicalize().unwrap(),
+                "{case}: verify the SSH socket-path cwd for the selected HOME length"
+            );
+            if long_home {
+                assert!(
+                    !expected_ssh_cwd.join("journal").exists()
+                        && !expected_ssh_cwd.join("peer.pid").exists(),
+                    "{case}: peer outputs must remain in the fixture root"
+                );
+            }
+            let journal = fs::read_to_string(fixture.path().join("journal")).unwrap();
+            assert_eq!(
+                journal,
+                if case == "initialize" {
+                    "initialize\n"
+                } else {
+                    "initialize\ntools/call\n"
+                },
+                "the transport must not replay the dispatched call or add a version probe"
+            );
+            let pid: i32 = fs::read_to_string(fixture.path().join("peer.pid"))
+                .unwrap()
+                .parse()
+                .unwrap();
+            // SAFETY: signal zero observes existence without signaling a process.
+            assert_eq!(
+                unsafe { libc::kill(pid, 0) },
+                -1,
+                "the SSH peer must be reaped"
+            );
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ESRCH)
             );
         }
-        assert!(output.status.success(), "{case}: {captured}");
-        let journal = fs::read_to_string(fixture.path().join("journal")).unwrap();
-        assert_eq!(
-            journal,
-            if case == "initialize" {
-                "initialize\n"
-            } else {
-                "initialize\ntools/call\n"
-            },
-            "the transport must not replay the dispatched call or add a version probe"
-        );
-        let pid: i32 = fs::read_to_string(fixture.path().join("peer.pid"))
-            .unwrap()
-            .parse()
-            .unwrap();
-        // SAFETY: signal zero observes existence without signaling a process.
-        assert_eq!(
-            unsafe { libc::kill(pid, 0) },
-            -1,
-            "the SSH peer must be reaped"
-        );
-        assert_eq!(
-            std::io::Error::last_os_error().raw_os_error(),
-            Some(libc::ESRCH)
-        );
     }
 }
 
@@ -266,4 +305,155 @@ fn exercise(case: &str) {
             json!(["title", "status"])
         }
     );
+}
+
+const LEGACY_CHILD: &str = "ORBIT_LEGACY_RPC_REFUSAL_FIXTURE";
+
+/// An owner whose internal drain registry predates late effort reports.
+///
+/// The reply is the old server's invalid-params JSON-RPC error, spoken on the
+/// exported SSH route rather than a private session.
+const LEGACY_PEER: &str = r#"#!/usr/bin/env python3
+import json, os, sys
+fixture = os.environ['ORBIT_FIXTURE_DIR']
+with open(os.path.join(fixture, 'argv'), 'w') as file:
+    file.write('\n'.join(sys.argv))
+with open(os.path.join(fixture, 'peer.pid'), 'w') as file:
+    file.write(str(os.getpid()))
+for line in sys.stdin:
+    request = json.loads(line)
+    if 'id' not in request:
+        continue
+    with open(os.path.join(fixture, 'journal'), 'a') as file:
+        file.write(request['method'] + '\n')
+    if request['method'] == 'initialize':
+        result = {'protocolVersion': request['params']['protocolVersion']}
+        response = {'result': result}
+    elif request['method'] == 'orbit/internal/drain/call':
+        response = {'error': {'code': -32602, 'message': 'unknown internal drain operation'}}
+    else:
+        raise SystemExit('unexpected request: ' + request['method'])
+    response.update(jsonrpc='2.0', id=request['id'])
+    print(json.dumps(response), flush=True)
+"#;
+
+#[test]
+fn unknown_internal_drain_operation_preserves_the_legacy_rpc_refusal() {
+    if std::env::var(LEGACY_CHILD).is_ok() {
+        exercise_legacy_rpc_refusal();
+        return;
+    }
+    let fixture = tempfile::Builder::new()
+        .prefix("orbit-legacy-rpc-refusal-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let bin = fixture.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    let peer = bin.join("ssh");
+    fs::write(&peer, LEGACY_PEER).unwrap();
+    fs::set_permissions(&peer, fs::Permissions::from_mode(0o700)).unwrap();
+    let output = orbit_common::process::run_bounded(
+        Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "oversized_lines::unknown_internal_drain_operation_preserves_the_legacy_rpc_refusal",
+                "--nocapture",
+            ])
+            .current_dir(fixture.path())
+            .env(LEGACY_CHILD, "1")
+            .env("ORBIT_FIXTURE_DIR", fixture.path())
+            .env("HOME", fixture.path())
+            .env(
+                "PATH",
+                format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+            ),
+        Duration::from_secs(15),
+    )
+    .unwrap();
+    let captured = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.status.success(),
+        "legacy RPC refusal through the public SSH route: {captured}"
+    );
+    let argv = fs::read_to_string(fixture.path().join("argv")).unwrap();
+    assert!(
+        argv.contains("--internal-drain"),
+        "open_internal_drain_route must ask the peer for the internal route: {argv}"
+    );
+    let journal = fs::read_to_string(fixture.path().join("journal")).unwrap();
+    assert_eq!(
+        journal, "initialize\norbit/internal/drain/call\n",
+        "the exported route must handshake, then deliver the drain call once"
+    );
+    let pid: i32 = fs::read_to_string(fixture.path().join("peer.pid"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    // SAFETY: signal zero observes existence without signaling a process.
+    assert_eq!(
+        unsafe { libc::kill(pid, 0) },
+        -1,
+        "the SSH peer must be reaped"
+    );
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
+}
+
+fn exercise_legacy_rpc_refusal() {
+    let probe = SshDestinationProbe::new(
+        "hm_caller".into(),
+        Duration::from_secs(5),
+        Duration::from_secs(5),
+        None,
+        McpSessionAuthority::Agent,
+    );
+    let mut route = probe
+        .open_internal_drain_route(&Destination::ssh("fake-peer", "hm_fixture"))
+        .expect("handshake the legacy owner over the exported SSH route");
+    let error = route
+        .call_internal_drain(
+            "orbit.drain.claim.effort",
+            json!({"claim_id": "claim"}),
+            ToolSessionContext::default(),
+        )
+        .expect_err("the old owner must refuse the unknown operation");
+    let OrbitError::RemoteTool {
+        code,
+        message,
+        payload,
+    } = error
+    else {
+        panic!("the JSON-RPC refusal is preserved as structured data: {error}");
+    };
+    assert_eq!(code.as_str(), "invalid_input", "{code}");
+    assert_eq!(error_rpc_code(&payload), Some(-32602), "{payload}");
+    assert_eq!(
+        payload["rpc_message"], "unknown internal drain operation",
+        "{payload}"
+    );
+    assert!(
+        message.contains(
+            "'orbit/internal/drain/call' failed: {\"code\":-32602,\"message\":\"unknown internal drain operation\"}"
+        ),
+        "keep the diagnostic text as detail: {message}"
+    );
+    // The preserved structured fields classify the legacy reply without
+    // reading the formatted message.
+    let preserved = OrbitError::RemoteTool {
+        code,
+        message,
+        payload,
+    };
+    assert!(preserved.is_unknown_internal_drain_operation());
+    assert!(preserved.is_json_rpc_refusal());
+}
+
+fn error_rpc_code(payload: &Value) -> Option<i64> {
+    payload["rpc_code"].as_i64()
 }

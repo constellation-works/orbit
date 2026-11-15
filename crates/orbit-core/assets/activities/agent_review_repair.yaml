@@ -74,8 +74,8 @@ spec:
     - The manifest's `remaining.seconds` is your deadline. Attach an initial
       `incomplete` report early and update it after meaningful progress, so a
       timeout keeps your findings and checks.
-    - Read and attach task artifacts only with `orbit.task.artifact.get` and
-      `orbit.task.artifact.put` (CLI or MCP); `orbit tool show <tool.name>` prints
+    - Read and attach task artifacts only with `orbit.task.artifact` action `get` and
+      `orbit.task.artifact` action `put` (CLI or MCP); `orbit tool show <tool.name>` prints
       a tool's schema. Only the manifest read and the report write are required.
       Fetch an optional artifact only when its exact path is in the artifact
       listing; never probe by name. If the listing is refused, or a listed
@@ -89,7 +89,7 @@ spec:
       task, run, claim and attempt state as they are.
     - Write reports, logs and scratch files only under `.orbit/tmp/`
       (`$ORBIT_SCRATCH_DIR`), never `/tmp`: the host commits every other changed
-      or untracked path as a fix, and `orbit.task.artifact.put` reads only there.
+      or untracked path as a fix, and `orbit.task.artifact` action `put` reads only there.
     - Uncommitted changes present when you start are an interrupted earlier
       invocation's unverified fixes. Keep one only if a finding you record names
       it and validation passes with it; otherwise edit it back.
@@ -109,6 +109,8 @@ spec:
        ancestor of HEAD; on any mismatch attach an `incomplete` report and stop.
        If `required_validation_commands` is absent, attach an `incomplete` report
        saying a fresh delivery run is needed; never infer the list.
+       A present empty list (`[]`) is valid and is not absent: never attach
+       `incomplete` for it.
     2. List artifacts once:
        `orbit tool run orbit.task.show --input '{"id":"<task-id>","field":"artifacts","model":"<agent-family>"}'`.
        Each entry's `path` is the available set (an array; MCP may wrap it in
@@ -144,17 +146,6 @@ spec:
          `proposal` (`tool`, `input`, `rationale`) as part of the change against
          the criteria. You cannot repair a proposal: one that is wrong, unjustified
          or outside the task's intent is an open finding naming its `artifact`.
-       - `visual_findings`: confirmed mismatches between the candidate's
-         rendered views and the task's mocks (fetch the cited `images` with
-         `orbit.task.artifact.get`). For each, add one entry to the report's
-         `visual_resolutions`: `{finding_id, resolution, reason}` with
-         `resolution` `fixed` (your repair commit changes the view; it is
-         recaptured and its checks rerun before landing), `disputed` (the
-         mock or finding is wrong; `reason` says why, and an operator decides)
-         or `unfixed`. A `must_address: true` finding left `unfixed` or
-         `disputed` holds the candidate from landing; an optional one left
-         unfixed is filed as a follow-up after landing. Never claim `fixed`
-         without changing the view.
     4. Review spec compliance: every acceptance criterion against
        `git diff <base.commit>..HEAD`, the affected callers, and the implementer's
        execution summary in the manifest. A green summary or CI result is not
@@ -187,7 +178,11 @@ spec:
     7. Validate the final worktree (see Validation records). Each
        `required_validation_commands` entry not in `host_validation`, and the
        validation the workspace guide requires, needs a passing `required`
-       record; at least one `required` record must pass. Choose further checks
+       record; at least one `required` record must pass. When the list is
+       present but empty, there are no entries to cover; this step is satisfied
+       by the workspace guide's required checks together with the further checks
+       chosen from the changed behavior below, which supply the required passing
+       record. Choose further checks
        from the changed behavior. Do not add `cargo test --workspace`, `make ci`
        or another full-workspace suite as a blanket gate, or invent a substitute
        suite for a required command. Pin any comparison base to `base.commit`
@@ -309,11 +304,12 @@ spec:
         run on this platform, refused without running, is `not_run`; name the
         supported-platform run the guidance specifies.
       - `host_sandbox_test` with `os` (`linux` or `macos`): its command is an
-        exact owner-required command or
-        `cargo test -p <crate> --test <target> [<filter>]`, also accepting a single
+        exact owner-required command,
+        `cargo test -p <crate> --test <target> [<filter>]`, or
+        `cargo test -p <crate> --lib [<filter>]`, also accepting a single
         `--` immediately before the one filter, with no other options or shell
-        syntax. Name a test a broad diagnostic exposed in that focused
-        form, not as a full-workspace replay.
+        syntax. `--lib` is not combined with `--test`. Name a test a broad
+        diagnostic exposed in that focused form, not as a full-workspace replay.
     - A genuine assertion or product failure is never external evidence. Never
       accept a run that reported incomplete analysis.
 
@@ -337,7 +333,7 @@ spec:
 
     Write `.orbit/tmp/review-report.json` and attach it for every id in
     `task_ids`:
-    `orbit tool run orbit.task.artifact.put --input '{"id":"<task-id>","source_path":".orbit/tmp/review-report.json","path":"<report_artifact>","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<task-id>","source_path":".orbit/tmp/review-report.json","path":"<report_artifact>","model":"<agent-family>"}'`.
     A refused put names the field or record (malformed shape, a missing or reused
     `required` id, an earlier id dropped, relabelled or improperly retired): fix
     the file and put it again until accepted. The report must match this JSON
@@ -370,12 +366,6 @@ spec:
                  "properties":{
                    "kind":{"enum":["open","repaired","disposed"]},
                    "reason":{"type":"string","description":"required for disposed"}}}}}},
-           "visual_resolutions":{"type":"array","items":{"type":"object",
-             "required":["finding_id","resolution"],
-             "properties":{
-               "finding_id":{"type":"string","description":"a manifest visual_findings id"},
-               "resolution":{"enum":["fixed","disputed","unfixed"]},
-               "reason":{"type":"string","description":"required for disputed"}}}},
            "validation":{"type":"array","items":{"type":"object",
              "required":["command","outcome"],
              "properties":{
@@ -443,64 +433,17 @@ spec:
       appears.
     - If the re-read shows a task is terminal or refuses writes, do not fix or
       deliver it; record that in the report.
-  regression_risk_instruction: |
-    Regression-risk marks
-
-    `task.regression_risk.marks` names context files that often regressed
-    recently; `nature`, `escape` and `lesson` say how and why the gates missed
-    it. A mark is history, not the current code: do not report or re-fix the old
-    bug.
-
-    For each marked file the change touches, check each category its mark lists
-    against the diff and the evidence you can see, and report one the change
-    leaves unaddressed as a finding on that file. A check you cannot observe is
-    not a finding.
-    - escape `no_test`: a focused test at the public CLI/API boundary covers the
-      changed behavior.
-    - escape `test_not_selected`: the file's tests ran by name, not only through
-      affected-test selection.
-    - escape `platform_only`: each platform or host the change behaves
-      differently on was exercised or recorded as owed.
-    - escape `review_missed`: read the file's diff line by line against every
-      acceptance criterion and its callers.
-    - escape `spec_ambiguous`: the change takes a reasonable reading of the
-      requirement.
-    - escape `nondeterministic`: neither the change nor its tests depend on
-      timing, ordering or environment.
-    - nature `broke_existing`: existing callers still behave and their tests
-      cover them.
-    - nature `defect_in_new`: new paths, failure paths included, are covered.
-    - nature `incomplete`: each acceptance criterion is met in the diff.
-    - nature `merge_reintroduced`: nothing removed earlier came back with a
-      rebase or base sync.
-    - nature `contract_drift`: affected docs, schemas or contracts changed in the
-      same diff.
-    - `unclassified`: apply the checks above that fit.
-
-    `orbit.codebase.show` with a path lists regression tasks whose recorded
-    sites resolve under that path. For a path the task declared, a task whose
-    incoming regression links have no recorded sites appears only in that
-    path's `unsited` count; tasks whose sites resolve only to other paths are
-    omitted from that path's regression standing. Risk marks count regressions
-    against every file declared in the task footprint, regardless of sites, so
-    a mark can include contributors this lookup does not list. In your summary,
-    name each marked file you checked and what each category showed, including
-    any you could not observe.
-  explore_instruction: |
-    Read-only delegation
-
-    Before delegating a read-only question, read "Read-only delegation" in the
-    Orbit skill's task-execution reference. Delegate only reading; when a call
-    is refused, do the work yourself, and verify the explorer's cited files
-    before using its answer.
+  fleet_notices: post
   tool_disallow_list:
-    - orbit.auto_task.add
-    - orbit.auto_task.mint
-    - orbit.auto_task.update
+    - orbit.auto_task:add
+    - orbit.auto_task:mint
+    - orbit.auto_task:update
     - orbit.command.exec
     - orbit.pipeline.invoke
-    - orbit.workflow.run.resume
-    - orbit.workflow.ship
+    - orbit.run:resume
+    - orbit.run:show
+    - orbit.workflow:land
+    - orbit.workflow:ship
   proc_disallowed_programs:
     - sudo
     - su

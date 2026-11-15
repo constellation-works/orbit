@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 
 use super::browser_kit::browser_kit_rows;
 use super::git_protection::git_protection_row;
+use super::host_workspaces::host_workspace_convergence_row;
 use super::permissions::state_directory_permissions_row;
 use super::script_grants::script_grant_rows;
 use super::worker_containment::worker_containment_row;
@@ -37,7 +38,6 @@ const REPORT_PROBES: &[DoctorProbe] = &[
         mcp_registration_row(runtime, orbit_common::fs::path::home_dir().ok().as_deref())
     }),
     // Machine-global checks: they read the operator's home, not the workspace.
-    DoctorProbe::many("mcp-callers", |_, _| caller_authorization_rows()),
     DoctorProbe::one("clock-unit", |runtime, _| {
         clock_unit_row(&runtime.global_root())
     }),
@@ -45,8 +45,70 @@ const REPORT_PROBES: &[DoctorProbe] = &[
         crate::hosts::doctor_hosts_row(&runtime.global_root())
     }),
     DoctorProbe::many("browser-kit", |runtime, _| browser_kit_rows(runtime)),
+    DoctorProbe::one("workspace-convergence", |runtime, _| {
+        host_workspace_convergence_row(runtime)
+    }),
     DoctorProbe::one("host-labels", |runtime, _| host_labels_row(runtime)),
+    DoctorProbe::one("plugin-enablement", |runtime, _| {
+        plugin_enablement_row(runtime)
+    }),
 ];
+
+/// A `[plugin_enablement]` table in the global (host) config: refused at
+/// load, so every owner-served call fails until it is removed. Reported
+/// here directly from the file; when the table keeps the runtime from opening
+/// at all, [`misplaced_plugin_enablement_row`] gives the row without one.
+fn plugin_enablement_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    plugin_enablement_row_for(&runtime.global_root())
+}
+
+/// The `plugin-enablement` row for the host config under `global_root`, only
+/// when it holds the misplaced table.
+///
+/// `orbit doctor` calls this before any runtime exists: the table makes the
+/// layered config refuse to load, so the runtime the report probes need never
+/// opens. A clean, absent or unreadable host config yields `None`, leaving the
+/// caller's own error to stand.
+pub fn misplaced_plugin_enablement_row(
+    global_root: &std::path::Path,
+) -> Option<WorkspaceDoctorResult> {
+    let row = plugin_enablement_row_for(global_root);
+    (row.status == WorkspaceDoctorStatus::Error).then_some(row)
+}
+
+/// The `plugin-enablement` row for the host config under `global_root`.
+pub(super) fn plugin_enablement_row_for(global_root: &std::path::Path) -> WorkspaceDoctorResult {
+    let path = global_root.join("config.toml");
+    match orbit_config::misplaced_global_plugin_enablement(&path) {
+        Ok(Some(misplaced)) => WorkspaceDoctorResult {
+            duration_ms: 0,
+            check_name: "plugin-enablement".into(),
+            status: WorkspaceDoctorStatus::Error,
+            message: format!(
+                "[plugin_enablement] is misplaced in host config '{}' on host '{}': it is a workspace setting and its presence fails every config load on this host",
+                misplaced.path.display(),
+                misplaced.host
+            ),
+            remediation: Some(orbit_config::global_plugin_enablement_fix(&misplaced.path)),
+        },
+        Ok(None) => WorkspaceDoctorResult {
+            duration_ms: 0,
+            check_name: "plugin-enablement".into(),
+            status: WorkspaceDoctorStatus::Ok,
+            message: "no [plugin_enablement] table in the host config".into(),
+            remediation: None,
+        },
+        Err(error) => WorkspaceDoctorResult {
+            duration_ms: 0,
+            check_name: "plugin-enablement".into(),
+            status: WorkspaceDoctorStatus::Warning,
+            message: format!("cannot inspect host config '{}': {error}", path.display()),
+            remediation: Some(
+                "Fix the host config file named above, then rerun `orbit doctor`.".into(),
+            ),
+        },
+    }
+}
 
 /// The capability labels this host carries for tasks' `requires_labels`:
 /// its `machine.labels` plus its OS as an implicit label.
@@ -166,7 +228,7 @@ fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
 
     names.into_iter().map(|name| {
         let check_name = format!("provider:{name}");
-        let Some(crew) = config.crews.get(&name) else {
+        let Some(crew) = orbit_types::identity::find_crew(&name, &config.crews) else {
             return WorkspaceDoctorResult {
                 duration_ms: 0,
                 check_name,
@@ -269,7 +331,7 @@ pub(super) fn routed_crew_names(
 /// Provider readiness follows dispatch. A disabled crew is omitted. A name
 /// absent from the registry stays included so the probe can report it missing.
 fn routing_selects_crew(config: &ResolvedConfig, name: &str) -> bool {
-    match config.crews.get(name) {
+    match orbit_types::identity::find_crew(name, &config.crews) {
         Some(crew) => crew.enabled,
         None => true,
     }
@@ -497,51 +559,6 @@ fn mcp_registration_row(
             remediation: None,
         }
     }
-}
-
-/// Whether this machine still carries retired destination-side MCP caller
-/// authorization files [ORB-12564].
-///
-/// One row, and never an error. The files grant and refuse nothing now: an SSH
-/// login to this machine is ownership of it, so a session served over SSH holds
-/// the authority its argv asks for, exactly as a local one does. What is worth
-/// saying is that a ceiling an operator wrote is inert, because the operator
-/// who wrote it has no other way to find out.
-fn caller_authorization_rows() -> Vec<WorkspaceDoctorResult> {
-    let Ok(home) = orbit_common::fs::path::home_dir() else {
-        return Vec::new();
-    };
-    let ignored = orbit_mcp::ignored_caller_authorization_paths(&home.join(".orbit"));
-    if ignored.is_empty() {
-        return vec![WorkspaceDoctorResult {
-            duration_ms: 0,
-            check_name: "mcp-callers".to_string(),
-            status: WorkspaceDoctorStatus::Ok,
-            message: "no retired MCP caller-authorization files; a session served over SSH \
-                      holds the authority its argv asks for"
-                .to_string(),
-            remediation: None,
-        }];
-    }
-    let paths = ignored
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect::<Vec<_>>();
-    vec![WorkspaceDoctorResult {
-        duration_ms: 0,
-        check_name: "mcp-callers".to_string(),
-        status: WorkspaceDoctorStatus::Warning,
-        message: format!(
-            "left over from destination-side caller authorization and ignored, capping no \
-             remote MCP session: {}",
-            paths.join(", ")
-        ),
-        remediation: Some(format!(
-            "Delete it: `rm -r {}`. To deny a caller, remove its key from \
-             `~/.ssh/authorized_keys` — that is the only boundary this machine ever had.",
-            paths.join(" ")
-        )),
-    }]
 }
 
 /// Whether the OS sweep-clock unit invokes this binary [ORB-12244].

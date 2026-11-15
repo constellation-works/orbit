@@ -14,9 +14,9 @@ use orbit_exec::{
     LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapMask, LinuxBwrapMountAuthority, LinuxBwrapPlan,
     LinuxBwrapPostRunGuard, LinuxBwrapScratchRemoval, LinuxBwrapSpawnRequest, WriteAnchorKind,
     bwrap_path, bwrap_program_for_audit, compile_linux_bwrap_argv,
-    compile_linux_bwrap_argv_with_authority, linux_bwrap_write_grant_diagnostic,
-    linux_bwrap_write_grants, prepare_linux_bwrap_write_grants, probe_bwrap,
-    spawn_under_linux_bwrap,
+    compile_linux_bwrap_argv_with_authority, existing_glob_matches,
+    linux_bwrap_write_grant_diagnostic, linux_bwrap_write_grants, prepare_linux_bwrap_write_grants,
+    probe_bwrap, spawn_under_linux_bwrap,
 };
 use orbit_types::policy::ResolvedFsProfile;
 use orbit_types::workflow::{HostEvidenceReason, HostSandboxCommand, judge_host_test_output};
@@ -1363,6 +1363,95 @@ fn direct_invocation_policy_table() {
     assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
 }
 
+/// [ORB-24174] Exact-file sqlite grants under the workspace (the resident
+/// cycle's `semantic.db` bind-fd grants) cannot create a `.env`, so a direct
+/// invocation under the shipped `**/.env` denies compiles; a directory grant
+/// under the same prefix, or an exact grant of a `.env` file itself, still
+/// refuses.
+#[test]
+fn direct_invocation_allows_exact_file_grants_but_refuses_directory_grants() {
+    let (_temp, workspace) = fresh_workspace();
+    let state = workspace.join(".orbit/state");
+    std::fs::create_dir_all(&state).expect("create state dir");
+    let mut modify: Vec<String> = Vec::new();
+    for name in ["semantic.db", "semantic.db-wal", "semantic.db-shm"] {
+        let file = state.join(name);
+        std::fs::write(&file, "db").expect("create semantic grant file");
+        modify.push(file.display().to_string());
+    }
+    for deny in ["**/.env", "**/.env.*", "**/*.env", "**/*.env.*"] {
+        modify.push(format!("!{}/{deny}", workspace.display()));
+    }
+    compile_linux_bwrap_argv(
+        &profile(modify.clone()),
+        "/bin/true",
+        &[],
+        Some(&workspace),
+        false,
+    )
+    .expect("exact-file semantic.db grants must not trip the non-subtree .env deny");
+
+    // A directory/subtree grant under the workspace can create a `.env`.
+    let mut dir_modify = modify.clone();
+    dir_modify.push(format!("{}/**", state.display()));
+    let error = compile_linux_bwrap_argv(
+        &profile(dir_modify),
+        "/bin/true",
+        &[],
+        Some(&workspace),
+        false,
+    )
+    .expect_err("directory grant under the deny prefix must still refuse");
+    assert!(
+        error.to_string().contains("non-subtree denyModify"),
+        "{error}"
+    );
+
+    // An exact grant of a `.env` file itself can modify a denied path.
+    let env_file = workspace.join(".env");
+    std::fs::write(&env_file, "secret").expect("create .env file");
+    let mut env_modify = modify;
+    env_modify.push(env_file.display().to_string());
+    let error = compile_linux_bwrap_argv(
+        &profile(env_modify),
+        "/bin/true",
+        &[],
+        Some(&workspace),
+        false,
+    )
+    .expect_err("exact .env grant must still refuse");
+    assert!(
+        error.to_string().contains("non-subtree denyModify"),
+        "{error}"
+    );
+
+    // A hard link gives the exact sqlite grant another name at the denied
+    // path. Path matching alone cannot establish that the writable inode is
+    // separate from a protected `.env` file, so this must fail closed too.
+    let database = state.join("semantic.db");
+    std::fs::remove_file(&database).expect("remove standalone semantic database");
+    std::fs::hard_link(&env_file, &database).expect("link semantic grant to denied .env");
+    let mut hard_link_modify = vec![database.display().to_string()];
+    for name in ["semantic.db-wal", "semantic.db-shm"] {
+        hard_link_modify.push(state.join(name).display().to_string());
+    }
+    for deny in ["**/.env", "**/.env.*", "**/*.env", "**/*.env.*"] {
+        hard_link_modify.push(format!("!{}/{deny}", workspace.display()));
+    }
+    let error = compile_linux_bwrap_argv(
+        &profile(hard_link_modify),
+        "/bin/true",
+        &[],
+        Some(&workspace),
+        false,
+    )
+    .expect_err("a hard-linked exact grant must not write through a denied .env path");
+    assert!(
+        error.to_string().contains("non-subtree denyModify"),
+        "{error}"
+    );
+}
+
 /// [ORB-11257] A read-only direct invocation can compile default dotenv glob
 /// denials. Live Bubblewrap must leave an existing match intact and refuse a
 /// newly created matching path; a write-capable sibling still fails closed.
@@ -1942,6 +2031,154 @@ fn create_in_managed_child(
         std::fs::write(path, "secret").expect("record the created path");
     }
     guard
+}
+
+/// A forbidden scratch symlink is removed as an entry, without deleting its target.
+#[test]
+fn post_run_guard_removes_scratch_symlink_not_target() {
+    let (_temp, workspace, scratch) = scratch_workspace();
+    let guard = LinuxBwrapPostRunGuard::capture(&scratch_policy_profile(&workspace))
+        .expect("capture")
+        .expect("guard");
+    let target = scratch.join("allowed.txt");
+    let link = scratch.join("forbidden.env");
+    fs::write(&target, "keep").unwrap();
+    symlink(&target, &link).unwrap();
+    let removed = guard.verify(Some(&scratch)).unwrap();
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].path, link);
+    assert_eq!(fs::read_to_string(&target).unwrap(), "keep");
+    assert!(fs::symlink_metadata(&link).is_err());
+    assert!(guard.verify(Some(&scratch)).unwrap().is_empty());
+
+    let outside = workspace.join("outside.txt");
+    fs::write(&outside, "keep outside").unwrap();
+    symlink(&outside, &link).unwrap();
+    assert!(guard.verify(Some(&scratch)).is_err());
+    assert!(fs::symlink_metadata(&link).is_ok());
+    assert_eq!(fs::read_to_string(outside).unwrap(), "keep outside");
+}
+
+/// [F2026-10-712] A dangling link matching a deny glob, already present at
+/// compile and capture, no longer fails every managed invocation in the
+/// worktree; it mounts nothing, and creating its target or retargeting it is
+/// still a new forbidden match.
+#[test]
+fn dangling_deny_glob_link_keeps_managed_runs_usable() {
+    let (_temp, workspace, scratch) = scratch_workspace();
+    let root = workspace.display().to_string();
+    let deny = format!("{root}/**/*.orbitdeny");
+    let resolved = profile(vec![
+        format!("{root}/**"),
+        format!("!{root}/.orbit/**"),
+        format!("{root}/.orbit/tmp/**"),
+        format!("!{deny}"),
+    ]);
+    let link = workspace.join("src/probe.orbitdeny");
+    let missing = workspace.join("missing-target.txt");
+    fs::create_dir_all(link.parent().unwrap()).unwrap();
+    symlink(&missing, &link).unwrap();
+    let compile = || compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), true);
+
+    let plan = compile().expect("managed compile tolerates the dangling deny match");
+    for rendered in [link.display().to_string(), missing.display().to_string()] {
+        assert!(
+            !plan.args.contains(&rendered),
+            "the dangling entry and its unresolved target are never mounted: {:?}",
+            plan.args
+        );
+    }
+    assert_eq!(compile().expect("repeat compile").args, plan.args);
+    assert_eq!(
+        existing_glob_matches(std::slice::from_ref(&deny)).expect("expand"),
+        [link.clone()].into_iter().collect(),
+        "Landlock and broker exclusions keep the dangling entry itself"
+    );
+
+    let guard = LinuxBwrapPostRunGuard::capture(&resolved)
+        .expect("capture tolerates the dangling deny match")
+        .expect("guard");
+    let mut compiled = compile().expect("compile");
+    let spawn_guard = compiled.take_post_run_guard().expect("managed guard");
+    for guard in [&guard, &spawn_guard] {
+        assert_eq!(guard.verify(Some(&scratch)).expect("verify"), Vec::new());
+        assert_eq!(guard.verify(Some(&scratch)).expect("repeat"), Vec::new());
+    }
+    assert!(fs::symlink_metadata(&link).is_ok(), "the entry is kept");
+
+    // Creating the target writes through the denied entry.
+    fs::write(&missing, "written through").unwrap();
+    let error = guard
+        .verify(Some(&scratch))
+        .expect_err("target creation is a new forbidden match");
+    assert!(
+        matches!(error, OrbitError::PolicyDenied(_))
+            && error.to_string().contains(&link.display().to_string()),
+        "{error}"
+    );
+    assert_eq!(fs::read_to_string(&missing).unwrap(), "written through");
+    fs::remove_file(&missing).unwrap();
+    assert_eq!(
+        guard.verify(Some(&scratch)).expect("dangling again"),
+        Vec::new()
+    );
+
+    // Retargeting the entry, even to another missing path inside scratch,
+    // modifies a denied entry outside scratch.
+    fs::remove_file(&link).unwrap();
+    symlink(scratch.join("elsewhere.txt"), &link).unwrap();
+    let error = guard
+        .verify(Some(&scratch))
+        .expect_err("a retargeted dangling entry is a new forbidden match");
+    assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
+    assert!(
+        fs::symlink_metadata(&link).is_ok(),
+        "a failing guard removes nothing"
+    );
+
+    // A new dangling match under scratch is removed as an entry.
+    let scratch_link = scratch.join("fresh.orbitdeny");
+    symlink(&missing, &scratch_link).unwrap();
+    fs::remove_file(&link).unwrap();
+    symlink(&missing, &link).unwrap();
+    let removed = guard
+        .verify(Some(&scratch))
+        .expect("scratch-only dangling match");
+    assert_eq!(
+        removed,
+        vec![LinuxBwrapScratchRemoval {
+            path: scratch_link.clone(),
+            rule: deny.clone(),
+        }]
+    );
+    assert!(fs::symlink_metadata(&scratch_link).is_err() && !missing.exists());
+
+    // A direct invocation has no post-run guard, so a dangling match whose
+    // target a writable root could hold still refuses the plan.
+    let links = workspace.join("links");
+    fs::create_dir_all(&links).unwrap();
+    symlink(
+        workspace.join("work/created.txt"),
+        links.join("a.orbitdeny"),
+    )
+    .unwrap();
+    fs::create_dir_all(workspace.join("work")).unwrap();
+    let direct = profile(vec![
+        format!("{root}/work/**"),
+        format!("!{root}/links/*.orbitdeny"),
+    ]);
+    let error = compile_linux_bwrap_argv(&direct, "/bin/true", &[], Some(&workspace), false)
+        .expect_err("direct invocation refuses a dangling deny match");
+    assert!(
+        matches!(error, OrbitError::PolicyDenied(_)) && error.to_string().contains("dangling"),
+        "{error}"
+    );
+
+    // A positive glob grant matching only dangling links grants nothing.
+    let grant = profile(vec![format!("{root}/links/*.orbitdeny")]);
+    let error = compile_linux_bwrap_argv(&grant, "/bin/true", &[], Some(&workspace), true)
+        .expect_err("a dangling positive match has nothing to mount");
+    assert!(matches!(error, OrbitError::InvalidInput(_)), "{error}");
 }
 
 /// Post-run guard rows: a denyModify match created only under run scratch is

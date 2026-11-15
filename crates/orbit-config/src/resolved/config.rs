@@ -5,16 +5,20 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
-use orbit_types::identity::Crew;
+use orbit_types::identity::{Crew, HumanCrew};
 
 use super::compatibility::{
     CompatibilityKeys, RETIRED_BACKEND_ENV, deprecated_keys_present,
     reject_retired_backend_overrides, reject_stale_agent_tables, removed_keys_present,
     validate_task_artifact_store_from_raw,
 };
-use super::crew::{IgnoredCrewProperty, crews_from_raw, default_crews};
+use super::crew::{
+    IgnoredCrewProperty, crews_from_raw, explain_human_crew_reference, human_crews_from_raw,
+    reject_human_crew_name_collisions,
+};
 use super::execution_env::{CodexExecutionPolicy, ExecutionEnvPolicy};
 use crate::ConfigRoots;
+use crate::crew_defaults::builtin_default_crews;
 use crate::layering::load_layered_resolved;
 use crate::operation::{OperationLayer, OperationLayerSource, OperationPolicy};
 use crate::persistence::PersistenceConfig;
@@ -43,12 +47,17 @@ struct DocumentAdmissionOptions {
 pub struct PrSettings {
     /// URL template used to link a task ID in PR descriptions.
     pub task_url_template: Option<String>,
-    /// Close a task's open Orbit-authored PRs when it reaches done, rejected
-    /// or archived (`pr.close_on_terminal`, default `true`).
-    pub close_on_terminal: bool,
     /// Normalized forge logins whose PRs count as Orbit-authored; empty means
     /// the forge CLI's authenticated login (`pr.delivery_authors`).
     pub delivery_authors: Vec<String>,
+    /// Log-line prefixes that mark a failed CI job as an infrastructure failure
+    /// (`workflow.ci_infrastructure_signatures`). Empty declares none.
+    pub ci_infrastructure_signatures: Vec<String>,
+    /// Bounded, backed-off retries of logged infrastructure failures.
+    pub ci_infrastructure_retry: orbit_types::workflow::CiInfrastructureRetryPolicy,
+    /// Failed-step name patterns of dependency handoffs
+    /// (`workflow.ci_infrastructure_retry.handoff_steps`). Empty declares none.
+    pub ci_handoff_steps: Vec<String>,
     /// The `pr.*`, `commit.*` and `branch.*` templates and switches that
     /// shape what a delivery publishes.
     pub conventions: orbit_types::workflow::DeliveryConventions,
@@ -67,9 +76,6 @@ pub struct ResolvedConfig {
     pub persistence: PersistenceConfig,
     /// Config-owned PR settings.
     pub pr: PrSettings,
-    /// Minutes a deferred delivery-automation reason may persist before it is
-    /// escalated (`[automation] stall_window_minutes`; default 60).
-    pub automation_stall_window_minutes: u32,
     /// Config-only `[workflow] base_branch` fallback (default `"main"`).
     /// Delivery defaults prefer the registered workspace base branch.
     pub workflow_base_branch: String,
@@ -81,6 +87,10 @@ pub struct ResolvedConfig {
     /// Named provider-model assignments from `[crews.<name>]`, disabled crews
     /// included (see [`Crew::enabled`]).
     pub crews: BTreeMap<String, Crew>,
+    /// Operator crews from `[crews.<name>] kind = "human"`. Kept apart from
+    /// [`Self::crews`], so no pool, default, overlay or redraw resolves one;
+    /// a task may still name one, and then waits for that person.
+    pub human_crews: BTreeMap<String, HumanCrew>,
     /// Crew used when a task declares none and no override is given.
     pub default_crew: Option<String>,
     /// Automatic admission pools; explicit task assignments take precedence.
@@ -103,14 +113,12 @@ pub struct ResolvedConfig {
     /// inherits the host state. Always empty for the global layer, which
     /// refuses the table.
     pub plugin_enablement: BTreeMap<String, bool>,
-    /// `[workflow.tag_instructions.<tag>]`: which file, if any, replaces
-    /// Orbit's shipped default instruction for a tag and role.
+    /// Trusted file mappings: `[workflow.tag_instructions.<tag>]` for tag
+    /// instructions and `[workflow.agent_corpus]` for activity index rows.
     pub tag_instructions: crate::TagInstructionSettings,
     /// `[workflow.review_skip_tags.<tag>]`: path allow-list and optional
     /// guard under which a candidate carrying `<tag>` skips agent review.
     pub review_skip_tags: crate::ReviewSkipSettings,
-    /// `[visual_review]`: view manifests and the default mock width.
-    pub visual_review: crate::VisualReviewSettings,
 }
 
 impl ResolvedConfig {
@@ -125,15 +133,24 @@ impl ResolvedConfig {
             persistence,
             pr: PrSettings {
                 task_url_template: snapshot.pr_task_url_template.clone(),
-                close_on_terminal: snapshot.pr_close_on_terminal,
                 delivery_authors: snapshot.pr_delivery_authors.clone(),
+                ci_infrastructure_signatures: snapshot
+                    .workflow_ci_infrastructure_signatures
+                    .clone(),
+                ci_infrastructure_retry: orbit_types::workflow::CiInfrastructureRetryPolicy {
+                    max_attempts: snapshot.workflow_ci_infrastructure_retry_max_attempts,
+                    backoff_seconds: snapshot.workflow_ci_infrastructure_retry_backoff_seconds,
+                },
+                ci_handoff_steps: snapshot
+                    .workflow_ci_infrastructure_retry_handoff_steps
+                    .clone(),
                 conventions: snapshot.delivery_conventions(),
             },
-            automation_stall_window_minutes: snapshot.automation_stall_window_minutes,
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
             resource_throttle: snapshot.resource_throttle(),
             auto_concurrency: snapshot.auto_concurrency(),
-            crews: default_crews(),
+            crews: builtin_default_crews(),
+            human_crews: BTreeMap::new(),
             default_crew: snapshot.workflow_default_crew.clone(),
             complexity_crews: crate::ComplexityCrewPools {
                 low: Some(snapshot.workflow_low_complexity_crews.clone()),
@@ -148,7 +165,6 @@ impl ResolvedConfig {
             plugin_enablement: BTreeMap::new(),
             tag_instructions: crate::TagInstructionSettings::default(),
             review_skip_tags: crate::ReviewSkipSettings::default(),
-            visual_review: crate::VisualReviewSettings::default(),
             snapshot,
         }
     }
@@ -293,14 +309,16 @@ impl ResolvedConfig {
             &document,
             std::env::var(RETIRED_BACKEND_ENV).ok().as_deref(),
         )?;
+        let human_crews = human_crews_from_raw(parsed.crews.as_ref(), config_path)?;
         let (crews, ignored_crew_properties) =
             crews_from_raw(parsed.crews.as_ref(), config_path, crew_field_path)?;
-        let snapshot = if options.scoped {
-            ConfigSnapshot::admit_scoped(&document, config_path, &crews)?
+        reject_human_crew_name_collisions(&crews, &human_crews)?;
+        let admitted = if options.scoped {
+            ConfigSnapshot::admit_scoped(&document, config_path, &crews)
         } else {
             match options.auto_memory_threshold {
                 AutoConcurrencyMemoryThreshold::EffectiveLayer => {
-                    ConfigSnapshot::admit(&document, config_path, &crews)?
+                    ConfigSnapshot::admit(&document, config_path, &crews)
                 }
                 AutoConcurrencyMemoryThreshold::Global(memory_high) => {
                     ConfigSnapshot::admit_with_global_memory_high(
@@ -308,37 +326,32 @@ impl ResolvedConfig {
                         config_path,
                         &crews,
                         memory_high,
-                    )?
+                    )
                 }
                 AutoConcurrencyMemoryThreshold::Skip => {
-                    ConfigSnapshot::admit_workspace(&document, config_path, &crews)?
+                    ConfigSnapshot::admit_workspace(&document, config_path, &crews)
                 }
             }
         };
+        // A pool, default or review crew naming a human crew fails as an
+        // unknown agent crew; say why instead.
+        let snapshot =
+            admitted.map_err(|error| explain_human_crew_reference(error, &human_crews))?;
         // One document is one layer. The layered loader replaces this with
         // the exact global/workspace resolution; a store passes the scope of
         // its file so pre-write validation reports accurate provenance.
         let operation_layer = OperationLayer::from_document(&document, config_path)?;
         let mut operation =
             OperationPolicy::resolve(&[(options.operation_layer_source, &operation_layer)]);
-        operation.review_crew.value = snapshot
-            .workflow_purpose_crews_review
-            .clone()
-            .unwrap_or_default();
-        operation.pre_landing_review_crew.value = snapshot
-            .workflow_purpose_crews_pre_landing_review
-            .clone()
-            .unwrap_or_default();
+        operation.project_canonical_review_pools(
+            snapshot.workflow_purpose_crews_review.as_deref(),
+            snapshot
+                .workflow_purpose_crews_pre_landing_review
+                .as_deref(),
+        );
 
         let compatibility_keys = CompatibilityKeys {
-            deprecated_task_id_pattern: parsed
-                .knowledge
-                .as_ref()
-                .and_then(|section| section.task_id_pattern.as_ref())
-                .is_some(),
-            retired_duel: parsed.duel.is_some(),
             retired_routines: parsed.routines.is_some(),
-            retired_docs: parsed.docs.is_some(),
             removed_keys: removed_keys_present(&document),
             deprecated_keys: deprecated_keys_present(&document),
         };
@@ -353,8 +366,6 @@ impl ResolvedConfig {
             crate::tag_instructions::tag_instructions_from_document(&document, config_path)?;
         let review_skip_tags =
             crate::review_skip_tags::review_skip_tags_from_document(&document, config_path)?;
-        let visual_review =
-            crate::visual_review::visual_review_from_document(&document, config_path)?;
 
         Ok(Self {
             execution_env: ExecutionEnvPolicy::from_snapshot(&snapshot)
@@ -363,15 +374,24 @@ impl ResolvedConfig {
             persistence,
             pr: PrSettings {
                 task_url_template: snapshot.pr_task_url_template.clone(),
-                close_on_terminal: snapshot.pr_close_on_terminal,
                 delivery_authors: snapshot.pr_delivery_authors.clone(),
+                ci_infrastructure_signatures: snapshot
+                    .workflow_ci_infrastructure_signatures
+                    .clone(),
+                ci_infrastructure_retry: orbit_types::workflow::CiInfrastructureRetryPolicy {
+                    max_attempts: snapshot.workflow_ci_infrastructure_retry_max_attempts,
+                    backoff_seconds: snapshot.workflow_ci_infrastructure_retry_backoff_seconds,
+                },
+                ci_handoff_steps: snapshot
+                    .workflow_ci_infrastructure_retry_handoff_steps
+                    .clone(),
                 conventions: snapshot.delivery_conventions(),
             },
-            automation_stall_window_minutes: snapshot.automation_stall_window_minutes,
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
             resource_throttle: snapshot.resource_throttle(),
             auto_concurrency: snapshot.auto_concurrency(),
             crews,
+            human_crews,
             default_crew: snapshot.workflow_default_crew.clone(),
             complexity_crews: crate::ComplexityCrewPools {
                 low: Some(snapshot.workflow_low_complexity_crews.clone()),
@@ -386,7 +406,6 @@ impl ResolvedConfig {
             plugin_enablement,
             tag_instructions,
             review_skip_tags,
-            visual_review,
             snapshot,
         })
     }

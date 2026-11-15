@@ -16,8 +16,7 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 use super::paths::{CLOCK_HOLD, validated_generation_record_path, validated_generation_root};
-use super::refusal::{BREAKING_WAITING, INCOMPATIBLE, SWITCH_PENDING, WRITES_WHILE_FOREIGN};
-use crate::OrbitError;
+use crate::{OrbitError, UpgradeAdmissionRefusalKind};
 
 /// The record never exceeds this many bytes; a longer reason is cut short.
 const CLOCK_HOLD_MAX_BYTES: u64 = 1024;
@@ -43,15 +42,31 @@ pub struct ClockGenerationHold {
 /// True only for a clock writer held back by other live generations: a
 /// still-pinned v1 generation, or a pending switch it is not part of.
 pub fn is_clock_generation_hold(error: &OrbitError) -> bool {
-    let message = error.to_string();
-    message.contains(WRITES_WHILE_FOREIGN) || message.contains(SWITCH_PENDING)
+    let OrbitError::UpgradeAdmissionRefused(refusal) = error else {
+        return false;
+    };
+    match refusal.kind {
+        UpgradeAdmissionRefusalKind::WritesWhileForeign
+        | UpgradeAdmissionRefusalKind::SwitchPending => true,
+        UpgradeAdmissionRefusalKind::BreakingWaiting
+        | UpgradeAdmissionRefusalKind::Incompatible
+        | UpgradeAdmissionRefusalKind::Other => false,
+    }
 }
 
 /// True for a clock writer refused because a breaking migration cannot run
 /// beside the live processes: it waited for them to yield, or it is older.
 pub fn is_clock_upgrade_refusal(error: &OrbitError) -> bool {
-    let message = error.to_string();
-    message.contains(BREAKING_WAITING) || message.contains(INCOMPATIBLE)
+    let OrbitError::UpgradeAdmissionRefused(refusal) = error else {
+        return false;
+    };
+    match refusal.kind {
+        UpgradeAdmissionRefusalKind::BreakingWaiting
+        | UpgradeAdmissionRefusalKind::Incompatible => true,
+        UpgradeAdmissionRefusalKind::WritesWhileForeign
+        | UpgradeAdmissionRefusalKind::SwitchPending
+        | UpgradeAdmissionRefusalKind::Other => false,
+    }
 }
 
 /// Persist consecutive refused ticks without emitting one error per process.

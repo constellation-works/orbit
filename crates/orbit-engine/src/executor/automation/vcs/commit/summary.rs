@@ -40,8 +40,8 @@ use serde_json::{Value, json};
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
 
 use super::super::claim::{carries_implementer_output, implementer_summary};
+use super::super::conventions::meaningful_execution_summary;
 use super::super::git::git_output_raw;
-use super::super::pr::meaningful_execution_summary;
 
 /// Cap on individually named files; the remainder is reported as a count.
 const MAX_LISTED_FILES: usize = 25;
@@ -53,6 +53,23 @@ const EXECUTION_SUMMARY_PERSISTED_EVENT: &str = "execution_summary_persisted";
 /// The step id local and PR pipelines give the implementer inside their
 /// implement loop; its checkpointed output carries the returned summary.
 const IMPLEMENT_STEP_ID: &str = "implement_one";
+
+/// This run's implementation output for commit evidence. Explicit step input
+/// wins; owner pipelines otherwise checkpoint it under `implement_one`.
+/// A resumed run that skipped implementation may have no such output.
+pub(super) fn commit_implementation_input<H: RuntimeHost + ?Sized>(
+    host: &H,
+    run_id: &str,
+    input: &Value,
+) -> Result<Option<Value>, OrbitError> {
+    if carries_implementer_output(input) {
+        return Ok(Some(input.clone()));
+    }
+    Ok(host
+        .read_run_state(run_id)?
+        .and_then(|state| state.pipeline.get(IMPLEMENT_STEP_ID).cloned())
+        .map(|output| json!({ "implementation": output })))
+}
 
 /// Give the task a durable execution summary when nothing else did.
 ///
@@ -149,10 +166,8 @@ fn returned_summary<H: RuntimeHost + ?Sized>(
     let summary = if carries_implementer_output(input) {
         implementer_summary(input)
     } else {
-        host.read_run_state(run_id)?.and_then(|state| {
-            let output = state.pipeline.get(IMPLEMENT_STEP_ID)?;
-            implementer_summary(&json!({ "implementation": output }))
-        })
+        commit_implementation_input(host, run_id, input)?
+            .and_then(|implementation_input| implementer_summary(&implementation_input))
     };
     Ok(summary.filter(|summary| meaningful_execution_summary(summary).is_some()))
 }

@@ -1,8 +1,8 @@
 // Orbit dashboard task status and crew controls: the status and crew selects, their forced-status confirmation and their apply functions.
 
-import { captureWorkspaceVisit, el, patchJson, isAggregateView } from './common.js';
-import { taskState, rerender, statusOrder, statusTransitions, statusTransition, canMutateTask, aggregateRefusalTitle, taskMutationPath, MUTATION_UNDO_WINDOW_MS, STATUS_LABELS } from './task-shared.js';
-import { scheduleFeedbackExpiry, buildMutationFeedback, explicitCrewValue, hasStaleExplicitCrew, resolvedCrewName, defaultCrewOptionText, crewOptionTitle } from './task-crew.js';
+import { captureWorkspaceVisit, el, patchJson, isAggregateView, confirmForceOverride, forceOverrideGuardText } from './common.js';
+import { taskState, rerender, statusOrder, statusTransitions, statusTransition, usesHumanCrewBypass, canMutateTask, aggregateRefusalTitle, taskMutationPath, MUTATION_UNDO_WINDOW_MS, STATUS_LABELS, taskDispatchIdentity, isSelectedTask } from './task-shared.js';
+import { scheduleFeedbackExpiry, buildMutationFeedback, explicitCrewValue, hasStaleExplicitCrew, findConfiguredCrew, resolvedCrewName, defaultCrewOptionText, crewOptionTitle, aggregateCrewPayload, aggregateCrewUnavailable } from './task-crew.js';
 import { applyUpdatedTask, currentCrewTask, loadTaskDetail, mergeTaskRecord } from './task-data.js';
 import { collapseTask, stopRowInteraction } from './task-nav.js';
 
@@ -13,17 +13,23 @@ const FORCED_STATUS_GROUP_LABEL = "force (off-table)";
 export function buildStatusUpdateControl(task, context) {
   const cell = el("span", { class: "status-cell" });
   cell.dataset.status = task.status || "";
-  const targets = statusTransitions(task).map((transition) => transition.status);
+  // A human crew's task takes every status directly: no off-table group and
+  // no forced confirmation, because the server applies it as the operator's
+  // own work and records it as a human-crew bypass.
+  const humanBypass = usesHumanCrewBypass(task);
+  const targets = humanBypass
+    ? statusOrder(context).filter((status) => status && status !== task.status)
+    : statusTransitions(task).map((transition) => transition.status);
   // ORB-12445: an operator may move a task to any status from any status, the
   // same override the bare CLI spells `--force`. The governed targets keep the
   // plain list; everything else the lifecycle table refuses is offered under a
   // marked group so the two are never confused, and a terminal task is no
   // longer a dead control.
-  const forcedTargets = statusOrder(context).filter(
+  const forcedTargets = humanBypass ? [] : statusOrder(context).filter(
     (status) => status && status !== task.status && !targets.includes(status),
   );
   const mutable = canMutateTask(task);
-  const feedback = taskState.statusFeedback.get(task.id);
+  const feedback = taskState.statusFeedback.get(taskDispatchIdentity(task));
   const label = `Update status for ${task.id}`;
   const select = el("select", {
     class: "task-status-select mono",
@@ -85,19 +91,26 @@ export function buildStatusUpdateControl(task, context) {
 
 // The list row overlays a chip on its select; the detail styles the select
 // itself inside a visible field label and needs no duplicate value.
-export function buildCrewUpdateControl(task, context, { withChip = true } = {}) {
-  const cell = el("span", { class: "crew-cell" });
-  if (isAggregateView()) {
-    // The aggregate task list has no single crew registry to validate against.
-    // Keep the task's own crew visible without marking it missing or offering
-    // a workspace-scoped edit control.
-    cell.textContent = explicitCrewValue(task) || resolvedCrewName(task);
-    cell.title = "Crew settings are workspace-specific; select a workspace to edit.";
-    return cell;
+// All workspaces installs that task's own workspace registry for the build,
+// then puts the ambient payload back. A selected workspace never takes this
+// branch, so its select is built against `lastCrewPayload` as before.
+export function buildCrewUpdateControl(task, context, options = {}) {
+  if (!isAggregateView()) return buildScopedCrewUpdateControl(task, context, options);
+  const previous = taskState.lastCrewPayload;
+  const registryUnavailable = aggregateCrewUnavailable(task);
+  taskState.lastCrewPayload = aggregateCrewPayload(task);
+  try {
+    return buildScopedCrewUpdateControl(task, context, { ...options, registryUnavailable });
+  } finally {
+    taskState.lastCrewPayload = previous;
   }
+}
+
+function buildScopedCrewUpdateControl(task, context, { withChip = true, registryUnavailable = false } = {}) {
+  const cell = el("span", { class: "crew-cell" });
 
   const mutable = canMutateTask(task);
-  const feedback = taskState.crewFeedback.get(task.id);
+  const feedback = taskState.crewFeedback.get(taskDispatchIdentity(task));
   const label = `Update crew for ${task.id}`;
   const select = el("select", {
     class: "task-crew-select mono",
@@ -105,7 +118,9 @@ export function buildCrewUpdateControl(task, context, { withChip = true } = {}) 
   });
   select.setAttribute("aria-label", label);
   const currentValue = explicitCrewValue(task);
-  const staleCurrentValue = hasStaleExplicitCrew(task);
+  // A failed or missing aggregate registry is "crew unavailable", not a crew
+  // the workspace no longer configures. A loaded registry keeps the (missing) option.
+  const staleCurrentValue = !registryUnavailable && hasStaleExplicitCrew(task);
   select.dataset.currentValue = currentValue;
   select.dataset.staleCurrentValue = staleCurrentValue ? currentValue : "";
 
@@ -125,6 +140,22 @@ export function buildCrewUpdateControl(task, context, { withChip = true } = {}) 
     select.appendChild(option);
   }
 
+  // Human crews are listed apart: assigning one hands the task to that
+  // operator, and no agent picks it up.
+  const humanCrews = taskState.lastCrewPayload.human_crews || [];
+  if (humanCrews.length > 0) {
+    const group = el("optgroup", { label: "Human crews (operator work)" });
+    for (const crew of humanCrews) {
+      const option = el("option", {
+        text: crew.name,
+        title: crew.description || "Operator work: no drain or task pilot picks it up",
+      });
+      option.value = crew.name;
+      group.appendChild(option);
+    }
+    select.appendChild(group);
+  }
+
   if (staleCurrentValue) {
     const option = el("option", {
       text: `${currentValue} (missing)`,
@@ -132,9 +163,20 @@ export function buildCrewUpdateControl(task, context, { withChip = true } = {}) 
     });
     option.value = currentValue;
     select.appendChild(option);
+  } else if (currentValue && !Array.from(select.options).some((option) => option.value === currentValue)) {
+    const baseCrew = findConfiguredCrew(currentValue);
+    const option = el("option", {
+      text: currentValue,
+      title: baseCrew
+        ? (baseCrew.model != null ? crewOptionTitle(baseCrew) : (baseCrew.description || "Operator work: no drain or task pilot picks it up"))
+        : "",
+    });
+    option.value = currentValue;
+    select.appendChild(option);
   }
 
-  if (crews.length === 0) {
+  const registryEmpty = registryUnavailable || (crews.length === 0 && humanCrews.length === 0);
+  if (registryEmpty) {
     select.disabled = true;
     defaultOption.textContent = "crew unavailable";
   }
@@ -156,7 +198,7 @@ export function buildCrewUpdateControl(task, context, { withChip = true } = {}) 
   if (withChip) {
     const chip = el("span", {
       class: "task-select-chip",
-      text: crews.length === 0 ? "unavailable" : staleCurrentValue
+      text: registryEmpty ? "unavailable" : staleCurrentValue
         ? `${currentValue} (missing)`
         : currentValue || resolvedCrewName(task),
     });
@@ -177,27 +219,30 @@ export async function applyTaskStatusChange(task, nextStatus, context) {
   const visit = captureWorkspaceVisit();
   const mutationPath = visit.path(taskMutationPath(task));
   if (!nextStatus || nextStatus === task.status || !canMutateTask(task)) return;
-  let transition = statusTransition(task, nextStatus);
+  // A human crew's task skips the lifecycle gates server-side: send the bare
+  // status, with no evidence prompt, forced confirmation or detail lookup.
+  const humanBypass = usesHumanCrewBypass(task) && statusOrder(context).includes(nextStatus);
+  let transition = humanBypass ? null : statusTransition(task, nextStatus);
   // A target the projection did not offer is an override, not a mistake: the
   // operator gets one confirm naming the move, and the PATCH carries `force`
   // so the server applies it and records the `forced` history event. A target
   // that is not a lifecycle status at all stays a refusal.
-  const forced = !transition;
+  const forced = !humanBypass && !transition;
   // A refusal before any write. Beside an open detail's control it stays until
   // the next change; on a folded row or notice it expires like the feedback it
   // replaced, so a refused undo does not linger there.
   const refuse = (text) => {
-    taskState.statusFeedback.set(task.id, { kind: "error", text });
+    taskState.statusFeedback.set(taskDispatchIdentity(task), { kind: "error", text });
     rerender(context);
-    if (taskState.foldedStatusTasks.has(task.id) && taskState.selectedTaskId !== task.id) {
-      scheduleFeedbackExpiry(taskState.statusFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
+    if (taskState.foldedStatusTasks.has(taskDispatchIdentity(task)) && !isSelectedTask(task)) {
+      scheduleFeedbackExpiry(taskState.statusFeedback, taskDispatchIdentity(task), context, MUTATION_UNDO_WINDOW_MS + 500);
     }
   };
   // A summary row lists the governed targets but not what each one requires —
   // the `done` requirement depends on the task's job run, which only the
   // detail endpoint reads. Ask it before deciding whether to prompt.
-  if (!forced && !("required_field" in transition)) {
-    taskState.statusFeedback.set(task.id, { kind: "pending", text: "checking…" });
+  if (!humanBypass && !forced && !("required_field" in transition)) {
+    taskState.statusFeedback.set(taskDispatchIdentity(task), { kind: "pending", text: "checking…" });
     rerender(context);
     let detail;
     try {
@@ -227,7 +272,7 @@ export async function applyTaskStatusChange(task, nextStatus, context) {
   }
 
   const payload = forced ? { status: nextStatus, force: true } : { status: nextStatus };
-  if (!forced && transition.required_field) {
+  if (!humanBypass && !forced && transition.required_field) {
     const evidence = collectStatusTransitionEvidence(task, nextStatus, transition.required_field);
     if (!evidence) {
       refuse(statusTransitionEvidenceUnavailable(transition.required_field));
@@ -237,40 +282,72 @@ export async function applyTaskStatusChange(task, nextStatus, context) {
   }
 
   const previousValue = task.status;
-  taskState.statusFeedback.set(task.id, { kind: "pending", text: "saving…" });
+  taskState.statusFeedback.set(taskDispatchIdentity(task), { kind: "pending", text: "saving…" });
   rerender(context);
-  try {
-    const updatedTask = await patchJson(mutationPath, payload);
+  const sendStatus = async (payloadToSend, wasForced) => {
+    const updatedTask = await patchJson(mutationPath, payloadToSend);
     if (!visit.isCurrent()) return;
-    const merged = applyUpdatedTask(updatedTask, context) || task;
+    const merged = applyUpdatedTask(updatedTask, context, task) || task;
     const feedback = {
       kind: "success",
-      text: forced ? "status forced" : "status saved",
+      text: wasForced ? "status forced" : "status saved",
     };
     const reverse = statusTransition(updatedTask, previousValue);
-    if (reverse && !reverse.required_field) {
+    if (usesHumanCrewBypass(updatedTask) || (reverse && !reverse.required_field)) {
       feedback.undo = { previousValue, expiresAt: Date.now() + MUTATION_UNDO_WINDOW_MS };
     }
-    taskState.statusFeedback.set(task.id, feedback);
+    taskState.statusFeedback.set(taskDispatchIdentity(task), feedback);
     // Fold the open detail in; an undo from a folded row keeps it folded. A
     // pinned detail is the only view of a filtered-out task, so it stays open.
     // A full page is that task's own view, so it stays too.
     const pinned = taskState.pinnedExternalTask && taskState.pinnedExternalTask.id === task.id;
-    if (!pinned && taskState.taskPageId !== task.id && (taskState.selectedTaskId === task.id || taskState.foldedStatusTasks.has(task.id))) {
-      if (taskState.selectedTaskId === task.id) taskState.rowFocusAfterRender = task.id;
+    if (!pinned && taskState.taskPageId !== task.id && (isSelectedTask(task) || taskState.foldedStatusTasks.has(taskDispatchIdentity(task)))) {
+      if (isSelectedTask(task)) taskState.rowFocusAfterRender = task.id;
       collapseTask(task.id);
-      taskState.foldedStatusTasks.set(task.id, merged);
+      taskState.foldedStatusTasks.set(taskDispatchIdentity(task), merged);
     }
+  };
+  try {
+    await sendStatus(payload, forced);
   } catch (error) {
     if (!visit.isCurrent()) return;
-    taskState.statusFeedback.set(task.id, {
-      kind: "error",
-      text: `status update failed: ${error.message || String(error)}`,
-    });
-    console.error(error);
+    // A guard `--force` overrides refused a governed target: offer the
+    // override instead of a dead failure line. The server's structured
+    // code decides, never its message text.
+    if (!forced && error && error.code === "force_overridable") {
+      const confirmed = await confirmForceOverride({
+        heading: `Force ${task.id} from ${previousValue} to ${nextStatus}?`,
+        guard: forceOverrideGuardText(error.body),
+        effect: "Forcing does not cancel the run. The status change is applied and recorded in task history as forced.",
+      });
+      if (!visit.isCurrent()) return;
+      if (!confirmed) {
+        refuse("status update cancelled");
+        return;
+      }
+      taskState.statusFeedback.set(taskDispatchIdentity(task), { kind: "pending", text: "saving…" });
+      rerender(context);
+      try {
+        await sendStatus({ ...payload, force: true }, true);
+      } catch (retryError) {
+        if (!visit.isCurrent()) return;
+        taskState.statusFeedback.set(taskDispatchIdentity(task), {
+          kind: "error",
+          text: `status update failed: ${retryError.message || String(retryError)}`,
+        });
+        console.error(retryError);
+      }
+    } else {
+      taskState.statusFeedback.set(taskDispatchIdentity(task), {
+        kind: "error",
+        text: `status update failed: ${error.message || String(error)}`,
+      });
+      console.error(error);
+    }
   }
+  if (!visit.isCurrent()) return;
   rerender(context);
-  scheduleFeedbackExpiry(taskState.statusFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
+  scheduleFeedbackExpiry(taskState.statusFeedback, taskDispatchIdentity(task), context, MUTATION_UNDO_WINDOW_MS + 500);
 }
 
 // One confirm, naming the exact move, before the override leaves the browser.
@@ -306,25 +383,25 @@ async function applyTaskCrewChange(task, nextValue, context) {
   const mutationPath = visit.path(taskMutationPath(currentTask));
   const previousValue = explicitCrewValue(currentTask);
   if (nextValue === previousValue || !canMutateTask(currentTask)) return;
-  taskState.crewFeedback.set(currentTask.id, { kind: "pending", text: "saving…" });
+  taskState.crewFeedback.set(taskDispatchIdentity(currentTask), { kind: "pending", text: "saving…" });
   rerender(context);
   try {
     const updatedTask = await patchJson(mutationPath, { crew: nextValue || null });
     if (!visit.isCurrent()) return;
-    applyUpdatedTask(updatedTask, context);
-    taskState.crewFeedback.set(currentTask.id, {
+    applyUpdatedTask(updatedTask, context, currentTask);
+    taskState.crewFeedback.set(taskDispatchIdentity(currentTask), {
       kind: "success",
       text: "crew saved",
       undo: { previousValue, expiresAt: Date.now() + MUTATION_UNDO_WINDOW_MS },
     });
   } catch (error) {
     if (!visit.isCurrent()) return;
-    taskState.crewFeedback.set(currentTask.id, {
+    taskState.crewFeedback.set(taskDispatchIdentity(currentTask), {
       kind: "error",
       text: `crew update failed: ${error.message || String(error)}`,
     });
     console.error(error);
   }
   rerender(context);
-  scheduleFeedbackExpiry(taskState.crewFeedback, currentTask.id, context, MUTATION_UNDO_WINDOW_MS + 500);
+  scheduleFeedbackExpiry(taskState.crewFeedback, taskDispatchIdentity(currentTask), context, MUTATION_UNDO_WINDOW_MS + 500);
 }

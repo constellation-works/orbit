@@ -243,6 +243,270 @@ fn help_matches_the_shipped_surface() {
     check_help_goldens(&root, update, &home, &work);
 }
 
+/// A plugin longer than every built-in root group widens their shared
+/// description column, and its help wraps against the actual PTY width.
+#[cfg(unix)]
+#[test]
+fn plugin_help_wraps_and_aligns_in_a_pty_and_stays_flat_when_piped() {
+    use std::io::Read;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let temp = tempfile::tempdir_in(test_env::canonical_temp_dir()).expect("tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    let root = temp.path().join("root");
+    let empty_root = temp.path().join("empty-root");
+    let source = temp.path().join("source");
+    fs::create_dir_all(&home).expect("create fixture home");
+    fs::create_dir_all(&work).expect("create fixture work");
+    fs::create_dir_all(source.join(".orbit-plugin/bin")).expect("create plugin source");
+    crate::git_repo::init(&work);
+
+    let fixture_command = |selected_root: &Path| {
+        let mut command = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .env("NO_COLOR", "1")
+            .env_remove("ORBIT_FORMAT")
+            .env_remove("ORBIT_SKIP_HOST_PREREQUISITES")
+            .arg("--root")
+            .arg(selected_root);
+        command
+    };
+
+    for (selected_root, machine) in [(&root, "plugin-help"), (&empty_root, "empty-help")] {
+        fixture_command(selected_root)
+            .args([
+                "init",
+                "--non-interactive",
+                "--machine-name",
+                machine,
+                "--task-prefix",
+                "UXR",
+            ])
+            .assert()
+            .success();
+    }
+    fixture_command(&root)
+        .args(["workspace", "init", "--name", "plugin-help"])
+        .assert()
+        .success();
+
+    fs::write(
+        source.join(".orbit-plugin/plugin.yaml"),
+        "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: long-plugin-namespace\n  version: 0.1.0\n  description: A very long plugin description used to inspect the shared root help column and wrapped output at narrow terminal sizes.\nspec:\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: status\n      description: Report status.\n      execution_kind: read_only\n      mcp_scope: workspace\n      input_schema:\n        type: object\n",
+    )
+    .expect("write plugin manifest");
+    let backend = source.join(".orbit-plugin/bin/backend.sh");
+    fs::write(
+        &backend,
+        "#!/bin/sh\nprintf '{\"ok\":true,\"output\":{}}\\n'\n",
+    )
+    .expect("write plugin backend");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&backend, fs::Permissions::from_mode(0o755))
+            .expect("make plugin backend executable");
+    }
+    fixture_command(&root)
+        .args(["plugin", "add"])
+        .arg(&source)
+        .arg("--enable")
+        .assert()
+        .success();
+
+    let run_pty_help = |width: u16, flag: &str| {
+        let mut requested = libc::winsize {
+            ws_row: 40,
+            ws_col: width,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        let mut master_fd = -1;
+        let mut slave_fd = -1;
+        // SAFETY: openpty initializes these two valid out-pointers and copies
+        // the supplied window size into the newly opened pseudo-terminal.
+        // macOS declares the winsize parameter as *mut, Linux as *const. A raw *mut
+        // satisfies both (coercing to *const on Linux) and avoids
+        // clippy::unnecessary_mut_passed, which fires on `&mut` where *const suffices.
+        let opened = unsafe {
+            libc::openpty(
+                &mut master_fd,
+                &mut slave_fd,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::addr_of_mut!(requested),
+            )
+        };
+        assert_eq!(opened, 0, "open PTY: {}", std::io::Error::last_os_error());
+        // SAFETY: openpty succeeded (asserted above), so `master_fd` is an open pty
+        // master that no other handle owns; this File takes sole ownership and closes it.
+        let master = unsafe { std::fs::File::from_raw_fd(master_fd) };
+        // SAFETY: openpty succeeded (asserted above), so `slave_fd` is the distinct, open
+        // pty slave of that pair that no other handle owns; this File takes sole ownership.
+        let slave = unsafe { std::fs::File::from_raw_fd(slave_fd) };
+        let mut actual = libc::winsize {
+            ws_row: 0,
+            ws_col: 0,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: the slave descriptor is open and `actual` is a valid output
+        // pointer for TIOCGWINSZ.
+        let read_size = unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCGWINSZ, &mut actual) };
+        assert_eq!(read_size, 0, "read PTY window size");
+        assert_eq!(actual.ws_col, width, "PTY accepted requested width");
+
+        let mut command = Command::new(env!("CARGO_BIN_EXE_orbit"));
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .env("NO_COLOR", "1")
+            .env_remove("ORBIT_FORMAT")
+            .env_remove("ORBIT_SKIP_HOST_PREREQUISITES")
+            .arg("--root")
+            .arg(&root)
+            .arg(flag)
+            .stdin(Stdio::from(slave.try_clone().expect("clone PTY slave")))
+            .stdout(Stdio::from(slave.try_clone().expect("clone PTY stdout")))
+            .stderr(Stdio::from(slave.try_clone().expect("clone PTY stderr")));
+        let mut child = command.spawn().expect("spawn CLI help in PTY");
+        drop(command);
+        drop(slave);
+        let mut master = master;
+        let mut output = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("PTY help timed out at {width} columns ({flag})");
+            }
+            let timeout_ms = remaining.as_millis().min(5_000) as i32;
+            let mut poll_fd = libc::pollfd {
+                fd: master.as_raw_fd(),
+                events: libc::POLLIN | libc::POLLHUP,
+                revents: 0,
+            };
+            // SAFETY: `poll_fd` points to one initialized pollfd and the call
+            // waits at most timeout_ms without mutating unrelated descriptors.
+            let ready = unsafe { libc::poll(&mut poll_fd, 1, timeout_ms) };
+            if ready == 0 {
+                continue;
+            }
+            if ready < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("poll PTY output: {error}");
+            }
+            let mut chunk = [0_u8; 4096];
+            match master.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(count) => output.extend_from_slice(&chunk[..count]),
+                Err(error) if error.raw_os_error() == Some(libc::EIO) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("read PTY output: {error}");
+                }
+            }
+        }
+        let status = child.wait().expect("wait for CLI help");
+        (
+            status,
+            String::from_utf8(output)
+                .expect("help is UTF-8")
+                .replace('\r', ""),
+        )
+    };
+
+    for width in [60, 80, 120] {
+        for flag in ["--help", "-h"] {
+            let (status, help) = run_pty_help(width, flag);
+            assert!(status.success(), "orbit {flag} failed at {width}: {help}");
+            let lines: Vec<&str> = help.lines().collect();
+            let heading = lines
+                .iter()
+                .position(|line| *line == "Plugins:")
+                .expect("active plugin section");
+            let end = lines[heading + 1..]
+                .iter()
+                .position(|line| line.is_empty())
+                .expect("plugin section boundary");
+            let plugin_lines = &lines[heading + 1..heading + 1 + end];
+            let plugin_column = plugin_lines[0]
+                .find("A very long plugin description")
+                .expect("plugin description column");
+            let built_in = lines
+                .iter()
+                .find(|line| line.contains("Initialize the global Orbit root"))
+                .expect("built-in root description");
+            assert_eq!(
+                plugin_column,
+                built_in.find("Initialize the global Orbit root").unwrap(),
+                "plugin description column at {width} columns"
+            );
+            assert!(
+                plugin_lines
+                    .iter()
+                    .all(|line| line.chars().count() <= usize::from(width)),
+                "plugin row exceeded {width} columns:\n{}",
+                plugin_lines.join("\n")
+            );
+            assert!(
+                plugin_lines
+                    .iter()
+                    .skip(1)
+                    .all(|line| line.starts_with(&" ".repeat(plugin_column))),
+                "plugin continuation did not hang at its description column:\n{}",
+                plugin_lines.join("\n")
+            );
+        }
+    }
+
+    let piped = fixture_command(&root)
+        .arg("--help")
+        .output()
+        .expect("run piped plugin help");
+    assert!(piped.status.success());
+    let piped_help = String::from_utf8(piped.stdout).expect("piped help is UTF-8");
+    let piped_lines: Vec<&str> = piped_help.lines().collect();
+    let heading = piped_lines
+        .iter()
+        .position(|line| *line == "Plugins:")
+        .expect("piped plugin section");
+    let end = piped_lines[heading + 1..]
+        .iter()
+        .position(|line| line.is_empty())
+        .expect("piped plugin section boundary");
+    assert_eq!(end, 1, "piped plugin description stays on one line");
+
+    let no_plugin = fixture_command(&empty_root)
+        .arg("--help")
+        .output()
+        .expect("run help without plugins");
+    assert!(no_plugin.status.success());
+    assert!(!String::from_utf8_lossy(&no_plugin.stdout).contains("Plugins:"));
+}
+
 /// Grouped `orbit run` / `orbit task` help must keep every description in one
 /// column with a clear gap, and never stack a description onto its own line in
 /// piped output [ORB-19912]. Piped output is width 0, so this is the wide
@@ -256,10 +520,18 @@ fn grouped_command_help_stays_aligned_without_stacked_rows() {
     fs::create_dir_all(&work).expect("fixture work");
 
     let run_sections: &[(&str, &[&str])] = &[
-        ("Workflows", &["auto", "ship", "task-pilot", "job", "agent"]),
+        ("Workflows", &["auto", "ship", "task-pilot", "job"]),
         (
             "Audits",
-            &["history", "show", "logs", "events", "trace", "settlements"],
+            &[
+                "history",
+                "show",
+                "logs",
+                "events",
+                "trace",
+                "settlements",
+                "settlements-hydrate",
+            ],
         ),
         (
             "Maintenance",
@@ -270,7 +542,7 @@ fn grouped_command_help_stays_aligned_without_stacked_rows() {
         (
             "Tasks",
             &[
-                "add", "update", "archive", "list", "eligible", "show", "artifact",
+                "add", "update", "repilot", "archive", "list", "eligible", "show", "artifact",
             ],
         ),
         (
@@ -477,61 +749,68 @@ fn update_creates_missing_family_directories_but_validation_stays_strict() {
     assert!(!temp.path().join("outside.txt").exists());
 }
 
+/// `orbit <args> <flag>` on a pseudo-terminal whose width is `COLUMNS`.
 #[cfg(unix)]
-#[test]
-fn grouped_help_fits_narrow_tty() {
+fn read_help_on_pty(args: &[&str], flag: &str, width: usize) -> String {
     use std::io::Read;
     use std::os::fd::FromRawFd;
     use std::process::Stdio;
 
     let temp = tempdir().expect("tempdir");
+    let mut master = -1;
+    let mut slave = -1;
+    // SAFETY: openpty initializes both descriptors on success; pointers are valid.
+    let rc = unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(rc, 0, "openpty: {}", std::io::Error::last_os_error());
+    // SAFETY: successful openpty returned owned, distinct file descriptors.
+    let mut master = unsafe { fs::File::from_raw_fd(master) };
+    // SAFETY: slave is the other owned end of the same openpty pair, wrapped only here.
+    let slave = unsafe { fs::File::from_raw_fd(slave) };
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_orbit"));
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    let mut child = command
+        .current_dir(temp.path())
+        .env("HOME", temp.path())
+        .env("USERPROFILE", temp.path())
+        .env("COLUMNS", width.to_string())
+        .env("NO_COLOR", "1")
+        .env_remove("ORBIT_FORMAT")
+        .env_remove("ORBIT_SKIP_HOST_PREREQUISITES")
+        .args(args)
+        .arg(flag)
+        .stdout(Stdio::from(slave))
+        .spawn()
+        .expect("run help on pty");
+    drop(command);
+    let mut bytes = Vec::new();
+    if let Err(error) = master.read_to_end(&mut bytes) {
+        // Linux PTY masters signal closure with EIO; other Unix systems return EOF.
+        assert_eq!(error.raw_os_error(), Some(libc::EIO), "read pty: {error}");
+    }
+    assert!(child.wait().expect("wait for help").success());
+    String::from_utf8(bytes).expect("UTF-8 help")
+}
+
+#[cfg(unix)]
+#[test]
+fn grouped_help_fits_narrow_tty() {
     for args in [&[][..], &["run"][..], &["task"][..]] {
         for width in [8usize, 16, 20] {
-            let mut master = -1;
-            let mut slave = -1;
-            // SAFETY: openpty initializes both descriptors on success; pointers are valid.
-            let rc = unsafe {
-                libc::openpty(
-                    &mut master,
-                    &mut slave,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                )
-            };
-            assert_eq!(rc, 0, "openpty: {}", std::io::Error::last_os_error());
-            // SAFETY: successful openpty returned owned, distinct file descriptors.
-            let mut master = unsafe { fs::File::from_raw_fd(master) };
-            let slave = unsafe { fs::File::from_raw_fd(slave) };
-            let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_orbit"));
-            test_env::clear_inherited_authority(|name| {
-                command.env_remove(name);
-            });
-            let mut child = command
-                .current_dir(temp.path())
-                .env("HOME", temp.path())
-                .env("USERPROFILE", temp.path())
-                .env("COLUMNS", width.to_string())
-                .env("NO_COLOR", "1")
-                .env_remove("ORBIT_FORMAT")
-                .env_remove("ORBIT_SKIP_HOST_PREREQUISITES")
-                .args(args)
-                .arg("--help")
-                .stdout(Stdio::from(slave))
-                .spawn()
-                .expect("run help on pty");
-            drop(command);
-            let mut bytes = Vec::new();
-            if let Err(error) = master.read_to_end(&mut bytes) {
-                // Linux PTY masters signal closure with EIO; other Unix systems return EOF.
-                assert_eq!(error.raw_os_error(), Some(libc::EIO), "read pty: {error}");
-            }
-            assert!(child.wait().expect("wait for help").success());
-            let output = String::from_utf8(bytes).expect("UTF-8 help");
+            let output = read_help_on_pty(args, "--help", width);
             let start_heading = match args.first().copied() {
                 Some("run") => "Workflows:",
                 Some("task") => "Tasks:",
-                _ => "Environment:",
+                _ => "Setup:",
             };
             let grouped = output
                 .split_once(start_heading)
@@ -549,6 +828,392 @@ fn grouped_help_fits_narrow_tty() {
                         "orbit {args:?}, width {width}: overlong grouped line {line:?}"
                     );
                 }
+            }
+        }
+    }
+}
+
+/// Clap's own help text (flags, about, command lists, footers) used to come
+/// out as one long line per paragraph because Clap's `wrap_help` was off, so a
+/// terminal soft-wrapped it from column 0. At a terminal width every line must
+/// now fit, at 120 as well as at 60, and a continuation must stay indented
+/// under the flag or command it belongs to.
+#[cfg(unix)]
+#[test]
+fn clap_help_wraps_to_the_terminal_width_with_a_hanging_indent() {
+    let surfaces: [(&[&str], &str); 7] = [
+        (&[], "-h"),
+        (&["search"], "--help"),
+        (&["config", "browser-kit"], "--help"),
+        (&["workspace"], "--help"),
+        (&["run"], "--help"),
+        (&["task"], "--help"),
+        (&["task", "update"], "--help"),
+    ];
+    for width in [60usize, 80, 120] {
+        for (args, flag) in surfaces {
+            let output = read_help_on_pty(args, flag, width);
+            let mut previous_indent = 0usize;
+            for line in output.lines().map(|line| line.trim_end_matches('\r')) {
+                let indent = line.chars().take_while(|c| *c == ' ').count();
+                let words: Vec<_> = line.split_whitespace().collect();
+                assert!(
+                    line.chars().count() <= width
+                        || (words.len() == 1
+                            && words[0].chars().count() > width.saturating_sub(indent)),
+                    "orbit {args:?} {flag}, width {width}: overlong line {line:?}"
+                );
+                // A wrapped flag description sits deeper than its flag, never at column 0.
+                if previous_indent >= 6 && !line.is_empty() {
+                    assert!(
+                        indent > 0,
+                        "orbit {args:?} {flag}, width {width}: continuation at column 0 {line:?}"
+                    );
+                }
+                previous_indent = indent;
+            }
+        }
+    }
+}
+
+/// Footer example blocks keep one readable layout on narrow terminals. The
+/// piped goldens freeze the wide layout, so this PTY check guards the 60/80
+/// column fallback. While the piped description column leaves room for the
+/// explanation, every over-wide aligned row keeps that column with a hanging
+/// indent and no command runs into its explanation [ORB-23871]. When it leaves
+/// less than `MIN_EXPLANATION_WIDTH` columns, the block stacks every explanation
+/// two columns under its command instead, so no explanation wraps a word per
+/// line beside a squeezed column [ORB-24274].
+#[cfg(unix)]
+#[test]
+fn footer_example_blocks_keep_one_layout_on_narrow_terminals() {
+    // Fewest columns an aligned explanation needs; mirrors the CLI renderer.
+    const MIN_EXPLANATION_WIDTH: usize = 24;
+
+    use std::io::Read;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    fs::create_dir_all(&home).expect("fixture home");
+    fs::create_dir_all(&work).expect("fixture work");
+
+    let run_verified_pty = |args: &[&str], flag: &str, width: u16| {
+        let mut requested = libc::winsize {
+            ws_row: 40,
+            ws_col: width,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        let mut master_fd = -1;
+        let mut slave_fd = -1;
+        // SAFETY: openpty initializes these two valid out-pointers and copies
+        // the supplied window size into the newly opened pseudo-terminal.
+        let opened = unsafe {
+            libc::openpty(
+                &mut master_fd,
+                &mut slave_fd,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::addr_of_mut!(requested),
+            )
+        };
+        assert_eq!(opened, 0, "open PTY: {}", std::io::Error::last_os_error());
+        // SAFETY: openpty succeeded, so both descriptors are open and owned here.
+        let master = unsafe { fs::File::from_raw_fd(master_fd) };
+        // SAFETY: slave is the distinct open end of the same pair.
+        let slave = unsafe { fs::File::from_raw_fd(slave_fd) };
+        let mut actual = libc::winsize {
+            ws_row: 0,
+            ws_col: 0,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: the slave descriptor is open and `actual` is a valid output.
+        let read_size = unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCGWINSZ, &mut actual) };
+        assert_eq!(read_size, 0, "read PTY window size");
+        assert_eq!(actual.ws_col, width, "PTY accepted requested width");
+
+        let mut command = Command::new(env!("CARGO_BIN_EXE_orbit"));
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .env("NO_COLOR", "1")
+            .env_remove("COLUMNS")
+            .env_remove("ORBIT_FORMAT")
+            .env_remove("ORBIT_SKIP_HOST_PREREQUISITES")
+            .args(args)
+            .arg(flag)
+            .stdin(Stdio::from(slave.try_clone().expect("clone PTY slave")))
+            .stdout(Stdio::from(slave.try_clone().expect("clone PTY stdout")))
+            .stderr(Stdio::from(slave.try_clone().expect("clone PTY stderr")));
+        let mut child = command.spawn().expect("spawn CLI help in PTY");
+        drop(command);
+        drop(slave);
+        let mut master = master;
+        let mut output = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!(
+                    "PTY help timed out at {width} columns ({} {flag})",
+                    args.join(" ")
+                );
+            }
+            let timeout_ms = remaining.as_millis().min(5_000) as i32;
+            let mut poll_fd = libc::pollfd {
+                fd: master.as_raw_fd(),
+                events: libc::POLLIN | libc::POLLHUP,
+                revents: 0,
+            };
+            // SAFETY: `poll_fd` points to one initialized pollfd.
+            let ready = unsafe { libc::poll(&mut poll_fd, 1, timeout_ms) };
+            if ready == 0 {
+                continue;
+            }
+            if ready < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("poll PTY output: {error}");
+            }
+            let mut chunk = [0_u8; 4096];
+            match master.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(count) => output.extend_from_slice(&chunk[..count]),
+                Err(error) if error.raw_os_error() == Some(libc::EIO) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("read PTY output: {error}");
+                }
+            }
+        }
+        let status = child.wait().expect("wait for CLI help");
+        assert!(
+            status.success(),
+            "`orbit {} {flag}` failed at {width}",
+            args.join(" ")
+        );
+        String::from_utf8(output)
+            .expect("help is UTF-8")
+            .replace('\r', "")
+    };
+
+    let description_column = |line: &str| -> Option<usize> {
+        let chars: Vec<char> = line.chars().collect();
+        let lead = chars.iter().take_while(|c| **c == ' ').count();
+        if lead == 0 || lead >= chars.len() {
+            return None;
+        }
+        let mut index = lead;
+        while index < chars.len() {
+            if chars[index] != ' ' {
+                index += 1;
+                continue;
+            }
+            let start = index;
+            while index < chars.len() && chars[index] == ' ' {
+                index += 1;
+            }
+            if index - start >= 2
+                && chars[lead..start].iter().any(|c| *c != ' ')
+                && index < chars.len()
+            {
+                return Some(index);
+            }
+        }
+        None
+    };
+
+    let block_lines = |help: &str, heading: &str| -> Vec<String> {
+        let lines: Vec<&str> = help.lines().collect();
+        let start = lines
+            .iter()
+            .position(|line| *line == heading)
+            .unwrap_or_else(|| panic!("missing block `{heading}`"));
+        let mut block = Vec::new();
+        for line in &lines[start + 1..] {
+            if line.is_empty() || !line.starts_with(' ') {
+                break;
+            }
+            block.push((*line).to_string());
+        }
+        assert!(!block.is_empty(), "block `{heading}` has no rows");
+        block
+    };
+
+    for (args, flag, heading) in [
+        (&["task"][..], "--help", "Lifecycle:"),
+        (&["task"][..], "-h", "Lifecycle:"),
+        (&["task", "lint"][..], "--help", "Examples:"),
+        (&["task", "recheck-blocked"][..], "--help", "Examples:"),
+        (&["task", "settle-merged"][..], "--help", "Examples:"),
+    ] {
+        let piped = read_help_with_flag(args, flag, &home, &work);
+        let piped_block = block_lines(&piped, heading);
+        let mut counts = std::collections::BTreeMap::new();
+        for line in &piped_block {
+            if let Some(column) = description_column(line) {
+                *counts.entry(column).or_insert(0usize) += 1;
+            }
+        }
+        let (&shared, _) = counts
+            .iter()
+            .max_by_key(|(_, count)| **count)
+            .expect("piped block has no aligned column");
+        assert!(
+            counts.get(&shared).is_some_and(|count| *count >= 2),
+            "piped block `{heading}` needs an aligned example column"
+        );
+        // Command text of every piped row. A narrow render may wrap or stack a
+        // command, so its visible lines are leading parts of these.
+        let piped_commands: Vec<String> = piped_block
+            .iter()
+            .filter(|line| line.starts_with("  orbit"))
+            .map(|line| match description_column(line) {
+                Some(column) => line
+                    .chars()
+                    .take(column)
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string(),
+                None => line.clone(),
+            })
+            .collect();
+
+        for width in [80u16, 60u16] {
+            let help = run_verified_pty(args, flag, width);
+            let block = block_lines(&help, heading);
+            for line in &block {
+                assert!(
+                    line.chars().count() <= usize::from(width),
+                    "`orbit {} {flag}` at {width}: overlong footer line {line:?}",
+                    args.join(" ")
+                );
+            }
+            // Stacked when the shared column leaves too little room; then no row
+            // keeps the column and every explanation hangs under its command.
+            let room = usize::from(width).saturating_sub(shared);
+            let stacked = room < MIN_EXPLANATION_WIDTH;
+            let mut explained = false;
+            let mut command_indent = 0;
+            for line in &block {
+                let indent = line.chars().take_while(|c| *c == ' ').count();
+                if line.starts_with("  orbit") {
+                    command_indent = indent;
+                    explained = false;
+                    match description_column(line) {
+                        Some(column) => {
+                            assert!(
+                                !stacked,
+                                "`orbit {} {flag}` at {width}: explanation kept beside column {shared} with {room} columns: {line:?}",
+                                args.join(" ")
+                            );
+                            assert_eq!(
+                                column,
+                                shared,
+                                "`orbit {} {flag}` at {width}: explanation drifted from column {shared}: {line:?}",
+                                args.join(" ")
+                            );
+                            explained = true;
+                        }
+                        // A command without an explanation: stacked, or wrapped
+                        // because it is too long for the width.
+                        None => assert!(
+                            piped_commands
+                                .iter()
+                                .any(|command| command.starts_with(line.as_str())),
+                            "`orbit {} {flag}` at {width}: command runs into its explanation with one space: {line:?}",
+                            args.join(" ")
+                        ),
+                    }
+                } else if explained {
+                    assert_eq!(
+                        indent,
+                        shared,
+                        "`orbit {} {flag}` at {width}: continuation not at column {shared}: {line:?}",
+                        args.join(" ")
+                    );
+                } else {
+                    assert_eq!(
+                        indent,
+                        command_indent + 2,
+                        "`orbit {} {flag}` at {width}: wrapped line not under its command: {line:?}",
+                        args.join(" ")
+                    );
+                }
+            }
+            assert_eq!(
+                block.iter().any(|line| description_column(line).is_some()),
+                !stacked,
+                "`orbit {} {flag}` at {width}: {room} columns beside column {shared} must {}",
+                args.join(" "),
+                if stacked {
+                    "stack the block"
+                } else {
+                    "keep the aligned layout"
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn public_commands_appear_in_grouped_help() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    fs::create_dir_all(&home).expect("fixture home");
+    fs::create_dir_all(&work).expect("fixture work");
+    for flag in ["-h", "--help"] {
+        for (args, group, names) in [
+            (&[][..], "Advanced", &["application"][..]),
+            (&[][..], "Observe", &["attention"][..]),
+            (&["run"][..], "Audits", &["settlements-hydrate"][..]),
+        ] {
+            let mut command = cargo_bin_cmd!("orbit");
+            test_env::clear_inherited_authority(|name| {
+                command.env_remove(name);
+            });
+            let output = command
+                .current_dir(&work)
+                .env("HOME", &home)
+                .env("USERPROFILE", &home)
+                .args(args)
+                .arg(flag)
+                .output()
+                .expect("run help");
+            assert!(output.status.success());
+            let help = String::from_utf8(output.stdout).expect("UTF-8 help");
+            let section = help
+                .split_once(&format!("{group}:\n"))
+                .expect("group")
+                .1
+                .split("\n\n")
+                .next()
+                .expect("rows");
+            for name in names {
+                assert!(
+                    section
+                        .lines()
+                        .any(|line| line.split_whitespace().next() == Some(name)),
+                    "{name} missing from {group} in {flag}: {section}"
+                );
             }
         }
     }

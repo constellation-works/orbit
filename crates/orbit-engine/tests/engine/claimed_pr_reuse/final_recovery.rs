@@ -12,7 +12,8 @@ use orbit_engine::{
 use orbit_types::workflow::activity_job::JobV2;
 use orbit_types::workflow::handoff::TaskHandoff;
 use orbit_types::workflow::{
-    FinalRecoveryCheckpoint, FinalRecoveryKey, JobRunState, PipelineState,
+    FinalRecoveryCheckpoint, FinalRecoveryCheckpointOutcome, FinalRecoveryKey, JobRunState,
+    PipelineState,
 };
 
 const TASK_ID: &str = "ORB-1";
@@ -329,8 +330,10 @@ impl orbit_engine::test_support::NullRuntimeHost for ReplayHost<'_> {
                     input["failed_step_id"], "handoff",
                     "unexpected original error: {input}"
                 );
-                return Ok(json!({"decision": "resume", "step_id": "implement_bundle",
-                    "rationale": "Correct self-attribution; preserve the published candidate"}));
+                return Ok(
+                    json!({"decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "step_id": "implement_bundle",
+                    "rationale": "Correct self-attribution; preserve the published candidate"}),
+                );
             }
             _ => {}
         }
@@ -353,6 +356,10 @@ impl orbit_engine::test_support::NullRuntimeHost for ReplayHost<'_> {
         id: &str,
         output: &Value,
         compound: &BTreeMap<String, Value>,
+        _: &std::collections::BTreeMap<
+            String,
+            orbit_types::workflow::activity_job::ScriptOutputSet,
+        >,
     ) -> Result<(), DispatchError> {
         if id == "pr_open" {
             self.publications.lock().unwrap().push(output.clone());
@@ -408,6 +415,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ReplayHost<'_> {
             base_ref: Some(BASE.into()),
             admitted_at: Utc::now(),
             decision: None,
+            fault: Default::default(),
             repair_commit: None,
             resume_context: None,
             outcome: None,
@@ -423,7 +431,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ReplayHost<'_> {
         let mut state = self.state.lock().unwrap();
         let checkpoint = state.final_recovery.as_mut().unwrap();
         checkpoint.decision = Some(application.decision.clone());
-        checkpoint.outcome = Some("resume".into());
+        checkpoint.outcome = Some(FinalRecoveryCheckpointOutcome::Resume);
         checkpoint.repair_commit = application.repair_commit.clone();
         checkpoint.resume_context = application.resume_context.clone();
         let from = application
@@ -530,8 +538,6 @@ fn scenario(sandbox: &Path, mode: &'static str) {
         Arc::new(orbit_store::Store::open_in_memory().unwrap()),
         "ws-test",
         RUN_ID,
-        "test-agent",
-        None,
         sandbox,
     ));
     let audit = Arc::new(

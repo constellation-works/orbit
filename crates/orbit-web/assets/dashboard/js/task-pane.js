@@ -1,10 +1,10 @@
 // Orbit dashboard task pane: the pane render, its head, the resizer and the
 // keyboard navigation around it.
 
-import { el, makeCopyButton, syncNodes } from './common.js';
+import { el, getWorkspace, hostWriteRefusal, makeCopyButton, syncNodes } from './common.js';
 import { $, taskState } from './task-shared.js';
 import * as taskShared from './task-shared.js';
-import { closeTaskPane, focusTaskRow, openTaskPage, revealTaskRow, selectTask, stopRowInteraction } from './task-nav.js';
+import { closeTaskPane, filterTasks, focusTaskRow, openTaskPage, revealTaskRow, selectTask, stopRowInteraction } from './task-nav.js';
 import { taskDetailState, taskDrainSignature, taskDrainState } from './task-data.js';
 import { buildTaskDetail, buildTaskDetailPlaceholder, detailFeedbackSignature } from './task-detail.js';
 import { osReadoutNote, osReadoutText } from './task-lifecycle.js';
@@ -13,19 +13,21 @@ import { fixPrSignature, fixPrState, pilotSignature, recoverySignature, refreshF
 import { crewOptionsSignature, feedbackSignature } from './task-crew.js';
 import { buildRelationRow, drainDependencyIds, relationTargets } from './task-relations.js';
 import * as taskReadiness from './task-readiness.js';
-import * as taskEvidence from './task-evidence.js';
 import * as taskComments from './task-comments.js';
 import * as taskFields from './task-fields.js';
+import { retainDecisionNotes, retireClosedDecisionCards } from './task-decision.js';
 
 // A detail kept for an open draft can refresh its read-only readiness and
 // selector displays without touching the editor holding that draft.
 function refreshDraftDetails(wrap, task, context, readinessTask = task) {
+  retireClosedDecisionCards(wrap, readinessTask);
   for (const readout of wrap.querySelectorAll(".task-os-readout")) {
     readout.textContent = osReadoutText(task);
     const note = readout.parentNode && readout.parentNode.querySelector(".info-hint-text");
     if (note) note.textContent = osReadoutNote(task);
   }
   refreshDraftCrewControl(wrap, task, context);
+  refreshDraftComplexityControl(wrap, readinessTask, context);
   refreshFixPrControls(wrap, task, context);
   taskFields.refreshFieldCells(wrap, readinessTask);
   taskReadiness.refreshOperatorRecordFeedback(wrap, task);
@@ -44,7 +46,7 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
   if (!drain) return;
   const signature = taskDrainSignature(drain);
   if (current.dataset.drainSignature !== signature) {
-    const replacement = taskReadiness.buildReadinessBlock(taskReadiness.readinessOf(readinessTask), drain, readinessTask.workspace_id);
+    const replacement = taskReadiness.buildReadinessBlock(taskReadiness.readinessOf(readinessTask), drain, readinessTask.workspace_id, readinessTask, context);
     replacement.dataset.drainSignature = signature;
     const parent = current.parentNode;
     if (!parent) return;
@@ -107,14 +109,37 @@ function refreshDraftCrewControl(wrap, task, context) {
   const newFeedback = refreshed.querySelector(":scope > .mutation-feedback");
   if (newFeedback) control.appendChild(newFeedback);
 }
+function refreshDraftComplexityControl(wrap, task, context) {
+  // A summary record can omit complexity; only a full record may repaint it.
+  if (!task || task.complexity === undefined) return;
+  const control = wrap.querySelector(".complexity-cell");
+  const select = control && control.querySelector("select");
+  if (!select) return;
+  const refreshed = taskFields.buildComplexityUpdateControl(task, context);
+  const refreshedSelect = refreshed.querySelector("select");
+  if (!refreshedSelect) return;
+  const value = refreshedSelect.value;
+  select.replaceChildren(...refreshedSelect.children);
+  select.value = value;
+  select.disabled = refreshedSelect.disabled;
+  select.title = refreshedSelect.title;
+  const oldFeedback = control.querySelector(":scope > .mutation-feedback");
+  if (oldFeedback) oldFeedback.remove();
+  const newFeedback = refreshed.querySelector(":scope > .mutation-feedback");
+  if (newFeedback) control.appendChild(newFeedback);
+}
 // The pinned resolver result shares the normal detail's crew control. Only
-// the dock needs the outside-the-list note; full-page CSS hides that box.
+// the dock needs the outside-the-list note; full-page CSS hides that box. A
+// task the filter matches is only further down its section than the rows
+// loaded, so it carries no note [ORB-24677].
 function buildPinnedTask(ptask, context) {
+  const outside = filterTasks([ptask], context).length === 0;
   const row = el("div", { class: "pinned-external" }, [
-    el("span", { class: "pinned-note", text: `Not in the current list · ${ptask.status}` }),
+    outside ? el("span", { class: "pinned-note", text: `Not in the current list · ${ptask.status}` }) : null,
   ]);
+  row.hidden = !outside;
   stopRowInteraction(row);
-  row.dataset.hash = `${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(taskState.crewFeedback, ptask.id)}`;
+  row.dataset.hash = `${outside}-${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(taskState.crewFeedback, taskShared.taskDispatchIdentity(ptask))}`;
 
   const drain = taskDrainState(ptask, context);
   const detail = buildTaskDetail(ptask, context, drain);
@@ -123,8 +148,8 @@ function buildPinnedTask(ptask, context) {
 
   const wrap = el("div", { class: "pinned-task-wrap" }, [row, detail]);
   wrap.teardown = () => taskComments.disconnectCommentCards(wrap);
-  wrap.dataset.key = `pinned-${ptask.id}`;
-  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${taskDrainSignature(drain)}-${detailFeedbackSignature(ptask.id)}-${fixPrSignature(ptask)}-${taskEvidence.decisionSignature(ptask)}-${taskReadiness.operatorRecordSignature(ptask)}`;
+  wrap.dataset.key = `pinned-${taskShared.taskDispatchIdentity(ptask)}`;
+  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${taskDrainSignature(drain)}-${detailFeedbackSignature(ptask)}-${fixPrSignature(ptask)}-${taskReadiness.operatorRecordSignature(ptask)}`;
   return wrap;
 }
 /* ORB-11655: a comment or reject form, or an open field editor (ORB-12235),
@@ -147,15 +172,16 @@ function openDraftNodes(body) {
   }
   return drafts;
 }
-// The pane beside the list: a head naming the task with its close, back and
+// The pane beside the list: a head naming the task with its close and
 // full-page controls, then the task's detail. A pinned resolver result shows
 // here too, marked as outside the list.
 export function renderTaskPane(filtered, context) {
   const pane = $("task-detail-pane");
   const paneBody = $("task-detail-body");
   if (!pane || !paneBody) return;
+  const restoreDecisionNotes = retainDecisionNotes(paneBody);
   const ptask = taskState.pinnedExternalTask && taskState.pinnedExternalTask.task ? taskState.pinnedExternalTask.task : null;
-  const listTask = !ptask && taskState.selectedTaskId ? filtered.find((task) => task.id === taskState.selectedTaskId) || null : null;
+  const listTask = !ptask && taskState.selectedTaskId ? filtered.find(taskShared.isSelectedTask) || null : null;
   const shown = ptask || listTask;
   const existing = new Map();
   for (const node of paneBody.children) {
@@ -166,7 +192,7 @@ export function renderTaskPane(filtered, context) {
   if (shown) {
     nodes.push(buildPaneHead(shown, Boolean(ptask), context));
     if (ptask) {
-      const draft = drafts.get(`pinned-${ptask.id}`);
+      const draft = drafts.get(`pinned-${taskShared.taskDispatchIdentity(ptask)}`);
       if (draft) refreshDraftDetails(draft, ptask, context);
       nodes.push(draft || buildPinnedTask(ptask, context));
     } else {
@@ -176,6 +202,7 @@ export function renderTaskPane(filtered, context) {
     nodes.push(buildTaskPagePlaceholder(context));
   }
   syncNodes(paneBody, nodes);
+  restoreDecisionNotes();
   const open = nodes.length > 0;
   pane.hidden = !open;
   const main = $("tasks-main");
@@ -196,7 +223,7 @@ function focusPaneHeading() {
 // A list task's detail node, kept across renders while its payload and
 // feedback are unchanged and kept verbatim while it holds a draft.
 function buildListTaskDetail(t, drafts, existing, context) {
-  const key = `detail-${t.id}`;
+  const key = `detail-${taskShared.taskDispatchIdentity(t)}`;
   const state = taskDetailState(t, context);
   const draft = drafts.get(key);
   if (draft) {
@@ -217,7 +244,7 @@ function buildListTaskDetail(t, drafts, existing, context) {
   // its read state instead; a detail rendered from the cached projection must
   // not be rebuilt just because a refresh has a read in flight.
   const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
-  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t.id)}-${taskState.shipInFlightTaskIds.has(taskShared.taskDispatchIdentity(t))}-${pilotSignature(t)}-${triageSignature(t)}-${recoverySignature(t)}-${taskReadiness.operatorRecordSignature(t)}-${fixPrSignature(t)}-${taskEvidence.decisionSignature(t)}`;
+  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t)}-${taskState.shipInFlightTaskIds.has(taskShared.taskDispatchIdentity(t))}-${pilotSignature(t)}-${triageSignature(t)}-${recoverySignature(t)}-${taskReadiness.operatorRecordSignature(t)}-${fixPrSignature(t)}-${hostWriteRefusal()}`;
   const detailHash = `${baseHash}-${taskDrainSignature(drain)}`;
   const existingDetail = existing.get(key);
   if (existingDetail && existingDetail.dataset.hash === detailHash) return existingDetail;
@@ -236,20 +263,20 @@ function buildListTaskDetail(t, drafts, existing, context) {
   if (readiness) readiness.dataset.drainSignature = taskDrainSignature(drain);
   detail.dataset.key = key;
   // The row's disclosure and the tabs point here, so the detail needs a real id.
-  detail.id = key;
+  detail.id = `detail-${t.id}`;
   detail.dataset.hash = detailHash;
   detail.dataset.baseHash = baseHash;
   return detail;
 }
 function buildPaneHead(task, pinned, context) {
   const page = taskState.taskPageId === task.id;
-  const back = el("button", {
+  const back = page ? el("button", {
     class: "action task-pane-back",
     type: "button",
-    text: page ? "Back to list" : "Back",
-    title: page ? "Back to the task list at this task (Esc)" : "Back to the task list (Esc)",
-  });
-  back.addEventListener("click", () => closeTaskPane(context, { forget: true }));
+    text: "Back to list",
+    title: "Back to the task list at this task (Esc)",
+  }) : null;
+  if (back) back.addEventListener("click", () => closeTaskPane(context, { forget: true }));
   // Icon buttons: the glyph is CSS, the accessible name is the label.
   const full = page ? null : el("button", {
     class: "task-pane-icon task-pane-full",
@@ -276,7 +303,7 @@ function buildPaneHead(task, pinned, context) {
   const head = el("div", { class: "task-pane-head" }, [
     el("div", { class: "task-pane-bar" }, page
       ? [id, spacer, back]
-      : [back, id, spacer, full, close]),
+      : [id, spacer, full, close]),
     title,
   ]);
   head.dataset.key = key;
@@ -320,8 +347,7 @@ function isEditableTarget(target) {
 }
 
 function taskIdOfRow(row) {
-  const key = row && row.dataset ? row.dataset.key || "" : "";
-  return key.startsWith("task-") ? key.slice(5) : null;
+  return row?.dataset.taskId || null;
 }
 
 // Roving focus moved to another row: while the pane shows a list task, it
@@ -329,7 +355,10 @@ function taskIdOfRow(row) {
 export function followRovingSelection(button) {
   if (!taskState.selectedTaskId || taskState.pinnedExternalTask || taskState.taskPageId || !taskState.paneContext) return;
   const taskId = taskIdOfRow(button.closest ? button.closest(".row") : null);
-  if (taskId && taskId !== taskState.selectedTaskId) selectTask(taskId, taskState.paneContext);
+  const workspace = button.closest(".row")?.dataset.workspace;
+  if (taskId && (taskId !== taskState.selectedTaskId || workspace !== taskState.selectedTaskWorkspace)) {
+    selectTask(taskId, taskState.paneContext, { workspace });
+  }
 }
 
 // j/k from inside the pane: select the next or previous row and keep the
@@ -339,11 +368,12 @@ function moveTaskSelection(step) {
   if (!body || !taskState.paneContext) return false;
   const buttons = Array.from(body.querySelectorAll("[data-row-focus]"))
     .filter((button) => typeof button.getClientRects !== "function" || button.getClientRects().length > 0);
-  const at = buttons.findIndex((button) => taskIdOfRow(button.closest(".row")) === taskState.selectedTaskId);
+  const at = buttons.findIndex((button) => taskIdOfRow(button.closest(".row")) === taskState.selectedTaskId &&
+    button.closest(".row").dataset.workspace === (taskState.selectedTaskWorkspace || getWorkspace() || ""));
   const next = at < 0 ? buttons[0] : buttons[at + step];
   const taskId = next ? taskIdOfRow(next.closest(".row")) : null;
   if (!taskId) return false;
-  selectTask(taskId, taskState.paneContext);
+  selectTask(taskId, taskState.paneContext, { workspace: next.closest(".row").dataset.workspace });
   revealTaskRow(taskId);
   focusPaneHeading();
   return true;
@@ -357,8 +387,8 @@ function phoneSheet() {
   }
 }
 
-// At phone width the open pane is a full-screen sheet: a modal dialog whose
-// background is inert until Back closes it.
+// At phone width the pane covers the board inside the content area. Only
+// that covered board becomes inert; global search and navigation stay usable.
 function syncPaneChrome(open) {
   const pane = $("task-detail-pane");
   if (!pane) return;
@@ -366,8 +396,8 @@ function syncPaneChrome(open) {
   if (sheet === sheetOpen) return;
   sheetOpen = sheet;
   if (sheet) {
-    pane.setAttribute("role", "dialog");
-    pane.setAttribute("aria-modal", "true");
+    pane.setAttribute("role", "region");
+    pane.removeAttribute("aria-modal");
     pane.setAttribute("aria-labelledby", "task-pane-title");
   } else if (typeof pane.removeAttribute === "function") {
     pane.removeAttribute("role");
@@ -381,7 +411,7 @@ function syncPaneChrome(open) {
 function setSheetInert(pane) {
   for (const node of sheetInert) node.inert = false;
   sheetInert = [];
-  for (let node = pane; node && node.parentElement && node !== document.body; node = node.parentElement) {
+  for (let node = pane; node && node.parentElement && node !== $("tasks-main"); node = node.parentElement) {
     for (const sibling of node.parentElement.children) {
       if (sibling === node || sibling.inert || sibling.tagName === "SCRIPT") continue;
       sibling.inert = true;
@@ -493,7 +523,8 @@ export function wireTaskPane(context) {
     const target = event.target;
     if (!target || !target.matches || !target.matches("[data-row-focus]")) return;
     const taskId = taskIdOfRow(target.closest(".row"));
-    if (!taskId || taskId !== taskState.selectedTaskId || taskState.pinnedExternalTask) return;
+    const workspace = target.closest(".row").dataset.workspace;
+    if (!taskId || !taskShared.isSelectedTask({ id: taskId, workspace_id: workspace }) || taskState.pinnedExternalTask) return;
     event.preventDefault();
     openTaskPage(taskId, taskState.paneContext || context);
   });

@@ -14,9 +14,10 @@ use orbit_cmd::registry_routines::routine_statuses;
 use orbit_common::governance::authorization::{
     DASHBOARD_AUTO_TASK_SCHEDULE, DASHBOARD_ROUTINE_TRIGGER,
 };
-use orbit_core::application::routines::{
-    RoutineToggleRefusal, RoutineTriggerEditOutcome, edit_listed_routine_trigger,
+use orbit_core::application::auto_tasks::{
+    AutoTaskScheduleError, AutoTaskScheduleOutcome, AutoTaskScheduleProfile,
 };
+use orbit_core::application::routines::{RoutineEditRefusal, edit_listed_routine_trigger};
 use orbit_types::workflow::{AutoTaskSchedule, RoutineTrigger};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -24,8 +25,8 @@ use serde_json::{Value, json};
 
 use super::auto_tasks::{auto_task_control_error, resolve_workspace_blocking};
 use super::routines::{
-    OperationsQuery, authorization_denied, authorized_caller, explicit_workspace,
-    named_entity_not_found, record_operation_audit,
+    OperationAudit, OperationsQuery, authorization_denied, authorized_caller, explicit_workspace,
+    named_entity_not_found, routine_edit_refusal_reason, routine_edit_refused,
 };
 use super::{blocking, map_runtime_error};
 use crate::state::{DashboardState, Ws};
@@ -80,35 +81,18 @@ pub(super) async fn set_routine_trigger(
         Ok(workspace) => workspace.to_string(),
         Err(rejection) => return rejection.into_response(),
     };
-    let audit_args = json!({"source": body.source, "target": body.target, "trigger": body.trigger});
-    let audit = |caller, denial, failure: Option<String>, started| {
-        let runtime = runtime.clone();
-        let (workspace, name, machine, args) = (
-            workspace.clone(),
-            body.name.clone(),
-            body.machine_name.clone(),
-            audit_args.clone(),
-        );
-        async move {
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                DASHBOARD_ROUTINE_TRIGGER.id,
-                &name,
-                &machine,
-                &args,
-                caller,
-                denial,
-                failure.as_deref(),
-                started,
-            )
-            .await;
-        }
-    };
+    let audit = OperationAudit::new(
+        &runtime,
+        &workspace,
+        DASHBOARD_ROUTINE_TRIGGER.id,
+        body.name.as_str(),
+        json!({"source": body.source, "target": body.target, "trigger": body.trigger}),
+    )
+    .with_machine_name(&body.machine_name);
     let caller = match authorized_caller(&DASHBOARD_ROUTINE_TRIGGER, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
-            audit(None, Some(&denial), None, Instant::now()).await;
+            audit.denied(&denial, Instant::now()).await;
             return authorization_denied(denial);
         }
     };
@@ -146,55 +130,23 @@ pub(super) async fn set_routine_trigger(
         Ok(selected) => selected,
         Err(response) => return *response,
     };
-    let changed = matches!(selected, Ok(Ok(RoutineTriggerEditOutcome::Changed)));
-    let refusal = match selected {
-        Ok(Ok(RoutineTriggerEditOutcome::Changed | RoutineTriggerEditOutcome::Unchanged)) => None,
-        Ok(Ok(RoutineTriggerEditOutcome::Conflict { actual_trigger })) => Some(json!({
-            "error": "routine trigger changed while this edit was open; refresh before retrying",
-            "code": "stale_routine_trigger",
-            "actual_trigger": actual_trigger,
-        })),
-        Ok(Ok(RoutineTriggerEditOutcome::TargetConflict { actual_target })) => Some(json!({
-            "error": format!("routine target changed; refresh and confirm '{}'", actual_target.as_ref_string()),
-            "code": "target_mismatch",
-            "actual_target": actual_target.as_ref_string(),
-        })),
-        Ok(Err(RoutineToggleRefusal::OwnerAuthority {
-            reason,
-            owner_machine,
-        })) => Some(json!({
-            "error": reason,
-            "code": "owner_authority",
-            "owner_machine": owner_machine,
-        })),
-        Ok(Err(RoutineToggleRefusal::NotFound)) => {
-            return named_entity_not_found(
-                "routine_not_found",
-                format!("routine '{}' was not found", body.name),
-            );
+    let changed = match selected {
+        Ok(Ok(outcome)) => outcome.changed,
+        // An unlisted routine is a 404 with nothing to audit.
+        Ok(Err(refusal @ RoutineEditRefusal::NotFound { .. })) => {
+            return routine_edit_refused(&refusal);
         }
-        Ok(Err(RoutineToggleRefusal::WorkspaceMismatch { source_workspace })) => Some(json!({
-            "error": format!(
-                "select routine source workspace '{source_workspace}' before changing '{}'",
-                body.name
-            ),
-            "code": "workspace_mismatch",
-        })),
+        Ok(Err(refusal)) => {
+            let reason = routine_edit_refusal_reason(&refusal);
+            audit.failed(&caller, &reason, started).await;
+            return routine_edit_refused(&refusal);
+        }
         Err(error) => {
-            audit(Some(&caller), None, Some(error.to_string()), started).await;
+            audit.failed(&caller, &error.to_string(), started).await;
             return map_runtime_error(error);
         }
     };
-    if let Some(refusal) = refusal {
-        let reason = format!(
-            "{}: {}",
-            refusal["code"].as_str().unwrap_or("conflict"),
-            refusal["error"].as_str().unwrap_or_default()
-        );
-        audit(Some(&caller), None, Some(reason), started).await;
-        return conflict(refusal);
-    }
-    audit(Some(&caller), None, None, started).await;
+    audit.succeeded(&caller, started).await;
     Json(json!({
         "name": body.name,
         "target": body.target,
@@ -219,30 +171,17 @@ pub(super) async fn set_auto_task_schedule(
         Ok(runtime) => runtime,
         Err(response) => return *response,
     };
-    let audit_args = json!({"schedule": body.schedule});
-    let audit = |caller, denial, failure: Option<String>, started| {
-        let runtime = runtime.clone();
-        let (workspace, name, args) = (workspace.clone(), body.name.clone(), audit_args.clone());
-        async move {
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                DASHBOARD_AUTO_TASK_SCHEDULE.id,
-                &name,
-                "",
-                &args,
-                caller,
-                denial,
-                failure.as_deref(),
-                started,
-            )
-            .await;
-        }
-    };
+    let audit = OperationAudit::new(
+        &runtime,
+        &workspace,
+        DASHBOARD_AUTO_TASK_SCHEDULE.id,
+        body.name.as_str(),
+        json!({"schedule": body.schedule}),
+    );
     let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_SCHEDULE, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
-            audit(None, Some(&denial), None, Instant::now()).await;
+            audit.denied(&denial, Instant::now()).await;
             return authorization_denied(denial);
         }
     };
@@ -260,53 +199,50 @@ pub(super) async fn set_auto_task_schedule(
         Err(response) => return *response,
     };
     let started = Instant::now();
-    let current = match blocking("auto-task show", {
+    let outcome = match blocking("auto-task schedule", {
         let runtime = runtime.clone();
         let name = body.name.clone();
-        move || runtime.auto_task_show(&name)
+        let profile = AutoTaskScheduleProfile::Observed {
+            expected_schedule: Box::new(expected),
+        };
+        move || Ok(runtime.auto_task_schedule_command(&name, schedule, profile))
     })
     .await
     {
-        Ok(Some(definition)) => definition,
-        Ok(None) => {
+        Ok(outcome) => outcome,
+        Err(response) => return *response,
+    };
+    let updated = match outcome {
+        Ok(AutoTaskScheduleOutcome::Written(updated)) => updated,
+        Ok(AutoTaskScheduleOutcome::AlreadySet(current)) => {
+            return Json(json!({
+                "name": body.name,
+                "schedule": current.schedule,
+                "changed": false,
+                "message": "Auto-task schedule already matched",
+            }))
+            .into_response();
+        }
+        Ok(AutoTaskScheduleOutcome::Stale { actual_schedule }) => {
+            return conflict(json!({
+                "error": "auto-task schedule changed while this edit was open; refresh before retrying",
+                "code": "stale_auto_task_schedule",
+                "actual_schedule": actual_schedule,
+            }));
+        }
+        Ok(AutoTaskScheduleOutcome::NotFound) => {
             return named_entity_not_found(
                 "auto_task_not_found",
                 format!("auto-task '{}' was not found", body.name),
             );
         }
-        Err(response) => return *response,
-    };
-    if current.schedule != expected {
-        return conflict(json!({
-            "error": "auto-task schedule changed while this edit was open; refresh before retrying",
-            "code": "stale_auto_task_schedule",
-            "actual_schedule": current.schedule,
-        }));
-    }
-    if current.schedule == schedule {
-        return Json(json!({
-            "name": body.name,
-            "schedule": current.schedule,
-            "changed": false,
-            "message": "Auto-task schedule already matched",
-        }))
-        .into_response();
-    }
-    let updated = match blocking("auto-task schedule", {
-        let runtime = runtime.clone();
-        let name = body.name.clone();
-        move || Ok(runtime.auto_task_set_schedule_checked(&name, &expected, schedule))
-    })
-    .await
-    {
-        Ok(Ok(updated)) => updated,
-        Ok(Err(error)) => {
-            audit(Some(&caller), None, Some(error.to_string()), started).await;
+        Err(AutoTaskScheduleError::Read(error)) => return map_runtime_error(error),
+        Err(AutoTaskScheduleError::Write(error)) => {
+            audit.failed(&caller, &error.to_string(), started).await;
             return auto_task_control_error(error);
         }
-        Err(response) => return *response,
     };
-    audit(Some(&caller), None, None, started).await;
+    audit.succeeded(&caller, started).await;
     Json(json!({
         "name": updated.name,
         "schedule": updated.schedule,

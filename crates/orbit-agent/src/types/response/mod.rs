@@ -10,10 +10,17 @@ use orbit_common::OrbitError;
 use orbit_types::telemetry::ToolCallTrace;
 use serde_json::Value;
 
-pub use envelope::{DeclaredResponseFailure, ParsedStdout};
+pub use envelope::{
+    DeclaredResponseFailure, IMPLEMENTATION_INCOMPLETE_CODE, IncompleteContinuationRequest,
+    ParsedStdout, is_missing_envelope_violation, is_success_carrying_error_violation,
+};
 pub use limit::{provider_usage_limit, provider_usage_limit_details};
-pub use protocol_schema::response_envelope_json_schema_arg;
+pub use protocol_schema::{response_envelope_json_schema, response_envelope_json_schema_arg};
 pub(crate) use usage::request_usage;
+
+pub(crate) fn tool_calls_in_documents(documents: &[Value]) -> Vec<ToolCallTrace> {
+    tool_calls::extract_tool_calls(documents)
+}
 pub use wrapper::provider_invocation_diagnostic;
 
 /// Phrases a provider CLI prints in its own failure diagnostics when
@@ -60,6 +67,34 @@ pub fn provider_authentication_failure(text: &str) -> bool {
 /// different model.` [ORB-14149]
 const PROVIDER_CAPACITY_PHRASES: &[&str] = &["model is at capacity"];
 
+/// Phrases a provider CLI prints in its own failure diagnostics when its
+/// account is out of quota/billing credit. Lowercase, matched
+/// case-insensitively. Codex: `Quota exceeded. Check your plan and billing
+/// details.`; Claude Code: `Credit balance is too low` [ORB-24803]. Generic
+/// quota errors can describe timed API limits or host disk exhaustion and do
+/// not establish a billing failure.
+const PROVIDER_QUOTA_PHRASES: &[&str] = &[
+    "quota exceeded. check your plan and billing details.",
+    "credit balance is too low",
+];
+
+/// Whether a provider's own failure text says its account's quota/billing
+/// is exhausted, so the provider is unavailable on that account until an
+/// operator restores credit or billing.
+///
+/// Pass only text the provider wrote about itself, as for
+/// [`provider_authentication_failure`]. This is distinct from
+/// [`provider_usage_limit`]: an explicit usage-limit phrase takes precedence
+/// over the billing diagnostic so its reset remains available to scheduling.
+#[must_use]
+pub fn provider_quota_exceeded(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    !provider_usage_limit(&text)
+        && PROVIDER_QUOTA_PHRASES
+            .iter()
+            .any(|phrase| text.contains(phrase))
+}
+
 /// Whether a provider's own failure text says the selected model is at
 /// capacity, so retrying the same model immediately cannot succeed.
 ///
@@ -101,13 +136,11 @@ pub fn provider_content_refusal(text: &str) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentInvocationSpec {
-    pub runtime_key: &'static str,
     pub program: String,
     pub args: Vec<String>,
     /// The prompt bytes the provider must receive: on stdin unless
     /// `prompt_file_flag` names a file transport.
     pub stdin: Vec<u8>,
-    pub stdout_schema_json: Option<Value>,
     pub required_env_vars: &'static [&'static str],
     /// Environment entries the provider pins for every invocation. They are
     /// applied over the `[execution.env]` allowlist, so an outer process

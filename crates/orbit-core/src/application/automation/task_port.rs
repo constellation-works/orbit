@@ -13,6 +13,7 @@ use super::source::Source;
 use super::{members, pilot_reservation, preparation};
 use crate::OrbitRuntime;
 use crate::application::contracts::PilotFingerprints;
+use crate::application::contracts::PilotTaskReservation;
 use crate::application::task::{SourceGit, TaskAutomationPort};
 
 impl SourceGit for Source<'_> {
@@ -34,7 +35,7 @@ impl TaskAutomationPort for OrbitRuntime {
         &self,
         run_id: Option<&str>,
         task_ids: &[String],
-    ) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
+    ) -> Result<PilotTaskReservation, OrbitError> {
         pilot_reservation::reserve(self, run_id, task_ids)
     }
 
@@ -98,12 +99,6 @@ impl TaskAutomationPort for OrbitRuntime {
 
     fn pilot_preparation_holders(&self) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
         preparation::active_task_pilot_preparations(self)
-    }
-
-    fn finding_verification_holders(
-        &self,
-    ) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
-        preparation::active_finding_verifications(self)
     }
 
     fn escalation_triage_holders(&self) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {

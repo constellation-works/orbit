@@ -25,6 +25,92 @@ use tempfile::tempdir;
 
 const FOREIGN_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
+#[test]
+fn parent_relative_root_opens_the_same_store_as_its_absolute_path() {
+    let temp = tempdir().expect("fixture tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    fs::create_dir_all(&home).expect("home");
+    crate::git_repo::init(&work);
+    let root = temp.path().join("r3");
+    orbit(&work, &home)
+        .args([
+            "--root",
+            "../r3",
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "root-test",
+            "--task-prefix",
+            "RTR",
+        ])
+        .assert()
+        .success();
+    orbit(&work, &home)
+        .args([
+            "--root",
+            "../r3",
+            "workspace",
+            "init",
+            "--name",
+            "root-test",
+        ])
+        .assert()
+        .success();
+    let absolute = root.to_str().expect("root path");
+    let expected = orbit(&work, &home)
+        .args(["--root", absolute, "task", "list", "--json"])
+        .output()
+        .expect("absolute task list");
+    assert!(expected.status.success(), "{expected:?}");
+    for flag in [true, false] {
+        let mut command = orbit(&work, &home);
+        if flag {
+            command.args(["--root", "../r3"]);
+        } else {
+            command.env("ORBIT_ROOT", "../r3");
+        }
+        let actual = command
+            .args(["task", "list", "--json"])
+            .output()
+            .expect("relative task list");
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout);
+    }
+    for args in [
+        &["workspace", "list", "--json"][..],
+        &["config", "show", "--workspace", "root-test"][..],
+    ] {
+        let actual = orbit(&work, &home)
+            .args(["--root", "../r3"])
+            .args(args)
+            .output()
+            .expect("relative command");
+        let expected = orbit(&work, &home)
+            .args(["--root", absolute])
+            .args(args)
+            .output()
+            .expect("absolute command");
+        assert!(actual.status.success(), "{actual:?}");
+        assert!(expected.status.success(), "{expected:?}");
+        assert_eq!(actual.stdout, expected.stdout);
+    }
+    let doctor = orbit(&work, &home)
+        .args(["--root", "../r3", "doctor", "--json"])
+        .output()
+        .expect("doctor");
+    assert!(
+        !String::from_utf8_lossy(&doctor.stderr).contains("parent-directory traversal"),
+        "{doctor:?}"
+    );
+    let workspaces = orbit(&work, &home)
+        .args(["--root", absolute, "workspace", "list", "--json"])
+        .output()
+        .expect("workspace list");
+    let entries: Value = serde_json::from_slice(&workspaces.stdout).expect("workspace JSON");
+    assert_eq!(entries.as_array().map(Vec::len), Some(1));
+}
+
 fn explicit_root_spellings_select_the_same_generation_host_registry_and_admission_roots() {
     for (raw, suffix) in [
         ("~", ""),
@@ -331,7 +417,8 @@ fn orbit(work: &Path, home: &Path) -> assert_cmd::Command {
     command
         .current_dir(work)
         .env("HOME", home)
-        .env("USERPROFILE", home);
+        .env("USERPROFILE", home)
+        .env("RUST_LOG", "off");
     command
 }
 
@@ -841,6 +928,86 @@ fn update_with_uninitialized_root_still_requires_a_workspace() {
     }
 }
 
+/// A command spawned with the checkout as its root (`--root <checkout>`,
+/// `ORBIT_ROOT=<checkout>`, or `--root ..` from inside `.orbit/`) opens the
+/// checkout's `.orbit/` store, so it must also join that store's generation
+/// authority. Pinning the checkout itself left `.generation-*` files in the
+/// working tree and registered the command where the real participants never
+/// look. A git checkout with no Orbit workspace is refused before anything is
+/// written there.
+fn checkout_root_joins_its_orbit_authority_and_a_bare_checkout_is_refused() {
+    let temp = tempfile::tempdir_in(test_env::canonical_temp_dir()).expect("fixture tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    fs::create_dir_all(&home).expect("home");
+    crate::git_repo::init(&work);
+    let orbit_dir = work.join(".orbit");
+    initialize_registered_root(&work, &home, &orbit_dir);
+    fs::remove_file(orbit_dir.join(".generation.lock")).expect("reset the workspace record");
+
+    let checkout = work.to_str().expect("UTF-8 checkout");
+    let spellings: [(&str, &Path, Option<&str>, Option<&str>); 3] = [
+        ("--root <checkout>", &work, Some(checkout), None),
+        ("ORBIT_ROOT=<checkout>", &work, None, Some(checkout)),
+        ("--root .. from .orbit/", &orbit_dir, Some(".."), None),
+    ];
+    for (label, cwd, flag, env) in spellings {
+        let mut command = orbit(cwd, &home);
+        if let Some(root) = flag {
+            command.args(["--root", root]);
+        }
+        if let Some(root) = env {
+            command.env("ORBIT_ROOT", root);
+        }
+        let output = command
+            .args(["task", "list", "--json"])
+            .output()
+            .expect("task list");
+        assert!(output.status.success(), "{label}: {output:?}");
+        assert_eq!(
+            stray_generation_entries(&work),
+            Vec::<String>::new(),
+            "{label}"
+        );
+    }
+    assert_generation_record(&orbit_dir);
+
+    let bare = temp.path().join("bare");
+    crate::git_repo::init(&bare);
+    let bare_arg = bare.to_str().expect("UTF-8 bare checkout");
+    for use_flag in [true, false] {
+        let mut command = orbit(&work, &home);
+        if use_flag {
+            command.args(["--root", bare_arg]);
+        } else {
+            command.env("ORBIT_ROOT", bare_arg);
+        }
+        let output = command
+            .args(["task", "list", "--json"])
+            .output()
+            .expect("task list");
+        assert!(!output.status.success(), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("is a git working tree"), "{stderr}");
+        assert!(
+            stderr.contains(&bare.join(".orbit").display().to_string()),
+            "the refusal must name the Orbit root to use: {stderr}"
+        );
+        assert_eq!(stray_generation_entries(&bare), Vec::<String>::new());
+    }
+}
+
+fn stray_generation_entries(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .expect("read checkout")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(".generation"))
+        .collect();
+    names.sort();
+    names
+}
+
 #[test]
 fn generation_admission_contracts_0() {
     for (name, check) in [
@@ -952,6 +1119,10 @@ fn generation_admission_contracts_4() {
         (
             "update_with_uninitialized_root_still_requires_a_workspace",
             update_with_uninitialized_root_still_requires_a_workspace as fn(),
+        ),
+        (
+            "checkout_root_joins_its_orbit_authority_and_a_bare_checkout_is_refused",
+            checkout_root_joins_its_orbit_authority_and_a_bare_checkout_is_refused as fn(),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");

@@ -6,6 +6,9 @@
 //! the blocked task keeps (`failure_handoff`). Both are re-authenticated in
 //! full from the immutable source when the next run adopts them.
 use super::*;
+use crate::application::contracts::OwnerSourceIdentityRefusal;
+use orbit_common::SourceRepairRunStateRefusal;
+use orbit_types::workflow::{self, HeldFailure, JobRunStep};
 use serde::{Deserialize, Serialize};
 
 const PRESERVED: &str = "published_owner_requeued";
@@ -52,24 +55,93 @@ fn parse_preserved(entry: &TaskHistoryEntry) -> Result<PreservedPublication, Orb
         .map_err(|e| refuse(e.to_string()))
 }
 
-/// Refuse unless `source` is a conclusively stopped failed delivery.
-pub(super) fn require_stopped_failed_requeue_source(source: &JobRun) -> Result<(), OrbitError> {
-    let stopped = run_owner_liveness(source) == RunOwnerLiveness::Stopped;
-    if source.state != JobRunState::Failed || source.finished_at.is_none() || !stopped {
-        return Err(refuse(
-            "the task's run is not a conclusively stopped failed delivery",
-        ));
+/// The worker that owned `source` is gone and the run has a finish time.
+fn source_owner_is_gone(source: &JobRun) -> bool {
+    source.finished_at.is_some() && run_owner_liveness(source) == RunOwnerLiveness::Stopped
+}
+
+/// A step that records the before-landing review hold: the run ended `held`
+/// so a recorded decision can land the open pull request.
+fn step_holds_review_decision(step: &JobRunStep) -> bool {
+    HeldFailure::of(step.error_code.as_deref(), step.error_message.as_deref())
+        == Some(HeldFailure::DecisionPending)
+}
+
+/// `source` is `held` because a before-landing review left its pull request
+/// open for a recorded decision.
+fn held_for_review_decision(source: &JobRun) -> bool {
+    source.state == JobRunState::Held && source.steps.iter().any(step_holds_review_decision)
+}
+
+/// A failed delivery, or a review-decision hold, whose worker is gone.
+///
+/// A before-landing review refusal ends the delivery `held`, not `failed`,
+/// and final recovery asks the operator about that same run. The run will
+/// never become `failed`, so that conclusively stopped hold is a requeue
+/// source. A delivery that is still running is not.
+fn repairable_stopped_source(source: &JobRun) -> bool {
+    source_owner_is_gone(source)
+        && (source.state == JobRunState::Failed || held_for_review_decision(source))
+}
+
+/// A publication the next run may adopt: a stopped failed or cancelled
+/// delivery, or a stopped review-decision hold.
+fn adoptable_published_source(source: &JobRun) -> bool {
+    source_owner_is_gone(source)
+        && (matches!(source.state, JobRunState::Failed | JobRunState::Cancelled)
+            || held_for_review_decision(source))
+}
+
+/// What to tell the operator when `source` cannot be repaired, naming an
+/// action that can succeed in its current state.
+fn stopped_source_refusal(source: &JobRun) -> OrbitError {
+    let run_id = &source.run_id;
+    if !source.state.is_terminal() || source.finished_at.is_none() {
+        // Cancel succeeds only while the run is not terminal. Discard of a
+        // blocked task also succeeds; the requeue wrapper names that route.
+        refuse_run_state(
+            SourceRepairRunStateRefusal::StillRunning,
+            format!(
+                "delivery `{run_id}` is still running, so it cannot be repaired. \
+                 Cancel it with `orbit run cancel {run_id} --confirm`"
+            ),
+        )
+    } else if run_owner_liveness(source) != RunOwnerLiveness::Stopped {
+        // The record is terminal, so cancel reports already terminal and
+        // does not stop the worker. Discard is the route that can succeed.
+        refuse_run_state(
+            SourceRepairRunStateRefusal::StillRunning,
+            format!("delivery `{run_id}` is still running, so it cannot be repaired"),
+        )
+    } else {
+        refuse_run_state(
+            SourceRepairRunStateRefusal::NotStoppedFailed,
+            format!(
+                "run `{run_id}` is {}, not a conclusively stopped failed delivery",
+                source.state
+            ),
+        )
     }
-    Ok(())
+}
+
+/// Refuse unless `source` is a conclusively stopped failed delivery, or a
+/// conclusively stopped run held for a before-landing review decision.
+/// A delivery that is still running stays refused.
+pub(super) fn require_stopped_failed_requeue_source(source: &JobRun) -> Result<(), OrbitError> {
+    if repairable_stopped_source(source) {
+        return Ok(());
+    }
+    Err(stopped_source_refusal(source))
 }
 
 impl OrbitRuntime {
-    /// Called under the final-recovery task lock; stored atomically with its decision.
-    pub(crate) fn published_owner_requeue_record(
+    /// `run_id`, when a requeue of `task` would preserve its publication: a
+    /// local, unclaimed owner PR run that pushed or opened its pull request.
+    fn published_owner_requeue_source(
         &self,
         task: &Task,
         run_id: &str,
-    ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
+    ) -> Result<Option<JobRun>, OrbitError> {
         if !self.task_run_is_local(task) {
             return Ok(None);
         }
@@ -79,7 +151,7 @@ impl OrbitRuntime {
         let Some(state) = self.read_run_state(run_id)? else {
             return Ok(None);
         };
-        if source.job_id != "task_pr_pipeline"
+        if source.job_id != workflow::TASK_PR_PIPELINE_JOB
             || source.input.as_ref().is_some_and(|i| i["claimed"] == true)
             || !["push", "pr_open"]
                 .iter()
@@ -87,6 +159,37 @@ impl OrbitRuntime {
         {
             return Ok(None);
         }
+        Ok(Some(source))
+    }
+
+    /// Why a requeue of `task` must not preserve `run_id`'s publication: the
+    /// run published, but is not the exact owner-local single-task execution
+    /// the next run's candidate resume authenticates, so a successor would
+    /// only fail there. `None` when nothing is published or the source passes
+    /// that identity check.
+    pub(crate) fn published_owner_requeue_refusal(
+        &self,
+        task: &Task,
+        run_id: &str,
+    ) -> Result<Option<OwnerSourceIdentityRefusal>, OrbitError> {
+        match self.published_owner_requeue_source(task, run_id)? {
+            Some(source) => self.owner_source_identity_refusal(&source, task),
+            None => Ok(None),
+        }
+    }
+
+    /// Called under the final-recovery task lock; stored atomically with its
+    /// decision. Refuses a publication candidate resume would refuse
+    /// ([`Self::published_owner_requeue_refusal`]) rather than preserve it.
+    pub(crate) fn published_owner_requeue_record(
+        &self,
+        task: &Task,
+        run_id: &str,
+    ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
+        let Some(source) = self.published_owner_requeue_source(task, run_id)? else {
+            return Ok(None);
+        };
+        self.owner_source_identity(&source, task)?;
         let record = PreservedPublication {
             schema_version: 1,
             source_run_id: run_id.into(),
@@ -120,13 +223,11 @@ impl OrbitRuntime {
         let Some(source) = self.get_job_run_backend(source_id)? else {
             return Ok(None);
         };
-        if source.job_id != "task_pr_pipeline"
+        if source.job_id != workflow::TASK_PR_PIPELINE_JOB
             || source.input.as_ref().is_none_or(|i| {
                 i["claimed"] == true || carried_task_ids(i) != BTreeSet::from([task.id.clone()])
             })
-            || !matches!(source.state, JobRunState::Failed | JobRunState::Cancelled)
-            || source.finished_at.is_none()
-            || run_owner_liveness(&source) != RunOwnerLiveness::Stopped
+            || !adoptable_published_source(&source)
         {
             return Ok(None);
         }
@@ -264,7 +365,7 @@ impl OrbitRuntime {
         }
         if let Some(run_id) = task.job_run_id.as_deref() {
             let owner_pr = self.get_job_run_backend(run_id)?.is_some_and(|run| {
-                run.job_id == "task_pr_pipeline"
+                run.job_id == workflow::TASK_PR_PIPELINE_JOB
                     && run
                         .input
                         .as_ref()
@@ -318,13 +419,30 @@ impl OrbitRuntime {
             return Err(refuse("an operator discarded this run's candidate"));
         }
         let newest = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
-            job_id: Some("task_pr_pipeline".into()),
+            job_id: Some(workflow::TASK_PR_PIPELINE_JOB.into()),
             task_id: Some(task.id.clone()),
             limit: Some(1),
             include_steps: false,
             ..Default::default()
         })?;
         if newest.first().is_none_or(|run| run.run_id != source_id) {
+            if let Some(run) = newest.first().filter(|run| {
+                run.state == JobRunState::Held
+                    && run.retry_source_run_id.as_deref() == Some(source_id)
+            }) {
+                let held = self.get_job_run_backend(&run.run_id)?;
+                if held
+                    .as_ref()
+                    .and_then(|run| run.steps.last())
+                    .and_then(|step| step.error_code.as_deref())
+                    == Some(workflow::DeliveryRefusal::CheckEvidenceInconclusive.error_code())
+                {
+                    return Err(refuse(format!(
+                        "newer execution makes publication association ambiguous; completion run '{}' is held on inconclusive check evidence; resume it with `orbit job resume {}`",
+                        run.run_id, run.run_id
+                    )));
+                }
+            }
             return Err(refuse(
                 "newer execution makes publication association ambiguous",
             ));
@@ -332,41 +450,72 @@ impl OrbitRuntime {
         Ok(())
     }
 
+    /// Refuse unless `source` is an exact owner-local single-task execution
+    /// of `task`, naming the predicate that failed
+    /// ([`Self::owner_source_identity_refusal`]).
     pub(super) fn owner_source_identity(
         &self,
         source: &JobRun,
         task: &Task,
     ) -> Result<(), OrbitError> {
-        let local = self
-            .automation_machine_identity()
-            .ok_or_else(|| refuse("local identity missing"))?;
-        if source.job_id != "task_pr_pipeline"
-            || source
-                .executed_on
-                .as_ref()
-                .is_none_or(|o| o.machine_id != local)
-            || task
-                .job_run_machine
-                .as_ref()
-                .is_none_or(|o| o.machine_id != local)
-            || source.input.as_ref().is_none_or(|i| {
-                i["claimed"] == true || carried_task_ids(i) != BTreeSet::from([task.id.clone()])
-            })
-            || self
-                .stores()
-                .jobs()
-                .local_pull_for_run(&source.run_id)?
-                .is_some()
-            || self
-                .resolve_execution_claims()?
-                .iter()
-                .any(|c| c.claim.task_id == task.id)
-        {
-            return Err(refuse(
-                "published candidate is not an exact owner-local single-task execution",
-            ));
+        match self.owner_source_identity_refusal(source, task)? {
+            None => Ok(()),
+            Some(OwnerSourceIdentityRefusal::LocalIdentityMissing) => {
+                Err(refuse("local identity missing"))
+            }
+            Some(reason) => Err(refuse(format!(
+                "published candidate is not an exact owner-local single-task execution: {reason}"
+            ))),
         }
-        Ok(())
+    }
+
+    /// The first owner-source identity predicate `source` fails for `task`,
+    /// or `None` when it is an exact owner-local single-task execution. The
+    /// predicates run in a fixed order and the store reads only after the
+    /// record checks pass, so each failing source reports one reason.
+    pub(crate) fn owner_source_identity_refusal(
+        &self,
+        source: &JobRun,
+        task: &Task,
+    ) -> Result<Option<OwnerSourceIdentityRefusal>, OrbitError> {
+        let Some(local) = self.automation_machine_identity() else {
+            return Ok(Some(OwnerSourceIdentityRefusal::LocalIdentityMissing));
+        };
+        let reason = if source.job_id != workflow::TASK_PR_PIPELINE_JOB {
+            OwnerSourceIdentityRefusal::JobKind
+        } else if source
+            .executed_on
+            .as_ref()
+            .is_none_or(|o| o.machine_id != local)
+        {
+            OwnerSourceIdentityRefusal::SourceMachine
+        } else if task
+            .job_run_machine
+            .as_ref()
+            .is_none_or(|o| o.machine_id != local)
+        {
+            OwnerSourceIdentityRefusal::TaskMachine
+        } else if source.input.as_ref().is_some_and(|i| i["claimed"] == true) {
+            OwnerSourceIdentityRefusal::ClaimedInput
+        } else if source
+            .input
+            .as_ref()
+            .is_none_or(|i| carried_task_ids(i) != BTreeSet::from([task.id.clone()]))
+        {
+            OwnerSourceIdentityRefusal::TaskSet
+        } else if self
+            .stores()
+            .jobs()
+            .local_pull_for_run(&source.run_id)?
+            .is_some()
+        {
+            OwnerSourceIdentityRefusal::LocalPull
+        } else if !self.resolve_task_execution_claims(&task.id)?.is_empty() {
+            OwnerSourceIdentityRefusal::ExecutionClaim
+        } else {
+            return Ok(None);
+        };
+        Ok(Some(reason))
     }
 
     pub(crate) fn owner_published_candidate(
@@ -385,7 +534,7 @@ impl OrbitRuntime {
         // Claimed and local-only deliveries retain their existing candidate
         // contracts; this path authenticates owner PR publications only.
         if current.as_ref().is_some_and(|run| {
-            run.job_id != "task_pr_pipeline"
+            run.job_id != workflow::TASK_PR_PIPELINE_JOB
                 || run.input.as_ref().is_some_and(|i| i["claimed"] == true)
         }) {
             return Ok(None);
@@ -406,7 +555,7 @@ impl OrbitRuntime {
                 .as_ref()
                 .ok_or_else(|| refuse("current execution missing"))?;
             let runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
-                job_id: Some("task_pr_pipeline".into()),
+                job_id: Some(workflow::TASK_PR_PIPELINE_JOB.into()),
                 task_id: Some(task_id.into()),
                 limit: Some(2),
                 include_steps: false,
@@ -436,7 +585,8 @@ impl OrbitRuntime {
         };
         let source = self.get_job_run_backend(source_id)?;
         if source.as_ref().is_some_and(|run| {
-            run.job_id.starts_with("task_claimed_")
+            run.job_id
+                .starts_with(workflow::CLAIMED_DELIVERY_LEAF_PREFIX)
                 || run.input.as_ref().is_some_and(|i| i["claimed"] == true)
         }) {
             return Ok(None);
@@ -473,6 +623,16 @@ impl OrbitRuntime {
         }
         if matching.is_empty() && !published {
             if !records.is_empty() || task.github_pr_number().is_some() {
+                // [ORB-20956] The discard predates the predecessor, but the
+                // host records prove every attempt since then implemented
+                // fresh because of it and published nothing.
+                if let Some(current) = current.as_ref()
+                    && self.discard_survives_unpublished_successors(
+                        &task, current, source_id, &entries, &records,
+                    )?
+                {
+                    return Ok(None);
+                }
                 // The immediate predecessor has no publication evidence. Its
                 // liveness cannot identify the older publisher; require the
                 // operator to select that source explicitly.
@@ -480,7 +640,7 @@ impl OrbitRuntime {
                     "a published candidate predates the current binding; predecessor \
                      '{source_id}' has no publication evidence; stop any newer attempts, \
                      then select the older publishing run for explicit source \
-                     repair (orbit.workflow.run.resume with source_repair), or discard \
+                     repair (orbit.run action resume with source_repair), or discard \
                      the candidate (orbit task update {} --status backlog \
                      --discard-candidate) so the next run implements fresh",
                     task.id
@@ -503,9 +663,7 @@ impl OrbitRuntime {
         }
         let source = source.ok_or_else(|| refuse("published source missing"))?;
         self.owner_source_identity(&source, &task)?;
-        if !matches!(source.state, JobRunState::Failed | JobRunState::Cancelled)
-            || source.finished_at.is_none()
-            || run_owner_liveness(&source) != RunOwnerLiveness::Stopped
+        if !adoptable_published_source(&source)
             || self.recorded_final_recovery(task_id, source_id)?
                 != Some(crate::application::task::FinalRecoveryOutcome::Requeued)
             || matching[0].1.schema_version != 1
@@ -537,6 +695,170 @@ impl OrbitRuntime {
         }
         self.observe_published_source(source, task, false)
             .map(|(_, _, binding)| Some(binding))
+    }
+
+    /// [ORB-20956] Whether an operator's discard of a publication still
+    /// governs `current`, although conclusively stopped attempts that
+    /// published nothing ran between them, so the run implements fresh
+    /// without another discard.
+    ///
+    /// Walks the task's bindings from `current` back through `source_id`.
+    /// Each intervening attempt must be an owner-local single-task run that
+    /// stopped, kept no preservation record, published nothing (no push, PR
+    /// or publishing failure handoff), and whose authenticated host
+    /// checkpoints show it set up on the next older binding and implemented
+    /// fresh. The walk ends at the first attempt created after a discard
+    /// recorded since the next older binding began: that binding is the
+    /// discarded publisher, which must be a stopped owner-local run with
+    /// publication evidence and no preservation record, and the attempt's
+    /// fresh outcome must name it as the discarded source or have found no
+    /// candidate at all. Anything else is unproven, and the caller keeps its
+    /// refusal.
+    fn discard_survives_unpublished_successors(
+        &self,
+        task: &Task,
+        current: &JobRun,
+        source_id: &str,
+        entries: &[TaskHistoryEntry],
+        records: &[(chrono::DateTime<Utc>, PreservedPublication)],
+    ) -> Result<bool, OrbitError> {
+        let runs = self
+            .stores()
+            .jobs()
+            .list_job_runs_filtered(&JobRunQuery {
+                task_id: Some(task.id.clone()),
+                limit: Some(super::successor::SUCCESSOR_CHAIN_WINDOW),
+                include_steps: false,
+                ..Default::default()
+            })?
+            .into_iter()
+            .filter(|run| workflow::is_delivery_leaf_job_by_claimed_prefix(&run.job_id))
+            .collect::<Vec<_>>();
+        if runs.first().is_none_or(|run| run.run_id != current.run_id)
+            || runs.get(1).is_none_or(|run| run.run_id != source_id)
+        {
+            return Ok(false);
+        }
+        for pair in runs[1..].windows(2) {
+            let [member, older] = pair else {
+                return Ok(false);
+            };
+            let Some(member) = self.get_job_run_backend(&member.run_id)? else {
+                return Ok(false);
+            };
+            let Some(resumed) =
+                self.unpublished_fresh_attempt(task, &member, &older.run_id, records)?
+            else {
+                return Ok(false);
+            };
+            let discarded = entries.iter().any(|e| {
+                e.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT
+                    && e.at >= older.created_at
+                    && e.at < member.created_at
+            });
+            if !discarded {
+                continue;
+            }
+            let names_discarded = resumed["reason_code"] == "candidate_discarded"
+                && resumed["source_run_id"] == older.run_id.as_str();
+            let found_none =
+                resumed["reason_code"] == "no_candidate" && resumed["source_run_id"].is_null();
+            let Some(publisher) = self.get_job_run_backend(&older.run_id)? else {
+                return Ok(false);
+            };
+            let published = self
+                .read_run_state(&publisher.run_id)?
+                .is_some_and(|state| {
+                    state.run_id == publisher.run_id
+                        && ["push", "pr_open"]
+                            .iter()
+                            .any(|k| state.pipeline.get(k).is_some_and(|v| !v.is_null()))
+                });
+            return Ok((names_discarded || found_none)
+                && published
+                && self.owner_source_identity(&publisher, task).is_ok()
+                && publisher.finished_at.is_some()
+                && run_owner_liveness(&publisher) == RunOwnerLiveness::Stopped
+                && !records
+                    .iter()
+                    .any(|(_, r)| r.source_run_id == publisher.run_id));
+        }
+        Ok(false)
+    }
+
+    /// The authenticated fresh `candidate_resume` output of `member`, when it
+    /// is a conclusively stopped owner-local attempt set up on `older_id`
+    /// that published nothing and left no commit checkpoint or uncommitted
+    /// work; `None` otherwise.
+    fn unpublished_fresh_attempt(
+        &self,
+        task: &Task,
+        member: &JobRun,
+        older_id: &str,
+        records: &[(chrono::DateTime<Utc>, PreservedPublication)],
+    ) -> Result<Option<Value>, OrbitError> {
+        if self.owner_source_identity(member, task).is_err()
+            || !matches!(member.state, JobRunState::Failed | JobRunState::Cancelled)
+            || member.finished_at.is_none()
+            || run_owner_liveness(member) != RunOwnerLiveness::Stopped
+            || records
+                .iter()
+                .any(|(_, r)| r.source_run_id == member.run_id)
+        {
+            return Ok(None);
+        }
+        let Some(state) = self.read_run_state(&member.run_id)? else {
+            return Ok(None);
+        };
+        // A failure handoff commits and publishes whatever the run left; only
+        // its recorded no-candidate outcome published nothing. A commit
+        // checkpoint is candidate evidence the next adoption would not resume,
+        // so it fails the same bar `observe_successor_member` applies.
+        if state.run_id != member.run_id
+            || state.job_id != member.job_id
+            || super::successor::PUBLICATION_KEYS
+                .iter()
+                .any(|k| state.pipeline.get(k).is_some_and(|v| !v.is_null()))
+            || member
+                .steps
+                .iter()
+                .any(|s| super::successor::PUBLICATION_KEYS.contains(&s.target_id.as_str()))
+            || state
+                .failure_activity_checkpoint
+                .as_ref()
+                .is_some_and(|c| c.output["decision"] != "no_candidate")
+        {
+            return Ok(None);
+        }
+        // Work the attempt left uncommitted is a resume candidate the next
+        // run's new worktree would not carry; unreadable changes are unproven.
+        match self.retained_candidate(task, Some(&member.run_id), Some(member)) {
+            crate::application::task::RetainedCandidate::Present {
+                changed_paths: Ok(paths),
+                ..
+            } if paths.is_empty() => {}
+            crate::application::task::RetainedCandidate::Absent { .. } => {}
+            crate::application::task::RetainedCandidate::Present { .. } => return Ok(None),
+        }
+        let definition = self.source_repair_definition(member)?;
+        let checkpoint = |id, action| {
+            super::observation::authenticated_checkpoint(&definition, &state, id, action).ok()
+        };
+        let (Some(worktree), Some(resumed)) = (
+            checkpoint("worktree", "worktree_setup"),
+            checkpoint("resume_candidate", "candidate_resume"),
+        ) else {
+            return Ok(None);
+        };
+        let fresh = worktree["prior_job_run_id"] == older_id
+            && worktree["prior_foreign_run"].is_null()
+            && resumed["phase"] == "candidate_resume"
+            && resumed["outcome"] == "fresh"
+            && resumed["implement"] == true
+            && resumed["base_sha"] == worktree["base_sha"]
+            && resumed["reused_branch"].is_null()
+            && resumed["prior_pull_request"].is_null();
+        Ok(fresh.then(|| resumed.clone()))
     }
 
     /// Publication authority is the successful host adoption, never a caller's input.
@@ -603,7 +925,7 @@ impl OrbitRuntime {
                 Some("resumed_carried" | "resumed_repaired")
             )
             || output["source_branch"] != binding.branch
-            || output["source_sha"] != binding.head_sha
+            || output["source_sha"] != binding.candidate_head()
             || output["base_sha"] != state.pipeline["worktree"]["base_sha"]
             || output["prior_pull_request_head"] != binding.branch
             || output["reused_branch"] != binding.branch

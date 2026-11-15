@@ -23,9 +23,15 @@ pub(crate) fn execution_claim_phase_label(phase: ExecutionClaimPhase) -> &'stati
     }
 }
 
-/// The crew-accounting read task code calls, implemented by `distributed`.
+/// The crew-accounting and owner-authority reads task code calls,
+/// implemented by `distributed`.
 pub(in crate::application) trait TaskDistributedPort {
     /// The crew a task-pilot run drew to write its assessments, from the
     /// run's `state`; `None` when the run recorded no pilot draw.
     fn pilot_assessment_crew(&self, state: &PipelineState) -> Option<String>;
+
+    /// The completion authority this owner grants a distributed handoff an
+    /// external merge settles, or `None` when each waits for an operator's
+    /// approval.
+    fn external_merge_completion_authority(&self) -> Option<String>;
 }

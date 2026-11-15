@@ -3,8 +3,11 @@ use thiserror::Error;
 
 use super::{
     ArtifactOrigin, CandidateAbsorbed, ClaimRefusalKind, DecisionRefusalCode,
-    DependencyNotDelivered, FrictionNotLocal, HostRegistryCode, NotFoundKind, PrivateVcsFailure,
-    RecoverableVcsConflict, RemoteToolCode, SqliteContention, StorageLayer, WorkspaceClaimHeld,
+    DependencyNotDelivered, ForceOverridableRefusal, ForgePushHoldFailure, FrictionNotLocal,
+    HostRegistryCode, NotFoundKind, NoticeRefusalCode, PrivateVcsFailure, RecoverableVcsConflict,
+    RemoteToolCode, SourceRepairAuthorityRefusal, SourceRepairRunStateRefusal, SqliteContention,
+    StorageLayer, TaskPilotRefusalCode, UpgradeAdmissionRefusal, WorkflowEvidenceUnavailable,
+    WorkspaceClaimHeld,
 };
 
 #[derive(Debug, Error, Serialize)]
@@ -15,9 +18,12 @@ use super::{
 pub enum OrbitError {
     #[error("policy denied: {0}")]
     PolicyDenied(String),
+    /// A plugin callback selected a checkout its backend sandbox does not cover.
+    #[error("{0}")]
+    CallbackWorkspaceOutsideSandbox(String),
     #[error(
-        "{kind} not found: {id}{guidance}",
-        guidance = .guidance.as_deref().unwrap_or_default()
+        "{message}",
+        message = not_found_message(*kind, id, guidance.as_deref())
     )]
     NotFound {
         kind: NotFoundKind,
@@ -25,6 +31,9 @@ pub enum OrbitError {
         #[serde(skip_serializing_if = "Option::is_none")]
         guidance: Option<String>,
     },
+    /// A run read omitted the ID, and the workspace has no runs to select.
+    #[error("no job runs exist in this workspace; see `orbit run history` for recorded runs")]
+    NoJobRuns,
     /// A governed operation was refused because the caller lacked the required
     /// capability [ORB-10453]. Distinct from [`Self::PolicyDenied`], which is
     /// `orbit-policy`'s filesystem-scoping refusal: this one is about *who is
@@ -57,6 +66,20 @@ pub enum OrbitError {
     #[error("{code}: {message}")]
     DecisionRefused {
         code: DecisionRefusalCode,
+        message: String,
+    },
+    /// A fleet-notice refusal with a stable code. Nothing was written; the
+    /// refusal itself is audited by the notice service.
+    #[error("{code}: {message}")]
+    NoticeRefused {
+        code: NoticeRefusalCode,
+        message: String,
+    },
+    /// An explicit task-pilot submission refused before any run existed.
+    /// `code` is the stable token every surface reports; nothing was submitted.
+    #[error("{code}: {message}")]
+    TaskPilotRefused {
+        code: TaskPilotRefusalCode,
         message: String,
     },
     /// The owner's pull request contract differs from this executor's build.
@@ -110,10 +133,18 @@ pub enum OrbitError {
     /// [ORB-11078]. Distinct from a dangling miss, which is audit-visible
     /// and does not block completion.
     #[error(
-        "resolves target '{}' is not in workspace '{}' (found in {}); auto-resolve is workspace-local — resolve it from its owning workspace with `orbit friction resolve <id>` (operator CLI) or `orbit tool run orbit.friction.update` with status resolved (agent path), or land a covering task there",
+        "resolves target '{}' is not in workspace '{}' (found in {}); auto-resolve is workspace-local — resolve it from its owning workspace with `orbit friction resolve <id>` (operator CLI) or `orbit tool run orbit.friction` with action update and status resolved (agent path), or land a covering task there",
         .0.friction_id, .0.workspace_id, .0.found_in.join(", ")
     )]
     FrictionNotLocal(Box<FrictionNotLocal>),
+    /// The host's own global configuration is invalid, so a call that only
+    /// needed the host to serve it was not judged. Names the host and file.
+    #[error("host configuration error on host '{host}' in '{path}': {message}")]
+    HostConfiguration {
+        host: String,
+        path: String,
+        message: String,
+    },
     #[error("invalid input: {0}")]
     InvalidInput(String),
     /// A distributed-execution claim or handoff mutation the owner refused.
@@ -124,6 +155,11 @@ pub enum OrbitError {
         kind: ClaimRefusalKind,
         message: String,
     },
+    /// A refusal `--force` overrides. Displays exactly as
+    /// [`Self::InvalidInput`]; the refusal's `kind` is what callers branch
+    /// on, never the message.
+    #[error("invalid input: {}", .0.message)]
+    ForceOverridable(Box<ForceOverridableRefusal>),
     #[error("sensitive input rejected for `{field}`: {reason}")]
     SensitiveInput { field: String, reason: String },
     #[error("invalid input: {message}")]
@@ -156,6 +192,15 @@ pub enum OrbitError {
     },
     #[error("execution failed: {0}")]
     Execution(String),
+    /// Executable-generation admission refused an operation. Displays and
+    /// serializes exactly as [`Self::Execution`]; callers select clock handling
+    /// by the refusal kind, never from its message.
+    #[error("execution failed: {}", .0.message)]
+    #[serde(
+        rename = "Execution",
+        serialize_with = "serialize_upgrade_admission_refusal"
+    )]
+    UpgradeAdmissionRefused(Box<UpgradeAdmissionRefusal>),
     /// A typed fail-closed completion or landing decision. Its message remains
     /// diagnostic; the refusal value alone authorizes a held run outcome.
     #[error("execution failed: {message}")]
@@ -168,6 +213,15 @@ pub enum OrbitError {
     #[error("execution failed: {0}")]
     #[serde(rename = "Execution", serialize_with = "serialize_absorbed_candidate")]
     CandidateAbsorbed(Box<CandidateAbsorbed>),
+    /// Evidence for a workflow prerequisite decision could not be read or
+    /// verified. Displays and serializes exactly as [`Self::Execution`]; callers
+    /// select this family by the variant, never from the text.
+    #[error("execution failed: {0}")]
+    #[serde(
+        rename = "Execution",
+        serialize_with = "serialize_workflow_evidence_unavailable"
+    )]
+    WorkflowEvidenceUnavailable(WorkflowEvidenceUnavailable),
     /// An execution step failed because an operation it supervised hit its
     /// deadline. Reads and codes exactly as [`Self::Execution`]; the variant
     /// carries the timeout class so callers never read it from the text.
@@ -179,6 +233,12 @@ pub enum OrbitError {
     #[error("execution failed: {}", .0.message)]
     #[serde(rename = "Execution", serialize_with = "serialize_private_vcs_failure")]
     PrivateVcs(Box<PrivateVcsFailure>),
+    /// The forge refused a delivery push past its retry budget. Displays and
+    /// serializes exactly as [`Self::Execution`]; the hold travels here, so
+    /// callers never read it from the text.
+    #[error("execution failed: {}", .0.message)]
+    #[serde(rename = "Execution", serialize_with = "serialize_forge_push_hold")]
+    ForgeUnavailable(Box<ForgePushHoldFailure>),
     /// A child process exceeded its deadline. The supervisor signalled the
     /// owned process group and reaped the leader; descendants that remained in
     /// that group were signalled with it.
@@ -346,7 +406,7 @@ pub enum OrbitError {
     /// read-only or denies access. Classified from the native error (the
     /// `io::ErrorKind` or errno, or SQLite's result code) where it is
     /// translated, so passive callers that fail open never read message text.
-    /// Displays and reports exactly as the `layer` variant it stands in for.
+    /// Displays as the `layer` variant, with the `storage_access_denied` wire code.
     #[error("{layer}: {message}")]
     StorageAccessDenied {
         layer: StorageLayer,
@@ -364,12 +424,54 @@ pub enum OrbitError {
         layer: StorageLayer,
         message: String,
     },
+    /// A named source-repair authority refusal. Displays, reports and
+    /// serializes exactly as the [`Self::JobValidation`] (or, for
+    /// [`SourceRepairAuthorityRefusal::PublicationAdmissionChanged`],
+    /// [`Self::Execution`]) error it stands in for; the code is attached where
+    /// the refusal is decided, so callers never read it from the text.
+    #[error("{}", source_repair_refusal_legacy_error(*.0))]
+    #[serde(untagged, serialize_with = "serialize_source_repair_refusal")]
+    SourceRepairAuthorityRefused(SourceRepairAuthorityRefusal),
+    /// A source-repair refusal caused by the run's state. Displays, reports
+    /// and serializes exactly as the [`Self::JobValidation`] carrying
+    /// `message`; the `reason` is attached where the refusal is decided, so
+    /// callers never read it from the text.
+    #[error("job validation failed: {message}")]
+    #[serde(untagged, serialize_with = "serialize_source_repair_run_state_refusal")]
+    SourceRepairRunStateRefused {
+        reason: SourceRepairRunStateRefusal,
+        message: String,
+    },
 }
 
 const _: () = assert!(
     std::mem::size_of::<OrbitError>() <= 128,
     "OrbitError exceeds its 128-byte size budget; box multi-field variant payloads"
 );
+
+fn not_found_message(kind: NotFoundKind, id: &str, guidance: Option<&str>) -> String {
+    // This synthetic partition represents an initialized data root without a
+    // registered workspace. It is an internal routing key, so show the setup
+    // action instead of presenting that key as a workspace the operator can
+    // find.
+    if kind == NotFoundKind::Workspace && id == "ws_unbound-data-dir" {
+        return "workspace not found; run `orbit workspace init` from a project or pass `--workspace <workspace>`".to_string();
+    }
+
+    // Explicit guidance (for example a spelling suggestion or an artifact's
+    // owning task) is more specific than the default listing.
+    let guidance = guidance.unwrap_or(match kind {
+        NotFoundKind::Task => "; see `orbit task list` or `orbit.task.list` for valid task IDs",
+        NotFoundKind::JobRun => {
+            "; see `orbit run history` for valid run IDs, or use `orbit.task.show` with `field: \"delivery\"` for a task's delivery run"
+        }
+        NotFoundKind::Job => "; see `orbit job list` for valid job IDs",
+        NotFoundKind::Tool => "; see `orbit tool list` or MCP `tools/list` for valid tool names",
+        NotFoundKind::Workspace => "; see `orbit workspace list` for registered workspaces",
+        _ => "",
+    });
+    format!("{kind} not found: {id}{guidance}")
+}
 
 fn serialize_absorbed_candidate<S: serde::Serializer>(
     candidate: &CandidateAbsorbed,
@@ -378,8 +480,29 @@ fn serialize_absorbed_candidate<S: serde::Serializer>(
     serializer.serialize_str(&candidate.to_string())
 }
 
+fn serialize_upgrade_admission_refusal<S: serde::Serializer>(
+    refusal: &UpgradeAdmissionRefusal,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&refusal.message)
+}
+
+fn serialize_workflow_evidence_unavailable<S: serde::Serializer>(
+    evidence: &WorkflowEvidenceUnavailable,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&evidence.to_string())
+}
+
 fn serialize_private_vcs_failure<S: serde::Serializer>(
     failure: &PrivateVcsFailure,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&failure.message)
+}
+
+fn serialize_forge_push_hold<S: serde::Serializer>(
+    failure: &ForgePushHoldFailure,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(&failure.message)
@@ -391,4 +514,28 @@ fn serialize_as_storage_layer<S: serde::Serializer>(
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     OrbitError::storage(*layer, false, message).serialize(serializer)
+}
+
+/// The untyped error a source-repair authority refusal reports as.
+fn source_repair_refusal_legacy_error(code: SourceRepairAuthorityRefusal) -> OrbitError {
+    if code.reports_as_execution() {
+        OrbitError::Execution(code.message())
+    } else {
+        OrbitError::JobValidation(code.message())
+    }
+}
+
+fn serialize_source_repair_run_state_refusal<S: serde::Serializer>(
+    _reason: &SourceRepairRunStateRefusal,
+    message: &str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    OrbitError::JobValidation(message.to_string()).serialize(serializer)
+}
+
+fn serialize_source_repair_refusal<S: serde::Serializer>(
+    code: &SourceRepairAuthorityRefusal,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    source_repair_refusal_legacy_error(*code).serialize(serializer)
 }

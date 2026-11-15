@@ -139,8 +139,8 @@ fn dry_run_uses_capability_floors_including_input_dependent_authority() {
     for (tool, input) in [
         ("orbit.routine.control", json!({"action": "status"})),
         (
-            "orbit.auto_task.update",
-            json!({"name": "missing", "expected_enabled": true, "enabled": false}),
+            "orbit.auto_task",
+            json!({"action": "update", "name": "missing", "expected_enabled": true, "enabled": false}),
         ),
     ] {
         for operator in [false, true] {
@@ -210,7 +210,7 @@ fn dry_run_reports_the_same_plugin_callback_allowlist_refusal_as_dispatch() {
     std::fs::write(
         &record,
         json!({
-            "schema_version": 3, "plugin": "ungranted", "version": "0.1.0",
+            "schema_version": 4, "plugin": "ungranted", "version": "0.1.0",
             "manifest_digest": "0".repeat(64), "effective_tools": [],
             "token": token, "pid": pid, "starttime": starttime,
         })
@@ -340,7 +340,7 @@ fn read_only_tool_run_persists_audit_while_joining_a_foreign_generation() {
             .get_output()
             .clone();
         let value: Value = serde_json::from_slice(&output.stdout).expect("task status");
-        assert_eq!(value, task["status"]);
+        assert_eq!(value, json!({"status": task["status"].clone()}));
         assert!(
             output.stderr.is_empty(),
             "read-only tool emitted a warning: {}",
@@ -357,5 +357,80 @@ fn read_only_tool_run_persists_audit_while_joining_a_foreign_generation() {
         count(),
         initial + 2,
         "each CLI dispatch must persist exactly one audit row"
+    );
+}
+
+/// Regression: with a runtime envelope identity set, an explicit `--model`
+/// flag outranks a self-reported tool-JSON `model` in the audit role label,
+/// and without a flag the envelope identity outranks the tool JSON.
+#[test]
+fn audit_role_prefers_flag_then_envelope_over_self_reported_input_model() {
+    let root = tempfile::tempdir().expect("fixture");
+    let home = root.path().join("home");
+    let work = root.path().join("work");
+    std::fs::create_dir_all(&home).expect("fixture home");
+    git_repo::init(&work);
+    fixture_orbit(&work, &home)
+        .args(["workspace", "init", "--name", "audit-role-fixture"])
+        .assert()
+        .success();
+
+    let input = |title: &str| {
+        json!({
+            "title": title, "description": "Audit role precedence fixture",
+            "complexity": "low", "model": "grok"
+        })
+        .to_string()
+    };
+    let enveloped = || {
+        let mut command = fixture_orbit(&work, &home);
+        command
+            .env("ORBIT_AGENT_NAME", "codex")
+            .env("ORBIT_AGENT_MODEL", "codex");
+        command
+    };
+    enveloped()
+        .args([
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--model",
+            "gemini",
+            "--input",
+            &input("Flag over input"),
+        ])
+        .assert()
+        .success();
+    enveloped()
+        .args([
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--input",
+            &input("Envelope over input"),
+        ])
+        .assert()
+        .success();
+
+    let conn = rusqlite::Connection::open_with_flags(
+        home.join(".orbit/orbit.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .expect("audit reader");
+    let roles: Vec<String> = conn
+        .prepare(
+            "SELECT role FROM audit_events
+             WHERE tool_name = 'orbit.task.add' AND command = 'tool' AND subcommand = 'run'
+             ORDER BY id",
+        )
+        .expect("audit query")
+        .query_map([], |row| row.get::<_, String>(0))
+        .expect("audit rows")
+        .collect::<Result<_, _>>()
+        .expect("audit roles");
+    assert_eq!(
+        roles,
+        ["gemini", "codex"],
+        "the flag outranks the envelope, and the envelope outranks tool-JSON `model`"
     );
 }

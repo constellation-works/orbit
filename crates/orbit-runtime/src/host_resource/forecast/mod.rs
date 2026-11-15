@@ -39,7 +39,7 @@
 //! drain's candidates and a pull drain's kinds of work alike: a candidate
 //! fits only if, at every minute of its horizon, the forecast plus its
 //! profile stays under `admit_cpu_percent` of the host's cores and
-//! `admit_memory_percent` of its memory. While the forecast holds no running
+//! 75% of its memory. While the forecast holds no running
 //! delivery or reservation, one that does not fit is admitted anyway: nothing
 //! on the host would make room by finishing, and the throttle is the
 //! backstop.

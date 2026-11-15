@@ -1,4 +1,4 @@
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 use serde_json::{Map, Value};
 
 use crate::OrbitError;
@@ -57,6 +57,13 @@ pub struct OperationSpec<V: 'static> {
     /// [`crate::governance::authorization::GOVERNED_OPERATIONS`] alone — see that module's
     /// "Placement is not permission" section.
     pub mcp_scope: Option<McpToolScope>,
+    /// The id-routing classification this operation declares for itself:
+    /// task-id-routed, or workspace-local with the reason. The MCP adapter
+    /// and federation consume the declaration from the tool definition
+    /// built from this spec; a builtin that takes a required `id` with an
+    /// optional workspace and leaves this `Unspecified` fails closed when
+    /// its MCP definitions are built.
+    pub id_route: McpIdRouteDeclaration,
 }
 
 impl<V: 'static> OperationSpec<V> {
@@ -105,8 +112,8 @@ impl<V: 'static> OperationSpec<V> {
     /// Whether `field` is an input key this operation does not declare.
     ///
     /// A key is declared when it is a parameter name or alias, a retired
-    /// field, a transport wrapper (`workspace`, `_meta`) or an attribution key
-    /// (`model`, `agent`) that the tool boundary reads for every builtin.
+    /// field, a transport wrapper (`workspace`, `_meta`) or the unadvertised
+    /// `model` attribution key that the tool boundary reads for every builtin.
     pub fn is_undeclared_field(&self, field: &str) -> bool {
         !TOOL_INPUT_TRANSPORT_WRAPPER_KEYS.contains(&field)
             && !TOOL_INPUT_IDENTITY_KEYS.contains(&field)
@@ -177,6 +184,18 @@ impl<V: 'static> OperationSpec<V> {
     /// Parsing canonical input again yields the same input, so a host may
     /// re-wrap what the tool entry already parsed.
     pub fn parse_input(&self, input: Value) -> Result<OperationInput, OrbitError> {
+        let input = self.parse_input_fields(input)?;
+        self.require_input_fields(&input)?;
+        Ok(input)
+    }
+
+    /// Canonicalize and check present fields, without requiring absent ones.
+    ///
+    /// A surface with its own required-field diagnostic can run that check
+    /// after shape validation, then call [`Self::require_input_fields`].
+    /// Guarded modes may also check a subset of the operation's fields here
+    /// while retaining their own required-field contract.
+    pub fn parse_input_fields(&self, input: Value) -> Result<OperationInput, OrbitError> {
         let mut object = match input {
             Value::Object(object) => object,
             Value::Null => Map::new(),
@@ -232,15 +251,23 @@ impl<V: 'static> OperationSpec<V> {
             }
         }
 
-        let input = Value::Object(object);
+        Ok(OperationInput {
+            input: Value::Object(object),
+            unknown_fields,
+        })
+    }
+
+    /// Require this operation's mandatory fields on already parsed input.
+    pub fn require_input_fields(&self, input: &OperationInput) -> Result<(), OrbitError> {
+        let input = input.as_value();
         if let Some(missing) = self.wire_params().find(|param| {
             param.required
                 && !TOOL_INPUT_IDENTITY_KEYS.contains(&param.name)
                 && input.get(param.name).is_none()
         }) {
-            return Err(missing_tool_field(&input, missing.name));
+            return Err(missing_tool_field(input, missing.name));
         }
-        if let Value::Object(object) = &input
+        if let Value::Object(object) = input
             && self.misses_at_least_one_of(object)
         {
             return Err(OrbitError::InvalidInput(format!(
@@ -253,11 +280,7 @@ impl<V: 'static> OperationSpec<V> {
                 )
             )));
         }
-
-        Ok(OperationInput {
-            input,
-            unknown_fields,
-        })
+        Ok(())
     }
 }
 
@@ -296,7 +319,14 @@ fn check_param_type(param: &ParamSpec, value: &Value) -> Result<(), OrbitError> 
         ParamType::Boolean | ParamType::Switch => (value.is_boolean(), "a boolean"),
         ParamType::Enum(_) => (value.is_string(), "a string"),
         ParamType::Object => (value.is_object(), "an object"),
-        ParamType::Array => (value.is_array(), "an array"),
+        ParamType::Array => match value {
+            Value::Array(items) if !items.iter().all(Value::is_object) => {
+                return Err(OrbitError::InvalidInput(format!(
+                    "`{name}` entries must be objects"
+                )));
+            }
+            _ => (value.is_array(), "an array of objects"),
+        },
     };
     if valid {
         return Ok(());

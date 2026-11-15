@@ -5,6 +5,7 @@ use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 
 use super::catalog::{
     GovernedOperation, PLUGIN_TOOL_AGENT_CALLABLE, PLUGIN_TOOL_MUTATING, PLUGIN_TOOL_READ_ONLY,
+    RESIDENT_GRANT_OPERATION_ID,
 };
 use super::env::{OPERATOR_OVERRIDE_ENV, agent_declared_in_env, env_truthy, interactive_terminal};
 
@@ -53,13 +54,21 @@ impl Display for CallerProvenance {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CapabilityResolution {
     /// The hosting process's environment counts, so [`OPERATOR_OVERRIDE_ENV`]
-    /// and the agent envelope contribute. This is every non-MCP surface.
+    /// and the agent envelope contribute. This is every surface except MCP
+    /// and the dashboard.
     #[default]
     ProcessEnvelope,
     /// Only grants asserted by the trusted session count. The MCP surface
     /// resolves this way so an agent session cannot inherit operator authority
     /// from whatever process happens to host its server.
     SessionOnly,
+    /// Only the dashboard server's own session state counts: the grant
+    /// `orbit web serve --operator` stamps at startup. The server's terminal,
+    /// [`OPERATOR_OVERRIDE_ENV`] and agent envelope are ignored, so a server
+    /// left running on a terminal (or behind an SSH `-tt` pty) cannot lend
+    /// that terminal's operator authority to whatever reaches its loopback
+    /// port.
+    DashboardSession,
 }
 
 /// The raw signals a chokepoint observed about its caller.
@@ -118,6 +127,20 @@ impl CallerEnvelope {
             ..Self::default()
         }
     }
+
+    /// Read the dashboard server's session grants and nothing else.
+    ///
+    /// The dashboard chokepoint builds its envelope here. Like
+    /// [`Self::mcp_session`], the live process environment and terminal are
+    /// discarded: `--operator` at startup is the dashboard's only operator
+    /// grant, and a granted call is attributed to the session, never to a
+    /// person at an interactive terminal.
+    pub fn dashboard_session(session: &ToolSessionContext) -> Self {
+        Self {
+            resolution: CapabilityResolution::DashboardSession,
+            ..Self::mcp_session(session)
+        }
+    }
 }
 
 /// A caller's resolved capabilities and how Orbit arrived at them.
@@ -160,16 +183,29 @@ impl CallerCapabilities {
 
     /// Resolve a caller for one governed operation.
     ///
-    /// An unmanaged local CLI caller gains agent identity only at the plugin
-    /// tool chokepoint. All plugin rows use that identity; only read-only
-    /// tools and consented agent-callable mutations admit this caller.
+    /// An unmanaged local CLI caller gains agent identity at the plugin tool
+    /// chokepoint. All plugin rows use that identity; only read-only tools and
+    /// consented agent-callable mutations admit this caller.
+    ///
+    /// `orbit.resident.grant` extends that identity to any process-envelope
+    /// caller that holds nothing (the local CLI, or a shell no signal
+    /// identifies), so it can raise the grant request for the human. The
+    /// identity is only a floor: core applies a widening for a positively
+    /// identified operator alone, so this caller's widening is a request and
+    /// its narrowing is the ordinary task write. An MCP session never gains it.
     pub fn resolve_for_operation(envelope: &CallerEnvelope, operation: &GovernedOperation) -> Self {
         let mut caller = Self::resolve(envelope);
-        if caller.provenance == CallerProvenance::LocalCli
-            && (operation.id == PLUGIN_TOOL_READ_ONLY.id
-                || operation.id == PLUGIN_TOOL_MUTATING.id
-                || operation.id == PLUGIN_TOOL_AGENT_CALLABLE.id)
-        {
+        let plugin_tool = operation.id == PLUGIN_TOOL_READ_ONLY.id
+            || operation.id == PLUGIN_TOOL_MUTATING.id
+            || operation.id == PLUGIN_TOOL_AGENT_CALLABLE.id;
+        let resident_grant_request = operation.id == RESIDENT_GRANT_OPERATION_ID
+            && caller.resolution == CapabilityResolution::ProcessEnvelope
+            && matches!(
+                caller.provenance,
+                CallerProvenance::LocalCli | CallerProvenance::Unknown
+            );
+        let local_plugin = plugin_tool && caller.provenance == CallerProvenance::LocalCli;
+        if local_plugin || resident_grant_request {
             caller.grants.insert(McpCapability::Agent);
         }
         caller

@@ -28,6 +28,17 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::create(false)
+    }
+
+    /// A fixture whose home and workspace sit inside a directory that already
+    /// carries Orbit's product marker, as a managed worktree does inside its
+    /// repository's `.orbit/state/worktrees/`.
+    fn nested_under_orbit_root() -> Self {
+        Self::create(true)
+    }
+
+    fn create(marked_ancestor: bool) -> Self {
         // Plugin commands report resolved paths (a plugin root, a skill link's
         // target, the workspace a render names), and the assertions compare
         // them with these, so root the fixture at a resolved temp directory.
@@ -35,6 +46,10 @@ impl Fixture {
         let temp = tempfile::tempdir_in(test_env::canonical_temp_dir()).expect("tempdir");
         let home = temp.path().join("home");
         let work = temp.path().join("work");
+        if marked_ancestor {
+            std::fs::write(temp.path().join(".orbit-product"), "orbit:v1\n")
+                .expect("ancestor product marker");
+        }
         std::fs::create_dir_all(&home).expect("create home");
         git_repo::init(&work);
         let fixture = Self {
@@ -724,6 +739,90 @@ fn enable_warns_when_a_grant_was_not_requested() {
     );
 }
 
+/// One plugin activity whose allowlist names a tool no installed plugin
+/// registers used to fail the whole activity catalog, so every job in the
+/// workspace failed at load with `build activity catalog: …` [ORB-21453].
+/// The activity is withdrawn alone: enable warns, an unrelated job runs, and
+/// only a job that uses the activity is refused, naming it and the tool.
+#[cfg(unix)]
+#[test]
+fn an_activity_naming_an_unregistered_tool_is_withdrawn_alone() {
+    let fixture = Fixture::new();
+    crate::fixture_crew::configure_sol(&fixture.home.join(".orbit"));
+    let source = fixture.source("lonely");
+    write_status_plugin(
+        &source,
+        "lonely",
+        "  definitions:\n    activities: [definitions/activities/*.yaml]\n",
+    );
+    let activities = source.join(".orbit-plugin/definitions/activities");
+    std::fs::create_dir_all(&activities).expect("activities dir");
+    std::fs::write(
+        activities.join("draft.yaml"),
+        "schemaVersion: 2\nkind: Activity\nmetadata:\n  name: lonely_draft\nspec:\n  \
+         type: agent_loop\n  description: Needs a tool from a plugin that is not installed.\n  \
+         tools:\n    - absent.fetch\n  input_schema_json:\n    type: object\n  \
+         instruction: Fetch.\n",
+    )
+    .expect("write activity");
+    fixture.add(&source, &[]);
+
+    let enabled = fixture.json(["plugin", "enable", "lonely"]);
+    assert!(
+        enabled["warnings"]
+            .as_array()
+            .is_some_and(|warnings| warnings.iter().filter_map(Value::as_str).any(
+                |warning| warning.contains("lonely_draft") && warning.contains("absent.fetch")
+            )),
+        "enable warns about the unregistered tool: {enabled}"
+    );
+
+    let jobs = fixture.work.join(".orbit/resources/jobs");
+    std::fs::create_dir_all(&jobs).expect("jobs dir");
+    std::fs::write(
+        jobs.join("unrelated_nap.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: unrelated_nap\nspec:\n  \
+         state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        \
+         seconds: 0\n      spec:\n        type: deterministic\n        action: sleep\n        \
+         config: {}\n",
+    )
+    .expect("write unrelated job");
+    std::fs::write(
+        jobs.join("uses_lonely.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: uses_lonely\nspec:\n  \
+         state: enabled\n  kind: workflow\n  steps:\n    - id: draft\n      \
+         target: activity:lonely_draft\n",
+    )
+    .expect("write dependent job");
+
+    let unrelated = fixture
+        .command(["job", "run", "unrelated_nap", "--wait", "--json"])
+        .output()
+        .expect("run unrelated job");
+    let unrelated_json = stdout_json(&unrelated);
+    assert_eq!(
+        unrelated_json["state"],
+        "success",
+        "an unrelated job still runs: {unrelated_json} {}",
+        String::from_utf8_lossy(&unrelated.stderr)
+    );
+
+    let refused = fixture
+        .command(["job", "run", "uses_lonely", "--wait", "--json"])
+        .output()
+        .expect("run dependent job");
+    let refusal = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(
+        refusal.contains("activity `lonely_draft` is unavailable")
+            && refusal.contains("absent.fetch"),
+        "the dependent job is refused naming the activity and tool: {refusal}"
+    );
+}
+
 /// `--grant fs=data --grant fs=cache` used to record `fs=data,cache`. The next
 /// process then refused the row: `cache` is not a path continuation, so the
 /// plugin could not run even though enable had succeeded.
@@ -1299,6 +1398,289 @@ fn rendered_validation_redacts_credentials_without_changing_backend_environment(
     assert!(marker.exists(), "the actual call must execute the backend");
 }
 
+/// `orbit plugin validate <source> --render` projects a speculative backend for
+/// the source namespace. That projection must not create, repoint or prune the
+/// program links an installed backend's `PATH` already names, including when
+/// the source resolves the same program to another file or drops
+/// `requires.programs`.
+#[cfg(unix)]
+#[test]
+fn rendered_validation_keeps_installed_program_links() {
+    let fixture = Fixture::new();
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    let installed_bin = fixture.home.join("bin-installed");
+    let alternate_bin = fixture.home.join("bin-alternate");
+    let installed_program = installed_bin.join("keptprog");
+    let alternate_program = alternate_bin.join("keptprog");
+    write_executable(&installed_program, "#!/bin/sh\nprintf 'kept-program\\n'\n");
+    write_executable(
+        &alternate_program,
+        "#!/bin/sh\nprintf 'alternate-program\\n'\n",
+    );
+    let recorded = installed_program
+        .canonicalize()
+        .expect("canonical recorded program");
+    let alternate = alternate_program
+        .canonicalize()
+        .expect("canonical alternate program");
+    assert_ne!(
+        recorded, alternate,
+        "the two program files must be distinct so a repoint is observable"
+    );
+    let install_path = format!("{}:{inherited_path}", installed_bin.display());
+    let alternate_path = format!("{}:{inherited_path}", alternate_bin.display());
+
+    let source = fixture.source("linkkeep");
+    let source_arg = source.to_str().expect("utf8 source");
+    write_status_plugin(
+        &source,
+        "linkkeep",
+        "  requires:\n    programs: [keptprog]\n",
+    );
+    let manifest = source.join(".orbit-plugin/plugin.yaml");
+    let manifest_text = std::fs::read_to_string(&manifest).expect("read installed manifest");
+    std::fs::write(
+        &manifest,
+        manifest_text.replace("    type: exec\n", "    type: exec\n    sandbox: none\n"),
+    )
+    .expect("request an unsandboxed installed backend");
+    fixture
+        .orbit()
+        .env("PATH", &install_path)
+        .args([
+            "plugin",
+            "add",
+            source_arg,
+            "--enable",
+            "--grant",
+            "unsandboxed",
+        ])
+        .assert()
+        .success();
+    fixture
+        .orbit_as_operator()
+        .env("PATH", &install_path)
+        .args(["linkkeep", "status", "--format", "json"])
+        .assert()
+        .success();
+
+    let link = fixture
+        .home
+        .join(".orbit/plugins/.programs/linkkeep/keptprog");
+    assert_installed_program_unchanged(&link, &recorded);
+
+    std::fs::write(
+        fixture.work.join(".orbit/config.toml"),
+        "[execution.env]\npass = [\"SERVICE_API_TOKEN\", \"SERVICE_PASSWORD\", \"SERVICE_REGION\"]\n",
+    )
+    .expect("admit synthetic environment in the fixture workspace");
+    let workspace = fixture.work.to_str().expect("utf8 workspace");
+    let credentials = [
+        ("SERVICE_API_TOKEN", "synthetic-service-credential-a8b92c6d"),
+        ("SERVICE_PASSWORD", "xy"),
+    ];
+    let retarget = fixture.home.join("plugin-sources/linkkeep-retarget");
+    let dropped = fixture.home.join("plugin-sources/linkkeep-dropped");
+    let retarget_marker = fixture.home.join("retarget-backend-ran");
+    let dropped_marker = fixture.home.join("dropped-backend-ran");
+    write_rendered_program_source(
+        &retarget,
+        "  requires:\n    programs: [keptprog]\n  permissions:\n    env_pass: [SERVICE_API_TOKEN, SERVICE_PASSWORD, SERVICE_REGION]\n",
+        &retarget_marker,
+    );
+    write_rendered_program_source(
+        &dropped,
+        "  permissions:\n    env_pass: [SERVICE_API_TOKEN, SERVICE_PASSWORD, SERVICE_REGION]\n",
+        &dropped_marker,
+    );
+
+    for (source, marker, programs_on_path) in [
+        (&retarget, &retarget_marker, true),
+        (&dropped, &dropped_marker, false),
+    ] {
+        for format in ["plain", "json"] {
+            let rendered = render_plugin_source(
+                &fixture,
+                source,
+                &alternate_path,
+                workspace,
+                format,
+                &credentials,
+            );
+            for bytes in [&rendered.stdout, &rendered.stderr] {
+                assert!(
+                    !String::from_utf8_lossy(bytes).contains(credentials[0].1),
+                    "{format} inspection must not disclose an admitted credential"
+                );
+            }
+            if format == "json" {
+                let rendered = stdout_json(&rendered);
+                assert_rendered_program_environment(&rendered, workspace, &link, programs_on_path);
+            } else {
+                let text = String::from_utf8_lossy(&rendered.stdout);
+                for name in ["SERVICE_API_TOKEN", "SERVICE_PASSWORD"] {
+                    assert!(text.contains(&format!("{name}=[REDACTED_ENV]")), "{text}");
+                }
+                assert!(text.contains("SERVICE_REGION=fixture-east"), "{text}");
+                assert!(
+                    text.contains(&format!("ORBIT_WORKSPACE_ROOT={workspace}")),
+                    "{text}"
+                );
+                assert!(text.contains("ORBIT_PLUGIN=linkkeep"), "{text}");
+                let path_line = text
+                    .lines()
+                    .find(|line| line.trim_start().starts_with("PATH="))
+                    .unwrap_or_else(|| panic!("plain render must show PATH: {text}"));
+                assert_rendered_path(path_line, &link, programs_on_path);
+            }
+            assert!(
+                !marker.exists(),
+                "rendered validation must not execute the alternate backend"
+            );
+        }
+        assert_installed_program_unchanged(&link, &recorded);
+    }
+}
+
+#[cfg(unix)]
+fn write_executable(path: &Path, body: &str) {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("program directory");
+    }
+    std::fs::write(path, body).expect("write program");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod program");
+}
+
+#[cfg(unix)]
+fn write_rendered_program_source(source: &Path, extra_spec: &str, marker: &Path) {
+    write_status_plugin(source, "linkkeep", extra_spec);
+    let marker = marker.display();
+    write_executable(
+        &source.join(".orbit-plugin/bin/backend.sh"),
+        &format!("#!/bin/sh\n: > '{marker}'\nprintf '{{\"ok\":true,\"output\":{{}}}}\\n'\n"),
+    );
+}
+
+#[cfg(unix)]
+fn render_plugin_source(
+    fixture: &Fixture,
+    source: &Path,
+    path_env: &str,
+    workspace: &str,
+    format: &str,
+    credentials: &[(&str, &str)],
+) -> std::process::Output {
+    fixture
+        .orbit()
+        .env("PATH", path_env)
+        .env(credentials[0].0, credentials[0].1)
+        .env(credentials[1].0, credentials[1].1)
+        .env("SERVICE_REGION", "fixture-east")
+        .args([
+            "plugin",
+            "validate",
+            source.to_str().expect("utf8 source"),
+            "--render",
+            "--workspace",
+            workspace,
+            "--format",
+            format,
+        ])
+        .success_output()
+}
+
+#[cfg(unix)]
+#[track_caller]
+fn assert_installed_program_unchanged(link: &Path, recorded: &Path) {
+    assert_eq!(
+        std::fs::read_link(link).expect("installed program link"),
+        recorded,
+        "rendered validation must not repoint or remove the installed program link"
+    );
+    let output = std::process::Command::new(link)
+        .output()
+        .expect("run the installed program through its link");
+    assert!(
+        output.status.success(),
+        "installed program link must stay executable: {output:?}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "kept-program",
+        "the installed link must still run the recorded program"
+    );
+    let mut names = std::fs::read_dir(link.parent().expect("link directory"))
+        .expect("read program link directory")
+        .map(|entry| {
+            entry
+                .expect("link directory entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(
+        names,
+        vec!["keptprog".to_string()],
+        "rendered validation must not add or remove program links"
+    );
+}
+
+#[cfg(unix)]
+#[track_caller]
+fn assert_rendered_program_environment(
+    rendered: &Value,
+    workspace: &str,
+    link: &Path,
+    programs_on_path: bool,
+) {
+    let profile = &rendered["rendered"];
+    assert_eq!(profile["workspace"], workspace);
+    let environment = &profile["environments"][0];
+    assert_eq!(environment["tool"], "linkkeep.status");
+    let variables = &environment["variables"];
+    assert_eq!(variables["SERVICE_API_TOKEN"], "[REDACTED_ENV]");
+    assert_eq!(variables["SERVICE_PASSWORD"], "[REDACTED_ENV]");
+    assert_eq!(variables["SERVICE_REGION"], "fixture-east");
+    assert_eq!(variables["ORBIT_WORKSPACE_ROOT"], workspace);
+    assert_eq!(variables["ORBIT_PLUGIN"], "linkkeep");
+    let path = variables["PATH"]
+        .as_str()
+        .unwrap_or_else(|| panic!("rendered PATH must be a string: {variables}"));
+    assert_rendered_path(path, link, programs_on_path);
+    let allowed = if programs_on_path { "keptprog" } else { "" };
+    assert_eq!(variables["ORBIT_PROC_ALLOWED_PROGRAMS"], allowed);
+}
+
+#[cfg(unix)]
+#[track_caller]
+fn assert_rendered_path(path: &str, link: &Path, programs_on_path: bool) {
+    let link_dir = link
+        .parent()
+        .expect("program link directory")
+        .to_string_lossy()
+        .into_owned();
+    let first = path
+        .trim()
+        .trim_start_matches("PATH=")
+        .split(':')
+        .next()
+        .unwrap_or("");
+    if programs_on_path {
+        assert_eq!(
+            first, link_dir,
+            "a source that declares a granted program must project that link directory on PATH: {path}"
+        );
+    } else {
+        assert!(
+            !path.split(':').any(|dir| dir == link_dir),
+            "a source that drops requires.programs must not project the installed link directory: {path}"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn scaffold_validate_test_and_install_run_end_to_end() {
@@ -1463,7 +1845,7 @@ fn remove_requires_confirmation_unlinks_skills_and_renders_json() {
         .command(["plugin", "remove", "demo"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("pass --yes to proceed"));
+        .stderr(predicate::str::contains("pass --confirm to proceed"));
 
     let removed = fixture.json(["plugin", "remove", "demo", "--yes"]);
     assert_eq!(removed["name"], "demo");
@@ -1556,33 +1938,6 @@ fn remove_prints_retained_state_path_and_purge_removes_only_that_state() {
             );
         }
     }
-}
-
-#[test]
-fn tool_scaffold_still_works_and_points_at_plugin_scaffold() {
-    let fixture = Fixture::new();
-    let script = fixture.home.join("legacy/hello_orbit.py");
-
-    fixture
-        .success([
-            "tool",
-            "scaffold",
-            script.to_str().expect("utf8 path"),
-            "--name",
-            "demo.hello",
-        ])
-        .stderr(predicate::str::contains("deprecated"))
-        .stderr(predicate::str::contains("orbit plugin scaffold"))
-        .stdout(predicate::str::contains("Created starter plugin"));
-
-    assert!(script.is_file(), "the v1 executable is still written");
-    assert!(
-        fixture
-            .home
-            .join("legacy/hello_orbit.orbit-tool.yaml")
-            .is_file(),
-        "the v1 sidecar is still written"
-    );
 }
 
 /// A backend that can write `orbit.db` can point its own row anywhere, and the
@@ -1973,6 +2328,289 @@ fn plugin_test_refuses_an_unconfined_manifest_until_the_operator_accepts_it() {
     );
 }
 
+/// Manifest defaults containing template syntax reach both conformance and
+/// installed calls unchanged, matching the installed configuration contract.
+#[cfg(unix)]
+#[test]
+fn plugin_test_keeps_manifest_template_config_literal_like_installed_calls() {
+    let fixture = Fixture::new();
+    let source = fixture.source("templatecfg");
+    let root = write_shell_backend(
+        &source,
+        r#"#!/usr/bin/python3
+import json, sys
+config = json.load(sys.stdin)["context"]["config"]
+print(json.dumps({"ok": True, "output": {
+    "default_is_literal": config.get("root") == "{{workspace}}/default-state"
+}}))
+"#,
+    );
+    std::fs::create_dir_all(root.join("tests/conformance")).unwrap();
+    std::fs::create_dir_all(root.join("schemas")).unwrap();
+    std::fs::write(
+        root.join("plugin.yaml"),
+        r#"schemaVersion: 2
+kind: Plugin
+metadata:
+  name: templatecfg
+  version: 1.0.0
+  description: Preserve manifest default strings for conformance.
+spec:
+  backend:
+    type: exec
+    command: bin/backend.sh
+  config:
+    schema: schemas/config.json
+    defaults: {root: "{{workspace}}/default-state"}
+  tools:
+    - name: probe
+      description: Report whether the default template remains literal.
+      execution_kind: read_only
+      mcp_scope: workspace
+  tests: [tests/conformance/*.yaml]
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("schemas/config.json"),
+        r#"{"type":"object","properties":{"root":{"type":"string"}}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("tests/conformance/probe.yaml"),
+        "schemaVersion: 1\nkind: PluginTest\ntests:\n  - name: defaults\n    tool: probe\n    input: {}\n    expect:\n      output: {default_is_literal: true}\n",
+    )
+    .unwrap();
+
+    let conformance = fixture
+        .command(["plugin", "test"])
+        .arg(&source)
+        .args(["--json"])
+        .success_json();
+    assert_eq!(conformance["passed"], true, "{conformance}");
+    assert_eq!(conformance["configuration_source"], "manifest_defaults");
+
+    fixture.add(&source, &[]);
+    fixture.success(["plugin", "enable", "templatecfg"]);
+    let installed = fixture
+        .operator_command(["tool", "run", "templatecfg.probe", "--input", "{}"])
+        .success_output();
+    let installed = stdout_json(&installed);
+    assert_eq!(installed["default_is_literal"], true, "{installed}");
+}
+
+/// Ambient plugin settings used to escape the temporary conformance roots.
+/// This deliberately unconfined backend makes that leak observable without
+/// relying on kernel sandbox availability or contacting a model provider.
+#[cfg(unix)]
+#[test]
+fn plugin_test_isolates_caller_settings_even_with_declared_grants() {
+    let fixture = Fixture::new();
+    let source = fixture.source("isolated");
+    let external = fixture.home.join("external-session-state");
+    std::fs::create_dir_all(&external).expect("external sentinel directory");
+    let sentinel = external.join("record");
+    std::fs::write(&sentinel, "preserve-format-6").expect("sentinel record");
+    let read_marker = external.join("read");
+    let model_marker = external.join("model-called");
+    let model = external.join("model-stub");
+    std::fs::write(
+        &model,
+        format!(
+            "#!/bin/sh\n[ \"$CONFORMANCE_MODEL_CREDENTIAL\" = synthetic-fixture-token ] || exit 9\nprintf called > '{}'\n",
+            model_marker.display()
+        ),
+    )
+    .expect("write synthetic credentialed model stub");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&model, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let root = write_shell_backend(
+        &source,
+        r#"#!/usr/bin/python3
+import json, os, pathlib, subprocess, sys
+config = json.load(sys.stdin)["context"]["config"]
+if config.get("root"):
+    state = pathlib.Path(config["root"])
+    if (state / "record").exists():
+        (state / "read").write_text((state / "record").read_text())
+        (state / "record").write_text("advanced-format-7")
+if config.get("model"):
+    subprocess.run([config["model"]], check=True)
+output = {
+    "root_template_is_unexpanded": "{{workspace}}" in config.get("root", ""),
+    "model": config.get("model"),
+    "limit": config.get("limit"),
+}
+print(json.dumps({"ok": True, "output": output}))
+"#,
+    );
+    // `{{config.root}}` expands once, so this literal default token remains a
+    // path component when the declared write root is resolved.
+    std::fs::create_dir_all(root.join("{{workspace}}/default-state")).unwrap();
+    std::fs::create_dir_all(root.join("tests/conformance")).unwrap();
+    std::fs::write(
+        root.join("plugin.yaml"),
+        r#"schemaVersion: 2
+kind: Plugin
+metadata:
+  name: isolated
+  version: 1.0.0
+  description: Configuration isolation fixture.
+spec:
+  backend:
+    type: exec
+    command: bin/backend.sh
+    sandbox: none
+  permissions:
+    network: any
+    env_pass: [CONFORMANCE_MODEL_CREDENTIAL]
+    fs:
+      write: ["{{config.root}}"]
+  config:
+    schema: schemas/config.json
+    defaults: {root: "{{workspace}}/default-state", model: "", limit: 2}
+  tools:
+    - name: probe
+      description: Probe configuration isolation.
+      execution_kind: read_only
+      mcp_scope: workspace
+  tests: [tests/conformance/*.yaml]
+"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join("schemas")).unwrap();
+    std::fs::write(
+        root.join("schemas/config.json"),
+        serde_json::to_vec(&json!({
+            "type": "object", "additionalProperties": false,
+            "properties": {
+                "root": {"type": "string"}, "model": {"type": "string"},
+                "limit": {"type": "integer"}
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(root.join("tests/conformance/probe.yaml"),
+        "schemaVersion: 1\nkind: PluginTest\ntests:\n  - name: defaults\n    tool: probe\n    input: {}\n    expect:\n      output: {root_template_is_unexpanded: true, model: \"\", limit: 2}\n"
+    ).unwrap();
+    let caller_config = format!(
+        "[plugins.isolated]\nroot = {}\nmodel = {}\nlimit = 99\n",
+        json!(external),
+        json!(model)
+    );
+    // Both config layers must be ignored, including when --workspace selects
+    // the registered caller workspace explicitly.
+    std::fs::write(fixture.home.join(".orbit/config.toml"), &caller_config).unwrap();
+    std::fs::write(fixture.work.join(".orbit/config.toml"), &caller_config).unwrap();
+    for installed in [false, true] {
+        if installed {
+            fixture.add(&source, &[]);
+            fixture.success([
+                "plugin",
+                "enable",
+                "isolated",
+                "--grant",
+                "fs,network,env_pass,unsandboxed",
+            ]);
+        }
+        for consent in [
+            vec!["--grant", "fs,network,env_pass,unsandboxed"],
+            vec!["--accept-requested"],
+        ] {
+            let output = fixture
+                .command(["plugin", "test"])
+                .arg(&source)
+                .args(["--workspace", "plugin-cli", "--json"])
+                .args(consent)
+                .env("CONFORMANCE_MODEL_CREDENTIAL", "synthetic-fixture-token")
+                .output()
+                .expect("run real conformance binary");
+            assert!(
+                !read_marker.exists(),
+                "caller-selected state must never be read"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&sentinel).unwrap(),
+                "preserve-format-6"
+            );
+            assert!(
+                !model_marker.exists(),
+                "caller-selected credentialed model must never run"
+            );
+            assert!(
+                output.status.success(),
+                "{} {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let report = stdout_json(&output);
+            assert_eq!(report["passed"], true);
+            assert_eq!(report["configuration_source"], "manifest_defaults");
+            assert_eq!(report["fixture_config"], Value::Null);
+            assert_eq!(report["certified"], installed);
+        }
+    }
+
+    // A fixture override is explicit, typed, schema-checked, and still does
+    // not merge the caller's live root or model selection into the section.
+    let fixture_config = fixture.home.join("fixture-config.json");
+    std::fs::write(
+        &fixture_config,
+        r#"{"limit":7,"root":"{{workspace}}/fixture-state"}"#,
+    )
+    .unwrap();
+    let golden = root.join("tests/conformance/probe.yaml");
+    let defaults_golden = std::fs::read_to_string(&golden).unwrap();
+    std::fs::write(
+        &golden,
+        defaults_golden.replace(
+            "root_template_is_unexpanded: true, model: \"\", limit: 2",
+            "root_template_is_unexpanded: false, model: \"\", limit: 7",
+        ),
+    )
+    .unwrap();
+    let report = fixture
+        .command(["plugin", "test"])
+        .arg(&source)
+        .args(["--accept-requested", "--fixture-config"])
+        .arg(&fixture_config)
+        .args(["--workspace", "plugin-cli", "--json"])
+        .success_json();
+    assert_eq!(report["passed"], true);
+    assert_eq!(report["configuration_source"], "fixture_file");
+    assert_eq!(report["fixture_config"], json!(fixture_config));
+    assert_eq!(report["certified"], false);
+    assert!(
+        report["certification"]
+            .as_str()
+            .unwrap()
+            .contains("--fixture-config")
+    );
+
+    for (contents, diagnostic) in [
+        ("[]", "must be a JSON object"),
+        ("{", "must be a JSON object"),
+        (r#"{"limit":"invalid"}"#, "plugins.isolated.limit"),
+    ] {
+        std::fs::write(&fixture_config, contents).unwrap();
+        let refused = fixture
+            .command(["plugin", "test"])
+            .arg(&source)
+            .args(["--accept-requested", "--fixture-config"])
+            .arg(&fixture_config)
+            .assert()
+            .failure();
+        assert!(String::from_utf8_lossy(&refused.get_output().stderr).contains(diagnostic));
+    }
+    assert!(!read_marker.exists());
+    assert_eq!(
+        std::fs::read_to_string(&sentinel).unwrap(),
+        "preserve-format-6"
+    );
+    assert!(!model_marker.exists());
+}
+
 /// A conformance fixture whose backend tries to write `marker`, outside every
 /// root the plugin declares, before it answers. Under its declared sandbox the
 /// write is refused; only a backend started with weaker containment leaves
@@ -2289,3 +2927,23 @@ fn write_greet_conformance_files(root: &Path, namespace: &str) {
     )
     .expect("write golden");
 }
+
+#[cfg(unix)]
+#[path = "application_authority.rs"]
+mod application_authority;
+
+#[cfg(unix)]
+#[path = "application_consent.rs"]
+mod application_consent;
+
+#[cfg(unix)]
+#[path = "application_admission.rs"]
+mod application_admission;
+
+#[cfg(unix)]
+#[path = "application_callbacks.rs"]
+mod application_callbacks;
+
+#[cfg(unix)]
+#[path = "application_auto_tasks.rs"]
+mod application_auto_tasks;

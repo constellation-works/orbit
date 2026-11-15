@@ -2,24 +2,20 @@ use std::time::{Duration, Instant};
 
 use orbit_engine::DispatchError;
 use orbit_tools::{ToolCaller, ToolContext, WitnessedProgramGrant};
-use orbit_types::policy::Role;
 use orbit_types::tool::McpCapability;
 use orbit_types::workflow::{CoreDeterministicAction, DeterministicAction};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::application::admission::{backlog_exclusion, scan_unresolved};
-use crate::application::job::pipeline_actions;
+use crate::application::job::{pipeline_actions, script_attach};
 use crate::application::pull_drain;
 use crate::application::sweep_filing::ci_failure::filing as ci_failure_filing;
 use crate::application::sweep_filing::dependabot::{
     consolidate as dependabot_consolidate, filing as dependabot_filing,
 };
-use crate::application::sweep_filing::rule_findings as rule_findings_filing;
 use crate::application::task::pilot as task_pilot;
-use crate::application::task::{
-    blocked_recovery, escalation_triage_steps, finding_verification_steps,
-};
+use crate::application::task::{blocked_recovery, escalation_triage_steps};
 use crate::application::workspace_auto;
 
 use super::pipeline_actions::{invoke_and_wait, invoke_detached};
@@ -65,8 +61,6 @@ pub(crate) fn run_deterministic(
         deterministic_action,
         CoreDeterministicAction::PrepareTaskPilot
             | CoreDeterministicAction::ApplyTaskPilotResults
-            | CoreDeterministicAction::PrepareFindingVerification
-            | CoreDeterministicAction::ApplyFindingVerification
             | CoreDeterministicAction::PrepareEscalationTriage
     ) {
         crate::application::automation::members::require_claim_owner(
@@ -106,7 +100,7 @@ pub(crate) fn run_deterministic(
                 .unwrap_or(Value::Null);
 
             runtime
-                .run_tool_with_context_and_role(tool_name, args, Role::Admin, tool_context)
+                .run_tool_with_context(tool_name, args, tool_context)
                 .map_err(|err| DispatchError::action_failed(action, format!("{err}")))
         }
         // Retired Phase 4 stubs. These used to return structured skipped
@@ -164,11 +158,10 @@ pub(crate) fn run_deterministic(
                 "slept_seconds": started_at.elapsed().as_secs_f64(),
             }))
         }
-        // The hourly crew-performance snapshot refresh: rebuild the
-        // by-type cell matrix from a scorecard scan and persist it for
-        // draws. No-ops without scanning while the feature is off.
-        CoreDeterministicAction::CrewPerformanceRefresh => runtime
-            .refresh_crew_performance_snapshot()
+        // The weekly crew memory dreaming mint: a no-op that names its gate
+        // while crew memory is disabled or no memory experiment is running.
+        CoreDeterministicAction::CrewMemoryDream => runtime
+            .crew_memory_dream()
             .map_err(|error| DispatchError::action_failed(action, error.to_string())),
         // Publish only this workspace, with an explicit successful skip when unbound.
         CoreDeterministicAction::TaskPublication => runtime
@@ -201,10 +194,10 @@ pub(crate) fn run_deterministic(
             dependabot_filing::file_dependabot_alert_tasks(runtime, input)
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))
         }
-        // Keep one task per rule-result fingerprint from a results document
-        // any workspace script wrote; surface-agnostic by schema.
-        CoreDeterministicAction::FileRuleFindings => {
-            rule_findings_filing::file_rule_findings(runtime, input)
+        // Attach an earlier script step's verified output files to a task,
+        // by the set the dispatching run's own checkpoint holds.
+        CoreDeterministicAction::AttachScriptFiles => {
+            script_attach::attach_script_files(runtime, input, owner_run_id(&tool_context))
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))
         }
         // The admissible work for one drain iteration [ORB-10819]: the
@@ -267,20 +260,6 @@ pub(crate) fn run_deterministic(
         // Validate all agent proposals before writing, then replace only the
         // exact prepared tasks' context_files fields.
         CoreDeterministicAction::ApplyTaskPilotResults => task_pilot::apply(runtime, action, input),
-        // Select and assign review findings to verifiers, then record each
-        // validated verdict; both run at one pinned source revision.
-        CoreDeterministicAction::PrepareFindingVerification => finding_verification_steps::prepare(
-            runtime,
-            action,
-            input,
-            finding_verification_steps::run_id(owner_run_id(&tool_context), input),
-        ),
-        CoreDeterministicAction::ApplyFindingVerification => finding_verification_steps::apply(
-            runtime,
-            action,
-            input,
-            finding_verification_steps::run_id(owner_run_id(&tool_context), input),
-        ),
         // Select the held pilot assessments an escalation triage run reads
         // and draw each one's hard-tier triager; the triager records its own
         // decision through `orbit.task.block_triage`.
@@ -288,8 +267,27 @@ pub(crate) fn run_deterministic(
             runtime,
             action,
             input,
-            finding_verification_steps::run_id(owner_run_id(&tool_context), input),
+            step_run_id(owner_run_id(&tool_context), input),
         ),
+        // Take the resident cycle lease for this run's mandate (recovering a
+        // dead predecessor) and build the brief; then close the cycle. The run
+        // is the trusted reservation owner, never step input.
+        CoreDeterministicAction::ResidentObserve => {
+            let run_id = owner_run_id(&tool_context).ok_or_else(|| {
+                DispatchError::action_failed(action, "resident_observe needs its owning run")
+            })?;
+            runtime
+                .begin_resident_cycle(run_id, chrono::Utc::now())
+                .map_err(|error| DispatchError::action_failed(action, error.to_string()))
+        }
+        CoreDeterministicAction::ResidentFinalize => {
+            let run_id = owner_run_id(&tool_context).ok_or_else(|| {
+                DispatchError::action_failed(action, "resident_finalize needs its owning run")
+            })?;
+            runtime
+                .finish_resident_cycle(run_id)
+                .map_err(|error| DispatchError::action_failed(action, error.to_string()))
+        }
         // Re-check one blocked task's episode and open a detached base
         // checkout for final recovery, then apply its decision through the
         // shared final-recovery applier and remove that checkout.
@@ -325,33 +323,6 @@ pub(crate) fn run_deterministic(
         }
         CoreDeterministicAction::ReviewGateSettle => {
             crate::application::review::review_gate_settle(runtime, action, input)
-        }
-        // Visual review §4, §7: the capture of record of a `verify-mock-ui`
-        // delivery, its deterministic checks, and its settlement against the
-        // candidate head and the frozen mocks.
-        CoreDeterministicAction::VisualCapture => {
-            crate::application::visual_delivery::visual_capture_step(runtime, action, input)
-        }
-        CoreDeterministicAction::VisualChecks => {
-            crate::application::visual_delivery::visual_checks_step(runtime, action, input)
-        }
-        CoreDeterministicAction::VisualReviewPrepare => {
-            crate::application::visual_delivery::visual_review_prepare_step(runtime, action, input)
-        }
-        CoreDeterministicAction::VisualVerifyPrepare => {
-            crate::application::visual_delivery::visual_verify_prepare_step(runtime, action, input)
-        }
-        CoreDeterministicAction::VisualSettle => {
-            crate::application::visual_delivery::visual_settle_step(runtime, action, input)
-        }
-        // Visual review §1, §11.3: in `live`, settle the code reviewer's
-        // resolutions before landing (recapturing a changed candidate), and
-        // file what landed unresolved as follow-ups after landing.
-        CoreDeterministicAction::VisualRecapture => {
-            crate::application::visual_delivery::visual_recapture_step(runtime, action, input)
-        }
-        CoreDeterministicAction::VisualLanded => {
-            crate::application::visual_delivery::visual_landed_step(runtime, action, input)
         }
         // Operator-admitted review reconciliation of an already-merged
         // foreign delivery head: re-observe and pin the head, run required
@@ -409,12 +380,7 @@ pub(crate) fn run_deterministic(
                 }
             }
             runtime
-                .run_tool_with_context_and_role(
-                    "orbit.task.locks.release",
-                    args,
-                    Role::Admin,
-                    tool_context,
-                )
+                .run_tool_with_context("orbit.task.locks.release", args, tool_context)
                 .map_err(|err| DispatchError::action_failed(action, format!("{err}")))
         }
         // Submit a child v2 Job and block on its terminal state.
@@ -523,9 +489,7 @@ fn plugin_tool_call(
             args,
             crate::adapter::command::ToolEntryPoint::Cli,
             tool_context.session_context.clone(),
-            |args| {
-                runtime.run_tool_with_context_and_role(&tool_name, args, Role::Admin, tool_context)
-            },
+            |args| runtime.run_tool_with_context(&tool_name, args, tool_context),
         )
         .map(|outcome| outcome.value)
         .map_err(|error| DispatchError::action_failed(action, error.to_string()))
@@ -574,4 +538,17 @@ fn reconciliation_step(
     result: Result<Value, orbit_common::OrbitError>,
 ) -> Result<Value, DispatchError> {
     result.map_err(|error| DispatchError::action_failed(action, error.to_string()))
+}
+
+/// The run a deterministic action executes for: the reservation owner the
+/// dispatcher passes, else the run id the engine put in its input.
+fn step_run_id<'a>(owner: Option<&'a str>, input: &'a Value) -> Option<&'a str> {
+    owner
+        .or_else(|| {
+            ["job_run_id", "run_id"]
+                .into_iter()
+                .find_map(|key| input.get(key).and_then(Value::as_str))
+        })
+        .map(str::trim)
+        .filter(|run_id| !run_id.is_empty())
 }

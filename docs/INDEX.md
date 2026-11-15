@@ -27,6 +27,34 @@ operational and contributor procedures, feature designs, and incident reviews.
 | [Optimistic Merging](./OPTIMISTIC_MERGING.md) | Optimistic Merging: Orbit's preferred delivery mode. Merge fast, review after landing, keep the queue draining |
 | [Orbit Positioning](./POSITIONING.md) | Orbit Positioning |
 
+### Architecture
+
+Code map of the current tree: end-to-end data flow, store and federation, surfaces, and one page per crate. Design intent stays in `docs/design/`.
+
+| Page | Purpose |
+| --- | --- |
+| [Orbit architecture — code map](./architecture/README.md) | Orbit code map: end-to-end data flow, store and federation, MCP and dashboard surfaces, crate dependency diagram and per-crate pages. |
+| [orbit-agent](./architecture/orbit-agent.md) | Architecture map for orbit-agent: what it owns, main modules, dependencies and entry points. |
+| [orbit-auth](./architecture/orbit-auth.md) | Architecture map for orbit-auth: what it owns, main modules, dependencies and entry points. |
+| [orbit-automation](./architecture/orbit-automation.md) | Architecture map for orbit-automation: what it owns, main modules, dependencies and entry points. |
+| [orbit-cli](./architecture/orbit-cli.md) | Architecture map for orbit-cli: what it owns, main modules, dependencies and entry points. |
+| [orbit-clock](./architecture/orbit-clock.md) | Architecture map for orbit-clock: what it owns, main modules, dependencies and entry points. |
+| [orbit-cmd](./architecture/orbit-cmd.md) | Architecture map for orbit-cmd: what it owns, main modules, dependencies and entry points. |
+| [orbit-common](./architecture/orbit-common.md) | Architecture map for orbit-common: what it owns, main modules, dependencies and entry points. |
+| [orbit-config](./architecture/orbit-config.md) | Architecture map for orbit-config: what it owns, main modules, dependencies and entry points. |
+| [orbit-core](./architecture/orbit-core.md) | Architecture map for orbit-core: what it owns, main modules, dependencies and entry points. |
+| [orbit-engine](./architecture/orbit-engine.md) | Architecture map for orbit-engine: what it owns, main modules, dependencies and entry points. |
+| [orbit-exec](./architecture/orbit-exec.md) | Architecture map for orbit-exec: what it owns, main modules, dependencies and entry points. |
+| [orbit-mcp](./architecture/orbit-mcp.md) | Architecture map for orbit-mcp: what it owns, main modules, dependencies and entry points. |
+| [orbit-policy](./architecture/orbit-policy.md) | Architecture map for orbit-policy: what it owns, main modules, dependencies and entry points. |
+| [orbit-registry](./architecture/orbit-registry.md) | Architecture map for orbit-registry: what it owns, main modules, dependencies and entry points. |
+| [orbit-runtime](./architecture/orbit-runtime.md) | Architecture map for orbit-runtime: what it owns, main modules, dependencies and entry points. |
+| [orbit-search](./architecture/orbit-search.md) | Architecture map for orbit-search: what it owns, main modules, dependencies and entry points. |
+| [orbit-store](./architecture/orbit-store.md) | Architecture map for orbit-store: what it owns, main modules, dependencies and entry points. |
+| [orbit-tools](./architecture/orbit-tools.md) | Architecture map for orbit-tools: what it owns, main modules, dependencies and entry points. |
+| [orbit-types](./architecture/orbit-types.md) | Architecture map for orbit-types: what it owns, main modules, dependencies and entry points. |
+| [orbit-web](./architecture/orbit-web.md) | Architecture map for orbit-web: what it owns, main modules, dependencies and entry points. |
+
 ### Design patterns
 
 | Pattern | Purpose |
@@ -86,7 +114,7 @@ CLI behavior, state layout, or recovery semantics change.
 | [Runbook Conventions](./runbooks/CONVENTIONS.md) | Authoring and maintenance conventions for Orbit operator, contributor, and release runbooks. |
 | [Bound Concurrent Orbit Repository Builds](./runbooks/build-budget.md) | Run Cargo builds within Orbit's host-wide cross-worktree admission and compiler-job budget. |
 | [Run local Rust CodeQL for code-scanning repairs and security changes](./runbooks/codeql-local.md) | Run local Rust CodeQL once per delivery for code-scanning repairs, security-tagged tasks and CodeQL setup changes, with a verified host toolchain cache, bounded concurrency, threaded evaluation and exact-input reuse, and reject incomplete semantic extraction. |
-| [Share Rust dependency compilation across worker worktrees](./runbooks/compiler-cache.md) | Opt in, measure, and remove the host Rust compiler cache shared across Orbit worker worktrees, validate before/after builds with it off, and see why hosted CI caches only dependencies. |
+| [Share Rust dependency compilation across worker worktrees](./runbooks/compiler-cache.md) | Manage the opt-in host Rust compiler cache and understand hosted dependency and content-verified workspace-output caches. |
 | [Full pre-release QA sweep](./runbooks/qa-full-sweep.md) | Mint, execute, and judge the workspace-local complete pre-release Orbit QA sign-off. |
 | [Release Orbit](./runbooks/release.md) | Cut and verify an Orbit release across agent plugins, Cargo, GitHub artifacts, Homebrew, npm, and the human Cursor marketplace follow-up. |
 | [Soak-Test Dashboard Memory](./runbooks/web-memory-soak.md) | Measure orbit web serve resident memory under the dashboard polling mix on a large disposable store (Linux). |
@@ -117,33 +145,33 @@ Live task progress is in Orbit; this board records what the feature lead last se
 
 | Feature | Next | Lead |
 | --- | --- | --- |
+| [Application Approvals](./design/application-approvals/1_scope.md) | Orbit slices 1-5 shipped; office profile remains ORB-20363, compatibility retirement ORB-21043 | claude |
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) are not filed | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | File phase 3: host scope and notifications | claude |
-| [Crew Ladder](./design/crew-ladder/1_scope.md) | Phase 1 shipped (config, shadow, report); Daniel reviews, then file phase 2 (live propose trials) | claude |
-| [Distributed Drain](./design/distributed-drain/1_overview.md) | Owner review of the building stage now that receipt compaction and accounting have an operator caller (ORB-19424). | claude |
-| [Experiments](./design/experiments/1_scope.md) | Raise a concluded-or-due experiment through the human decision channel (open; decision requests are task-bound today) | claude |
-| [Explore Brief](./design/explore-brief/1_scope.md) | Operator starts the three-arm trial (S7, unfiled); S8 readout [ORB-18544] is archived until it runs | claude |
-| [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Mail transport in the orbit-decision-mail plugin (a stub today); polish ORB-18446 | claude |
+| [Crew Memory](./design/crew-memory/1_overview.md) | M5 shadow runs (ORB-23117); live from 2026-11-15, then conclude by 2026-12-20 (ORB-23110) | claude |
+| [Distributed Drain](./design/distributed-drain/1_overview.md) | Owner review of the building stage now receipts have an operator caller (ORB-19424). | claude |
+| [Experiments](./design/experiments/1_scope.md) | The horizon decision-channel step remains unfiled | claude |
+| [Model Ranking](./design/model-ranking/1_overview.md) | R4 has no open task (ORB-23305 rejected): file the freeze and 4-week shadow run | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
-| [Script Steps](./design/script-steps/1_scope.md) | Phases 1-2 landed ([ORB-19983], [ORB-19985]); phase 3 (files, macOS profile) is not yet filed | claude |
-| [Web Terminal](./design/web-terminal/1_scope.md) | Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed | claude |
+| [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | Re-file the slice 10 pilot (ORB-21251 archived 2026-11-03, not done) once a bounded mandate with an operator authority grant and a manager session is ready | claude |
+| [Script Steps](./design/script-steps/1_scope.md) | File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled) | claude |
 
 ### Designing (6)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Review the Copilot existing-PR recovery companion; the Claude phase 0 spike remains pending | claude |
-| [Conflict Budget](./design/conflict-budget/1_scope.md) | Settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
+| [Context Index](./design/context-index/1_overview.md) | File 2_design.md §13 tasks 1–5 in ws_orbit-graph (retired-tool fix, word_index variant, baselines and gates, options); Daniel answers the questions still open in §14.2 | claude |
+| [Eval Harness](./design/eval-harness/1_overview.md) | Daniel accepted every recommendation in 2_design.md §14; file build-order tasks 1 to 5 once he names the Q7 spend cap and confirms the Q2 box | claude |
+| [Owner Failover](./design/owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
-| [Ux Rules](./design/ux-rules/1_scope.md) | Phases 1-3 built (ORB-19974..19976); enabling the routine needs an operator-granted ux_rules_runner script, and a live UI surface waits for script steps' network phase | claude |
-| [Visual Review](./design/visual-review/1_scope.md) | UX rules ORB-19974/19975 first (view manifest, browser settings); then phases 1-6 as ORB-19977..19982 | claude |
 
-### Shipped (35)
+### Shipped (37)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
-| [Activity / Job](./design/activity-job/1_overview.md) | Review proposed auto-task targets and durable CEL waiting; no implementation authorized | codex |
+| [Activity / Job](./design/activity-job/1_overview.md) | Release-readiness example stays disabled until owner prerequisites (ORB-20166) | codex |
 | [Agent Families](./design/agent-families/1_overview.md) | — | grok |
 | [Agent Scorecards](./design/agent-scorecards/1_overview.md) | — | claude |
 | [Auditability](./design/auditability/1_overview.md) | — | codex |
@@ -151,39 +179,42 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Auto-tasks](./design/auto-tasks/1_overview.md) | — | claude |
 | [Automation Triggers](./design/automation-triggers/1_overview.md) | — | codex |
 | [Crew Credentials](./design/crew-credentials/1_scope.md) | — | claude |
-| [Crew Performance](./design/crew-performance/1_scope.md) | Operator picks a workflow.crew_performance default from the shadow share report | claude |
 | [Distributions](./design/distributions/1_scope.md) | — | claude |
 | [Executors](./design/executors/4_decisions.md) | — | claude |
 | [Federated MCP](./design/federated-mcp/1_overview.md) | — | grok |
-| [Finding Verification](./design/finding-verification/1_overview.md) | — | claude |
-| [Granted Tools](./design/granted-tools/1_scope.md) | Operate the shipped grants and reviewed mutation proposal path | claude |
+| [Fleet Notices](./design/fleet-notices/1_overview.md) | — | claude |
+| [Granted Tools](./design/granted-tools/1_scope.md) | — | claude |
 | [Host Registry](./design/host-registry/1_overview.md) | — | codex |
+| [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Review the plugin-raised decision design (ORB-22824), then file its slices | claude |
 | [Orbit MCP](./design/mcp-bridge/1_overview.md) | — | codex |
 | [MCP Session Context](./design/mcp-session-context/1_overview.md) | — | codex |
 | [Mid-Run Operator Steering](./design/mid-run-steering/1_overview.md) | — | codex |
+| [Operator Attention](./design/operator-attention/1_overview.md) | — | claude |
 | [Orbit Core](./design/orbit-core/1_overview.md) | — | codex |
 | [Task Search](./design/orbit-search/1_overview.md) | — | codex |
-| [Path Leases](./design/path-leases/1_overview.md) | — | claude |
 | [Plugins](./design/plugins/1_scope.md) | — | claude |
 | [Policy & Sandboxing](./design/policy-sandbox/1_overview.md) | — | claude |
 | [Process Supervision](./design/process-supervision/1_overview.md) | — | claude |
 | [Remote Access](./design/remote-access/1_overview.md) | — | codex |
-| [Review Gate](./design/review-gate/1_overview.md) | ORB-20087 shipped selective before-landing risk/path rules (§3.3, default off) after ORB-20099 staged before-PR deprecation (§1.1); observe/enforce adoption is an operator decision; symbols deferred. | codex |
+| [Review Gate](./design/review-gate/1_overview.md) | Remove the legacy selective fields after 2026-12-08 | codex |
 | [Routines](./design/routines/1_overview.md) | — | claude |
 | [Scheduled Tasks](./design/scheduled-tasks/1_scope.md) | Consumer calendar and Schedule picker in orbit-office | claude |
 | [State Compatibility](./design/state-compatibility/1_overview.md) | — | claude |
 | [Task Artifacts](./design/task-artifacts/1_overview.md) | — | codex |
 | [Task Migration](./design/task-migration/1_overview.md) | — | claude |
+| [Task Pilot](./design/task-pilot/1_scope.md) | — | orbit |
 | [Task Publication](./design/task-publication/1_overview.md) | — | codex |
 | [Terminal Interface](./design/terminal-interface/1_overview.md) | — | claude |
 | [Usage Pressure](./design/usage-pressure/1_scope.md) | — | claude |
 | [User Interface](./design/user-interface/1_overview.md) | — | gemini |
+| [Workspace Agent Corpus](./design/workspace-agent-corpus/1_scope.md) | — | Orbit |
 
-### Parked (2)
+### Parked (3)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
-| [Decision Assistance](./design/decision-assistance/1_scope.md) | Improve rubrics/packets, independently adjudicate permitted data and register an unopened holdout before any activation; advisory rollout remains parked. | codex |
+| [Conflict Budget](./design/conflict-budget/1_scope.md) | Parked for free time (Daniel, 2026-11-02); on pickup settle open questions, file phase 1 | claude |
+| [Path Leases](./design/path-leases/1_overview.md) | Restore the config keys, CLI and MCP tools withdrawn in ORB-22808 before any host enables leases | claude |
 | [Project Learnings](./design/project-learnings/4_decisions.md) | Retired by decision (ORB-10736); candidate to move under _archived | claude |
 
 ## Designs
@@ -198,57 +229,60 @@ a conservative title/status fallback.
 | --- | --- | --- | --- |
 | [Activity / Job](./design/activity-job/1_overview.md) | Activity / Job is Orbit's execution substrate. | Draft | codex |
 | [Agent Families](./design/agent-families/1_overview.md) | Orbit models AI coding systems as first-class agent families and groups concrete provider-model assignments into named crews. | Draft | grok |
-| [Agent Scorecards](./design/agent-scorecards/1_overview.md) | One scorecard per agent role (orchestrators, implementers, reviewers, task pilots), ranked by crew and model, where each problem counts against exactly one role. | Draft | claude |
+| [Agent Scorecards](./design/agent-scorecards/1_overview.md) | One scorecard per agent role (implementers, reviewers, task pilots), ranked by crew and model, where each problem counts against exactly one role. | Draft | claude |
+| [Application Approvals](./design/application-approvals/1_scope.md) | Scope: parameterised application consent scopes (typed per-field constraints bound to live task state, bound read callbacks, named transitions) so an app can carry a user's approvals without operator authority | Draft | claude |
 | [Auditability](./design/auditability/1_overview.md) | Auditability is Orbit's answer to the operator question that matters after an agent touches a real repository: what happened, why, and who is accountable? | Draft | codex |
-| [Auto-concurrency](./design/auto-concurrency/1_overview.md) | Partly implemented predictive admission — Orbit records per-task CPU and memory samples, builds resource profiles, forecasts host load, and supports shadow or forecast-based admission for local and pull drains; operational accuracy evidence remains limited. | Draft | claude |
-| [Auto-tasks](./design/auto-tasks/1_overview.md) | Dynamically-defined recurring task templates minted by the host clock tick — periodic work as data, not code. | Accepted | claude |
+| [Auto-concurrency](./design/auto-concurrency/1_overview.md) | Shipped predictive admission — Orbit records per-task CPU and memory samples, builds resource profiles, forecasts host load, and supports shadow or forecast-based admission for local and pull drains; operational accuracy evidence remains limited. | Draft | claude |
+| [Auto-tasks](./design/auto-tasks/1_overview.md) | Dynamically-defined recurring task templates minted by the host clock tick — periodic work as data, not code. | Implemented | claude |
 | [Automation Triggers](./design/automation-triggers/1_overview.md) | Proposed bounded state-driven triggers for routines and auto-tasks with durable work identity and honest coverage. | Draft | codex |
-| [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Scope: simulate real drain admission, review modes, retry outcomes, host resource fit and regression rework; expose task riskiness and score each forecast model version separately | Draft | claude |
+| [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Scope: simulate real drain admission, review modes, retry outcomes, host resource fit and regression rework; expose task riskiness, score each forecast model version separately, and correct per-metric quantiles from scored residuals | Draft | claude |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Proposed Claude cloud task delivery, with a companion scope for Copilot repair of existing PRs under shared repair ownership, budgets and exact-head evidence. | Draft | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | Scope: a condition trigger kind whose predicate is a type-checked CEL expression over task, workspace, host and file state, fired once per subject edge with a durable fire identity, beside the typed trigger kinds | Draft | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Scope: let footprint admission run overlapping tasks together when the expected cost of repairing their landing conflicts fits an operator budget that can be high by day and low at night, scored per path from recorded conflict history | Draft | claude |
+| [Context Index](./design/context-index/1_overview.md) | An inverted index, built in the orbit-graph plugin, from the words of landed tasks to the symbols and files their merged diffs changed, queried with a new task's wording to predict its context_files, and shipped only if a time-split evaluation beats BM25 over code | Draft | claude |
 | [Crew Credentials](./design/crew-credentials/1_scope.md) | Scope: a crew-level env list, so one crew can run on a different provider account (an API key with prepaid credits) than the rest of its provider | Draft | claude |
-| [Crew Ladder](./design/crew-ladder/1_scope.md) | Scope: an opt-in, operator-ordered ladder of crews (model and effort) per workspace; each complexity tier continuously trials the next cheaper rung on a small share of its tasks as a system-run experiment, promotes it on a sequential non-inferiority test and keeps going until a rung fails, so each tier settles at the cheapest crew that holds its quality, with demotion on evidence and, once the delivery-quality grader is adopted, a per-dimension code-quality guardrail | Draft | claude |
-| [Crew Performance](./design/crew-performance/1_scope.md) | Scope: weight crew pool draws by each crew's implementer score on the task's type within its complexity tier, either toward the crew that does that type best (absolute) or toward the type each crew does best relative to its own work (comparative) | Draft | claude |
-| [Decision Assistance](./design/decision-assistance/1_scope.md) | Scope: optional typed model judgments, parked rollout and a proposed advisory delivery-quality grader. | Draft | codex |
+| [Crew Memory](./design/crew-memory/1_overview.md) | Experimental: storage, gated memory delivery, weekly dreaming and operator review of global-memory proposals are built. Adoption depends on the memory-on vs memory-off experiment. | Accepted | claude |
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | Run the workspace drain on more than one host against one owner store — followers pull one task at a time from the owner's ready queue over federated MCP, validate where they built, and land through the owner. | Draft | claude |
-| [Distributions](./design/distributions/1_scope.md) | Scope: name the role of an app built on Orbit (a distribution), and let it choose which shipped default routines and auto-tasks its workspaces carry through a persistent seeding policy and a TOML preset | Accepted | claude |
+| [Distributions](./design/distributions/1_scope.md) | Scope: name the role of an app built on Orbit (a distribution), and let it choose which shipped default routines and auto-tasks its workspaces carry through a persistent seeding policy and a TOML preset | Implemented | claude |
+| [Eval Harness](./design/eval-harness/1_overview.md) | An evaluation plugin with two jobs: replay closed tasks against chosen crews and score the candidates, and bake off one new task across crews as candidate pull requests a person picks from | Draft | claude |
 | [Executors](./design/executors/4_decisions.md) | Decision log for executor registration, the local-shell executor, and the (now retired) External Executor Protocol. | Draft | claude |
-| [Experiments](./design/experiments/1_scope.md) | Scope: operator-defined experiments whose arms overlay instructions, skills, tools, crews or allowlisted config on a task's runs; sticky random assignment at admission, durable SQLite records, per-arm outcome analysis with intervals, and an operator decision that files the promotion | Draft | claude |
-| [Explore Brief](./design/explore-brief/1_scope.md) | Scope: task-pilot leaves a bounded, revision-keyed code map (explore brief) as a task artifact, and the implementer starts from it instead of exploring cold; includes the three-arm trial and the slice breakdown | Draft | claude |
+| [Experiments](./design/experiments/1_scope.md) | Scope: operator-defined experiments whose arms overlay instructions, skills, tools, crews, allowlisted config or crew memory on a task's runs; sticky random assignment at admission, durable SQLite records, per-arm outcome analysis with intervals, and an operator decision that files the promotion | Draft | claude |
 | [Federated MCP](./design/federated-mcp/1_overview.md) | Mux that presents one MCP namespace over the accepting machine plus operator-configured SSH remotes, keyed by machine_id, without becoming a fleet registry. | Draft | grok |
-| [Finding Verification](./design/finding-verification/1_overview.md) | Review-filed bug findings are rejected by default by the task pilot or the implementer when the defect does not exist; the pooled verifier job is the opt-in gate whose CONFIRMED verdict unlocks backlog and drain admission. | Accepted | claude |
-| [Granted Tools](./design/granted-tools/1_scope.md) | Scope: an operator-only `granted_tools` task field that lifts the implementing activity's deny list for named tools, without granting capability, placement or live side effects | Accepted | claude |
+| [Fleet Notices](./design/fleet-notices/1_overview.md) | Fleet notices: short-lived, scoped, authored coordination notes (incident, maintenance, info) held by the owner, reached through an opt-in notice MCP toolset and quoted into agent briefs as untrusted data | Draft | claude |
+| [Granted Tools](./design/granted-tools/1_scope.md) | Scope: an operator-only `granted_tools` task field that lifts the implementing activity's deny list for named tools, without granting capability, placement or live side effects | Implemented | claude |
 | [Host Registry](./design/host-registry/1_overview.md) | The live host-registry feature is a machine-local identity and workspace catalog. | Implemented | codex |
 | [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Scope: a core decision-request record and delegated-human channel, with email as a plugin transport, so held Orbit work can be decided by replying to an email | Draft | claude |
-| [Orbit MCP](./design/mcp-bridge/1_overview.md) | One authoritative Orbit MCP server, reached by local stdio, a byte-transparent direct SSH stdio proxy, or a loopback-default TCP listener. | Draft | codex |
-| [MCP Session Context](./design/mcp-session-context/1_overview.md) | ToolSessionContext is Orbit's transport-to-Core invocation envelope. | Accepted | codex |
-| [Mid-Run Operator Steering](./design/mid-run-steering/1_overview.md) | Default-off delivery of operator comments written after dispatch to the running agent, gated on the durable task record | Accepted | codex |
-| [Operations as Data](./design/operations-as-data/1_overview.md) | One spec per operation drives the CLI, MCP, and runtime adapters; dashboard routes remain separately wired. Kernel v2 serves friction, auto-task, drain, workspace claim, task, workflow-run, search, codebase operations, and agent scorecards; deprecated orchestrator scorecard aliases share the registry. | Accepted | claude |
-| [Orbit Core](./design/orbit-core/1_overview.md) | Directional runtime, application, adapter, bootstrap, and composition boundaries across orbit-runtime and orbit-core. | Accepted | codex |
-| [Task Search](./design/orbit-search/1_overview.md) | Lexical task search using SQLite FTS5 BM25. | Accepted | codex |
-| [Path Leases](./design/path-leases/1_overview.md) | Implemented lease storage and request, renew, release, show, list and check operations over MCP, CLI and loopback REST, with Orbit Web notices/SSE, lease-token administration, orbit-auth credentials, the authenticated Unix intake socket and the token-authenticated lease listener. Native TLS and the listener's configured request and rate limits are implemented. | Draft | claude |
+| [Orbit MCP](./design/mcp-bridge/1_overview.md) | One authoritative Orbit MCP server, reached by local stdio, a byte-transparent direct SSH stdio proxy, or a loopback-default TCP listener. | Implemented | codex |
+| [MCP Session Context](./design/mcp-session-context/1_overview.md) | ToolSessionContext is Orbit's transport-to-Core invocation envelope. | Implemented | codex |
+| [Mid-Run Operator Steering](./design/mid-run-steering/1_overview.md) | Default-off delivery of operator comments written after dispatch to the running agent, gated on the durable task record | Implemented | codex |
+| [Model Ranking](./design/model-ranking/1_overview.md) | Per-model ranking of implementer models, built through R3: quality and reliability measured against the fleet's expectation for the same task mix, noise-scaled, with 95% tie bands ordered by score. Cost breaks exact score ties. CI and recovery measures are not yet scored. | Accepted | claude |
+| [Operations as Data](./design/operations-as-data/1_overview.md) | One spec per operation drives the CLI, MCP, and runtime adapters; dashboard routes remain separately wired. Kernel v2 serves friction, auto-task, drain, workspace claim, task, workflow-run, search, codebase operations, agent scorecards, resident checkpoint and evolution. | Accepted | claude |
+| [Operator Attention](./design/operator-attention/1_overview.md) | orbit attention: one read-only, filterable, federated view of everything waiting on an operator, with a stateless delta cursor for callers | Draft | claude |
+| [Orbit Core](./design/orbit-core/1_overview.md) | Directional runtime, application, adapter, bootstrap, and composition boundaries across orbit-runtime and orbit-core. | Implemented | codex |
+| [Task Search](./design/orbit-search/1_overview.md) | Lexical task search using SQLite FTS5 BM25. | Implemented | codex |
+| [Owner Failover](./design/owner-failover/1_overview.md) | Proposed owner failover — followers mirror owner task changes on every drain call, git publication bootstraps them, and an epoch-fenced handoff or takeover moves ownership while the old owner rejoins as a follower. | Draft | claude |
+| [Path Leases](./design/path-leases/1_overview.md) | Lease storage, queue, notices, the loopback REST routes, orbit-auth credentials, the Unix intake socket and the token-authenticated lease listener are implemented but unreachable: the lease.* config keys, the orbit lease CLI and the orbit.lease.* MCP tools were withdrawn in ORB-22808 and leases stay disabled. | Draft | claude |
 | [Plugins](./design/plugins/1_scope.md) | Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest | Implemented | claude |
 | [Policy & Sandboxing](./design/policy-sandbox/1_overview.md) | Policy & Sandboxing is Orbit's safety surface for filesystem access and process execution. | Draft | claude |
 | [Process Supervision](./design/process-supervision/1_overview.md) | Record of converging Orbit's child-process supervisors (orbit-common's bounded runner, orbit-exec's SupervisedChild, the engine CLI runner, and two ad-hoc loops) onto one kill-on-drop supervisor in orbit-common, with the caller inventory and the seven-step migration, now landed. | Draft | claude |
 | [Project Learnings](./design/project-learnings/4_decisions.md) | Project Learnings — Decisions: why the native learning subsystem was removed and why leftover .orbit/learnings/ files stay ignored. | Accepted | claude |
-| [Remote Access](./design/remote-access/1_overview.md) | Multi-workspace Orbit Web serving and loopback-safe remote access over an SSH local forward. | Accepted | codex |
-| [Review Gate](./design/review-gate/1_overview.md) | Independent automatic review with captured timing and exact-tree coverage; shipped staged before-PR deprecation and shipped selective before-landing risk/path rules (default off) preserve existing runs and evidence. | Accepted | codex |
-| [Routines](./design/routines/1_overview.md) | Durable checkout-local routine definitions dispatch catalog jobs on cron, delivery or state eligibility, with host-local checkpoints. | Implemented | claude |
+| [Remote Access](./design/remote-access/1_overview.md) | Multi-workspace Orbit Web serving and loopback-safe remote access over an SSH local forward. | Implemented | codex |
+| [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | One manager session is the human's front door; each mandate gets a resident orchestrator that runs as bounded, checkpointed Orbit activity cycles on the existing clock, coordination only | Draft | claude |
+| [Review Gate](./design/review-gate/1_overview.md) | Independent automatic review with captured timing and exact-tree coverage; shipped staged before-PR deprecation preserves existing runs and evidence; selective before-landing rules were removed. | Implemented | codex |
+| [Routines](./design/routines/1_overview.md) | Durable checkout-local routine definitions dispatch catalog jobs on cron, delivery or state eligibility, with host-local checkpoints. | Accepted | claude |
 | [Scheduled Tasks](./design/scheduled-tasks/1_scope.md) | Scope: let a task wait for a date — an optional not_before instant that every dispatcher honours as a self-lifting admission hold, readable by date range so a calendar can show it | Draft | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | Scope: a job step that runs a workspace script by name inside the executor sandbox, authorized by an operator grant bound to the script's content digest, with JSON stdin/stdout, declared files, audit and the job retry policy | Draft | claude |
 | [State Compatibility](./design/state-compatibility/1_overview.md) | How an Orbit binary decides whether it may open workspace state written by a newer Orbit, instead of refusing every command on a version number. | Draft | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Scope: a routine-built per-symbol index of body size, test coverage and regression-site history, read by admission riskiness and a test-priority view, each shipped only if its backtest beats today's model | Draft | claude |
 | [Task Artifacts](./design/task-artifacts/1_overview.md) | Tasks are Orbit's durable intent records: they explain what an agent or human is trying to change, how the work should be validated, what context is relevant, who acted on the work, and how the work connects to other Orbit artifacts. | Draft | codex |
 | [Task Migration](./design/task-migration/1_overview.md) | Move orbit tasks between hosts with export/import (tar.zst); task_prefix identifies each task's canonical owner, while an admitted follower may execute a fenced claim without taking authority. | Draft | claude |
-| [Task Publication](./design/task-publication/1_overview.md) | Explicitly publish authority-owned task snapshots to a dedicated Git repository for labelled inspection and deliberate recovery. | Accepted | codex |
+| [Task Pilot](./design/task-pilot/1_scope.md) | Pilot assessment artifacts, compact receipt comments, and compatibility with inline audits. | Draft | orbit |
+| [Task Publication](./design/task-publication/1_overview.md) | Explicitly publish authority-owned task snapshots to a dedicated Git repository for labelled inspection and deliberate recovery. | Implemented | codex |
 | [Task Risk](./design/task-risk/1_scope.md) | Advisory task-risk estimates separating model-relative complexity, repair burden and escaped regressions. | Draft | codex |
-| [Terminal Interface](./design/terminal-interface/1_overview.md) | House style for orbit-cli terminal output — machine-readable first, borderless single-line tables, semantic color resolved at the sink. | Accepted | claude |
+| [Terminal Interface](./design/terminal-interface/1_overview.md) | House style for orbit-cli terminal output — machine-readable first, borderless single-line tables, semantic color resolved at the sink. | Implemented | claude |
 | [Usage Pressure](./design/usage-pressure/1_scope.md) | Scope: weight crew pool draws by how much of each provider account's usage window would expire unused, so Orbit spends the capacity that is about to reset before the capacity that is not | Implemented | claude |
 | [User Interface](./design/user-interface/1_overview.md) | Orbit UI covers the dashboard and HTTP API owned by `orbit-web`; `orbit-cli` is the thin `orbit web serve` / `connect` command adapter. | Draft | gemini |
-| [Ux Rules](./design/ux-rules/1_scope.md) | Scope: break the ux-review-ui and ux-review-cli prompts into named, executable rules (Playwright measurements for the dashboard and website, PTY captures for the CLI and MCP surface), run them on a routine, and file one task per failing rule and target, so the LLM reviews keep only the judgement work | Draft | claude |
-| [Visual Review](./design/visual-review/1_scope.md) | Scope: for tasks tagged verify-mock-ui, the implementer compares its build against the attached mocks while it works, then Orbit captures the mocked views on the final candidate, runs deterministic checks, and has a vision crew compare each capture with its mock, with findings verified by a different crew | Draft | claude |
-| [Web Terminal](./design/web-terminal/1_scope.md) | Scope: an interactive shell on any registered host from the dashboard — a PTY over a WebSocket, carried by the existing host forward, behind a browser-session credential that a confined agent cannot read. | Draft | claude |
+| [Workspace Agent Corpus](./design/workspace-agent-corpus/1_scope.md) | Pinned activity-scoped corpus guidance and deterministic append proposals | Draft | Orbit |
 
 ### Archived designs
 
@@ -257,7 +291,15 @@ They are reference only and are not authoritative.
 
 | Feature | Summary | Status | Lead |
 | --- | --- | --- | --- |
+| [Crew Ladder](./design/_archived/crew-ladder/1_scope.md) | Scope: an opt-in, operator-ordered ladder of crews (model and effort) per workspace; each complexity tier continuously trials the next cheaper rung on a small share of its tasks as a system-run experiment, promotes it on a sequential non-inferiority test and keeps going until a rung fails, so each tier settles at the cheapest crew that holds its quality, with demotion on evidence and, once the delivery-quality grader is adopted, a per-dimension code-quality guardrail | Deprecated | claude |
+| [Crew Performance](./design/_archived/crew-performance/1_scope.md) | Scope: weight crew pool draws by each crew's implementer score on the task's type within its complexity tier, either toward the crew that does that type best (absolute) or toward the type each crew does best relative to its own work (comparative) | Deprecated | claude |
+| [Decision Assistance](./design/_archived/decision-assistance/1_scope.md) | Scope: optional typed model judgments, parked rollout, a proposed delivery-quality grader and a proposed precedent-decision consumer. | Deprecated | codex |
+| [Explore Brief](./design/_archived/explore-brief/1_scope.md) | Scope: task-pilot leaves a bounded, revision-keyed code map (explore brief) as a task artifact, and the implementer starts from it instead of exploring cold; includes the three-arm trial and the slice breakdown | Deprecated | claude |
+| [Finding Verification](./design/_archived/finding-verification/1_overview.md) | Review-filed bug findings are rejected by default by the task pilot or the implementer when the defect does not exist; the pooled verifier job is the opt-in gate whose CONFIRMED verdict unlocks backlog and drain admission. | Deprecated | claude |
 | [Hidden Acceptance](./design/_archived/hidden-acceptance/1_scope.md) | Scope: an acceptance lane whose scenarios implementers cannot see or edit, written from the specification by another agent family and run after landing, so a green result is an independent signal rather than the implementer grading its own work | Deprecated | claude |
+| [Ux Rules](./design/_archived/ux-rules/1_scope.md) | Scope: break the ux-review-ui and ux-review-cli prompts into named, executable rules (Playwright measurements for the dashboard and website, PTY captures for the CLI and MCP surface), run them on a routine, and file one open task per declared defect group or, without one, per failing rule and target, so the LLM reviews keep only the judgement work | Deprecated | claude |
+| [Visual Review](./design/_archived/visual-review/1_scope.md) | Scope: for tasks tagged verify-mock-ui, the implementer compares its build against the attached mocks while it works, then Orbit captures the mocked views on the final candidate, runs deterministic checks, and has a vision crew compare each capture with its mock, with findings verified by a different crew | Deprecated | claude |
+| [Web Terminal](./design/_archived/web-terminal/1_scope.md) | Scope: an interactive shell on any registered host from the dashboard — a PTY over a WebSocket, carried by the existing host forward, behind a browser-session credential that a confined agent cannot read. | Deprecated | claude |
 
 Folder layout, frontmatter, ADR, and ownership rules live in
 [design conventions](./design/CONVENTIONS.md).

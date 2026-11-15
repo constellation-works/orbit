@@ -28,8 +28,8 @@ impl OrbitRuntime {
                 "the run published its pull request through its own pipeline steps and its \
                  failure handoff kept that pull request, so there is no failure-handoff \
                  publication to repair. Inspect the original publishing run with \
-                 orbit.workflow.run.resume source_repair for explicitly authorized source work, \
-                 or requeue the blocked task (`orbit task requeue`, MCP `orbit.task.requeue`) \
+                 orbit.run action resume with source_repair for explicitly authorized source work, \
+                 or requeue the blocked task (`orbit task requeue`, MCP `orbit.task.recover` action `requeue`) \
                  once every required check has passed on its recorded head",
             ));
         }
@@ -57,18 +57,59 @@ impl OrbitRuntime {
             || !definition.resolved_failure_activity.as_ref().is_some_and(|a|
                 matches!(&a.spec, ActivityV2Spec::Deterministic(s) if s.action == "pr_failure_handoff"))
             || checkpoint.activity_name != "pr_failure_handoff"
-            || state.step_states.get(&(failed_index as u32)) != Some(&JobRunState::Failed)
-            || field(output, "phase")? != "failure_handoff"
-            || !matches!(field(output, "decision")?, "blocked_failure_pr" | "blocked_conflict_pr")
-            || field(output, "task_id")? != task.id
-            || field(output, "handoff_run_id")? != source.run_id
+        {
+            return Err(refuse(
+                "failure-handoff activity disagrees: the source definition and checkpoint do not \
+                 both name the pr_failure_handoff action; retain the original host receipt",
+            ));
+        }
+        // The executor checkpoints only steps that completed, so the step that
+        // failed has no recorded state; a recorded `failed` is equally valid. A
+        // step recorded as anything else completed and cannot be the failed one.
+        let failed_state = state.step_states.get(&(failed_index as u32));
+        if !matches!(failed_state, None | Some(JobRunState::Failed))
             || field(output, "failed_step_id")? != checkpoint.failed_step_id
+        {
+            return Err(refuse(format!(
+                "failure-handoff failed step disagrees: step `{}` is recorded as {} and the \
+                 receipt names `{}`; retain the original host receipt",
+                checkpoint.failed_step_id,
+                failed_state.map_or_else(|| "not completed".to_string(), |s| format!("{s:?}")),
+                field(output, "failed_step_id")?,
+            )));
+        }
+        if field(output, "phase")? != "failure_handoff"
+            || !matches!(
+                field(output, "decision")?,
+                "blocked_failure_pr" | "blocked_conflict_pr"
+            )
+        {
+            return Err(refuse(
+                "failure-handoff receipt disagrees: it is not a published blocked-pull-request \
+                 handoff; retain the original host receipt",
+            ));
+        }
+        if field(output, "task_id")? != task.id
+            || field(output, "handoff_run_id")? != source.run_id
             || field(output, "checkpoint_owner")? != owner.run_id
             || field(worktree, "job_run_id")? != owner.run_id
-            || field(output, "original_base_sha")? != field(worktree, "base_sha")?
-            || !task.spec_digest_matches(field(output, "task_spec_digest")?)
         {
-            return Err(refuse("failure-handoff ownership, failed step or task specification disagrees; retain the original host receipt"));
+            return Err(refuse(
+                "failure-handoff ownership disagrees: the receipt's task, handoff run or \
+                 checkpoint owner is not this task's run; retain the original host receipt",
+            ));
+        }
+        if field(output, "original_base_sha")? != field(worktree, "base_sha")? {
+            return Err(refuse(
+                "failure-handoff base disagrees: the receipt's original base is not the run's \
+                 worktree base; retain the original host receipt",
+            ));
+        }
+        if !task.spec_digest_matches(field(output, "task_spec_digest")?) {
+            return Err(refuse(
+                "failure-handoff task specification digest disagrees: the task's description or \
+                 acceptance criteria changed after the handoff; retain the original host receipt",
+            ));
         }
         let branch = field(output, "branch")?;
         let head = field(output, "head_sha")?;
@@ -132,7 +173,7 @@ impl OrbitRuntime {
             .and_then(Value::as_bool)
             .ok_or_else(|| refuse("failure-handoff preservation decision missing"))?;
         for sha in [head, base_sha, field(worktree, "base_sha")?] {
-            if sha.len() != 40 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+            if !observation::is_exact_sha(sha) {
                 return Err(refuse(
                     "failure-handoff candidate/base identity is not exact",
                 ));
@@ -200,26 +241,8 @@ impl OrbitRuntime {
                     || field(prepared, "base_sha")? != base_sha
                     || field(sync, "base_sha")? != base_sha
                     || field(prepared, "head_sha")? != field(sync, "head_sha_before")?
-                    || !run_git(
-                        repo,
-                        &[
-                            "merge-base",
-                            "--is-ancestor",
-                            committed,
-                            field(prepared, "head_sha")?,
-                        ],
-                    )?
-                    .success
-                    || !run_git(
-                        repo,
-                        &[
-                            "merge-base",
-                            "--is-ancestor",
-                            base_sha,
-                            field(sync, "head_sha")?,
-                        ],
-                    )?
-                    .success
+                    || !observation::is_git_ancestor(repo, committed, field(prepared, "head_sha")?)?
+                    || !observation::is_git_ancestor(repo, base_sha, field(sync, "head_sha")?)?
                     || sync.get("rewritten").and_then(Value::as_bool)
                         != Some(field(sync, "head_sha_before")? != field(sync, "head_sha")?)
                 {
@@ -253,18 +276,7 @@ impl OrbitRuntime {
             Some(_) => allowed.last() == Some(&parent),
             None => allowed.contains(&parent),
         };
-        if !contiguous
-            || !run_git(
-                repo,
-                &[
-                    "merge-base",
-                    "--is-ancestor",
-                    field(worktree, "base_sha")?,
-                    head,
-                ],
-            )?
-            .success
-        {
+        if !contiguous || !observation::is_git_ancestor(repo, field(worktree, "base_sha")?, head)? {
             return Err(refuse(
                 "failure-handoff candidate lacks an authenticated preservation parent",
             ));
@@ -274,16 +286,7 @@ impl OrbitRuntime {
                 let published = authenticated_checkpoint(definition, state, id, "git_push")?;
                 if field(published, "phase")? != "push"
                     || field(published, "branch")? != branch
-                    || !run_git(
-                        repo,
-                        &[
-                            "merge-base",
-                            "--is-ancestor",
-                            field(published, "local_sha")?,
-                            head,
-                        ],
-                    )?
-                    .success
+                    || !observation::is_git_ancestor(repo, field(published, "local_sha")?, head)?
                 {
                     return Err(refuse(
                         "failure-handoff contradicts preceding host publication",
@@ -319,6 +322,7 @@ impl OrbitRuntime {
                 base_branch,
                 number,
                 allow_missing_branch: true,
+                certified_tip: None,
             },
         )?;
         if field(output, "pr_url")? != result.2.pull_request_url

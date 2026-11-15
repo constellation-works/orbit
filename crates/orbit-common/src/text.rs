@@ -1,4 +1,5 @@
-//! UTF-8-safe byte-index helpers for bounding arbitrary text.
+//! Shared text mechanisms: UTF-8-safe byte-index helpers for bounding
+//! arbitrary text, and Unicode-scalar edit distance for typo suggestions.
 //!
 //! They stand in for `str::floor_char_boundary` / `str::ceil_char_boundary`,
 //! which are newer than the workspace MSRV. Callers bound subprocess output,
@@ -51,4 +52,25 @@ pub fn contains_lowercased(haystack: &str, lowered_needle: &str) -> bool {
         .as_bytes()
         .windows(lowered_needle.len())
         .any(|window| window.eq_ignore_ascii_case(lowered_needle.as_bytes()))
+}
+
+/// Levenshtein distance between `left` and `right` over Unicode scalars
+/// (`char`s, not bytes or grapheme clusters): the minimum number of scalar
+/// insertions, deletions and substitutions, each costing 1, that turns one
+/// into the other. No normalization is applied.
+pub fn unicode_edit_distance(left: &str, right: &str) -> usize {
+    let right: Vec<_> = right.chars().collect();
+    let mut row: Vec<_> = (0..=right.len()).collect();
+    for (index, left) in left.chars().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = index + 1;
+        for (column, right) in right.iter().enumerate() {
+            let previous = row[column + 1];
+            row[column + 1] = (diagonal + usize::from(left != *right))
+                .min(previous + 1)
+                .min(row[column] + 1);
+            diagonal = previous;
+        }
+    }
+    row[right.len()]
 }

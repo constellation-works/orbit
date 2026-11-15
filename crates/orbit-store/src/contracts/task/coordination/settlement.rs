@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     AdmissionShipContract, ClaimAttribution, ClaimEvidence, ClaimRun, ExecutionClaim,
-    ExecutionClaimPhase, ExecutionLocation, PreservedClaimCandidate, TaskCoordinationRow,
+    ExecutionClaimPhase, ExecutionLocation, LeafRunEvidence, PreservedClaimCandidate,
+    TaskCoordinationRow,
 };
 
 /// A typed release the owner applied, kept on the claim's lifecycle state so
@@ -84,6 +85,16 @@ pub struct ClaimSettlementRecord {
     /// follower reported it. Absent for a follower that predates the report.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_path: Option<String>,
+    /// The leaf's effective reasoning effort, when its follower reported it,
+    /// in the agent scorecards' encoding: the effort's wire name, `null` for
+    /// the provider default, and absent when the follower did not know it or
+    /// predates the report. Attribution only, like `crew_model`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::claim::reported_effort"
+    )]
+    pub reasoning_effort: Option<Option<String>>,
     /// The first leaf step that did not complete, when the leaf kept a
     /// candidate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -131,6 +142,13 @@ impl ClaimSettlementRecord {
             crew_model: named(&evidence.crew_model).or_else(|| named(&reported.crew_model)),
             branch: named(&reported.branch),
             worktree_path: named(&reported.worktree_path),
+            reasoning_effort: reported.reasoning_effort.as_ref().and_then(|effort| {
+                match effort.as_deref().map(str::trim) {
+                    None => Some(None),
+                    Some("") => None,
+                    Some(name) => Some(Some(name.to_string())),
+                }
+            }),
             failed_step_id: failure
                 .and_then(|failure| failure.candidate.as_ref())
                 .and_then(|candidate| candidate.failed_step_id.clone()),
@@ -340,6 +358,10 @@ pub struct ClaimFinalRecovery {
     /// The decision as the leaf's agent proposed it. The owner verifies a
     /// `complete_no_diff` commit against its own base branch.
     pub decision: orbit_types::workflow::FinalRecoveryDecision,
+    /// Whose fault the leaf's recovery found the failure to be; a settlement
+    /// from a follower that predates faults carries `unknown`.
+    #[serde(default)]
+    pub fault: orbit_types::workflow::FaultAttribution,
 }
 
 /// Worker-owned documents and coordination metadata. Lifecycle transitions
@@ -441,6 +463,14 @@ pub enum ClaimMutation {
         event: String,
         note: String,
     },
+    /// [ORB-24233] Record a `completion_held` hold on the task of a live
+    /// landing attempt: the history entry carrying the hold decision and one
+    /// system comment. Changes no status and no claim authority.
+    RecordLandingCompletionHold {
+        handoff_id: String,
+        history: orbit_types::task::TaskHistoryEntry,
+        comment: String,
+    },
     /// Complete an authorized landing against verified external merge evidence.
     /// Refused while a merge intent is unresolved or the authority is stale.
     CompleteLanding {
@@ -514,6 +544,21 @@ pub struct ClaimInspection {
     /// starts from it rather than delivering the same comments again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steering: Option<orbit_types::workflow::SteeringWatermark>,
+    /// [ORB-20906] The leaf run's job, build and failing step, projected from
+    /// the claim's separate immutable evidence row. Never part of the
+    /// lifecycle state a mutation rewrites.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leaf_run_evidence: Option<LeafRunEvidence>,
+    /// The follower's late effort report for this claim, projected from its
+    /// immutable row. A settlement record holding no effort is filled from
+    /// it; a claim that settled before the owner kept settlement records
+    /// has only this [ORB-24150]. Never part of the lifecycle state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub late_leaf_effort: Option<LateLeafEffort>,
+    /// The follower's late report of the leaf's implementing model,
+    /// projected from its immutable row like [`Self::late_leaf_effort`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub late_leaf_model: Option<LateLeafModel>,
 }
 
 /// What a claimed leaf's task-context prompt carried, as the leaf records it
@@ -557,6 +602,10 @@ pub struct ClaimSteeringReading {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaimMutationResult {
+    /// Owner-measured revision of the winning failure commit. Older receipts
+    /// lack this fence and must not initiate automatic final recovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_revision: Option<crate::contracts::FinalRecoveryTaskRevision>,
     pub claim_id: String,
     pub phase: ExecutionClaimPhase,
     pub status: TaskStatus,
@@ -591,4 +640,120 @@ pub(crate) struct ClaimCommitEffects {
     /// The requesting executor's census row an admission upserts with its
     /// receipt [ORB-17304].
     pub census: Option<super::ExecutorCensusEntry>,
+    /// System comments of CI observations landing in this commit.
+    pub observation_comments: Vec<String>,
+}
+
+/// A follower's late report of the reasoning effort a leaf it already settled
+/// ran at [ORB-24115]: the effort its settlement did not carry, read afterwards
+/// from the follower's own records by the rule it reports at settlement. The
+/// owner keeps it in its own immutable row beside the claim, and a claim
+/// inspection fills an absent [`ClaimSettlementRecord::reasoning_effort`] from
+/// it, so the agent scorecards count it exactly as a reported settlement.
+/// Attribution only, like the settlement's own report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LateLeafEffort {
+    /// The machine that reported it: the claim's executing machine, from the
+    /// trusted session, never from the report.
+    pub machine_id: String,
+    /// The leaf run the claim was bound to.
+    pub run_id: String,
+    /// The effort's wire name, or `null` for the provider default. Always
+    /// present: a report of an unknown effort is never sent.
+    pub reasoning_effort: Option<String>,
+    /// The crew the leaf run used, as the report carried it [ORB-24206]. Absent
+    /// when the follower predates the field or did not know the crew. The
+    /// attempt is keyed to this crew and the model read with it, not to the
+    /// task's crew at the attempt's start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew: Option<String>,
+    pub recorded_at: String,
+}
+
+impl LateLeafEffort {
+    /// Whether `other` reports the same effort for the same leaf.
+    #[must_use]
+    pub fn same_fact(&self, other: &Self) -> bool {
+        self.machine_id == other.machine_id
+            && self.run_id == other.run_id
+            && self.reasoning_effort == other.reasoning_effort
+    }
+}
+
+/// A crew added to an already-recorded late effort report. Kept in its own
+/// immutable row so a newer follower can enrich a crewless report without
+/// rewriting the effort row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LateLeafCrew {
+    /// The machine that reported it: the claim's executing machine, from the
+    /// trusted session, never from the report.
+    pub machine_id: String,
+    /// The leaf run the claim was bound to.
+    pub run_id: String,
+    /// The effort report this crew enriches.
+    pub reasoning_effort: Option<String>,
+    /// The crew the leaf run used.
+    pub crew: String,
+    pub recorded_at: String,
+}
+
+/// A follower's late report of the model a leaf it already settled ran its
+/// implementing agent on [ORB-24150], read from the follower's own records
+/// by the rule that reads the effort (the leaf's main implementing
+/// invocation, else its latest matching launch record), never from a crew
+/// name or configuration. Kept in its own immutable row beside the claim;
+/// a claim inspection fills an absent [`ClaimSettlementRecord::crew_model`]
+/// from it. Attribution only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LateLeafModel {
+    /// The machine that reported it: the claim's executing machine, from the
+    /// trusted session, never from the report.
+    pub machine_id: String,
+    /// The leaf run the claim was bound to.
+    pub run_id: String,
+    pub crew_model: String,
+    pub recorded_at: String,
+}
+
+impl LateLeafModel {
+    /// Whether `other` reports the same model for the same leaf.
+    #[must_use]
+    pub fn same_fact(&self, other: &Self) -> bool {
+        self.machine_id == other.machine_id
+            && self.run_id == other.run_id
+            && self.crew_model == other.crew_model
+    }
+}
+
+/// What recording a late model report for a settled claim did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LateLeafModelWrite {
+    /// The report was recorded.
+    Recorded,
+    /// The claim already holds this model; nothing was written.
+    Replayed,
+    /// The claim already holds a different model, which stands. `held` is
+    /// that model.
+    Conflict { held: String },
+}
+
+/// What a late report for a settled claim did: its effort and, when it
+/// carried one, its model. A conflict on either writes neither.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LateLeafReportWrite {
+    pub effort: LateLeafEffortWrite,
+    pub model: Option<LateLeafModelWrite>,
+}
+
+/// What recording a late effort report for a settled claim did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LateLeafEffortWrite {
+    /// The report was recorded.
+    Recorded,
+    /// The claim already holds this effort, on its settlement or from an
+    /// earlier report; nothing was written.
+    Replayed,
+    /// The claim already holds a different effort, which stands; nothing was
+    /// written. `held` is that effort (`None` for the provider default).
+    Conflict { held: Option<String> },
 }

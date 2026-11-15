@@ -37,8 +37,8 @@ use orbit_store::contracts::{
 use orbit_types::record::OrbitEvent;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
-    JobRun, JobRunState, PipelineState, RunCancellationProvenance, RunStateUpdate,
-    TaskCancellationPolicy,
+    JobRun, JobRunState, PipelineState, RunCancellationProvenance, TaskCancellationPolicy,
+    WORKSPACE_AUTO_PIPELINE_JOB,
 };
 use serde_json::json;
 
@@ -46,13 +46,12 @@ use super::actions::{CancellationRequest, cancellation_note, cancellation_result
 use super::owner::{
     RunOwnerLiveness, run_owner_liveness, run_owner_unstoppable_reason, signal_run_owner_confirmed,
 };
+use super::state_write::RunStateCreation;
 use super::types::{JobRunCancelOutcome, JobRunCancelResult, UnstoppedChild, UnstoppedLeaf};
 use crate::OrbitRuntime;
 use crate::application::contracts::PULL_DRAIN_JOB;
 use crate::application::job::{JobDrainPort, JobPullSettlementPort};
 
-/// The local auto drain, whose leaves its cancel detaches.
-const LOCAL_DRAIN_JOB: &str = "workspace_auto_pipeline";
 const GRACEFUL_CANCEL_AUDIT: &str = "pipeline.run.cancel.graceful_requested";
 
 impl OrbitRuntime {
@@ -148,7 +147,7 @@ impl OrbitRuntime {
                 return self.request_graceful_drain_cancel(&run, request);
             }
         }
-        if force && run.job_id == LOCAL_DRAIN_JOB {
+        if force && run.job_id == WORKSPACE_AUTO_PIPELINE_JOB {
             return self.force_cancel_local_drain(&run, request, signal);
         }
         self.cancel_job_run_with_reason_and_policy_and_signal(
@@ -188,36 +187,13 @@ impl OrbitRuntime {
             });
             Ok(())
         };
-        loop {
-            match self
-                .stores()
-                .jobs()
-                .update_run_state(&run.run_id, &mut update)?
-            {
-                RunStateUpdate::Updated => break,
-                RunStateUpdate::NotFound => {
-                    return Err(OrbitError::not_found(
-                        NotFoundKind::JobRun,
-                        run.run_id.clone(),
-                    ));
-                }
-                RunStateUpdate::NoState => {
-                    #[cfg(test)]
-                    run_drain_cancel_state_init_hook();
-                    let state = PipelineState::new(
-                        run.run_id.clone(),
-                        run.job_id.clone(),
-                        run.input.clone().unwrap_or_else(|| json!({})),
-                    );
-                    // Initialize without controls or replacing worker progress.
-                    // Retrying checks the fresh lifecycle state transactionally,
-                    // whether we or a concurrent worker supplied the state.
-                    self.stores()
-                        .jobs()
-                        .initialize_run_state(&run.run_id, &state)?;
-                }
-            }
-        }
+        self.update_or_create_run_state(
+            &run.run_id,
+            &run.job_id,
+            run.input.as_ref(),
+            RunStateCreation::CreateIfMissing,
+            &mut update,
+        )?;
         if terminal {
             // The drain finished while this request was on its way.
             return self.cancel_job_run_with_reason_and_policy(
@@ -526,26 +502,5 @@ impl OrbitRuntime {
             }
         }
         Ok(result)
-    }
-}
-
-// Force a worker checkpoint or terminal transition between the NoState result
-// and insert-if-absent initialization without relying on scheduler timing.
-#[cfg(test)]
-thread_local! {
-    static DRAIN_CANCEL_STATE_INIT_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
-        std::cell::RefCell::new(None);
-}
-
-#[cfg(test)]
-pub(super) fn set_drain_cancel_state_init_hook(hook: impl FnOnce() + 'static) {
-    DRAIN_CANCEL_STATE_INIT_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
-}
-
-#[cfg(test)]
-fn run_drain_cancel_state_init_hook() {
-    let hook = DRAIN_CANCEL_STATE_INIT_HOOK.with(|slot| slot.borrow_mut().take());
-    if let Some(hook) = hook {
-        hook();
     }
 }

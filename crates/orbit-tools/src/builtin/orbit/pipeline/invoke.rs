@@ -12,13 +12,8 @@ pub struct OrbitPipelineInvokeTool;
 pub fn has_pipeline_child_admission(ctx: &ToolContext) -> bool {
     ctx.reservation_owner
         .as_ref()
-        .and_then(|owner| owner.owner_metadata_json.as_deref())
-        .and_then(|metadata| serde_json::from_str::<Value>(metadata).ok())
-        .is_some_and(|metadata| {
-            metadata
-                .get("pipeline_child_admission")
-                .is_some_and(Value::is_object)
-        })
+        .and_then(|owner| owner.owner_metadata.as_ref())
+        .is_some_and(|metadata| metadata.child_admission().is_some())
 }
 
 impl Tool for OrbitPipelineInvokeTool {
@@ -45,10 +40,9 @@ impl Tool for OrbitPipelineInvokeTool {
             },
         ];
         parameters.extend([
-            super::super::task::guarded::param("workspace", "string", "Explicit workspace required for default-input catalog submission"),
-            super::super::task::guarded::param("default_input", "boolean", "True submits an enabled, no-input catalog job with its defaults. Requires trusted operator authority and forbids managed-run invocation, input and priority. After a lost reply inspect runs; never automatically replay."),
+            crate::tool::tool_param("workspace", "Explicit workspace required for default-input catalog submission", "string", false),
+            crate::tool::tool_param("default_input", "True submits an enabled, no-input catalog job with its defaults. Requires trusted operator authority and forbids managed-run invocation, input and priority. After a lost reply inspect runs; never automatically replay.", "boolean", false),
         ]);
-        parameters.extend(super::super::identity_params());
 
         ToolSchema {
             name: "orbit.pipeline.invoke".to_string(),
@@ -60,10 +54,10 @@ impl Tool for OrbitPipelineInvokeTool {
     }
 
     fn input_schema(&self) -> Option<Value> {
-        let mut schema = Value::Object(orbit_common::protocol::tool_schema::tool_input_schema(
+        let mut schema = Value::Object(orbit_common::governance::tool_schema::tool_input_schema(
             &self.schema(),
         ));
-        schema["allOf"] = json!([{"if":{"required":["default_input"],"properties":{"default_input":{"const":true}}},"then":{"required":["workspace"],"propertyNames":{"enum":["workspace","job_name","default_input","model"]}},"else":{"required":["input"]}}]);
+        schema["allOf"] = json!([{"if":{"required":["default_input"],"properties":{"default_input":{"const":true}}},"then":{"required":["workspace"],"propertyNames":{"enum":["workspace","job_name","default_input"]}},"else":{"required":["input"]}}]);
         Some(schema)
     }
 
@@ -73,11 +67,7 @@ impl Tool for OrbitPipelineInvokeTool {
                 OrbitError::InvalidInput("default_input must be a boolean".into())
             })?;
             if enabled {
-                if ctx
-                    .orbit_host
-                    .as_ref()
-                    .is_some_and(|host| host.task_scope().run_id.is_some())
-                {
+                if ctx.is_managed_run() {
                     return Err(OrbitError::CapabilityDenied(
                         "managed runs cannot submit catalog jobs".into(),
                     ));
@@ -108,12 +98,7 @@ impl Tool for OrbitPipelineInvokeTool {
                 );
             }
         }
-        if ctx
-            .orbit_host
-            .as_ref()
-            .is_some_and(|host| host.task_scope().run_id.is_some())
-            && !has_pipeline_child_admission(ctx)
-        {
+        if ctx.is_managed_run() && !has_pipeline_child_admission(ctx) {
             return Err(OrbitError::CapabilityDenied(
                 "managed runs may invoke only a host-authorized child pipeline admission".into(),
             ));

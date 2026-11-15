@@ -1,6 +1,6 @@
-//! Agent scorecards: one scorecard per agent role (orchestrators,
-//! implementers, reviewers, pilots), ranked by crew and model, where every
-//! problem counts against exactly one role or is Not scored.
+//! Agent scorecards: one scorecard per agent role (implementers, reviewers,
+//! pilots), ranked by crew and model, where every problem counts against
+//! exactly one role or is Not scored.
 //!
 //! [`OrbitRuntime::agent_scan`](crate::OrbitRuntime::agent_scan) reads the
 //! workspace once ([`AgentFacts`]):
@@ -18,26 +18,38 @@
 //! above the fleet average, pulled down toward it with K = 30. Cost is never
 //! a term.
 
+use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 
 mod api;
 mod attribution;
 mod candidates;
+mod ci_failures;
+pub(super) mod effort;
+mod effort_backfill;
 mod facts;
 mod hands;
-mod performance;
+pub(crate) mod memory_evidence;
 mod query;
+mod rank;
 mod records;
 mod roles;
 mod score;
-mod shadow;
 
+#[cfg(test)]
+mod tests;
+
+pub(crate) use api::AgentDetailSurface;
 pub use attribution::{Charge, Credit, Owner};
+pub use ci_failures::CiFailureQuery;
+pub use effort_backfill::{
+    ClaimedEffortBackfill, ClaimedEffortOutcome, ClaimedEffortRow, DispatchEffortBackfill,
+};
 pub(crate) use facts::review_gate_verdicts;
-pub use facts::{AgentFacts, Problem};
+pub(crate) use facts::task_execution_modes;
+pub use facts::{AgentFacts, ExecutionMode, Problem};
 
-/// The model of a row whose runs, or for orchestrators whose tasks, recorded
-/// none.
+/// The model of a row whose runs recorded none.
 pub(crate) const MODEL_UNKNOWN: &str = "model unknown";
 /// The crew of a row whose attempt no job run records.
 pub(crate) const CREW_UNKNOWN: &str = "crew unknown";
@@ -68,15 +80,13 @@ const WINDOWS: &[(&str, &str, i64)] = &[
 /// An agent role, each with its own scorecard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AgentRole {
-    Orchestrators,
     Implementers,
     Reviewers,
     Pilots,
 }
 
 impl AgentRole {
-    pub const ALL: [AgentRole; 4] = [
-        AgentRole::Orchestrators,
+    pub const ALL: [AgentRole; 3] = [
         AgentRole::Implementers,
         AgentRole::Reviewers,
         AgentRole::Pilots,
@@ -84,7 +94,6 @@ impl AgentRole {
 
     pub fn as_str(self) -> &'static str {
         match self {
-            AgentRole::Orchestrators => "orchestrators",
             AgentRole::Implementers => "implementers",
             AgentRole::Reviewers => "reviewers",
             AgentRole::Pilots => "pilots",
@@ -98,32 +107,90 @@ impl AgentRole {
             .find(|role| role.as_str() == name.trim())
             .ok_or_else(|| {
                 OrbitError::InvalidInput(format!(
-                    "role must be one of orchestrators, implementers, reviewers or pilots; got '{name}'"
+                    "role must be one of implementers, reviewers or pilots; got '{name}'"
                 ))
             })
     }
 }
 
-/// A validated selection: the window and the units a row needs before it is
-/// ranked.
+/// Every role scorecard's term keys and labels, in role order. The crew
+/// memory score-blind lint refuses a note that quotes them, so a model's
+/// memory describes its work rather than how the work is measured.
+pub(crate) fn scorecard_term_vocabulary() -> Vec<&'static str> {
+    AgentRole::ALL
+        .into_iter()
+        .flat_map(|role| roles::spec(role).terms.iter())
+        .flat_map(|term| [term.key, term.label])
+        .collect()
+}
+
+/// Which tasks implementer metrics count, by their derived
+/// [`ExecutionMode`]. Unclassified tasks are in none. Cost and run time
+/// count managed tasks whatever the scope: interactive work records none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExecutionScope {
+    /// Managed tasks only, the default.
+    #[default]
+    Managed,
+    /// Managed and interactive tasks together.
+    All,
+    /// Interactive tasks only, as a separate series.
+    Interactive,
+}
+
+impl ExecutionScope {
+    const ALL: [ExecutionScope; 3] = [
+        ExecutionScope::Managed,
+        ExecutionScope::All,
+        ExecutionScope::Interactive,
+    ];
+
+    /// The scope's wire name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExecutionScope::Managed => "managed",
+            ExecutionScope::All => "all",
+            ExecutionScope::Interactive => "interactive",
+        }
+    }
+
+    /// Whether a task executed as `mode` is counted.
+    pub(crate) fn admits(self, mode: ExecutionMode) -> bool {
+        match self {
+            ExecutionScope::Managed => mode == ExecutionMode::Managed,
+            ExecutionScope::All => mode != ExecutionMode::Unclassified,
+            ExecutionScope::Interactive => mode == ExecutionMode::Interactive,
+        }
+    }
+}
+
+/// A validated selection: the window, its optional exclusive end, the units
+/// a row needs before it is ranked and which executions implementer metrics
+/// count.
 #[derive(Debug, Clone, Copy)]
 pub struct AgentQuery {
     requested: &'static str,
     window: &'static str,
     span: WindowSpan,
     min_support: usize,
+    execution: ExecutionScope,
+    /// Exclusive end. `None` leaves the upper bound open, so an omitted
+    /// `until` counts the same work as a window that ends now.
+    until: Option<DateTime<Utc>>,
 }
 
 /// How far back a window reaches.
 #[derive(Debug, Clone, Copy)]
 enum WindowSpan {
-    /// This many hours ending now.
+    /// This many hours ending at `until`, or now when `until` is omitted.
     Hours(i64),
     /// Back to the start of the newest this many delivery attempts.
     Attempts(usize),
 }
 
 pub use api::{
-    agent_attribution, agent_by_type_scorecard, agent_detail, agent_per_task_export,
-    agent_scorecard,
+    agent_attribution, agent_by_type_scorecard, agent_detail, agent_detail_with_effort,
+    agent_per_task_export, agent_scorecard, agent_size_curves,
 };
+pub(crate) use query::WindowBounds;
+pub use rank::{RankQuery, RankSeasons, agent_rank};

@@ -1,7 +1,6 @@
 use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::optional_string_alias;
 use orbit_types::identity::{normalize_agent_family_for_model, require_canonical_agent_family};
-use orbit_types::tool::ToolParam;
 use serde_json::Value;
 
 use crate::ToolContext;
@@ -31,24 +30,26 @@ pub(super) fn resolve_identity(
         });
     }
 
-    let input_agent = optional_string_alias(input, &["agent"])?;
-    let input_model = optional_string_alias(input, &["model"])?;
+    // `model` is no longer a schema parameter, so the registry's null-as-absent
+    // rule for declared optional fields does not cover it. A JSON null means no
+    // self-reported model, the same as an absent key.
+    let input_model = match input.get("model") {
+        None | Some(Value::Null) => None,
+        Some(_) => optional_string_alias(input, &["model"])?,
+    };
     let context_agent = trimmed_optional(ctx.agent_name.clone());
     let context_model = trimmed_optional(ctx.model_name.clone());
     let context_has_identity = context_agent.is_some() || context_model.is_some();
-    let input_has_identity = input_agent
+    let input_has_identity = input_model
         .as_deref()
-        .is_some_and(|value| !value.trim().is_empty())
-        || input_model
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty());
+        .is_some_and(|value| !value.trim().is_empty());
     let (agent, model) = if context_has_identity {
         let agent =
             normalize_agent_family_for_model(context_agent.as_deref(), context_model.as_deref())?;
         // Runtime identity takes precedence over any self-reported input.
         (agent, context_model)
     } else if input_has_identity {
-        (trimmed_optional(input_agent), trimmed_optional(input_model))
+        (None, trimmed_optional(input_model))
     } else {
         (None, None)
     };
@@ -59,36 +60,4 @@ pub(super) fn resolve_identity(
         model,
         actor_label: family,
     })
-}
-
-pub(super) fn identity_params() -> Vec<ToolParam> {
-    vec![
-        ToolParam {
-            name: "agent".to_string(),
-            description:
-                "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
-                    .to_string(),
-            param_type: "string".to_string(),
-            required: false,
-        },
-        ToolParam {
-            name: "model".to_string(),
-            description:
-                "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized."
-                    .to_string(),
-            param_type: "string".to_string(),
-            required: false,
-        },
-    ]
-}
-
-pub(super) fn model_identity_params() -> Vec<ToolParam> {
-    vec![ToolParam {
-        name: "model".to_string(),
-        description:
-            "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
-                .to_string(),
-        param_type: "string".to_string(),
-        required: false,
-    }]
 }

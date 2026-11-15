@@ -24,8 +24,9 @@ use orbit_common::fs::io::atomic_write_text;
 use orbit_engine::activity_job::{ScriptAsset, V2ScriptCatalog};
 use orbit_types::identity::lower_hex;
 use orbit_types::workflow::activity_job::{
-    ScriptGrant, ScriptGrantLimits, ScriptHostRole, ScriptNetwork, is_valid_script_name,
-    script_content_digest, script_grant_id, script_sha256_hex,
+    SCRIPT_OUTPUT_HARD_MAX_FILE_BYTES, SCRIPT_OUTPUT_HARD_MAX_FILES, ScriptGrant,
+    ScriptGrantLimits, ScriptHostRole, ScriptNetwork, is_valid_script_name, script_content_digest,
+    script_grant_id, script_sha256_hex,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -214,8 +215,11 @@ pub enum ScriptGrantState {
     Ungranted,
     /// A grant whose manifest no longer exists.
     Orphaned,
-    /// A grant row whose witness is missing or does not match.
+    /// A stored grant whose witness is untrusted or whose timeout ceiling is
+    /// outside the supported range.
     WitnessRefused,
+    /// A manifest that could not be loaded.
+    Unavailable,
 }
 
 impl ScriptGrantState {
@@ -226,6 +230,7 @@ impl ScriptGrantState {
             ScriptGrantState::Ungranted => "ungranted",
             ScriptGrantState::Orphaned => "orphaned",
             ScriptGrantState::WitnessRefused => "witness_refused",
+            ScriptGrantState::Unavailable => "unavailable",
         }
     }
 }
@@ -261,6 +266,82 @@ pub struct ScriptGrantOptions {
     pub write_roots: Vec<PathBuf>,
     pub env_pass: Vec<String>,
     pub follower: bool,
+    /// The step timeout ceiling the grant records, in seconds. Unset keeps
+    /// the default ceiling; a re-grant never inherits or widens it on its own.
+    pub timeout_seconds: Option<u64>,
+    /// The most output files one step may keep. Unset keeps the default
+    /// ceiling; a re-grant never inherits or widens it on its own.
+    pub output_max_files: Option<u32>,
+    /// The largest output file one step may keep, in bytes.
+    pub output_max_file_bytes: Option<u64>,
+    /// Who the grant records as grantor. Unset is this process's actor
+    /// label (the operator at the CLI).
+    pub grantor: Option<String>,
+    /// How consent arrived: `cli` when unset, `dashboard`, or
+    /// `decision-channel <name>` / `decision <request>` for an answered
+    /// script grant request.
+    pub provenance: Option<String>,
+    /// The digest the operator saw. When set, a script whose current bytes
+    /// digest to anything else is refused instead of granted, so consent
+    /// is never applied to bytes nobody reviewed.
+    pub expected_digest: Option<String>,
+}
+
+/// The longest timeout a grant may record, in seconds. A step's deadline is
+/// `Instant::now() + timeout` when it starts, and that sum panics once it
+/// leaves the host's `Instant` range (ORB-21454). 2^32 seconds, about 136
+/// years, sits far inside that range on Linux, where the overflow was
+/// reproduced, so no realistic request is refused.
+const SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS: u64 = u32::MAX as u64;
+
+fn script_grant_timeout_refusal(name: &str, grant_id: &str, seconds: u64) -> String {
+    format!(
+        "script `{name}` grant {grant_id} is refused: timeout ceiling {seconds} is outside \
+         1..={SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS} seconds; review it and re-grant \
+         with `orbit script grant {name}`"
+    )
+}
+
+/// The limits one grant records: the defaults, with each acknowledged
+/// override checked against the hard ceilings.
+fn grant_output_limits(
+    name: &str,
+    options: &ScriptGrantOptions,
+) -> Result<ScriptGrantLimits, OrbitError> {
+    let mut limits = ScriptGrantLimits::default();
+    if let Some(seconds) = options.timeout_seconds {
+        if seconds == 0 {
+            return Err(OrbitError::InvalidInput(format!(
+                "script `{name}` timeout must be at least 1 second; nothing was granted"
+            )));
+        }
+        if seconds > SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS {
+            return Err(OrbitError::InvalidInput(format!(
+                "script `{name}` timeout {seconds} is outside \
+                 1..={SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS} seconds; nothing was granted"
+            )));
+        }
+        limits.timeout_max_seconds = seconds;
+    }
+    if let Some(files) = options.output_max_files {
+        if !(1..=SCRIPT_OUTPUT_HARD_MAX_FILES).contains(&files) {
+            return Err(OrbitError::InvalidInput(format!(
+                "script `{name}` output file count {files} is outside 1..={SCRIPT_OUTPUT_HARD_MAX_FILES}; \
+                 nothing was granted"
+            )));
+        }
+        limits.output_max_files = files;
+    }
+    if let Some(bytes) = options.output_max_file_bytes {
+        if !(1..=SCRIPT_OUTPUT_HARD_MAX_FILE_BYTES).contains(&bytes) {
+            return Err(OrbitError::InvalidInput(format!(
+                "script `{name}` output file size {bytes} is outside \
+                 1..={SCRIPT_OUTPUT_HARD_MAX_FILE_BYTES} bytes; nothing was granted"
+            )));
+        }
+        limits.output_max_file_bytes = bytes;
+    }
+    Ok(limits)
 }
 
 impl RuntimeKernel {
@@ -269,9 +350,9 @@ impl RuntimeKernel {
     pub fn v2_script_catalog(&self) -> Result<V2ScriptCatalog, OrbitError> {
         let paths = self.paths();
         let mut catalog = V2ScriptCatalog::new(paths.scripts_dir.clone(), paths.repo_root.clone());
-        catalog
-            .load_dir()
-            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+        catalog.load_dir().map_err(|error| {
+            OrbitError::InvalidInput(orbit_engine::activity_job::script_load_refusal(&error))
+        })?;
         Ok(catalog)
     }
 
@@ -298,6 +379,19 @@ impl RuntimeKernel {
                 ),
                 Some(grant) => match verify_script_grant_witness(&global_root, grant) {
                     Err(reason) => (ScriptGrantState::WitnessRefused, reason),
+                    Ok(())
+                        if !(1..=SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS)
+                            .contains(&grant.limits.timeout_max_seconds) =>
+                    {
+                        (
+                            ScriptGrantState::WitnessRefused,
+                            script_grant_timeout_refusal(
+                                &asset.name,
+                                &grant.grant_id,
+                                grant.limits.timeout_max_seconds,
+                            ),
+                        )
+                    }
                     Ok(()) if grant.digest == asset.digest => (
                         ScriptGrantState::Granted,
                         format!(
@@ -330,8 +424,19 @@ impl RuntimeKernel {
                 detail,
             });
         }
+        for (name, reason) in catalog.unavailable_scripts() {
+            statuses.push(ScriptStatus {
+                name: name.to_string(),
+                state: ScriptGrantState::Unavailable,
+                asset: None,
+                grant: grants.iter().find(|grant| grant.name == name).cloned(),
+                detail: reason.to_string(),
+            });
+        }
         for grant in grants {
-            if catalog.get(&grant.name).is_some() {
+            if catalog.get(&grant.name).is_some()
+                || catalog.unavailable_script(&grant.name).is_some()
+            {
                 continue;
             }
             let witness_note = match verify_script_grant_witness(&global_root, &grant) {
@@ -367,15 +472,45 @@ impl RuntimeKernel {
     }
 
     /// The grant a script name currently holds, verified against its
-    /// witness. A row without a matching witness is refused, never
-    /// returned as authority.
+    /// witness and the supported timeout range. A row without a matching
+    /// witness or with an invalid timeout ceiling is refused, never
+    /// returned as authority, including grants stored by older versions.
     pub fn verified_script_grant(&self, name: &str) -> Result<Option<ScriptGrant>, OrbitError> {
         let workspace_id = self.workspace_id()?;
         let Some(grant) = self.sqlite_store()?.get_script_grant(&workspace_id, name)? else {
             return Ok(None);
         };
         verify_script_grant_witness(&self.global_root(), &grant).map_err(OrbitError::Execution)?;
+        let seconds = grant.limits.timeout_max_seconds;
+        if !(1..=SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS).contains(&seconds) {
+            return Err(OrbitError::Execution(script_grant_timeout_refusal(
+                name,
+                &grant.grant_id,
+                seconds,
+            )));
+        }
         Ok(Some(grant))
+    }
+
+    /// The manifest and entry bytes the current grant's witness recorded,
+    /// for the diff a re-grant shows. `None` when the script has no
+    /// verified grant.
+    pub fn granted_script_bytes(
+        &self,
+        name: &str,
+    ) -> Result<Option<GrantedScriptBytes>, OrbitError> {
+        let Some(grant) = self.verified_script_grant(name)? else {
+            return Ok(None);
+        };
+        let path = script_grant_witness_path(&self.global_root(), &grant.workspace_id, name);
+        let raw = std::fs::read_to_string(&path)
+            .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
+        let witness: ScriptGrantWitness = serde_json::from_str(&raw)
+            .map_err(|error| OrbitError::Execution(format!("parse {}: {error}", path.display())))?;
+        Ok(Some(GrantedScriptBytes {
+            manifest: decode_hex(&witness.manifest_hex)?,
+            entry: decode_hex(&witness.entry_hex)?,
+        }))
     }
 
     /// Grant one script at its current digest. The row is written first
@@ -387,6 +522,9 @@ impl RuntimeKernel {
         options: &ScriptGrantOptions,
     ) -> Result<ScriptGrant, OrbitError> {
         let catalog = self.v2_script_catalog()?;
+        if let Some(reason) = catalog.unavailable_script(name) {
+            return Err(OrbitError::InvalidInput(reason.to_string()));
+        }
         let Some(asset) = catalog.get(name) else {
             return Err(OrbitError::InvalidInput(format!(
                 "script `{name}` manifest not found at {}; nothing was granted",
@@ -400,12 +538,21 @@ impl RuntimeKernel {
             OrbitError::Io(format!("read {}: {error}", asset.entry_path.display()))
         })?;
         let digest = script_content_digest(&manifest_bytes, &entry_bytes);
+        if let Some(expected) = options.expected_digest.as_deref()
+            && expected != digest
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "script `{name}` changed since it was reviewed (reviewed digest {expected}, current \
+                 digest {digest}); nothing was granted"
+            )));
+        }
         if digest != asset.digest {
             return Err(OrbitError::InvalidInput(format!(
                 "script `{name}` changed at {} while it was being granted; run the grant again",
                 asset.manifest_path.display()
             )));
         }
+        let limits = grant_output_limits(name, options)?;
         let interpreter_paths = resolve_grant_interpreter_paths(asset)?;
         let mut read_roots = asset.spec.requests.read_roots.clone();
         read_roots.extend(options.read_roots.iter().cloned());
@@ -418,6 +565,25 @@ impl RuntimeKernel {
                     root.display()
                 )));
             }
+        }
+        // Each root must exist, resolve, sit outside the credential paths and
+        // pass a read (and, for a write root, write) probe by this process.
+        // The job's process repeats the probe before every spawn.
+        let home = std::env::var_os("HOME");
+        let roots = read_roots
+            .iter()
+            .map(|root| (root, orbit_exec::ScriptRootAccess::Read))
+            .chain(
+                write_roots
+                    .iter()
+                    .map(|root| (root, orbit_exec::ScriptRootAccess::Write)),
+            );
+        for (root, access) in roots {
+            orbit_exec::probe_script_root(root, access, home.as_deref()).map_err(|reason| {
+                OrbitError::InvalidInput(format!(
+                    "script `{name}` cannot be granted: {reason}; nothing was granted"
+                ))
+            })?;
         }
         let mut env_pass = asset.spec.requests.env_pass.clone();
         for env_name in &options.env_pass {
@@ -438,15 +604,21 @@ impl RuntimeKernel {
             read_roots,
             write_roots,
             env_pass,
-            limits: ScriptGrantLimits::default(),
+            limits,
             host_role: if options.follower {
                 ScriptHostRole::Follower
             } else {
                 ScriptHostRole::Owner
             },
-            grantor: self.actor_label().to_string(),
+            grantor: options
+                .grantor
+                .clone()
+                .unwrap_or_else(|| self.actor_label().to_string()),
             granted_at: chrono::Utc::now().to_rfc3339(),
-            provenance: "cli".to_string(),
+            provenance: options
+                .provenance
+                .clone()
+                .unwrap_or_else(|| "cli".to_string()),
             expires_at: None,
         };
         self.sqlite_store()?.upsert_script_grant(&grant)?;
@@ -469,6 +641,29 @@ impl RuntimeKernel {
         forget_script_grant_witness(&self.global_root(), &workspace_id, name);
         Ok(deleted)
     }
+}
+
+/// The manifest and entry bytes a verified grant's witness recorded.
+#[derive(Debug, Clone)]
+pub struct GrantedScriptBytes {
+    pub manifest: Vec<u8>,
+    pub entry: Vec<u8>,
+}
+
+fn decode_hex(hex: &str) -> Result<Vec<u8>, OrbitError> {
+    if !hex.len().is_multiple_of(2) {
+        return Err(OrbitError::Execution(
+            "script grant witness bytes are not hex".to_string(),
+        ));
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(|index| {
+            u8::from_str_radix(&hex[index..index + 2], 16).map_err(|_| {
+                OrbitError::Execution("script grant witness bytes are not hex".to_string())
+            })
+        })
+        .collect()
 }
 
 /// The interpreter argv a grant records: the first element resolved to

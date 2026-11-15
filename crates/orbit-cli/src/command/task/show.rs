@@ -29,6 +29,10 @@ pub(super) fn render(
 ) -> CommandOut {
     match input.get("fields").map(strings) {
         Some(fields) => {
+            // The tool's `fields` projection keys even one field; the CLI
+            // keeps its bare single-field JSON, so unwrap that one key
+            // before rendering either surface.
+            let value = single_field_value(&value, &fields);
             let text = fields_text(&value, &fields)?;
             Ok(Payload::detail(value, text).into())
         }
@@ -340,21 +344,21 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
             final_recovery_text(record)
         );
     }
+    // The `completion.hold` rule that kept a `--complete` run's task here.
+    if let Some(hold) = task.get("completion_hold") {
+        let _ = writeln!(
+            out,
+            "{} {}",
+            bold("Completion Hold:"),
+            completion_hold_text(hold)
+        );
+    }
     // Criteria the delivery owes until the deployed build is measured.
     if let Some(owed) = task.get("owed_criteria") {
         let _ = writeln!(out, "{}", bold("Owed After Deploy:"));
         for line in owed_criteria_lines(owed) {
             let _ = writeln!(out, "  {line}");
         }
-    }
-    // A `verify-mock-ui` task's capture of record: what was captured and
-    // checked, or why it is not established.
-    if let Some(summary) = task
-        .get("visual_review")
-        .and_then(|visual| visual.get("summary"))
-        .and_then(Value::as_str)
-    {
-        let _ = writeln!(out, "{} {summary}", bold("Visual Review:"));
     }
     if pr.is_none()
         && let Some(pr_status) = field("pr_status")
@@ -449,6 +453,9 @@ fn location_label_parts(machine_id: Option<&str>, machine_name: Option<&str>) ->
 }
 
 /// The PR's stored review status moves beside its number in the summary.
+/// The show record orders `external_refs` with the latest recorded `github-pr`
+/// first, so the first match is the task's current delivery (a requeued task
+/// that opened a fresh pull request no longer reports the closed earlier one).
 fn pr_summary(task: &Map<String, Value>) -> Option<String> {
     let pull_request = task
         .get("external_refs")
@@ -464,6 +471,19 @@ fn pr_summary(task: &Map<String, Value>) -> Option<String> {
         .and_then(Value::as_str)
         .unwrap_or("unknown");
     Some(format!("PR: #{number} ({state})"))
+}
+
+/// Unwrap a one-field projection to its bare value, for the CLI's
+/// single-field JSON. `terminal` alone stays keyed, as the tool
+/// answers it; anything already bare is left as it is.
+fn single_field_value(value: &Value, fields: &[&str]) -> Value {
+    let [field] = fields else {
+        return value.clone();
+    };
+    if *field == "terminal" {
+        return value.clone();
+    }
+    value.get(field).cloned().unwrap_or_else(|| value.clone())
 }
 
 /// The text of a `--fields` projection: one field's value bare, several each
@@ -631,16 +651,46 @@ pub(crate) fn next_step_text(next: &Value) -> String {
     }
 }
 
-/// The words after `Final Recovery:` on a task show. Local and routed text
-/// both use this.
+/// The words after `Final Recovery:` on a task show, and an indented
+/// `Fault:` line when the decision recorded one (an older decision reads as
+/// `unknown` with no evidence and prints none). Local and routed text both
+/// use this.
 pub(crate) fn final_recovery_text(record: &Value) -> String {
     let part = |key: &str| record.get(key).and_then(Value::as_str).unwrap_or_default();
-    format!(
+    let mut text = format!(
         "{} ({}) by run {} at {}",
         part("decision"),
         part("outcome"),
         part("run_id"),
         timestamp(part("at"))
+    );
+    let fault = part("fault");
+    let evidence = part("fault_evidence");
+    if !fault.is_empty() && (fault != "unknown" || !evidence.is_empty()) {
+        text.push_str(&format!("\n  Fault: {fault}"));
+        if !evidence.is_empty() {
+            text.push_str(&format!(" ({evidence})"));
+        }
+    }
+    text
+}
+
+/// The words after `Completion Hold:` on a task show: the rule, the field
+/// and value that matched and what they matched, and the run it held. Local
+/// and routed text both use this.
+pub(crate) fn completion_hold_text(hold: &Value) -> String {
+    let part = |key: &str| hold.get(key).and_then(Value::as_str).unwrap_or_default();
+    let task = match part("matched_task_id") {
+        "" => String::new(),
+        id => format!(" (bundled task {id})"),
+    };
+    format!(
+        "held for review: {} {} matched {}{task} (rule {}, run {})",
+        part("field"),
+        part("pattern"),
+        part("matched"),
+        part("rule"),
+        part("run_id")
     )
 }
 

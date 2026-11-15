@@ -8,10 +8,10 @@ use orbit_policy::PolicyEngine;
 use super::fs_audit::FsAuditLogger;
 use super::host::OrbitToolHost;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ReservationOwnerContext {
     pub owner_run_id: String,
-    pub owner_metadata_json: Option<String>,
+    pub owner_metadata: Option<orbit_types::task::ReservationOwnerMetadata>,
 }
 
 /// The managed activity a tool call serves, attested by the host that
@@ -76,17 +76,24 @@ pub struct WitnessedProgramGrant {
     pub programs: Result<std::collections::BTreeMap<String, PathBuf>, String>,
 }
 
+/// Longest timeout, in minutes, one `proc.spawn` call may use inside an
+/// activity: long enough for a cold workspace build and test gate, still
+/// bounded below a typical activity.
+///
+/// The former `execution.proc_spawn_max_timeout_minutes` default, fixed when the key was removed [ORB-22808].
+pub const PROC_SPAWN_MAX_TIMEOUT_MINUTES: u64 = 45;
+
 /// The wall-clock budget a managed activity grants `proc.spawn`.
 ///
 /// Built only by the host that dispatched the activity: from the deadline the
-/// CLI runner stamped into the provider's environment, and the operator's
-/// `execution.proc_spawn_max_timeout_minutes`. Tool input never contributes.
+/// CLI runner stamped into the provider's environment, and
+/// [`PROC_SPAWN_MAX_TIMEOUT_MINUTES`]. Tool input never contributes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProcSpawnBudget {
     /// When the activity's provider subprocess is stopped.
     pub deadline: std::time::SystemTime,
-    /// Operator ceiling for one `proc.spawn` call, however long the activity
-    /// has left.
+    /// Ceiling for one `proc.spawn` call, however long the activity has
+    /// left.
     pub max_timeout_ms: u64,
 }
 
@@ -162,6 +169,14 @@ pub struct ToolContext {
     /// Narrow Orbit application host used by Orbit builtins instead of respawning
     /// the Orbit CLI or carrying task-specific state in the generic tool context.
     pub orbit_host: Option<Arc<dyn OrbitToolHost>>,
+}
+
+impl ToolContext {
+    pub(crate) fn is_managed_run(&self) -> bool {
+        self.orbit_host
+            .as_ref()
+            .is_some_and(|host| host.task_scope().run_id.is_some())
+    }
 }
 
 impl std::fmt::Debug for ToolContext {

@@ -15,6 +15,7 @@ mod operations;
 #[cfg(unix)]
 mod orchestrator_env;
 mod resume;
+mod script_branch_resume;
 mod shell;
 #[cfg(unix)]
 mod trusted_host;

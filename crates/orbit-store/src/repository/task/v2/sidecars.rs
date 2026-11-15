@@ -1,6 +1,33 @@
 use super::*;
 
+/// Small scans avoid helper startup; large scans bound simultaneous probes
+/// just as envelope freshness does. Bundle reads never leave the caller.
+const PARALLEL_BUNDLE_STAMP_MIN_TASKS: usize = 256;
+const MAX_BUNDLE_STAMP_THREADS: usize = 16;
+
 impl TaskV2Store {
+    pub(crate) fn task_decision_snapshots(
+        &self,
+    ) -> Result<BTreeMap<String, crate::contracts::TaskDecisionSnapshot>, OrbitError> {
+        self.registry.task_decision_snapshots(&self.workspace_id)
+    }
+
+    pub(crate) fn record_task_decision_snapshots(
+        &self,
+        records: &[crate::contracts::TaskDecisionSnapshot],
+    ) -> Result<bool, OrbitError> {
+        self.registry
+            .record_task_decision_snapshots(&self.workspace_id, records)
+    }
+
+    pub(crate) fn decision_request_task_id(
+        &self,
+        request_id: &str,
+    ) -> Result<Option<String>, OrbitError> {
+        self.registry
+            .decision_request_task_id(&self.workspace_id, request_id)
+    }
+
     /// A task's comments for a reader outside any boundary section.
     ///
     /// When the partition has nothing to recover, only the comment log is
@@ -115,12 +142,122 @@ impl TaskV2Store {
         if !boundary.has_nothing_to_recover()? {
             return Ok(None);
         }
+        self.settled_history_stamp(id)
+    }
+
+    /// [`Self::task_history_stamp`] for each of `ids`, checking the
+    /// partition for a commit to recover once rather than per task. A task
+    /// is absent when nothing can vouch for its logs, and every task is when
+    /// there is no commit boundary or the partition has a commit to recover.
+    pub(crate) fn task_history_stamps(
+        &self,
+        ids: &[String],
+    ) -> Result<BTreeMap<String, String>, OrbitError> {
+        let mut stamps = BTreeMap::new();
+        let Some(boundary) = &self.coordination else {
+            return Ok(stamps);
+        };
+        if !boundary.has_nothing_to_recover()? {
+            return Ok(stamps);
+        }
+        for id in ids {
+            orbit_types::task::validate_orb_task_id(id)?;
+            if let Some(stamp) = self.settled_history_stamp(id)? {
+                stamps.insert(id.clone(), stamp);
+            }
+        }
+        Ok(stamps)
+    }
+
+    /// One task's log stamp once the partition is known to be settled.
+    fn settled_history_stamp(&self, id: &str) -> Result<Option<String>, OrbitError> {
         let Some([events, comments]) = self.bundle_store.settled_log_paths(id)? else {
             return Ok(None);
         };
         Ok(persisted_file_stamp(&events)
             .zip(persisted_file_stamp(&comments))
             .map(|(events, comments)| format!("{events}/{comments}")))
+    }
+
+    /// Filesystem evidence of the bundle a whole-bundle read opens, for each
+    /// of `ids`, taken without reading it: whole-bundle stamps over its
+    /// directories and logs.
+    ///
+    /// A store write that changes what a whole-bundle read returns, or
+    /// whether it succeeds, changes the stamp: it appends to a log, truncates
+    /// one, or renames a new file into a directory. It carries the limits
+    /// [`Self::task_history_stamp`] states: taken before a read it labels
+    /// that read or something older, and it is evidence that the store
+    /// wrote nothing, not proof the bytes are identical: an out-of-band
+    /// in-place edit of a renamed-into-place document, manifest or blob,
+    /// or a change inside a legacy nested artifact
+    /// directory, goes unseen until the bundle's next store write.
+    ///
+    /// The partition is checked once for a commit to recover; a task is
+    /// absent when nothing can vouch for its bundle (a write to settle, a
+    /// missing task, a platform without file identity), and every task is
+    /// when there is no commit boundary or the partition has a commit to
+    /// recover.
+    pub(crate) fn task_bundle_stamps(
+        &self,
+        ids: &[String],
+    ) -> Result<BTreeMap<String, String>, OrbitError> {
+        let Some(boundary) = &self.coordination else {
+            return Ok(BTreeMap::new());
+        };
+        if !boundary.has_nothing_to_recover()? {
+            return Ok(BTreeMap::new());
+        }
+        let threads = std::thread::available_parallelism()
+            .map_or(1, |parallelism| parallelism.get())
+            .min(MAX_BUNDLE_STAMP_THREADS);
+        if ids.len() < PARALLEL_BUNDLE_STAMP_MIN_TASKS || threads < 2 {
+            return self.stamp_settled_task_bundles(ids);
+        }
+        // Only metadata and non-blocking commit-lease probes run on helpers:
+        // no boundary entry, recovery or bundle read with thread-local locks.
+        std::thread::scope(|scope| {
+            let chunks = ids
+                .chunks(ids.len().div_ceil(threads))
+                .map(|chunk| {
+                    let handle = std::thread::Builder::new()
+                        .spawn_scoped(scope, move || self.stamp_settled_task_bundles(chunk))
+                        .ok();
+                    (chunk, handle)
+                })
+                .collect::<Vec<_>>();
+            // Join every helper before propagating errors. A lost helper
+            // supplies no proof, so those tasks get strict bundle reads.
+            let batches = chunks
+                .into_iter()
+                .map(|(chunk, handle)| match handle {
+                    Some(handle) => handle.join().unwrap_or_else(|_| Ok(BTreeMap::new())),
+                    None => self.stamp_settled_task_bundles(chunk),
+                })
+                .collect::<Vec<_>>();
+            let mut stamps = BTreeMap::new();
+            for batch in batches {
+                stamps.extend(batch?);
+            }
+            Ok(stamps)
+        })
+    }
+
+    /// Stamp a slice after the caller checked partition settledness once.
+    fn stamp_settled_task_bundles(
+        &self,
+        ids: &[String],
+    ) -> Result<BTreeMap<String, String>, OrbitError> {
+        let mut stamps = BTreeMap::new();
+        for id in ids {
+            let Some(bundle_dir) = self.bundle_store.settled_bundle_dir(id)? else {
+                continue;
+            };
+            if let Some(stamp) = bundle_stamp::task_bundle_freshness_stamp(&bundle_dir) {
+                stamps.insert(id.clone(), stamp);
+            }
+        }
+        Ok(stamps)
     }
 
     /// The history from the whole bundle, once the partition has settled.
@@ -166,15 +303,12 @@ fn comments_read_span(id: &str) -> orbit_common::tracing::span::EnteredSpan {
 pub(crate) fn task_history_from_events(events: Vec<TaskEventRowV2>) -> Vec<TaskHistoryEntry> {
     events
         .into_iter()
-        .map(|event| TaskHistoryEntry {
-            at: event.at,
-            by: event.by,
-            event: event.event_type,
-            note: event.note,
-            from_status: event.from_status,
-            to_status: event.to_status,
-            operation_id: event.operation_id,
-            decision: event.decision,
+        .map(|event| {
+            TaskHistoryEntry::new(event.at, event.by, event.event_type)
+                .with_note(event.note)
+                .with_status_change(event.from_status, event.to_status)
+                .with_operation_id(event.operation_id)
+                .with_decision(event.decision)
         })
         .collect()
 }

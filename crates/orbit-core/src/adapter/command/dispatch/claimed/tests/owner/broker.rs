@@ -51,8 +51,10 @@ impl TaskOwner {
     pub(super) fn execute(&self, tool: &str, mut input: Value) -> Result<Value, OrbitError> {
         // Stand in for the owner's workspace routing, with the real tool
         // dispatch and stored task on this fixture's disposable owner store.
+        // Like the owner's MCP route, a family action re-enters as its family.
         input["workspace"] = json!(self.runtime.workspace_id()?);
-        self.runtime.execute_tool_command(tool, input, None, None)
+        let (tool, input) = orbit_types::tool::tool_family_call(tool, input);
+        self.runtime.execute_tool_command(&tool, input, None, None)
     }
 
     pub(super) fn calls(&self) -> usize {
@@ -346,7 +348,8 @@ fn the_nested_orbit_keeps_other_routes_outside_a_masked_sandbox() {
     let input = json!({"id": TASK});
 
     // Not a coordination tool, or no remote owner: the existing route.
-    assert!(fixture.call(None, "orbit.search", json!({})).is_none());
+    assert!(!crate::runtime::is_coordination_tool("orbit.codebase"));
+    assert!(fixture.call(None, "orbit.codebase", json!({})).is_none());
     let local_owner = WorkerInvocation {
         owner_machine_id: FOLLOWER.into(),
         ..fixture.binding.clone()

@@ -8,6 +8,7 @@ use super::JournalCommitOutcome;
 use crate::contracts::{
     TaskCoordinationRow, TaskReservationReserveParams, TaskReservationReserveResult,
 };
+use crate::driver::sqlite::friction_write;
 use crate::driver::sqlite::task_reservation_store::notices::{self, LeaseOverlapNotice};
 use crate::driver::sqlite::task_reservation_store::reserve_files_in_tx;
 use crate::{Store, StoreTx};
@@ -30,7 +31,8 @@ impl Store {
         effects: &crate::contracts::ClaimCommitEffects,
         lease_notice: Option<&LeaseOverlapNotice<'_>>,
     ) -> Result<JournalCommitOutcome, OrbitError> {
-        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+        let mut reported_friction = None;
+        let outcome = self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             let workspace_id: String = tx
                 .tx
                 .query_row(
@@ -115,7 +117,7 @@ impl Store {
             }
 
             if let Some((friction, receipt_id)) = &effects.friction {
-                let record = crate::driver::sqlite::friction_write::add_in_transaction(
+                let record = friction_write::add_in_transaction(
                     tx.connection(), &workspace_id, friction,
                 )?;
                 let payload = serde_json::to_string(&record)
@@ -124,6 +126,7 @@ impl Store {
                     "INSERT INTO task_coordination_rows(workspace_id, kind, row_id, payload_json, journal_id, created_at) VALUES (?1, 'distributed-claim-friction-v1', ?2, ?3, ?4, ?5)",
                     params![workspace_id, receipt_id, payload, journal_id, now],
                 ).map_err(sqlite_store_error)?;
+                reported_friction = Some((workspace_id.clone(), record));
             }
 
             if let Some(entry) = &effects.census {
@@ -151,7 +154,12 @@ impl Store {
                 )));
             }
             Ok(JournalCommitOutcome::Committed(reserved))
-        })
+        })?;
+        // A later SQL error or failed COMMIT must not announce a submission.
+        if let Some((workspace_id, record)) = reported_friction {
+            friction_write::project_committed_friction(&workspace_id, &record);
+        }
+        Ok(outcome)
     }
 }
 

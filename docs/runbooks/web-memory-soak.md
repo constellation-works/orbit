@@ -5,7 +5,7 @@ tags: [operations, performance, dashboard]
 paths: ["crates/orbit-web/**", "scripts/web-memory-soak.py", "Makefile"]
 related_features: [orbit-web]
 related_artifacts: [ORB-14723]
-last_validated: 2026-10-19
+last_validated: 2026-11-14
 ---
 
 # Soak-Test Dashboard Memory
@@ -48,10 +48,19 @@ To compare two binaries, run the script directly against each with the same fixt
 python3 scripts/web-memory-soak.py --bin <orbit-binary> --work-dir <fixture-dir> --report <report.json>
 ```
 
-Other flags: `--rounds` (default 20), `--interval` seconds between rounds (default 91,
+Other flags: `--rounds` (default 20, at least 3 so drift is measured from round 3
+to the last round), `--interval` seconds between rounds (default 91,
 past the dashboard's 90 s memo TTL so every round recomputes), `--task-list-runs`,
-`--server-env KEY=VALUE` (repeatable, extra environment for the server), and
-`--report-only` (exit 0 even when a budget fails).
+`--server-env KEY=VALUE` (repeatable, extra environment for the server; a value
+without `=` is a usage error), and `--report-only` (exit 0 even when a budget fails).
+
+Each fresh server and the soak server must announce their address within
+`--startup-timeout` seconds (default 30, a finite positive number). A silent
+backend, an incomplete line, early exit or malformed announcement fails startup
+and exits 1 before measurement. The harness terminates the owned backend process
+group, escalates to a kill when needed, reaps the server and closes its output
+pipe on startup failure as well as after measurement. Cleanup has two bounded
+five-second waits in addition to the announcement deadline.
 
 ## What it measures
 

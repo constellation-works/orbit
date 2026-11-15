@@ -16,6 +16,7 @@
 //! not installed loadable (§3).
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{OnceLock, RwLock};
 
 use jsonschema::error::ValidationErrorKind;
@@ -182,6 +183,19 @@ pub fn register_plugin_config_schemas(schemas: Vec<PluginConfigSchema>) {
             registry.insert(schema.namespace.clone(), schema);
         }
     }
+    SCHEMA_GENERATION.fetch_add(1, Ordering::SeqCst);
+}
+
+/// How many registrations have been applied in this process. Resolution
+/// results admit against the registered contracts, so a cache of resolved
+/// values keys on this count: a re-registered (upgraded) contract
+/// re-resolves instead of serving values admitted against its predecessor.
+static SCHEMA_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// The current registration generation, counting every applied
+/// [`register_plugin_config_schemas`] call in this process.
+pub fn plugin_config_schema_generation() -> u64 {
+    SCHEMA_GENERATION.load(Ordering::SeqCst)
 }
 
 /// The contract registered for one namespace, if any.

@@ -262,7 +262,7 @@ impl PullDrain<'_> {
             .as_deref()
             .and_then(|run_id| self.jobs.get_job_run(run_id).ok())
             .flatten();
-        let settlement = super::attach_leaf_attribution(settlement, leaf.as_ref());
+        let settlement = super::attach_leaf_attribution(settlement, leaf.as_ref(), None);
         match self.update(record, LocalPullMutation::Settle(Box::new(settlement))) {
             Ok(settling) => Ok(settling),
             Err(error) => match self.reread(record)? {

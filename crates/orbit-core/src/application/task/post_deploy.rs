@@ -10,7 +10,6 @@
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_types::record::OrbitEvent;
 use orbit_types::task::{Task, TaskHistoryEntry};
 use orbit_types::workflow::{
     OwedCriterion, POST_DEPLOY_HEADER, POST_DEPLOY_OWED_EVENT, POST_DEPLOY_RECORDED_EVENT,
@@ -205,31 +204,23 @@ impl OrbitRuntime {
             criteria: owed.to_vec(),
         })
         .map_err(|error| OrbitError::Execution(format!("encode owed criteria: {error}")))?;
-        self.with_mutation(|| {
-            let updated = self.stores().task_records().update(
-                task_id,
-                TaskRecordUpdateParams {
-                    actor: SYSTEM_ACTOR_LABEL.to_string(),
-                    append_history: vec![TaskHistoryEntry {
-                        at: Utc::now(),
-                        by: SYSTEM_ACTOR_LABEL.to_string(),
-                        event: POST_DEPLOY_OWED_EVENT.to_string(),
-                        note: Some(note.clone()),
-                        from_status: None,
-                        to_status: None,
-                        operation_id: None,
-                        decision: None,
-                    }],
-                    ..Default::default()
-                },
-            )?;
-            Ok((
-                updated,
-                OrbitEvent::TaskUpdated {
-                    id: task_id.to_string(),
-                },
-            ))
-        })?;
+        self.stores().task_records().update(
+            task_id,
+            TaskRecordUpdateParams {
+                actor: SYSTEM_ACTOR_LABEL.to_string(),
+                append_history: vec![TaskHistoryEntry {
+                    at: Utc::now(),
+                    by: SYSTEM_ACTOR_LABEL.to_string(),
+                    event: POST_DEPLOY_OWED_EVENT.to_string(),
+                    note: Some(note.clone()),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: None,
+                }],
+                ..Default::default()
+            },
+        )?;
         Ok(())
     }
 

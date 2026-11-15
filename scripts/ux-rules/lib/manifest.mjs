@@ -1,4 +1,4 @@
-// View manifest loader (visual-review 2_design.md §3.1).
+// View manifest loader (archived visual-review 2_design.md §3.1).
 //
 // A deliberately small TOML reader for the manifest subset: top-level
 // scalars, [app.<name>] tables and [[view]] arrays whose values are

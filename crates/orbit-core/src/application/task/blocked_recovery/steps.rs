@@ -8,6 +8,7 @@
 //! the two actions here.
 
 use orbit_engine::DispatchError;
+use orbit_types::workflow::FAULT_JUDGED_BY_FIELD;
 use serde_json::{Map, Value, json};
 
 use crate::OrbitRuntime;
@@ -43,7 +44,10 @@ pub(crate) fn prepare(
         }),
         BlockedRecoveryPreparation::Ready(prepared) => {
             let checkout = prepared.checkout.to_string_lossy().to_string();
-            json!({
+            let candidate_workflow_failure = prepared
+                .error_message
+                .contains(orbit_types::workflow::PR_CANDIDATE_WORKFLOW_FAILURE_MARKER);
+            let mut output = json!({
                 "proceed": true,
                 "episode": episode.to_json(),
                 "recovery": {
@@ -56,11 +60,15 @@ pub(crate) fn prepare(
                     "error_message": prepared.error_message,
                     "base_ref": prepared.base_ref,
                     "base_sha": prepared.base_sha,
-                    "decisions": BACKSTOP_DECISIONS,
+                    "decisions": BACKSTOP_DECISIONS.iter().filter(|kind| !(candidate_workflow_failure && **kind == "rerun_ci")).collect::<Vec<_>>(),
                     "lane_contract": BACKSTOP_LANE_CONTRACT,
                     "retained_candidate": prepared.retained_candidate.to_json(),
                 },
-            })
+            });
+            if candidate_workflow_failure {
+                output["recovery"]["workflow_run_failure"] = json!({"classification":"candidate_owned","evidence":output["recovery"]["error_message"]});
+            }
+            output
         }
     })
 }
@@ -114,7 +122,9 @@ pub(crate) fn apply(
 
 /// The decision object an agent step returned: exactly the keys of its
 /// response envelope's `result`, without the invocation metadata Orbit merges
-/// into the step output. `None` when the envelope was missing or invalid.
+/// into the step output, except the provider it ran on, which replaces any
+/// `fault_judged_by` the agent wrote. `None` when the envelope was missing or
+/// invalid.
 pub(super) fn decision_result(output: &Value) -> Option<Value> {
     if output
         .get("response_envelope_valid")
@@ -128,6 +138,10 @@ pub(super) fn decision_result(output: &Value) -> Option<Value> {
     for field in fields {
         let field = field.as_str()?;
         decision.insert(field.to_string(), output.get(field)?.clone());
+    }
+    decision.remove(FAULT_JUDGED_BY_FIELD);
+    if let Some(provider) = output.get("provider").filter(|value| value.is_string()) {
+        decision.insert(FAULT_JUDGED_BY_FIELD.to_string(), provider.clone());
     }
     Some(Value::Object(decision))
 }

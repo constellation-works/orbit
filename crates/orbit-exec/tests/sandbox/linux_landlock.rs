@@ -1031,8 +1031,9 @@ fn a_write_root_above_a_caller_read_exclusion_cannot_read_the_excluded_file() {
 
 /// A single-file write grant includes read. Naming the denied file itself
 /// must not hand that read back. A write path nested strictly inside a
-/// broader deny is a different case: it stays read-write, the way a
-/// plugin's own state directory stays readable under `state/plugins`.
+/// broader deny is read-write only beneath a read root that re-allows it,
+/// the way a plugin's own state directory stays readable under
+/// `state/plugins`.
 #[test]
 fn a_write_file_at_a_read_deny_cannot_read_that_file() {
     if skip_write_boundary() {
@@ -1067,6 +1068,173 @@ fn a_write_file_at_a_read_deny_cannot_read_that_file() {
             .contains("OVERWRITE"),
         "the named write file stays writable"
     );
+}
+
+/// `vault/data/key` under a caller read exclusion on `vault/**`: what a
+/// brokered backend sees when the agent may modify `vault/data` but not read
+/// it.
+fn vault_under_caller_exclusion(fixture: &Fixture) -> (PathBuf, LandlockBoundary) {
+    let data = fixture.root().join("vault/data");
+    fs::create_dir_all(&data).expect("create vault data");
+    fs::write(data.join("key"), "VAULT_SENTINEL").expect("write vault key");
+    let boundary = LandlockBoundary {
+        read: vec![fixture.root()],
+        read_denies: Vec::new(),
+        read_exclusions: vec![format!("{}/vault/**", fixture.root().display())],
+        write: vec![],
+        write_files: vec![],
+        deny_tcp: false,
+    };
+    (data, boundary)
+}
+
+/// A write directory strictly inside a caller read exclusion keeps its write
+/// rights only. Its grant must not reopen what the caller may not read: the
+/// file already there, or one the child creates after spawn [ORB-20350].
+#[test]
+fn a_write_root_inside_a_caller_read_exclusion_cannot_read_the_excluded_tree() {
+    let fixture = Fixture::new();
+    let (data, boundary) = vault_under_caller_exclusion(&fixture);
+    let boundary = LandlockBoundary {
+        write: vec![data.clone()],
+        ..boundary
+    };
+    let key = data.join("key");
+    let grants = linux_landlock_boundary_grants(&fixture_request(&fixture), &boundary)
+        .expect("compile boundary");
+    assert!(
+        !grants_read(&grants, &key),
+        "a write root inside a caller read exclusion must not grant read: {grants:?}"
+    );
+    if skip_write_boundary() {
+        return;
+    }
+    spawn_bounded(&fixture, &boundary, &format!("cat {}", key.display()))
+        .assert_withheld("VAULT_SENTINEL");
+    let fresh = data.join("fresh");
+    spawn_bounded(
+        &fixture,
+        &boundary,
+        &format!("echo FRESH_VAULT > {f} && cat {f}", f = fresh.display()),
+    )
+    .assert_withheld("FRESH_VAULT");
+    assert!(
+        fs::read_to_string(&fresh)
+            .expect("read the created file from the parent")
+            .contains("FRESH_VAULT"),
+        "a permitted write inside the excluded write root must reach the disk"
+    );
+}
+
+/// The same for a single write file strictly inside a caller read exclusion
+/// [ORB-20350].
+#[test]
+fn a_write_file_inside_a_caller_read_exclusion_cannot_read_that_file() {
+    let fixture = Fixture::new();
+    let (data, boundary) = vault_under_caller_exclusion(&fixture);
+    let key = data.join("key");
+    let boundary = LandlockBoundary {
+        write_files: vec![key.clone()],
+        ..boundary
+    };
+    let grants = linux_landlock_boundary_grants(&fixture_request(&fixture), &boundary)
+        .expect("compile boundary");
+    assert!(
+        !grants_read(&grants, &key),
+        "a write file inside a caller read exclusion must not grant read: {grants:?}"
+    );
+    if skip_write_boundary() {
+        return;
+    }
+    spawn_bounded(&fixture, &boundary, &format!("cat {}", key.display()))
+        .assert_withheld("VAULT_SENTINEL");
+    spawn_bounded(
+        &fixture,
+        &boundary,
+        &format!("echo OVERWRITE > {k} && cat {k}", k = key.display()),
+    )
+    .assert_withheld("OVERWRITE");
+    assert!(
+        fs::read_to_string(&key)
+            .expect("read the overwritten file from the parent")
+            .contains("OVERWRITE"),
+        "the named write file stays writable"
+    );
+}
+
+/// A write root nested strictly inside a read deny is read-write only where a
+/// read root names it inside that deny, the way a plugin's own state is
+/// re-allowed under `state/plugins`. Any other nested root keeps its write
+/// rights and no read [ORB-20350].
+#[test]
+fn a_write_root_inside_a_read_deny_reads_only_where_a_read_root_reallows_it() {
+    let fixture = Fixture::new();
+    let plugins = fixture.root().join("state/plugins");
+    let own = plugins.join("own");
+    let other = plugins.join("other");
+    for (dir, sentinel) in [(&own, "OWN_SENTINEL"), (&other, "OTHER_SENTINEL")] {
+        fs::create_dir_all(dir).expect("create plugin state");
+        fs::write(dir.join("data"), sentinel).expect("write plugin state");
+    }
+    let boundary = LandlockBoundary {
+        read: vec![fixture.root(), own.clone()],
+        read_denies: vec![plugins.clone()],
+        read_exclusions: Vec::new(),
+        write: vec![own.clone(), other.clone()],
+        write_files: vec![],
+        deny_tcp: false,
+    };
+    let grants = linux_landlock_boundary_grants(&fixture_request(&fixture), &boundary)
+        .expect("compile boundary");
+    assert!(
+        grants_read(&grants, &own.join("data")),
+        "the re-allowed state tree stays readable: {grants:?}"
+    );
+    assert!(
+        !grants_read(&grants, &other.join("data")),
+        "a write root inside the deny with no read re-allow must not grant read: {grants:?}"
+    );
+    if skip_write_boundary() {
+        return;
+    }
+    spawn_bounded(
+        &fixture,
+        &boundary,
+        &format!(
+            "echo MORE >> {d} && cat {d}",
+            d = own.join("data").display()
+        ),
+    )
+    .assert_returned("MORE");
+    spawn_bounded(
+        &fixture,
+        &boundary,
+        &format!("cat {}", other.join("data").display()),
+    )
+    .assert_withheld("OTHER_SENTINEL");
+    spawn_bounded(
+        &fixture,
+        &boundary,
+        &format!("echo WRITTEN > {}", other.join("new").display()),
+    );
+    assert!(
+        fs::read_to_string(other.join("new"))
+            .expect("read the written file from the parent")
+            .contains("WRITTEN"),
+        "the nested write root stays writable"
+    );
+}
+
+fn fixture_request(fixture: &Fixture) -> ExecRequest {
+    ExecRequest {
+        program: "/bin/sh".to_string(),
+        args: vec!["-c".to_string(), "true".to_string()],
+        current_dir: Some(fixture.root().display().to_string()),
+        timeout_ms: Some(10_000),
+        stdin_mode: StdinMode::Null,
+        environment_mode: EnvironmentMode::ClearAndSet(fixture.environment.clone()),
+        debug: false,
+    }
 }
 
 /// A `$HOME` holding `gh`'s sign-in and an `$ORBIT_ROOT` holding the plugin
@@ -1179,4 +1347,69 @@ fn a_bounded_child_cannot_read_a_denied_tree_through_a_host_tool_state_grant() {
         &format!("cat {}", state.orbit_sibling.display()),
     )
     .assert_returned("ORBIT_SIBLING_SENTINEL");
+}
+
+/// A caller wildcard exclusion that names a path only under a host tool state
+/// grant, with no explicit root beside it, still binds that grant: the
+/// matching file is withheld and its siblings stay readable. One boundary
+/// also carries a write root nested inside a caller exclusion, so both read
+/// carves hold together [ORB-20350].
+#[test]
+fn a_host_only_wildcard_exclusion_is_carved_out_of_the_tool_state_grants() {
+    let fixture = Fixture::new();
+    let rustup = fixture.host_root().join("rustup");
+    fs::create_dir_all(&rustup).expect("create tool state");
+    let private = rustup.join("private-key");
+    let sibling = rustup.join("settings.toml");
+    fs::write(&private, "TOOL_SECRET_SENTINEL").expect("write private");
+    fs::write(&sibling, "TOOL_SIBLING_SENTINEL").expect("write sibling");
+    let fixture = fixture.with_env("RUSTUP_HOME", &rustup);
+    let (data, vault) = vault_under_caller_exclusion(&fixture);
+    let request = fixture_request(&fixture);
+
+    // Control: an exact exclusion of the same file is held.
+    let exact = LandlockBoundary {
+        read: vec![fixture.root()],
+        read_exclusions: vec![private.display().to_string()],
+        ..LandlockBoundary::default()
+    };
+    let grants = linux_landlock_boundary_grants(&request, &exact).expect("compile boundary");
+    assert!(
+        !grants_read(&grants, &private),
+        "an exact exclusion carves the tool state grant: {grants:?}"
+    );
+
+    let mut exclusions = vault.read_exclusions.clone();
+    exclusions.push(format!("{}/private*", rustup.display()));
+    let boundary = LandlockBoundary {
+        read_exclusions: exclusions,
+        write: vec![data.clone()],
+        ..vault
+    };
+    let grants = linux_landlock_boundary_grants(&request, &boundary).expect("compile boundary");
+    assert!(
+        !grants_read(&grants, &private),
+        "a wildcard exclusion under a host tool state grant must be carved: {grants:?}"
+    );
+    assert!(
+        grants_read(&grants, &sibling),
+        "the rest of the tool state keeps its host grant: {grants:?}"
+    );
+    assert!(
+        !grants_read(&grants, &data.join("key")),
+        "the nested write root stays unreadable beside the host carve: {grants:?}"
+    );
+    if skip_write_boundary() {
+        return;
+    }
+    spawn_bounded(&fixture, &boundary, &format!("cat {}", private.display()))
+        .assert_withheld("TOOL_SECRET_SENTINEL");
+    spawn_bounded(
+        &fixture,
+        &boundary,
+        &format!("cat {}", data.join("key").display()),
+    )
+    .assert_withheld("VAULT_SENTINEL");
+    spawn_bounded(&fixture, &boundary, &format!("cat {}", sibling.display()))
+        .assert_returned("TOOL_SIBLING_SENTINEL");
 }

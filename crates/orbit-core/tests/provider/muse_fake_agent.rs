@@ -23,7 +23,7 @@ use orbit_engine::{
 };
 use orbit_types::identity::ReasoningEffort;
 use orbit_types::resource::{EXECUTOR_RESOURCE_SCHEMA_VERSION, ExecutorResource};
-use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, OnDenial, Provider};
+use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, Provider};
 use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, is_provider_unavailable};
 
 const PROMPT_SECRET: &str = "muse-tenant-42-authorization-bearer-zzz";
@@ -172,33 +172,26 @@ fn seed_muse_executor(
 
 fn spec(timeout_seconds: u64) -> AgentLoopSpec {
     AgentLoopSpec {
-        crew_name: None,
-        tool_disallow_list: None,
-        instruction: "Return the requested Orbit response envelope.".to_string(),
-        steering_instruction: None,
-        regression_risk_instruction: None,
-        explore_instruction: None,
-        explore_brief_instruction: None,
-        tools: Vec::new(),
-        on_denial: OnDenial::Terminate,
         model: Some(MODEL.to_string()),
         reasoning_effort: Some(ReasoningEffort::High),
-        max_iterations: 1,
-        backend: None,
-        provider: Provider::Muse,
-        wall_clock_timeout_seconds: timeout_seconds,
         require_response_envelope: true,
-        require_completion_envelope: true,
-        proc_allowed_programs: None,
-        proc_disallowed_programs: None,
-        trusted_host_execution: false,
-        crew_env: Vec::new(),
-        crew_account: None,
-        crew_vision_disabled: false,
+        ..AgentLoopSpec::for_provider(
+            "Return the requested Orbit response envelope.".to_string(),
+            Provider::Muse,
+            timeout_seconds,
+        )
     }
 }
 
 fn try_dispatch(harness: &Harness, spec: AgentLoopSpec) -> Result<DispatchOutcome, String> {
+    try_dispatch_activity(harness, spec, "muse_fake_agent")
+}
+
+fn try_dispatch_activity(
+    harness: &Harness,
+    spec: AgentLoopSpec,
+    activity_name: &str,
+) -> Result<DispatchOutcome, String> {
     let audit_dir = tempfile::tempdir().expect("audit tempdir");
     let audit = V2AuditWriter::with_disk_sinks(
         audit_dir.path(),
@@ -211,7 +204,7 @@ fn try_dispatch(harness: &Harness, spec: AgentLoopSpec) -> Result<DispatchOutcom
     .expect("build audit writer");
 
     dispatch_v2_activity(V2DispatchInput {
-        activity_name: "muse_fake_agent",
+        activity_name,
         spec: &ActivityV2Spec::AgentLoop(spec),
         fs_profile: None,
         input: serde_json::json!({
@@ -944,4 +937,41 @@ fn shipped_executor_is_sandboxed_and_missing_binary_is_stable() {
         error.contains("failed to spawn"),
         "stable diagnostic names spawn failure: {error}"
     );
+}
+
+// The 3h implement deadline killed a completed candidate (ORB-23280).
+// Read the shipped declaration and observe the deadline delivered to a real
+// provider process; workspace policy must also reach that same boundary.
+#[test]
+fn implement_deadline_uses_the_shipped_budget_or_workspace_override() {
+    let activity: serde_yaml::Value =
+        serde_yaml::from_str(include_str!("../../assets/activities/agent_implement.yaml"))
+            .expect("shipped implementation activity");
+    let declared = activity["spec"]["wall_clock_timeout_seconds"]
+        .as_u64()
+        .expect("declared implement timeout");
+    for (configured, expected) in [(None, 21600), (Some(28800), 28800)] {
+        let dir = tempfile::tempdir().expect("isolated runtime");
+        let global = dir.path().join("global");
+        let workspace = dir.path().join("workspace/.orbit");
+        std::fs::create_dir_all(&global).expect("global config directory");
+        std::fs::create_dir_all(&workspace).expect("workspace config directory");
+        if let Some(seconds) = configured {
+            std::fs::write(
+                workspace.join("config.toml"),
+                format!("[workflow.activity_timeouts]\nagent_implement = {seconds}\n"),
+            )
+            .expect("workspace timeout override");
+        }
+        let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("isolated runtime");
+        let harness = Harness::with_runtime(&success_body(), None, runtime, Some(dir));
+        let outcome = try_dispatch_activity(&harness, spec(declared), "agent_implement")
+            .expect("dispatch implementation");
+        assert!(outcome.success, "{:?}", outcome.message);
+        assert_eq!(
+            harness.env_value(orbit_common::security::child_env::ACTIVITY_TIMEOUT_ENV),
+            Some((expected * 1000_u64).to_string()),
+            "ORB-23280: a 3h ceiling must not cut off the implementation budget"
+        );
+    }
 }

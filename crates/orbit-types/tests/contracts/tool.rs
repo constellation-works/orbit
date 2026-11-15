@@ -1,5 +1,5 @@
 use orbit_types::task::ExecutionLocation;
-use orbit_types::tool::WorkerInvocation;
+use orbit_types::tool::{WorkerInvocation, tool_requirement_name};
 
 fn binding() -> WorkerInvocation {
     WorkerInvocation {
@@ -43,4 +43,21 @@ fn ordinary_session_json_cannot_introduce_worker_authority() {
     .unwrap();
     assert!(session.worker_invocation.is_none());
     assert!(!session.worker_host_call);
+}
+
+#[test]
+fn a_requirement_stored_before_tool_families_reads_as_its_family_action() {
+    // Tasks minted and auto-task definitions written before ORB-23280 name
+    // the operation; admission reads it as the family action.
+    assert_eq!(
+        tool_requirement_name("orbit.task.artifact.put"),
+        "orbit.task.artifact:put"
+    );
+    assert_eq!(
+        tool_requirement_name("orbit.task.artifact.get"),
+        "orbit.task.artifact:get"
+    );
+    for unchanged in ["orbit.task.artifact:put", "orbit.task.show", "orbit.search"] {
+        assert_eq!(tool_requirement_name(unchanged), unchanged);
+    }
 }

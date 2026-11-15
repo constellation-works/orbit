@@ -3,8 +3,10 @@
 //! and inline-code interpreter flags all fail naming the manifest file),
 //! resolves, and at dispatch hands the attempt to its host. A host refusal
 //! fails the step without retry; a nonzero exit is a failed attempt the
-//! step's `retry` repeats; exit 0 must answer with JSON. Every attempt
-//! leaves one `script.execution` audit entry.
+//! step's `retry` repeats; on exit 0, empty or whitespace-only stdout with no
+//! output schema becomes `{}`. Otherwise stdout must be one JSON document,
+//! and any declared output schema must accept it. Every attempt leaves one
+//! `script.execution` audit entry.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,8 +14,8 @@ use std::sync::{Arc, Mutex};
 
 use orbit_agent::loop_engine::InMemorySink;
 use orbit_engine::activity_job::{
-    V2ActivityCatalog, V2ScriptCatalog, load_job_asset, load_script_asset, resolve_job_target_refs,
-    resolve_job_target_refs_with_scripts,
+    ScriptLoadError, V2ActivityCatalog, V2ScriptCatalog, load_job_asset, load_script_asset,
+    resolve_job_target_refs, resolve_job_target_refs_with_scripts,
 };
 use orbit_engine::{
     ScriptStepEnd, ScriptStepRan, ScriptStepRequest, ScriptStepRun, V2AuditWriter, V2SqliteSink,
@@ -21,7 +23,8 @@ use orbit_engine::{
 };
 use orbit_store::V2AuditEventFilter;
 use orbit_types::workflow::activity_job::{
-    ScriptExecutionRecord, V2_EVENT_TYPE_SCRIPT_EXECUTION, script_failure, script_refusal,
+    ScriptExecutionRecord, ScriptValidationError, V2_EVENT_TYPE_SCRIPT_EXECUTION, script_failure,
+    script_refusal,
 };
 use serde_json::{Value, json};
 
@@ -114,6 +117,41 @@ fn a_valid_script_manifest_loads_with_shebang_interpreter_and_digests() {
     assert_eq!(asset.digest.len(), 64);
     assert_ne!(asset.digest, asset.manifest_digest);
     assert_ne!(asset.digest, asset.entry_digest);
+}
+
+#[test]
+fn release_readiness_example_loads_and_rejects_nested_input_names() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let fixture = Fixture::new();
+    fixture.write_entry(
+        "scripts/release-readiness-adapter.py",
+        &fs::read_to_string(root.join("scripts/release-readiness-adapter.py")).unwrap(),
+    );
+    let manifest = fixture.scripts_dir().join("release-readiness.yaml");
+    fs::copy(
+        root.join("examples/release-readiness/scripts/release-readiness.yaml"),
+        &manifest,
+    )
+    .unwrap();
+    let catalog = fixture.catalog();
+    assert!(catalog.get("release-readiness").is_some());
+
+    let mut yaml: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&manifest).unwrap()).unwrap();
+    let nested_name = "scripts/qa-full-sweep-inventory.json";
+    yaml["spec"]["files"]["inputs"][0]["as"] = nested_name.into();
+    fs::write(&manifest, serde_yaml::to_string(&yaml).unwrap()).unwrap();
+    let mut catalog =
+        V2ScriptCatalog::new(fixture.scripts_dir(), fixture.workspace().to_path_buf());
+    assert!(matches!(
+        load_script_asset(&manifest, fixture.workspace()),
+        Err(ScriptLoadError::Validation {
+            source: ScriptValidationError::InvalidFileInputName(name), ..
+        }) if name == nested_name
+    ));
+    catalog.load_dir().unwrap();
+    let error = catalog.unavailable_script("release-readiness").unwrap();
+    assert!(error.contains(nested_name), "{error}");
 }
 
 #[test]
@@ -265,8 +303,6 @@ fn audited_writer(
         Arc::clone(&store) as Arc<dyn orbit_store::contracts::V2AuditStoreBackend>,
         "ws_scripts",
         run_id,
-        "test-agent",
-        None,
         audit_root.path(),
     ));
     let writer = Arc::new(
@@ -349,6 +385,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ScriptedRunHost {
                 duration_ms: Some(7),
                 ..ScriptExecutionRecord::default()
             },
+            outputs: orbit_engine::ScriptStepOutputs::None,
         }))
     }
 }

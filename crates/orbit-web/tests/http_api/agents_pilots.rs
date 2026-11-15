@@ -26,7 +26,13 @@ fn row<'a>(card: &'a Value, crew: &str, model: &str) -> &'a Value {
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["crew"] == crew && row["model"] == model)
+        .find(|row| {
+            row["model"] == model
+                && (row["crew"] == crew
+                    || row["crews"]
+                        .as_array()
+                        .is_some_and(|crews| crews.iter().any(|name| name == crew)))
+        })
         .unwrap_or_else(|| panic!("a {crew} / {model} row: {card}"))
 }
 
@@ -140,6 +146,7 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                             crew: crew.into(),
                             source: key.into(),
                             eligible_pool: Vec::new(),
+                            auto_effort: None,
                         },
                     );
                 }
@@ -151,6 +158,7 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                             crew: "wrong-legacy-crew".into(),
                             source: legacy.into(),
                             eligible_pool: Vec::new(),
+                            auto_effort: None,
                         },
                     );
                 }
@@ -212,16 +220,47 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                     now - Duration::minutes(60),
                     now - Duration::minutes(60 - minutes),
                 );
-                for (activity, model) in
-                    [("pilot", "initial-model"), ("repair_pilot", "repair-model")]
-                {
+                for (activity, model, effort, duration_ms) in [
+                    (
+                        "pilot",
+                        "initial-model",
+                        orbit_types::identity::ReasoningEffort::High,
+                        10_000,
+                    ),
+                    (
+                        "repair_pilot",
+                        "repair-model",
+                        orbit_types::identity::ReasoningEffort::Medium,
+                        60_000,
+                    ),
+                ] {
                     if index == 0 && activity == "repair_pilot" {
                         continue;
                     }
                     fixture
                         .runtime
                         .insert_invocation_trace_record(&InvocationInsertParams {
-                            agent_execution_id: None,
+                            // Each round ran at its own effort; the repair
+                            // round ran longest, so a run-wide longest
+                            // pick would label the initial model medium.
+                            agent_execution_id: Some(
+                                fixture
+                                    .runtime
+                                    .sqlite_store()
+                                    .unwrap()
+                                    .begin_agent_execution(
+                                        fixture.runtime.stores().jobs().workspace_id(),
+                                        &run,
+                                        activity,
+                                        "fixture",
+                                        Some(model),
+                                        &orbit_types::telemetry::AgentExecutionIdentity {
+                                            crew: Some(crew.into()),
+                                            reasoning_effort: Some(effort),
+                                        },
+                                    )
+                                    .unwrap(),
+                            ),
                             job_run_id: run.clone(),
                             account: None,
                             activity_id: activity.into(),
@@ -230,6 +269,7 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                             model: Some(model.into()),
                             task_ids: vec![],
                             trace: InvocationTrace {
+                                duration_ms,
                                 provider_cost_usd: Some(cost),
                                 ..Default::default()
                             },
@@ -317,8 +357,9 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                 .collect();
             let expected = [
                 ("haiku", "actual-pilot-model", 2),
-                ("overlap-a", "initial-model", 1),
-                ("overlap-b", "initial-model", 1),
+                // Both overlap runs' initial assessments share the one
+                // initial-model row; the crews are its secondary detail.
+                ("overlap-a", "initial-model", 2),
                 ("overlap-b", "repair-model", 2),
             ];
             let missing: Vec<_> = expected
@@ -330,12 +371,26 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                 "recorded model and overlapping legacy attribution failures: {missing:?}; observed {observed:?}"
             );
             for (crew, model, units, cost, seconds) in [
-                ("overlap-a", "initial-model", 1, 2.0, 600),
-                ("overlap-b", "initial-model", 1, 12.0, 1200),
+                // The merged initial-model row: both runs' costs (2 + 12)
+                // over its two units, median of 600s and 1200s runs.
+                ("overlap-a", "initial-model", 2, 7.0, 900),
                 ("overlap-b", "repair-model", 2, 6.0, 1200),
             ] {
                 let attributed = row(&card, crew, model);
                 assert_eq!(attributed["units"], units);
+                // Each round keeps its own recorded effort: the initial
+                // pilot ran high, the (longer) repair pilot medium.
+                assert_eq!(
+                    attributed["label"],
+                    format!(
+                        "{model} @ {}",
+                        if model == "initial-model" {
+                            "high"
+                        } else {
+                            "medium"
+                        }
+                    )
+                );
                 assert_eq!(attributed["runs_without_model"], 0);
                 assert_eq!(stat(attributed, "cost_per_assessment"), cost);
                 assert_eq!(stat(attributed, "median_run_seconds"), seconds);
@@ -346,18 +401,22 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                 "pilot assessments follow the drawn crew, never the piloted task's crew: {card}"
             );
             assert_eq!(row(&card, "luna", "legacy-pilot-model")["units"], 1);
-            assert_eq!(row(&card, "haiku", "model unknown")["units"], 1);
+            assert_eq!(
+                row(&card, "haiku", "model unknown")["units"],
+                2,
+                "the haiku and uninvoked model-unknown assessments share one row"
+            );
             assert_eq!(
                 row(&card, "haiku", "model unknown")["runs_without_model"],
-                1
+                2
             );
             assert_eq!(
                 row(&card, "luna", "repair-only-model")["runs_without_model"],
                 0
             );
             assert_eq!(
-                row(&card, "uninvoked", "model unknown")["runs_without_model"],
-                1
+                row(&card, "uninvoked", "model unknown")["crews"],
+                json!(["haiku", "uninvoked"])
             );
             assert_eq!(
                 row(&card, "crew unknown", "unattributed-pilot-model")["units"],
@@ -365,7 +424,7 @@ fn pilots_attribute_assessments_to_recorded_activity() {
             );
             assert_eq!(
                 card["rows"].as_array().unwrap().len(),
-                9,
+                7,
                 "no task-crew or other-activity rows: {card}"
             );
         },
@@ -912,7 +971,7 @@ fn pilots_charge_wasted_reservations_costly_misses_and_calibrate_tiers() {
             assert_eq!(strip["owners"]["pilots"], 2, "{strip}");
             assert_eq!(
                 strip["charged"]["pilots"],
-                json!([{"crew": "pilot-a", "model": "model-a", "problems": 2}]),
+                json!([{"crew": "pilot-a", "crews": ["pilot-a"], "model": "model-a", "reasoning_effort": "unknown", "effort_label": "effort unknown", "label": "model-a @ effort unknown", "problems": 2}]),
                 "{strip}"
             );
         },
@@ -932,7 +991,7 @@ fn pilots_calibrate_only_placed_tasks() {
                 &fixture,
                 &format!("jrun-pilot-{crew}"),
                 crew,
-                "pilot-model",
+                &format!("{crew}-pilot-model"),
                 now - Duration::hours(9),
                 now - Duration::hours(8),
             );
@@ -964,7 +1023,7 @@ fn pilots_calibrate_only_placed_tasks() {
         let card = json_ok(server.get(&format!(
             "/api/agents/pilots/scorecard?{WS}&window=30d&min_support=1"
         )));
-        let mixed = row(&card, "mixed", "pilot-model");
+        let mixed = row(&card, "mixed", "mixed-pilot-model");
         assert_eq!(mixed["units"], 3);
         assert_eq!(mixed["counts"]["tier_calibration"], 1);
         assert_eq!(mixed["per_100"]["tier_calibration"], 50);
@@ -972,7 +1031,7 @@ fn pilots_calibrate_only_placed_tasks() {
         assert_eq!(stat(mixed, "tier_matrix")["not_placed"], 1);
         assert_eq!(mixed["per_100"]["f1_lift"], 100);
         assert_eq!(mixed["raw"], 112.5);
-        let full = row(&card, "full", "pilot-model");
+        let full = row(&card, "full", "full-pilot-model");
         assert_eq!(full["units"], 1);
         assert_eq!(full["term_units"]["tier_calibration"], 1);
         assert_eq!(full["per_100"]["tier_calibration"], 100);
@@ -985,11 +1044,11 @@ fn pilots_calibrate_only_placed_tasks() {
             .unwrap();
         assert_eq!(calibration["unit"], "placed tasks");
         let detail = json_ok(server.get(&format!(
-            "/api/agents/pilots/detail?{WS}&window=30d&min_support=1&crew=mixed&model=pilot-model"
+            "/api/agents/pilots/detail?{WS}&window=30d&min_support=1&crew=mixed&model=mixed-pilot-model"
         )));
         assert_eq!(term(&detail, "tier_calibration")["units"], 2);
         assert_eq!(term(&detail, "tier_calibration")["contribution"], 12.5);
-        let unpriced = row(&card, "unpriced", "pilot-model");
+        let unpriced = row(&card, "unpriced", "unpriced-pilot-model");
         assert_eq!(unpriced["term_units"]["tier_calibration"], 0);
         assert_eq!(stat(unpriced, "tier_matrix")["not_placed"], 3);
         assert!(
@@ -1003,7 +1062,7 @@ fn pilots_calibrate_only_placed_tasks() {
         let supported = json_ok(server.get(&format!(
             "/api/agents/pilots/scorecard?{WS}&window=30d&min_support=3"
         )));
-        let mixed = row(&supported, "mixed", "pilot-model");
+        let mixed = row(&supported, "mixed", "mixed-pilot-model");
         assert_eq!(mixed["below_support"], false);
         assert!(
             mixed["provisional_terms"]
@@ -1392,4 +1451,138 @@ fn as_f64(value: &Value) -> f64 {
     value
         .as_f64()
         .unwrap_or_else(|| panic!("a number: {value}"))
+}
+
+/// Re-check and full pilot runs are reported apart: each mode's assessments,
+/// runs, durations and tokens, and the re-checks that later needed a full
+/// pilot, whether a later full assessment followed or the pilot escalated
+/// the re-check itself [ORB-21124].
+#[test]
+fn pilots_report_recheck_and_full_runs_apart() {
+    isolated(
+        "agents_pilots::pilots_report_recheck_and_full_runs_apart",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let run = |run_id: &str, minutes: i64, input: u64, output: u64| {
+                let started = now - Duration::minutes(40);
+                pilot_run(
+                    &fixture,
+                    run_id,
+                    "warden",
+                    "warden-model",
+                    started,
+                    started + Duration::minutes(minutes),
+                );
+                fixture
+                    .runtime
+                    .insert_invocation_trace_record(&InvocationInsertParams {
+                        agent_execution_id: None,
+                        job_run_id: run_id.into(),
+                        account: None,
+                        activity_id: "pilot".into(),
+                        agent: "fixture".into(),
+                        provider: None,
+                        model: Some("warden-model".into()),
+                        task_ids: Vec::new(),
+                        trace: InvocationTrace {
+                            usage: orbit_types::telemetry::TokenUsage {
+                                input,
+                                output,
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                    })
+                    .unwrap();
+            };
+            run("jrun-pilot-full", 5, 9000, 1000);
+            run("jrun-pilot-recheck", 1, 900, 100);
+            run("jrun-pilot-full-again", 5, 9000, 1000);
+            let proposed =
+                |title: &str| add_with_status(&fixture, title, &[], vec![], TaskStatus::Proposed);
+            let held = json!({"utility_warnings": [{"text": "Hold.", "holds_promotion": true}]});
+            let with_mode = |mode: &str, extra: Value| {
+                let mut findings = held.clone();
+                findings["mode"] = json!(mode);
+                for (key, value) in extra.as_object().into_iter().flatten() {
+                    findings[key] = value.clone();
+                }
+                findings
+            };
+            let receipt = |task: &str, minutes: i64, run_id: &str, findings: Value| {
+                pilot_receipt_with(
+                    &fixture,
+                    task,
+                    now - Duration::minutes(minutes),
+                    Some(run_id),
+                    &[],
+                    &["file:README.md"],
+                    findings,
+                );
+            };
+            // Full, then a re-check, then a full pilot again.
+            let looped = proposed("looped");
+            receipt(&looped, 30, "jrun-pilot-full", with_mode("full", json!({})));
+            receipt(
+                &looped,
+                20,
+                "jrun-pilot-recheck",
+                with_mode("recheck", json!({})),
+            );
+            receipt(
+                &looped,
+                10,
+                "jrun-pilot-full-again",
+                with_mode("full", json!({})),
+            );
+            // A re-check that settled the hold, with no full pilot after it.
+            let settled = proposed("settled");
+            receipt(
+                &settled,
+                30,
+                "jrun-pilot-full",
+                with_mode("full", json!({})),
+            );
+            receipt(
+                &settled,
+                20,
+                "jrun-pilot-recheck",
+                with_mode("recheck", json!({})),
+            );
+            // A re-check the pilot escalated to a full assessment.
+            let escalated = proposed("escalated");
+            receipt(
+                &escalated,
+                10,
+                "jrun-pilot-full-again",
+                with_mode("full", json!({"mode_reason": "recheck_escalated"})),
+            );
+            // A receipt from before modes reads as a full pilot.
+            let legacy = proposed("legacy");
+            receipt(&legacy, 30, "jrun-pilot-full", held.clone());
+
+            let card = scorecard(&fixture, "30d");
+            assert_eq!(card["status"], "ok", "{card}");
+            let modes = &card["pilot_modes"];
+            let full = &modes["full"];
+            let recheck = &modes["recheck"];
+            assert_eq!(full["assessments"], 5, "{modes}");
+            assert_eq!(recheck["assessments"], 2, "{modes}");
+            assert_eq!(full["runs"], 2, "{modes}");
+            assert_eq!(recheck["runs"], 1, "{modes}");
+            assert_eq!(as_f64(&full["median_seconds"]), 300.0, "{modes}");
+            assert_eq!(as_f64(&recheck["median_seconds"]), 60.0, "{modes}");
+            let tokens = |mode: &Value| mode["total_tokens"].as_u64().unwrap();
+            assert!(tokens(recheck) > 0, "{modes}");
+            assert_eq!(tokens(full), 20 * tokens(recheck), "{modes}");
+            assert_eq!(modes["rechecks_followed_by_full"], 1, "{modes}");
+            assert_eq!(modes["rechecks_escalated_to_full"], 1, "{modes}");
+            // Two of three re-check attempts needed a full pilot.
+            assert!(
+                (as_f64(&modes["recheck_full_rate"]) - 2.0 / 3.0).abs() < 0.01,
+                "{modes}"
+            );
+        },
+    );
 }

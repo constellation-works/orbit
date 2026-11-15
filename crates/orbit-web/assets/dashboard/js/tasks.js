@@ -1,12 +1,12 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, syncNodes, makeRowDisclosure, enableRovingRows, makeCopyButton } from './common.js';
+import { findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getUnownedReplicas, getWorkspace, hostWriteRefusal, workspaceColor, workspacePickerIndex, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, syncNodes, makeRowDisclosure, enableRovingRows, makeCopyButton } from './common.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessFor, drainWaitSignature } from './drain-waits.js';
 import { elapsedLabel, runStartedAt, taskLockFiles } from './task-runtime.js';
 import { buildRiskRowPart, riskinessSignature } from './task-riskiness.js';
-import { $, absTimeNode, rerender, taskState, setRenderer, taskList, tasksMeta, plural, isOsTag } from './task-shared.js';
-import { buildMutationFeedback, crewOptionsSignature, feedbackSignature } from './task-crew.js';
+import { $, absTimeNode, rerender, taskState, setRenderer, taskList, tasksMeta, plural, isOsTag, taskDispatchIdentity, isSelectedTask, TASK_SECTION_STEP } from './task-shared.js';
+import { buildMutationFeedback, crewOptionsSignature, feedbackSignature, humanCrewFor } from './task-crew.js';
 import { invalidateDistributedConsole } from './distributed.js';
 import { recoveryRefusals } from './task-agent-actions.js';
 export { normalizeCrewPayload, cacheCrewPayload, hasCrewOptions } from './task-crew.js';
@@ -15,8 +15,8 @@ import * as taskComments from './task-comments.js';
 export { buildArtifacts } from './task-evidence.js';
 export { scrollToComment } from './task-comments.js';
 import { clearTaskDataCaches } from './task-data.js';
-import { closeTaskPane, filterTasks, focusTaskRow, refreshChips, renderFilterSummary, renderTaskPagination, resolvePendingOpenTask, revealTaskRow, selectTask, setOpenTask, stopRowInteraction, syncSettleMergedButton } from './task-nav.js';
-export { taskPilotWarningsFilter, copyTaskIdWithNotice, openVisibleTask, setPinnedExternalTask, clearPinnedExternalTask, cancelTaskSearchDebounce, clearTaskSearch, buildTasksHash, applyTasksHashQuery, syncTaskControls, renderTaskPagination, buildChips, wireSearch } from './task-nav.js';
+import { browserTaskFilterActive, closeTaskPane, filterTasks, focusTaskRow, refreshChips, renderFilterSummary, resolvePendingOpenTask, revealTaskRow, selectTask, setOpenTask, stopRowInteraction } from './task-nav.js';
+export { taskPilotWarningsFilter, copyTaskIdWithNotice, openVisibleTask, refreshPinnedTask, buildTasksHash, buildTasksFilterHash, applyTasksHashQuery, syncTaskControls, refreshChips, buildChips } from './task-nav.js';
 import { buildQuickAction, buildQuickActionError, hasQuickAction, pruneQuickActionErrors, quickActionSignature, quickActionState } from './task-quick-actions.js';
 import { applyTaskStatusChange, buildCrewUpdateControl } from './task-status-controls.js';
 import { followRovingSelection, renderTaskPane } from './task-pane.js';
@@ -31,6 +31,7 @@ onWorkspaceChange(() => {
   taskState.taskActionNotice = null;
   quickActionState.clear();
   taskState.selectedTaskId = null;
+  taskState.selectedTaskWorkspace = null;
   taskRunLoads.clear();
   // The initial workspace selection also lands here; a task the URL named but
   // no render has shown yet must survive it.
@@ -48,7 +49,6 @@ onWorkspaceChange(() => {
   taskState.fieldFeedback.clear();
   clearTaskDataCaches();
   recoveryRefusals.clear();
-  taskState.taskDecisionLoads.clear();
   taskState.expandedComments.clear();
   taskComments.rawComments.clear();
   taskState.restoredCommentHash = null;
@@ -79,23 +79,12 @@ const GROUP_HINTS = {
 // Groups whose rows carry where their run is and how long it has been going.
 const RUN_GROUPS = new Set(["in-progress", "blocked"]);
 
-// How an empty open group reads in the "Nothing …" line above the cards.
-const EMPTY_GROUP_PHRASES = {
-  blocked: "blocked",
-  "in-progress": "in progress",
-  review: "in review",
-  proposed: "proposed",
-  backlog: "in the backlog",
-};
-
-// Explicit page range and matching total instead of the ambiguous `N/50`
-// shorthand, which could mean either a total or an unreachable hard cap.
+// The rows loaded against the matching total, so a list whose sections are
+// partly loaded never reads as complete.
 export function formatTaskCount(filteredCount, fetchedCount, meta) {
   if (meta && Number.isFinite(meta.total)) {
-    const offset = Number.isFinite(meta.offset) ? meta.offset : 0;
-    if (fetchedCount === 0) return `0 of ${meta.total}`;
-    const range = `${offset + 1}–${offset + fetchedCount} of ${meta.total}`;
-    return filteredCount === fetchedCount ? range : `${filteredCount} shown · page ${range}`;
+    const loaded = fetchedCount === meta.total ? plural(meta.total, "task") : `${fetchedCount} of ${meta.total} loaded`;
+    return filteredCount === fetchedCount ? loaded : `${filteredCount} shown · ${loaded}`;
   }
   return filteredCount === fetchedCount
     ? `${fetchedCount} shown`
@@ -103,10 +92,10 @@ export function formatTaskCount(filteredCount, fetchedCount, meta) {
 }
 // The task row's OS chips, from the parsed requirement the server attaches;
 // a tag outside the namespace reads as the wait it causes.
-function buildScheduledChip(task, context) {
+function buildScheduledChip(task) {
   if (task.status !== "backlog" || !task.not_before || task.scheduled_hold === false || Date.parse(task.not_before) <= Date.now()) return null;
   return el("span", { class: "scheduled-chip", title: "Waiting for the scheduled time; starts on the next admission pass afterwards" }, [
-    "Scheduled ", absTimeNode(context, task.not_before),
+    "Scheduled ", absTimeNode(task.not_before),
   ]);
 }
 
@@ -134,30 +123,77 @@ function splitTitlePrefix(title) {
   const match = /^((?:\[[^\]]+\]\s*)+)(.*)$/.exec(String(title || ""));
   if (!match || !match[2]) return [[], String(title || "")];
   const labels = [...match[1].matchAll(/\[([^\]]+)\]/g)].map((part) => part[1].trim()).filter(Boolean);
-  return [labels, match[2]];
+  // `[resident]: title` keeps its separator after the chip; drop it.
+  const rest = match[2].replace(/^[\s:]+/, "");
+  if (!rest) return [[], String(title || "")];
+  return [labels, rest];
 }
 
 // Where a running or blocked task's run is and what it holds: the host, the
 // time since the run started (known for runs this host records), and the files
 // the task has locked, each file in the tooltip.
+//
+// A machine id is the execution identity. The display name is optional metadata.
+// A linked run with no machine id is unknown. The host selected in the dashboard
+// is not a substitute: historical links and machine-id-only records used to
+// render as that host.
+function executionIdentity(machine) {
+  const machineId = machine && typeof machine.machine_id === "string" ? machine.machine_id.trim() : "";
+  if (!machineId) return { known: false, machine_id: "", machine_name: "" };
+  const machineName = typeof machine.machine_name === "string" ? machine.machine_name.trim() : "";
+  return { known: true, machine_id: machineId, machine_name: machineName };
+}
+
+function selectedExecutionHost() {
+  const selectedName = getHost() || getServingHost()?.name || "";
+  const row = selectedName
+    ? findRegisteredHost(selectedName)
+    : getRegisteredHosts().find((host) => host.local);
+  return { name: row?.name || selectedName, machine_id: row?.machine_id || "" };
+}
+
 function runCellParts(task) {
-  const machine = task.job_run_machine && task.job_run_machine.machine_name;
-  const host = machine || (task.job_run_id ? getHost() || getServingHost()?.name || "this host" : "");
+  const identity = executionIdentity(task.job_run_machine);
+  let host = "";
+  let provenance = "none";
+  if (identity.known && identity.machine_name) {
+    host = identity.machine_name;
+    provenance = "named";
+  } else if (identity.known) {
+    host = identity.machine_id;
+    provenance = "machine_id";
+  } else if (task.job_run_id) {
+    host = "unknown";
+    provenance = "unknown";
+  }
+  const selected = selectedExecutionHost();
+  const sameMachine = identity.known && (
+    (selected.machine_id && identity.machine_id === selected.machine_id)
+    || (identity.machine_name && selected.name && identity.machine_name === selected.name)
+  );
   const started = task.status === "in-progress" ? runStartedAt(task.job_run_id) : null;
   const files = taskLockFiles(task.id);
   return {
     host,
-    remote: Boolean(machine) && machine !== (getHost() || getServingHost()?.name),
+    provenance,
+    remote: identity.known && !sameMachine,
     elapsed: started != null ? elapsedLabel(Date.now() - started) : "",
     files,
   };
 }
 
+function runLocationLead(host, provenance) {
+  if (provenance === "named") return `Run on ${host}`;
+  if (provenance === "machine_id") return `Execution machine id: ${host}`;
+  if (provenance === "unknown") return "Execution location unknown";
+  return "No run recorded";
+}
+
 function buildRunCell(task) {
-  const { host, elapsed, files } = runCellParts(task);
+  const { host, provenance, elapsed, files } = runCellParts(task);
   const sub = [elapsed, files.length ? plural(files.length, "file") : ""].filter(Boolean);
   const title = [
-    host ? `Run on ${host}` : "No run recorded",
+    runLocationLead(host, provenance),
     elapsed ? `running for ${elapsed}` : "",
     ...files,
   ].filter(Boolean).join("\n");
@@ -168,8 +204,8 @@ function buildRunCell(task) {
 }
 
 function runCellSignature(task) {
-  const { host, elapsed, files } = runCellParts(task);
-  return JSON.stringify([host, elapsed, files]);
+  const { provenance, host, elapsed, files } = runCellParts(task);
+  return JSON.stringify([provenance, host, elapsed, files]);
 }
 /* ORB-10444: one-click Ship. The dispatch carries only the task id — the
    pipeline resolves the crew from the task's own record and the mode from the
@@ -188,18 +224,20 @@ function runCellSignature(task) {
 // The feedback of a status change whose detail folded in, with its undo. Null
 // while the detail is open again (it shows the feedback itself) or once the
 // feedback has expired.
-function buildFoldedStatusFeedback(taskId, context) {
-  if (!taskState.foldedStatusTasks.has(taskId) || taskState.selectedTaskId === taskId) return null;
+function buildFoldedStatusFeedback(task, context) {
+  const taskId = taskDispatchIdentity(task);
+  if (!taskState.foldedStatusTasks.has(taskId) || isSelectedTask(task)) return null;
   const entry = taskState.statusFeedback.get(taskId);
   return buildMutationFeedback(entry, () => {
     if (!entry || !entry.undo) return;
-    const task = taskList(context).find((t) => t && t.id === taskId) || taskState.foldedStatusTasks.get(taskId);
-    applyTaskStatusChange(task, entry.undo.previousValue, context);
+    const current = taskList(context).find((t) => t && taskDispatchIdentity(t) === taskId) || taskState.foldedStatusTasks.get(taskId);
+    applyTaskStatusChange(current, entry.undo.previousValue, context);
   });
 }
 
-function foldedStatusSignature(taskId) {
-  return taskState.foldedStatusTasks.has(taskId) && taskState.selectedTaskId !== taskId ? feedbackSignature(taskState.statusFeedback, taskId) : "";
+function foldedStatusSignature(task) {
+  const key = taskDispatchIdentity(task);
+  return taskState.foldedStatusTasks.has(key) && !isSelectedTask(task) ? feedbackSignature(taskState.statusFeedback, key) : "";
 }
 
 // Folded status feedback for a task with no row on screen, usually because its
@@ -208,15 +246,15 @@ function foldedStatusSignature(taskId) {
 function buildFoldedStatusNotices(rowIds, context) {
   const notices = [];
   for (const [taskId, task] of taskState.foldedStatusTasks) {
-    if (rowIds.has(taskId) || (taskState.pinnedExternalTask && taskState.pinnedExternalTask.id === taskId)) continue;
-    const feedback = buildFoldedStatusFeedback(taskId, context);
+    if (rowIds.has(taskId) || (taskState.pinnedExternalTask && taskDispatchIdentity(taskState.pinnedExternalTask.task) === taskId)) continue;
+    const feedback = buildFoldedStatusFeedback(task, context);
     if (!feedback) continue;
     const notice = el("div", { class: "task-status-notice" }, [
-      el("span", { class: "mono", text: `${taskId} → ${task.status}` }),
+      el("span", { class: "mono", text: `${task.id} → ${task.status}` }),
       feedback,
     ]);
     notice.dataset.key = `status-notice-${taskId}`;
-    notice.dataset.hash = `${task.status}-${foldedStatusSignature(taskId)}`;
+    notice.dataset.hash = `${task.status}-${foldedStatusSignature(task)}`;
     notices.push(notice);
   }
   return notices;
@@ -233,40 +271,77 @@ function syncTaskNotices(notices) {
   if (notices.some(node => !before.includes(`${node.dataset.key}:${node.dataset.hash}`))) raiseMessageSlot(host);
 }
 
-function takeTaskActionNotice() {
-  if (!taskState.taskActionNotice) return null;
-  const notice = el("div", { class: "task-action-notice", text: taskState.taskActionNotice });
+// An action notice stays up for a minimum read, like the quick-action
+// errors (180 s) and mutation feedback beside it: it is rebuilt from the
+// persisting state on every render instead of being consumed by the first
+// one, and a timer retires it once its window lapses. A newer notice resets
+// the window.
+const TASK_ACTION_NOTICE_MS = 30_000;
+let actionNoticeShownFor = null;
+let actionNoticeTimer = null;
+
+function takeTaskActionNotice(context) {
+  const text = taskState.taskActionNotice;
+  if (!text) {
+    actionNoticeShownFor = null;
+    if (actionNoticeTimer) { clearTimeout(actionNoticeTimer); actionNoticeTimer = null; }
+    return null;
+  }
+  const notice = el("div", { class: "task-action-notice", text });
   notice.dataset.key = "task-action-notice";
-  notice.dataset.hash = taskState.taskActionNotice;
+  notice.dataset.hash = text;
   notice.setAttribute("role", "status");
   notice.setAttribute("aria-live", "polite");
-  taskState.taskActionNotice = null;
+  if (actionNoticeShownFor !== text) {
+    actionNoticeShownFor = text;
+    if (actionNoticeTimer) clearTimeout(actionNoticeTimer);
+    actionNoticeTimer = setTimeout(() => {
+      actionNoticeTimer = null;
+      if (taskState.taskActionNotice === text) {
+        taskState.taskActionNotice = null;
+        actionNoticeShownFor = null;
+        rerender(context);
+      }
+    }, TASK_ACTION_NOTICE_MS);
+  }
   return notice;
 }
-// ORB-15216: a pull replica holds no tasks of its own; they live on its owner
-// host. The serving host's `/api/hosts` row lists each checkout's role, so this
-// reads what the host picker already has. A remote host's row lists checkouts
-// only after a probe, so replicas on a remote host are not named here.
+// A host that owns nothing never selects a replica board. Its `/api/workspaces`
+// rows still name each replica's owner, and Tasks points there instead.
 function replicaOwner() {
-  const workspaceId = getWorkspace();
-  if (!workspaceId) return null;
-  const row = getHost() ? findRegisteredHost(getHost()) : getRegisteredHosts().find((host) => host.local);
-  const checkout = (row?.workspaces || []).find((workspace) => workspace.id === workspaceId);
-  if (checkout?.role !== "replica") return null;
-  const owner = findRegisteredHost(checkout.owner_machine_id);
-  return {
-    name: owner ? owner.name : checkout.owner_machine_id || "an unknown host",
-    // Only a registered remote host has an entry in the picker to switch to.
-    switchable: Boolean(owner && !owner.local),
-  };
+  if (getWorkspace()) return null;
+  const replicas = getUnownedReplicas();
+  if (!replicas.length) return null;
+  const ownerIds = [];
+  for (const replica of replicas) {
+    const id = replica.owner_machine_id;
+    if (id && !ownerIds.includes(id)) ownerIds.push(id);
+  }
+  if (ownerIds.length !== 1) {
+    return {
+      name: ownerIds.length ? "" : "an unknown host",
+      switchable: false,
+      several: ownerIds.length > 1,
+    };
+  }
+  const owner = findRegisteredHost(ownerIds[0]);
+  const name = owner ? owner.name : ownerIds[0];
+  const selected = getHost();
+  // The serving host's picker value is empty, so it is a switch target only
+  // while a remote follower is selected. A remote owner is switchable from
+  // any other host.
+  const switchable = Boolean(owner) && (owner.local ? Boolean(selected) : owner.name !== selected);
+  return { name, switchable, several: false };
 }
 
 function showOnOwnerButton(name) {
-  const button = el("button", { class: "ghost", type: "button", text: `Show on ${name}` });
+  const button = el("button", { class: "show-on-owner", type: "button", text: `Show on ${name}` });
   button.addEventListener("click", () => {
     const picker = document.getElementById("host-select");
     if (!picker) return;
-    picker.value = name;
+    const owner = findRegisteredHost(name);
+    // The serving host's option value is empty; remotes use their registered name.
+    picker.value = owner && owner.local ? "" : name;
     picker.dispatchEvent(new Event("change"));
   });
   return button;
@@ -292,28 +367,98 @@ function runningHint(group) {
   return parts.length > 0 ? parts.join(" · ") : GROUP_HINTS["in-progress"];
 }
 
-function buildGroupHeader(status, group) {
+// Sections the operator folded, kept across refreshes for the page session.
+const collapsedSections = new Set();
+
+// A section's head: its name, its count and the hint, as one button that
+// folds the section. The count is the status total under the server-side
+// filter; while a browser-side filter narrows the rows, the total is not
+// known for it, so the head counts the rows shown instead.
+function buildGroupHeader(status, group, count, context) {
   const hint = status === "in-progress" ? runningHint(group) : GROUP_HINTS[status];
-  const header = el("div", { class: "group-header" }, [
-    el("h3", { class: "group-title" }, [
-      el("span", { class: "group-dot", "aria-hidden": "true" }),
-      el("span", { class: "group-label", text: GROUP_LABELS[status] || status }),
-      el("span", { class: "group-count", text: `${group.length}` }),
-    ]),
-    hint ? el("span", { class: "group-hint", text: hint }) : null,
+  const collapsed = collapsedSections.has(status);
+  const label = GROUP_LABELS[status] || status;
+  const countTitle = count.total ? `${count.value} ${label.toLowerCase()} tasks` : `${count.value} shown under the current filter`;
+  const toggle = el("button", {
+    class: "group-toggle",
+    type: "button",
+    "aria-expanded": collapsed ? "false" : "true",
+    title: collapsed ? `Expand ${label}` : `Collapse ${label}`,
+  }, [
+    el("span", { class: "group-chevron", "aria-hidden": "true" }),
+    el("span", { class: "group-dot", "aria-hidden": "true" }),
+    el("span", { class: "group-label", text: label }),
+    el("span", { class: "group-count", text: `${count.value}`, title: countTitle }),
+  ]);
+  toggle.addEventListener("click", () => {
+    if (collapsedSections.has(status)) collapsedSections.delete(status);
+    else collapsedSections.add(status);
+    taskState.sectionToggleFocus = status;
+    rerender(context);
+  });
+  const header = el("div", { class: `group-header${collapsed ? " collapsed" : ""}` }, [
+    el("h3", { class: "group-title" }, [toggle]),
+    hint && !collapsed ? el("span", { class: "group-hint", text: hint }) : null,
   ]);
   header.dataset.status = status;
   header.dataset.key = `header-${status}`;
-  header.dataset.hash = `${status}-${group.length}-${hint || ""}`;
+  header.dataset.hash = `${status}-${count.value}-${count.total}-${collapsed}-${hint || ""}`;
   return header;
+}
+
+// The end of a partly loaded section: the next step and what is left, "Show
+// all" once fewer than 100 remain, and a failed read's error, which the same
+// buttons retry. Rows load below the ones shown.
+function buildSectionMore(status, section, context) {
+  if (!section || !section.next_cursor) return null;
+  const remaining = Math.max(0, section.total - section.items.length);
+  if (remaining === 0) return null;
+  const load = typeof context?.getTaskSectionLoad === "function" ? context.getTaskSectionLoad(status) : null;
+  const loading = Boolean(load && load.loading);
+  const error = load && !loading ? load.error : null;
+  const step = Math.min(TASK_SECTION_STEP, remaining);
+  const label = (GROUP_LABELS[status] || status).toLowerCase();
+  const more = el("button", {
+    class: "group-more-button",
+    type: "button",
+    text: `Show ${step} more · ${remaining} remaining`,
+    title: `Load the next ${step} ${label} tasks below these`,
+  });
+  more.dataset.more = "step";
+  more.addEventListener("click", () => context.loadMoreTaskSection(status));
+  const all = remaining < 100 ? el("button", {
+    class: "group-more-button",
+    type: "button",
+    text: "Show all",
+    title: `Load the remaining ${remaining} ${label} tasks`,
+  }) : null;
+  if (all) {
+    all.dataset.more = "all";
+    all.addEventListener("click", () => context.loadMoreTaskSection(status, { all: true }));
+  }
+  // Marked unavailable rather than disabled while the read is out, so the
+  // button keeps focus through the repaints; a click then does nothing.
+  for (const button of [more, all]) {
+    if (!button || !loading) continue;
+    button.setAttribute("aria-disabled", "true");
+    button.setAttribute("aria-busy", "true");
+  }
+  const node = el("div", { class: "group-more" }, [
+    more,
+    all,
+    error ? el("span", { class: "group-more-error", role: "alert", text: `Could not load more: ${error}` }) : null,
+  ]);
+  stopRowInteraction(node);
+  node.dataset.key = `more-${status}`;
+  node.dataset.hash = `more-${status}-${remaining}-${loading}-${error || ""}`;
+  return node;
 }
 // The legend's short word for each readiness pool; its title says it in full.
 const READY_POOL_WORDS = { eligible: "eligible", locks: "locks", capacity: "capacity", other: "other" };
 
-// The Backlog card's readiness strip: one slim bar split by pool, a legend
-// whose entries filter the card to that pool, and a link to the Drain view that
-// explains each wait. Absent until the drain snapshot arrives, so the card
-// never claims a readiness it does not know.
+// The Backlog card's readiness strip: one slim bar split by pool and a legend
+// whose entries filter the card to that pool. It is absent until the drain
+// snapshot arrives, so the card never claims readiness it does not know.
 function buildBacklogReadiness(group, context) {
   const { known, counts } = backlogReadiness(group);
   if (!known) return null;
@@ -352,17 +497,35 @@ function buildBacklogReadiness(group, context) {
     }),
     counts.unknown > 0 ? el("span", { class: "ready-unknown", text: `${counts.unknown} not in the drain snapshot` }) : null,
   ]);
-  const why = el("a", { class: "ready-why", text: "Why? See Tasks dock", title: "Open the Tasks dock: admission status and window controls" });
-  why.href = "#tasks?dock=drain";
-  const strip = el("div", { class: "group-readiness" }, [bar, legend, why]);
+  const strip = el("div", { class: "group-readiness" }, [bar, legend]);
   strip.dataset.key = "readiness-backlog";
   strip.dataset.hash = `${DRAIN_POOLS.map(({ key }) => counts[key]).join(",")},${counts.unknown}-${readyPoolFilter || ""}`;
   return strip;
 }
 
+// Operator work: the task's crew is a human crew, so it waits for that person
+// and no drain or task pilot picks it up.
+function buildHumanCrewBadge(task) {
+  const human = humanCrewFor(task);
+  if (!human) return null;
+  return el("span", {
+    class: "human-crew-badge",
+    text: `for ${human.name}`,
+    title: `Operator work for human crew ${human.name}: no drain or task pilot picks it up`,
+  });
+}
+
 // A card whose rows the readiness filter hid entirely still says so.
-function buildFilteredEmpty(status) {
-  const note = el("div", { class: "group-empty", text: `No ${(GROUP_LABELS[status] || status).toLowerCase()} tasks match this readiness filter.` });
+// The All workspaces row's workspace pill, in its workspace's palette colour
+// (the same one the Tasks workspace filter entry shows).
+function buildWorkspaceBadge(task) {
+  const badge = el("span", { class: "ws-badge mono", text: task.workspace_name, title: `Workspace: ${task.workspace_name}` });
+  badge.dataset.wsColor = String(workspaceColor(task.workspace_id));
+  return badge;
+}
+
+function buildFilteredEmpty(status, text = null) {
+  const note = el("div", { class: "group-empty", text: text || `No ${(GROUP_LABELS[status] || status).toLowerCase()} tasks match this readiness filter.` });
   note.dataset.key = `empty-${status}`;
   note.dataset.hash = `empty-${status}`;
   return note;
@@ -389,9 +552,12 @@ export function renderTasks(tasks, context) {
   // omit the jumped task even when its chip is on.
   if (taskState.pinnedExternalTask && taskState.pinnedExternalTask.task) {
     const p = taskState.pinnedExternalTask.task;
-    if (filterTasks(tasks, context).some((task) => task.id === p.id)) {
+    if (filterTasks(tasks, context).some((task) => taskDispatchIdentity(task) === taskDispatchIdentity(p))) {
       taskState.pinnedExternalTask = null;
-      if (taskState.openTaskId === p.id) taskState.selectedTaskId = p.id;
+      if (taskState.openTaskId === p.id) {
+        taskState.selectedTaskId = p.id;
+        taskState.selectedTaskWorkspace = p.workspace_id || getWorkspace() || null;
+      }
     }
   }
   resolvePendingOpenTask(tasks, context);
@@ -412,7 +578,7 @@ export function renderTasks(tasks, context) {
   for (const node of body.children) {
     if (node.dataset.key) existingRowNodes.set(node.dataset.key, node);
   }
-  const notice = takeTaskActionNotice();
+  const notice = takeTaskActionNotice(context);
 
   const filtered = filterTasks(tasks, context);
   // Rows keep a fixed-width action column so actions line up between groups;
@@ -421,11 +587,9 @@ export function renderTasks(tasks, context) {
   const quickActions = filtered.some(hasQuickAction) ? "some" : "none";
   if (body.dataset.quickActions !== quickActions) body.dataset.quickActions = quickActions;
   $("tasks-count").textContent = formatTaskCount(filtered.length, tasks.length, tasksMeta(context));
-  renderTaskPagination(context);
-  syncSettleMergedButton(context);
   // ORB-10972: the rail shows the matching total the panel header reports, so
-  // the Tasks entry reads correctly from any other tab. The rows on this page
-  // are not that total once the list is paginated (ORB-14701).
+  // the Tasks entry reads correctly from any other tab. The rows loaded are
+  // not that total while a section holds more (ORB-14701).
   const railCount = document.getElementById("rail-count-tasks");
   if (railCount) {
     const meta = tasksMeta(context);
@@ -435,12 +599,24 @@ export function renderTasks(tasks, context) {
   }
   renderFilterSummary(context);
   refreshChips(context);
-  if (filtered.length === 0) {
+  const sections = tasksMeta(context)?.sections || new Map();
+  const narrowed = browserTaskFilterActive();
+  const activeStatuses = context && typeof context.getActiveStatuses === "function" ? context.getActiveStatuses() : null;
+  // A section with rows still to load keeps its control even when a
+  // browser-side filter hides every loaded row, so more can be read.
+  const pending = [...sections.values()].filter((section) => section.next_cursor
+    && section.total > section.items.length && (!activeStatuses || activeStatuses.has(section.status)));
+  if (filtered.length === 0 && pending.length === 0) {
     const replica = tasks.length === 0 ? replicaOwner() : null;
     const defaultText = tasks.length === 0 ? "No tasks available." : "No tasks match filter.";
+    const replicaText = !replica
+      ? defaultText
+      : replica.several
+        ? "This host owns no workspaces; its checkouts are replicas of more than one owner."
+        : `This host owns no workspaces; its checkouts are replicas of ${replica.name}.`;
     const emptyState = el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
-      el("div", { class: "text", text: replica ? `This checkout is a pull replica of ${replica.name}; its tasks live on the owner.` : defaultText }),
+      el("div", { class: "text", text: replicaText }),
       replica?.switchable ? showOnOwnerButton(replica.name) : null,
     ]);
     syncTaskNotices([notice, ...buildFoldedStatusNotices(new Set(), context)].filter(Boolean));
@@ -456,28 +632,54 @@ export function renderTasks(tasks, context) {
     if (!groups.has(t.status)) groups.set(t.status, []);
     groups.get(t.status).push(t);
   }
+  // Under All workspaces each status section reads workspace by workspace,
+  // in picker order. The sort is stable, so one workspace's rows keep their
+  // order; /api/tasks/all already cuts pages in this order.
+  if (aggregate) {
+    for (const group of groups.values()) {
+      group.sort((a, b) => workspacePickerIndex(a.workspace_id) - workspacePickerIndex(b.workspace_id));
+    }
+  }
+  for (const section of pending) {
+    if (!groups.has(section.status)) groups.set(section.status, []);
+  }
   const ordered = GROUP_ORDER.filter((s) => groups.has(s)).concat(
     [...groups.keys()].filter((s) => !GROUP_ORDER.includes(s)),
   );
+  // A "Show more" button that had focus is rebuilt when its section changes;
+  // focus returns to the same button of the same section.
+  const focusedMore = document.activeElement?.closest?.(".group-more");
+  const moreFocus = focusedMore && body.contains(focusedMore)
+    ? { group: focusedMore.dataset.group, kind: document.activeElement.dataset.more || "step" } : null;
   for (const status of ordered) {
     const group = groups.get(status);
-    // Each status is one card: its head, the backlog's readiness strip, then
-    // the rows. The nodes stay siblings in the list so row reuse and keyboard
-    // roving work across groups; CSS draws the card from the first node of
-    // each run to the one marked `group-end`.
-    const groupNodes = [buildGroupHeader(status, group)];
+    const section = sections.get(status);
+    const count = !narrowed && section ? { value: section.total, total: true } : { value: group.length, total: false };
+    // Each status is one card: its head, the backlog's readiness strip, the
+    // rows, then the control that loads more. The nodes stay siblings in the
+    // list so row reuse and keyboard roving work across groups; CSS draws the
+    // card from the first node of each run to the one marked `group-end`.
+    const groupNodes = [buildGroupHeader(status, group, count, context)];
+    if (collapsedSections.has(status)) {
+      groupNodes.forEach((node) => {
+        if (node.dataset.group !== status) node.dataset.group = status;
+        node.classList.add("group-end");
+      });
+      nodes.push(...groupNodes);
+      continue;
+    }
     let rows = group;
     if (status === "backlog") {
       const strip = buildBacklogReadiness(group, context);
       if (strip) groupNodes.push(strip);
-      if (readyPoolFilter && strip) rows = group.filter((t) => drainReadinessFor(t.id)?.pool === readyPoolFilter);
+      if (readyPoolFilter && strip) rows = group.filter((t) => drainReadinessFor(t)?.pool === readyPoolFilter);
     }
     for (const t of rows) {
-      const rowKey = `task-${t.id}`;
+      const rowKey = `task-${taskDispatchIdentity(t)}`;
       const run = RUN_GROUPS.has(t.status);
       // Basic hash based on row presentation parameters (selection is painted
       // apart, by syncRowSelection)
-      const rowHash = `${JSON.stringify(t.pilot_warnings || [])}-${JSON.stringify(t.delivery_attention || null)}-${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${t.not_before || ""}-${t.scheduled_hold}-${Boolean(t.not_before && Date.parse(t.not_before) > Date.now())}-${taskReadiness.readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(taskState.crewFeedback, t.id)}-${quickActionSignature(t)}-${foldedStatusSignature(t.id)}-${riskinessSignature(t)}`;
+      const rowHash = `${JSON.stringify(t.pilot_warnings || [])}-${JSON.stringify(t.active_triage || [])}-${JSON.stringify(t.delivery_attention || null)}-${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${t.not_before || ""}-${t.scheduled_hold}-${Boolean(t.not_before && Date.parse(t.not_before) > Date.now())}-${taskReadiness.readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${t.workspace_name || ""}-${aggregate ? workspaceColor(t.workspace_id) : ""}-${aggregate}-${JSON.stringify(t.human_crew || null)}-${crewOptionsSignature()}-${feedbackSignature(taskState.crewFeedback, taskDispatchIdentity(t))}-${quickActionSignature(t)}-${foldedStatusSignature(t)}-${riskinessSignature(t)}-${hostWriteRefusal()}`;
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {
@@ -494,12 +696,14 @@ export function renderTasks(tasks, context) {
         const [prefixes, rest] = splitTitlePrefix(t.title);
         const tags = [
           aggregate && t.workspace_name
-            ? el("span", { class: "ws-badge mono", text: t.workspace_name, title: `Workspace: ${t.workspace_name}` })
+            ? buildWorkspaceBadge(t)
             : null,
           ...buildOsBadges(t),
-          buildScheduledChip(t, context),
+          buildHumanCrewBadge(t),
+          buildScheduledChip(t),
           ...taskReadiness.buildReadinessBadge(t),
           ...taskReadiness.buildPilotWarningBadge(t),
+          ...taskReadiness.buildActiveTriageBadges(t),
           ...taskReadiness.buildDeliveryAttentionBadge(t),
           ...prefixes.map((label) => el("span", { class: "title-tag", text: label, title: `[${label}]` })),
         ].filter(Boolean);
@@ -511,7 +715,7 @@ export function renderTasks(tasks, context) {
           tags.length ? el("span", { class: "title-tags" }, tags) : null,
         ]);
         const quickError = buildQuickActionError(t, context);
-        const statusFeedbackNode = buildFoldedStatusFeedback(t.id, context);
+        const statusFeedbackNode = buildFoldedStatusFeedback(t, context);
         const statusNote = statusFeedbackNode ? el("div", { class: "task-status-note" }, [statusFeedbackNode]) : null;
         if (statusNote) stopRowInteraction(statusNote);
         row = el("div", { class: `row${quickError ? " has-quick-error" : ""}${statusNote ? " has-status-note" : ""}`, title: t.title }, [
@@ -523,6 +727,8 @@ export function renderTasks(tasks, context) {
           statusNote,
         ]);
         row.dataset.key = rowKey;
+        row.dataset.taskId = t.id;
+        row.dataset.workspace = t.workspace_id || getWorkspace() || "";
         row.dataset.hash = rowHash;
         // Selection is painted after the sync (syncRowSelection), so moving it
         // rebuilds no row and the focused one keeps its node.
@@ -530,15 +736,21 @@ export function renderTasks(tasks, context) {
           expanded: false,
           controls: "task-detail-pane",
           onToggle: () => {
-            if (taskState.selectedTaskId === t.id && !taskState.pinnedExternalTask) closeTaskPane(context, { forget: true });
-            else selectTask(t.id, context, { anchor: row });
+            if (isSelectedTask(t) && !taskState.pinnedExternalTask) closeTaskPane(context, { forget: true });
+            else selectTask(t.id, context, { anchor: row, workspace: row.dataset.workspace });
           },
         });
       }
       groupNodes.push(row);
-      rowIds.add(t.id);
+      rowIds.add(taskDispatchIdentity(t));
     }
-    if (rows.length === 0) groupNodes.push(buildFilteredEmpty(status));
+    if (rows.length === 0) {
+      groupNodes.push(group.length === 0
+        ? buildFilteredEmpty(status, `No loaded ${(GROUP_LABELS[status] || status).toLowerCase()} tasks match this filter.`)
+        : buildFilteredEmpty(status));
+    }
+    const more = buildSectionMore(status, section, context);
+    if (more) groupNodes.push(more);
     // A card whose rows carry no action (Blocked) gives the action column
     // back, so its crew sits at the card's right edge.
     const noQuick = !group.some(hasQuickAction);
@@ -554,6 +766,7 @@ export function renderTasks(tasks, context) {
   syncTaskNotices([notice, ...buildFoldedStatusNotices(rowIds, context)].filter(Boolean));
   syncNodes(body, nodes);
   syncRowSelection(body);
+  restoreSectionFocus(body, moreFocus);
   renderTaskPane(filtered, context);
   finishTaskRender(body);
   const commentHash = taskComments.getCommentHash();
@@ -567,10 +780,28 @@ export function renderTasks(tasks, context) {
     taskState.restoredCommentHash = null;
   }
 }
+// Focus a rebuilt section control: the "Show more" button the operator used,
+// or the head they folded or opened.
+function restoreSectionFocus(body, moreFocus) {
+  const toggled = taskState.sectionToggleFocus;
+  taskState.sectionToggleFocus = null;
+  if (toggled) {
+    const header = [...body.children].find((node) => node.dataset.key === `header-${toggled}`);
+    const toggle = header?.querySelector(".group-toggle");
+    if (toggle && document.activeElement !== toggle) toggle.focus({ preventScroll: true });
+    return;
+  }
+  if (!moreFocus || body.contains(document.activeElement)) return;
+  const node = [...body.children].find((child) => child.dataset.key === `more-${moreFocus.group}`);
+  const button = node?.querySelector(`[data-more="${moreFocus.kind}"]`) || node?.querySelector(".group-more-button");
+  if (button) button.focus({ preventScroll: true });
+}
+
 // The selected row reads as selected without being rebuilt: its class and
 // its disclosure state are set on the node the list already holds.
 function syncRowSelection(body) {
-  const selected = !taskState.pinnedExternalTask && taskState.selectedTaskId ? `task-${taskState.selectedTaskId}` : null;
+  const selected = !taskState.pinnedExternalTask && taskState.selectedTaskId
+    ? `task-${taskState.selectedTaskWorkspace || getWorkspace() || ""}:${taskState.selectedTaskId}` : null;
   for (const row of body.querySelectorAll(".row")) {
     if (!row.dataset.key || !row.dataset.key.startsWith("task-")) continue;
     const on = row.dataset.key === selected;

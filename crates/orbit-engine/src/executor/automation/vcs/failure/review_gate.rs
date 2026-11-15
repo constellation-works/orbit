@@ -2,8 +2,12 @@ use std::path::Path;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_types::task::{TaskComment, TaskStatus};
-use orbit_types::workflow::{ReviewGateAdmissionOutput, ReviewGateHistoryNote, ReviewGateRefusal};
+use orbit_types::task::{TaskComment, TaskDecision, TaskStatus};
+use orbit_types::workflow::{
+    FailureHandoffDecision, REVIEW_FIX_VALIDATION_FAILURE_SCHEMA_VERSION,
+    RecordedReviewFixValidationFailure, ReviewGateAdmissionOutput, ReviewGateHistoryNote,
+    ReviewGateRefusal,
+};
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -131,25 +135,25 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         (
             TaskStatus::InProgress,
             "review_awaiting_evidence",
-            "awaiting_review_evidence",
+            FailureHandoffDecision::AwaitingReviewEvidence,
         )
     } else if timeout_exhausted {
         (
             TaskStatus::Blocked,
             "review_timeout_requeue_exhausted",
-            "blocked_review_gate",
+            FailureHandoffDecision::BlockedReviewGate,
         )
     } else if timed_out {
         (
             TaskStatus::Backlog,
             "review_timeout_incomplete",
-            "incomplete_review_timeout",
+            FailureHandoffDecision::IncompleteReviewTimeout,
         )
     } else {
         (
             TaskStatus::Blocked,
             REVIEW_GATE_EVENT,
-            "blocked_review_gate",
+            FailureHandoffDecision::BlockedReviewGate,
         )
     };
     let continuation = if evidence_hold {
@@ -208,6 +212,25 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
             leftover.join(", ")
         },
     );
+    let at = Utc::now();
+    let append_history = if failed_step_id == REVIEW_VALIDATION_STEP {
+        vec![
+            RecordedReviewFixValidationFailure {
+                schema_version: REVIEW_FIX_VALIDATION_FAILURE_SCHEMA_VERSION,
+                run_id: run_id.to_string(),
+                attempt_id: attempt_id.map(str::to_string),
+                candidate_commit: head_sha.clone(),
+            }
+            .history_entry(at, "system")
+            .map_err(|error| {
+                OrbitError::Execution(format!(
+                    "serialize reviewer-fix validation failure: {error}"
+                ))
+            })?,
+        ]
+    } else {
+        Vec::new()
+    };
     host.apply_task_automation_update(
         &task.id,
         TaskAutomationUpdate {
@@ -215,8 +238,13 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
             status: Some(status),
             status_event: Some(event.to_string()),
             status_note: Some(note.clone()),
+            // Only the escalation that blocks names its run in the note.
+            status_decision: (event == REVIEW_GATE_EVENT).then(|| TaskDecision::RunTransition {
+                run_id: run_id.to_string(),
+            }),
+            append_history,
             append_comments: vec![TaskComment {
-                at: Utc::now(),
+                at,
                 by: "system".to_string(),
                 message: format!("{note}\n\n{body}"),
                 operation_id: None,
@@ -227,7 +255,7 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
 
     Ok(json!({
         "phase": "failure_handoff",
-        "decision": decision,
+        "decision": decision.as_str(),
         "task_id": task.id,
         "handoff_run_id": run_id,
         "failed_step_id": failed_step_id,

@@ -25,12 +25,19 @@ use tempfile::TempDir;
 
 mod admission;
 mod artifact_attachment;
+// The provider fixture is an executable script.
+#[cfg(unix)]
+mod auto_effort;
+#[cfg(unix)]
+mod backlog_repilot;
 mod blockers;
 mod ci_sweep_races;
+mod consequential_decision;
 mod creation;
 mod crew_selection;
 mod finding_invalid;
 mod freshness;
+mod frozen_review;
 mod inspection;
 mod malformed_input;
 // The provider fixture is an executable script.
@@ -41,9 +48,34 @@ mod pilot_output;
 mod post_deploy;
 mod provider_hold;
 mod races;
+mod recheck;
+#[cfg(unix)]
+mod reservation_busy;
 mod review_evidence;
 mod settlement;
 mod source_moves;
+mod standalone_repilot;
+
+/// Read either generation of a pilot receipt through the public artifact API.
+pub(super) fn pilot_audit(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    comment: &orbit_types::task::TaskComment,
+) -> Value {
+    let receipt = comment.receipt().expect("pilot receipt");
+    let body: Value = serde_json::from_str(receipt.body).expect("pilot comment JSON");
+    match body["assessment_artifact"].as_str() {
+        Some(path) => {
+            let artifact = runtime.get_task_artifact(task_id, path).unwrap().unwrap();
+            assert_eq!(
+                body["assessment_sha256"],
+                orbit_common::security::release::sha256_hex(&artifact.content)
+            );
+            serde_json::from_slice(&artifact.content).expect("pilot assessment artifact JSON")
+        }
+        None => body,
+    }
+}
 
 struct Workspace {
     root: TempDir,
@@ -680,6 +712,37 @@ fn preparation_routine_withholds_active_pilot_tasks_until_the_hold_ends() {
     assert_eq!(workspace.prepare(&[&task.id])["task_ids"], json!([task.id]));
 }
 
+fn no_pilot_excludes_automatic_preparation_and_explains_the_tag() {
+    let workspace = Workspace::new();
+    let template = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/routines/task_pilot.yaml"),
+    )
+    .unwrap()
+    .replace("__ORBIT_ROUTINE_NAME__", "fixture-shipped-pilot")
+    .replace("__ORBIT_OWNER_MACHINE__", "fixture-machine")
+    .replace("__ORBIT_BASE_BRANCH__", "main")
+    .replace("enabled: false", "enabled: true");
+    let shipped: RoutineDefinition = serde_yaml::from_str(&template).unwrap();
+    let routines = [pilot_routine(), shipped];
+    for status in [TaskStatus::Proposed, TaskStatus::Backlog] {
+        let task = workspace
+            .runtime
+            .add_task(TaskAddParams {
+                title: format!("no pilot {status:?}"),
+                status: Some(status),
+                tags: vec!["no-pilot".into()],
+                ..Default::default()
+            })
+            .unwrap();
+        for routine in &routines {
+            let observed = evaluate_routine(&workspace.runtime, routine, true, Utc::now()).unwrap();
+            let members = observed.state.unwrap().members.unwrap();
+            assert!(!members.pending.contains_key(&task.id));
+            assert_eq!(members.withheld[&task.id], "excluded_tag: no-pilot");
+        }
+    }
+}
+
 /// A retained pending member can be off the next page when a targeted pilot
 /// acquires its hold. Admission must suppress it even without re-observation.
 fn preparation_routine_admission_withholds_a_held_member_off_the_scan_page() {
@@ -801,143 +864,6 @@ fn routine_attempt_pins_are_released_once_the_attempt_settles_or_fails() {
     assert!(workspace.pins().is_empty(), "terminal failure released it");
 }
 
-/// Record a `material_v1` assessment of `task` at `attempt`'s source: no task
-/// dependencies, the resolved crew assignment, and an empty instruction list.
-/// That list matches a pinned tree with no `AGENTS.md` or `CLAUDE.md`. A tree
-/// that has them no longer matches, so the assessment is piloted again.
-fn applied_legacy(workspace: &Workspace, task: &Task, attempt: &MemberAttempt) -> String {
-    let assignment = workspace
-        .runtime
-        .lookup_crew_for_task(None, task.crew.as_deref())
-        .unwrap();
-    let legacy_dependencies = json!([{
-        "effective_assignment": {
-            "crew": assignment.name,
-            "model": assignment.assignment.model,
-            "provider": assignment.assignment.provider,
-        }
-    }]);
-    let legacy_fingerprint = orbit_automation::members::preparation::legacy_fingerprint(
-        task,
-        &attempt.member.source.commit,
-        &legacy_dependencies,
-        "[]",
-        &Default::default(),
-    )
-    .unwrap();
-    workspace.applied_with_fingerprint(attempt, Some(&legacy_fingerprint));
-    legacy_fingerprint
-}
-
-/// A pre-upgrade accepted assessment still needs its pinned source to be
-/// compared under material_v1; current material_v2 assessments release at
-/// settlement as covered above.
-fn routine_attempt_pin_stays_for_a_legacy_assessment() {
-    let workspace = Workspace::new();
-    workspace.install_pilot_job();
-    let task = workspace.task("legacy assessment");
-    let routine = pilot_routine();
-    let now = Utc::now();
-    evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
-    let attempt = workspace.admitted(&task, 1);
-    let pin = pin_attempt_source(&workspace.runtime, &attempt).unwrap();
-    let legacy_fingerprint = applied_legacy(&workspace, &task, &attempt);
-
-    evaluate_routine(
-        &workspace.runtime,
-        &routine,
-        false,
-        now + Duration::minutes(4),
-    )
-    .unwrap();
-    let members = workspace.routine_state().members.unwrap();
-    assert_eq!(
-        members.assessed[&task.id].resulting_fingerprint,
-        legacy_fingerprint
-    );
-    assert_eq!(members.assessed[&task.id].receipt_id, attempt.id);
-    assert!(members.active.is_none());
-    assert_eq!(
-        workspace.pins(),
-        [pin],
-        "the legacy assessment still needs its pinned revision"
-    );
-    let run_id = attempt.action_id.as_deref().unwrap();
-    workspace
-        .jobs
-        .mark_job_run_running(run_id, Utc::now(), std::process::id())
-        .unwrap();
-    workspace
-        .jobs
-        .finalize_job_run(run_id, JobRunState::Success, Utc::now(), None)
-        .unwrap();
-
-    let cleanup = release_unreferenced_attempt_pins(&workspace.runtime).unwrap();
-    assert_eq!(cleanup.retained_assessed, 1);
-    assert!(cleanup.released.is_empty());
-}
-
-/// An attempt an earlier client admitted pinned only the legacy shared ref.
-/// The current client still reads it by its exact name to carry the
-/// assessment forward, and never deletes it: no owner is recorded for it.
-fn legacy_shared_pins_are_read_as_a_fallback_and_never_released() {
-    let workspace = Workspace::new();
-    workspace.install_pilot_job();
-    let task = workspace.task("pinned by an earlier client");
-    let routine = pilot_routine();
-    let now = Utc::now();
-    evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
-    let attempt = workspace.admitted(&task, 1);
-    let owned = pin_attempt_source(&workspace.runtime, &attempt).unwrap();
-    workspace.git(&["update-ref", "-d", &owned]);
-    let legacy = format!("refs/orbit/automation/{}", attempt.id);
-    workspace.pin(&legacy);
-
-    applied_legacy(&workspace, &task, &attempt);
-    evaluate_routine(
-        &workspace.runtime,
-        &routine,
-        false,
-        now + Duration::minutes(4),
-    )
-    .unwrap();
-    assert_eq!(
-        workspace.pins(),
-        std::slice::from_ref(&legacy),
-        "settlement kept it"
-    );
-
-    // The next pass recomputes the legacy digest at the legacy pin, so the
-    // unchanged task keeps its assessment instead of joining a re-pilot.
-    evaluate_routine(
-        &workspace.runtime,
-        &routine,
-        false,
-        now + Duration::minutes(5),
-    )
-    .unwrap();
-    let members = workspace.routine_state().members.unwrap();
-    assert_eq!(members.assessed[&task.id].receipt_id, attempt.id);
-    assert!(
-        !members.pending.contains_key(&task.id),
-        "the legacy fallback carried the assessment forward"
-    );
-
-    let run_id = attempt.action_id.as_deref().unwrap();
-    workspace
-        .jobs
-        .mark_job_run_running(run_id, Utc::now(), std::process::id())
-        .unwrap();
-    workspace
-        .jobs
-        .finalize_job_run(run_id, JobRunState::Success, Utc::now(), None)
-        .unwrap();
-    let cleanup = release_unreferenced_attempt_pins(&workspace.runtime).unwrap();
-    assert_eq!(cleanup.retained_legacy, 1);
-    assert!(cleanup.released.is_empty());
-    assert_eq!(workspace.pins(), [legacy]);
-}
-
 /// Tracked root and nested `AGENTS.md` and `CLAUDE.md` bytes are part of the
 /// preparation fingerprint when `instructions` is material. A near-name, an
 /// ordinary file, and an untracked instruction file are not.
@@ -953,6 +879,21 @@ fn instruction_edits_change_the_preparation_fingerprint() {
         "spaced directory rules\n",
         "spaced directory instructions",
     );
+    let spaced = pending_fingerprint(&workspace, &routine, &task.id, now);
+    assert_ne!(
+        spaced, empty,
+        "a leading-space instruction path alone enters the snapshot"
+    );
+    workspace.commit_file(
+        " instructions/AGENTS.md",
+        "spaced directory rules revised\n",
+        "edit spaced directory instructions",
+    );
+    let spaced_edited = pending_fingerprint(&workspace, &routine, &task.id, now);
+    assert_ne!(
+        spaced_edited, spaced,
+        "editing a leading-space instruction path changes the fingerprint"
+    );
     workspace.commit_file("AGENTS.md", "root rules\n", "root instructions");
     workspace.commit_file("a/AGENTS.md", "nested agents\n", "nested agents");
     workspace.commit_file("a/b/CLAUDE.md", "nested claude\n", "nested claude");
@@ -961,7 +902,7 @@ fn instruction_edits_change_the_preparation_fingerprint() {
     let listed = pending_fingerprint(&workspace, &routine, &task.id, now + Duration::minutes(1));
     assert_ne!(
         listed, empty,
-        "tracked instruction files, including a leading-space path, enter the snapshot"
+        "tracked root and nested instruction files enter the snapshot"
     );
 
     workspace.commit_file("AGENTS.md", "root rules revised\n", "edit root");
@@ -1040,10 +981,18 @@ fn instruction_snapshot_survives_a_tree_listing_over_the_source_output_cap() {
     let now = Utc::now();
     let empty = pending_fingerprint(&workspace, &routine, &task.id, now);
 
-    let bulk = workspace.repo.join("bulk").join("d".repeat(100));
+    // Three 250-byte names make each listed path about 770 bytes, so 1,500
+    // files still exceed the 1 MiB source-output cap.
+    let name = "d".repeat(250);
+    let bulk = workspace
+        .repo
+        .join("bulk")
+        .join(&name)
+        .join(&name)
+        .join(name);
     std::fs::create_dir_all(&bulk).unwrap();
-    for index in 0..10_000 {
-        std::fs::write(bulk.join(format!("file_{index:05}.txt")), "x\n").unwrap();
+    for index in 0..1_500 {
+        std::fs::write(bulk.join(format!("file_{index:04}.txt")), "x\n").unwrap();
     }
     workspace.commit_file("AGENTS.md", "root rules\n", "root instructions");
     workspace.commit_file("bulk/nested/CLAUDE.md", "nested claude\n", "nested claude");
@@ -1075,57 +1024,6 @@ fn instruction_snapshot_survives_a_tree_listing_over_the_source_output_cap() {
     );
 }
 
-/// A `material_v1` assessment stored against an empty instruction snapshot
-/// does not carry forward once the pinned revision's tracked instruction
-/// files are part of that hash. The member is piloted again once.
-fn legacy_assessment_repilots_when_pinned_instructions_were_omitted() {
-    let workspace = Workspace::new();
-    workspace.install_pilot_job();
-    workspace.commit_file("AGENTS.md", "root rules\n", "root instructions");
-    workspace.commit_file("a/AGENTS.md", "nested agents\n", "nested agents");
-    workspace.commit_file("a/b/CLAUDE.md", "nested claude\n", "nested claude");
-    let task = workspace.task("legacy empty snapshot");
-    let routine = pilot_routine();
-    let now = Utc::now();
-    evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
-    let attempt = workspace.admitted(&task, 1);
-    let stale = applied_legacy(&workspace, &task, &attempt);
-
-    evaluate_routine(
-        &workspace.runtime,
-        &routine,
-        false,
-        now + Duration::minutes(4),
-    )
-    .unwrap();
-    let members = workspace.routine_state().members.unwrap();
-    assert_eq!(
-        members.assessed[&task.id].resulting_fingerprint, stale,
-        "settlement records the empty-snapshot assessment"
-    );
-    assert!(
-        workspace.pins().is_empty(),
-        "that hash does not match the pinned instructions, so the pin is not kept"
-    );
-
-    evaluate_routine(
-        &workspace.runtime,
-        &routine,
-        false,
-        now + Duration::minutes(5),
-    )
-    .unwrap();
-    let members = workspace.routine_state().members.unwrap();
-    assert!(
-        members.pending.contains_key(&task.id),
-        "the member is piloted again once"
-    );
-    assert_ne!(
-        members.pending[&task.id].fingerprint, stale,
-        "the new fingerprint is not the empty-snapshot legacy hash"
-    );
-}
-
 /// `orbit doctor --fix-automation-pins` reclaims leaked owned pins past the
 /// size one namespace listing could read, and keeps every pin a consumer or
 /// live run names, every legacy and delivery batch pin, and every ref it
@@ -1138,7 +1036,8 @@ fn fix_automation_pins_releases_only_owned_attempt_pins_nothing_names() {
     let now = Utc::now();
     evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
 
-    // A pin from before settlement released them, backing an assessment.
+    // A pin left behind after settlement. Only the accepted assessment names
+    // it, so the repair reclaims it.
     let settled = workspace.admitted(&assessed, 1);
     workspace.settle(&settled, now + Duration::minutes(3));
     let assessed_pin = pin_attempt_source(&workspace.runtime, &settled).unwrap();
@@ -1214,23 +1113,23 @@ fn fix_automation_pins_releases_only_owned_attempt_pins_nothing_names() {
     let mut released = cleanup.released.clone();
     released.sort();
     let mut expected = leaked.clone();
+    expected.push(assessed_pin.clone());
     expected.sort();
     assert_eq!(released, expected);
     assert_eq!(
         (
             cleanup.retained_active,
-            cleanup.retained_assessed,
             cleanup.retained_live_run,
             cleanup.retained_legacy,
             cleanup.foreign_owners,
         ),
-        (1, 1, 1, 1, 0)
+        (1, 1, 1, 0)
     );
     let mut reported = cleanup.unrecognized.clone();
     reported.sort();
     assert_eq!(reported, unrecognized);
     assert!(cleanup.kept.is_empty());
-    let mut remaining = vec![assessed_pin, active_pin, live_pin, batch_pin, legacy_pin];
+    let mut remaining = vec![active_pin, live_pin, batch_pin, legacy_pin];
     remaining.extend(unrecognized);
     remaining.sort();
     assert_eq!(workspace.pins(), remaining);
@@ -1354,13 +1253,13 @@ fn unproven_ownership_and_moved_pins_retain_every_pin() {
     assert!(cleanup.refused.is_some(), "a missing record proves nothing");
     assert_eq!(workspace.pins(), std::slice::from_ref(&pin));
 
-    // Restored, the record proves the namespace again; the settled
-    // attempt's assessment still names the pin.
+    // Restored, the record proves the namespace again. The settled attempt
+    // is done, so the pin its assessment alone named is reclaimed.
     workspace.git(&["update-ref", &record, &bound]);
     let cleanup = release_unreferenced_attempt_pins(&workspace.runtime).unwrap();
     assert_eq!(cleanup.refused, None);
-    assert_eq!(cleanup.retained_assessed, 1);
-    assert_eq!(workspace.pins(), std::slice::from_ref(&pin));
+    assert_eq!(cleanup.released, std::slice::from_ref(&pin));
+    assert!(workspace.pins().is_empty());
 
     // A pin repointed after admission is neither rebound nor released.
     let moved_task = workspace.task("moved pin");
@@ -1379,11 +1278,58 @@ fn unproven_ownership_and_moved_pins_retain_every_pin() {
     workspace.git(&["update-ref", &moved_pin, &elsewhere]);
     assert!(pin_attempt_source(&workspace.runtime, &moved).is_err());
     workspace.settle(&moved, now + Duration::minutes(5));
-    let mut expected = vec![pin, moved_pin.clone()];
-    expected.sort();
-    assert_eq!(workspace.pins(), expected);
+    assert_eq!(workspace.pins(), vec![moved_pin.clone()]);
     assert_eq!(workspace.object(&moved_pin), elsewhere);
 }
+
+fn a_retrying_pilot_run_refuses_a_duplicate_explicit_pilot() {
+    use orbit_core::application::job::{TaskPilotRefusal, TaskPilotSubmitError};
+    use orbit_types::workflow::JobRunTrigger;
+
+    let workspace = Workspace::new();
+    let task = workspace.task("already piloting");
+    let run = workspace
+        .jobs
+        .insert_job_run(
+            "task_pilot_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({ "task_ids": [task.id] })),
+            None,
+        )
+        .unwrap();
+    let changed = workspace
+        .runtime
+        .sqlite_store()
+        .unwrap()
+        .connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE job_runs SET state = 'retrying' WHERE run_id = ?1",
+            [&run.run_id],
+        )
+        .unwrap();
+    assert_eq!(changed, 1);
+
+    let error = workspace
+        .runtime
+        .submit_explicit_task_pilot(&task.id, Some("operator"), JobRunTrigger::cli())
+        .expect_err("a retrying pilot holds the task");
+    match error {
+        TaskPilotSubmitError::Refused(TaskPilotRefusal::PilotRunning { run_id, task_id }) => {
+            assert_eq!(run_id, run.run_id);
+            assert_eq!(task_id, task.id);
+        }
+        other => panic!("expected the live pilot refusal, got {other}"),
+    }
+}
+
+// Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    a_retrying_pilot_run_refuses_a_duplicate_explicit_pilot_scenarios,
+    a_retrying_pilot_run_refuses_a_duplicate_explicit_pilot,
+);
 
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
@@ -1391,17 +1337,15 @@ crate::scenario_table!(
     all_held_pilot_run_succeeds_and_retains_every_holder_skip,
     mixed_pilot_selection_applies_free_tasks_and_skips_held_tasks,
     preparation_routine_withholds_active_pilot_tasks_until_the_hold_ends,
+    no_pilot_excludes_automatic_preparation_and_explains_the_tag,
     preparation_routine_admission_withholds_a_held_member_off_the_scan_page,
     routine_attempt_pins_are_released_once_the_attempt_settles_or_fails,
-    routine_attempt_pin_stays_for_a_legacy_assessment,
-    legacy_shared_pins_are_read_as_a_fallback_and_never_released,
     instruction_edits_change_the_preparation_fingerprint
 );
 
 crate::scenario_table!(
     instruction_snapshot_survives_a_tree_listing_over_the_source_output_cap_scenarios,
     instruction_snapshot_survives_a_tree_listing_over_the_source_output_cap,
-    legacy_assessment_repilots_when_pinned_instructions_were_omitted,
     fix_automation_pins_releases_only_owned_attempt_pins_nothing_names
 );
 

@@ -5,16 +5,16 @@ use orbit_store::contracts::JobRunStepParams;
 use orbit_store::contracts::{InvocationQuery, InvocationRecord, KeptClaimCandidate};
 use orbit_tools::{FsAuditLogger, ToolContext};
 use orbit_types::identity::AgentModelPair;
-use orbit_types::policy::Role;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     ContextWideningStep, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
     TaskPriority, TaskStatus,
 };
 use orbit_types::telemetry::ProviderLimitObservation;
+use orbit_types::workflow::{AutoTaskStepRecord, ParkedWait};
 use orbit_types::workflow::{
-    DeferralProbe, ExperimentActivityOverlay, ExploreBriefAdmission, JobRun, JobRunStartOutcome,
-    JobRunState, NamespaceProbe, PipelineState, TagInstruction,
+    DeferralProbe, ExperimentActivityOverlay, JobRun, JobRunStartOutcome, JobRunState,
+    NamespaceProbe, PipelineState, TagInstruction,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -26,6 +26,7 @@ use crate::activity_job::{
     ResolvedShellExecutor,
 };
 
+use super::{AutoTaskAdmission, AutoTaskObservation, AutoTaskStepRequest};
 use super::{
     ClaimExecutionContext, CompletionObservationAdmission, CrewConfig, FinalRecoveryAdmission,
     FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied,

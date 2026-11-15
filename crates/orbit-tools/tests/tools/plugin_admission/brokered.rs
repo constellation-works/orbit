@@ -46,6 +46,7 @@ impl Fixture {
             fs: PluginFsPermissions {
                 read: read.iter().map(|root| (*root).into()).collect(),
                 write: write.iter().map(|root| (*root).into()).collect(),
+                ..PluginFsPermissions::default()
             },
             ..PluginPermissions::default()
         };

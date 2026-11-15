@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use crate::presentation_definition::presentation_definition;
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{
     self, CallerCapabilities, CallerEnvelope, OperationSurface,
@@ -8,15 +7,16 @@ use orbit_common::governance::authorization::{
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_types::telemetry::normalize_self_reported_actor;
 use orbit_types::tool::{
-    McpInputDecoration, McpPresentationRead, McpToolDefinition, ToolSessionContext,
+    McpInputDecoration, McpPresentationRead, McpToolDefinition, TOOL_ACTION_FIELD, TOOL_FAMILIES,
+    ToolSessionContext, tool_family,
 };
 use rmcp::ErrorData as McpError;
 use rmcp::ServerHandler;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, CustomRequest, CustomResult, Implementation,
-    InitializeRequestParams, InitializeResult, ListResourcesResult, ListToolsResult, Meta,
-    PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, ServerCapabilities,
-    ServerInfo,
+    CallToolRequestParams, CallToolResponse, CallToolResult, CustomRequest, CustomResult,
+    Implementation, InitializeRequestParams, InitializeResult, ListResourcesResult,
+    ListToolsResult, MetaObject, PaginatedRequestParams, ReadResourceRequestParams,
+    ReadResourceResponse, ReadResourceResult, RequestMetaObject, ServerCapabilities, ServerConfig,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use serde_json::{Map, Value};
@@ -25,7 +25,7 @@ use super::name_map::{advertise_tool_names, advertise_tool_names_in_schema, buil
 use super::presentation;
 use super::schema::{
     SelectorAdvertisement, WorkspaceBinding, ensure_workspace_selector, host_owns_plugin_selector,
-    schema_to_tool,
+    schema_to_tool, slim_advertised_property_descriptions,
 };
 use super::structured::mcp_tool_call_result;
 use super::{OrbitToolServer, ToolSurface};
@@ -94,13 +94,6 @@ impl OrbitToolServer {
             .map(|surface| Arc::clone(&surface.definitions))
     }
 
-    fn name_map(&self) -> Result<Arc<std::collections::HashMap<String, String>>, McpError> {
-        self.load_tool_surface()
-            .map_err(invalid_definitions_mcp_error)?
-            .name_map
-            .clone()
-    }
-
     /// Resolve the advertised wire input schema for one canonical definition.
     pub(super) fn input_schema_for(
         &self,
@@ -112,14 +105,18 @@ impl OrbitToolServer {
             .flatten();
         let mut schema = match definition.input_schema.as_ref().and_then(Value::as_object) {
             Some(declared) => super::schema::declared_input_schema(declared),
-            None => super::schema::build_input_schema_with_friction_taxonomy(
+            None => super::schema::build_input_schema(
                 &definition.schema.name,
                 &definition.schema.parameters,
-                taxonomy.as_deref(),
-                definition.rules.input_decoration,
             ),
         };
+        super::schema::apply_input_decoration(
+            &mut schema,
+            definition.rules.input_decoration,
+            taxonomy.as_deref(),
+        );
         ensure_workspace_selector(&mut schema, definition, self.selector_advertisement());
+        slim_advertised_property_descriptions(&mut schema, &definition.schema.name);
         Ok(schema)
     }
 
@@ -146,6 +143,7 @@ impl OrbitToolServer {
         &self,
         mut result: ListToolsResult,
         definitions: &[McpToolDefinition],
+        name_map: &super::CachedNameMap,
     ) -> Result<ListToolsResult, McpError> {
         let context = self.session_context();
         let caller = CallerCapabilities::resolve(&CallerEnvelope::mcp_session(&context));
@@ -155,13 +153,22 @@ impl OrbitToolServer {
                 .iter()
                 .filter(|operation| {
                     operation.surface == OperationSurface::Tool
-                        // The managed-run explorer admission can allow an agent
-                        // without the operator capability required by this row.
-                        && operation.id != "orbit.agent.invoke"
                         && authorization::authorize(operation, &caller).is_err()
                 })
                 .map(|operation| operation.id.to_owned()),
         );
+        // A family is hidden only when every action it serves is.
+        let hidden_families = TOOL_FAMILIES
+            .iter()
+            .filter(|family| {
+                family
+                    .actions
+                    .iter()
+                    .all(|action| hidden.contains(action.operation))
+            })
+            .map(|family| family.name.to_string())
+            .collect::<Vec<_>>();
+        hidden.extend(hidden_families);
         if presentation::reader(definitions, McpPresentationRead::Task)
             .is_some_and(|reader| hidden.contains(&reader.schema.name))
         {
@@ -172,7 +179,7 @@ impl OrbitToolServer {
         if hidden.is_empty() {
             return Ok(result);
         }
-        let name_map = self.name_map()?;
+        let name_map = name_map.clone()?;
         result.tools.retain(|tool| {
             name_map
                 .get(tool.name.as_ref())
@@ -217,6 +224,8 @@ impl OrbitToolServer {
         // one session can never accumulate two identities; `None` here means
         // this session is anonymous, not that the previous claim still holds.
         trusted.self_reported_actor = announced.self_reported_actor;
+        // Replaced, like the actor claim: a re-initialize never inherits it.
+        trusted.mcp_client_name = announced.mcp_client_name;
         trusted.trace_id = None;
         self.replace_session_context(trusted);
     }
@@ -237,20 +246,17 @@ impl OrbitToolServer {
         context
     }
 
-    pub(super) fn canonical_name(&self, advertised: &str) -> Result<String, McpError> {
-        let map = self.name_map()?;
-        Ok(map
-            .get(advertised)
-            .cloned()
-            .unwrap_or_else(|| advertised.to_string()))
-    }
-
     async fn dispatch_tool_call(
         &self,
         request: CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
-        if let Some(definition) = presentation_definition(request.name.as_ref()) {
-            let result = self.dispatch_presentation(request, definition.kind).await;
+        if presentation::is_presentation(request.name.as_ref()) {
+            if !self.host.presentation_enabled() {
+                return Ok(tool_error_result(&OrbitError::InvalidInput(
+                    "UI tools are not enabled for this server".into(),
+                )));
+            }
+            let result = self.dispatch_presentation(request).await;
             return Ok(match result {
                 Ok(value) => mcp_tool_call_result(value),
                 Err(error) => tool_error_result(&error),
@@ -271,15 +277,22 @@ impl OrbitToolServer {
             });
         }
         let mut call_context = self.context_for_tool_call();
-        let canonical = self.canonical_name(request.name.as_ref())?;
+        // One surface load for this call: the name map and the definitions
+        // both come from the same snapshot.
+        let surface = self
+            .load_tool_surface()
+            .map_err(invalid_definitions_mcp_error)?;
+        let name_map = surface.name_map.clone()?;
+        let canonical = name_map
+            .get(request.name.as_ref())
+            .cloned()
+            .unwrap_or_else(|| request.name.to_string());
         let mut input = request
             .arguments
             .map(Value::Object)
             .unwrap_or_else(|| Value::Object(Map::new()));
 
-        let definitions = self
-            .load_tool_definitions()
-            .map_err(invalid_definitions_mcp_error)?;
+        let definitions = &surface.definitions;
         let definition = definitions
             .iter()
             .find(|definition| definition.schema.name == canonical);
@@ -314,11 +327,36 @@ impl OrbitToolServer {
                 .as_deref()
                 .is_none_or(|selector| selector.trim().is_empty())
         {
-            return Ok(tool_error_result(&OrbitError::InvalidInput(format!(
-                "tool '{canonical}' requires an explicit workspace selector from discovery: \
-                 `view` reads never use the session's bound workspace. Pass `workspace` with a \
+            let fields = definition
+                .map(|definition| {
+                    definition
+                        .rules
+                        .workspace_echo
+                        .matching_input_fields(&input)
+                })
+                .unwrap_or_default();
+            let trigger = if fields.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "input {} requires this selector; ",
+                    fields
+                        .iter()
+                        .map(|field| format!("`{field}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            let guidance = if fields.contains(&"view") {
+                "`view` reads never use the session's bound workspace. Pass `workspace` with a \
                  selector copied from `orbit_workspace_list`, or omit `view` to use the bound \
                  workspace"
+            } else {
+                "pass `workspace` with a selector copied from `orbit_workspace_list`"
+            };
+            return Ok(tool_error_result(&OrbitError::InvalidInput(format!(
+                "tool '{canonical}' requires an explicit workspace selector from discovery: \
+                 {trigger}{guidance}"
             ))));
         }
         let host = Arc::clone(&self.host);
@@ -353,7 +391,6 @@ impl OrbitToolServer {
     async fn dispatch_presentation(
         &self,
         request: CallToolRequestParams,
-        kind: crate::presentation_definition::PresentationKind,
     ) -> Result<Value, OrbitError> {
         let definitions = self.load_tool_definitions()?;
         let hidden = self.host.hidden_tool_names(&self.session_context());
@@ -365,7 +402,7 @@ impl OrbitToolServer {
             ));
         };
         let input = Value::Object(request.arguments.unwrap_or_default());
-        let Some(selection) = presentation::selection(kind, &input)? else {
+        let Some(selection) = presentation::selection(&input)? else {
             return Ok(presentation::empty_panel());
         };
         let presentation::Selection {
@@ -403,9 +440,17 @@ impl OrbitToolServer {
         .schema
         .name
         .clone();
+        // A family reader is called with its show action.
+        let read_action = tool_family(&read_name)
+            .and_then(|family| family.action("show"))
+            .map(|action| action.action);
         let task = tokio::task::spawn_blocking(move || {
             if run_selection {
-                return host.call_tool(&read_name, serde_json::json!({"workspace":selector,"view":"bounded","id":task_key,"limit":25}), context);
+                let mut read = serde_json::json!({"workspace":selector,"view":"bounded","id":task_key,"limit":25});
+                if let Some(action) = read_action {
+                    read[TOOL_ACTION_FIELD] = Value::String(action.to_string());
+                }
+                return host.call_tool(&read_name, read, context);
             }
             host.call_tool(
                 &read_name,
@@ -447,9 +492,9 @@ impl OrbitToolServer {
     pub(crate) fn apply_initialize(
         &self,
         request: &InitializeRequestParams,
-        transport_meta: &Meta,
+        transport_meta: &RequestMetaObject,
     ) -> Result<(), McpError> {
-        let metadata = request
+        let metadata: &MetaObject = request
             .meta
             .as_ref()
             .map(|meta| &meta.0)
@@ -487,6 +532,22 @@ impl OrbitToolServer {
         }
         self.adopt_announced_session(session_context_from_initialize(request, transport_meta));
         Ok(())
+    }
+
+    /// Peer info for a session resumed after an executable handover.
+    ///
+    /// [`Self::apply_initialize`] keeps the client's metadata, announced
+    /// workspace and worker binding. `serve_directly` then treats this value
+    /// as the negotiated peer, so the protocol version is the one `initialize`
+    /// would have agreed, not the version the client first requested.
+    pub(crate) fn resumed_peer_info(
+        &self,
+        mut request: InitializeRequestParams,
+    ) -> Result<InitializeRequestParams, McpError> {
+        self.apply_initialize(&request, &RequestMetaObject::default())?;
+        let negotiated = self.negotiate_initialize(&request)?;
+        request.protocol_version = negotiated.protocol_version;
+        Ok(request)
     }
 }
 
@@ -550,12 +611,12 @@ impl ServerHandler for OrbitToolServer {
             return std::future::ready(Err(error));
         }
         if context.peer.peer_info().is_none() {
-            context.peer.set_peer_info(request);
+            context.peer.set_peer_info(request.clone());
         }
-        std::future::ready(Ok(self.get_info()))
+        std::future::ready(self.negotiate_initialize(&request))
     }
 
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         let implementation = Implementation::new("orbit-mcp", env!("CARGO_PKG_VERSION"));
         let capabilities = ServerCapabilities::builder()
             .enable_tools()
@@ -582,7 +643,11 @@ impl ServerHandler for OrbitToolServer {
         if let Ok(cache) = surface.lists.lock()
             && let Some(cached) = cache.get(&cache_key)
         {
-            return self.without_hidden_tools((**cached).clone(), &surface.definitions);
+            return self.without_hidden_tools(
+                (**cached).clone(),
+                &surface.definitions,
+                &surface.name_map,
+            );
         }
 
         // Build and validate the map on the same first pass as the list. This
@@ -602,7 +667,8 @@ impl ServerHandler for OrbitToolServer {
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>();
-        let presentation_available = presentation::available(&definitions);
+        let presentation_available =
+            self.host.presentation_enabled() && presentation::available(&definitions);
         let mut tools = definitions
             .into_iter()
             .map(|mut definition| {
@@ -610,8 +676,10 @@ impl ServerHandler for OrbitToolServer {
                     .input_schema_for(&definition)
                     .map_err(invalid_definitions_mcp_error)?;
                 advertise_tool_names_in_schema(&mut input_schema, &canonical_names);
-                definition.schema.description =
-                    advertise_tool_names(&definition.schema.description, &canonical_names);
+                definition.schema.description = super::schema::advertised_tool_description(
+                    &definition.schema.name,
+                    &advertise_tool_names(&definition.schema.description, &canonical_names),
+                );
                 Ok(schema_to_tool(
                     definition.schema,
                     input_schema,
@@ -629,7 +697,7 @@ impl ServerHandler for OrbitToolServer {
         if let Ok(mut cache) = surface.lists.lock() {
             cache.insert(cache_key, Arc::new(result.clone()));
         }
-        self.without_hidden_tools(result, &surface.definitions)
+        self.without_hidden_tools(result, &surface.definitions, &surface.name_map)
     }
 
     async fn list_resources(
@@ -646,26 +714,26 @@ impl ServerHandler for OrbitToolServer {
         &self,
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, McpError> {
-        if request.uri != presentation::RESOURCE_URI
-            && request.uri != presentation::LEGACY_RESOURCE_URI
-        {
+    ) -> Result<ReadResourceResponse, McpError> {
+        if request.uri != presentation::RESOURCE_URI {
             return Err(McpError::resource_not_found(
                 "unknown UI resource",
                 Some(serde_json::json!({ "code": "resource_not_found" })),
             ));
         }
-        Ok(ReadResourceResult::new(vec![
-            presentation::resource_content(&request.uri),
-        ]))
+        Ok(ReadResourceResponse::Complete(ReadResourceResult::new(
+            vec![presentation::resource_content(&request.uri)],
+        )))
     }
 
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
-        self.dispatch_tool_call(request).await
+    ) -> Result<CallToolResponse, McpError> {
+        Ok(CallToolResponse::Complete(
+            self.dispatch_tool_call(request).await?,
+        ))
     }
 }
 
@@ -678,7 +746,7 @@ fn invalid_definitions_mcp_error(error: OrbitError) -> McpError {
 
 pub(super) fn session_context_from_initialize(
     request: &InitializeRequestParams,
-    transport_meta: &Meta,
+    transport_meta: &RequestMetaObject,
 ) -> ToolSessionContext {
     // rmcp moves wire `_meta` to the request context. Prefer params-level meta
     // for in-process callers, then fall back to the transport-level value.
@@ -688,6 +756,8 @@ pub(super) fn session_context_from_initialize(
     ToolSessionContext {
         workspace,
         self_reported_actor: self_reported_actor_from_initialize(request, transport_meta),
+        mcp_client_name: Some(request.client_info.name.trim().to_string())
+            .filter(|name| !name.is_empty()),
         ..ToolSessionContext::default()
     }
 }
@@ -708,7 +778,7 @@ pub(super) fn session_context_from_initialize(
 /// anonymous. There is no fallback to another source of identity.
 fn self_reported_actor_from_initialize(
     request: &InitializeRequestParams,
-    transport_meta: &Meta,
+    transport_meta: &RequestMetaObject,
 ) -> Option<String> {
     meta_string(request.meta.as_ref().map(|meta| &meta.0), "actor")
         .or_else(|| meta_string(Some(&transport_meta.0), "actor"))
@@ -719,7 +789,7 @@ fn self_reported_actor_from_initialize(
 
 /// Read `_meta.orbit.<key>`, accepting both the nested object and the flat
 /// dotted spelling clients use when they cannot build nested `_meta`.
-fn meta_string(meta: Option<&rmcp::model::JsonObject>, key: &str) -> Option<String> {
+fn meta_string(meta: Option<&MetaObject>, key: &str) -> Option<String> {
     meta.and_then(|meta| {
         meta.get("orbit")
             .and_then(|orbit| orbit.get(key))

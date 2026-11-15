@@ -179,7 +179,8 @@ fn prepare(
             }
             Ok(ListView::default())
         }
-        TaskVerb::ReviewReset
+        TaskVerb::Repilot
+        | TaskVerb::ReviewReset
         | TaskVerb::ReconcileReview
         | TaskVerb::Requeue
         | TaskVerb::RecoverClaim
@@ -411,7 +412,8 @@ fn render(
             let text = super::reconcile_review::reconciliation_text(&value);
             Ok(Payload::detail(value, text).into())
         }
-        TaskVerb::RetryHandoff
+        TaskVerb::Repilot
+        | TaskVerb::RetryHandoff
         | TaskVerb::RecoverClaim
         | TaskVerb::RevokeHandoff
         | TaskVerb::BlockTriage
@@ -453,7 +455,7 @@ pub(crate) fn requeue_text(value: &Value) -> String {
                 .into(),
         ),
         Some("disabled") => lines.push(
-            "pr.close_on_terminal is off, so no pull request was closed; close the discarded one \
+            "Pull request closure is off, so no pull request was closed; close the discarded one \
              by hand."
                 .into(),
         ),

@@ -90,10 +90,10 @@ impl Execute for CodebaseCommand {
 }
 
 fn analytics_blocks(value: &Value) -> Vec<Block> {
-    let mut blocks = vec![Block::text(selection_line(value))];
+    let mut blocks = vec![Block::prose(selection_line(value))];
 
     let overlap = &value["overlap"];
-    blocks.push(Block::text(format!(
+    blocks.push(Block::prose(format!(
         "\nIn several rankings: {} of {} ranked paths",
         rows(overlap).len(),
         count(&overlap["ranked_paths"]),
@@ -123,7 +123,7 @@ fn analytics_blocks(value: &Value) -> Vec<Block> {
 
     for ranking in PATH_RANKINGS {
         let section = &value[ranking.key];
-        blocks.push(Block::text(format!(
+        blocks.push(Block::prose(format!(
             "\n{}: {} ÷ {} ({} below minimum support)",
             ranking.label,
             ranking.numerator,
@@ -141,7 +141,7 @@ fn analytics_blocks(value: &Value) -> Vec<Block> {
     }
 
     let coupling = &value["change_coupling"];
-    blocks.push(Block::text(format!(
+    blocks.push(Block::prose(format!(
         "\nChange coupling: reserved together ÷ reserved either ({} pairs below minimum support)",
         count(&coupling["below_support"]),
     )));
@@ -158,7 +158,7 @@ fn analytics_blocks(value: &Value) -> Vec<Block> {
     }
     blocks.push(Block::table(table));
 
-    blocks.push(Block::text(format!(
+    blocks.push(Block::prose(format!(
         "\nShowing up to {TEXT_ROWS} rows per ranking; --json carries up to {} and the \
          regression cross-tabs. Follow a path to its tasks with `orbit codebase show <path>`.",
         count(&value["row_limit"]),
@@ -199,10 +199,10 @@ fn regression_blocks(section: &Value) -> Vec<Block> {
         count(&unsited["tasks"]),
         count(&unsited["links"]),
     );
-    let mut blocks = vec![Block::text(out)];
+    let mut blocks = vec![Block::prose(out)];
     for (slice, heading) in [("crew", "CREW"), ("complexity", "COMPLEXITY")] {
         let rates = &section[format!("by_{slice}")];
-        blocks.push(Block::text(format!(
+        blocks.push(Block::prose(format!(
             "\nRegressed done tasks by {slice} ({} below minimum support)",
             count(&rates["below_support"]),
         )));

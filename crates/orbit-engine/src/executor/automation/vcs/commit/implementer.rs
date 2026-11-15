@@ -26,18 +26,14 @@ pub(crate) fn require_implementer_no_diff_artifacts<H: RuntimeHost + ?Sized>(
     output: &Value,
 ) -> Result<(), OrbitError> {
     let claimed = input.get("claimed").and_then(Value::as_bool) == Some(true);
-    if let Some(declared) =
-        AlreadyResolved::from_output(output).map_err(OrbitError::InvalidInput)?
-    {
-        if !claimed {
-            return Err(OrbitError::InvalidInput(format!(
-                "`{ALREADY_RESOLVED_FIELD}` is a claimed leaf's outcome, whose claim host replays \
-                 its tests; on this run, run the tests and report a clean-tree outcome without it"
-            )));
-        }
-        declared.admit().map_err(OrbitError::InvalidInput)?;
-    }
+    let already_resolved = admit_implementer_already_resolved(output, claimed)?;
+    // ORB-22407: a claimed already-resolved outcome is evidence the commit
+    // step can settle through its already-resolved checkpoint — the named
+    // selectors replay on the base during claimed validation — so it needs
+    // no clean-tree report beside it. A summary alone remains refused, as
+    // before: it names no check that could show the base resolves the task.
     if !claimed
+        || already_resolved
         || output
             .get("no_diff_artifacts")
             .and_then(Value::as_array)
@@ -76,4 +72,27 @@ pub(crate) fn require_implementer_no_diff_artifacts<H: RuntimeHost + ?Sized>(
          `no_diff_artifacts`. Return a JSON response result containing the clean-tree report \
          and every referenced validation log's scratch path{parse_error}"
     )))
+}
+
+/// Admit selectors only on the claimed route, whose host replays them before
+/// handoff. Owner implement and commit gates share this refusal so an owner
+/// cannot settle an empty stage using tests that nobody executed [ORB-23194].
+pub(super) fn admit_implementer_already_resolved(
+    output: &Value,
+    claimed: bool,
+) -> Result<bool, OrbitError> {
+    let Some(declared) = AlreadyResolved::from_output(output).map_err(OrbitError::InvalidInput)?
+    else {
+        return Ok(false);
+    };
+    if !claimed {
+        return Err(OrbitError::InvalidInput(format!(
+            "`{ALREADY_RESOLVED_FIELD}` is available only to claimed runs, whose claim host \
+             replays the selectors; on an owner run, run validation and attach `no-diff.json` \
+             or `already-landed.json` and every referenced validation log with \
+             `orbit.task.artifact` action `put` before returning a clean-tree outcome"
+        )));
+    }
+    declared.admit().map_err(OrbitError::InvalidInput)?;
+    Ok(true)
 }

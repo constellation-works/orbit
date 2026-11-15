@@ -6,7 +6,7 @@ use std::time::Duration;
 use crate::OrbitError;
 use crate::process::run_bounded_capped;
 
-use super::io::with_exclusive_file_lock;
+use super::io::{try_with_exclusive_file_lock, with_exclusive_file_lock};
 
 /// Lock file inside the git common directory that serializes Orbit-owned
 /// updates of remote-tracking refs.
@@ -226,6 +226,18 @@ where
     with_exclusive_file_lock(&git_fetch_lock_target(&common), "git fetch", op)
 }
 
+/// [`with_git_fetch_lock`] only when the lock is free now: `Ok(None)` when
+/// another Orbit fetch holds it. For an optional remote-tracking-ref update
+/// that a concurrent writer makes redundant, so it never waits on that writer.
+pub fn try_with_git_fetch_lock<T, E, F>(workspace: &Path, op: F) -> Result<Option<T>, E>
+where
+    F: FnOnce() -> Result<T, E>,
+    E: From<io::Error>,
+{
+    let common = git_common_dir(workspace).map_err(|error| io::Error::other(error.to_string()))?;
+    try_with_exclusive_file_lock(&git_fetch_lock_target(&common), "git fetch", op)
+}
+
 /// True when git refused a ref update because another process raced the same
 /// remote-tracking ref. Auth and network failures stay false so callers do
 /// not retry them.
@@ -287,6 +299,7 @@ const ADMITTED_SUBCOMMANDS: &[&str] = &[
     "rev-parse",
     "status",
     "symbolic-ref",
+    "update-ref",
     "worktree",
 ];
 

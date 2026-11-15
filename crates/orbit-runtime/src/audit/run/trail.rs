@@ -11,8 +11,8 @@ use crate::RuntimeKernel;
 use orbit_store::V2AuditEventFilter;
 
 use super::projection::{
-    audit_step_attempts_from_events, audit_steps_from_events, bound_provider_processes,
-    cli_invocation_record, latest_timestamp_from_envelope_rows, provider_processes_from_events,
+    audit_step_attempts_from_events, audit_steps_from_events, cli_invocation_record,
+    latest_timestamp_from_envelope_rows, provider_processes_from_events,
     recovery_attempts_from_partitioned_rows, run_audit_event, step_index_by_id,
 };
 
@@ -320,6 +320,15 @@ impl RunProviderProcess {
 /// and `unavailable` when it has none — a legacy run, or one whose trail was
 /// never written. An `observed` progress with no active step and no open child
 /// is a run between steps, which is a different fact from having no evidence.
+///
+/// The projection is served from bounded audit windows, so a long trail can
+/// outgrow them: `steps_complete` is false when the step-lifecycle prefix
+/// does not include every lifecycle row (the active step may then be missing,
+/// so a null `active_step` must not be read as "no open step"), and
+/// `complete` is false when any window overflowed (a provider child spawned
+/// before the structural window may then be absent even though it is still
+/// open). Both are true for `unavailable`, whose `state` already says there
+/// is no evidence.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunExecutionProgress {
     pub state: &'static str,
@@ -327,6 +336,13 @@ pub struct RunExecutionProgress {
     pub provider_processes: Vec<RunProviderProcess>,
     pub limit: usize,
     pub truncated: bool,
+    /// Whether the bounded lifecycle prefix includes every step-lifecycle
+    /// row; false means `active_step` may be missing rather than absent.
+    pub steps_complete: bool,
+    /// Whether every bounded window was complete; false means older
+    /// provider children, their samples, step positions or the active step
+    /// may be missing.
+    pub complete: bool,
 }
 
 impl RunExecutionProgress {
@@ -339,6 +355,8 @@ impl RunExecutionProgress {
             provider_processes: Vec::new(),
             limit: MAX_PROVIDER_PROCESSES,
             truncated: false,
+            steps_complete: true,
+            complete: true,
         }
     }
 }
@@ -355,6 +373,15 @@ pub(super) const MAX_PROVIDER_PROCESSES: usize = 8;
 const RUN_AUDIT_PAGE_SIZE: usize = 50_000;
 #[cfg(test)]
 const RUN_AUDIT_PAGE_SIZE: usize = 8;
+
+/// Payload `body_kind`s the step projections read. Shared with the bounded
+/// run-detail reader so the two cannot drift.
+pub(super) const STEP_LIFECYCLE_KINDS: [&str; 4] = [
+    "step_started",
+    "step_finished",
+    "step_skipped",
+    "step_denied",
+];
 
 /// What one scan of a run's v2 audit trail says about its execution: every
 /// step it started, and every provider child those steps spawned.
@@ -450,7 +477,14 @@ impl RuntimeKernel {
     }
 
     /// Inner, testable form of [`Self::collect_run_execution_progress`] with the
-    /// liveness probe injected.
+    /// liveness probe injected. Served from the bounded audit windows in
+    /// [`super::detail`]: at most `512 + 256 + 256 + 256 + 3` rows are loaded
+    /// however long the trail has grown, `truncated` is also set when the
+    /// structural window overflowed, and the active step is reported only
+    /// when the lifecycle prefix is complete. The returned progress carries
+    /// that completeness (`complete`/`steps_complete` from the bounded read)
+    /// so a caller never reads a missing active step or provider child as
+    /// proof that none exists.
     pub(crate) fn collect_run_execution_progress_with<P>(
         &self,
         run_id: &str,
@@ -459,31 +493,9 @@ impl RuntimeKernel {
     where
         P: Fn(u32, Option<&str>) -> ProcessLiveness,
     {
-        let events = self.collect_run_audit_events(run_id)?;
-        if events.is_empty() {
-            return Ok(RunExecutionProgress::unavailable());
-        }
-
-        let steps = audit_steps_from_events(&events);
-        // Parallel activities can leave several steps open at once; the newest
-        // one is what "what is it doing now" means to an operator.
-        let active_step = steps
-            .iter()
-            .rev()
-            .find(|step| step.finished_at.is_none())
-            .cloned();
-        let records =
-            provider_processes_from_events(run_id, events, &step_index_by_id(&steps), probe);
-        let (provider_processes, truncated) =
-            bound_provider_processes(records, MAX_PROVIDER_PROCESSES);
-
-        Ok(RunExecutionProgress {
-            state: "observed",
-            active_step,
-            provider_processes,
-            limit: MAX_PROVIDER_PROCESSES,
-            truncated,
-        })
+        Ok(self
+            .collect_bounded_run_progress_with(run_id, probe)?
+            .progress)
     }
 
     pub fn collect_run_audit_events(&self, run_id: &str) -> Result<Vec<RunAuditEvent>, OrbitError> {
@@ -549,7 +561,7 @@ impl RuntimeKernel {
 
     pub fn collect_run_audit_steps(&self, run_id: &str) -> Result<Vec<RunAuditStep>, OrbitError> {
         Ok(audit_steps_from_events(
-            &self.collect_run_audit_events(run_id)?,
+            &self.collect_step_lifecycle_events(run_id)?,
         ))
     }
 
@@ -560,8 +572,64 @@ impl RuntimeKernel {
         run_id: &str,
     ) -> Result<Vec<RunAuditStep>, OrbitError> {
         Ok(audit_step_attempts_from_events(
-            &self.collect_run_audit_events(run_id)?,
+            &self.collect_step_lifecycle_events(run_id)?,
         ))
+    }
+
+    /// Lifecycle rows for one run, oldest first, paging until the trail ends.
+    ///
+    /// The store filter keeps the rows the step projections would have kept
+    /// from [`Self::collect_run_audit_events`]: valid JSON, a string
+    /// `event_id`, and one of [`STEP_LIFECYCLE_KINDS`]. Order is `ts ASC, id
+    /// ASC`, the order left after that reader reverses its newest-first pages.
+    /// A repeated `event_id` keeps the last payload in that order, as the full
+    /// trail does. Paging bounds each read; it is not a row cap.
+    fn collect_step_lifecycle_events(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<RunAuditEvent>, OrbitError> {
+        let mut rows = Vec::new();
+        let mut offset = 0;
+        loop {
+            let page = self.list_v2_audit_events(V2AuditEventFilter {
+                workspace_id: String::new(),
+                run_id: Some(run_id.to_string()),
+                source: Some("v2_envelope".to_string()),
+                oldest_first: true,
+                body_kinds: STEP_LIFECYCLE_KINDS.map(str::to_string).to_vec(),
+                limit: Some(RUN_AUDIT_PAGE_SIZE),
+                offset: Some(offset),
+                ..Default::default()
+            })?;
+            let page_len = page.len();
+            rows.extend(page);
+            if page_len < RUN_AUDIT_PAGE_SIZE {
+                break;
+            }
+            offset += page_len;
+        }
+
+        let mut events_by_id = HashMap::new();
+        let mut ordered_ids = Vec::new();
+        for row in rows {
+            let value: Value = match serde_json::from_str(&row.payload_json) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            let Some(event_id) = value.get("event_id").and_then(Value::as_str) else {
+                continue;
+            };
+            ordered_ids.push(event_id.to_string());
+            events_by_id.insert(event_id.to_string(), value);
+        }
+
+        Ok(ordered_ids
+            .into_iter()
+            .filter_map(|event_id| {
+                let raw = events_by_id.get(&event_id).cloned()?;
+                Some(run_audit_event(event_id, raw, &events_by_id))
+            })
+            .collect())
     }
 
     /// Recover the most recent bounded recovery-attempt evidence for a run.

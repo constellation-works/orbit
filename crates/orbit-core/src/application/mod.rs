@@ -16,19 +16,21 @@
 pub const SYSTEM_AUDIT_IDENTITY: &str = "system";
 
 pub(crate) mod admission;
+pub(crate) mod agent_corpus;
 pub mod agents;
-pub mod assistance;
+mod application_authority;
+pub mod attention;
 pub mod audit_event;
 pub mod auto_tasks;
+pub(crate) mod backlog_forecast;
 pub mod change_watch;
 pub mod codebase;
 pub mod config;
 pub mod contracts;
-pub mod crew_ladder;
-pub mod delivery_quality;
+pub mod crew_memory;
 pub mod distributed;
+pub mod evolution;
 pub(crate) mod executor;
-pub(crate) mod executor_host_os;
 pub mod experiment;
 pub mod gc;
 pub mod health;
@@ -36,27 +38,32 @@ pub(crate) mod host_labels;
 pub mod job;
 pub mod landing;
 pub(crate) mod managed_assets;
-pub(crate) mod mock_admission;
+pub mod notice;
+pub mod operator_input;
 pub mod plugin;
 pub(crate) mod pull_drain;
+pub mod resident;
 pub mod review;
 pub mod routines;
 pub(crate) mod search;
 pub mod seeding_policy;
 pub mod skill;
+pub(crate) mod statistics;
 pub(crate) mod sweep_filing;
 pub(crate) mod tag_instructions;
 pub mod task;
-pub mod task_quality;
+pub mod task_bundle;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub(crate) mod tool_name_migration;
 pub mod vision_probe;
-pub mod visual_capture;
-pub(crate) mod visual_delivery;
 pub(crate) mod workflow;
 mod workspace;
 pub(crate) mod workspace_auto;
-pub use workspace::{preset as workspace_preset, sync as workspace_sync};
+pub(crate) use workspace::product_profile as workspace_product_profile;
+pub use workspace::{
+    live_runs as workspace_live_runs, preset as workspace_preset, sync as workspace_sync,
+};
 
 #[cfg(test)]
 mod tests;

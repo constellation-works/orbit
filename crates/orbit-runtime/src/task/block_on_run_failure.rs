@@ -44,7 +44,9 @@
 //! stranded by a host reboot behind a status identical to healthy in-flight
 //! work. The distinct event tells an operator to resume rather than diagnose,
 //! and resume re-admits the task (`application::job::resume`), so the block
-//! costs the recovery path nothing.
+//! costs the recovery path nothing. A host-manager stop is `held` with
+//! `operator_stopped` and uses that same interruption block: the worker was
+//! stopped, and `orbit job resume` recovers it.
 //!
 //! `blocked` is a deliberate dead end for automation: workflow admission
 //! accepts only `backlog` and `in-progress`, so drains skip these
@@ -69,12 +71,13 @@ use orbit_engine::activity_job::cli_runner::missing_launcher_in;
 use orbit_engine::{
     TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT, baseline_red_hold_update,
     blocked_workflow_failure_update, blocked_workflow_interruption_update,
+    blocked_workflow_owner_signoff_update,
 };
-use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{Task, TaskDecision, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
-    BASELINE_RED_HOLD_EVENT, BaselineRedHold, HeldFailure, JobRun, JobRunState,
-    ProviderFailureClass, ReviewGateHistoryNote, UPGRADE_PENDING_REQUEUED_EVENT,
-    is_baseline_red_failure, is_upgrade_pending,
+    AgentBlocker, BaselineRedHold, HeldFailure, JobRun, JobRunState, ProviderFailureClass,
+    ReviewGateHistoryNote, UPGRADE_PENDING_REQUEUED_EVENT, is_baseline_red_failure,
+    is_operator_stopped, is_upgrade_pending,
 };
 
 use crate::RuntimeKernel;
@@ -181,7 +184,14 @@ pub(crate) fn failed_run_error_context(run: &JobRun) -> (Option<String>, Option<
         .iter()
         .rev()
         .find(|step| step.error_code.is_some() || step.error_message.is_some())
-        .map(|step| (step.error_code.clone(), step.error_message.clone()))
+        .map(|step| {
+            (
+                step.error_code.clone(),
+                step.error_message
+                    .as_deref()
+                    .map(orbit_common::security::redaction::redact_all),
+            )
+        })
         .unwrap_or((None, None))
 }
 
@@ -285,7 +295,7 @@ impl RuntimeKernel {
             );
             return Ok(());
         }
-        let Some(run) = self.get_job_run_backend(run_id)? else {
+        let Some(run) = self.stores().jobs().get_job_run(run_id)? else {
             return Ok(());
         };
         let (error_code, error_message) = match diagnostic {
@@ -294,9 +304,21 @@ impl RuntimeKernel {
         };
         // [ORB-15202] A run held on a red base or an awaited decision couples
         // out exactly as the failure it records, as does a local provider
-        // capacity or usage-limit hold. Any other hold names its own
+        // capacity, usage-limit or unavailability hold. Any other hold names its own
         // resumption and leaves its tasks alone.
+        // [ORB-23967] A run held on owner sign-off is not a failed run: its
+        // task is blocked under the held note, which the backstop does not own.
+        let owner_signoff_hold = state == JobRunState::Held
+            && matches!(
+                HeldFailure::of_local(error_code.as_deref(), error_message.as_deref()),
+                Some(HeldFailure::OwnerSignoffRequired)
+            );
+        // A host-manager stop is not a review, forge, or delivery hold. The
+        // coupled task takes the interruption update, which names `orbit job
+        // resume`.
+        let operator_stopped = is_operator_stopped(state, error_code.as_deref());
         let state = match state {
+            JobRunState::Held if operator_stopped => JobRunState::Interrupted,
             JobRunState::Held => {
                 match HeldFailure::of_local(error_code.as_deref(), error_message.as_deref()) {
                     // The refusing action already recorded its task/repair
@@ -310,6 +332,8 @@ impl RuntimeKernel {
         };
         let blocked_update = if state == JobRunState::Interrupted {
             blocked_workflow_interruption_update
+        } else if owner_signoff_hold {
+            blocked_workflow_owner_signoff_update
         } else {
             blocked_workflow_failure_update
         };
@@ -338,7 +362,9 @@ impl RuntimeKernel {
         let upgrade_pending = state == JobRunState::Failed
             && is_upgrade_pending(error_code.as_deref(), error_message.as_deref());
         let task_cancellation_policy = if state == JobRunState::Cancelled {
-            self.read_run_state(run_id)?
+            self.stores()
+                .jobs()
+                .read_run_state(run_id)?
                 .and_then(|state| state.task_cancellation_policy)
         } else {
             None
@@ -359,7 +385,6 @@ impl RuntimeKernel {
                 }
             }
         }
-        let requeue_note_prefix = format!("final recovery (run_id={run_id}): ");
         for task in tasks.into_values() {
             // Recovery and cleanup serialize the decision with the status
             // write. Re-read the binding too: another run may have admitted
@@ -398,15 +423,13 @@ impl RuntimeKernel {
                             .find(|entry| {
                                 entry.to_status.is_some()
                                     || entry.event == FINAL_RECOVERY_REQUEUED_EVENT
-                                    || entry.event == BASELINE_RED_HOLD_EVENT
+                                    || BaselineRedHold::from_entry(entry).is_some()
                             })
                             .is_some_and(|entry| {
-                                let note = entry.note.as_deref().unwrap_or_default();
                                 (entry.event == FINAL_RECOVERY_REQUEUED_EVENT
-                                    && note.starts_with(&requeue_note_prefix))
-                                    || (entry.event == BASELINE_RED_HOLD_EVENT
-                                        && BaselineRedHold::from_text(note)
-                                            .is_some_and(|held| held.run_id == run_id))
+                                    && entry.transition_run_id() == Some(run_id))
+                                    || BaselineRedHold::from_entry(entry)
+                                        .is_some_and(|held| held.run_id == run_id)
                             })
                     {
                         return Ok(());
@@ -462,6 +485,17 @@ impl RuntimeKernel {
                                      the held candidate once the upgrade settles",
                                     run.job_id
                                 )),
+                                status_decision: error_message
+                                    .as_deref()
+                                    .and_then(AgentBlocker::from_step_failure_message)
+                                    .map(|mut blocker| {
+                                        // Redacted like the status note beside it.
+                                        blocker.evidence =
+                                            orbit_common::security::redaction::redact_all(
+                                                &blocker.evidence,
+                                            );
+                                        TaskDecision::AgentBlocked { blocker }
+                                    }),
                                 ..TaskAutomationUpdate::default()
                             },
                         );

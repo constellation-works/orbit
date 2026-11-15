@@ -22,6 +22,37 @@ pub(super) fn requires_fresh_rework_authority(source: &JobRun, state: &PipelineS
         || (source.state == JobRunState::Failed && kept_inline_publication(state))
 }
 
+/// The kept publication's own run applied a final-recovery `resume` in place
+/// and later failed again, after which the final-recovery receipt it inherited
+/// kept the run from settling (`escalated` or `requeued`). Only the host's
+/// receipt on the run's own checkpoints proves this: the decision was applied
+/// to this task by this very run, resumed no host repair commit, and still
+/// stands as that run's one final recovery. Repair of the published head and
+/// its recorded auto-fix chain is then explicit operator work, like any other
+/// kept inline publication; nothing here grants completion or auto-fix.
+pub(super) fn resumed_in_place_publication(
+    source: &JobRun,
+    state: &PipelineState,
+    task_id: &str,
+) -> bool {
+    source.state == JobRunState::Failed
+        && kept_inline_publication(state)
+        && state.run_id == source.run_id
+        && state.final_recovery.as_ref().is_some_and(|checkpoint| {
+            checkpoint.task_id == task_id
+                && checkpoint.key.run_id == source.run_id
+                && matches!(
+                    checkpoint.outcome,
+                    Some(orbit_types::workflow::FinalRecoveryCheckpointOutcome::Resume)
+                )
+                && checkpoint.repair_commit.is_none()
+                && matches!(
+                    checkpoint.decision,
+                    Some(orbit_types::workflow::FinalRecoveryDecision::Resume { .. })
+                )
+        })
+}
+
 /// A kept receipt certifies scope and preservation only. The ordinary host
 /// commit/review/push/PR chain independently authenticates the publication.
 pub(super) fn authenticate_kept_inline_receipt(
@@ -141,7 +172,7 @@ impl OrbitRuntime {
         let mut evidence = Vec::new();
         let mut newest_binding = source.run_id.as_str();
         for run in runs[..source_at].iter().rev() {
-            if !is_delivery(&run.job_id) {
+            if !orbit_types::workflow::is_delivery_leaf_job_by_claimed_prefix(&run.job_id) {
                 continue;
             }
             if run.created_at <= source.created_at {
@@ -167,7 +198,9 @@ impl OrbitRuntime {
                         .as_deref()
                         .and_then(|id| runs.iter().find(|parent| parent.run_id == id))
                         .ok_or_else(|| refuse("inline publication retry lineage is incomplete"))?;
-                    if !is_delivery(&parent.job_id) {
+                    if !orbit_types::workflow::is_delivery_leaf_job_by_claimed_prefix(
+                        &parent.job_id,
+                    ) {
                         return Err(refuse("inline publication retry parent is not a delivery"));
                     }
                     if parent.created_at >= child.created_at {
@@ -456,10 +489,7 @@ impl OrbitRuntime {
         if field(marker, "task_id")? != task.id
             || field(marker, "pr_number")? != pr
             || field(marker, "head_sha")? != field(&original.pipeline["push"], "local_sha")?
-            || !matches!(
-                field(marker, "blocker")?,
-                "failed_checks" | "conflict" | "landing_review"
-            )
+            || !repair_grant_names_its_cause(marker)
             || marker
                 .get("failed_checks")
                 .and_then(Value::as_array)
@@ -511,6 +541,7 @@ impl OrbitRuntime {
                 "pr_number",
                 "head_sha",
                 "blocker",
+                "hold_code",
                 "drain_run_id",
             ]
             .iter()
@@ -543,6 +574,22 @@ impl OrbitRuntime {
     }
 }
 
-fn is_delivery(job: &str) -> bool {
-    matches!(job, "task_pr_pipeline" | "task_local_pipeline") || job.starts_with("task_claimed_")
+/// Whether an out-of-run repair grant names what it resumed delivery for: a
+/// repairable blocker, or [ORB-23809] no blocker and a delivery hold the
+/// drain hands back to completion.
+fn repair_grant_names_its_cause(marker: &Value) -> bool {
+    match marker.get("blocker") {
+        Some(Value::String(blocker)) => {
+            matches!(
+                blocker.as_str(),
+                "failed_checks" | "conflict" | "landing_review"
+            )
+        }
+        Some(Value::Null) => marker
+            .get("hold_code")
+            .and_then(Value::as_str)
+            .and_then(orbit_types::workflow::DeliveryRefusal::from_error_code)
+            .is_some_and(crate::application::job::pr_repair::handed_back_hold),
+        _ => false,
+    }
 }

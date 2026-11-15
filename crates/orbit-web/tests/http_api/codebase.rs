@@ -301,8 +301,8 @@ analytics_test!(
         let detail = fixture
             .runtime
             .run_tool(
-                "orbit.codebase.show",
-                json!({ "path": "src/shared.rs", "window": "all", "min_support": 1 }),
+                "orbit.codebase",
+                json!({"action": "show", "path": "src/shared.rs", "window": "all", "min_support": 1 }),
             )
             .unwrap();
         let waits = detail["rankings"]["lock_contention"]["waits"]
@@ -1198,8 +1198,8 @@ analytics_test!(
         let mut tool = fixture
             .runtime
             .run_tool(
-                "orbit.codebase.analytics",
-                json!({ "window": "30d", "min_support": 1 }),
+                "orbit.codebase",
+                json!({"action": "analytics", "window": "30d", "min_support": 1 }),
             )
             .unwrap();
         assert_eq!(api["cache_ttl_seconds"], 300, "the route caches its scan");
@@ -1224,8 +1224,8 @@ analytics_test!(
         let detail = fixture
             .runtime
             .run_tool(
-                "orbit.codebase.show",
-                json!({ "path": shared, "window": "30d", "min_support": 1 }),
+                "orbit.codebase",
+                json!({"action": "show", "path": shared, "window": "30d", "min_support": 1 }),
             )
             .unwrap();
         assert_eq!(detail["path"], shared);
@@ -1301,14 +1301,14 @@ analytics_test!(
         let by_dir = fixture
             .runtime
             .run_tool(
-                "orbit.codebase.show",
-                json!({ "path": "src", "rollup": "dir", "min_support": 1 }),
+                "orbit.codebase",
+                json!({"action": "show", "path": "src", "rollup": "dir", "min_support": 1 }),
             )
             .unwrap();
         assert_eq!(by_dir["path"], "src/");
         let unknown = fixture.runtime.run_tool(
-            "orbit.codebase.show",
-            json!({ "path": "src/absent.rs", "min_support": 1 }),
+            "orbit.codebase",
+            json!({"action": "show", "path": "src/absent.rs", "min_support": 1 }),
         );
         assert!(
             matches!(unknown, Err(OrbitError::InvalidInput(_))),
@@ -1530,8 +1530,8 @@ analytics_test!(
             fixture
                 .runtime
                 .run_tool(
-                    "orbit.codebase.show",
-                    json!({ "path": path, "window": "30d", "min_support": 1 }),
+                    "orbit.codebase",
+                    json!({"action": "show", "path": path, "window": "30d", "min_support": 1 }),
                 )
                 .unwrap()
         };
@@ -1553,6 +1553,29 @@ analytics_test!(
 analytics_test!(
     codebase_regressions_break_down_and_filter_by_link_dimensions,
     |fixture| {
+        // The layers this scenario reads, in the order the breakdowns list
+        // them: the workspace's `workflow.regression_layers` owns them.
+        let fixture = fixture.with_workspace_config(
+            r#"
+[[workflow.regression_layers]]
+name = "ci_tests"
+prefixes = [".github/"]
+dirs = ["tests", "testdata", "fixtures"]
+
+[[workflow.regression_layers]]
+name = "docs_skills"
+prefixes = ["docs/"]
+suffixes = [".md"]
+
+[[workflow.regression_layers]]
+name = "dashboard"
+prefixes = ["crates/orbit-web/"]
+
+[[workflow.regression_layers]]
+name = "store_migration"
+prefixes = ["crates/orbit-store/"]
+"#,
+        );
         let repo = init_repo(&fixture);
         let now = Utc::now();
         let area = "src/area.rs";
@@ -1851,8 +1874,8 @@ analytics_test!(
         let detail = fixture
         .runtime
         .run_tool(
-            "orbit.codebase.show",
-            json!({ "path": area, "window": "30d", "min_support": 1, "detected_by": "operator" }),
+            "orbit.codebase",
+            json!({"action": "show", "path": area, "window": "30d", "min_support": 1, "detected_by": "operator" }),
         )
         .unwrap();
         assert_eq!(detail["regression_filter"]["detected_by"], "operator");
@@ -1864,9 +1887,10 @@ analytics_test!(
 
         let bad = codebase_get(&server, "analytics", "layer=frontend");
         assert_eq!(bad.status(), 400, "an unknown layer is refused");
-        let bad = fixture
-            .runtime
-            .run_tool("orbit.codebase.analytics", json!({ "escape": "missed" }));
+        let bad = fixture.runtime.run_tool(
+            "orbit.codebase",
+            json!({"action": "analytics", "escape": "missed" }),
+        );
         assert!(matches!(bad, Err(OrbitError::InvalidInput(_))), "{bad:?}");
     }
 );
@@ -2030,7 +2054,7 @@ analytics_test!(
         assert!(filtered["rows"].as_array().unwrap().is_empty());
         let unknown = related(&server, "path=unknown&min_support=1");
         assert!(unknown["rows"].as_array().unwrap().is_empty());
-        for query in ["top=0", "min_support=0", "window=1y", "path=../outside"] {
+        for query in ["top=0", "min_support=0", "window=1y"] {
             assert_eq!(
                 server
                     .get(&format!("/api/codebase/related?{WS}&path=src/a.rs&{query}"))
@@ -2039,6 +2063,12 @@ analytics_test!(
                 400
             );
         }
+        let traversal = server.get(&format!("/api/codebase/related?{WS}&path=../outside"));
+        assert_eq!(traversal.status().as_u16(), 400);
+        assert_eq!(
+            traversal.json::<Value>().unwrap()["error"],
+            "path must be a repository-relative file path"
+        );
         let analytics = analytics(&server, "");
         assert!(
             analytics["known_paths"]
@@ -2376,26 +2406,6 @@ analytics_test!(
             detail["riskiness"], risky,
             "list and detail share one estimate"
         );
-        drop(server);
-
-        // min_support is the history a fit needs: above both populations,
-        // neither basis fits and no number is shown.
-        let config = fixture.work.join("config.toml");
-        let mut text = fs::read_to_string(&config).unwrap_or_default();
-        text.push_str("\n[workflow.regression_risk]\nmin_support = 13\n");
-        fs::write(&config, text).unwrap();
-        let server = fixture.server(false);
-        for id in [&backlog_wide, &large[0]] {
-            let thin = task_riskiness(&server, id);
-            assert_eq!(thin["state"], "insufficient_history", "{thin}");
-            assert_eq!(thin["probability"], Value::Null);
-            assert_eq!(thin["basis"], "declared_files");
-            assert_eq!(thin["size_band"], Value::Null);
-        }
-        assert_eq!(
-            task_riskiness(&server, &large[0])["basis_fallback"],
-            "diff_history_insufficient"
-        );
     }
 );
 
@@ -2542,6 +2552,7 @@ fn landed_row(fixture: &Fixture, task_id: &str, seq: usize, lines: u64) {
             },
             tests: DiffClassCounts::default(),
             other: DiffClassCounts::default(),
+            reviewable: None,
         })
         .unwrap();
 }

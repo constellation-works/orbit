@@ -1,11 +1,10 @@
 use crate::workspace_registry::{
-    WorkspaceRegistryMachineContext, find_workspace_by_id, load_registry_from,
-    load_registry_from_with_context_and_writer, load_registry_from_with_writer, save_registry_to,
-    with_registry_lock,
+    WorkspaceRegistryMachineContext, find_workspace_by_id,
+    load_registry_from_with_context_and_writer, save_registry_to, with_registry_lock,
 };
 use chrono::{TimeZone, Utc};
 use orbit_common::OrbitError;
-use orbit_types::workspace::{Workspace, WorkspaceStatus};
+use orbit_types::workspace::{Workspace, WorkspaceCheckoutRole, WorkspaceStatus};
 use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
@@ -37,46 +36,55 @@ fn write_json(path: &Path, value: &Value) -> Vec<u8> {
     bytes
 }
 
-#[test]
-fn injected_migration_write_failure_preserves_readable_legacy_registry() {
-    let root = tempdir().expect("tempdir");
-    let path = root.path().join("workspaces.json");
-    let original = write_json(
-        &path,
-        &json!({
-            "workspaces": [{
-                "id": "ws_orbit",
-                "name": "orbit",
-                "root": "/repos/orbit",
-                "orbit_dir": "/repos/orbit/.orbit",
-                "git_remote": null,
-                "base_branch": "main",
-                "status": "active",
-                "created_at": "2026-07-18T01:02:03Z",
-                "updated_at": "2026-07-18T01:02:03Z"
-            }],
-            "path_overrides": {}
-        }),
-    );
+/// A standalone host: no machine identity, so a role-less checkout is
+/// canonicalized to `owner` and the read persists that change.
+fn standalone(_: &Path) -> Result<WorkspaceRegistryMachineContext, OrbitError> {
+    Ok(WorkspaceRegistryMachineContext { machine_id: None })
+}
 
-    let error = load_registry_from_with_writer(&path, |_, _| {
-        Err(OrbitError::Io("injected write failure".to_string()))
+/// A current-schema registry whose only checkout has no role, so loading it
+/// on a standalone host must canonicalize and write it back.
+fn registry_needing_canonicalization() -> Value {
+    json!({
+        "schema_version": 1,
+        "workspaces": [logical_workspace("ws_orbit", None)],
+        "checkouts": [{
+            "workspace_id": "ws_orbit",
+            "repo_root": "/repos/orbit",
+            "orbit_dir": "/repos/orbit/.orbit"
+        }]
     })
-    .expect_err("write failure must surface");
-    assert!(error.to_string().contains("injected write failure"));
-    assert_eq!(
-        fs::read(&path).expect("read preserved legacy file"),
-        original
-    );
-
-    let recovered = load_registry_from(&path).expect("legacy source remains migratable");
-    assert_eq!(recovered.workspaces[0].id, "ws_orbit");
-    assert_eq!(recovered.checkouts[0].workspace_id, "ws_orbit");
 }
 
 #[test]
-fn migrating_read_rechecks_under_lock_and_preserves_interleaved_registration() {
-    const TEST: &str = "tests::workspace_registry::migrating_read_rechecks_under_lock_and_preserves_interleaved_registration";
+fn injected_canonicalizing_write_failure_preserves_readable_registry() {
+    let root = tempdir().expect("tempdir");
+    let path = root.path().join("workspaces.json");
+    let original = write_json(&path, &registry_needing_canonicalization());
+
+    let error = load_registry_from_with_context_and_writer(&path, standalone, |_, _| {
+        Err(OrbitError::Io("injected write failure".to_string()))
+    })
+    .expect_err("write failure must surface");
+    assert!(
+        error.to_string().contains("injected write failure"),
+        "{error}"
+    );
+    assert_eq!(fs::read(&path).expect("read preserved registry"), original);
+
+    let recovered = load_registry_from_with_context_and_writer(&path, standalone, save_registry_to)
+        .expect("registry remains loadable after the failed write");
+    assert_eq!(recovered.workspaces[0].id, "ws_orbit");
+    assert_eq!(recovered.checkouts[0].workspace_id, "ws_orbit");
+    assert_eq!(
+        recovered.checkouts[0].role,
+        Some(WorkspaceCheckoutRole::Owner)
+    );
+}
+
+#[test]
+fn canonicalizing_read_rechecks_under_lock_and_preserves_interleaved_registration() {
+    const TEST: &str = "tests::workspace_registry::canonicalizing_read_rechecks_under_lock_and_preserves_interleaved_registration";
     const CHILD: &str = "ORBIT_TEST_REGISTRY_MIGRATION_CHILD";
     if std::env::var_os(CHILD).is_none() {
         let output_dir = tempdir().expect("child output directory");
@@ -98,41 +106,40 @@ fn migrating_read_rechecks_under_lock_and_preserves_interleaved_registration() {
     }
     let root = tempdir().expect("tempdir");
     let path = root.path().join("workspaces.json");
-    write_json(
-        &path,
-        &json!({
-            "workspaces": [],
-            "path_overrides": {}
-        }),
-    );
+    write_json(&path, &registry_needing_canonicalization());
     let reads = std::cell::Cell::new(0);
 
     let loaded = load_registry_from_with_context_and_writer(
         &path,
-        |_| {
+        |path| {
             reads.set(reads.get() + 1);
             if reads.get() == 1 {
-                // The reader already holds legacy bytes. Complete a second writer's
-                // locked registration before the reader can acquire the migration lock.
-                with_registry_lock(&path, || {
-                    let mut registered = load_registry_from(&path)?;
+                // The reader already holds the role-less bytes. Complete a second
+                // writer's locked registration before the reader can acquire the lock.
+                with_registry_lock(path, || {
+                    let mut registered = load_registry_from_with_context_and_writer(
+                        path,
+                        standalone,
+                        save_registry_to,
+                    )?;
                     registered
                         .workspaces
                         .push(logical_workspace("ws_new", None));
-                    save_registry_to(&registered, &path)
+                    save_registry_to(&registered, path)
                 })
                 .expect("interleaved locked registration");
             }
-            Ok(WorkspaceRegistryMachineContext { machine_id: None })
+            standalone(path)
         },
         save_registry_to,
     )
-    .expect("load and migrate under lock");
+    .expect("load and canonicalize under lock");
 
-    let persisted = load_registry_from(&path).expect("read persisted registry");
+    let persisted = load_registry_from_with_context_and_writer(&path, standalone, save_registry_to)
+        .expect("read persisted registry");
     assert!(
         find_workspace_by_id(&persisted, "ws_new").is_some(),
-        "migration must not overwrite the interleaved locked registration"
+        "canonicalization must not overwrite the interleaved locked registration"
     );
     assert!(
         find_workspace_by_id(&loaded, "ws_new").is_some(),

@@ -237,8 +237,8 @@ fn run_pages_filter_in_sql_and_project_task_ids_without_task_reads() {
         assert_eq!(runs.len(), limit);
         let output = runtime
             .execute_tool_command_with_session_context(
-                "orbit.workflow.run.list",
-                json!({"limit": limit}),
+                "orbit.run",
+                json!({"action": "list", "limit": limit}),
                 None,
                 Some("codex".into()),
                 ToolSessionContext {

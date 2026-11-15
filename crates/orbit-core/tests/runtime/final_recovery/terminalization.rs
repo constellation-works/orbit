@@ -19,7 +19,9 @@ use orbit_store::contracts::JobRunStepParams;
 use orbit_tools::ToolContext;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::activity_job::{JobV2, V2AuditEventKind};
-use orbit_types::workflow::{FinalRecoveryDecision, JobRunState, JobTargetType};
+use orbit_types::workflow::{
+    FinalRecoveryCheckpointOutcome, FinalRecoveryDecision, JobRunState, JobTargetType,
+};
 use serde_json::{Value, json};
 
 use super::{Fixture, fixture};
@@ -101,10 +103,16 @@ impl orbit_engine::test_support::NullRuntimeHost for FailingPipeline<'_> {
         step_id: &str,
         output: &Value,
         compound: &BTreeMap<String, Value>,
+        script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
     ) -> Result<(), DispatchError> {
-        self.fixture
-            .runtime
-            .checkpoint_step(run_id, index, step_id, output, compound)
+        self.fixture.runtime.checkpoint_step(
+            run_id,
+            index,
+            step_id,
+            output,
+            compound,
+            script_outputs,
+        )
     }
 
     fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
@@ -301,7 +309,7 @@ fn a_later_resume_target_records_the_downgrade_on_the_task() {
         &fixture,
         &run,
         &task,
-        json!({"decision": "resume", "step_id": "deliver", "rationale": "repair is ready"}),
+        json!({"decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "step_id": "deliver", "rationale": "repair is ready"}),
         "review",
         TaskStatus::InProgress,
     );
@@ -354,7 +362,7 @@ fn a_requeue_survives_failed_run_terminalization_even_if_the_outcome_write_fails
                     &fixture,
                     &run,
                     &task,
-                    json!({"decision": "requeue", "reason": "the environment is repaired"}),
+                    json!({"decision": "requeue", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "reason": "the environment is repaired"}),
                     "review",
                     failure_status,
                 );
@@ -413,7 +421,7 @@ fn a_requeue_survives_failed_run_terminalization_even_if_the_outcome_write_fails
     }
 }
 
-fn other_final_recovery_outcomes_survive_failed_run_terminalization() {
+fn other_recovery_outcomes_survive_failed_run_terminalization() {
     let fixture = fixture("[\"sol\"]");
     let git = |args: &[&str]| {
         let output = crate::git_test_support::run(&fixture.repo, args).unwrap();
@@ -433,25 +441,25 @@ fn other_final_recovery_outcomes_survive_failed_run_terminalization() {
         "landed",
     ]);
     let commit = git(&["rev-parse", "HEAD"]);
-    let complete = json!({"decision": "complete_no_diff", "evidence_commit": commit, "rationale": "already landed"});
+    let complete = json!({"decision": "complete_no_diff", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "evidence_commit": commit, "rationale": "already landed"});
     for job in ["task_pr_pipeline", "task_local_pipeline"] {
         for (decision, completion, status, event, outcome) in [
             (
-                json!({"decision": "escalate", "diagnosis": "provider denied access", "human_action": "restore access"}),
+                json!({"decision": "escalate", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "diagnosis": "provider denied access", "human_action": "restore access"}),
                 "review",
                 "blocked",
                 "final_recovery_escalated",
                 "escalated",
             ),
             (
-                json!({"decision": "reject", "reason": "invalid requirement", "evidence": "the contract excludes it"}),
+                json!({"decision": "reject", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "reason": "invalid requirement", "evidence": "the contract excludes it"}),
                 "review",
                 "rejected",
                 "final_recovery_rejected",
                 "settled",
             ),
             (
-                json!({"decision": "archive", "reason": "superseded"}),
+                json!({"decision": "archive", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "reason": "superseded"}),
                 "review",
                 "archived",
                 "final_recovery_archived",
@@ -519,7 +527,7 @@ fn already_done_unapplied_proposal_settles_without_the_failure_handoff() {
         .add_task(TaskAddParams {
             title: "Already done with an open proposal".into(),
             plan: "Propose the definition change.".into(),
-            granted_tools: vec!["orbit.auto_task.update".into()],
+            granted_tools: vec!["orbit.auto_task:update".into()],
             ..Default::default()
         })
         .unwrap();
@@ -541,8 +549,8 @@ fn already_done_unapplied_proposal_settles_without_the_failure_handoff() {
     std::fs::write(
         &source,
         json!({
-            "tool": "orbit.auto_task.update",
-            "input": {"name": "proposal-target", "description": "revised"},
+            "tool": "orbit.auto_task",
+            "input": {"action": "update", "name": "proposal-target", "description": "revised"},
             "rationale": "The definition's description is stale.",
         })
         .to_string(),
@@ -592,7 +600,7 @@ fn already_done_unapplied_proposal_settles_without_the_failure_handoff() {
     let run = fixture.pipeline_run(&task_id, "task_pr_pipeline");
     let handoffs = AtomicUsize::new(0);
     let decision = json!({
-        "decision": "complete_no_diff",
+        "decision": "complete_no_diff", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check",
         "evidence_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "rationale": "already landed"
     });
@@ -634,7 +642,14 @@ fn already_done_unapplied_proposal_settles_without_the_failure_handoff() {
         "the refusal comment must be recorded: {comments:?}"
     );
     let outcome = fixture.state(&run).final_recovery.unwrap().outcome.unwrap();
-    assert!(outcome.starts_with("settled: refused:"), "{outcome}");
+    assert!(
+        matches!(
+            &outcome,
+            FinalRecoveryCheckpointOutcome::Settled { detail }
+                if detail.starts_with("refused:")
+        ),
+        "{outcome}"
+    );
     let replayed = fixture.apply(
         &run,
         &task_id,
@@ -714,7 +729,7 @@ crate::scenario_table!(
     a_later_resume_target_records_the_downgrade_on_the_task_scenarios,
     a_later_resume_target_records_the_downgrade_on_the_task,
     a_requeue_survives_failed_run_terminalization_even_if_the_outcome_write_fails,
-    other_final_recovery_outcomes_survive_failed_run_terminalization,
+    other_recovery_outcomes_survive_failed_run_terminalization,
     already_done_unapplied_proposal_settles_without_the_failure_handoff,
     failure_cleanup_still_blocks_backlog_without_a_current_requeue_from_that_run
 );

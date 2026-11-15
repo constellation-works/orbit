@@ -47,8 +47,12 @@ impl TaskCommitBoundary {
         auth: &ClaimInvocation,
         handoff_id: &str,
         plan: &orbit_types::workflow::CiRerunPlan,
+        policy: orbit_types::workflow::CiInfrastructureRetryPolicy,
+        now_ms: u64,
     ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError> {
-        use orbit_types::workflow::{CI_RERUN_RESERVED_EVENT, CiRerunAdmission, decide_ci_rerun};
+        use orbit_types::workflow::{
+            CI_RERUN_RESERVED_EVENT, CiRerunAdmission, decide_ci_rerun_with_policy,
+        };
         self.with_admission(|| {
             let authority = self.claim_authority(auth, false)?;
             self.check_handoff_landing(auth, &authority.state)?;
@@ -68,7 +72,7 @@ impl TaskCommitBoundary {
             }
             let history =
                 crate::repository::task::v2::task_history_from_events(authority.bundle.events);
-            let decision = decide_ci_rerun(&history, plan);
+            let decision = decide_ci_rerun_with_policy(&history, plan, policy, now_ms);
             if matches!(decision, CiRerunAdmission::Reserved) {
                 let mutation = ClaimMutation::RecordLandingHistory {
                     handoff_id: handoff_id.into(),
@@ -76,8 +80,8 @@ impl TaskCommitBoundary {
                     note: encode(plan)?,
                 };
                 let mutation_id = format!(
-                    "ci-retry:{}:{}:{}",
-                    plan.repository, plan.pr_number, plan.head_sha
+                    "ci-retry:{}:{}:{}:{}:{}",
+                    plan.repository, plan.pr_number, plan.head_sha, plan.run_id, plan.run_attempt
                 );
                 let receipt_id = sha256_hex(encode(&(&auth.claim_id, &mutation_id))?.as_bytes());
                 let input = encode(&(

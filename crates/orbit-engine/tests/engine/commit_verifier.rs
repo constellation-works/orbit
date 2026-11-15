@@ -29,6 +29,7 @@ struct VerifierHost {
     comments: Mutex<BTreeMap<String, Vec<TaskComment>>>,
     artifacts: Mutex<BTreeMap<String, Vec<TaskArtifact>>>,
     worker: Option<orbit_types::tool::WorkerInvocation>,
+    state: Mutex<Option<orbit_types::workflow::PipelineState>>,
     unknown_artifact_read: Mutex<Option<(String, usize)>>,
     bulk_reads: Mutex<usize>,
     pr_config: Mutex<orbit_engine::PrConfig>,
@@ -43,6 +44,7 @@ impl VerifierHost {
             comments: Mutex::default(),
             artifacts: Mutex::default(),
             worker: None,
+            state: Mutex::default(),
             unknown_artifact_read: Mutex::default(),
             bulk_reads: Mutex::default(),
             pr_config: Mutex::default(),
@@ -146,6 +148,19 @@ impl orbit_engine::test_support::NullRuntimeHost for VerifierHost {
             .get(task_id)
             .cloned()
             .unwrap_or_default())
+    }
+
+    fn read_run_state(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<orbit_types::workflow::PipelineState>, OrbitError> {
+        Ok(self
+            .state
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|state| state.run_id == run_id)
+            .cloned())
     }
 
     fn get_job_run(
@@ -811,7 +826,13 @@ fn commit_verifier_refuses_required_evidence_and_unknown_reads() {
     let temp = tempdir().expect("create tempdir");
     init_git_repo(temp.path());
     let head = git_head(temp.path());
-    let input = commit_input(temp.path(), &head);
+    let mut input = commit_input(temp.path(), &head);
+    // Implementation evidence cannot override invalid reports or unknown reads.
+    input["implementation"] = json!({
+        "already_resolved": {
+            "selectors": ["cargo test -p orbit-engine --test engine commit_verifier::"]
+        }
+    });
     let valid = valid_already_landed_artifacts(&head);
 
     for (case, artifacts) in [
@@ -1572,6 +1593,119 @@ fn clean_doc_duties_task_completes_local_and_pr_pipeline_commit_with_no_diff_evi
     );
 }
 
+/// A claimed task's selectors settle its empty commit stage for host replay
+/// [ORB-22407]. Owner selectors refuse even when supplied directly or recovered
+/// from the implement checkpoint [ORB-23194]; missing evidence still refuses.
+fn owner_empty_candidates_require_reports_and_claimed_selectors_settle() {
+    let temp = tempdir().expect("create tempdir");
+    let repo = temp.path();
+    init_git_repo(repo);
+    let head = git_head(repo);
+
+    let claimed_host = |repo: &Path| {
+        let mut host = VerifierHost::new(repo, fixture_task());
+        host.worker = Some(orbit_types::tool::WorkerInvocation {
+            owner_machine_id: "owner".into(),
+            owner_workspace_id: "ws_owner".into(),
+            owner_destination: "owner/ws_owner".into(),
+            task_id: TASK_ID.into(),
+            claim_id: "claim-verifier".into(),
+            execution: orbit_types::task::ExecutionLocation {
+                machine_id: "follower".into(),
+                machine_name: None,
+            },
+            bound_run_id: RUN_ID.into(),
+        });
+        host
+    };
+
+    for (pipeline_asset, claimed) in [
+        ("task_local_pipeline.yaml", false),
+        ("task_pr_pipeline.yaml", false),
+        ("task_claimed_local_pipeline.yaml", true),
+        ("task_claimed_pr_pipeline.yaml", true),
+    ] {
+        let host = if claimed {
+            claimed_host(repo)
+        } else {
+            VerifierHost::new(repo, fixture_task())
+        };
+        let mut input = pipeline_commit_step_input(pipeline_asset, repo, &head);
+        input["implementation"] = json!({
+            "execution_summary": "Outcome: success\n\nThe defect is already fixed on the pinned base; no change is required.",
+            "already_resolved": {
+                "selectors": ["cargo test -p orbit-engine --test engine commit_verifier::"]
+            },
+        });
+        if claimed {
+            let result = action(&host, &input).unwrap_or_else(|error| {
+                panic!("{pipeline_asset} empty candidate must settle, got: {error}")
+            });
+            assert_eq!(result["decision"], "verified_already_resolved", "{result}");
+            assert_eq!(result["committed"], false, "{result}");
+            assert_eq!(result["skipped_no_diff_expected"], true, "{result}");
+            assert_eq!(result["task_id"], TASK_ID, "{result}");
+            assert_eq!(result["base_sha"], head, "{result}");
+            assert_eq!(
+                result["already_resolved_evidence"]["selectors"],
+                json!(["cargo test -p orbit-engine --test engine commit_verifier::"]),
+                "{result}"
+            );
+            assert!(
+                result["already_resolved_evidence"]["execution_summary"]
+                    .as_str()
+                    .is_some_and(|summary| summary.contains("already fixed")),
+                "{result}"
+            );
+            assert_eq!(git_head(repo), head);
+            assert!(git_output(repo, &["status", "--porcelain"]).is_empty());
+        } else {
+            let error = action(&host, &input).expect_err("owner selectors must refuse");
+            assert!(
+                error.to_string().contains("available only to claimed runs"),
+                "{error}"
+            );
+            // Owner pipelines checkpoint the implementer instead of passing
+            // its output directly; that path must enforce the same contract.
+            let mut state = orbit_types::workflow::PipelineState::new(
+                RUN_ID.into(),
+                "task_pr_pipeline".into(),
+                json!({}),
+            );
+            state.record_pipeline_output("implement_one", input["implementation"].clone());
+            *host.state.lock().unwrap() = Some(state);
+            let mut checkpoint_input = input.clone();
+            checkpoint_input
+                .as_object_mut()
+                .unwrap()
+                .remove("implementation");
+            let checkpoint_error = action(&host, &checkpoint_input)
+                .expect_err("checkpointed owner selectors must refuse");
+            assert_eq!(checkpoint_error.to_string(), error.to_string());
+            *host.state.lock().unwrap() = None;
+        }
+
+        // A summary alone names no check that could show the base resolves
+        // the task. No implementation output also keeps the empty-stage error.
+        for implementation in [
+            json!({
+                "execution_summary": "Outcome: success\n\nVerified the change already exists on the base.",
+            }),
+            Value::Null,
+        ] {
+            input["implementation"] = implementation;
+            let error = action(&host, &input)
+                .expect_err("an empty candidate without selectors must be refused");
+            assert!(
+                error.to_string().contains("nothing to commit"),
+                "{pipeline_asset} expected empty stage refusal, got: {error}"
+            );
+        }
+        assert_eq!(git_head(repo), head);
+        assert!(git_output(repo, &["status", "--porcelain", "--untracked-files=all"]).is_empty());
+    }
+}
+
 /// Plant a nested repository at `sub/` whose own config runs a clean filter
 /// that creates `marker`, as a sandboxed agent can inside its worktree.
 fn plant_filtering_nested_repo(repo: &Path, marker: &Path) -> PathBuf {
@@ -1773,6 +1907,10 @@ fn commit_evidence_contracts_3() {
             (
                 "clean_doc_duties_task_completes_local_and_pr_pipeline_commit_with_no_diff_evidence",
                 clean_doc_duties_task_completes_local_and_pr_pipeline_commit_with_no_diff_evidence,
+            ),
+            (
+                "owner_empty_candidates_require_reports_and_claimed_selectors_settle",
+                owner_empty_candidates_require_reports_and_claimed_selectors_settle,
             ),
         ]);
     });

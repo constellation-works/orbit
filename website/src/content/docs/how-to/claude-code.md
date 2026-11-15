@@ -1,245 +1,163 @@
 ---
 title: Use the Claude Code mod
-description: "Review tasks, approve proposals, ship backlog items, follow PR pipeline runs, and rescue blocked work directly inside Claude Code."
-sidebar:
-  order: 2
+description: "Review tasks, approve proposals, ship backlog items, follow PR pipeline runs and rescue blocked work inside Claude Code."
 ---
 
-The Orbit plugin for Claude Code includes a hooks module (mod) that brings your
-Orbit workspace into the terminal session. It draws task counts and run status
-around the prompt, responds to slash commands, and opens interactive panes to
-manage tasks, run preflight checks, and follow ships through the pull request
-pipeline.
+The Orbit plugin for Claude Code includes a mod that shows your workspace's
+tasks around the prompt and lets you approve, ship and rescue them without
+leaving the session. Other agent clients load the plugin's MCP tools and skills
+and ignore the mod.
 
-Other agent clients (such as Codex CLI, Cursor, or Gemini CLI) load Orbit's MCP
-tools and workflow skills directly, and clients or terminals that cannot render
-the mod fall back to the standard MCP tool and skill interface without loss of
-functionality.
+## Set up
 
-## Prerequisites and fallback
+1. Install the plugin in Claude Code:
 
-To use the mod:
+   ```text
+   /plugin marketplace add constellation-works/orbit
+   /plugin install orbit
+   ```
 
-- Install the Orbit plugin in Claude Code:
-  ```bash
-  /plugin marketplace add constellation-works/orbit
-  /plugin install orbit
-  ```
-- Have the `orbit` CLI installed. The mod searches `~/.orbit/bin` first, then
-  your `PATH`.
-- Open Claude Code inside an initialized Orbit workspace, a replica checkout,
-  or a directory configured with an [owner host](#plugin-options).
-- Use a terminal with sufficient width. Interactive panes (Board and Ship) open
-  when terminal width permits; on narrower screens, commands notify you that
-  the pane will open once the terminal is wide enough.
+2. Install the `orbit` CLI. The mod looks in `~/.orbit/bin` first, then your
+   `PATH`.
+3. Open Claude Code in an initialized Orbit workspace, or in a replica checkout
+   whose owner the mod can reach (see [Remote workspaces](#remote-workspaces)).
 
-If your client or terminal cannot render the interactive mod, the session
-gracefully falls back: Orbit's full MCP tool surface and bundled workflow skills
-(`orbit-setup`, `orbit-orchestrate`) remain available through normal tool calls
-and prompts.
+The panes need a wide enough terminal. On a narrow one, the command tells you
+the pane opens once the terminal is wide enough. If your client or terminal
+cannot draw the mod at all, Orbit's MCP tools and skills still work through
+normal tool calls.
 
 ## Slash commands
 
-The mod registers three slash commands in Claude Code:
+| Command | Action |
+|---|---|
+| `/orbit-board [id]` | Opens the Board pane. With a task ID, opens that task's lane and selects its card. |
+| `/orbit-ship [id]` | Opens the Ship pane. With a task ID, runs that task's preflight. |
+| `/orbit-band` | Shows or hides the band above the prompt. |
 
-| Command | Argument | Action |
-|---|---|---|
-| `/orbit-board` | `[id]` | Opens the Orbit board pane. Passing a task ID (such as `/orbit-board ABC-12`) opens that task's lane and selects its card. |
-| `/orbit-ship` | `[id]` | Opens the Ship pane. Passing a task ID runs its preflight checks and stages it for launch. |
-| `/orbit-band` | None | Toggles visibility of the prompt band on or off. |
+## What the mod shows
 
-## In-session interface
+| Element | Shows |
+|---|---|
+| **Band**, above the prompt | Counts of running, blocked, review, backlog and proposed tasks, and the task this session is working on. While a ship runs, its step in the pull request pipeline. The first blocked task gets **Open** and **Rescue here** buttons. Below 80 columns, or with `band` set to `compact`, the band is one line. |
+| **Status line** | The ship in flight (`orbit ⇡ ABC-12 · review 7/12`), else the active task (`orbit ◉ ABC-12 · in-progress`), else the blocked count. |
+| **Toasts** | A task moved to `blocked`, `review` or `done`, or a ship ended. |
+| **Task cards** | When your prompt mentions a known task ID such as `ABC-12`, the task's status, priority and acceptance criteria are added to Claude's context. |
 
-The mod surfaces workspace activity without requiring you to switch windows.
-
-### Prompt band
-
-The band renders above your input prompt:
-
-- **Workspace counts**: shows open task counts across `blocked`, `in-progress`,
-  `review`, `proposed`, and `backlog`.
-- **Active task**: highlights the task currently assigned to this session.
-- **Flight tracker**: while a ship is running, shows its current step and
-  progress along the pull request pipeline.
-- **Blocked work**: when a task is blocked, surfaces the first blocked task with
-  immediate **Open** and **Rescue here** buttons.
-- **Compact mode**: if the terminal window is narrower than 80 columns, or if
-  the `band` plugin setting is set to `compact`, the band renders as a single
-  line.
-
-The band refreshes every `refreshMinutes` (default 3 minutes) and after any turn
-that finishes at least 30 seconds after the last read. You can hide or restore it
-anytime with `/orbit-band`.
-
-### Status line
-
-The status line displays high-priority state:
-
-1. **Ship in flight**: `orbit ⇡ ABC-12 · review 7/12`
-2. **Active task**: `orbit ◉ ABC-12 · in-progress`
-3. **Blocked tasks**: count of blocked tasks awaiting attention.
-
-### Toasts
-
-Toasts notify you when a task enters `blocked`, `review`, or `done`, or when a
-ship finishes landing.
-
-### Task cards
-
-When you mention a known task ID (like `ABC-12`) in your prompt, the mod
-automatically injects that task's card—including status, priority, and acceptance
-criteria—into Claude's prompt context. You do not need to copy and paste task
-details into the conversation.
+The band refreshes every `refreshMinutes` (default 3), and after any turn that
+ends at least 30 seconds after the last read.
 
 ## The Board pane
 
-Open the board with `/orbit-board` or `/orbit-board <id>`.
+The board has one collapsible lane per status, most urgent first: **Blocked**,
+**In-progress**, **Review**, **Proposed**, **Backlog** and **Done today**.
 
-The board organizes open tasks into collapsible lanes ordered by attention:
+Each lane shows up to 20 tasks, then a footer
+(`+N more · /orbit-board <id> opens one`). `/orbit-board <id>` brings a task
+into view even when it is outside the first 20.
 
-1. **Blocked**: tasks requiring intervention or diagnosis.
-2. **In-progress**: tasks actively being worked.
-3. **Review**: tasks with completed work awaiting review acceptance.
-4. **Proposed**: newly filed tasks awaiting triage or approval.
-5. **Backlog**: approved tasks ready to be worked or shipped.
-6. **Done today**: tasks completed recently.
+Select a task to see its complexity, dependencies, last run ID and acceptance
+criteria, with the actions its status allows:
 
-Each lane displays up to 20 tasks. When a lane exceeds 20 tasks, a footer
-indicates additional tasks (`+N more · /orbit-board <id> opens one`). Opening a
-task directly with `/orbit-board <id>` brings that task into view even if it is
-outside the first 20. Collapsing a lane clears any active task selection within it.
+| Status | Actions |
+|---|---|
+| **Proposed** | **Approve** (`a`) runs `orbit task update <id> --approve` at once and moves the task to `backlog`. **Reject** (`x`) asks for confirmation, then marks it `rejected`. |
+| **Backlog** | **Ship…** (`s`) opens the Ship pane and runs preflight. **Work here** (`w`). |
+| **In-progress** | **Track run** (`t`) follows the task's run in the Ship pane, when it has one. **Work here** (`w`) when the task is not already active in this session. |
+| **Review** | **Accept → done** (`a`) asks `Accept <id> and mark it done?`, then marks it `done`. **Work here** (`w`). |
+| **Blocked** | **Rescue here** (`r`). **Open run** (`t`) shows the task's run in the Ship pane, when it has one. |
 
-### Task actions and confirmations
+**Work here** and **Rescue here** make the task active in this session and
+submit a prompt to Claude:
 
-Selecting a task expands its details, showing its complexity, dependencies, last
-run ID, acceptance criteria, and status-specific action buttons:
+- **Work here** asks Claude to read the task, start it with the `orbit` skill
+  and work it to review.
+- **Rescue here** asks Claude to diagnose the task's last run with the
+  `orbit-orchestrate` skill, finish the work in this session and hand it to
+  review.
 
-| Status | Available actions | Confirmation behaviour |
-|---|---|---|
-| **Proposed** | **Approve** (`a`), **Reject** (`x`) | **Approve** runs immediately (`orbit task update <id> --approve`), moving the task to `backlog`. **Reject** prompts for confirmation before marking the task `rejected`. |
-| **Backlog** | **Ship…** (`s`), **Work here** (`w`) | **Ship…** switches to the Ship pane and runs preflight readiness checks. **Work here** assigns the task to this session and submits an instruction to Claude. |
-| **In-progress** | **Track run** (`t`), **Work here** (`w`) | **Track run** opens the Ship view to follow the execution. **Work here** assigns the task to this session if it is not already active. |
-| **Review** | **Accept → done** (`a`), **Work here** (`w`) | **Accept → done** prompts for confirmation (`Accept <id> and mark it done?`) before marking the task `done`. **Work here** prompts Claude to make further changes. |
-| **Blocked** | **Rescue here** (`r`), **Open run** (`t`) | **Rescue here** assigns the task to this session and prompts Claude to diagnose and repair the issue. **Open run** inspects run logs. |
-
-### Work here and Rescue here
-
-- **Work here**: marks the task as active in the session, updates the band and
-  status line, and submits a prompt to Claude to read the task, start work using
-  the `orbit` skill, and bring it to review.
-- **Rescue here**: marks the blocked task as active and instructs Claude to
-  diagnose the failed run using the `orbit-orchestrate` skill, repair the issue
-  in the current session, and hand the candidate back to review.
-
-Neither button dispatches unattended background workers; both route the task
-directly into your active Claude session.
+Neither dispatches a background worker.
 
 ## The Ship pane
 
-Open the ship pane with `/orbit-ship` or `/orbit-ship <id>`.
-
-If no task is staged, the pane lists ready backlog tasks. Selecting one or
-passing an ID initiates preflight checks.
+Open it with `/orbit-ship`, or `/orbit-ship <id>` to go straight to a task's
+preflight. With no task chosen, the pane lists backlog tasks to pick from.
 
 ### Preflight checks
 
-Opening the Ship pane for a task computes its preflight once and lists the
-results in the pane. The first three rows come from the local snapshot; the
-remaining rows come from `orbit run readiness <id>`:
+The pane computes the preflight once when it loads. It does not re-run the
+checks before launch.
 
-1. **Task is in backlog**: the task is approved in `backlog`.
-2. **Dependencies are done**: all required dependency tasks are marked `done`.
-3. **No ship already running**: from the snapshot's run ID and status; shown for
-   context and always passes for a backlog task.
-4. **Files are free to lock** (when readiness reports the task): red when
-   another task holds a conflicting lock (detail names the holder, such as
-   `held by ORB-9`); green otherwise (`no conflicting task`).
-5. **Ready to start** (when readiness reports the task): green when the
-   readiness row is eligible (`eligible now`); red otherwise, with the readiness
-   reason as detail (underscores shown as spaces).
+| Check | Passes when | Gates Launch |
+|---|---|---|
+| **Task is in backlog** | The task's status is `backlog`. | Yes |
+| **Dependencies are done** | Every dependency is `done`. | Yes |
+| **No ship already running** | Shown for context. It always passes for a backlog task. | No |
+| **Files are free to lock** | No other task holds a conflicting lock. Otherwise the detail names the holder, such as `held by ABC-9`. | No |
+| **Ready to start** | `orbit run readiness <id>` reports the task eligible. Otherwise the detail gives the reason. | No |
 
-Only the first two rows gate the **Launch** button (`l`): it appears when
-**Task is in backlog** and **Dependencies are done** both pass. The remaining
-rows are advisory — a red lock or readiness row does not remove **Launch**.
-When readiness cannot be reported (the command fails, returns non-JSON, or has
-no row for the task), the pane shows a green **Readiness** row reading
-`not reported; the run waits for locks if needed`, and **Launch** is unaffected.
+The last two rows come from `orbit run readiness`. When it reports nothing for
+the task, the pane shows one passing **Readiness** row instead:
+`not reported; the run waits for locks if needed`.
 
-Checks are computed once when the preflight loads; they are not re-run before
-launch. **Launch** still asks for confirmation
-(`Ship <id> through the PR pipeline?`) and then runs `orbit run ship`. This
-section describes only what the pane shows; it makes no promise about whether
-the ship coordinator itself enforces file locks.
+### Launch and track
 
-### Launch confirmation and tracking
+**Launch** (`l`) appears when the first two checks pass. It asks
+`Ship <id> through the PR pipeline?`, then runs `orbit run ship <id> --json`.
 
-Pressing **Launch** opens a confirmation prompt (`Ship <id> through the PR pipeline?`).
-Confirming starts `orbit run ship <id> --json`, which launches the ship coordinator.
+The pane then follows the run through the twelve steps of the pull request
+pipeline. Desktop and VS Code surfaces also draw the track as an SVG curve.
 
-The view then tracks the run through the twelve steps of the pull request pipeline:
+| Glyph | Step state |
+|---|---|
+| `●` | Completed. |
+| `◉` | Active. |
+| `✗` | Failed. |
+| `■` | Stopped, held or cancelled. |
+| `↷` | Skipped. Not counted as completed. |
 
-- **Visualization**: On desktop and VS Code surfaces, progress displays as an
-  SVG trajectory curve. In standard terminals, it displays step glyphs and labels
-  across columns.
-- **Step indicators**:
-  - `●` (accent/color): Completed step.
-  - Active: Cyan highlight.
-  - `✗` (red): Failed step.
-  - `■` (yellow): Stopped, held, or cancelled step.
-  - `↷`: Skipped step (does not increment the completed step count).
-- **Terminal outcomes**:
-  - **Landed**: The pipeline passed, the pull request was opened against the base
-    branch, and the task moved to `review`.
-  - **Failed**: The run halted; the pane displays the failure reason and provides
-    a **Rescue here** button.
-  - **Held**: Execution paused waiting on external review evidence; the task
-    remains in its current state.
-  - **Skipped**: The run was skipped and tracking ends.
+| Outcome | Meaning |
+|---|---|
+| **Landed** | The pull request is open against the base branch and the task moves to `review`. |
+| **Failed** | The pane shows the failure reason and a **Rescue here** button. |
+| **Held** | Delivery is waiting on external review evidence. The run is over and the task stays as it is. |
+| **Skipped** | The run was skipped. Tracking ends. |
 
-While a ship is in flight, you can safely continue conversation in Claude Code;
-the prompt band and status line maintain live progress indicators until the run
-settles.
+You can keep working in the session while a ship is in flight. The band and
+status line follow the run until it ends.
 
 ## Automatic commit trailers
 
-When you work on an active task (via **Work here**, **Rescue here**, or setting a
-task in-progress), the mod inspects shell commands and automatically adds a
-`--trailer 'Task: <id>'` argument to `git commit`.
+While the session works a task (after **Work here**, **Rescue here**, or setting
+a task in-progress), the mod adds `--trailer 'Task: <id>'` to `git commit`
+commands Claude runs.
 
-- The trailer is appended to Git commits within chained commands (`&&`, `;`, `|`),
-  subshells, or conditional statements (`if`, `while`).
-- It ignores `--amend` commits, commits that already specify a `Task:` trailer,
-  plumbing commands like `git commit-tree`, and commit messages in heredocs.
-- You can disable this behaviour by setting the `commitTrailer` plugin option to
-  `false`.
+- It also catches commits inside chained commands (`&&`, `;`, `|`), subshells
+  and conditions (`if`, `while`).
+- It skips `--amend`, commits that already carry a trailer, `git commit-tree`
+  and text inside heredocs.
+- Set the `commitTrailer` option to `false` to turn it off.
 
 ## Plugin options
 
-Configure the mod through Claude Code plugin settings (`/plugin`, choose **orbit**,
-then **configure**):
+Set these in Claude Code's plugin settings (`/plugin`, choose **orbit**, then
+**configure**):
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `ownerHost` | string | `""` | SSH host or alias for remote workspaces. When set, all `orbit` CLI commands execute over `ssh -o BatchMode=yes <ownerHost>`. When empty, the mod falls back to hosts registered with `orbit host add`. |
-| `refreshMinutes` | number | `3` | Refresh frequency in minutes (minimum 1). The mod also refreshes after turns that finish at least 30 seconds after the last refresh. |
-| `band` | string | `"on"` | Display mode for the prompt band: `"on"` (standard multi-line), `"compact"` (always single-line), or `"off"` (hidden). |
-| `commitTrailer` | boolean | `true` | When `true`, automatically adds `--trailer 'Task: <id>'` to `git commit` commands executed while working on a task. |
+| `ownerHost` | string | `""` | SSH host or alias that owns this workspace. See [Remote workspaces](#remote-workspaces). |
+| `refreshMinutes` | number | `3` | How often the mod refreshes, in minutes (minimum 1). |
+| `band` | string | `"on"` | `"on"`, `"compact"` (always one line) or `"off"` (hidden). |
+| `commitTrailer` | boolean | `true` | Add the `Task:` trailer to commits made while working a task. |
 
-## Remote workspace routing
+## Remote workspaces
 
-Every operation executed by the mod is an `orbit` CLI invocation scoped with
-`--workspace`. When Claude Code runs in a directory, the mod determines how to
-route calls:
+Every read and write is an `orbit` CLI call scoped with `--workspace`.
 
-1. **Local checkouts**: If the checkout is an initialized local workspace,
-   commands run locally.
-2. **Replica or unregistered checkouts**: If the directory is a replica or an
-   unregistered clone named after a workspace:
-   - Commands route to `ownerHost` over SSH if configured.
-   - Otherwise, the mod queries the federated host registry (`~/.orbit/hosts.toml`
-     or legacy `~/.orbit/mcp-destinations.toml`, configured via `orbit host add`)
-     and selects the first host that owns the workspace.
+- In an initialized local workspace, the calls run locally.
+- In a replica, or an unregistered clone named after a workspace, the calls run
+  on the owner over `ssh -o BatchMode=yes`. The owner is `ownerHost` when set.
+  Otherwise the mod tries the hosts registered with `orbit host add`
+  (`~/.orbit/hosts.toml`) and uses the first that answers for the workspace.
 
-All remote executions use non-interactive batch mode (`ssh -o BatchMode=yes`),
-ensuring your Claude session remains responsive without hanging on credential
-prompts.
+Batch mode means SSH never stops the session to ask for a password.

@@ -200,6 +200,7 @@ include!("file_store.rs");
 include!("incident_cause.rs");
 include!("incident_performance.rs");
 include!("invocation_workspace_scope.rs");
+include!("job_run_recency.rs");
 include!("job_run_states.rs");
 include!("job_run_tasks.rs");
 include!("migration_freeze.rs");
@@ -212,6 +213,7 @@ include!("session_log.rs");
 include!("store_readiness.rs");
 include!("store_retention.rs");
 include!("task_mutations.rs");
+include!("task_reservation_scans.rs");
 include!("task_registry_ledger.rs");
 
 include!("v2_audit_presence.rs");

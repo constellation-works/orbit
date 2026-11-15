@@ -37,6 +37,9 @@ pub struct HandoffLandingContext {
     pub handoff_id: String,
     pub task_id: String,
     pub claim_id: String,
+    /// The run that produced the handed-off candidate, which a required-check
+    /// failure on its head is recorded against. Empty when unknown.
+    pub producing_run_id: String,
     /// The accepted candidate: repository, branches, candidate/base revisions
     /// and delivery variant.
     pub candidate: orbit_types::workflow::handoff::HandoffCandidate,
@@ -54,6 +57,13 @@ pub struct HandoffLandingContext {
     /// the backlog for a landing repair. A hosted check its candidate fails
     /// then stops for that requeue instead of asking for another repair.
     pub automatic_repair_spent: bool,
+    /// [ORB-23365] The owner's standing policy completes claimed handoffs
+    /// (`workflow.distributed_completion = "done"`) right now, so the
+    /// landing may reach `done` with nobody looking. `completion.hold`
+    /// rules are evaluated before anything merges or lands only then:
+    /// under the `review` policy every landing already had a person
+    /// approve it, so nothing is held.
+    pub owner_distributed_completion_done: bool,
 }
 
 /// One durable step of a landing attempt, recorded by the owner store.
@@ -70,14 +80,15 @@ pub enum HandoffLandingStep {
     /// marks a candidate that conflicts with, or is stale against, the base
     /// it lands on [ORB-14261], or whose pull request fails a hosted check
     /// the candidate caused [ORB-15956]: the owner hands it to one automatic
-    /// repair rather than leaving it in review.
+    /// repair rather than leaving it in review. A check the candidate caused
+    /// no longer takes this route; it requeues.
     Stop { repairable: bool },
     /// [ORB-16890] Durable evidence for a landing whose pull request fails a
-    /// required check the candidate itself caused, once its one automatic
-    /// repair is spent. The owner ends the claim and returns the task to the
-    /// backlog with the candidate and this evidence, so the task's next run
-    /// repairs that candidate, until its landing repair budget is spent and
-    /// the task blocks.
+    /// required check the candidate itself caused, whether or not an
+    /// automatic repair was spent. The owner ends the claim and returns the
+    /// task to the backlog with the candidate and this evidence, so the
+    /// task's next run repairs that candidate, until its landing repair budget
+    /// is spent and the task blocks.
     StopForRequeue,
 }
 

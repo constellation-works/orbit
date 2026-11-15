@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 
 use super::admission::{
-    acquire_admissions, acquire_candidate_admissions, handover_of, pin_candidate,
+    acquire_candidate_admissions, acquire_current_admissions, current_of, handover_of,
+    pin_candidate,
 };
 use super::channel;
 use super::converge;
@@ -73,6 +74,8 @@ pub(super) fn run_update_with_restore(
         admission_roots: environment.admission_roots.clone(),
         local_candidate: None,
         handover: Vec::new(),
+        same_generation: Vec::new(),
+        migration_fenced: Vec::new(),
         recovery: None,
     };
 
@@ -132,11 +135,19 @@ pub(super) fn run_update_with_restore(
     if target == current {
         // Not a no-op: re-running `orbit update` at the installed version is
         // the documented way to finish a run whose convergence failed. It
-        // renames nothing, so nothing live can hand over to it.
+        // renames nothing, so nothing live hands over to a new image; a live
+        // process already running the installed generation is asked to hand
+        // over to it in place, which proves the generation free before the
+        // re-pin.
         let contract = converge::require_admission_contract(&executable)?;
         let digest = orbit_common::fs::generation::executable_generation(&executable)?;
-        let admissions = acquire_admissions(&environment.admission_roots)?;
-        let _generations = pin_candidate(
+        let admissions = acquire_current_admissions(
+            &environment.admission_roots,
+            &digest,
+            contract.identity.as_ref(),
+        )?;
+        report.same_generation = current_of(&admissions).iter().map(Into::into).collect();
+        let generations = pin_candidate(
             &environment.admission_roots,
             admissions,
             &digest,
@@ -147,6 +158,7 @@ pub(super) fn run_update_with_restore(
             &executable,
             report,
             UpdateOutcome::AlreadyCurrent,
+            generations,
         ));
     }
 
@@ -217,7 +229,7 @@ pub(super) fn run_update_with_restore(
         }
     }
 
-    let _generations = match pin_candidate(
+    let generations = match pin_candidate(
         &environment.admission_roots,
         admissions,
         &digest,
@@ -237,6 +249,7 @@ pub(super) fn run_update_with_restore(
         &executable,
         report,
         UpdateOutcome::Updated,
+        generations,
     ))
 }
 

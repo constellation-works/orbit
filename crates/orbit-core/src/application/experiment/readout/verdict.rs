@@ -3,9 +3,9 @@ use std::collections::BTreeSet;
 use chrono::{DateTime, Utc};
 use orbit_store::contracts::ExperimentRecord;
 
-use crate::application::experiment::readout::outcomes::{Kind, MetricSpec, metric_spec};
+use crate::application::experiment::definition::{Kind, MetricSpec, metric_spec};
 
-use super::model::{GuardrailArm, GuardrailReadout, ReadoutMetric, Verdict};
+use super::model::{GuardrailArm, GuardrailReadout, ReadoutArm, ReadoutMetric, Verdict};
 
 /// A guardrail threshold: its direction (`true` for an upper limit) and
 /// its value in the metric's units, given the control's mean.
@@ -119,9 +119,38 @@ pub(super) fn horizon_reached(
         })
 }
 
+/// One reason per treatment arm whose delivered rate is below
+/// `min_delivered_rate`, or that has no settled task once the horizon is
+/// reached: its runs did not receive the treatment, so no comparison can
+/// credit or clear it.
+pub(super) fn undelivered_reasons(
+    arms: &[ReadoutArm],
+    min_delivered_rate: f64,
+    horizon_reached: bool,
+) -> Vec<String> {
+    arms.iter()
+        .filter_map(|arm| {
+            let delivery = arm.delivery.as_ref()?;
+            let short = match delivery.rate {
+                Some(rate) => rate < min_delivered_rate,
+                None => horizon_reached && delivery.assigned > 0,
+            };
+            short.then(|| {
+                format!(
+                    "arm `{}` treatment delivered on {}/{} runs",
+                    arm.name,
+                    delivery.delivered,
+                    delivery.assigned - delivery.pending
+                )
+            })
+        })
+        .collect()
+}
+
 pub(super) fn verdict(
     horizon_reached: bool,
     mismatch: bool,
+    undelivered: &[String],
     started: bool,
     primary: Option<&ReadoutMetric>,
     guardrails: &[GuardrailReadout],
@@ -134,6 +163,14 @@ pub(super) fn verdict(
             horizon_reached,
             reasons,
         };
+    if let Some(primary) = primary.filter(|metric| metric.exploratory) {
+        return make(
+            "withheld",
+            None,
+            "no verdict".into(),
+            vec![format!("primary metric `{}` is step-local", primary.metric)],
+        );
+    }
     if mismatch {
         return make(
             "withheld",
@@ -141,6 +178,9 @@ pub(super) fn verdict(
             "no verdict".into(),
             vec!["the sample-ratio check failed".into()],
         );
+    }
+    if !undelivered.is_empty() {
+        return make("withheld", None, "no verdict".into(), undelivered.to_vec());
     }
     if !started || !horizon_reached {
         return make(
@@ -150,7 +190,7 @@ pub(super) fn verdict(
             vec!["not every arm has reached min_sample and max_days has not passed".into()],
         );
     }
-    let Some(primary) = primary.filter(|primary| primary.measured) else {
+    let Some(primary) = primary else {
         return make(
             "inconclusive",
             None,

@@ -10,6 +10,7 @@
 pub mod agent_detect;
 pub mod agent_prompt;
 mod command;
+mod human_crew;
 #[cfg(target_os = "linux")]
 mod linux_host;
 mod prompt_stdin;
@@ -18,3 +19,6 @@ mod seed;
 
 pub use command::InitCommand;
 pub(crate) use seed::{collect_config_seed_for_init, config_seed_from_detection};
+
+#[cfg(test)]
+mod tests;

@@ -9,6 +9,7 @@ mod show;
 mod source_remote;
 mod support;
 mod sync;
+mod sync_all;
 mod teardown;
 
 pub use command::{WorkspaceCommand, WorkspaceSubcommand};

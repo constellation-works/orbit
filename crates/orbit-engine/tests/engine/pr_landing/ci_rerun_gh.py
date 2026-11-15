@@ -8,7 +8,8 @@ root = Path(sys.argv[1])
 args = sys.argv[2:]
 config = json.loads((root / "retry-config.json").read_text())
 applied = (root / "retry-applied").exists()
-phase = 2 if applied else 1
+phase = int((root / "retry-applied").read_text() or "2") if applied else 1
+recovered = applied and (not config.get("repeat") or phase > config.get("fail_attempts", 1000))
 merged = (root / "retry-merged").exists()
 repo = {"id": 500, "full_name": "orbit/test", "url": "https://api.github.com/repos/orbit/test"}
 app = {"id": 901 if config.get("wrong_app") else 900, "slug": "github-actions"}
@@ -17,7 +18,30 @@ branch, base_branch = "orbit/landing-candidate", "agent-main"
 names = ["test", "lint", "independent"]
 
 def outcome(name, is_base=False):
-    return "success" if is_base or (name == "independent" and not config.get("candidate")) or (applied and not config.get("repeat")) else "failure"
+    if is_base:
+        # Absent `base_failures` keeps every base job green.
+        if name in {str(item) for item in config.get("base_failures", [])}:
+            return "failure"
+        return "success"
+    named = config.get("conclusions", {}).get(name)
+    if isinstance(named, str):
+        return named
+    return "success" if (name == "independent" and not config.get("candidate")) or (recovered) else "failure"
+
+def refuse_log(job):
+    with (root / "retry-log-reads").open("a") as file:
+        file.write(f"{job}\n")
+    if str(job) in {str(item) for item in config.get("log_rate_limited_jobs", [])}:
+        print("HTTP 403: API rate limit exceeded for user ID 270255973.", file=sys.stderr)
+        print("X-RateLimit-Remaining: 0", file=sys.stderr)
+        print(f"X-RateLimit-Reset: {config['rate_limit_reset']}", file=sys.stderr)
+        raise SystemExit(1)
+    if str(job) in {str(item) for item in config.get("log_404_jobs", [])}:
+        print("gh: HTTP 404", file=sys.stderr)
+        raise SystemExit(1)
+    if str(job) in {str(item) for item in config.get("log_truncated_jobs", [])}:
+        print("the job log is truncated and has no complete failing command", file=sys.stderr)
+        raise SystemExit(1)
 
 def emit(value):
     print(json.dumps(value))
@@ -36,7 +60,7 @@ def run(is_base=False):
               "head_branch": base_branch if is_base else branch,
               "event": "push" if is_base else "pull_request",
               "repository": repo, "head_repository": repo, "actor": {"id": 123},
-              "status": "completed", "conclusion": "success" if (applied and not config.get("repeat")) or is_base else "failure",
+              "status": "completed", "conclusion": "success" if (recovered) or is_base else "failure",
               "run_started_at": "2026-10-29T10:00:00Z",
               "pull_requests": [] if is_base else [{"number": 42, "head": {"sha": head}, "base": {"sha": base, "ref": base_branch, "repo": repo}}]}
     if is_base and config.get("base_unproven"):
@@ -51,7 +75,7 @@ def jobs(is_base=False, producing=False):
     for index, name in enumerate(names):
         step = "Wait" if name == "lint" else "Tests"
         conclusion = outcome(name, is_base)
-        rows.append({"id": (2000 if is_base else 1000) + index + (10 if applied else 0), "run_id": 701 if is_base else 700,
+        rows.append({"id": (2000 if is_base else 1000) + index + (10 * (phase - 1) if applied else 0), "run_id": 701 if is_base else 700,
                      "run_attempt": 1 if is_base else phase, "head_sha": sha, "name": name,
                      "status": "completed", "conclusion": conclusion,
                      "started_at": "2026-10-29T10:02:00Z" if applied else "2026-10-29T10:00:00Z", "completed_at": "2026-10-29T10:03:00Z" if applied else "2026-10-29T10:01:00Z",
@@ -85,7 +109,7 @@ if args[:2] == ["run", "rerun"]:
     with (root / "retry-sends").open("a") as file:
         file.write(" ".join(args) + "\n")
     if config.get("reply") != "unknown":
-        (root / "retry-applied").touch()
+        (root / "retry-applied").write_text(str(phase + 1))
     if config.get("reply") in ("lost", "unknown"):
         print("lost provider reply", file=sys.stderr)
         raise SystemExit(1)
@@ -99,12 +123,13 @@ if args[:2] == ["run", "view"]:
     if config.get("raw_fallback"):
         raise SystemExit
     job = args[args.index("--job") + 1]
+    refuse_log(job)
     print((root / f"retry-log-{job}").read_text(), end="")
     raise SystemExit
 if args[:2] == ["pr", "view"]:
     emit({"number": 42, "url": "https://github.com/orbit/test/pull/42", "state": "MERGED" if merged else "OPEN",
           "headRefName": branch, "baseRefName": base_branch, "headRefOid": head,
-          "mergeStateStatus": "CLEAN" if applied and not config.get("repeat") else "BLOCKED", "reviewDecision": "APPROVED",
+          "mergeStateStatus": "CLEAN" if recovered and all(outcome(name) == "success" for name in names) else "BLOCKED", "reviewDecision": "APPROVED",
           "isDraft": False, "mergedAt": "2026-10-29T10:02:00Z" if merged else None, "mergeCommit": {"oid": head} if merged else None,
           "statusCheckRollup": [{"__typename": "CheckRun", "name": name, "workflowName": "CI",
                                  "status": "COMPLETED", "conclusion": outcome(name).upper()} for name in names]})
@@ -112,14 +137,15 @@ if args[0] != "api":
     raise SystemExit(77)
 if args[1] == "graphql":
     if any("requiredStatusChecks" in arg for arg in args):
-        emit({"data": {"repository": {"pullRequest": {"headRefOid": head, "baseRefName": base_branch, "reviewDecision": "APPROVED", "baseRef": {"branchProtectionRule": {"requiredStatusChecks": [{"context": name, "app": {"databaseId": 900}} for name in names]}}}}}})
+        emit({"data": {"repository": {"pullRequest": {"headRefOid": head, "baseRefName": base_branch, "reviewDecision": "APPROVED", "baseRef": {"branchProtectionRule": {"requiredStatusChecks": [{"context": name, "app": {"databaseId": 900}} for name in config.get("required", names)]}}}}}})
     if any("statusCheckRollup" in arg for arg in args):
-        contexts = {"pageInfo": {"hasNextPage": False}, "nodes": [{"__typename": "CheckRun", "name": name, "workflowName": "CI", "status": "COMPLETED", "conclusion": outcome(name).upper(), "isRequired": True} for name in names]}
+        contexts = {"pageInfo": {"hasNextPage": False}, "nodes": [{"__typename": "CheckRun", "name": name, "workflowName": "CI", "status": "COMPLETED", "conclusion": outcome(name).upper(), "isRequired": name in config.get("required", names)} for name in names]}
         emit({"data": {"repository": {"pullRequest": {"headRefOid": head, "commits": {"nodes": [{"commit": {"oid": head, "statusCheckRollup": {"contexts": contexts}}}]}}}}})
     raise SystemExit(77)
 endpoint = next((arg for arg in args[1:] if arg.startswith("repos/")), "")
 if "/actions/jobs/" in endpoint and endpoint.endswith("/logs"):
     job = endpoint.split("/actions/jobs/", 1)[1].split("/", 1)[0]
+    refuse_log(job)
     print((root / f"retry-log-{job}").read_text(), end="")
     raise SystemExit
 if "--include" in args and "actions/runs/700/jobs" in endpoint:

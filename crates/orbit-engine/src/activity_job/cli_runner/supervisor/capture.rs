@@ -21,17 +21,6 @@ pub(in crate::activity_job::cli_runner) struct CapturedOutput {
 
 impl CapturedOutput {
     #[cfg(test)]
-    pub(in crate::activity_job::cli_runner) fn empty() -> Self {
-        Self {
-            bytes: Vec::new(),
-            protocol_offset: 0,
-            observed_bytes: 0,
-            capture_limit_bytes: 0,
-            truncated: false,
-        }
-    }
-
-    #[cfg(test)]
     pub(in crate::activity_job::cli_runner) fn from_bytes(bytes: &[u8]) -> Self {
         Self {
             bytes: bytes.to_vec(),

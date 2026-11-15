@@ -2,6 +2,8 @@
 #![allow(missing_docs, clippy::unwrap_used, clippy::expect_used)]
 #[path = "ci_failure_goldens/archive.rs"]
 mod archive;
+#[path = "ci_failure_goldens/claimed_repair_owners.rs"]
+mod claimed_repair_owners;
 #[path = "support/git.rs"]
 mod git_test_support;
 orbit_common::isolate_test_process!();
@@ -15,6 +17,9 @@ use tempfile::TempDir;
 #[cfg(unix)]
 #[path = "ci_failure_goldens/sweep.rs"]
 mod sweep;
+#[cfg(unix)]
+#[path = "ci_failure_goldens/sweep_rate_limit.rs"]
+mod sweep_rate_limit;
 use chrono::Duration;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_engine::TaskAutomationUpdate;
@@ -35,6 +40,47 @@ fn orbit_dirs() -> (TempDir, PathBuf, PathBuf) {
 
 fn bare_runtime() -> (TempDir, OrbitRuntime) {
     let (root, global, workspace) = orbit_dirs();
+    (root, OrbitRuntime::from_roots(&global, &workspace).unwrap())
+}
+
+/// One migrated `orbit.db`, captured after its connection closed. Golden
+/// runtimes copy it instead of migrating a fresh store per case.
+fn migrated_store_template() -> &'static (Vec<u8>, std::fs::Permissions) {
+    use std::sync::OnceLock;
+    static TEMPLATE: OnceLock<(Vec<u8>, std::fs::Permissions)> = OnceLock::new();
+    TEMPLATE.get_or_init(|| {
+        let dir = tempfile::tempdir().expect("migrated store template");
+        let database = dir.path().join("orbit.db");
+        drop(orbit_store::Store::open(&database).expect("migrate the template store"));
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("template dir")
+            .map(|entry| entry.expect("template entry").file_name())
+            .collect();
+        assert!(
+            names.len() == 1 && names[0] == "orbit.db",
+            "a closed template store must leave only its database file to copy: {names:?}"
+        );
+        let permissions = std::fs::metadata(&database)
+            .expect("template database metadata")
+            .permissions();
+        let bytes = std::fs::read(&database).expect("template database");
+        (bytes, permissions)
+    })
+}
+
+fn seed_migrated_store(global: &std::path::Path) {
+    let database = global.join("orbit.db");
+    if database.exists() {
+        return;
+    }
+    let (bytes, permissions) = migrated_store_template();
+    std::fs::write(&database, bytes).expect("seed migrated store");
+    std::fs::set_permissions(&database, permissions.clone()).expect("seed store permissions");
+}
+
+fn seeded_golden_runtime() -> (TempDir, OrbitRuntime) {
+    let (root, global, workspace) = orbit_dirs();
+    seed_migrated_store(&global);
     (root, OrbitRuntime::from_roots(&global, &workspace).unwrap())
 }
 
@@ -174,12 +220,17 @@ fn description_only_owner(runtime: &OrbitRuntime, owner: &str) -> String {
             .get_task_history(&legacy.id)
             .unwrap()
             .iter()
-            .all(|entry| entry.decision.is_none())
+            // Creation records its crew assignment [ORB-24023]; the legacy
+            // shape is the absence of any CI-failure decision.
+            .all(|entry| matches!(
+                entry.decision,
+                None | Some(orbit_types::task::TaskDecision::CrewAssignment(_))
+            ))
     );
     legacy.id
 }
 
-/// Archived and rejected owners suppress until the configured clock boundary.
+/// Archived and rejected owners suppress until the fixed 6-hour clock boundary.
 /// `same_key` is false when the failure key embeds the checkout [compiler covers].
 fn assert_archive_suppresses(
     log: &str,
@@ -189,15 +240,9 @@ fn assert_archive_suppresses(
     status_label: bool,
     check_audit: bool,
 ) {
-    for (status, config, hours) in [
-        (TaskStatus::Archived, "", 6),
-        (
-            TaskStatus::Rejected,
-            "[ci_failure]\noperator_suppression_hours = 2\n",
-            2,
-        ),
-    ] {
-        let (_root, runtime, commits) = operator_fixture(config);
+    let hours = 6;
+    for status in [TaskStatus::Archived, TaskStatus::Rejected] {
+        let (_root, runtime, commits) = operator_fixture("");
         let first = file(&runtime, vec![failure(log, 0, &commits[0])]);
         let owner = first["filed"][0]["task_id"].as_str().unwrap();
         archive_owner(&runtime, owner, status, None);
@@ -377,6 +422,336 @@ fn ci_checkout_identity_gaps_are_named_at_the_filing_boundary() {
         "{output}"
     );
 }
+#[test]
+fn ci_snapshot_wide_retryable_errors_defer_without_filing() {
+    if !isolated("ci_snapshot_wide_retryable_errors_defer_without_filing") {
+        return;
+    }
+    let (_root, runtime, commits) = operator_fixture("");
+    let run = failure(
+        "error: would file without the snapshot-wide gap",
+        0,
+        &commits[0],
+    );
+    let output = runtime
+        .run_deterministic(
+            "file_ci_failure_tasks",
+            &json!({}),
+            &json!({"ci_evidence": {
+                "schema_version": 2, "collected": true,
+                "outcome_hint": "current_failures",
+                "capability": {"available": true, "authenticated": true},
+                "repository": {"name": "orbit", "full_name": "acme/orbit", "default_branch": "main"},
+                "heads": [{"kind": "integration", "branch": "agent-main", "current_head_sha": "1".repeat(40)}],
+                "latest_runs": [run.clone()], "current_failures": [run],
+                "stale_or_superseded": [], "in_flight": [],
+                "retryable_errors": [{
+                    "stage": "collection", "operation": "list_runs",
+                    "run_id": null, "job_id": null, "retryable": true,
+                    "message": "run listing did not finish",
+                }],
+                "collected_at": "2026-09-07T08:00:00Z",
+            }}),
+            ToolContext::default(),
+        )
+        .expect("a snapshot-wide retryable gap defers instead of failing");
+    assert_eq!(output["outcome"], json!("deferred"), "{output}");
+    assert_eq!(
+        output["stage"],
+        json!("collection_or_investigation"),
+        "{output}"
+    );
+    assert_eq!(output["filed_count"], json!(0), "{output}");
+    assert_eq!(output["filed"], json!([]), "{output}");
+    assert_eq!(output["audit"]["retryable_errors"], json!(1), "{output}");
+    assert_eq!(
+        output["retryable_errors"][0]["operation"],
+        json!("list_runs")
+    );
+    assert!(
+        runtime
+            .list_tasks()
+            .unwrap()
+            .iter()
+            .all(|task| !task.tags.iter().any(|tag| tag == "ci-failure-sweep")),
+        "no CI-failure task is filed from the incomplete snapshot"
+    );
+}
+
+fn named_failure(
+    log: &str,
+    index: usize,
+    checkout: &str,
+    run_id: u64,
+    job_name: &str,
+    step: &str,
+) -> Value {
+    let mut run = failure(log, index, checkout);
+    run["run_id"] = json!(run_id);
+    run["url"] = json!(format!(
+        "https://github.com/acme/orbit/actions/runs/{run_id}"
+    ));
+    run["failed_jobs"][0]["name"] = json!(job_name);
+    run["failed_jobs"][0]["failed_steps"][0]["name"] = json!(step);
+    run
+}
+
+fn dependency_record_log(dep: &str) -> String {
+    dependency_record_log_for(dep, 911)
+}
+
+fn dependency_record_log_for(dep: &str, job_id: u64) -> String {
+    format!(
+        "orbit-dependency-evidence:{{\"dependencies\":[{{\"conclusion\":\"failure\",\"job_id\":{job_id},\"job_name\":\"{dep}\",\"status\":\"completed\"}}],\"execution_contract\":\"isolated-source-v1\",\"kind\":\"dependency_failed\",\"schema_version\":1}}\nci-await: {dep} concluded failure: https://example.invalid/job\n##[error]Process completed with exit code 1."
+    )
+}
+
+const AGGREGATE_JOB: &str = "Check / Clippy / Test / Await the test build and nextest shards";
+const SIBLING_JOB: &str = "Test partition 2";
+
+#[test]
+fn ci_dependency_only_aggregate_folds_into_failed_sibling() {
+    if !isolated("ci_dependency_only_aggregate_folds_into_failed_sibling") {
+        return;
+    }
+    // Only dependency evidence naming a failed sibling: exactly one task.
+    {
+        let (_root, runtime, commits) = operator_fixture("");
+        let aggregate = named_failure(
+            &dependency_record_log(SIBLING_JOB),
+            0,
+            &commits[0],
+            4242,
+            AGGREGATE_JOB,
+            "Await the test build and nextest shards",
+        );
+        let sibling = named_failure(
+            "error: sibling test exploded",
+            1,
+            &commits[0],
+            4242,
+            SIBLING_JOB,
+            "Test",
+        );
+        let output = file(&runtime, vec![aggregate, sibling]);
+        assert_eq!(output["filed_count"], json!(1), "{output}");
+        assert_eq!(output["filed"][0]["job"], json!(SIBLING_JOB), "{output}");
+        assert_eq!(output["folded_count"], json!(1), "{output}");
+        assert_eq!(output["folded"][0]["job"], json!(AGGREGATE_JOB), "{output}");
+        assert_eq!(
+            output["folded"][0]["covered_by_task_id"], output["filed"][0]["task_id"],
+            "{output}"
+        );
+        let task_id = output["filed"][0]["task_id"].as_str().unwrap();
+        let task = runtime.get_task(task_id).unwrap();
+        assert!(
+            task.description.contains(AGGREGATE_JOB),
+            "sibling task carries the folded aggregate as context: {}",
+            task.description
+        );
+    }
+    // An aggregate with its own error anchor files its own task.
+    {
+        let (_root, runtime, commits) = operator_fixture("");
+        let own = format!(
+            "{}\nerror: aggregate's own check broke\n##[error]Process completed with exit code 1.",
+            dependency_record_log(SIBLING_JOB).lines().next().unwrap()
+        );
+        let aggregate = named_failure(
+            &own,
+            0,
+            &commits[0],
+            4242,
+            AGGREGATE_JOB,
+            "Await the test build and nextest shards",
+        );
+        let sibling = named_failure(
+            "error: sibling test exploded",
+            1,
+            &commits[0],
+            4242,
+            SIBLING_JOB,
+            "Test",
+        );
+        let output = file(&runtime, vec![aggregate, sibling]);
+        assert_eq!(output["filed_count"], json!(2), "{output}");
+        assert_eq!(output["folded_count"], json!(0), "{output}");
+    }
+    // Dependency evidence naming a job that did not fail files its own task.
+    {
+        let (_root, runtime, commits) = operator_fixture("");
+        let aggregate = named_failure(
+            &dependency_record_log("Test partition 9"),
+            0,
+            &commits[0],
+            4242,
+            AGGREGATE_JOB,
+            "Await the test build and nextest shards",
+        );
+        let sibling = named_failure(
+            "error: sibling test exploded",
+            1,
+            &commits[0],
+            4242,
+            SIBLING_JOB,
+            "Test",
+        );
+        let output = file(&runtime, vec![aggregate, sibling]);
+        assert_eq!(output["filed_count"], json!(2), "{output}");
+        assert_eq!(output["folded_count"], json!(0), "{output}");
+    }
+    // A sibling whose log the sweep could not read stays deferred, and the
+    // aggregate is filed rather than dropped with it.
+    {
+        let (_root, runtime, commits) = operator_fixture("");
+        let aggregate = named_failure(
+            &dependency_record_log(SIBLING_JOB),
+            0,
+            &commits[0],
+            4242,
+            AGGREGATE_JOB,
+            "Await the test build and nextest shards",
+        );
+        let mut sibling = named_failure(
+            "error: sibling test exploded",
+            1,
+            &commits[0],
+            4242,
+            SIBLING_JOB,
+            "Test",
+        );
+        sibling["investigated"] = json!(false);
+        let output = file(&runtime, vec![aggregate, sibling]);
+        assert_eq!(output["filed_count"], json!(1), "{output}");
+        assert_eq!(output["filed"][0]["job"], json!(AGGREGATE_JOB), "{output}");
+        assert_eq!(output["deferred_count"], json!(1), "{output}");
+        assert_eq!(output["folded_count"], json!(0), "{output}");
+    }
+    // Malformed or empty dependency evidence files its own task.
+    for log in [
+        "orbit-dependency-evidence:{not-json}\n##[error]Process completed with exit code 1."
+            .to_string(),
+        "orbit-dependency-evidence:{\"dependencies\":[]}\n##[error]Process completed with exit code 1."
+            .to_string(),
+        "orbit-dependency-evidence:{\"dependencies\":[{\"conclusion\":\"success\",\"job_name\":\"Test partition 2\"}]}\n##[error]Process completed with exit code 1."
+            .to_string(),
+    ] {
+        let (_root, runtime, commits) = operator_fixture("");
+        let aggregate = named_failure(
+            &log,
+            0,
+            &commits[0],
+            4242,
+            AGGREGATE_JOB,
+            "Await the test build and nextest shards",
+        );
+        let output = file(&runtime, vec![aggregate]);
+        assert_eq!(output["filed_count"], json!(1), "{log}: {output}");
+        assert_eq!(output["folded_count"], json!(0), "{log}: {output}");
+    }
+}
+
+const CHAIN_OUTER_JOB: &str = "Check / Clippy / Test / Await the outer aggregate";
+const CHAIN_MIDDLE_JOB: &str = "Check / Clippy / Test / Await the middle aggregate";
+const CHAIN_LEAF_JOB: &str = "Test partition 2";
+
+#[test]
+fn ci_dependency_only_chain_reports_the_covering_task() {
+    if !isolated("ci_dependency_only_chain_reports_the_covering_task") {
+        return;
+    }
+    // outer -> middle -> leaf: only the leaf files. The middle aggregate
+    // folds into it directly and the outer one folds through the middle, so
+    // both must name the leaf's task as their cover and the leaf's task must
+    // carry both as context.
+    let (_root, runtime, commits) = operator_fixture("");
+    let outer = named_failure(
+        &dependency_record_log_for(CHAIN_MIDDLE_JOB, 911),
+        0,
+        &commits[0],
+        4242,
+        CHAIN_OUTER_JOB,
+        "Await the outer aggregate",
+    );
+    let middle = named_failure(
+        &dependency_record_log_for(CHAIN_LEAF_JOB, 912),
+        1,
+        &commits[0],
+        4242,
+        CHAIN_MIDDLE_JOB,
+        "Await the middle aggregate",
+    );
+    let leaf = named_failure(
+        "error: leaf test exploded",
+        2,
+        &commits[0],
+        4242,
+        CHAIN_LEAF_JOB,
+        "Test",
+    );
+    let output = file(&runtime, vec![outer, middle, leaf]);
+    assert_eq!(output["filed_count"], json!(1), "{output}");
+    assert_eq!(output["filed"][0]["job"], json!(CHAIN_LEAF_JOB), "{output}");
+    assert_eq!(output["folded_count"], json!(2), "{output}");
+    let task_id = output["filed"][0]["task_id"].as_str().unwrap().to_string();
+    let task = runtime.get_task(&task_id).unwrap();
+    for job in [CHAIN_OUTER_JOB, CHAIN_MIDDLE_JOB] {
+        let folded = output["folded"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|entry| entry["job"].as_str() == Some(job))
+            .unwrap_or_else(|| panic!("{job} is reported as folded: {output}"));
+        assert_eq!(folded["covered_by_task_id"], json!(task_id), "{output}");
+        assert!(
+            task.description.contains(job),
+            "leaf task carries the folded aggregate {job} as context: {}",
+            task.description
+        );
+    }
+}
+
+#[test]
+fn ci_dependency_folding_requires_observed_run_and_job_identity() {
+    if !isolated("ci_dependency_folding_requires_observed_run_and_job_identity") {
+        return;
+    }
+    for (dependency, same_run_name) in [
+        (
+            dependency_record_log(SIBLING_JOB).replace("\"job_id\":911", "\"job_id\":999"),
+            false,
+        ),
+        (
+            dependency_record_log(SIBLING_JOB).replace("\"job_id\":911,", ""),
+            false,
+        ),
+        (
+            dependency_record_log(SIBLING_JOB).replace("\"job_id\":911", "\"job_id\":999"),
+            true,
+        ),
+    ] {
+        let (_root, runtime, commits) = operator_fixture("");
+        let aggregate = named_failure(&dependency, 0, &commits[0], 4242, AGGREGATE_JOB, "Await");
+        let log = compiler_log("E0433", "missing module", "crates/example/src/lib.rs", 8, 1);
+        let first = named_failure(
+            &log,
+            1,
+            &commits[0],
+            4242,
+            if same_run_name {
+                SIBLING_JOB
+            } else {
+                "Other job"
+            },
+            "Build",
+        );
+        let second = named_failure(&log, 2, &commits[0], 4343, SIBLING_JOB, "Build");
+        let output = file(&runtime, vec![aggregate, first, second]);
+        assert_eq!(output["filed_count"], json!(2), "{output}");
+        assert_eq!(output["folded_count"], json!(0), "{output}");
+    }
+}
+
 fn compiler_log(code: &str, message: &str, path: &str, line: usize, column: usize) -> String {
     format!("error[{code}]: {message}\n   --> {path}:{line}:{column}\n")
 }
@@ -1270,7 +1645,7 @@ fn ci_main_thread_panic_does_not_match_agent_main_task() {
 }
 /// Hand-built collection rows: the log is the snapshot's excerpt.
 fn filed_golden(case: &Value) -> Value {
-    let (_root, runtime) = bare_runtime();
+    let (_root, runtime) = seeded_golden_runtime();
     let mut results = Vec::new();
     let logs = case["logs"].as_array().unwrap();
     let first_batch = case["first_batch"].as_u64().unwrap_or(1) as usize;
@@ -1305,7 +1680,7 @@ fn filed_golden(case: &Value) -> Value {
 /// records the diagnostic collection bound as well as what was filed.
 #[cfg(unix)]
 fn collected_golden(case: &Value) -> Value {
-    let mut workspace = sweep::Workspace::new();
+    let mut workspace = sweep::Workspace::seeded();
     let mut results = Vec::new();
     for (index, parts) in case["logs"].as_array().unwrap().iter().enumerate() {
         let log = expand_parts(parts);
@@ -1573,9 +1948,6 @@ fn protecting_branch_claim(
     owner_id: &str,
 ) -> orbit_store::contracts::ExecutionClaim {
     use orbit_engine::TaskAutomationUpdate;
-    use orbit_store::contracts::{
-        AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation,
-    };
     use orbit_types::task::TaskStatus;
     let claim_id = format!("claim-{owner_id}");
     let request_id = format!("request-{owner_id}");
@@ -1596,6 +1968,20 @@ fn protecting_branch_claim(
             },
         )
         .unwrap();
+    insert_protecting_claim(runtime, owner_id)
+}
+/// Insert the follower's claim row, leaving the owner's status alone.
+fn insert_protecting_claim(
+    runtime: &OrbitRuntime,
+    owner_id: &str,
+) -> orbit_store::contracts::ExecutionClaim {
+    use orbit_store::contracts::{
+        AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation,
+    };
+    let claim_id = format!("claim-{owner_id}");
+    let request_id = format!("request-{owner_id}");
+    let claiming_run = "jrun-follower-claim";
+    let machine_id = "follower-mac";
     let claim = ExecutionClaim {
         claim_id: claim_id.clone(),
         task_id: owner_id.to_string(),
@@ -1889,6 +2275,7 @@ fn ci_failure_branch_receipt_retains_after_settlement_precedes_insertion() {
             artifact_path: path.clone(),
             content,
             claiming_run_id: Some(observed.claim.run_context.run_id.clone()),
+            comment: None,
             applied: false,
         };
         release_claim(
@@ -2214,6 +2601,60 @@ fn commit_chain(repo: &Path, count: usize) -> Vec<String> {
         })
         .collect()
 }
+/// Record the owner's verified landing of a pull follower's delivery.
+///
+/// The follower's run stays on the follower. The owner writes
+/// `landing_completed` with `delivery.merge_commit` and no local delivery run.
+fn record_owner_landing(runtime: &OrbitRuntime, task_id: &str, landed: &str) {
+    use orbit_types::task::TaskHistoryEntry;
+    runtime
+        .apply_task_automation_update(
+            task_id,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Done),
+                append_history: vec![TaskHistoryEntry {
+                    at: chrono::Utc::now(),
+                    by: "owner-landing".into(),
+                    event: "landing_completed".into(),
+                    note: Some(
+                        json!({
+                            "delivery": {
+                                "pr_number": 7392,
+                                "merged_at": "2026-11-01T01:20:00Z",
+                                "head_sha": "a".repeat(40),
+                                "merge_commit": landed,
+                            },
+                            "pull_request": 7392,
+                            "candidate": "b".repeat(40),
+                        })
+                        .to_string(),
+                    ),
+                    from_status: None,
+                    to_status: Some(TaskStatus::Done),
+                    operation_id: None,
+                    decision: None,
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let history = runtime.get_task_history(task_id).unwrap();
+    assert!(
+        history.iter().any(|entry| {
+            entry.event == "landing_completed"
+                && entry.by == "owner-landing"
+                && entry
+                    .note
+                    .as_deref()
+                    .is_some_and(|note| note.contains(landed))
+        }),
+        "owner landing note recorded: {history:?}"
+    );
+    assert!(
+        runtime.observe_task_delivery(task_id, None).is_err(),
+        "a follower delivery has no run in the owner store"
+    );
+}
 /// Record a successful delivery run that committed and merged `task_id` at
 /// `landed`, the way the host pipeline checkpoints it.
 fn record_landing(runtime: &OrbitRuntime, task_id: &str, base: &str, landed: &str) {
@@ -2267,6 +2708,108 @@ fn record_landing(runtime: &OrbitRuntime, task_id: &str, base: &str, landed: &st
         state.record_pipeline_output(step_id, output);
     }
     runtime.write_run_state(&run.run_id, &state).unwrap();
+}
+/// A done sweep repair that a pull follower delivered has no delivery run in
+/// the owner's store. The owner's `landing_completed` note still names the
+/// merge commit, so a later failure with the same compiler cause, a different
+/// failure key, and an older tested commit is held [ORB-20664]. A checkout
+/// that already contains the landing is still filed.
+#[test]
+fn ci_failure_predating_a_follower_delivered_landing_is_held_not_refiled() {
+    if !isolated("ci_failure_predating_a_follower_delivered_landing_is_held_not_refiled") {
+        return;
+    }
+    use orbit_types::task::TaskStatus;
+    // The compiler failure key includes the tested commit, so a late red run
+    // on an older commit than the one the repair was filed for has a different
+    // key and matches only through the compiler cause digest.
+    let (_root, runtime, commits) = operator_commits("", 4);
+    let (filed_at, tested, landed, after) = (&commits[0], &commits[1], &commits[2], &commits[3]);
+    let log = compiler_log(
+        "E0425",
+        "cannot find value `probe_timeout` in this scope",
+        "crates/orbit-cli/tests/workspace/init_human_crew.rs",
+        207,
+        9,
+    );
+    let original = file(&runtime, vec![failure(&log, 0, filed_at)]);
+    assert_eq!(original["filed_count"], 1, "{original}");
+    let repair = original["filed"][0]["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let repair_key = original["filed"][0]["failure_key"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let repair_task = runtime.get_task(&repair).unwrap();
+    assert!(
+        repair_task
+            .description
+            .contains("- Compiler cause identity: `"),
+        "{}",
+        repair_task.description
+    );
+    assert_eq!(repair_task.status, TaskStatus::Proposed);
+    record_owner_landing(&runtime, &repair, landed);
+    assert_eq!(runtime.get_task(&repair).unwrap().status, TaskStatus::Done);
+    let mut stale = failure(&log, 1, tested);
+    stale["failed_jobs"][0]["name"] = json!("macOS Platform");
+    let held = file(&runtime, vec![stale]);
+    assert_eq!(held["filed_count"], 0, "{held}");
+    assert_eq!(held["skipped_existing"], json!([]), "{held}");
+    assert_eq!(held["withheld"], json!([]), "{held}");
+    let pending = &held["pending_supersession"][0];
+    assert_eq!(
+        pending["reason"], "repaired_by_descendant_landing",
+        "{held}"
+    );
+    assert_eq!(pending["task_id"], repair.as_str());
+    assert_eq!(pending["landed_commit"], landed.as_str());
+    assert_eq!(pending["tested_commit"], tested.as_str());
+    assert_ne!(pending["failure_key"], repair_key.as_str(), "{held}");
+    let mut reproduced = failure(&log, 2, after);
+    reproduced["failed_jobs"][0]["name"] = json!("macOS Platform");
+    let filed = file(&runtime, vec![reproduced]);
+    assert_eq!(filed["filed_count"], 1, "{filed}");
+    assert_eq!(filed["pending_supersession"], json!([]), "{filed}");
+}
+/// An operator cover completed by the same owner landing, with no local
+/// delivery run, holds until the failing checkout contains that commit.
+#[test]
+fn ci_operator_cover_resolves_a_follower_delivered_landing() {
+    if !isolated("ci_operator_cover_resolves_a_follower_delivered_landing") {
+        return;
+    }
+    use orbit_types::task::TaskStatus;
+    let (_root, runtime, commits) = operator_fixture("");
+    let log = "error: store GC invariant broken";
+    let original = file(&runtime, vec![failure(log, 0, &commits[0])]);
+    let owner = original["filed"][0]["task_id"].as_str().unwrap();
+    let cover = add_titled(&runtime, "Follower hand fix");
+    archive_owner(&runtime, owner, TaskStatus::Archived, Some(&cover.id));
+    record_owner_landing(&runtime, &cover.id, &commits[1]);
+    let held = file(&runtime, vec![failure(log, 1, &commits[0])]);
+    assert_eq!(held["filed_count"], 0, "{held}");
+    assert_eq!(held["withheld"][0]["outcome"], "covered", "{held}");
+    assert_eq!(held["withheld"][0]["reason"], "awaiting_cover_commit");
+    assert_eq!(held["withheld"][0]["owner"], owner);
+    assert_eq!(held["withheld"][0]["cover"], cover.id);
+    assert_eq!(held["withheld"][0]["landed_commit"], commits[1]);
+    let reproduced = file(&runtime, vec![failure(log, 2, &commits[2])]);
+    assert_eq!(reproduced["filed_count"], 1, "{reproduced}");
+    assert_eq!(
+        reproduced["filed"][0]["failed_covers"][0]["cover"],
+        cover.id
+    );
+    assert_eq!(
+        reproduced["filed"][0]["failed_covers"][0]["reason"],
+        "cover_did_not_hold"
+    );
+    assert_eq!(
+        reproduced["filed"][0]["failed_covers"][0]["landed_commit"],
+        commits[1]
+    );
 }
 /// A red run that completes after its repair landed is not filed again
 /// [ORB-14422]: the done repair with the same normalized signature landed at a
@@ -2531,4 +3074,61 @@ fn ci_failure_branch_routing_ignores_a_sibling_token_in_an_external_ref() {
     let artifact = runtime.get_task_artifact(&owner.id, path).unwrap().unwrap();
     let retained: Value = serde_json::from_slice(&artifact.content).unwrap();
     assert_eq!(retained["failure"], pr);
+}
+
+#[test]
+fn ci_filing_at_workspace_scale_files_once_and_repeats_without_duplicates() {
+    let (_root, runtime) = bare_runtime();
+    // A workspace far larger than the failure set: every cluster's
+    // coverage assessment scans these tasks, so this is the shape whose
+    // per-cluster re-hydration made filing cost grow with cluster count.
+    for i in 0..300 {
+        let task = add_titled(&runtime, &format!("Unrelated backlog task {i}"));
+        if i % 25 == 0 {
+            runtime
+                .update_task_as_human(
+                    &task.id,
+                    TaskUpdateParams {
+                        comment: Some(format!("Unrelated progress note {i}.")),
+                        ..Default::default()
+                    },
+                    "human:fixture".into(),
+                )
+                .unwrap();
+        }
+    }
+    let checkout = "b".repeat(40);
+    let runs: Vec<Value> = (0..3)
+        .map(|i| {
+            failure(
+                &format!("error: scale probe failure {i} in subsystem{i}"),
+                i,
+                &checkout,
+            )
+        })
+        .collect();
+    let first = file(&runtime, runs.clone());
+    assert_eq!(first["clusters"], 3, "{first}");
+    assert_eq!(first["filed_count"], 3, "{first}");
+    // Identical evidence replayed: no second task per failure, and the
+    // already-filed owners are reported as the covering tasks.
+    let repeated = file(&runtime, runs);
+    assert_eq!(repeated["filed_count"], 0, "{repeated}");
+    assert_eq!(
+        repeated["skipped_existing"].as_array().unwrap().len(),
+        3,
+        "{repeated}"
+    );
+    let filed_ids: Vec<&str> = first["filed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|entry| entry["task_id"].as_str())
+        .collect();
+    for entry in repeated["skipped_existing"].as_array().unwrap() {
+        assert!(
+            filed_ids.contains(&entry["task_id"].as_str().unwrap()),
+            "{repeated}"
+        );
+    }
 }

@@ -4,8 +4,11 @@
 //! caches only what never changes on a host (`machine_id`, `task_prefix`) plus
 //! the operator's name and SSH target; reachability, version, protocol and
 //! workspaces are read live from the host whenever a command asks, and never
-//! written back. The CLI and the dashboard both call these operations, so
-//! validation, migration and writes have one implementation.
+//! written back. The local workspace projection reuses unchanged registry bytes
+//! and machine validation context in one bounded process-local slot; every read
+//! still checks path safety, readability and current contents. The CLI and the
+//! dashboard both call these operations, so
+//! validation and writes have one implementation.
 
 mod dependents;
 mod doctor;
@@ -34,21 +37,21 @@ pub use route::{
 use dependents::{host_dependents, replica_owners};
 use list::require_local;
 use probe::{in_parallel, local_binary_version};
-use remote::{RemoteTarget, remote_row, remote_targets, remote_workspace, skew_fields};
+use remote::{remote_row, remote_workspace, skew_fields};
 
 /// One host as `orbit host list` and `show` report it.
 #[derive(Debug, Clone, Serialize)]
 pub struct HostRow {
-    /// The host name. A legacy row has none, so its SSH target stands in.
+    /// The host name.
     pub name: String,
     pub machine_id: String,
     /// `None` for the local host, which is never reached over SSH.
     pub ssh: Option<String>,
-    /// Unknown only for a legacy row whose host did not report one.
+    /// The task prefix, retained as optional for JSON compatibility.
     pub task_prefix: Option<String>,
     /// This installation, read in-process.
     pub local: bool,
-    /// Read from the legacy destinations file, not the host file.
+    /// Retained for JSON compatibility; always false.
     pub legacy: bool,
     /// Whether the live probe answered; `None` when no probe ran.
     pub reachable: Option<bool>,
@@ -90,7 +93,7 @@ pub struct HostWorkspace {
 #[derive(Debug, Clone, Serialize)]
 pub struct HostList {
     pub host_file: PathBuf,
-    /// Rows were read from the legacy destinations file.
+    /// Retained for JSON compatibility; always false.
     pub legacy: bool,
     /// The local host first, then every remote sorted by name.
     pub hosts: Vec<HostRow>,

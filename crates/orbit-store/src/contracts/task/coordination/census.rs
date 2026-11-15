@@ -12,8 +12,8 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use orbit_types::task::{
-    AdmissionAffinityReach, DispatchAffinity, ExecutorOsLimit, HostOs, NEUTRAL_PRESSURE_MILLI,
-    Task, TaskOsRequirement,
+    AdmissionAffinityReach, CrewSource, DispatchAffinity, ExecutorOsLimit, HostOs,
+    NEUTRAL_PRESSURE_MILLI, Task, TaskOsRequirement,
 };
 use serde::{Deserialize, Serialize};
 
@@ -61,9 +61,25 @@ impl ExecutorCapability {
     /// crew.
     #[must_use]
     pub fn runs(&self, task: &Task, limits: &BTreeMap<String, ExecutorOsLimit>) -> bool {
+        self.runs_with_tag_label_requirements(
+            task,
+            limits,
+            &orbit_types::task::TagLabelRequirements::default(),
+        )
+    }
+
+    /// Whether this executor can run the task under the owner's tag policy.
+    #[must_use]
+    fn runs_with_tag_label_requirements(
+        &self,
+        task: &Task,
+        limits: &BTreeMap<String, ExecutorOsLimit>,
+        requirements: &orbit_types::task::TagLabelRequirements,
+    ) -> bool {
         os_unavailable(self.os, task, limits).is_none()
             && browser_kit_unavailable(self.browser_kit, task).is_none()
-            && labels_unavailable(self.os, &self.labels, task).is_none()
+            && labels_unavailable_with_tag_requirements(self.os, &self.labels, task, requirements)
+                .is_none()
             && self
                 .crews
                 .as_ref()
@@ -103,15 +119,23 @@ pub fn browser_kit_unavailable(browser_kit: bool, task: &Task) -> Option<String>
     })
 }
 
-/// Why `task`'s `requires_labels` exclude an executor on `os` declaring
-/// `labels`, or `None` when it carries every one.
+/// Why `task`'s labels, under the owner's tag policy `requirements` (explicit
+/// `requires_labels` plus every matching tag's mapping), exclude an executor
+/// on `os` declaring `labels`, or `None` when it carries every one. Every
+/// reader that judges an executor's labels passes the owner's policy here.
 #[must_use]
-pub fn labels_unavailable(os: Option<HostOs>, labels: &[String], task: &Task) -> Option<String> {
-    if task.requires_labels.is_empty() {
+pub fn labels_unavailable_with_tag_requirements(
+    os: Option<HostOs>,
+    labels: &[String],
+    task: &Task,
+    requirements: &orbit_types::task::TagLabelRequirements,
+) -> Option<String> {
+    let required = requirements.required_labels(&task.tags, &task.requires_labels);
+    if required.is_empty() {
         return None;
     }
     orbit_types::task::host_labels_unavailable(
-        &task.requires_labels,
+        &required,
         &orbit_types::task::effective_host_labels(labels, os),
     )
 }
@@ -142,6 +166,7 @@ impl ExecutorCensusEntry {
 pub struct ExecutorCensus {
     requester: String,
     executors: BTreeMap<String, ExecutorCapability>,
+    tag_label_requirements: orbit_types::task::TagLabelRequirements,
 }
 
 /// How a census classes the admitted task, as the receipt records it.
@@ -162,7 +187,7 @@ pub enum AdmissionAffinityClass {
 pub struct AdmissionAffinity {
     pub class: AdmissionAffinityClass,
     pub eligible_executors: usize,
-    /// The `workflow.admission_affinity` reach the order used.
+    /// The affinity reach the order used.
     pub reach: AdmissionAffinityReach,
     /// Machine ids of the live executors in the census, the requester
     /// among them.
@@ -187,7 +212,18 @@ impl ExecutorCensus {
         Self {
             requester: requester.to_string(),
             executors,
+            tag_label_requirements: Default::default(),
         }
+    }
+
+    /// Apply the owner's capability policy to every affinity calculation.
+    #[must_use]
+    pub fn with_tag_label_requirements(
+        mut self,
+        requirements: orbit_types::task::TagLabelRequirements,
+    ) -> Self {
+        self.tag_label_requirements = requirements;
+        self
     }
 
     /// Machine ids of the live executors, in order.
@@ -201,7 +237,11 @@ impl ExecutorCensus {
         let mut eligible = 0;
         let mut requester = false;
         for (machine, capability) in &self.executors {
-            if capability.runs(task, limits) {
+            if capability.runs_with_tag_label_requirements(
+                task,
+                limits,
+                &self.tag_label_requirements,
+            ) {
                 eligible += 1;
                 requester |= *machine == self.requester;
             }
@@ -255,11 +295,9 @@ impl ExecutorCensus {
         else {
             return NEUTRAL_PRESSURE_MILLI;
         };
-        let key = match task.crew_source.as_deref() {
-            Some(source) if source.starts_with("pool:") => {
-                source.strip_prefix("pool:").map(ToOwned::to_owned)
-            }
-            Some(source) if source.starts_with("purpose:") || source.starts_with("type:") => {
+        let key = match &task.crew_source {
+            Some(CrewSource::Pool(tier)) => Some(tier.as_str().to_string()),
+            Some(source @ (CrewSource::Purpose(_) | CrewSource::Type { .. })) => {
                 Some(source.to_string())
             }
             _ => task

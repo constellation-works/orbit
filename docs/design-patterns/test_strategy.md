@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Boundary-First Testing: integration, golden and e2e by default; unit tests by exception"
-last_validated: 2026-10-27
+last_validated: 2026-11-14
 ---
 # Boundary-First Testing
 
@@ -9,9 +9,9 @@ Test behaviour where callers meet it. A new test is written when a bug or defect
 
 Gate time is a finite budget. Optimize the suite for the critical failures it can detect and the time it costs, rather than its test count.
 
-## Quality and the 10-minute budget
+## Quality and the 400-second budget
 
-The complete **Check / Clippy / Test** CI job must finish in **at most 10 minutes (600 seconds) of elapsed wall time at p90 over PR runs**. Measure from the job's start to completion, including setup, compilation, checks, linting, tests and required capability checks. Report queue wait separately: the wait before the Check job starts, and the part of its elapsed time the awaited jobs spent queued after it started. The workspace tests run in separate jobs (a test build and parallel nextest shards, [DEVELOPMENT.md](../DEVELOPMENT.md#hosted-ci)) that the Check job waits for, so its elapsed time covers them, including their runners' queue wait. Its `ci-await:` lines give each awaited job's start and completion. A fast filtered run, a smaller test count or a sum of parallel testcase durations does not establish that the full job meets this budget. This is an acceptance requirement; documenting it does not claim the current suite already meets it.
+The complete **Check / Clippy / Test** CI job must finish in **at most 400 seconds of elapsed wall time at p90 over PR runs**. Measure from the job's start to completion, including setup, compilation, checks, linting, tests and required capability checks. Report queue wait separately: the wait before the Check job starts, and the part of its elapsed time the awaited jobs spent queued after it started. The workspace tests run in separate jobs (a test build and parallel nextest shards, [DEVELOPMENT.md](../DEVELOPMENT.md#hosted-ci)) that the Check job waits for, so its elapsed time covers them, including their runners' queue wait. Its `ci-await:` lines give each awaited job's start and completion. A pull request run tests only the affected crates and the always-run security and recovery crates ([PR test selection](../DEVELOPMENT.md#pr-test-selection)); the `agent-main` push run after the merge tests every crate. A local filtered run, a smaller test count or a sum of parallel testcase durations does not establish that the hosted job meets this budget. This is an acceptance requirement; documenting it does not claim the current suite already meets it.
 
 Every test must protect a named observable guarantee. Prioritize severity and likelihood of failure, the uniqueness of the test's coverage, and its diagnostic value relative to runtime. Prove behavior through the public boundary callers use, retain meaningful negative cases, and use deterministic fault injection where a failure or race cannot be reached reliably otherwise. The current agent guide governs admission of new tests; the historical unit-test admission records below do not authorize new tests of private implementation functions.
 
@@ -67,7 +67,7 @@ The nextest phase (in hosted CI, each shard job) runs on a 4-vCPU runner with ev
 `.config/nextest.toml` profile `ci` sets `test-threads` to 6 and `retries` to 0. Six is two extra slots on the 4-vCPU runner: enough to overlap that wait-bound fraction, and short of doubling the CPU-bound tests. The profile inherits the default profile, so the group caps stay `stateful-runtime` 1, `task-contracts` 4, and `mcp-contracts` 8. `scripts/ci-guardrails.sh`, the hosted nextest shards and the Linux sandbox gate select it with `--profile ci`. A local run that does not pass `--profile ci` keeps the default profile, whose thread count is the logical CPU count. `NEXTEST_TEST_THREADS`, including the value `scripts/build-budget.py` exports from the host `test-threads` file, still overrides the profile.
 
 The CI profile also gives priority 100 to the measured long tests, initially
-six: `task_delivery::source_repair::published_completion_scenarios`,
+six: the `task_delivery::source_repair::published_completion_scenarios*` family (its eight carriers, matched by prefix),
 `pr_landing::validation_repairs_and_logs`,
 `pr_landing::ci_rerun::owner_retry_preserves_read_only_and_independent_candidate_routes`,
 `public_tool_surface::github_log_goldens::every_selected_window_hides_credential_fragments`,
@@ -94,7 +94,7 @@ changes order only, preserving count-partition membership, ignored applicability
 zero retries, process isolation and all inherited group limits. No case or
 assertion is removed. A complete local shard comparison measures scheduling;
 only complete candidate hosted jobs and the subsequent PR distribution can
-establish whether the 600-second p90 requirement is restored.
+establish whether the p90 requirement then in force (600 s; 400 s since the ninth pass) is restored.
 
 The controlled 2026-10-29 comparison used independent extracts and targets at
 base `08bd9305eac9`, Rust 1.98.1, nextest 0.9.136, four Cargo jobs and six
@@ -122,7 +122,7 @@ build flags: no compile saving is attributed to this change. The 64-second
 critical-path goal is not demonstrated, and candidate hosted jobs and the
 latest-20 PR distribution remain outstanding through normal publication.
 
-`scripts/ci-guardrails.sh` arranges the full run around that phase. After formatting, the exclusive self-tests start one at a time at normal priority in their own lane. The repository-guard pool and the workflow test build run beside them in Linux's idle scheduling class, and both the pool and the lane join before any test runs. `test-ci-download-verified.py`, which waits out fixed delays for nearly all of its wall time, starts beside the pool outside its window and joins with it. nextest then runs the binaries listed from the folded test build (`--binaries-metadata`) without invoking Cargo. Production Clippy, doctests and documentation run beside it in Linux's idle scheduling class, on CPU time the tests leave idle, and join before the supply-chain gate. Documentation runs under production Clippy's lint environment, so it reuses that pass's check of the workspace and only runs rustdoc. The Check job's dev and test profiles carry no debuginfo (`CARGO_PROFILE_DEV_DEBUG` and `CARGO_PROFILE_TEST_DEBUG` are `0` in `ci.yml`); coverage keeps line tables in its own workflow. The `cpu-util:` line samples the whole host, so it includes that idle-class work. Every command that compiles workspace members after the folded build runs through `scripts/with-test-build-lint.sh`. Cargo fingerprints `RUSTC_WORKSPACE_WRAPPER` and `CLIPPY_ARGS`, so a nextest run without them recompiled every workspace member.
+`scripts/ci-guardrails.sh` arranges the full run around that phase. After formatting, the exclusive self-tests start one at a time at normal priority in their own lane. The repository-guard pool and the workflow test build run beside them in Linux's idle scheduling class, and both the pool and the lane join before any test runs. `test-ci-download-verified.py`, which waits out fixed delays for nearly all of its wall time, starts beside the pool outside its window and joins with it. nextest then runs the binaries listed from the folded test build (`--binaries-metadata`) without invoking Cargo. Production Clippy and documentation run beside it in Linux's idle scheduling class, on CPU time the tests leave idle, and join before the supply-chain gate. Workspace doctests are disabled (`[lib] doctest = false`), so no doctest phase runs; `scripts/check-doctest-fences.sh` instead fails any doc fence that rustdoc would run unless it is tagged `ignore`. Documentation runs under production Clippy's lint environment, so it reuses that pass's check of the workspace and only runs rustdoc. The Check job's dev and test profiles carry no debuginfo (`CARGO_PROFILE_DEV_DEBUG` and `CARGO_PROFILE_TEST_DEBUG` are `0` in `ci.yml`); coverage keeps line tables in its own workflow. The `cpu-util:` line samples the whole host, so it includes that idle-class work. Every command that compiles workspace members after the folded build runs through `scripts/with-test-build-lint.sh`. Cargo fingerprints `RUSTC_WORKSPACE_WRAPPER` and `CLIPPY_ARGS`, so a nextest run without them recompiled every workspace member.
 
 Timing evidence from 2026-10-17, in wall seconds from the `ci-guardrails-phase:` lines. The hosted column is a slow 4-vCPU runner (run 39042835730; Check job 1261 s, of which guardrails took 1214 s). The local columns ran the guardrails before and after this layout on one host pinned to four cores (`taskset -c 0-3`, `CARGO_INCREMENTAL=0`, after a source change to `orbit-common`), so they compare layouts rather than predict hosted time. The after column gives both samples.
 
@@ -250,7 +250,640 @@ Locally (one real 704 MB archive from `ci-guardrails.sh --test-archive` at the s
 
 Applied to run 41023394003 by scaling its slowest shard's nextest by the local partition-sum ratio (600.7/789.3), the shard chain projects from 647 s to about 570 s and the Check job from 653 s to about 575 s, with the build job's own partition ending earlier still (upload at about 296 s + 56 s of guard, doctests and setup + about 205 s of nextest at the same scale). This is a projection from one duration set, not a measurement: per-test durations came from three sequential local runs on a loaded shared host, individual long tests varied by up to 40% between runs, and a slow test-build runner now also runs its partition slowly, where before it only delayed the upload. Local pinned walls for the four partitions (133.3, 101.1, 110.7, 98.7 s) could not confirm the projection against host noise. The after column is owed by the pull request and the following PR runs: re-run `scripts/ci-p90.py` over the latest 20 completed PR workflow runs and report executed, skipped and cancelled counts with the nearest-rank p90; ten PR runs must show p90 at most 600 s. Do not read a single candidate run, fast or slow, as the restored distribution. No test was retired, consolidated, skipped, retried or weakened, and the shard-1 sandbox gate, the partition guard and digest verification are unchanged.
 
+An eighth pass on 2026-10-31 repaired a PR p90 of 664 s after the seventh pass landed. The latest 20 completed PR workflow runs (41158858782 back to 41140505053) had 18 executed Check jobs (15 succeeded, 3 failed) and 2 skipped, with no cancellations. Sorted, the executed durations were 469, 489, 491, 496, 526, 534, 539, 547, 557, 567, 579, 587, 617, 629, 642, 646, 664 and 693 s (nearest-rank p90 rank 17 = 664 s, median 562 s, six over 600 s). Every job log of those 18 runs was read for step timings. The Check and test jobs started within 10 s of each other. The Test build now finished last in 11 of the 18 runs, and in every cache-hit run over 600 s. The shards did so in 4 runs and the Check job's own guardrails in 3. Medians were: folded build 244 s (142–277 s on a cache hit), upload done at 292 s, then 56 s of non-test work before the build's own partition started (partition guard 32 s, doctests 11 s, ripgrep, uv and Bubblewrap preparation about 11 s), then its nextest at 206 s (119–277 s). After the upload a shard spent 19 s before its nextest (await, a four-stream download and the unpack), and its nextest took a median 201, 205 and 165 s for shards 1, 2 and 3. The build's partition was not heavier than a shard's: it finished last because its runner spent about 37 s more on non-test work after the upload. The partition guard spent 28 of its 32 s extracting the 819 MB archive again for each of its five listings (5.5 s each in run 41144357359). Two runs missed the Rust cache (`cache_hit=false`), 41155880316 (693 s) and 41155508765 (629 s). Both tested heads came right after the 0.40.0 version bump changed the root `Cargo.toml`, and with it the rust-cache `prefix-key`. In those runs the folded build took 354 s and the Check job's guardrails took 576 s respectively. Two changes shorten the binding path, with no change to what runs:
+
+- The partition guard extracts the archive once and lists all six selections from that extraction's `--binaries-metadata` and `--cargo-metadata`, as the shard-1 sandbox gate does. The listings still execute the archive's own test binaries, and a failed extraction fails the guard.
+- `NEXTEST_PARTITIONS` is 5. A new `Test extra partition` job runs the shard steps on a fourth runner with partition 5, so each of the five test runners takes a fifth of the list instead of a quarter. It is not a `Test shard k/N` job, so `NEXTEST_SHARDS`, the shard names and the agent-main ruleset are unchanged. The Check job awaits it like a shard, so its failure fails the required check. The sandbox gate still runs only in shard 1. A PR run uses one more runner, and nothing is added to its critical path except the runner's own queue wait. The test jobs started with the Check job in this cohort.
+
+For each run, the projection replaced the observed binding end with the latest of: each shard's end minus a fifth of its nextest time; the build's end minus the guard saving (32 s down to about 11 s) and a fifth of its nextest time; a fourth runner starting like the slowest shard, with the run's mean shard overhead and 0.8 times the slowest partition's nextest time; and the Check guardrails' end. It projects the cohort's p90 from 664 to 629 s (median 562 to 525 s). Over the 16 cache-hit runs it projects p90 from 646 to 570 s, and the slowest from 664 to 588 s. The two cache-miss runs still bind the cohort (629 s on the Check job's own guardrails, 642 s on a shard), so the next lever is the cold rust-cache after a root `Cargo.toml` change, which this pass does not change ([compiler-cache runbook](../runbooks/compiler-cache.md#ordinary-linux-ci)). This is a projection from one cohort's step timings, not a measurement. The after column is owed by the pull request and the following PR runs: `scripts/ci-p90.py` over the latest 20 completed PR workflow runs, with executed, skipped and cancelled counts and the nearest-rank p90. Ten PR runs must show p90 at most 600 s. No test was retired, consolidated, skipped, retried or weakened. The shard-1 sandbox gate, the partition guard's exact-once proof and digest verification are unchanged.
+
+A ninth pass on 2026-10-31 (ORB-20394) lowered the budget from 600 to 400 seconds and restructured the gate to reach it, without retiring a test. Before: over the 2553 executed (successful or failed) PR Check jobs from 2026-10-01 to 2026-10-31, p50 was 491 s and nearest-rank p90 814 s. Over the 377 successful ones from 2026-10-28 12:19 to 2026-10-31 04:49 UTC, p50 was 559 s and p90 674 s (push runs: 603 and 669 s). Step timings of six of those runs (41169473523 to 41169784003) located two lanes of equal length. The Check job's `Run CI guardrails` took 371–460 s, set by the guard pool and exclusive lane (374–445 s: `test-qa-full-sweep.py` 191–227 s, `test-check-dependency-direction.py` 80–99 s, `test-ci-download-verified.py` 87–91 s) beside production Clippy (98–123 s) and documentation (32–40 s). The test lane was the folded build (207–271 s), upload, then each partition's nextest (121–209 s). In a 40-run sample of `Change scope`, 18 PRs ran in full only because they touched a path outside `crates/` (9 under `plugin/skills/`, 4 `scripts/qa-full-sweep-inventory.json`), and every `affected:` run still tested its feature anchors (`orbit-core`, `orbit-mcp`, `orbit-web`), so an `orbit-cli`-only PR ran about 72% of the suite's test time. Changes:
+
+- Guardrails moved to a `CI guardrails` job (`ci-guardrails.sh --guards`) on its own runner beside `Test build`; the Check job runs formatting, production Clippy, documentation and the supply-chain gate, and awaits it with the test jobs. On a pull request the `scripts/test-*` self-tests run only when their inputs changed, by the `make ci-fast` rule; the repository guards and the QA sweep's inventory check always run. Push runs keep every self-test.
+- Every PR partition runs only its `affected:` crates' tests (a nextest package filter that the partition guard also lists); feature anchors are built, not run. Every PR adds the always-run set (`ALWAYS_RUN`: `orbit-exec`, `orbit-policy`, `orbit-auth`, `orbit-store`), so shard 1's Linux sandbox gate runs on every PR. In the 30-day failure record, `orbit-store` tests dominate the `agent-main` breakages and every migration failure is in `orbit-store`. The selector was replayed over the 171 PR failures heuristically classed as catches (failing on a branch, later fixed there), using each head's three-dot diff from `agent-main`. 88 came from heads that still run in full, and 79 were in a selected crate. The other 4 were `orbit-mcp`'s `task_route` boundary test on heads whose own diff changed only skill Markdown or `orbit-store`. That test reads only the compiled `orbit-tools` registry, so those failures came from a red base, not the diff, and the push run catches them. A governed tool added to `orbit-tools` or `orbit-common` still selects `orbit-mcp` and `orbit-cli` (`test-pr-state-workflows.py` asserts the `orbit-tools` case).
+- `FILE_READERS` declares repository files read by Cargo tests, including the sweep and npm validator (`orbit-core`), affected-test selector (`orbit-core`), CI await helper and workflow YAML (`orbit-engine`), release-readiness adapter and example (`orbit-engine`), setup skill mirror and auto-task design catalog (`orbit-core`), cross-crate fixtures, and executor/job/activity/auto-task assets. The table also covers the vendored dashboard scripts (`orbit-mcp`), plugin hooks, registry metadata and configuration reference (`orbit-cli`). The sweep inventory has no Cargo reader and is checked by guardrail self-tests. A path outside `crates/` that `FILE_READERS` does not declare still runs the full suite, as does any change to a workspace manifest, the lock file, the toolchain, `.cargo/` or `.config/`.
+
+Required check names are unchanged, and `agent-main` push runs test every crate, so a defect a narrowed PR run misses fails the push run and reaches the `ci_failure_sweep` as a repair task. After, measured on hosted runs:
+
+| Run | Scope | Check / Clippy / Test | Test build | Slowest shard | CI guardrails |
+|---|---|---|---|---|---|
+| 41172338562, leaf-crate PR (one `orbit-cli` line, stacked on this change) | `affected:` `orbit-cli` + always-run | **349 s** | 342 s (build 196 s, own partition 68 s) | 333 s (nextest 61 s) | 106 s (guards 61 s) |
+| 41172682236, this change's own PR (touches `.github/` and `scripts/`) | `full`, every self-test | 445 s | 359 s (build 161 s, own partition 129 s) | 439 s | 333 s (guards 291 s) |
+
+In both runs the Check job's own checks (73–100 s) ended long before its wait, so the test lane binds. A leaf-crate PR now finishes in 349 s, against 520–560 s before (the leaf runs in the before cohort were `affected:` runs that still tested their feature anchors). A full-mode PR, one that changes `.github/`, `scripts/`, an undeclared non-crate path, a manifest or the lock file, still takes about 440 s. The guardrails no longer bind it (333 s beside a 439 s shard), but its full nextest partitions do. So the 400 s p90 holds only while full-mode runs stay under a tenth of PR runs. If they don't, the next lever is the full suite's partition time, not the guardrails. The p90 over the PR population is owed by the following runs: `scripts/ci-p90.py` (now defaulting to 400 s) over the latest 20 completed PR runs. No test was retired, consolidated, skipped, retried or weakened.
+
+A tenth pass (ORB-20920) shortens two parts of the path the 2026-11-01 watch measured at nearest-rank p90 578 s over 16 executed PR Check jobs (budget 400 s). No test was retired, and the hosted p90 after the change is still the operator measurement below.
+
+The guard pool reaped in launch order, so a slow early member kept the slots of members that had already finished. On run 41294900107 (CI guardrails job 124813628606) the width-4 pool's own durations replay to 487.5 s, matching the hosted phase wall of 488 s. `test-qa-full-sweep.py` was 241 s of that, and the exclusive lane summed to 120 s beside it. Replaying the same durations with free-slot admission, still at width 4, finishes the pool when the sweep finishes, at 241 s. The waiting download fixture (83 s) and the exclusive lane stay overlapped with that. Output is still printed in launch order, and the first failure in that order is still the pool's status. Required check names are unchanged.
+
+Some of those full runs were full only because a path outside `crates/` was absent from `FILE_READERS`. Since the ux-rules routine and its filer were removed [ORB-22844], the UX rules are a hand-run QA tool: `scripts/ux-rules/ui/`, `scripts/ux-rules/cli/`, `scripts/ux-rules/tests/`, `scripts/ux-rules/README.md`, `scripts/ux-rules/lib/ui-context.mjs`, `scripts/ux-rules/lib/cli-context.mjs`, `scripts/ux-rules/lib/manifest.mjs` have no Cargo reader. No CI job runs the Node tests under `scripts/ux-rules/tests/`, so those paths select no crate and the PR runs the always-run set. `scripts/ux-rules/run.mjs` stays undeclared, so a change to it runs the full suite. There is no parent `scripts/ux-rules/` prefix, because that would declare `run.mjs` as well.
+
+An `orbit-core` selection is the eight-crate set measured at 545 s on run 41289004379. A full partition on this watch was 560–580 s, with list-build 273–294 s and nextest about 207–222 s on four cores, so archive-ready time plus nextest stays over 400 s for a full run and for that eight-crate set. The always-run-only class is the leaf measured at 341–404 s, and a scripts-only PR still runs the guardrail self-tests. The hosted sample after merge is `scripts/ci-p90.py` over the latest 20 completed `pull_request` `ci.yml` runs at a 400-second budget, with executed, skipped, cancelled, missing, failures and queue wait recorded separately. A local filtered timing does not establish that p90.
+
+An eleventh pass (ORB-21420) follows the 2026-11-02 watch: 13 executed PR Check jobs in the latest 20 completed PR runs (7 skipped, none cancelled), nearest-rank p90 627 s, median 532 s, min 403 s, every one over 400 s. The test lane bound them: the folded build's list-build (165–292 s) and then the slowest partition's nextest at 93–97% CPU busy. Nine ran in full, five of those only because they touched `scripts/unit-test-baseline.json` (4) or `plugin/evals/README.md` (1). It makes two changes, with no test retired, skipped, retried or weakened:
+
+- A sixth count partition runs on its own runner (`Test partition 6`, the shard steps; `NEXTEST_PARTITIONS` 6), and the Check job awaits it. Each partition's summed per-test time divided by profile `ci`'s six threads matched its nextest Summary time within 5 s on the full run 41414742939 (partition 2: 1406 test-seconds, Summary 236 s), and the count model reproduced 3553 of the 3576 test assignments its shard logs show. Replaying those logged durations at six partitions moves the slowest partition from 234 to 164 s on that run, and from 251 to 183 s on full run 41417766911. Seven partitions gain at most 3 s more, because single tests of 130 s or more set the floor. nextest's `slice:` partitioning was replayed too and rejected: it beat `count:` on the first run (197 against 234 s) and lost on the second (267 against 251 s). The binding path after the build's upload is about 70 s shorter on full runs. The build itself is unchanged, so a full run still exceeds 400 s.
+- `FILE_READERS` declares `scripts/unit-test-baseline.json` (read only by the always-run `unit-test-inventory.py --check` guard) and `plugin/evals/` (the `claude plugin eval` suite, read by no Cargo test, guard or CI job) with no Cargo reader. A pull request that changes only these runs the always-run set, and one that also changes crates runs those crates' selection. `scripts/test-pr-state-workflows.py` asserts both.
+
+Required check names, the always-run set, the partition guard's exact-once proof, the shard-1 sandbox gate and full `agent-main` push runs are unchanged. The sixth runner adds about one runner's time per run, and queueing for it falls inside the Check job's elapsed time. These figures are replays of one cohort's logs, not a hosted measurement. The hosted after column is the operator's `scripts/ci-p90.py` run over the latest 20 completed `pull_request` `ci.yml` runs at 400 s, reporting executed, skipped, cancelled and missing counts, failures and queue wait separately, from runs on this workflow revision.
+
+A twelfth pass (ORB-21846) follows the 2026-11-03 watch: 17 executed PR Check jobs in the latest 20 completed PR runs (3 skipped, none cancelled), nearest-rank p90 581 s, median 498 s, min 405 s, every one over 400 s. `Test partition 2` finished last in 9 of them. Its logs show one test that does not scale with CPU: `orbit-cli::process job_resume_detached::unix::worker_command_contracts_2` took 130.7–131.9 s in every examined run (41618439254, 41611947898, 41604497743, 41610521398, 41605212372), against 8.03 s in the fourth pass's table above. In 41611947898 it was partition 2's last test, so the partition ran at 48.9% CPU busy for a 146.5 s Summary; in 41618439254 and 41605212372 it ended 4–7 s before the Summary. Locally it took 128 s, and a process trace showed 120 s of it in one wait: its row `resume_wait_exits_nonzero_for_a_failed_detached_run` edited the catalog job to an unknown action, but the resumed run re-enters the source run's gate step, so nothing failed until `FIXTURE_STEP_DEADLINE` (120 s) killed the unanswered step. The row now holds the gate and fails it (`WorkflowGate::fail`, a nonzero waiter exit), so the run fails at once. It still asserts that `job resume --wait` returns only after execution, exits nonzero, and reports and stores the run as `failed`. Locally the test takes 7.6 s. No test was retired, skipped, retried or weakened, and the workflow, partitions and required check names are unchanged.
+
+The same watch's build evidence bounds what else this pass could have changed. A local workspace test build at `-j4` (dependencies warm, workspace members cold, no compiler cache) took 145 s under the folded build's clippy-driver and 130 s with plain rustc. Cargo's timings show two causes. `orbit-core`'s unit-test harness (49 s) starts only after the whole `orbit-core` library (47 s), because its self dev-dependency (which enables `test-support`) makes the harness link that library, and up to three cores sit idle meanwhile. Dropping the self dev-dependencies in an experiment, with the same features enabled from the command line, also gave 130 s. Neither change is made here. Moving all-targets Clippy out of the test build needs its own pass in the Check job. Removing a self dev-dependency would lose `test-support` for `cargo test -p <crate>`. A full run's archive-ready time plus its slowest partition therefore still exceeds 400 s. The p90 after merge is the operator's `scripts/ci-p90.py` run over the latest 20 completed `pull_request` `ci.yml` runs at 400 s, from runs on this revision.
+
+A thirteenth pass (ORB-22077) follows the 2026-11-04 watch: 15 executed PR Check jobs (5 skipped, none cancelled), nearest-rank p90 578 s, median 440 s, 10 over 400 s. Every Test build reported `cache_hit=true` on 4 CPUs, on image `ubuntu24/20261026.354.1` or `20261101.360.1`. Slow does not mean full. Six runs selected the changed crates' leaf set (always-run crates plus `orbit-cli`), five that plus `orbit-web`, three named `orbit-core` (8 to 11 crates) and one ran the full suite. The p90 sits in the last two groups, which carry `orbit-core::runtime` and `orbit-engine::engine`. Leaf runs spent 174 to 294 s in list-build and only about 50 to 90 s in the slowest partition's nextest, so their build was binding.
+
+Their build was large for two reasons. CI sets `CARGO_TERM_COLOR=always`, which colors `cargo tree`'s `(*)` marker, so `ci-test-affected.py` read it as a feature and added spurious anchors (a deterministic replay reproduced the hosted build sets for all four selections: `orbit-agent`, `orbit-automation` and `orbit-runtime` were spurious). The real gap, `tokio`'s `test-util`, `rusqlite`'s `hooks` and the `test-support` of `orbit-exec` and `orbit-mcp`, then pulled in `orbit-core`, `orbit-mcp` and `orbit-web`, and an anchor always compiles its unit-test harness (`orbit-core`'s alone costs 54 s of CPU). The pass passes `--color never` to `cargo tree`, names those features in `orbit-cli`'s dev-dependencies so no anchor is needed, and adds `Test partition 7` and `8`.
+
+| Local 4-core replay (members cold, dependencies warm, none rebuilt) | Before | After |
+|---|---|---|
+| Leaf selection, build | 125.7, 117.8 s | 85.3, 83.6 s |
+| Leaf plus `orbit-web`, build | same 11-crate build set as leaf | 90.6 s |
+| 11-crate core selection, build | 121.3 s | 118.6 s |
+| Leaf archive | 761 MB (hosted) | 377 MB |
+
+At the same tree the leaf archive lists the same 1047 tests as the old anchored build, so no test was dropped; doctests compile nothing after any of the three builds. The eight-partition guard passes on the leaf (1047), 11-crate (3170) and full (3765) archives. Replaying the logged durations, assigned as count partitions do (3145 of 3170 tests match the observed assignment at six partitions), the slowest partition's test time falls 35 to 57 s on core and full runs and 10 to 22 s on leaf runs; a ninth or tenth partition gains little because the longest test (96 to 136 s) then bounds it. Each new partition holds a runner for the whole run, because shards prepare while the build runs, so the pass adds two runners' time per run, and queueing for them falls inside Check's elapsed time.
+
+Rejected by measurement: moving all-targets Clippy out of the folded build saves about 4 s wall (130.2 s against 125.8 s, also dropping examples), not worth a new Check phase; removing `orbit-core`'s self dev-dependency gains no wall time (twelfth pass); `resolver.feature-unification` would replace the anchors but Cargo 1.98.1 ignores it without a nightly flag.
+
+Applying the replay's ratios to the cohort's logs projects p90 522 s, median 347 s, max 528 s and 4 over 400 s. That is a projection, not a measurement, and **it does not restore the budget**: the core and full runs (27% of the cohort) still take about 520 s, because their build is CPU-saturated on crates they really test. Closing that needs a decision outside this pass, such as a larger runner for `Test build`. The hosted per-unit timings were not read (`test-build-timings` needs an authenticated download), so the same selection's list-build ranging from 174 to 256 s on one image remains unexplained; `Report build inputs` now logs the CPU model to test runner variance. The hosted after column is the operator's `scripts/ci-p90.py` run once the latest 20 completed PR runs all carry this workflow.
+
+A fourteenth pass (ORB-22218) follows the 2026-11-05 watch: the latest 20
+completed PR workflows had 12 executed Checks, 7 skipped and 1 cancelled,
+nearest-rank p90 482 s, median 449.5 s and max 496 s. Two early failures
+(42 and 155 s) are elapsed observations, not fast successful gates. Slow
+successful samples spent 226–263 s in list-build, then 109–176 s in their
+last partition's nextest. Check's own phases finished earlier. Archive
+transfer on those slow samples was truncated, so no transfer cause is established.
+
+The controlled fixture used this base's full workspace selection, Rust
+1.98.1, nextest 0.9.136, four Cargo jobs and six nextest slots pinned to
+CPUs 0–3 on a shared 32-logical-CPU Ryzen AI MAX+ 395 Linux host. CI's
+incremental-off, debug-off and symbol-strip settings were retained. Dependency
+sources and compiled dependencies were warm; workspace members were cleaned
+between build trials, the compiler-object cache was off and OS caches were
+not flushed. Baseline list-build took 124.1/122.7 s, rebuilding the same 87
+workspace units with all 385 dependency units fresh. The core library
+(37.6 s) then its unit harness (49.5 s) bound the first build. An uncontaminated
+archive reused those objects in 2.68 s; extraction took 2.99 s. No hosted
+transfer, runner setup or queue saving is inferred from these local timings.
+
+The eight baseline partition walls were 63.97, 49.71, 59.78, 48.04, 52.53,
+52.27, 37.52 and 45.85 s, run sequentially on the same four CPUs. The
+slowest partition's JUnit timestamps showed two late carriers:
+`backlog_forecast::arrivals_past_the_generation_bound_report_the_cut_and_withhold_totals`
+started at 51.86 s and finished last at 63.80 s;
+`workflows::replay_returns_a_durable_receipt_while_the_job_runs_in_a_detached_worker`
+started at 56.17 s and finished at 62.43 s. Prioritizing the forecast alone
+left the worker observation deadline at the tail and measured 65.74 s.
+
+The CI priority list now starts **both** carriers early. Reusing the exact
+same archived binaries and partition, both started at zero. Partition wall
+fell to 59.89/59.90 s; a subsequent baseline control took 63.54 s (initial
+baseline 63.97 s). The repeated-control difference is about 3.85 s, or 6%
+of this partition, with natural shared-host timing noise. The remaining
+seven partitions' priorities are unchanged and were not replayed for the
+candidate; the baseline's next-slowest partition was 59.78 s. This is a
+measured partition improvement, not a complete candidate hosted gate or a
+claim that its p90 meets 400 s. The build remains unchanged and binding
+before archive publication; other partitions can now set the tail.
+A final root-profile validation took 95.04 s: the separate
+`distributed_drain::claimed_host_evidence::sandbox::seatbelt_probe_outcomes_scenarios`
+carrier took 60.93 s in one passing probe-denial scenario. Its cause is
+unconfirmed; the same 497 passes and four scratch-path failures remained.
+This outlier is retained separately and prevents treating the controlled
+scheduling gain as a complete candidate-gate runtime guarantee.
+
+All 3,839 test identities retain their applicability (3,773 selected and 66
+ignored), and the eight-way exact-once proof passes. Each critical-partition
+arm ran the same 501 tests: 497 passed and the same four scratch-path cases
+failed (config path display and Unix socket length limits). Other baseline
+partitions also had scratch-environment failures. These are diagnostic
+scheduling measurements, not full-suite passes; logs retain all successful
+output and capability notices. No test, assertion, deliberate observation
+deadline, partition, group cap, retry policy, always-run selection, required
+check identity or full integration-push coverage changes. Local default
+nextest ordering is unchanged because the addition is confined to `profile.ci`.
+
+A plain-rustc build experiment measured 116.8/119.9 s, about 5.1 s below the
+folded build's median, but required a separate all-targets Clippy phase,
+cache migration and old-head compatibility handling. That experiment is not
+landed; the final change only refreshes scheduling. The task's
+`ci-budget/report.md` artifact retains commands, conditions, JUnit evidence,
+rejected trials and validation outcomes. Two initial archive timings were
+excluded after source edits/Python bytecode writes under the build script's
+watched `scripts/` directory invalidated reuse.
+
+Operator handoff: after merge, collect the latest **20 completed
+`pull_request` workflows for `ci.yml`** once those runs carry this revision.
+Run `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400` and retain
+run IDs, full head SHAs and raw job/step timestamps. Report executed,
+skipped, cancelled and missing Check counts (classify `other_gaps`), failures
+separately from successful completions, ascending executed durations,
+nearest-rank rank `ceil(0.9 * n)`, p90, median and maximum. Do not count gaps
+as zero-duration successes. Report Check's pre-start queue wait separately
+from its elapsed wall time, and the awaited jobs' queue wait occurring after
+Check starts separately again; obtain job creation/start timestamps from
+the Actions jobs API and retain `ci-await:` start/completion lines. If a
+queue timestamp or transfer step is unavailable, report the gap rather than
+infer zero. Compare selections, cache hits, runner image/CPU and phase times
+before attributing a cohort change. This measurement is operator work after
+merge, not a requirement for this implementation leaf or a claim that the
+400-second budget has been restored.
+
+A fifteenth pass (ORB-22450) follows the 2026-11-06 watch: 16 executed PR Check
+jobs in the latest 20 completed PR runs (four skipped, none cancelled or
+missing), nearest-rank p90 542 s (rank 15/16), median 476.5 s, maximum 551 s.
+Two slow extremes ended on CI guardrails, whose two longest members overlapped
+(`test-check-dependency-direction.py` 362.5 s and 386.3 s, `test-qa-full-sweep.py`
+363.4 s and 335.1 s). It reduces the work inside those two self-tests. No check,
+job identity, runner, guard or production harness behavior changes.
+
+Conditions for every local figure: base `7d98fa450`, one checkout path, a shared
+32-logical-CPU Linux host pinned with `taskset -c 0-3` (pool width 4), Rust 1.98.1,
+Python 3.14.4, bash 5.3.9, ripgrep 14.1.1, runs in sequence with no synthetic
+load. The lane ran `CI_SELF_TESTS=all scripts/ci-guardrails.sh --guards`, the
+selection a PR gets when it touches a self-test input. This host is not a hosted
+4-vCPU runner, and setup and transfer are not measured.
+
+- **Dependency self-test.** It ran the whole guard once per row, about 0.68 s each
+  (39 Python and 48 ripgrep processes per run), and one comment matrix was 120 of
+  the 266 runs. Nine large tables now share one guard run per batch, for **266 → 63
+  guard runs**, a deterministic reduction. `check_rows` gives each row its own file
+  at the same directory depth and requires the guard to report that row's own path,
+  a stronger assertion than the former exit status. The guard is unchanged.
+- **QA self-test.** `builtin_refusal_self_test(wire=True)` took 70.3 s of the
+  sweep's 117.9–131.9 s self-test, because each of its 25 modes ran every built-in
+  command through the supervisor although only `mcp serve` and `search reindex`
+  vary. The other 24 modes now answer the unrelated fixture commands in process:
+  14.2 s, and **2901 → 645 successful `execve` calls** in one traced run of each
+  arm. The varying commands keep the real supervisor and fixture process.
+  The `valid` row and the five `builtin_refusal` modes stay fully supervised, and
+  every row's unrelated results must equal the `valid` row's.
+
+| Sequential lane run | 1 | 2 | 3 | Median | Spread |
+|---|---:|---:|---:|---:|---:|
+| Baseline lane wall (s) | 238.21 | 213.47 | 210.73 | 213.47 | 27.48 |
+| Candidate lane wall (s) | 104.57 | 102.67 | 105.96 | 104.57 | 3.29 |
+| Baseline dependency self-test (s) | 211.135 | 188.386 | 183.757 | 188.386 | 27.378 |
+| Candidate dependency self-test (s) | 50.807 | 48.119 | 48.508 | 48.508 | 2.688 |
+| Baseline QA sweep (s) | 148.643 | 143.541 | 132.778 | 143.541 | 15.865 |
+| Candidate QA sweep (s) | 93.422 | 91.723 | 94.001 | 93.422 | 2.278 |
+
+The slowest candidate lane beat the fastest baseline lane by 104.77 s, 3.8 times
+the baseline spread. The lane's next members are `test-qa-full-sweep.py` (about
+93 s), `test-ci-download-verified.py` (about 84 s, mostly fixed waits) and
+`test-pr-state-workflows.py` (about 59 s). A PR that touches no self-test input
+already skips the dependency self-test and runs the QA check with `--static`, so
+this pass does not shorten it.
+
+Eight guard mutations (nested comments, qualified self, dropped modules and names,
+raw strings, crate-root paths, a dropped lower-module loop) failed both the old and
+new self-test, on the same test. Two QA validator mutations failed both wire arms on
+the same row (`boolean-reindex`, `cross-success`). Two mutations of `finalize_result`
+(accepting a nonzero exit, accepting unverified cleanup) pass the whole QA self-test
+in both arms. That gap exists at the base and this pass neither causes nor closes it.
+
+The build and test path was profiled and left unchanged. Slow run 42194401872
+selected ten crates (`orbit-auth`, `orbit-cli`, `orbit-cmd`, `orbit-core`,
+`orbit-engine`, `orbit-exec`, `orbit-policy`, `orbit-runtime`, `orbit-store`,
+`orbit-web`), with a hosted cache hit, list-build 273 s and a 379-test partition 6
+nextest of 162.6 s. The same selection locally, under the CI build flags with
+dependencies warm and workspace members cold, took 127 s and 127 s for the list build
+and 3–4 s for the archive. Partition 6 took 51.55 s and 51.57 s for 382 tests, all
+passing (membership differs from the hosted 379 tests at this base). Its
+longest row, `events::change_stream_notices_other_process_writes_and_resumes_after_reconnect`,
+took 50.6–50.7 s, but no retained hosted excerpt shows that row, so it stays a lead.
+Hosted busy time was 88.7% and no cause beyond breadth was confirmed, so no build or
+partition change has evidence behind it yet.
+
+Operator handoff: after merge, once runs carry this revision, follow the
+[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff) for the latest
+20 completed `pull_request` `ci.yml` runs with
+`python3 scripts/ci-p90.py --limit 20 --budget-seconds 400`. Retain full SHAs, run
+IDs and raw job and step timestamps; report executed, skipped, cancelled and missing
+Check counts and failures separately; report median, nearest-rank p90 and maximum;
+report pre-Check queue and awaited-job queue within elapsed separately; and keep gaps
+as uncertainty, never zero. Note which runs executed the self-tests. This measurement
+and any live infrastructure or cost decision are operator-owned, not requirements of
+this leaf, and no local figure above claims the 400-second budget is restored.
+
+A sixteenth pass (ORB-22610) profiled the full-scope build, archive and test path after the
+2026-11-07 audit (21 executed PR Checks in the latest 24 completed PR runs, nearest-rank p90
+521 s, median 316 s, maximum 730 s). It found no software reduction that beats the
+measurement spread, so **no workflow, script, manifest or test changed**. The profile and the
+remaining decision are recorded here.
+
+Conditions: base `543335a7e`, the full selection (`--workspace --lib --bins --tests
+--examples` under `with-test-build-lint.sh`), CI's incremental-off, debug-0 and strip
+settings, the compiler-object cache off, Rust 1.98.1 and nextest 0.9.136. Dependencies were
+warm, all 86 workspace units were cleaned before each trial, and trials ran in sequence. The
+fixture was pinned to two physical cores with their SMT siblings (CPUs 0, 1, 16 and 17 of a
+shared 32-thread Ryzen AI MAX+ 395, load average 6–13), the shape of a hosted 4-vCPU runner.
+Earlier passes pinned four physical cores, so their walls are not comparable.
+
+| Sequential arm (4 threads, Cargo `-j4` unless noted) | Wall times (s) |
+|---|---|
+| Unchanged control | 176.1, 183.5, 169.3, 177.1, 185.7 (median 177.1, spread 16.5) |
+| `-C codegen-units=16` on workspace members | 184.0, 195.8 |
+| `-C codegen-units=64` on workspace members | 178.5 |
+| Parallel frontend (`-Zthreads=4`, bootstrap) | 184.3, 202.3 |
+| Cargo `-j6` | 184.4 |
+| Same build, 8 threads (CPUs 0–3, 16–19), `-j8` | 137.5, 134.7 |
+
+The build is bound by one dependency chain, not by CPU. In the 169.3 s control,
+`orbit-types` (0–15 s), `orbit-common`, `orbit-store`, `orbit-engine` and the `orbit-core`
+library (52–99 s) each start when the previous crate's metadata exists. The `orbit-core`
+unit-test harness (64 s) follows that library, and the build ends with it. Between about 60
+and 90 s only 1.5–2.3 of four slots were busy, while 26 units waited on `orbit-core`. In the
+library's single-threaded frontend, `-Ztime-passes` measured borrow checking at 8.5 s, type
+checking 7.2 s, crate metadata 6.9 s, the monomorphization walk 5.2 s, all lints including
+Clippy 2.3 s and macro expansion 1.1 s. Raising proc-macro optimization therefore has nothing
+to recover. Cargo's JSON shows each workspace unit built once, so there is no duplicate
+compile to remove. The four zero-test library harnesses (`orbit-agent`, `orbit-auth`,
+`orbit-policy`, `orbit-search`) cost 1.4 s of CPU together. Doubling the threads saves about
+23% (41 s), which is the size of the larger-runner lever.
+
+The archive reuses the build. Over two runs each, it took 3.9–4.9 s at nextest's default
+`--zstd-level 0` and 2.8–3.2 s at level 1, and the pack took 7.0–8.1 s. The 618 MB transfer
+was identical either way, and a third level-1 run took 14.4 s altogether, so there is no
+robust saving in the codec.
+
+On the test side, the hosted logs of full PR run 42341361073 give 5,623 slot-seconds over
+3,805 passing rows. Each partition's Summary is close to its summed time divided by six
+slots (partition 2: 871 slot-seconds, 145.6 s), so no single test sets a partition's wall.
+Alone on the fixture, two rows ran at about 1% CPU and matched their hosted time.
+`events::change_stream_notices_other_process_writes_and_resumes_after_reconnect` (50.2 s
+locally, 52.3 s hosted) waits on the change stream's production cadences: 2 s scans, 5 s
+host samples and the 15 s drain recheck.
+`origin_fetch_hold::worktree_setup_origin_outage_holds_backlog_and_fails_in_progress`
+(51.3 s, 52.2 s) waits on the production 15 s remote timeout and 25 s fetch-lock hold limit.
+Shortening either would need a new test-only timing seam in production code. It would save
+at most about 8 s of one partition's wall, less than the hosted spread between partitions
+(94–146 s in that run), so both stay as leads. A local full run under profile `ci` (eight
+threads on CPUs 0–7) passed 3,804 tests and skipped 58.
+
+The remaining lever is an operator decision: a larger `Test build` runner, which this lane
+may not change. A structural alternative is to shorten the `orbit-types` → `orbit-core`
+chain, or start the `orbit-core` harness before its own library finishes. The twelfth pass
+measured no wall gain from removing that crate's self dev-dependency, and splitting
+`orbit-core` is a separate design task. The hosted per-unit `test-build-timings` artifacts
+could not be read here (no authenticated artifact download on this lane), so whether the
+hosted 220–288 s full list-builds have the same shape is still an inference. The p90 after
+merge is the operator's measurement under the
+[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff): the latest 20
+completed `pull_request` `ci.yml` runs with `python3 scripts/ci-p90.py --limit 20
+--budget-seconds 400`. Report the full Check job wall time; executed, failed, skipped,
+cancelled and missing runs separately; the queue before Check and the awaited jobs' queue
+within it separately; and cache, scope and CPU strata. This pass claims no change to the
+400-second p90.
+
+A seventeenth pass (ORB-22688) made the first structural cut of the serial `orbit-core`
+library that the sixteenth pass named. The host's sweep clock (`routines/clock`: unit
+rendering and install, pause and resume, cadence, convergence, inspection and health), its
+`clock.toml` settings, the tick budget `TICK_DEADLINE` and the three unit templates moved
+into a new `orbit-clock` crate. It names only `orbit-common`. Core re-exports it at
+`application::routines::clock` and the settings through `application::contracts`, so no
+consumer changed. `orbit-automation` re-exports the tick budget, so the constant still has
+one definition. The 19 clock unit tests moved with their code, unchanged.
+
+Conditions: base `edadacb73` against the same tree with this change, the full selection
+(`cargo test --workspace --lib --bins --tests --examples --no-run` under
+`with-test-build-lint.sh`), CI's incremental-off, debug-0 and strip settings, no compiler
+wrapper, Rust 1.98.1 and nextest 0.9.136, Cargo `-j4` on CPUs 0, 1, 16 and 17 (load
+average 4.4–8.6). Both arms shared one target directory, so dependencies stayed warm and
+identical. Before every trial every workspace member of either arm was cleaned with
+`cargo clean -p`. Each arm had one primer, then three repetitions ran in sequence,
+alternating baseline and candidate.
+
+| Sequential arm | Wall times (s) |
+|---|---|
+| Primers (baseline compiled dependencies too) | baseline 321.1, candidate 176.4 |
+| Unchanged baseline | 179.4, 175.8, 187.2 (median 179.4, spread 11.4) |
+| Candidate | 178.4, 188.1, 176.7 (median 178.4, spread 11.4) |
+
+The 1.0-second median difference is inside the baseline's own 11.4-second spread, so no
+timing gain is claimed. The structural change is in Cargo's unit data. Workspace units went
+from 86 to 88, the `orbit-clock` library and its test harness, and Cargo's JSON shows each
+workspace unit built exactly once, with no duplicate. In each candidate trial, the
+`orbit-clock` library compiled in 0.60–0.64 s, starting at 19.5–21.4 s and ending by 22.0 s.
+That was while `orbit-store` was still compiling (17.5–42.6 s), and well before the
+`orbit-core` library started (55.0–59.9 s). Its harness (1.1–1.9 s) finished by 46.8 s. The
+clock is no longer input to the serial core unit: it moved 4,514 of the core library's
+286,727 source lines (1.6%) and 19 of the 230 tests in its unit-test harness. That is too
+small to show up in the core units:
+
+- **Core library:** 45.2, 47.6 and 55.2 s in the baseline, 46.5, 48.5 and 49.2 s in the
+  candidate.
+- **Core harness:** 68.4, 65.2 and 74.8 s in the baseline, 68.6, 34.8 and 71.3 s in the
+  candidate. Cargo's report starts the 34.8 s harness late (153 s), and that trial was the
+  slowest candidate (188.1 s), so the low figure is not a saving.
+
+`orbit-automation` now waits on `orbit-clock`, but the clock finishes before `orbit-store`,
+which automation already waited for, so the chain gained no serial step. `cargo nextest
+list` over the same selection counted 3,875 tests in both arms: 66 binaries became 67, the
+`orbit-core` library harness went from 230 to 211 tests, and `orbit-clock` held the other
+19, under the same names. The exact-once partition proof, the Linux sandbox gate, the
+always-run crates and the required job names are unchanged. The new crate joins every
+workspace selection through `cargo metadata`. The unit-test baseline records the 19 moved
+identities.
+
+Limits: one modest extraction does not shorten the `orbit-types` → `orbit-core` chain or
+the core harness that ends the build. A wall-time gain would need cuts of this kind on a
+much larger share of the core library and harness, or the larger `Test build` runner. That
+runner remains an operator decision, not part of this leaf.
+
+Operator handoff: after merge, once runs carry this revision, measure the latest 20
+completed `pull_request` `ci.yml` runs under the
+[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff) with
+`python3 scripts/ci-p90.py --limit 20 --budget-seconds 400`:
+
+- Report the full Check job elapsed time, with the nearest-rank p90 against 400 s, the
+  median and the maximum.
+- Report executed, failed, skipped, cancelled and missing runs separately.
+- Report the queue before Check separately from the awaited jobs' queue within it.
+- Report the cache, scope and CPU strata, and keep every gap as uncertainty, never zero.
+
+That measurement is the operator's, not an acceptance gate of this leaf, and no local
+figure here claims the 400-second budget is restored.
+
+An eighteenth pass (ORB-23406) follows the 2026-11-08 watch (ORB-23395: 17 executed PR
+Check jobs in the latest 20 completed PR runs, 3 skipped, none cancelled, nearest-rank
+p90 514 s, median 422 s, maximum 542 s). Job timings for 18 fetched runs of that cohort
+(16 executed, 2 skipped) split into two strata by whether the PR diff made the
+guardrails job run its fixture self-tests (`CI_SELF_TESTS=changed`). With self-tests
+off, CI guardrails ended 104–144 s after the Check job started and the slowest test
+partition bound the run. With self-tests on, CI guardrails ended at 460–783 s and was
+the last awaited job in four of the five slowest successes, 33–300 s after the slowest
+partition (run 42526696384: guardrails +760 s, slowest partition +460 s, Check 767 s).
+Parallel job times are compared by their ends, never summed.
+
+Step timings of the watch's three slowest runs (42524629248, 42525119185, 42525236912;
+affected selections of 19 and 8 crates, rust-cache hits, 4-vCPU runners) decompose the
+non-guardrails path: Check's own checks took 131 s and never bound. The folded build
+took 210–293 s (list-build 200–282 s, archive 8–9 s), the repack 12.5 s and the four
+serial uploads about 16 s; the slowest partition then spent about 16 s on transfer and
+155–165 s in nextest at 95% CPU busy. The guard pool's wall was 451–611 s, and its
+longest member in every run was `test-check-dependency-direction.py` at 380–486 s,
+ahead of `test-qa-full-sweep.py` at 165–261 s. The fifteenth pass had batched that
+self-test from 266 to 63 guard launches; tables added since (the landing, routines,
+contracts, experiment and auto_tasks ports) again launched the whole guard once per
+row. This pass batches those tables with the same `check_rows` helper — one guard run
+per detector in each chain, each row in its own file at the same module depth, the
+guard required to report that row's own path — and launches the self-test first in
+the guard pool (longest-processing-time-first), instead of after the repository
+scans. Rows whose identity is an exact file (the two `task/mod.rs` shim lines, the
+config leaves, `tag_instructions.rs`, the exact-line store-read allowances) keep
+their own runs and files, and `contracts/mod.rs` rows stay unrenamed because renaming
+changes the depth a `super::` chain resolves against. The guard itself is unchanged,
+and no row, assertion or check is removed. Two guard mutations (a neutered
+super-chain detector and a neutered inherent-call detector) fail the batched tests
+that exercise them.
+
+Local evidence: base `d3519c28`, one shared 32-logical-CPU Linux host at load average
+39–52, Python 3.14.4, each arm pinned with `taskset -c 0-3` in sequence. A counting
+`bash` shim recorded the self-test's guard launches deterministically: **223 → 149
+guard runs**. The pinned walls of one run per arm were 647.8 s before and 443.6 s
+after; on this oversubscribed host those walls are indicative only, and the launch
+count is the robust figure. This host is not a hosted 4-vCPU runner, and setup and
+transfer are not measured. The folded build plus the slowest partition still sets a
+floor above 400 s on the widest selections in this cohort, so no local figure here
+claims the budget is restored.
+
+Operator handoff: after merge, once runs carry this revision, measure the latest 20
+completed `pull_request` `ci.yml` runs under the
+[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff) with
+`python3 scripts/ci-p90.py --limit 20 --budget-seconds 400`. Report executed, failed,
+skipped, cancelled and missing runs separately, the nearest-rank p90 against 400 s,
+which runs executed the self-tests, and the cache, scope and CPU strata. That
+measurement is the operator's, not an acceptance gate of this leaf.
+
+A nineteenth pass (ORB-23755) follows the 2026-11-09 watch (ORB-23739: 16 executed PR
+Check jobs in the latest 20 completed PR runs, 4 skipped, none cancelled, nearest-rank
+p90 723 s, median 482.5 s, maximum 757 s). Job timings of that cohort's 16 executed runs
+split again by whether CI guardrails ran the fixture self-tests. With self-tests on (eight
+runs), the guard pool's wall equalled `test-check-dependency-direction.py`'s own wall to
+the second in every run (335–505 s; `test-qa-full-sweep.py` 184–291 s beside it). In the
+four warm-cache runs of that stratum where guardrails ended last (42594632810,
+42588330612, 42583560449, 42583069998), Check ended 5–7 s after guardrails (496–571 s),
+while the slowest test job ended at 238–481 s. With self-tests off, guardrails took
+87–145 s and the test lane bound (392–528 s). Parallel job times are compared by their
+ends, never summed.
+
+That self-test's 45 cases each build their own fixture tree and spend nearly all their
+time in 158 guard runs of about 1.3 s each, mostly about 70 short Python children per
+run. The cases are independent, so the self-test now runs them four at a time on threads,
+one `unittest` result per case. It fails unless every loaded case ran, so no case can be
+lost or selected away. Named cases or unittest options keep the standard serial runner.
+The guard, every case and every assertion are unchanged. With `inherent_calls_into`
+neutered, the concurrent and serial runners report the same 85 failures.
+
+Local evidence: base `83a476554`, a shared 32-logical-CPU AMD Ryzen AI MAX+ 395 Linux
+host at load average 3–10, Python 3.14.4, arms in sequence with no synthetic load. The
+self-test pinned with `taskset -c 0-3 chrt --idle 0` took **221.8 → 68.8 s** wall (user
+CPU 167.8 → 166.7 s). `CI_SELF_TESTS=all taskset -c 0-3 scripts/ci-guardrails.sh
+--guards` took **249 → 171 s** of guard-pool wall. The dependency self-test took 248.5 →
+140.3 s there, and `test-qa-full-sweep.py` (136.5 → 170.8 s, under more contention) is now
+the pool's longest member. The selection was the same 74 entries in both arms. This host
+is not a hosted 4-vCPU runner, and the test lane, which bound every self-test-off run, is
+unchanged, so no local figure here claims the budget is restored.
+
 The recurring `test-quality-audit` creates evidence-backed proposed tasks for critical coverage gaps, weak assertions, duplication, flaky or slow fixtures and regressions against this budget. It searches existing tasks before filing, links each finding to the audit, and records concrete acceptance criteria. The audit leaves a durable report even when no new finding is confirmed; it does not treat a quota of findings or deletions as success.
+
+### Build-runner partition delay (2026-10-31)
+
+The budget-watch cohort measured 16 executed Check jobs in 20 completed PR
+runs (four skipped, no cancellations): nearest-rank p90 571 s, median
+492.5 s, maximum 732 s. The build job finished last in the three examined
+runs below. Its folded compile took 210–443 s; bounded successful logs did
+not retain Cargo unit timings, so these observations do not attribute that
+variance to a particular crate or compiler phase. The folded build now uses
+`--timings` and uploads `test-build-timings` for that investigation.
+
+A confirmed scheduling cost follows publication: partition 2 waited for the
+archive coverage proof, workspace doctests and tool setup on the build
+runner. It now runs as literal job `Test partition 2`, sharing every shard
+step and preparing beside compilation. The build still proves exact-once
+coverage of the original archive and runs every workspace doctest. The
+required Check job awaits the new runner as well as all existing jobs.
+
+| Hosted run | Compile s | Observed Check s | Partition 2 publication-to-start s | Existing shard publication-to-start s | Projected Check s |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 41183374048 | 263 | 565 | 31.067 | 18.599 | 552.531 |
+| 41183989799 | 443 | 732 | 30.347 | 22.126 | 723.779 |
+| 41183528773 | 210 | 395 | 33.579 | 15.128 | 376.549 |
+
+The after column is a scheduling counterfactual: keep the observed partition
+2 runtime, every other job end and Check's final polling/cleanup tail; replace
+partition 2's serial publication-to-command-start delay with shard 1's
+observed polling/download/repack delay. The task's `ci-budget/replay.py` and
+`ci-budget/timing-inputs.json` artifacts reproduce the arithmetic without
+load generation. They project savings of 8.2–18.5 s, not a restored p90.
+One additional runner and archive download cost runner time, and queueing or
+a slower replacement runner can erase the saving. Compilation remains a
+large part of the path; do not call the 400 s rule satisfied from this change
+or these three runs. No test was retired, skipped, retried or weakened, and
+all five count partitions, digest verification, namespace preparation and
+the shard-1 sandbox gate retain their existing guarantees.
+
+After merge the operator owns a fresh hosted measurement; see
+[hosted CI measurement](../DEVELOPMENT.md#hosted-ci-budget-handoff). A rolling
+sample containing old workflow revisions cannot establish the candidate's
+p90. Report exact run/head identities, executed/skipped/cancelled/missing
+counts, failures, queue gaps and the nearest-rank p90 against **400 s**.
+
+### Awaited partition and QA contention reduction (2026-11-10)
+
+ORB-23890 revalidates the historical profile before edits at source head
+`ed219d0bda9100437b5f448fe559dfe0eea3b9a4`; the first profile was recorded
+at `45beaebdcfa666b0c1a297601c47372fe9afa390`. The ORB-23889 audit's
+22 executed PR Checks had nearest-rank
+p90 **580 s**, with 18 over 400 s. Five additional run views retain complete
+job durations, the failed run and self-test selection evidence:
+
+| Run | Check s | Test build s | CI guardrails s | Self-tests | Last partition s |
+| --- | ---: | ---: | ---: | --- | ---: |
+| 42757620515 | 696 | 380 | 469 | executed | 690 (partition 2) |
+| 42761390547 | 416 (failed) | 277 | 132 | skipped | 454 (partition 7) |
+| 42761647024 | 580 | 401 | 136 | skipped | 594 (shard 2/3) |
+| 42776520260 | 544 | 335 | 115 | skipped | 537 (shard 2/3) |
+| 42777960025 | 493 | 331 | 111 | skipped | 487 (shard 2/3) |
+
+Each duration is `completed_at - started_at`, including setup and post
+steps; the parallel durations are never summed. The failed Check returned
+before every partition finished; its last partition is retained rather than
+filtered out. Run creation-to-Check-start waits in the table's run order are
+20, 24, 43, 25 and 18 s, reported separately and never subtracted. The
+individual awaited jobs' queue waits remain unknown because the views omit
+their enqueue timestamps. The pre-edit profile and raw run views are task
+artifacts under `ci-profile/` and `ci-profile-v2/`.
+
+In run 42757620515 the folded build took 300 s, archive creation 9 s and
+transfer repacking 12.619 s. Partition 2 then ran 501 tests in 143.662 s at
+94.8% CPU busy: 859.847 summed testcase seconds, with a 58.806 s longest
+case. This is a CPU-bound partition tail, so the workflow now uses twelve
+count partitions instead of eight, all from the same build and archive.
+The build still proves exact-once coverage against all twelve partitions;
+Check awaits each literal partition job. This does not change compilation,
+which remains a substantial floor, or the complete-job measurement.
+
+That run's guard pool took 394 s, with the QA fixture taking 385.808 s beside
+the dependency-direction suite's 321.316 s. The QA inventory and selected
+self-test now run as `CI QA guardrails` on their own runner, with the same
+changed-input selection as the core guardrails. Every repository guard and
+fixture still runs once across the two routes; local guard modes retain both.
+The dependency suite's concurrent runner and its failure reporting are intact.
+
+The shared Bubblewrap preparation step executes
+`scripts/ci-probe-bubblewrap.sh` from the workflow revision. Its existing
+probes, deadlines, diagnostics and failure behavior stay intact. Extracting
+that repeated shell body keeps the workflow small even when YAML aliases are
+expanded by prerequisite readers; the two public landing regressions exercise
+that representation without raising the source bound.
+
+The allocation cost is five additional standard Ubuntu runners on every full
+or affected run: four partitions plus one QA runner. The four partitions each
+download the existing four-part archive (about 2.43 GB extra transfer for the
+606.8 MB sample). The QA runner performs no workspace build and downloads no
+archive. Runner setup, queue pressure, transfer variance and the unchanged
+compilation floor can limit or erase the gain. No larger-runner provisioning
+or price is assumed.
+
+Candidate hosted timings are **unavailable before publication**. ORB-23922
+must resolve this delivery's exact published PR/head and compare its complete
+Check, Test build, both guardrails jobs and last partition durations against
+these artifacts, including failures and queue gaps. The post-landing latest
+20-run nearest-rank p90 check remains operator verification on ORB-23888.
+Neither the scheduling change nor local checks establish a measured hosted
+speedup or compliance with the **400 s** budget.
+
+A 2026-11-12 phase repair (ORB-24231) addresses both lanes in the latest watch:
+the 543 s exemplar's list-build and serial published-completion carrier, and
+the 382–453 s exclusive self-test lane. Required job names, twelve count
+partitions, six nextest slots, zero retries and changed-input self-test
+selection remain intact.
+
+Test build now restores a separate protected-push workspace-output cache.
+The workflow revision's `ci-workspace-cache.py` verifies each current input's
+bytes, size and mode before restoring its cached source mtime. Changed and
+new inputs get a fresh timestamp, including older same-length changed files;
+Cargo still checks dependencies, compiler, features and environment. A real
+Cargo fixture proves both reuse and changed-output rebuilding. Folded
+all-targets Clippy, production Clippy, examples, test binaries and doctests
+retain their existing commands. Cache misses use the original build. See
+[the cache runbook](../runbooks/compiler-cache.md#ordinary-linux-ci) for
+provenance, first-seed behavior, quota and transfer costs.
+
+The 21 published-completion rows retain their bodies, assertions and private
+fixture state. Eight `published_completion_scenarios*` carriers expose their
+independent work to nextest instead of hiding it behind one serial test.
+The CI priority filter covers the whole family; the exact-once partition
+proof still derives its set from the actual test listing. No row is retired.
+The guardrail fixture runner executes every case once with at most four
+workers, each with its own root, environment and result. Its five rendezvous,
+relative-timing and lane-ordering controls run serially before those workers.
+Named-case invocations retain unittest's serial runner. Errors, failures,
+unexpected successes and an empty or lost case set determine the exit status;
+skips remain visible and, as under unittest, do not fail the run.
+
+Task artifacts `ci-budget-timings/before.json`, `after.json` and `report.md`
+record one discarded warmup and three sequential repetitions per phase, the
+host/build, medians, max-minus-min spreads, an unchanged formatter control,
+all logs and the two critical-path projections. The list-build fixture is the
+watch's ten-crate selection, including core, engine and runtime, with changed
+completion-test source against an immutable previous-build cache. This is
+local phase evidence, not a hosted p90. Cache seeding, source churn, extra
+cache transfer, runner setup and the watch's 455 s archive-download outlier
+remain limits. This leaf does not run the live remeasure or claim the budget
+is restored. After merge the operator runs
+`python3 scripts/ci-p90.py --limit 20 --budget-seconds 400`, retaining the
+executed/gap/failure counts and queue, cache, scope and CPU strata separately.
+
+A 2026-11-14 pass (ORB-24310) follows the ORB-24308 audit (pin `8a8830de9`, runs 43362371670–43377211443: nearest-rank p90 523 s, median 443 s) and the ORB-24333 watch (p90 522 s, median 436 s; its p90 run's guardrails took 515 s with 453 s of self-tests beside a 195 s list-build). Locally at base `a75e7384`, pinned to four cores with `CI_SELF_TESTS=all` (pool width 5 from `build-budget.py`, a shared 32-CPU host, so walls compare layouts rather than predict hosted time), `--guards-core` took 278 s, `--guards-qa` 175 s, the folded list-build 316 s plus a 6 s archive (790 MB), the partition guard 6.7 s proving 3,934 tests exactly once over 12 partitions, and partition 1/12 a 50.9 s nextest Summary (354 passed). The pool's longest member was `test-pr-state-workflows.py` at 202 s, launched near the end: replaying the logged durations as width-5 list scheduling gives 277 s, matching the observed wall, with that member starting at about 75 s and ending last. Standalone it took 189 s, of which one test took 129 s: `test_bubblewrap_apt_failure_reports_elapsed_package_seconds` had no `dpkg` fixture, so `ci-probe-bubblewrap.sh`'s `recover_dpkg` ran the host's real `dpkg --configure -a` through the test's unelevated `sudo` fixture, which exits 2 at once, and retried it until its 60 s deadline — once per apt-failure case, about 120 s measuring nothing. The same fixture shape runs on hosted runners, so the same two deadline loops sit inside the hosted guardrails time whenever the self-tests execute. Two changes, with no check, guard, assertion or runner added or removed:
+
+- That test now writes the same strict `bin/dpkg` fixture shape the dpkg-recovery test uses (`--configure -a` only, exit 0). Its elapsed-package-time assertions still come from the apt fixtures' 2 s sleeps across two attempts per case, and the recovery test keeps covering recovery semantics. A mutation that forced the probe script to report `package_seconds=0` still fails the test. The three bubblewrap tests together now take 8.3 s, and the whole self-test 59.7 s standalone.
+- The guard pool launches `test-pr-state-workflows.py` in its first slots, beside the dependency-direction self-test and the QA sweep, under the existing longest-processing-time-first rule.
+
+Candidate `--guards-core` walls under the same conditions were 143 s and 157 s against the 278 s baseline; the dependency-direction self-test (143–157 s in-pool, 105 s standalone) now sets the pool wall, so it is the next lever, ahead of the QA lane's 175 s. The removed time is two fixed 60 s wall-clock loops plus the late-start tail, so most of the saving transfers to hosted runs whose guardrails execute the self-tests; runs that skip them, and runs bound by the build or the slowest partition, gain nothing. No runner is added, so runner allocation cost is unchanged. This is local phase evidence, not a hosted p90: hosted timings are unavailable before publication, and restored 400-second compliance is claimed only when the operator's post-merge `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400` over completed `pull_request` `ci.yml` runs carrying this revision shows it, with executed, skipped, cancelled and missing counts, failures and queue wait reported separately. No test was retired, skipped, retried or weakened; the partition exact-once proof, the shard-1 sandbox and Landlock gates and the changed-input guard selection are unchanged.
+
+### Test jobs start after the test build (2026-11-14)
+
+Over 91 green PR runs measured on 2026-11-14, each run started 19 jobs and used
+about 100 runner-minutes. About 45 of them were idle: every test job set up
+beside the build, then held its runner for about four minutes in an `Await the
+nextest archive` step. The uncontended median run took 10.7 min, but drained
+PRs saturate the organization's concurrent-job cap, so the median over all
+runs was 19.3 min and queueing dominated.
+
+ORB-24733 makes every test job (`Test shard k/3`, `Test extra partition`,
+`Test partition k`) `needs: [pr-state, scope, test-build]` with its `if`
+unchanged, so it requests a runner only once the whole build job has finished.
+The polling step and the test jobs' `actions: read` permission are gone. The
+shards used to poll because Orbit's PR emission proof refused a job with a
+third `needs` entry; since ORB-24732 it admits sibling needs behind the same
+full change-scope gate, so every Orbit host must run a build with that change
+before this workflow lands. The `if` keeps `!cancelled()`, so a test job still
+runs after a failed or cancelled build. Its first step then fails at once and
+prints the waiter's line form, for example `ci-await: Test build concluded
+failure: https://github.com/<owner>/<repo>/actions/runs/<id>`, so CI-failure
+signatures and the awaited-stop classification read it as the build's failure.
+`Check / Clippy / Test` still awaits the build, every test job and both
+guardrails jobs, so its elapsed time remains the gate's wall time.
+
+What changes on the critical path: the test jobs now also wait for the build's
+post-upload partition proof (about 25 s), and their setup (about 36 s:
+checkout, toolchain, tool caches, Bubblewrap probe) and runner pickup follow
+the build instead of overlapping it. The uncontended path is projected about
+one minute longer, in exchange for fewer held runners and so less queueing
+under the cap. A partition-proof failure now fails every test job's first step
+instead of letting them run, and a build that timed out reports `failure`
+(`needs.<job>.result` has no `timed_out`). The MSRV check, neither a required
+check nor awaited, moved from `ci.yml` to the push-only `msrv.yml` on
+`agent-main`; `make ci-fast` still runs it locally. No test was retired,
+skipped, retried or weakened, and job names, `NEXTEST_PARTITIONS` and the
+ruleset are unchanged. The hosted after column (per-job durations, runner
+minutes and wall time against this baseline) is owed by the pull request's own
+run and the following PR runs.
 
 ## Why
 
@@ -298,9 +931,121 @@ Regression tests follow STD-04 §R1: drive the entry point production callers us
 
 `scripts/unit-test-inventory.py` inventories the unit-test functions under each `crates/<crate>/src/**`, inline or in a sibling `tests/` directory. [`scripts/unit-test-baseline.json`](../../scripts/unit-test-baseline.json) records sorted admitted identities as `<path relative to src>::<function name>` per crate (schema version 2). Repeated names in separate inline modules in one file retain their multiplicity. `make ci-fast` fails when a present test is not named in the baseline, even when the crate's total count stays the same. The change that adds or renames unit tests must update the baseline too, so each admission appears as a reviewed diff. Concurrent admissions then either merge with both identities recorded or conflict textually and require reconciliation; identical count bumps can no longer silently lose an admission.
 
-Removing tests still passes with stale baseline entries; those entries do not admit different tests in their place. Run `scripts/unit-test-inventory.py` for the current counts and identities, and `scripts/unit-test-inventory.py --write-baseline scripts/unit-test-baseline.json` to regenerate the baseline, including removing retired identities. The inventory scans test attributes, including the raw identifier spelling `#[r#test]`, without evaluating `cfg` or expanding macros, as in the original retirement measure. Rust strings, character literals and comments (including nested block comments) are excluded, so source fixture data does not consume admissions.
+Removing tests still passes with stale baseline entries; those entries do not admit different tests in their place. Run `scripts/unit-test-inventory.py` for the current counts and identities, and `scripts/unit-test-inventory.py --write-baseline scripts/unit-test-baseline.json` to regenerate the baseline, including removing retired identities. The inventory scans test attributes, including the raw identifier spelling `#[r#test]`, without evaluating `cfg` or expanding macros, as in the original retirement measure. A test attribute counts wherever it sits on a masked source line, so `#[cfg(test)]`, `#[allow(dead_code)]`, or another attribute before `#[test]`, `#[r#test]`, or `#[path::test]` does not hide the test. `#[cfg(test)]` by itself is not a test. The baseline stays the reviewed admission list: a scan that newly sees a real test is a missing admission, and the baseline is not rewritten only to conceal it. Rust strings, character literals and comments (including nested block comments) are excluded, so source fixture data does not consume admissions.
+
+ORB-24325's package-wide library deferral is no longer admitted as a unit test.
+`a_package_wide_deferral_is_covered_by_the_same_lib_filter` called the private
+`covers_deferral` helper. A regression belongs at the public boundary the
+workspace rule names, so that admission does not stand. Owner-landing
+`review_gate_settle` now guards the incident in
+`review_evidence_fulfilment::package_wide::a_package_wide_lib_deferral_is_received_when_settlement_runs_that_lib_test`
+and
+`review_evidence_fulfilment::package_wide::a_package_wide_lib_deferral_is_refused_for_a_mismatched_package_target_or_filter`.
+A package-wide `cargo test -p <crate>` record that deferred one library test
+is established only when settlement receives `cargo test -p <crate> --lib <exact test>`,
+including a record with arguments after `--`, one module filter, or
+non-selecting options (`--locked`, `--no-fail-fast`). Settlement refuses a
+different package, a `--test` requirement, a `--lib` requirement against a
+`--test` record, a record that already names `--lib`, `--bins` or
+`--all-targets`, a module-only filter, and a `--lib` requirement with no
+filter, and the host runs nothing. The private test finished in 0.00s. With
+the package-wide match removed, the receipt row stops at `review_gate_blocked`
+and its child exits in 0.41s. With the match restored, a debug run spends
+0.942s on the receipt row and 1.096s on the refusal row (one child, 2.049s).
 
 Admitted unit tests:
+
+- `crates/orbit-core/src/application/job/tests/exec.rs::code_only_hold_is_audited_held_and_finalizes_held` (criterion 1, hold classification). A `JobOutcome` whose only hold signal is `failure_code` `owner_signoff_required`, and a remote-tool error whose only hold signal is code `baseline_red`, are audited `held`. Their messages do not contain the text tokens the classifier also accepts. The same outcome is finalized and the stored run is `Held`. A real job's error text usually embeds those tokens, so a crate-root run would not fail before the audit label used the typed code (ORB-24799, from ORB-18579).
+
+- `crates/orbit-core/src/application/job/tests/exec.rs::detached_worker_persists_unrecognized_audit_step_outcomes_as_failed` (criterion 1, audit-step state mapping). A detached worker's audit trail with a finished step whose outcome is not a run state, a finished step whose outcome is the projection's `finished` alias, and a step that only started, is persisted as failed, succeeded and failed. An unrecognized or missing outcome used to be stored as succeeded. The mapper is private to job execution, and this persist path runs only after an overall-success finalize, so the crate-root suites that drive failed runs do not reach a garbled per-step outcome (ORB-24799, from ORB-12255).
+
+- `orbit-store`'s
+  `repository/task/coordination/tests/claim_index.rs::a_task_write_and_a_footprint_guard_decode_only_live_claims`
+  is the ORB-24411 acceptance check (criterion 1). It seeds one thousand
+  settled claims and two live ones, then counts `ExecutionClaim` decodes
+  through the `#[cfg(test)]` counter on the indexed claim reads. One
+  `with_task_lock` decodes that task's live claim only, and one
+  `guard_ordinary_footprint` decodes the two claims whose phase protects a
+  footprint. The same fixture's `EXPLAIN QUERY PLAN` of the by-task
+  statement must name `idx_task_coordination_claims_by_task`. The counter
+  and the statement are crate-private, so a crate-root test cannot observe
+  the decode bound. The pre-change read decoded every claim payload, so
+  the count does not hold there.
+
+- `orbit-engine`'s `executor/automation/vcs/operations/tests/push_retry.rs` cases
+  `timed_out_evidence_push_lands_when_the_ref_names_the_commit`,
+  `timed_out_evidence_push_fails_when_the_ref_is_absent`,
+  `timed_out_evidence_push_fails_when_the_ref_names_another_sha`,
+  `timed_out_evidence_push_fails_when_confirmation_is_unreadable`,
+  `permanent_push_refusal_fails_without_confirmation_success` and
+  `invalid_evidence_ref_and_head_are_refused_before_push` are a criterion 2
+  regression for ORB-23936 (F2026-11-230). They drive `push.evidence_ref` and
+  `push.candidate_ref` through the private VCS operation boundary. A substitute
+  receive-pack applies the update, or leaves the ref alone, and then stalls;
+  the supervision clock expires the production deadline once that stall is in
+  place. The landed case returns the pushed commit. An absent ref, a ref at
+  another sha, and an unreadable confirmation each fail once and do not push
+  again. A non-fast-forward refusal fails on its own diagnostic while the ref
+  already names the commit. Invalid tree, evidence-ref and head input are
+  refused before any push. A crate-root integration test cannot install the
+  supervision clock or the receive-pack stall without waiting out the 60s
+  production timeout.
+
+- `orbit-core`'s
+  `application/agents/tests/api.rs::reviewer_interval_resamples_review_units_not_task_groups`
+  is a criterion 1 regression for ORB-23843. It drives the public
+  `agent_scorecard` API with synthetic facts to prove two reviewer settlements
+  on one task resample as two row units, matching the same settlements on two
+  tasks, and that the fixed-seed interval repeats. `AgentFacts` is opaque to
+  crate-root integration callers; constructing this exact duplicate-task
+  observation there would require populating mutable workspace state and
+  scanning it, rather than exercising the scorecard boundary directly.
+
+- `orbit-core`'s `application/task/tests/add.rs` cases
+  `filing_refuses_an_unliftable_disallowed_required_tool`,
+  `filing_accepts_an_allowed_required_tool` and
+  `filing_accepts_a_disallowed_read_only_tool_a_grant_can_lift`, and
+  `application/task/pilot/tests/prepare.rs::unliftable_required_tool_is_a_blocking_pilot_finding`
+  (criteria 2 and 3, ORB-23342 regressing ORB-23331). They drive public
+  `add_task` and `prepare_task_pilot`. Filing refuses a disallowed mutating
+  required tool and names the activity and the operator remedy, accepts an
+  allowed tool, and accepts an exact denial only while a test-only
+  classification override marks that tool read/repeat-safe. The pilot finding
+  holds promotion for a task stored before the catalog is seeded, which
+  `add_task` would now refuse. No shipped tool is classified read/repeat-safe,
+  and a crate-root integration test compiles without `cfg(test)`, so it cannot
+  install that override. The mutating refusal is the observed admission
+  failure: a disallowed mutating tool was accepted at filing and blocked only
+  at dispatch.
+
+- `orbit-config`'s `resolved/tests/execution_env.rs::inherit_mode_omits_privilege_bearing_orbit_names`
+  is a criterion 3 regression for ORB-23049. It drives the public
+  `ExecutionEnvPolicy::agent_subprocess_env` with the internal inherit seam
+  set, for both a captured parent snapshot and the live process environment,
+  and proves privilege-bearing `ORBIT_*` names are omitted while an envelope
+  name and ordinary ambient names are still forwarded. No config file can
+  enable inherit, so a crate-root integration test cannot reach this branch.
+  The command-exec allowlist is covered separately at the `orbit.command.exec`
+  boundary.
+
+- `orbit-runtime`'s `task/tests/pr_forge_rerun.rs` cases
+  `rerun_waits_for_running_workflow_before_requesting_failed_jobs`,
+  `rerun_refuses_after_bounded_wait_and_names_running_workflow` and
+  `rerun_still_refuses_without_failed_or_running_workflows_on_head` exercise the
+  public `GhTaskPrForge::rerun_failed_checks` boundary for ORB-22619 / ORB-22211
+  (criterion 2). Thread-local gh replies and a virtual clock force the observed
+  failed-job / running-workflow interleaving and expiry without real waits,
+  credentials or environment mutation. The real recovery integration fixture
+  substitutes the entire forge and cannot exercise this race. The negative
+  case preserves the immediate-refusal contract required by this repair.
+
+- `orbit-exec`'s `build_sandbox/tests/script_macos_inputs.rs::an_input_growing_during_preparation_cannot_escape_the_scratch_cap`
+  is a criterion 2 regression for ORB-21492. It calls the public
+  `run_script_sandboxed` boundary while a private, test-only hook appends bytes
+  to the open source after the first copied chunk. It proves that growth
+  after metadata admission cannot overrun the scratch cap or start a script,
+  without timing races, disk pressure or a shipped test-hook API. The separate
+  integration regression covers known oversized sets and expired preparation.
 
 - `orbit-cli`'s `tests/plugin_callback_surface.rs::recover_claim_commands_parse_with_each_phase_used_by_settlement_refusals`
   verifies the required recover-claim options parse with each phase used by
@@ -342,6 +1087,10 @@ Admitted unit tests:
 - `crates/orbit-core/src/application/automation/tests/source.rs::replay_moves_a_retained_exclusion_onto_its_canonical_commit` (criterion 3, fail-closed replay identity). A real Git divergence is replayed through the source adapter, using a provider lookup that panics. The test proves that a retained certificate exclusion is restated from its own record, so no fresh provider proof is needed. The store then accepts it onto its canonical commit with the certificate intact. The public `auto-task recover --replay-history` path cannot swap in that lookup without a live GitHub provider. The evaluator and store outcomes are covered at the public boundary in `crates/orbit-automation/tests/scheduling/delivery_recovery.rs`.
 
 - `crates/orbit-core/src/application/job/tests/pipeline/admission.rs::a_redrawn_keyed_resubmission_is_refused_without_rewriting_the_task_crew` (criterion 3, fail-closed task write). A keyed automation resubmission of a delivery is refused as a changed key, because admission stamps fresh timestamps into the stored input. The test proves the refused draw writes nothing to its task. A redrawn keyed submission has no public boundary: `submit_automation_pipeline_run` is reached only from automation claims, whose setup dwarfs the invariant. It fails on the base, where the crew write-back landed before the refusal (ORB-19485).
+
+- `crates/orbit-core/src/application/agents/tests/rank.rs` cases `rank_pools_models_bands_by_bootstrap_orders_by_cost_and_drops_unmeasured_weights`, `rank_expectations_match_the_implementer_scorecard_on_shared_terms` and `calibrated_season_stores_window_and_reference_size_and_drives_the_board` (criterion 1, ranking arithmetic; ORB-23302 acceptance criteria). `rank_keeps_partly_measured_model_out_of_top_band` (criterion 1, band selection; ORB-24203) is the regression for a model whose tasks predate review recording: with no reviewed delivery it is scored on escaped regressions alone, and it must not hold band 1 over a fully measured model. It fails with the top-band gate disabled. They drive the public `agent_rank` and `agent_rank_calibration` over fixture scan facts: crew pooling, the settle lag, eligibility, shrinkage, bootstrap bands, cost order within a band, unmeasured measures leaving the weights, parity of expectations with the public implementer scorecard, and season scales with their window and `n_ref`. Scan facts are opaque outside the crate, and a crate-root workspace fixture would need hundreds of reviewed, regressed and priced job runs for one board.
+
+- `crates/orbit-core/src/application/tests/vision_probe.rs::successful_run_without_the_code_is_image_not_seen_and_a_returned_code_is_seen` (criterion 1, probe-report mapping). A finished image-input probe whose canary check did not see the code is reported `image_not_seen` for that crew, and a returned code is reported seen, including when the probe run itself succeeded. The same table keeps a failed delivery that still carries the marker as `image_not_seen`, and a failure after a seen check as a failure. `classify` is `pub(super)`, so the engine dispatch test cannot call it. That dispatch test proves the probe step stays successful and a delivery step still fails; it cannot assemble a successful pipeline wait beside a chosen check. The old mapping treated every successful run as seen and ignored the check (ORB-21365).
 
 - `crates/orbit-core/src/application/pull_drain/tests/drain.rs::claimed_leaf_settlement_carries_its_review_ledger` and `claimed_review_import_keeps_an_operator_decision` (criterion 3, durable review-state safety). The first exercises the production settlement path and proves an exhausted follower ledger reaches the owner under the claim lineage; the public escalation-and-requeue scenario starts from a prepared settlement and cannot prove that producer path. The second replays exhausted claim evidence after an operator reset and proves it cannot erase the reset decision; the public command scenario covers the escalation's requeue, not a later stale receipt.
 
@@ -395,7 +1144,7 @@ Admitted unit tests:
 
 - `crates/orbit-common/src/process/tests/identity.rs::partial_linux_group_scans_cannot_certify_death_and_vanished_pids_do_not_delay_cleanup` (criterion 2, I/O fault injection). The production scan accepts directory entries and a stat reader so the table can force entry errors, unreadable and malformed stat records, and ENOENT between enumeration and reading. It proves an observed zombie cannot certify group death when a potentially live PID cannot be inspected, preserving cleanup's SIGKILL escalation, while vanished PIDs do not prevent zombie-only success. Live-member and unavailable-directory controls cover conclusive activity and the existing signal fallback. The public probe cannot force these partial `/proc` failures economically without host permission changes or nondeterministic races; the crate-root process-group test covers a real Linux zombie through that public probe.
 
-- The [launchd enable tests](../../crates/orbit-core/src/application/routines/clock/tests/enable.rs) (criterion 2,
+- The [launchd enable tests](../../crates/orbit-clock/src/tests/enable.rs) (criterion 2,
   fault injection) drives the enable entry point with launchd selected and failed
   program/state probes. Version outcomes use the inspection probe seam rather
   than executing a fixture binary: healthy, timeout, empty output and unreachable
@@ -405,7 +1154,7 @@ Admitted unit tests:
   on Linux cannot force these launchd states.
 
 - The systemd activation matrices in
-  `crates/orbit-core/src/application/routines/clock/tests/enable.rs`
+  `crates/orbit-clock/src/tests/enable.rs`
   (`systemd_enable_accepts_healthy_in_flight_and_finite_timers` and
   `systemd_enable_rejects_missing_inactive_failed_or_unhealthy_sweeps_without_next_trigger`)
   and `tests/install.rs`
@@ -423,7 +1172,7 @@ Admitted unit tests:
   activation refusal observed on 2026-10-13 and exercise the activation entry
   points, including success reports and execution errors, without timing loops.
 
-- `crates/orbit-core/src/application/task/tests/transitions.rs::delete_rechecks_a_status_changed_after_its_guard_and_preserves_force` (criterion 2, deterministic interleaving). The existing transition-read seam commits an in-progress status after deletion's initial proposed/rejected check, before the task write lock. The isolated fixture asserts refusal leaves the task present, with forced deletion and unchanged eligible statuses as controls. Crate-root integration tests cannot reach the `cfg(test)` seam to choose this ordering reliably.
+- `crates/orbit-core/src/application/task/tests/transitions/reject.rs::delete_rechecks_a_status_changed_after_its_guard_and_preserves_force` (criterion 2, deterministic interleaving). The existing transition-read seam commits an in-progress status after deletion's initial proposed/rejected check, before the task write lock. The isolated fixture asserts refusal leaves the task present, with forced deletion and unchanged eligible statuses as controls. Crate-root integration tests cannot reach the `cfg(test)` seam to choose this ordering reliably.
 
 - `crates/orbit-common/src/process/tests/bounded.rs`: `argv_probe_recovers_when_a_live_child_outgrows_the_queried_buffer` (criteria 2 and 4, native fault injection). A pipe handshake grows a live macOS child's argv between the size query and read. The stale buffer yields an unreadable record, which must not prove exit or authorize cleanup; the probe grows its buffer and recovers the recorded identity. Darwin can return success with a truncated `KERN_PROCARGS2` record, so handling only `ENOMEM` is insufficient. The public bounded runner cannot force this observer interleaving.
 
@@ -435,7 +1184,7 @@ Admitted unit tests:
 
 - `crates/orbit-engine/src/activity_job/cli_runner/supervisor/tests/stall.rs::silent_sleep_stalls_while_cpu_and_output_keep_the_run_alive` (criterion 4, process-tree sampling and process-group cleanup) runs a silent sleeper, a CPU-burning descendant, a periodic printer and a disabled-watch sleeper through the real supervisor. The short window makes the kernel process-tree samples and group termination observable in one bounded fixture; a dispatcher integration fixture would duplicate the real child process cases and the existing supervisor coverage.
 
-- `crates/orbit-engine/src/activity_job/cli_runner/orchestrator/tests/completion.rs::a_stalled_provider_fails_transient_without_a_wall_clock_timeout` (criterion 1, terminal-outcome mapping) checks the stalled and wall-clock-timeout rows through completion projection. It preserves the distinct `stalled` and `timed_out` outputs, transient marker, step error code and claim retry class without running another provider process; the supervisor test above covers the actual stall detection.
+- `crates/orbit-engine/src/activity_job/cli_runner/orchestrator/completion/tests/failure.rs::a_stalled_provider_fails_transient_without_a_wall_clock_timeout` (criterion 1, terminal-outcome mapping) checks the stalled and wall-clock-timeout rows through completion projection. It preserves the distinct `stalled` and `timed_out` outputs, transient marker, step error code and claim retry class without running another provider process; the supervisor test above covers the actual stall detection.
 
 The [orbit-config audit delivery](../dev/reviews/unit-test-audit-orbit-config-delivery.md) maps the retired and relocated identities to their public boundaries. Config loading, compatibility warnings, environment projection, plugin toggles and store admission live in the existing crate-root integration binaries. The malformed-pool grammar table remains admitted under criterion 1; ordinary pool loading uses the public loader.
 
@@ -450,8 +1199,8 @@ The [orbit-config audit delivery](../dev/reviews/unit-test-audit-orbit-config-de
 - The four [worker log sibling tests](../../crates/orbit-core/src/application/job/pipeline/worker/tests/log.rs) — `appends_after_the_size_snapshot_are_excluded_from_the_bounded_read`, `empty_short_and_exact_limit_logs_keep_their_expected_content`, `long_logs_report_the_snapshot_window_and_return_only_its_tail`, and `shrink_after_the_size_snapshot_reports_only_bytes_still_available` (criterion 2, deterministic interleaving). A captured size is passed through the same bounded reader used by the audit and supervisor callers; the append case proves bytes written after that snapshot cannot exceed the 16 KiB window, while controls cover empty, short, exact-limit, long and shrinking files. The callers do not lock out the append-oriented worker, and an integration test cannot force the metadata/read order reproducibly [ORB-15610].
 - `crates/orbit-core/src/application/job/pipeline/worker/tests/supervisor.rs`: `store_read_faults_retain_supervision_and_reap_in_a_live_parent` (criterion 2, fault injection). A SQLite store wrapper injects unreadable and missing startup records and a post-exit read fault while a socket rendezvous bounds a real child. The isolated parent asserts fresh-state settlement and OS reaping before it exits; the public runtime cannot inject these observer reads.
 - The [admissions-stop regressions](../../crates/orbit-core/src/application/job/run/tests/admissions_stop.rs) and `crates/orbit-core/src/application/job/run/tests/drain_cancel.rs`: initialization races (criterion 2, deterministic interleaving). One-shot seams after `NoState` force a worker's first checkpoint and child dispatch, or terminalization with and without that checkpoint, before control initialization. They verify preserved progress and lineage, a merged control for a live drain, and no new effective control for a terminal drain. Crate-root integration tests cannot force this transaction ordering [ORB-15611].
-- `crates/orbit-cli/src/tests/main.rs`: `every_assembled_leaf_accepts_json_and_lists_domain_input_exclusions` (criterion 1). It walks the assembled command tree, including hidden and plugin-derived leaves that help goldens cannot enumerate, and asserts that every leaf accepts `--json`. The only exclusion is a plugin tool input named `json`.
-- `crates/orbit-cli/src/tests/main.rs`: `decision_submit_cli_preserves_signed_raw_message` (criteria 1 and 3, parser edge case and signed-content integrity). The observed submission defect (ORB-18396) trimmed the signed final body space and CRLF. This test feeds the same independently signed fixture as the governed runtime regression through the complete production argv parser and compares the forwarded tool input byte-for-byte. The binary-only CLI has no parser library for crate-root integration tests; a subprocess success fixture would need control of the host's DNS. Help goldens cannot observe input bytes. This test changes no state and calls no private projection helper.
+- `crates/orbit-cli/src/entry/tests/output_args.rs`: `every_assembled_leaf_accepts_json_and_lists_domain_input_exclusions` (criterion 1). It walks the assembled command tree, including hidden and plugin-derived leaves that help goldens cannot enumerate, and asserts that every leaf accepts `--json`. The only exclusion is a plugin tool input named `json`.
+- `crates/orbit-cli/src/entry/tests/discover.rs`: `decision_submit_cli_preserves_signed_raw_message` (criteria 1 and 3, parser edge case and signed-content integrity). The observed submission defect (ORB-18396) trimmed the signed final body space and CRLF. This test feeds the same independently signed fixture as the governed runtime regression through the complete production argv parser and compares the forwarded tool input byte-for-byte. The binary-only CLI has no parser library for crate-root integration tests; a subprocess success fixture would need control of the host's DNS. Help goldens cannot observe input bytes. This test changes no state and calls no private projection helper.
 - `crates/orbit-cmd/src/doctor/tests/worker_token.rs`: `clock_file_is_ready_only_when_it_holds_a_credential_the_workspace_admits` (criterion 1). It is a table over every pairing of clock-file credential names with the workspace's effective pass, asserting that the clock is ready only when an admitted credential is held, and that a held credential the pass omits is named and warned. The boundary needs an installed launchd or systemd clock to reach this classification. `absent_empty_refused_and_mismatched_clock_files_stay_distinct` (criterion 1) pins that absent, empty, refused and mismatched files stay distinct states.
 - Orbit-core's missing-directory and relative-path disk cases now run through the exported native host-resource probe in `tests/runtime/admission_audit/disk_probe.rs`. The private platform tests retain the injected CPU counter/time/wait matrices below.
 
@@ -459,7 +1208,7 @@ The [orbit-config audit delivery](../dev/reviews/unit-test-audit-orbit-config-de
 - `crates/orbit-runtime/src/host_resource/profile/tests/cache.rs`: `no_diff_tag_edit_reclassifies_a_cached_template` (criterion 1, state transitions of the profile cache's hit path). Freshness, bounds and crew models stay fixed while a template's `no-diff-expected` tag is added and then removed. An untouched cache still returns the same profiles, and the next pass after a tag edit classifies the template under its new base class, with no sampled run finishing in between. It fails on the base, where a hit returned the old class [ORB-19555]. The composed path is guarded at the public boundary by `no_diff_tag_edit_reclassifies_a_template_on_the_next_read` in [`resource_profiles.rs`](../../crates/orbit-core/tests/runtime/resource_profiles.rs), which edits the tag through `update_task_with_identity`; this unit case stays the cheaper guard of the cache's hit transition.
 - `crates/orbit-store/src/driver/sqlite/task_registry/tests/mod.rs`: `fresh_open_through_symlinked_root_matches_reopen_by_canonical_root` (criterion 3). It guards symlink confinement of the registry root: a fresh open through a symlinked root and a later open of the canonical root must key one `workspaces_dir`, because the repair gate keys its attempt budget on that path. `workspaces_dir` is crate-private, so no public-surface test can observe the split.
 - `crates/orbit-store/src/repository/task/coordination/tests/admission.rs`: `a_grant_never_takes_a_footprint_the_owner_wave_admitted_before_its_section` and `an_owner_wave_after_a_grant_refuses_the_claimed_footprint` (criterion 2, deterministic interleaving). The first admits an owner drain wave through the crate-private `after_selection` seam, between a pull grant's selection and its exclusive section, and asserts the grant neither takes the admitted task nor one overlapping its footprint. The second commits the grant first and asserts the wave's section refuses the claimed footprint even though the wave's snapshot predates the claim. At the runtime boundary the claim's task is already `in-progress` before any later drain snapshot, and nothing can land a grant between a wave's snapshot and its section, so neither ordering is reachable there.
-- `crates/orbit-store/src/repository/task/coordination/tests/claim_section.rs`: `a_claim_mutation_section_decodes_its_own_claim_and_syncs_only_its_commit` and `a_slow_claim_apply_holds_its_bundle_and_not_its_partition` (criterion 2, fault injection). The first counts, through the crate-private section probe, the claim-lifecycle rows decoded and the durability syncs requested inside a bind's and a budgeted release's exclusive section among other bound claims, asserts both stay under the pre-change baseline, and asserts an exact retry takes no exclusive section. The second holds a claim commit's apply, which runs after its admission section, on a release channel through a `#[cfg(test)]` seam. While it is held, another real admission proves partition release and an envelope read sees the decided bind. Hold reports may wait for the retained bundle lock to close before emission [ORB-19458]. A full task read waits on the task's bundle lock: the test waits for that read's contention diagnostic (the bundle lock's default 3 s warning) before releasing the writer, proves the read has not returned while the bind is half-applied, and checks the bind and its history after release. Reader assertions use channel ordering and load-tolerant hang guards, with no sleep or cross-thread completion-time bounds [ORB-15820]. Neither the counters nor the stall seam exist in the build the crate-root tests compile against [ORB-15797]. `exclusive_claim_sections_stay_short_under_concurrent_durable_mutations` is `#[ignore]`d and run on demand: it measures exclusive admission hold p50/p95 for concurrent claim mutations on a real disk with real syncs, and asserts those sections request no durability syncs [ORB-16389].
+- `crates/orbit-store/src/repository/task/coordination/tests/claim_section.rs`: `a_claim_mutation_section_decodes_its_own_claim_and_syncs_only_its_commit` and `a_slow_claim_apply_holds_its_bundle_and_not_its_partition` (criterion 2, fault injection). The first counts, through the crate-private section probe, the claim-lifecycle rows decoded and the durability syncs requested inside a bind's and a budgeted release's exclusive section among other bound claims, asserts both stay under the pre-change baseline, and asserts an exact retry takes no exclusive section. The second holds a claim commit's apply, which runs after its admission section, on a release channel through a `#[cfg(test)]` seam. While it is held, another real admission proves partition release and an envelope read sees the decided bind. Hold reports may wait for the retained bundle lock to close before emission [ORB-19458]. A full task read waits on the task's bundle lock: the test waits for that read's contention diagnostic (the bundle lock's default 3 s warning) before releasing the writer, proves the read has not returned while the bind is half-applied, and checks the bind and its history after release. Reader assertions use channel ordering and load-tolerant hang guards, with no sleep or cross-thread completion-time bounds [ORB-15820]. Neither the counters nor the stall seam exist in the build the crate-root tests compile against [ORB-15797]. `exclusive_claim_sections_stay_short_under_concurrent_durable_mutations` is `#[ignore]`d and run on demand: it measures exclusive admission hold p50/p95 for concurrent claim mutations on a real disk with real syncs, and asserts those sections request no durability syncs [ORB-16389]. `a_listing_during_a_commit_apply_waits_for_the_writer_and_does_not_rebuild_the_index` holds the same apply seam and asserts a listing that meets the held bundle takes no index fallback and returns the decided state [ORB-22425].
 - `crates/orbit-store/src/repository/task/coordination/tests/read_latency.rs`: `slow_release_reports_do_not_hold_task_boundaries` reproduces synchronous release-report I/O retaining both boundary locks (ORB-19458). An isolated child parks a subscriber after an 80 ms admission and probes both locks through the public acquisition API, then verifies full task and search results through `TaskStoreBackend` while the report is parked. It fails on the original guard drop order and passes after descriptor release and report deferral (focused candidate: 0.14 s). The private fixture only sets the hold-warning threshold; the assertions exercise public APIs. `task_read_report_latency_probe` uses the same fixture for ten sequential task reads and ten searches, with a 2.2 s sink stall per sample and eight representative bundles. This explicitly ignored experiment emits JSON timings and phase diagnostics, takes about 46 s per build, and runs only on demand; the regular regression has no performance deadline. The production boundary's 2 s warning threshold cannot place a report after a critical-section operation bounded to 100 ms, so the fixture needs the existing private threshold seam.
 - `crates/orbit-store/src/repository/task/coordination/tests/commit_replay.rs`: `a_bind_interrupted_after_its_decision_converges_to_the_committed_state` and `opening_a_boundary_replays_a_decision_whose_lease_was_lost` (criterion 2, fault injection). A `#[cfg(test)]` seam makes a decided bind's apply die before it starts or after only its history, dropping its lease and bundle lock as a dead process would. The first asserts the bundle refuses readers and writers until the next store read replays it, and that the replay matches an uninterrupted bind's history exactly once, settles the journal, clears the lease and keeps the receipt replay. The second removes the dead lease, as a host crash may, and asserts that opening the boundary replays the decision. A real crash cannot be placed between the decision and the apply from a crate-root test [ORB-16389].
 - `crates/orbit-store/src/repository/task/coordination/tests/commit_replay.rs::journal_retention_keeps_an_interrupted_decision_for_its_replay` (criterion 2, fault injection; explicitly required journal-retention recovery coverage). The existing `BeforeApply` seam interrupts a decided claim bind. After aging its committed journal row beyond the applied rows and pruning through `StoreRetentionBackend`, a task-store read must still replay the decision, settle the journal and preserve both the interrupted claim's receipt and a pruned claim's receipt. The seam is available only under `#[cfg(test)]`, so a crate-root integration test cannot force this crash point. This extends the existing replay fixture with the retention safety guarantee; it does not test a private implementation function.
@@ -512,7 +1261,6 @@ The [orbit-config audit delivery](../dev/reviews/unit-test-audit-orbit-config-de
 - `crates/orbit-store/src/driver/sqlite/migration/tests/ledger/registry.rs::store_schema_prefix_goldens` (criterion 3, persisted-schema safety): applies each shipped ledger prefix independently and compares its normalized SQLite schema with a lossless per-version golden. The public store-open boundary always applies the latest registry and cannot exercise historical prefixes without widening production visibility. The legacy recreation and actor data backfill cases use the public boundary in `tests/store/migration_freeze.rs`.
 - `crates/orbit-store/src/driver/sqlite/migration/tests/ledger/registry.rs::task_registry_schema_prefix_goldens` (criterion 3, persisted-schema safety): the same per-prefix golden for the task registry's own ledger (`task_registry/tests/registry_schema.golden`), a separate SQLite file the store-open boundary never builds. Adoption, the `user_version` fence and newer-registry decisions use the public registry boundary in `tests/store/task_registry_ledger.rs`.
 
-- `crates/orbit-config/src/tests/machine.rs::host_shutdown_hold_minutes_defaults_and_rejects_non_positive_values` (criterion 3, fail-closed crafted input). Zero is rejected by the resolver with a message that names `machine.host_shutdown_hold_minutes`; a negative fails the integer read and names the same key. The default 180 and an uncapped 10080 are controls in the same test. This admission [ORB-15796] was added after the pinned orbit-config audit and remains unchanged by that slice; the public workspace `[machine]` refusal now lives in the crate-root review-layer integration target.
 - `the_hold_includes_the_horizon_and_a_later_instant_admits` (criterion 1), beside `crates/orbit-runtime/src/host_signal.rs`. One table pins the horizon arithmetic: equality holds, one second later admits, and a past timestamp holds. The pull and local drain tests, and the sweep test below, place the schedule with `Utc::now()` at minute granularity, so they cannot pin the one-second boundary without a race [ORB-15796].
 - `crates/orbit-core/src/application/routines/tests/sweep.rs::a_shutdown_inside_the_hold_horizon_skips_the_sweep_and_one_beyond_it_fires` (criterion 2). The public `test_support::run_sweep_at` hardcodes the default host-signal probe, so a crate-root test cannot place a shutdown on either side of the horizon. The test drives `pub(crate)` `run_sweep_at_with_providers_at` with an injected clock and a 30-minute horizon, and asserts the tick skips at the horizon and fires one minute past it. A hardcoded 180 would still hold that far side [ORB-15796].
 
@@ -521,7 +1269,7 @@ The [orbit-config audit delivery](../dev/reviews/unit-test-audit-orbit-config-de
 - `crates/orbit-tools/src/plugin/tests/callback/mod.rs::a_failed_credential_open_removes_the_minted_record` (criterion 2, fault injection). Opening the credential fails only under descriptor exhaustion, or on a host with no inherited descriptors, so the test supplies a failing opener through the crate-private `mint_with` seam and proves the unowned `pid: 0` record is removed, since the sweep skips it forever.
   `crates/orbit-tools/src/plugin/tests/line_queue.rs::a_reader_stays_blocked_until_the_consumer_drains_bytes` and `dropping_the_consumer_releases_a_blocked_reader` (criterion 2, deterministic interleaving). A plugin MCP server's stdout reader may queue at most `MAX_QUEUED_BYTES` ahead of the consumer. A boundary test would need 64 MiB lines and a memory probe, so the tests drive the crate-private queue with a 10-byte budget: the reader cannot run more than one line ahead, and dropping the consumer releases a reader blocked on the budget.
 
-- `crates/orbit-core/src/application/visual_delivery/tests/resolve.rs::blocking_finding_with_no_reviewer_issued_is_a_high_follow_up_not_a_hold` and `blocking_finding_given_to_a_reviewer_that_did_not_resolve_it_still_holds` (criterion 3, fail-closed landing safety) are the regression for ORB-20273. A live delivery's blocking visual finding was held as `delivery_visual_review_unresolved` even when the review gate issued no reviewer, so nothing could fix or dispute it and `orbit visual accept-dispute` refused it. The tests drive the `visual_recapture` pipeline step: with no reviewer manifest the finding becomes a `high` follow-up; with a manifest that issued it and no report it still holds. Visual evidence under `visual/` is system-written, so neither a crate-root test nor the tool surface can seed it.
+- `crates/orbit-core/src/application/plugin/tests/seed.rs::plugin_auto_task_colliding_with_shipped_default_is_refused` and `non_colliding_plugin_auto_task_seeds_as_before` (criterion 3, fail-closed plugin seed validation for ORB-23050). They drive the public `seed_plugin_definitions` entry point the enable/sync paths use, with a fixture plugin whose `code` + `review` resolves to the shipped default `code-review`. The colliding test proves a typed refusal with and without `--force` and that no routine is left behind; the non-colliding test proves an ordinary name still seeds `Created` then `Unchanged`. The crate-root `plugin_workspace` integration boundary covers generic seed-failure toggle preservation but cannot choose the crafted namespace/name collision or the force matrix without a full install per case.
 
 ## Goldens
 
@@ -567,8 +1315,8 @@ cases do not earn unit admission because the public boundary costs the same.
 deferred-sandbox cases live in
 [`tests/contracts/main.rs`](../../crates/orbit-types/tests/contracts/main.rs),
 with modules for each surface in one integration binary.
-The admission audit's 40 moved cases use the same inputs and assertions through
-exported helpers and types, including the vendored provider-resolution fixture;
+The admission audit's moved cases use the same inputs and assertions through
+exported helpers and types;
 none needs a provider process or production visibility change.
 
 The two retired filesystem cases are covered by `orbit-policy`'s
@@ -875,6 +1623,20 @@ admitted session cases in `federated/probe/tests/session.rs`:
   `OutcomeUnknown`. The admitted malformed-reply case corrupts a consumed
   internal answer; it does not cover silence after a sent admission.
 
+The legacy invalid-params wire shape is not an admitted unit test.
+`unknown_internal_drain_operation_preserves_the_legacy_rpc_refusal` in
+`crates/orbit-mcp/tests/boundary/oversized_lines.rs` drives a scripted SSH
+peer through `DestinationProbe::open_internal_drain_route` and the returned
+session's `call_internal_drain`. The peer's JSON-RPC `-32602` reply for
+`orbit.drain.claim.effort` surfaces as `RemoteTool` with code `invalid_input`
+and typed `rpc_code` `-32602` and `rpc_message` `unknown internal drain
+operation` fields; the formatted `"code":-32602` text stays the diagnostic
+detail. The public late-effort regression classifies those fields as an
+unsupported owner, while settlement, reconcile and worktree GC still treat the
+same answer as an unreachable owner. A connection failure stays a separate
+unreachable outcome in that regression. No production visibility is widened
+for the move.
+
 The eight originally admitted orbit-mcp tests remain, including the private
 SSH proxy argv seam in `remote/tests/proxy.rs`.
 
@@ -913,7 +1675,6 @@ permission repair, and preserving an outside symlink target's mode. The nine
 collector cases, including the formerly admitted trash cases, use the exported
 collector independently of those final-removal seams. No production visibility
 is widened and no implementation is copied into a boundary fixture.
-
 
 The [orbit-store per-identity reconciliation](../dev/reviews/unit-test-admission-orbit-store-2026-10-13.json)
 checks the pinned audit against the current export surface. Twenty-nine existing
@@ -1011,6 +1772,22 @@ timeout without proving the byte cap. These cases retain `TunnelSpec`, `ProbeLim
 and the fake SSH/peer harness, alongside all 24 previously admitted private fault,
 security and platform cases. No production visibility or behavior changes.
 
+## Reconciliation during a cancellation admission
+
+`crates/orbit-core/src/application/job/run/tests/reconcile.rs::reconciling_a_reaped_worker_mid_cancel_leaves_the_outcome_to_the_canceller`
+(criterion 2, deterministic interleaving) reproduces ORB-21876. The private
+signal seam of the public cancel path places a reconciling `show_job_run` read
+after a real owner is signalled and reaped and before the canceller reads the
+run again, the gap in which retained production cancels ended `interrupted`.
+No public entry point can stop between those two steps without timing. It also
+shows that a bystander process survives and the task returns to the backlog.
+
+`crates/orbit-core/src/application/job/run/tests/reconcile.rs::reconciliation_interrupts_a_dead_owner_once_its_cancellation_cannot_finish`
+(criterion 2, crash mid-operation) covers the two exits from that deferral: a
+canceller that reported failure and one that vanished without reporting. A
+crash between request and completion cannot be produced through a public entry
+point, so the fixture records that durable state directly.
+
 ## Landing-review gate verdict parse admission
 
 `crates/orbit-core/src/application/job/tests/delivery_attention.rs::abandoned_landing_review_settle_reports_abandoned_verdict`
@@ -1041,3 +1818,14 @@ The step error is the refusal's `Display`, which prefixes the settlement with th
 refused action (`deterministic action \`review_gate_settle\` refused: review_abandoned: ...`).
 The verdict parse anchors the marker after that prefix, so the abandoned settlement
 reports `abandoned`; anchoring on the bare settlement text alone misread it as `incomplete`.
+
+`crates/orbit-engine/src/activity_job/workspace/tests/boundary_guard.rs::stationary_primary_generation_records_are_benign`
+(criterion 1, policy matching) guards ORB-23736: a stationary primary whose
+only dirt is Orbit's own generation records (`.generation-compat.json`,
+`.generation-image-digest.json`, a `.generation-participants/` record) is
+benign, while a stationary source path outside those records and outside
+`.orbit/` still fails as `primary_checkout_drift`. It drives the production
+`WorktreeBoundaryGuard::verify` entry point over two disposable Git checkouts
+with real fingerprints, proving both the benign and the still-drift rows plus
+that the guard stages, commits, resets, or cleans nothing. A full pipeline
+with linked worktrees and a provider run cannot prove this guard cheaply.

@@ -1,7 +1,9 @@
 //! One task's out-of-run auto-fix, started by an operator.
 //!
 //! The dashboard's Fix PR action repairs one `review` task's conflicting or
-//! red Orbit pull request without a drain. It runs the drain pass's own steps
+//! red Orbit pull request without a drain, or hands back a delivery held on
+//! a re-observable delivery hold (outside the drain's backoff, within its
+//! ceiling). It runs the drain pass's own steps
 //! for that task (`adoption`): the newest own delivery leaf, the same verdict,
 //! resume plan and start, the same attempt ledger and budget, the same
 //! deferred footprint locks and the same `pr_auto_fix_out_of_run` history
@@ -98,8 +100,9 @@ impl OrbitRuntime {
     /// Whether [`Self::start_task_pr_auto_fix`] would start a repair of
     /// `task_id`'s pull request now, without starting one. Reads the forge
     /// fresh. Returns `{available, reason, detail, pr_number, blocker,
-    /// head_sha}`; `reason` and `detail` are those of the refusal a start
-    /// would answer.
+    /// hold_code, head_sha}`; `reason` and `detail` are those of the refusal
+    /// a start would answer, and `hold_code` names the delivery hold of a
+    /// held leaf it hands back.
     pub fn task_pr_auto_fix_readiness(
         &self,
         task_id: &str,
@@ -119,6 +122,7 @@ impl OrbitRuntime {
                 "detail": Value::Null,
                 "pr_number": planned["pr_number"],
                 "blocker": planned["blocker"],
+                "hold_code": planned["hold_code"],
                 "head_sha": planned["head_sha"],
             })),
             Err(TaskAutoFixError::Refused(refusal)) => Ok(json!({
@@ -127,6 +131,7 @@ impl OrbitRuntime {
                 "detail": refusal.detail,
                 "pr_number": observation.pr_number,
                 "blocker": observation.blocker,
+                "hold_code": observation.hold_code,
                 "head_sha": Value::Null,
             })),
             Err(TaskAutoFixError::Runtime(error)) => Err(error),

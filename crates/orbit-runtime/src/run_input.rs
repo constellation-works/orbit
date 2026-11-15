@@ -27,6 +27,16 @@ pub fn managed_run_context_run_id_from_env() -> Option<String> {
         .and_then(|value| non_empty(&value).map(ToOwned::to_owned))
 }
 
+/// The task a managed run's environment names (`ORBIT_TASK_ID`), honored
+/// only with the managed marker and a non-blank run id, like
+/// [`managed_run_context_run_id_from_env`].
+pub fn managed_run_context_task_id_from_env() -> Option<String> {
+    managed_run_context_run_id_from_env()?;
+    std::env::var("ORBIT_TASK_ID")
+        .ok()
+        .and_then(|value| non_empty(&value).map(ToOwned::to_owned))
+}
+
 /// Whether this process is a trusted child of an Orbit-managed run.
 pub fn managed_run_context_from_env() -> bool {
     managed_run_context_run_id_from_env().is_some()

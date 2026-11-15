@@ -7,6 +7,7 @@ use orbit_store::contracts::JobRunQuery;
 use orbit_types::workflow::JobRun;
 
 use crate::OrbitRuntime;
+use crate::application::job::JobDrainLeafPort;
 
 use super::projection::ActivityInvocationEvidence;
 use super::reconcile::ReconcilePass;
@@ -44,51 +45,58 @@ impl OrbitRuntime {
     }
 
     pub fn show_job_run(&self, run_id: &str) -> Result<JobRun, OrbitError> {
+        let run = self.show_job_run_without_drain_leaf_settlement(run_id)?;
+        // [ORB-23198] A drain's leaf can end after the drain's last admission
+        // pass; this reconciling read records it terminal on the dispatch.
+        self.record_finished_drain_leaves(&run);
+        Ok(run)
+    }
+
+    /// Show a run after stale-run reconciliation without settling its drain
+    /// leaves. Read projections that separately display live child outcomes
+    /// can use this to keep the parent's dispatch checkpoint unchanged.
+    pub fn show_job_run_without_drain_leaf_settlement(
+        &self,
+        run_id: &str,
+    ) -> Result<JobRun, OrbitError> {
         let run = self.show_job_run_observed(run_id)?;
-        if self.reconcile_stale_job_run(&run)? {
-            self.show_job_run_observed(run_id)
+        Ok(if self.reconcile_stale_job_run(&run)? {
+            self.show_job_run_observed(run_id)?
         } else {
-            Ok(run)
-        }
+            run
+        })
     }
 
     /// The provider/model evidence each of a run's activities recorded, for
     /// [`super::job_run_to_json_with_activity_provenance`].
+    ///
+    /// Evidence is one row per completed invocation: its agent/model is the
+    /// provider-reported identity stored at completion (which wins when the
+    /// provider reports a different model than requested), while its crew and
+    /// reasoning effort are the dispatch identity recorded at launch. A launch
+    /// without a completed invocation is not evidence: it leaves the activity
+    /// `unavailable`, never `recorded`. Old completion rows have no dispatch
+    /// record. Keep their effort unknown, never reconstruct it from audit or
+    /// current crew settings.
     pub fn activity_invocation_evidence(
         &self,
         run_id: &str,
     ) -> Result<Vec<ActivityInvocationEvidence>, OrbitError> {
-        let workspace = self.stores().jobs().workspace_id();
-        let mut evidence = self
-            .sqlite_store()?
-            .agent_executions(workspace, run_id)?
-            .into_iter()
-            .map(|record| ActivityInvocationEvidence {
-                activity_id: record.activity_id,
-                provider: record.provider,
-                model: record.model,
-                execution: Some(record.identity),
-            })
-            .collect::<Vec<_>>();
-        // Old completion rows have no dispatch record. Keep their effort
-        // unknown, never reconstruct it from audit or current crew settings.
-        evidence.extend(
-            self.invocation_records(InvocationQuery {
+        Ok(self
+            .invocation_records(InvocationQuery {
                 job_run_id: Some(run_id.to_string()),
                 limit: 100_000,
                 skip_tool_calls: true,
                 ..InvocationQuery::default()
             })?
             .into_iter()
-            .filter(|record| record.execution.is_none())
             .map(|record| ActivityInvocationEvidence {
                 activity_id: record.activity_id,
-                provider: record.agent,
+                provider: record.provider.unwrap_or(record.agent),
                 model: record.model,
-                execution: None,
-            }),
-        );
-        Ok(evidence)
+                execution: record.execution,
+            })
+            .collect())
     }
 
     /// [`Self::list_job_runs`] without its stale-run reconciliation: the
@@ -117,6 +125,17 @@ impl OrbitRuntime {
     pub fn show_job_run_observed(&self, run_id: &str) -> Result<JobRun, OrbitError> {
         self.get_job_run_backend(run_id)?
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))
+    }
+
+    /// Steps-free run rows for `run_ids`, for a projection that needs state,
+    /// timing and task labels only.
+    ///
+    /// One statement per chunk of ids, selecting no step rows, with `input`
+    /// limited to the task keys the run list labels from. Missing ids are
+    /// omitted. This does not reconcile; a non-terminal child still needs
+    /// [`Self::show_job_run`] so a dead leaf is not shown as running.
+    pub fn get_job_runs_by_id(&self, run_ids: &[String]) -> Result<Vec<JobRun>, OrbitError> {
+        self.stores().jobs().get_job_runs_by_id(run_ids)
     }
 
     /// A job filter must name a known job or one with recorded runs.
@@ -164,6 +183,15 @@ impl OrbitRuntime {
 
     pub(crate) fn get_job_run_backend(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
         self.stores().jobs().get_job_run(run_id)
+    }
+
+    /// Only the run's lifecycle state, for polls that must not hydrate
+    /// steps, input or pipeline state.
+    pub(crate) fn get_job_run_state_backend(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<orbit_types::workflow::JobRunState>, OrbitError> {
+        self.stores().jobs().get_job_run_state(run_id)
     }
 }
 

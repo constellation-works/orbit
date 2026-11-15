@@ -8,6 +8,9 @@ pub struct JobRunOutcomeFact {
     pub job_id: String,
     pub state: String,
     pub created_at: DateTime<Utc>,
+    /// An `interrupted` run's recorded error code: the code of its last
+    /// non-skipped step that recorded an error. `None` in every other state.
+    pub interrupted_error_code: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

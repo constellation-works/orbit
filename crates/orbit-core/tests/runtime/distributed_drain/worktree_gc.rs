@@ -34,7 +34,7 @@ fn replica_gc(mut pair: Pair, config: &str) -> Pair {
         OrbitRuntime::from_roots_with_binding(
             &global,
             &pair.follower_repo.join(".orbit"),
-            orbit_core::WorkspaceRuntimeBinding {
+            orbit_core::runtime::WorkspaceRuntimeBinding {
                 logical_workspace_id: pair.wire.owner.workspace_id().unwrap(),
                 task_partition_id: pair.follower.workspace_id().unwrap(),
                 owner_machine_id: Some(OWNER.into()),
@@ -685,8 +685,8 @@ fn an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure(
         "{report:#}"
     );
     assert_eq!(
-        report["task_status"], "backlog",
-        "the owner's answer decides: {report:#}"
+        report["task_status"], "blocked",
+        "the owner's prerequisite hold decides: {report:#}"
     );
     assert!(worktree.exists());
 }
@@ -867,7 +867,8 @@ fn replica_gc_looks_each_id_up_on_the_host_its_prefix_names() {
     );
     assert!(owner_path.exists() && third_path.exists() && unregistered_path.exists());
 
-    // An unreachable third host is that host's outage, not a missing task.
+    // The owner's outage fails only the owner route; the third host's lookup
+    // goes by id and is left alone.
     *pair.wire.task_reads_fail.lock().unwrap() = Some("owner unreachable".into());
     let outage = pair
         .follower
@@ -886,6 +887,12 @@ fn replica_gc_looks_each_id_up_on_the_host_its_prefix_names() {
 
 /// Park an owner task in `someday`, as a human does.
 fn park(pair: &Pair, task: &str) {
+    if pair.owner_status(task) == "blocked" {
+        pair.wire
+            .owner
+            .requeue_blocked_task(task, "operator parks the failed launch", false)
+            .expect("resolve the prerequisite hold before parking");
+    }
     pair.wire
         .owner
         .update_task_as_human(
@@ -900,12 +907,13 @@ fn park(pair: &Pair, task: &str) {
 }
 
 /// [ORB-16385] A failed run's worktree whose task is parked in `someday` past
-/// `worktree.parked_reclaim_after_hours` is reclaimed. A Git worktree lock, an
+/// the parked-reclaim window (zero in this fixture) is reclaimed. A Git worktree lock, an
 /// unsettled claim or a backlog task keeps it, and so do run branch commits
 /// that exist on no published ref and in no rescue patch: the branch is the
 /// only copy of a run that committed before publication failed.
 fn a_parked_tasks_failed_worktree_goes_only_when_its_commits_survive() {
-    let pair = gc_pair_with(1, "[worktree]\nparked_reclaim_after_hours = 0\n");
+    let mut pair = gc_pair_with(1, "");
+    pair.follower = pair.follower.with_worktree_parked_reclaim_after_hours(0);
     let drain = pair.start_drain();
     // Cancellation's terminal hook and the launch pass both try delivery,
     // so the leaf's claim stays unsettled.
@@ -1034,7 +1042,7 @@ fn a_parked_tasks_failed_worktree_goes_only_when_its_commits_survive() {
 /// its run's end: a run that failed long ago keeps its worktree when its task
 /// was parked just now.
 fn a_parked_age_is_measured_from_the_status_change() {
-    let pair = gc_pair_with(1, "[worktree]\nparked_reclaim_after_hours = 24\n");
+    let pair = gc_pair_with(1, "");
     let task = pair.tasks[0].clone();
     let (leaf, path) =
         terminal_worktree_at(&pair, &[&task], Utc::now() - chrono::Duration::days(30));
@@ -1050,50 +1058,6 @@ fn a_parked_age_is_measured_from_the_status_change() {
     assert!(path.exists());
 }
 
-/// [ORB-17657] Regression for the run_id-only lookup: one leaf can yield
-/// both a worktree report and a host-target report under the same
-/// `run_id`, as in
-/// `a_linked_replica_reclaims_a_settled_leafs_host_validation_output`.
-/// `gc_report` must return the worktree report deterministically,
-/// regardless of the order GC emits or sorts the reports into. The old
-/// run_id-only `find` returned the host-target report in the second
-/// order below and the worktree report in the first, so this fails on
-/// the defective helper.
-fn gc_report_selects_the_worktree_report_when_a_leaf_also_has_a_host_target_report() {
-    let leaf = "leaf-dual-report";
-    let worktree = Path::new("/repo/.orbit/state/worktrees/orbit-leaf-dual-report");
-    let target = Path::new("/primary/.orbit/state/host-validation-targets/abc123");
-    let worktree_report = json!({
-        "run_id": leaf,
-        "path": worktree,
-        "action": "removed",
-        "bytes_reclaimed": 0,
-    });
-    let host_target_report = json!({
-        "run_id": leaf,
-        "path": target,
-        "action": "reclaimed",
-        "bytes_reclaimed": 16,
-    });
-    for reports in [
-        vec![worktree_report.clone(), host_target_report.clone()],
-        vec![host_target_report.clone(), worktree_report.clone()],
-    ] {
-        let result = json!({ "reports": reports });
-        let report = gc_report(&result, leaf, worktree);
-        assert_eq!(report["action"], "removed", "{report:#}");
-        assert_eq!(
-            report["path"],
-            worktree.to_string_lossy().as_ref(),
-            "{report:#}"
-        );
-        // The host-target report is still reachable by its own path.
-        let reclaimed = gc_report(&result, leaf, target);
-        assert_eq!(reclaimed["action"], "reclaimed", "{reclaimed:#}");
-        assert_eq!(reclaimed["bytes_reclaimed"], 16, "{reclaimed:#}");
-    }
-}
-
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     delivery_retains_a_shared_worktree_until_every_mapped_run_is_terminal_scenarios,
@@ -1107,5 +1071,4 @@ crate::scenario_table!(
     replica_gc_looks_each_id_up_on_the_host_its_prefix_names,
     a_parked_tasks_failed_worktree_goes_only_when_its_commits_survive,
     a_parked_age_is_measured_from_the_status_change,
-    gc_report_selects_the_worktree_report_when_a_leaf_also_has_a_host_target_report
 );

@@ -20,10 +20,10 @@ template:
 
     Do not file these here:
     - **Lint suppressions.** Counting, inventorying and ratcheting suppression
-      comments and attributes belongs to the `suppression-ratchet` default
-      auto-task. This sweep does not count them. If that definition is not
-      enabled in this workspace, say so in the execution summary instead of
-      counting here.
+      comments and attributes belongs to a workspace's own
+      `suppression-ratchet` auto-task when it has one. This sweep does not
+      count them. If no such definition is enabled in this workspace, say so
+      in the execution summary instead of counting here.
     - File size and module layout inside one package, and test placement or
       test retirement: layout-only work is not a code-health finding.
     - Latency and performance, documentation drift (the `doc-duties` default
@@ -36,6 +36,12 @@ template:
     `code-health` per the installed `orbit` skill's task-authoring reference
     and does not count toward the cap. File it with
     `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown with file:line evidence>","acceptance_criteria":["<observable outcome>"],"context_files":["symbol:<evidence source path>#<name>:<kind>","file:<matching test path>"],"complexity":"medium","tags":["code-health"],"type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium|high|critical>","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    When the matching test file (or any other file the defect fix creates)
+    does not exist yet, list its exact path as that `file:` selector and add
+    `"allow_missing_context":true` to the same call, so the filing records
+    `context_creation_authorized` for it; naming the new file only in the
+    description grants nothing. If its exact path cannot be named, do not
+    file the defect: record it as an evidence gap in the artifact instead.
 
     ## Rules and command surfaces
 
@@ -43,7 +49,7 @@ template:
       subcommands (they skip agent provenance). Find the previous pass with
       `orbit tool run orbit.task.list --input '{"status":["done"],"tag":["code-health-sweep","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`
       and fetch its artifact with
-      `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"code-health.json","model":"<agent-family>"}'`.
+      `orbit tool run orbit.task.artifact --input '{"action":"get","id":"<id>","path":"code-health.json","model":"<agent-family>"}'`.
       Search coverage with
       `orbit tool run orbit.search --input '{"query":"<one distinctive token>","kind":"task","all":true,"model":"<agent-family>"}'`
       (task search matches non-adjacent terms, full matches first: use a
@@ -300,8 +306,21 @@ template:
     filing, read the installed `orbit` skill's task-authoring reference and
     follow it for task shape. File each (tool-created tasks start `proposed`) with
     `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>"],"complexity":"<assessed>","tags":["code-health","tech-debt","<dead-code|dedup|simplify|architecture|compat-retire>"],"type":"refactor","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium>","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    Before filing, scan the draft description, scope and criteria for every
+    file the finding creates — a new module a split or deduplication moves
+    code into, a new test file, a migration or any other new destination.
+    List each exact path as a `file:` selector in that same `context_files`
+    list and add `"allow_missing_context":true` to the filing call, so it
+    records `context_creation_authorized` for each new path at filing time;
+    omit the flag only when the task creates nothing. Naming a new file only
+    in prose grants nothing, and a missing selector filed without the flag is
+    refused by `orbit.task.add`. If an exact destination cannot be named, do
+    not file the finding: record it in the artifact as an evidence gap
+    deferred to the next pass.
     Read each filed task back with `orbit.task.show` before recording it as
-    delivered. Never file a finding without verified `context_files`.
+    delivered, and confirm its history carries the creation grant for every
+    new path it names. Never file a finding without verified `context_files`
+    (existing targets, or new targets granted as above).
 
     - **Type and tags.** `type: refactor`; tags `code-health`, `tech-debt`, and
       the lens tag from the payload.
@@ -313,14 +332,48 @@ template:
       call site that changes, plus the tests that cover them:
       `symbol:<path>#<name>:<kind>` for each existing function or type that
       changes, `file:`/`dir:` when the change is file-wide (deletion of a
-      whole file, a move, more than about five symbols in one file).
+      whole file, a move, more than about five symbols in one file). Every
+      file the task creates is listed as its exact `file:` destination here
+      and granted at filing with `allow_missing_context: true` (see Filing
+      above); an existing declaration file a new module needs (`mod.rs` and
+      its peers) is listed as a verified existing `file:` selector.
     - **Description.** It contains **Outcome**; **Evidence** (paths with line
       numbers at the pinned SHA, reference counts, the copies side by side or
       the rule cited, and the routes checked for a dead-code candidate); **Scope
-      and non-goals**; the behavioural-difference table for duplication; a line
-      saying **Owner sign-off required** when the change alters a public
-      surface the repository's documents mark as stable; and the
+      and non-goals**; the behavioural-difference table for duplication; the
+      **Stable-surface approval** section below when it applies; and the
       **Conventions** block below, copied verbatim.
+    - **Stable-surface approval.** A change that keeps the Conventions block's
+      behaviour-preserving rule needs no approval: never invent a sign-off
+      for it. Only a change to a public surface the repository's documents
+      mark as stable (breaking changes needing an owner's sign-off) does. An
+      implementer cannot obtain that approval, so never leave it for the
+      implementer; record one of two states in the description:
+      - **Owner approval recorded**: who granted it, where (task comment,
+        document or decision record) and the exact surface and change it
+        covers. State the authorized change as the Outcome; every criterion
+        then proves that change and its behaviour.
+      - **Owner decision required before implementation**: open the
+        description with a section naming the surface, the proposed change
+        and the question for the owner. Write the Outcome, scope and
+        criteria as the complete proposed contract: name the proposed
+        change in the Outcome, include it in scope, and include criteria
+        proving it, each explicitly marked as proposed pending the owner's
+        decision. The task stays `proposed` until the owner records the
+        decision in a comment; the pending marking plus `proposed` status
+        is what keeps the change unauthorized, and a pending-marked naming
+        does not satisfy the Conventions block's "unless this task names
+        the change" until the owner has approved and the marking is
+        removed. Once the owner approves, update the task before it leaves
+        `proposed` to record the approval (who, where, exact change
+        covered) and remove the pending marking, so the Outcome and
+        criteria read as the authorized contract; if the owner narrows or
+        rejects the proposal, update the Outcome, scope and criteria to
+        match that decision instead.
+      Acceptance criteria prove the authorized change, or the proposed
+      change while the decision is pending; none may require obtaining,
+      recording or confirming sign-off, because a non-interactive
+      implementer cannot satisfy it.
     - **Compatibility retirement** also gives the evidence for each Pass C
       condition, quotes the documented support window and its source, and names
       exactly which command-line, API, configuration or persisted shape
@@ -353,7 +406,8 @@ template:
     >   a stop-and-report, not a judgement call.
     > - No layout-only moves. Narrow visibility in code you touch.
 
-    Tasks land in `proposed`. Do not approve them.
+    Tasks land in `proposed`. Do not approve them; a task that records an
+    owner decision as required stays `proposed` until the owner answers.
 
     ## Handoff
 
@@ -368,7 +422,7 @@ template:
     every finding (lens, evidence, disposition: filed ID, commented-onto ID,
     deferred with reason, or rejected with reason), the overflow list and the
     per-area last reviewed SHAs. Attach it with
-    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/code-health.json","path":"code-health.json","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this task ID>","source_path":".orbit/tmp/code-health.json","path":"code-health.json","model":"<agent-family>"}'`.
     The execution summary gives the area and its score with the top five
     alternatives, counts per lens, the compatibility inventory total against
     the previous pass, whether a support window was documented, and every
@@ -381,7 +435,8 @@ template:
   - The reviewed area was chosen by the recorded churn score with conflicted areas skipped, and every non-test line in it was read.
   - Every filed finding clears its lens bar; duplication findings list each behavioural difference between copies with a resolution.
   - Open and rejected `code-health` coverage was checked first; findings touching in-flight tasks were deferred, not filed or chained.
-  - At most 6 tasks were filed, all `proposed` with a `spawned_from` relation to this task, type refactor, tags `code-health`, `tech-debt` and the lens tag, verified `context_files`, the Conventions block and the specified acceptance criteria.
+  - At most 6 tasks were filed, all `proposed` with a `spawned_from` relation to this task, type refactor, tags `code-health`, `tech-debt` and the lens tag, verified `context_files`, the Conventions block and the specified acceptance criteria; a change to a documented-stable surface records either the owner's approval or a pending owner decision, and no filed criterion asks the implementer to obtain sign-off.
+  - Every filed task that names a new module, test or other created file lists that exact path in `context_files` and was filed with `allow_missing_context` set to true, and reading it back with `orbit.task.show` showed a `context_creation_authorized` grant for that exact path; a finding whose exact creation destination could not be named was recorded as an evidence gap instead of filed.
   - The artifact `code-health.json` is attached to this task and the execution summary maps every candidate and finding to a disposition; a run with no findings above the bars succeeds with that evidence.
   task_type: chore
   tags:
@@ -391,8 +446,8 @@ template:
   required_tools:
   - orbit.search
   - orbit.task.add
-  - orbit.task.artifact.get
-  - orbit.task.artifact.put
+  - orbit.task.artifact:get
+  - orbit.task.artifact:put
   - orbit.task.list
   - orbit.task.show
   - orbit.task.update

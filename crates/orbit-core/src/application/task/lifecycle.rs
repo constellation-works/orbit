@@ -25,8 +25,13 @@ const UNAUTHORED_TASK_PLAN_PLACEHOLDER: &str = "To be authored by executing agen
 
 /// Status event recorded when a human overrides the lifecycle table from the
 /// bare CLI or the dashboard, so an audit can tell a governed transition from
-/// an override.
+/// an override. An operator's move of a human crew's task records it too, with
+/// [`HUMAN_CREW_BYPASS_NOTE`] naming why no `--force` was needed.
 pub(crate) const FORCED_STATUS_EVENT: &str = "forced";
+
+/// Opens the note of the `forced` entry recorded when an operator moves a human
+/// crew's task without the lifecycle gates; the crew name follows.
+pub(crate) const HUMAN_CREW_BYPASS_NOTE: &str = "human-crew bypass: task is assigned to human crew";
 
 /// Status event recorded when Orbit settles a task to `done` from its delivery
 /// pull request merged outside Orbit (`external_merge`). Like the delivery
@@ -43,9 +48,13 @@ pub(crate) fn ensure_status_change_not_run_owned(
     id: &str,
 ) -> Result<(), OrbitError> {
     if let Some((run_id, state)) = live_local_run_owning(runtime, id)? {
-        return Err(OrbitError::InvalidInput(format!(
-            "status change refused: local run '{run_id}' still owns this task ({state}); stop the run first or use --force to override"
-        )));
+        return Err(OrbitError::force_overridable_run_owned(
+            run_id.clone(),
+            state.to_string(),
+            format!(
+                "status change refused: local run '{run_id}' still owns this task ({state}); stop the run first or use --force to override"
+            ),
+        ));
     }
     Ok(())
 }
@@ -84,12 +93,15 @@ pub(crate) fn live_local_run_owning(
 /// The shape mirrors the diagram agents are given in the `orbit` skill:
 ///
 /// ```text
-/// proposed → backlog → in-progress → review → done
-///          ↘ rejected
-/// someday  → in-progress ; blocked → backlog | in-progress
-/// review   → backlog | in-progress | rejected
-/// rejected → backlog | in-progress   (reconsider)
-/// *        → blocked | archived      (from any open status)
+/// proposed    → backlog | someday | in-progress | rejected
+/// backlog     → proposed | someday | in-progress | rejected
+/// someday     → backlog | in-progress | rejected
+/// in-progress → backlog | someday | review | rejected
+/// review      → backlog | in-progress | done | rejected
+/// rejected    → backlog | in-progress          (reconsider)
+/// blocked     → backlog | in-progress
+/// *           → blocked | archived             (from any open status)
+/// done and archived are terminal
 /// ```
 ///
 /// Two rules carry the governance weight. `done` is reachable only from
@@ -187,33 +199,6 @@ pub(crate) fn ensure_status_change_allowed(
         )?;
     }
 
-    // Promotion is refused while the task is an unverified review finding,
-    // judged on the finding material this update leaves it with.
-    if matches!(from, TaskStatus::Proposed | TaskStatus::Someday)
-        && matches!(target, TaskStatus::Backlog | TaskStatus::InProgress)
-    {
-        let mut promoted = task.clone();
-        if let Some(title) = &params.title {
-            promoted.title = title.clone();
-        }
-        if let Some(description) = &params.description {
-            promoted.description = description.clone();
-        }
-        if let Some(criteria) = &params.acceptance_criteria {
-            promoted.acceptance_criteria = criteria.clone();
-        }
-        if let Some(context_files) = &params.context_files {
-            promoted.context_files = context_files.clone();
-        }
-        if let Some(tags) = &params.tags {
-            promoted.tags = tags.clone();
-        }
-        if let Some(task_type) = params.task_type {
-            promoted.task_type = task_type;
-        }
-        runtime.ensure_finding_verified(&promoted)?;
-    }
-
     match target {
         TaskStatus::InProgress if in_progress_transition_requires_plan(from) => {
             let plan = params.plan.as_deref().unwrap_or(task.plan.as_str());
@@ -228,6 +213,73 @@ pub(crate) fn ensure_status_change_allowed(
         )),
         _ => Ok(()),
     }
+}
+
+/// Statuses a deliberate claim recovery may choose, before the lifecycle
+/// table narrows them to the task's current status. Recovery fences the
+/// claimed attempt, so it never leaves the task `in-progress` (no run would
+/// own it) and never returns it to `proposed`.
+const CLAIM_RECOVERY_STATUSES: [TaskStatus; 7] = [
+    TaskStatus::Blocked,
+    TaskStatus::Backlog,
+    TaskStatus::Review,
+    TaskStatus::Done,
+    TaskStatus::Archived,
+    TaskStatus::Rejected,
+    TaskStatus::Someday,
+];
+
+/// The statuses a claim recovery may move `task` to: every recovery status
+/// the lifecycle table allows from the task's status, with `done` only when
+/// it would pass the ordinary completion gates now. Advisory for a picker:
+/// the guarded recovery stays the authority that accepts or refuses.
+pub(crate) fn claim_recovery_targets(runtime: &OrbitRuntime, task: &Task) -> Vec<TaskStatus> {
+    CLAIM_RECOVERY_STATUSES
+        .into_iter()
+        .filter(|target| task_status_transition_allowed(task.status, *target))
+        .filter(|target| {
+            *target != TaskStatus::Done
+                || ensure_claim_recovery_target(runtime, task, *target).is_ok()
+        })
+        .collect()
+}
+
+/// Refuse a claim recovery target the lifecycle does not allow from the
+/// task's status, naming the rule. A `done` target passes the same completion
+/// gates an ordinary completion does: the table (`done` only from `review`),
+/// completion evidence, owed post-deploy criteria, a stopped run and applied
+/// mutation proposals. Recovery never bypasses them.
+pub(crate) fn ensure_claim_recovery_target(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    target: TaskStatus,
+) -> Result<(), OrbitError> {
+    if !CLAIM_RECOVERY_STATUSES.contains(&target) {
+        return Err(refused(
+            &task.id,
+            task.status,
+            target,
+            "claim recovery fences the attempt, so it cannot leave the task 'in-progress' \
+             or return it to 'proposed'",
+        ));
+    }
+    ensure_status_change_allowed(runtime, task, &TaskUpdateParams::default(), target)?;
+    if target == TaskStatus::Done {
+        runtime.ensure_mutation_proposals_applied(task)?;
+    }
+    Ok(())
+}
+
+/// Check the shared completion preconditions under the task write lock.
+/// Run ownership remains a separate gate because each writer has its own
+/// replacement and calling-run exemptions.
+pub(crate) fn ensure_completion_gates(
+    runtime: &OrbitRuntime,
+    task: &Task,
+) -> Result<(), OrbitError> {
+    ensure_post_deploy_criteria_met(runtime, task)?;
+    runtime.ensure_mutation_proposals_applied(task)?;
+    runtime.ensure_resolves_are_workspace_local(task)
 }
 
 /// Every ordinary completion writer checks the same persisted measurement

@@ -88,6 +88,8 @@
   transition: background 0.15s ease, color 0.15s ease;
 }
 
+.rail .tab[hidden] { display: none; }
+
 .rail .tab:hover { color: var(--fg); background: var(--bg-hover); }
 
 .rail .tab.active {
@@ -96,6 +98,28 @@
   font-weight: 500;
 }
 .rail .tab.active .rail-ico { color: var(--accent); }
+
+.rail .rail-drain { text-decoration: none; }
+/* Above the dock breakpoint the Tasks dock sits beside the list and already
+   holds Drain, so the rail item is withdrawn. It stays in the DOM, and its
+   reading still paints while hidden. */
+@media (min-width: 1001px) {
+  .rail .rail-drain { display: none; }
+}
+/* The live reading: a dot and words, tinted by state. */
+.rail-drain-state { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; color: var(--state-running); }
+.rail-drain-state[hidden] { display: none; }
+.rail-drain-state[data-drain-state="winding_down"], .rail-drain-state.held { color: var(--warn-fg); }
+.rail-drain-state[data-drain-state="pulling"] { color: var(--accent); }
+/* Without room beside the list, the Drain dock route stands in for it, so the
+   rail marks Drain and not Tasks. Log and Notices keep Tasks marked: the dock
+   is still the Tasks view. Keep these in step with .rail .tab.active above. */
+@media (max-width: 1000px) {
+  .shell:has(.tab-pane.active > main.dock-route):has(#side-dock[data-mode="drain"]) .rail .tab.active[data-tab="tasks"] { background: transparent; color: var(--fg-soft); font-weight: 400; }
+  .shell:has(.tab-pane.active > main.dock-route):has(#side-dock[data-mode="drain"]) .rail .tab.active[data-tab="tasks"] .rail-ico { color: var(--fg-dim); }
+  .shell:has(.tab-pane.active > main.dock-route):has(#side-dock[data-mode="drain"]) .rail .rail-drain { background: var(--bg-selected); color: var(--fg-strong); font-weight: 500; }
+  .shell:has(.tab-pane.active > main.dock-route):has(#side-dock[data-mode="drain"]) .rail .rail-drain .rail-ico { color: var(--accent); }
+}
 
 .rail-ico { width: 17px; height: 17px; flex: 0 0 auto; color: var(--fg-dim); }
 .rail-label {
@@ -127,6 +151,11 @@
   font-size: 11.5px;
   font-weight: 600;
 }
+/* A warning whose latest refresh failed: still visible, marked as last known. */
+.rail-count.alert[data-stale="true"] {
+  outline: 1px dashed var(--danger-fg);
+  outline-offset: -1px;
+}
 /* A second count does not split the free space with the first. The desktop
    two-line layout below resets this margin. */
 .rail-count + .rail-count { margin-left: 6px; }
@@ -135,11 +164,65 @@
    label. Keep the volume beside the label and the attention pill below it.
    The horizontal mobile rail has intrinsic-width buttons and needs no wrap. */
 @media (min-width: 761px) {
-  /* The sticky host block covers the bottom of the scrollport. The router
-     measures it as readings wrap; reserve that space and the 4px focus ring
-     when revealing a destination or a keyboard-focused view. */
-  .rail { scroll-padding-block: 4px calc(var(--rail-foot-height, 0px) + 4px); }
+  /* Short windows: the rail itself does not scroll; selectors and foot stay
+     put. When destination content exceeds the available height, the destination
+     column (.tabs) scrolls, and an open destination's views shrink into
+     their own scrolling region. Tall windows are unchanged: nothing grows,
+     and the foot's margin-top:auto still takes the spare room below the
+     destinations. */
+  .rail { overflow-y: hidden; }
+  .rail-host, .rail-workspace, .rail-foot { flex: 0 0 auto; }
+  .rail .tabs {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scroll-padding-block: 4px;
+    scrollbar-width: thin;
+  }
+  .rail-group { flex: 0 0 auto; min-height: 0; }
+  .rail-group:has(> .rail-subtabs:not(.dimmed)) { flex: 0 1 auto; }
+  .rail-group > .rail-group-label, .rail-group > .tab { flex: 0 0 auto; }
+  .rail-subtabs:not(.dimmed) {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scroll-padding-block: 4px;
+    scrollbar-width: thin;
+  }
+  /* Views keep their 30px line and scroll out of the region; they never
+     squash to fit it. */
+  .rail-subtabs .subtab { flex: 0 0 auto; }
+  /* The fade cue the phone strips use, turned vertical: an edge fades
+     only while it hides more views (classes set by syncRailScrollCues). */
+  .rail-subtabs.has-overflow-end {
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent 100%);
+  }
+  .rail-subtabs.has-overflow-start {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 16px);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 16px);
+  }
+  .rail-subtabs.has-overflow-start.has-overflow-end {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
+  }
   .rail .tab, .rail-subtabs .subtab { scroll-margin-block: 4px; }
+}
+/* On a short desktop window, fixed rail content plus a usable views
+   region can exceed the height even before any view is shown. Tighten
+   only the rail's spacing (not label or row heights) so at least two
+   views stay whole beside every destination and the foot. Taller
+   windows keep the spacing above. */
+@media (min-width: 761px) and (max-height: 800px) {
+  .shell > .rail { padding: 8px 12px 6px; }
+  .shell > .rail .tabs { gap: 6px; margin-top: 6px; margin-bottom: 4px; }
+  .shell > .rail .rail-group-label { padding-bottom: 2px; }
+  .shell > .rail .rail-foot { gap: 4px; padding-top: 4px; padding-bottom: 4px; }
+  .shell > .rail .rail-subtabs:not(.dimmed) { min-height: 64px; }
+}
+@media (min-width: 761px) {
   .rail .tab:has(> .rail-count + .rail-count:not([hidden])) {
     display: grid;
     grid-template-columns: 17px minmax(0, 1fr) max-content;
@@ -203,6 +286,10 @@
 .rail-subtabs .subtab:hover { color: var(--fg); background: var(--bg-hover); }
 .rail-subtabs .subtab.active { color: var(--fg); background: var(--bg-selected); font-weight: 600; }
 .rail-subtabs .subtab .rail-count { flex: none; }
+@media (min-width: 761px) {
+  /* Give the Auto-tasks label room beside its enabled/total count. */
+  .rail-subtabs .subtab[data-subtab="auto-tasks"] { padding-inline: 3px; gap: 4px; }
+}
 
 /* The host and workspace pickers read as one scope card at the head of the
    rail: host above, workspace below. */
@@ -222,6 +309,24 @@
   font-weight: 600;
 }
 .rail-host .workspace-select { font-family: var(--font-mono); font-size: 12.5px; font-weight: 500; }
+.rail-host .host-picker-control { display: flex; align-items: center; gap: 4px; min-width: 0; }
+/* The select uses the rail width beside the Serving badge. A longer name ends
+   in an ellipsis; its title keeps the whole name. */
+.rail-host .host-picker-control .host-select { flex: 1 1 0; min-width: 0; width: 0; padding-inline: 7px; text-overflow: ellipsis; }
+/* Keep the badge shorter than the select, so changing hosts does not change
+   the host control's height. */
+.rail-host .host-serving-badge {
+  flex: none;
+  padding: 2px 3px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-control);
+  color: var(--fg-dim);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
 
 /* The rail's foot, pinned below the destinations: the host block, then the
    last refresh time (the destination rides in its title and accessible
@@ -283,12 +388,14 @@
 :root { --topbar-height: 56px; }
 
 /* ORB-10972: one bar replaces the old header + tabs + health strip stack
-   (~194px). It holds the brand, provider usage, Drain and Refresh; the
+   (~194px). It holds the brand, provider usage, global search and task creation; the
    host readings and the windowed counts ride on the rail. */
 .topbar {
   flex: 0 0 auto;
   box-sizing: border-box;
   height: var(--topbar-height);
+  position: relative;
+  z-index: 30;
   border-bottom: 1px solid #1f242b;
   display: flex;
   align-items: center;
@@ -306,7 +413,7 @@
 }
 
 .topbar-spacer { flex: 1 1 0; min-width: 0; }
-.topbar .refresh-btn, .topbar .global-drain-state { flex: 0 0 auto; white-space: nowrap; }
+.topbar .refresh-btn { flex: 0 0 auto; white-space: nowrap; }
 
 /* Shrinks only while the bar is tight. From 1900px the per-window usage
    chips are shown, and the group stays rigid so a longer list takes the
@@ -363,8 +470,8 @@
    provider with its name, its worst window's value, a small meter and the
    weekly pressure in muted mono. Detail lives in the dialog it opens (see
    .usage-dialog). A stale provider is dashed and dimmed, a gating-off one
-   dashed, and each says so in a flag. Where the list would not fit beside the
-   drain label and Refresh, one summary chip (the worst provider) replaces it
+   dashed, and each says so in a flag. Where the list would not fit in the bar's
+   spare room, one summary chip (the worst provider) replaces it
    and opens the dialog that lists every provider. */
 .host-resource-group:has(#host-warn:not([hidden])) .provider-usage-chips::before { content: ""; flex: none; align-self: center; width: 1px; height: 18px; background: var(--border-strong); }
 .provider-usage { width: 6.75rem; }
@@ -395,7 +502,7 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
 }
 
 /* The dialog a provider chip opens: anchored under the chip and placed by
-   script (position fixed, so the bar's scrolling row cannot clip it). */
+   script (position fixed, so the top bar cannot clip it). */
 .shell > .usage-dialog { grid-area: 1 / 1; }
 .usage-dialog {
   position: fixed;
@@ -495,12 +602,15 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
 }
 
 /* Below 1240px the bar tightens its spacing, so the widest destination, the
-   three chips, the aggregate drain label and Refresh still share one row. */
+   three chips and the Tasks controls still share one row. */
 @media (max-width: 1240px) {
   .topbar { padding: 0 14px; gap: 10px; }
 }
-/* Below 1024px the bar may wrap, but only to two rows: crumb, drain and
-   Refresh on the first, the host chips on the second (scrolling if they must). */
+/* Below 1025px the bar drops the host warning and provider usage. */
+@media (max-width: 1024px) {
+  .topbar .host-resource-group { display: none; }
+}
+/* Below 1024px the bar may wrap if its controls don't fit. */
 @media (max-width: 1023px) {
   .topbar {
     height: auto;
@@ -508,9 +618,8 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
     row-gap: 6px;
     padding: 8px 12px;
   }
-  .topbar .host-resource-group { order: 1; flex: 1 1 100%; overflow-x: auto; }
   .topbar-spacer { order: 0; }
-  .topbar .rail-brand, .topbar .global-drain-state, .topbar .refresh-btn { order: 0; }
+  .topbar .rail-brand, .topbar .refresh-btn { order: 0; }
 }
 
 .refresh-btn {
@@ -548,12 +657,11 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
 .notify-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent-hover); }
 .topbar .notify-btn[hidden] { display: none; }
 
-/* On phones the top bar keeps the brand, Drain and Refresh on its first row
-   and the host readings on a second; the rail below holds the host and
-   workspace pickers side by side over scrolling destinations and views.
-   Keep the three rail rows compact enough that the first panel or view tabs
-   start by 200px at 375px wide, including the refresh line and clock below
-   navigation. */
+/* On phones the brand and Notify stay on the first row, Notify at the
+   trailing edge, the same place it occupies on every other view. Search takes
+   the next row, with New task while Tasks is open, so every control fits at
+   375px without the bar scrolling sideways. Scope pickers and navigation
+   keep their own rows below. */
 @media (max-width: 760px) {
   .shell {
     position: relative;
@@ -563,8 +671,8 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
   }
   .rail {
     display: grid;
-    grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr);
-    grid-template-rows: auto auto auto;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+    grid-template-rows: auto auto;
     border-right: none;
     border-bottom: 1px solid var(--hair);
     overflow: hidden;
@@ -575,22 +683,15 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
   .rail-brand svg { width: 64px; height: auto; }
   .rail-host { grid-column: 1; grid-row: 1; min-width: 0; margin-bottom: 0; align-self: start; }
   .rail-host .rail-scope-label { display: none; }
+  /* Phones keep the select and the Serving badge on one row. The host column
+     is wider than the workspace column so a host name fits beside the badge. */
+  .rail-host { flex-direction: row; align-items: center; gap: 4px; }
+  .rail-host .host-picker-control { order: 1; flex: 1 1 0; min-width: 0; }
   .rail-workspace { grid-column: 2; grid-row: 1; min-width: 0; align-self: start; }
   .rail-host .workspace-select,
   .rail-workspace .workspace-select { height: 30px; width: 100%; max-width: 100%; }
-  .rail-foot {
-    grid-column: 1 / -1;
-    grid-row: 3;
-    flex-direction: row;
-    align-items: center;
-    gap: 8px;
-    position: static;
-    margin: 0;
-    padding: 0 2px;
-  }
-  .rail-conn { flex: 1 1 auto; padding: 0; }
-  .rail-foot .clock-zone { width: auto; flex: 0 0 auto; }
-  .rail-foot .clock-zone-btn { flex: 0 0 auto; padding: 3px 10px; }
+  /* The host block, refresh line and UTC/Local control are desktop readings. */
+  .rail-foot { display: none; }
   .rail .tabs {
     grid-column: 1 / -1;
     grid-row: 2;
@@ -602,19 +703,19 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
     padding: 2px;
     gap: 2px;
     scrollbar-width: none;
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
-    mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
   }
   .rail .tabs::-webkit-scrollbar,
-  .rail .rail-subtabs::-webkit-scrollbar,
-  .topbar .host-resource-group::-webkit-scrollbar { display: none; }
+  .rail .rail-subtabs::-webkit-scrollbar { display: none; }
+  .rail .tabs { cursor: grab; }
+  .rail .tabs.is-drag-scrolling,
+  .rail .tabs.is-drag-scrolling * { cursor: grabbing; user-select: none; }
   .rail-group { display: contents; }
   .rail-group-label { display: none; }
   .rail .tab {
     width: auto;
     flex: 0 0 auto;
     white-space: nowrap;
-    height: 36px;
+    height: 44px;
   }
   .rail-label { flex: 0 1 auto; }
   .rail .rail-subtabs {
@@ -629,49 +730,75 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
     padding: 0 4px;
     gap: 2px;
     scrollbar-width: none;
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
-    mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
   }
   .rail-subtabs .subtab {
     padding: 0 10px;
     white-space: nowrap;
     flex: 0 0 auto;
   }
-  .topbar { flex-wrap: wrap; height: auto; padding: 4px 8px; row-gap: 2px; column-gap: 6px; }
-  .topbar .rail-brand { order: 0; height: 34px; }
-  .topbar-spacer { display: block; order: 1; }
-  .topbar .global-drain-state { order: 2; }
-  .topbar .refresh-btn { order: 3; }
-  .topbar .host-resource-group {
-    order: 4;
-    flex: 1 1 100%;
-    overflow-x: auto;
-    padding: 2px;
-    scrollbar-width: none;
+  /* ORB-20479: a scrolled strip fades only toward hidden content, so a label
+     resting at an edge reads as overflow instead of a rendering glitch. */
+  .rail .tabs.has-overflow-end,
+  .rail .rail-subtabs.has-overflow-end {
     -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
     mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
   }
-  /* A scope note takes room only while it says something. The host block
-     is a desktop reading; at this width the warning chip is the alarm. */
-  .rail-workspace .workspace-scope-note.is-inactive,
-  .host-block { display: none; }
+  .rail .tabs.has-overflow-start,
+  .rail .rail-subtabs.has-overflow-start {
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px);
+    mask-image: linear-gradient(to right, transparent 0, #000 16px);
+  }
+  .rail .tabs.has-overflow-start.has-overflow-end,
+  .rail .rail-subtabs.has-overflow-start.has-overflow-end {
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
+    mask-image: linear-gradient(to right, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
+  }
+  /* Free scrolling can rest mid-label; the fades above mark it as overflow,
+     while the router snaps the strip to an item start after every reveal. */
+  .topbar {
+    flex-wrap: wrap;
+    height: auto;
+    padding: 4px 8px;
+    gap: 6px;
+    /* Clip a subpixel leftover instead of growing a sideways page scroll.
+       The Tasks row is sized to fit, so this does not hide a control. */
+    overflow-x: clip;
+  }
+  .topbar :is(button, a):focus-visible { outline-offset: -2px; }
+  .topbar .rail-brand { order: 0; height: 34px; }
+  .topbar-spacer { display: block; order: 1; }
+  /* Notify stays on the first row. Global search, with task creation on
+     Tasks, takes its own row on every destination. */
+  .topbar .refresh-btn { order: 2; }
+  .topbar .topbar-task-actions {
+    order: 3;
+    flex: 1 1 100%;
+    min-width: 0;
+    max-width: 100%;
+    min-height: 44px;
+  }
+  .topbar .topbar-task-actions .task-search-wrap {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+  }
+  .topbar .topbar-task-actions #task-search { min-width: 0; }
+  /* A scope note takes room only while it says something. */
+  .rail-workspace .workspace-scope-note.is-inactive { display: none; }
   /* Tighter readings keep all three in view at 375px. */
   .host-resource { gap: 5px; padding: 0 4px; }
   .host-resource-bar { width: 20px; }
   .host-resource[data-resource="cpu"] { min-width: 9.75rem; }
   .host-resource[data-resource="memory"], .host-resource[data-resource="disk"], .host-resource[data-resource="io"] { min-width: 6.5rem; }
-  .topbar .global-drain-state,
   .topbar .refresh-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     box-sizing: border-box;
-    height: 34px;
+    height: 44px;
+    width: 44px;
+    padding: 0;
   }
-  .topbar .global-drain-state { min-width: 86px; padding: 0 10px; }
-  .topbar .global-drain-running { display: none; }
-  .topbar .refresh-btn { width: 34px; padding: 0; }
-  .topbar .global-drain-state[hidden] { display: none; }
   /* Keep the action name available to assistive tech. */
   .refresh-label {
     position: absolute;
@@ -981,6 +1108,10 @@ footer {
 /* One state for the selected host when it cannot be shown. It replaces every
    panel; the rail, the picker and the way back stay in place. */
 .main-col.host-unavailable > .tab-pane { display: none !important; }
+/* The top bar lives outside .main-col, so the rule above cannot withdraw its
+   task creation: hide it while the Tasks pane cannot be shown.
+   Global search remains available to show lookup failures in place. */
+.shell:has(.main-col.host-unavailable .tab-pane[data-tab="tasks"].active) #task-create-open { display: none; }
 .host-state {
   margin: 24px;
   max-width: 720px;
@@ -1153,7 +1284,7 @@ a.exec-origin.remote-run-link { color: var(--accent); }
   box-shadow: 0 12px 32px color-mix(in srgb, var(--bg) 55%, transparent);
 }
 .host-detail[hidden] { display: none; }
-.host-detail-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-bottom: 12px; }
+.host-detail-head { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-bottom: 12px; }
 .host-detail-name { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--fg-strong); }
 .host-detail-pill {
   padding: 2px 8px;
@@ -1167,10 +1298,14 @@ a.exec-origin.remote-run-link { color: var(--accent); }
 .host-detail-pill.critical { border-color: var(--danger-line); background: var(--danger-wash); color: var(--danger-fg); }
 .host-detail-pill.stale { border-style: dashed; color: var(--fg-mute); }
 .host-detail-age { margin-left: auto; color: var(--fg-mute); font-size: 12px; font-variant-numeric: tabular-nums; }
-.host-detail-row { margin: 0 0 12px; }
+.host-detail-row { position: relative; margin: 0 0 12px; }
 .host-detail-row-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .host-detail-label { font-weight: 600; }
-.host-detail-sub { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-mute); font-size: 12px; }
+.host-detail .info-hint { align-self: center; margin-left: 0; }
+/* The panel scrolls and sits on the viewport's bottom edge, so the last row's
+   bubble opens upward rather than overflowing it. */
+.host-detail-row:nth-last-child(2) .info-hint:hover > .info-hint-text,
+.host-detail-row:nth-last-child(2) .info-hint:focus > .info-hint-text { top: auto; bottom: calc(100% + 2px); }
 .host-detail-value { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; }
 .host-detail-row.elevated .host-detail-label,
 .host-detail-row.elevated .host-detail-value { color: var(--warn-fg); }
@@ -1184,7 +1319,6 @@ a.exec-origin.remote-run-link { color: var(--accent); }
 .host-detail-tick { position: absolute; top: -3px; width: 1px; height: 12px; background: var(--fg-mute); }
 .host-detail-tick.critical { background: var(--danger-fg); }
 .host-detail-tick.elevated { background: var(--warn-fg); }
-.host-detail-read { margin: 4px 0 0; color: var(--fg-dim); font-size: 12px; line-height: 1.4; }
 .host-detail-foot {
   display: flex;
   flex-wrap: wrap;
@@ -1202,3 +1336,14 @@ a.exec-origin.remote-run-link { color: var(--accent); }
 @media (max-width: 760px) {
   .host-block { display: none; }
 }
+
+/* The Tasks chip uses a custom listbox for multi-workspace filtering. The
+   rail workspace picker stays a native select with its browser popup. */
+.workspace-options { position: fixed; z-index: 100; left: 12px; bottom: auto; max-width: calc(100vw - 24px); max-height: 50vh; overflow: auto; padding: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-control); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
+.workspace-options[hidden] { display: none; }
+.workspace-options [role="option"] { display: flex; align-items: center; gap: 8px; padding: 8px; cursor: pointer; }
+.workspace-options [role="option"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.workspace-options [role="option"][aria-disabled="true"] { opacity: 0.55; cursor: default; }
+.workspace-options input { pointer-events: none; }
+/* Each entry's text is the colour key for the All workspaces task pills. */
+.workspace-options [role="option"][data-ws-color] { color: var(--ws); }

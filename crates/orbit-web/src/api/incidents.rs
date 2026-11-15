@@ -13,6 +13,7 @@
 //! exports stay the authority on complete evidence; the preview never changes
 //! the grouped population or its denominators.
 
+use crate::api::helpers;
 use axum::extract::{Path, Query};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
@@ -21,7 +22,6 @@ use orbit_core::{
     FailureClass, FailureIncident, FailureIncidentQuery, FailureIncidentReport, IncidentEventRef,
     JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL, OrbitError, PropagationLink,
 };
-use orbit_types::identity::{infer_agent_family_from_model, normalize_attribution_label};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -100,22 +100,20 @@ pub(super) async fn list_failure_incidents(
         role: role.clone(),
         ..Default::default()
     };
-    // Both the grouping scan and the total-event count are synchronous SQLite
-    // reads; keep them off the async executor.
-    let bundle = match tokio::task::spawn_blocking(move || {
+    // The grouping scan and the window's event count are synchronous SQLite
+    // reads; keep them off the async executor. The count is only the
+    // denominator: `audit_event_stats` would also sort every duration in the
+    // window to compute a percentile this payload does not return.
+    let bundle = match helpers::blocking_join("failure incident aggregation", move || {
         let report = runtime_clone.audit_failure_incidents(&incident_query)?;
-        let total_events = runtime_clone.audit_event_stats(since, None)?.total;
+        let total_events = runtime_clone.audit_event_count(since)?;
         Ok::<_, OrbitError>((report, total_events))
     })
     .await
     {
         Ok(Ok(bundle)) => bundle,
         Ok(Err(e)) => return server_error(e),
-        Err(join_err) => {
-            return server_error(OrbitError::Execution(format!(
-                "failure incident aggregation panicked: {join_err}"
-            )));
-        }
+        Err(response) => return *response,
     };
     let (report, total_events) = bundle;
 
@@ -374,12 +372,6 @@ fn propagation_to_json(link: &PropagationLink) -> Value {
             .map(event_ref_to_json)
             .collect::<Vec<_>>(),
     })
-}
-
-/// Maps a free-form audit `role` onto a canonical agent family.
-pub(super) fn agent_family_key(role: &str) -> String {
-    let normalized = normalize_attribution_label(role, None);
-    infer_agent_family_from_model(&normalized).unwrap_or(normalized)
 }
 
 /// Scan cap for the audit-summary rollups, which only need counts. Held

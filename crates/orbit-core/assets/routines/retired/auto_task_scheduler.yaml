@@ -1,8 +1,8 @@
 # Retired `auto_task_scheduler` default (last shipped 2026-09-11). Every clock
-# tick now evaluates auto-task definitions directly, so this routine has no job
+# tick evaluates auto-task definitions directly, so this routine has no job
 # to fire. Kept as a provenance shape only, so `orbit workspace sync` can tell an
 # Orbit-seeded copy from an operator-authored one — see `RETIRED_ROUTINE_FILES`
-# in `application/routine.rs`.
+# in `application/routines/seed.rs`.
 schemaVersion: 1
 name: __ORBIT_ROUTINE_NAME__
 description: >

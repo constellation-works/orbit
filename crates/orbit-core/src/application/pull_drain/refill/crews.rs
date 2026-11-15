@@ -64,7 +64,10 @@ fn crew_preflight(runtime: &OrbitRuntime) -> PullCrewPreflight {
         let unusable = if let Some(unset) = unset {
             // A crew whose credential source is unset would run on the
             // provider's default login instead; dispatch refuses it.
-            Some(format!("{} is unset on this host", unset.describe()))
+            Some(format!(
+                "crew_env_unset: {} is unset on this host",
+                unset.describe()
+            ))
         } else if crew.enabled {
             match RuntimeHost::resolve_cli_executor(runtime, &crew.provider) {
                 Ok(executor) => runtime

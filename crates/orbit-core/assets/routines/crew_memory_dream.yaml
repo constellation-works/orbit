@@ -1,0 +1,20 @@
+# Weekly crew memory dreaming (experimental). Seeded enabled because the
+# action is its own gate: it mints nothing while `crew_memory.enabled` is
+# false or no running shadow or live experiment has a memory arm, so
+# `crew_memory.enabled` stays the one switch for the whole feature. Monday
+# 02:00 host-local follows the Sunday crew-rankings note, so both read the
+# same settled week, and collides with no other shipped default.
+schemaVersion: 1
+name: __ORBIT_ROUTINE_NAME__
+description: >
+  Weekly crew memory dreaming: one reflection task per model with enough
+  recent implementer work, each with its evidence pack, while crew memory is
+  enabled and a memory experiment is running.
+enabled: true
+trigger:
+  cron: "0 2 * * 1"
+  missed_run: skip
+target: job:crew_memory_dream_pipeline
+policy:
+  timeout_minutes: 30
+  overlap: forbid

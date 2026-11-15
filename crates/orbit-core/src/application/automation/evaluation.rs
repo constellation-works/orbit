@@ -1,12 +1,13 @@
 //! Delivery evaluation of auto-tasks and routines against this host.
 
 use crate::OrbitRuntime;
+use crate::application::automation::AutomationAutoTaskPort;
 use chrono::{DateTime, Utc};
 use orbit_automation::delivery::{self, ActionOutcome, DeliveryHost};
 use orbit_automation::{AutomationError, DeferredReason, automation_error_to_orbit};
 use orbit_common::OrbitError;
 use orbit_types::workflow::automation::*;
-use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule, RoutineDefinition};
+use orbit_types::workflow::{AutoTaskDefinition, RoutineDefinition};
 
 use super::{
     AutomationReviewPort, SourceCache, consumer_key, direct, members, ownership, provider, source,
@@ -29,17 +30,7 @@ pub(crate) fn evaluate_auto_task_with_cache(
     now: DateTime<Utc>,
     cache: Option<&SourceCache>,
 ) -> Result<AutomationDiagnostic, OrbitError> {
-    let AutoTaskSchedule::Deliveries {
-        deliveries_landed: declared,
-        ..
-    } = &definition.schedule
-    else {
-        return Err(OrbitError::InvalidInput("not a delivery definition".into()));
-    };
-
-    let ownership = ownership::resolve(runtime, declared.owner_machine.as_deref());
-    let trigger = ownership::with_resolved_owner(declared, &ownership);
-    let epoch = ownership::auto_task_epoch(definition, &trigger)?;
+    let (ownership, trigger, epoch) = ownership::resolve_delivery_auto_task(runtime, definition)?;
 
     evaluate(
         runtime,
@@ -77,18 +68,8 @@ pub(crate) fn evaluate_routine_with_cache(
         return members::evaluate(runtime, definition, dry_run, now);
     }
 
-    let declared = definition
-        .trigger
-        .deliveries_landed
-        .as_ref()
-        .ok_or_else(|| OrbitError::InvalidInput("not a delivery routine".into()))?;
-
-    let ownership = ownership::resolve(runtime, declared.owner_machine.as_deref());
-    let mut effective_trigger = ownership::with_resolved_owner(declared, &ownership);
-    let epoch = ownership::routine_epoch(definition, &effective_trigger)?;
-
-    // The routine's retry policy caps whatever the trigger asks for.
-    effective_trigger.retries = effective_trigger.retries.min(definition.policy.retries.max);
+    let (ownership, effective_trigger, epoch) =
+        ownership::resolve_delivery_routine(runtime, definition)?;
 
     evaluate(
         runtime,
@@ -244,10 +225,6 @@ impl DeliveryHost for Host<'_> {
         }
     }
 
-    fn stall_window_minutes(&self) -> u32 {
-        self.runtime.automation_stall_window_minutes()
-    }
-
     fn replay_history(
         &self,
         branch: &str,
@@ -393,7 +370,7 @@ pub(super) fn auto_task_admission_deferral(
     definition: &AutoTaskDefinition,
 ) -> Result<Option<String>, OrbitError> {
     if definition.dedupe == orbit_types::workflow::DedupePolicy::SkipIfOpen
-        && runtime.open_auto_task_instance(definition)?.is_some()
+        && runtime.open_auto_task_instance_id(definition)?.is_some()
     {
         return Ok(Some("open_instance".into()));
     }

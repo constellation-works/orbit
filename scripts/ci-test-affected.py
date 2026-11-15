@@ -9,7 +9,7 @@ run executes exactly those packages instead of selecting from a diff, so a
 rerun on the base commit tests what the candidate tested. A selection that
 also names `failing_tests` (each a nextest `<binary-id> <test>` or a bare test
 name, as a failed candidate run printed them) runs only those tests, building
-only the packages their binary ids name and skipping doctests [ORB-15328]; the
+only the packages their binary ids name [ORB-15328]; the
 summary still reports the selection it was handed.
 
 The summary also records what an implementer's deferred-sandbox handoff
@@ -18,18 +18,23 @@ needs, so Orbit derives that record instead of the implementer writing it
 target sets), the base it compared against, its exit status once it finishes,
 and every skip or deferral notice its tests printed under nextest.
 
+Doctests are disabled workspace-wide (`[lib] doctest = false`), so this gate
+never invokes `cargo test --doc`; `scripts/check-doctest-fences.sh` fails a
+runnable fence instead of running it.
+
 It records where that time went. compile_ms and test_ms are millisecond
 totals, and package_timings lists each package's share. A total equals the
 sum of the per-package values for that phase, except under the cargo test
 fallback. Compile time is Cargo's unit durations (they overlap when the build
-is parallel). Test time is nextest testcase time plus doctest time (testcase
+is parallel). Test time is nextest testcase time (testcase
 time overlaps when tests are parallel). A phase that was not measured is null.
 The cargo test fallback has no per-package test split: its libtest time has no
 package, so those package test_ms values stay null while test_ms is that
-libtest time plus the doctest time.
+libtest time.
 """
 
 import argparse
+from collections import deque
 import contextlib
 import hashlib
 import json
@@ -42,6 +47,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import xml.etree.ElementTree
 
 
@@ -90,6 +96,19 @@ def changed_paths(base):
 # changed path under a prefix selects the readers and their reverse dependents.
 FILE_READERS = (
     (Path("scripts/build-budget.py"), ("orbit-engine",)),
+    (Path("scripts/ci-await-jobs.py"), ("orbit-engine",)),
+    (Path("scripts/ci-test-affected.py"), ("orbit-core",)),
+    (Path("scripts/release-readiness-adapter.py"), ("orbit-engine",)),
+    (Path("examples/release-readiness/scripts/release-readiness.yaml"), ("orbit-engine",)),
+    (Path(".github/workflows/ci.yml"), ("orbit-engine",)),
+    (Path(".github/workflows/ci-macos.yml"), ("orbit-engine",)),
+    (Path(".github/workflows/website-check.yml"), ("orbit-engine",)),
+    (Path(".github/workflows/codeql.yml"), ("orbit-engine",)),
+    (Path("docs/design/auto-tasks/1_overview.md"), ("orbit-core",)),
+    (Path("crates/orbit-engine/tests/engine/pr_landing/fixtures/base-refresh-forge.sh"), ("orbit-core",)),
+    (Path("crates/orbit-tools/tests/fixtures/plugins"), ("orbit-cli",)),
+    (Path("crates/orbit-agent/tests/provider_invocation/fixtures"), ("orbit-engine",)),
+    (Path("crates/orbit-core/assets/executors"), ("orbit-cli",)),
     (Path("crates/orbit-core/assets/jobs"), ("orbit-engine", "orbit-cli")),
     (Path("crates/orbit-core/assets/activities"), ("orbit-engine",)),
     (Path("crates/orbit-core/assets/auto_tasks"), ("orbit-cli",)),
@@ -98,7 +117,40 @@ FILE_READERS = (
     (Path("plugin/hooks"), ("orbit-cli",)),
     (Path("server.json"), ("orbit-cli",)),
     (Path("website/src/content/docs/reference/config.md"), ("orbit-cli",)),
+    # default_catalog reads the generated setup references as well as their source.
+    (Path("plugin/skills"), ("orbit-core",)),
+    # Read only by scripts/test-qa-full-sweep.py, which the guardrails run.
+    (Path("scripts/qa-full-sweep-inventory.json"), ()),
+    # review_baseline_hold executes the sweep and its imported npm validator.
+    (Path("scripts/test-qa-full-sweep.py"), ("orbit-core",)),
+    (Path("scripts/check_npm_package.py"), ("orbit-core",)),
+    # [ORB-21420] Read only by scripts/unit-test-inventory.py --check, a
+    # repository guard every CI guardrails run executes. No Cargo test reads it.
+    (Path("scripts/unit-test-baseline.json"), ()),
+    # The `claude plugin eval` suite runs outside CI. No Cargo test, guard
+    # or CI job reads its cases, graders or mocks.
+    (Path("plugin/evals"), ()),
+    # The UX rules are a hand-run QA tool since the ux-rules routine and its
+    # filer were removed [ORB-22844]: the UI and CLI rules, their lib helpers,
+    # README.md and the Node tests under tests/ have no Cargo reader, and no
+    # CI job runs those Node tests. run.mjs is not listed: nothing here
+    # executes the checkout's copy, and an undeclared path stays a full run.
+    (Path("scripts/ux-rules/ui"), ()),
+    (Path("scripts/ux-rules/lib/ui-context.mjs"), ()),
+    (Path("scripts/ux-rules/README.md"), ()),
+    (Path("scripts/ux-rules/lib/cli-context.mjs"), ()),
+    (Path("scripts/ux-rules/lib/manifest.mjs"), ()),
+    (Path("scripts/ux-rules/cli"), ()),
+    (Path("scripts/ux-rules/tests"), ()),
 )
+
+# Security and recovery invariants every pull request runs, whatever it
+# changed: the sandbox and Bubblewrap boundary (orbit-exec, whose presence also
+# admits shard 1's Linux sandbox gate), authorization (orbit-policy,
+# orbit-auth) and store migrations (orbit-store). The partition guard runs on
+# every test build. Their tests are about 2% of the suite's test time. A
+# pushed agent-main commit still runs every crate.
+ALWAYS_RUN = ("orbit-auth", "orbit-exec", "orbit-policy", "orbit-store")
 
 # ci-macos.yml names test paths and filters that a moved or deleted test leaves
 # stale. Only check-ci-macos.sh reads them, so the gate runs it whenever a
@@ -164,13 +216,14 @@ def affected_packages(metadata, paths):
 
 
 def test_target_flags(metadata, names):
-    """Cargo's lib, bin and test target flags for `names`. Cargo rejects --lib
-    for a bin-only selection, even with --bins/--tests."""
-    library_kinds = {"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"}
-    has_library = any(library_kinds.intersection(target["kind"])
-                      for package in metadata["packages"] if package["name"] in names
-                      for target in package["targets"])
-    return (["--lib"] if has_library else []) + ["--bins", "--tests"] if names else []
+    """Cargo's bin and test target flags for `names`.
+
+    Never `--lib`: an explicit `--lib` overrides a library's
+    `[lib] test = false` and builds its empty harness. `--tests` already
+    selects every target with `test = true`, including library unit tests,
+    and omits libraries that disabled them.
+    """
+    return ["--bins", "--tests"] if names else []
 
 
 def workspace_packages(metadata):
@@ -180,18 +233,20 @@ def workspace_packages(metadata):
 
 def pull_request_scope(metadata, paths):
     """The tests a pull request's CI runs: `(None, reason)` for the full suite,
-    or `(packages, reason)` for the changed crates and their reverse dependents.
+    or `(packages, reason)` for the changed crates, their reverse dependents
+    and the ALWAYS_RUN crates.
 
-    Stricter than the local gate. Every path outside crates/ runs everything
+    Stricter than the local gate. A path outside crates/ runs everything
     (workspace manifests, toolchain, .cargo/, .github/, scripts/, plugin/ and
-    any other repository file a test may read), except Markdown outside
-    crates/ and plugin/: no Cargo test reads it, and the one such page a test
-    reads is a FILE_READERS entry that selects its reader. The workspace-wide
-    Check job still runs the scripts/test-* self-tests that read Markdown, such
-    as test-release-promotion.py. A member manifest can change the features of
-    the whole workspace build, so it runs everything too. Inside crates/,
-    affected_packages adds FILE_READERS' cross-crate readers and runs
-    everything for a path no member owns.
+    any other repository file a test may read) unless FILE_READERS declares
+    which crates read it, or it is Markdown outside crates/ and plugin/: no
+    Cargo test reads undeclared Markdown; pages read by tests have
+    FILE_READERS entries that select their readers. The CI guardrails job still
+    runs the scripts/test-* self-tests whose inputs changed, such as
+    test-release-promotion.py for RELEASING.md. A member manifest can change
+    the features of the whole workspace build, so it runs everything too.
+    Inside crates/, affected_packages adds FILE_READERS' cross-crate readers
+    and runs everything for a path no member owns.
     """
     crate_paths = set()
     for raw_path in sorted(paths):
@@ -200,17 +255,21 @@ def pull_request_scope(metadata, paths):
             if len(path.parts) == 3 and path.name == "Cargo.toml":
                 return None, f"{raw_path} can change the workspace's dependency features"
             crate_paths.add(raw_path)
-        elif path.suffix == ".md" and path.parts[0] not in ("crates", "plugin"):
-            if any(path.is_relative_to(prefix) for prefix, _ in FILE_READERS):
-                crate_paths.add(raw_path)
-        else:
+        elif any(path.is_relative_to(prefix) for prefix, _ in FILE_READERS):
+            crate_paths.add(raw_path)
+        elif path.suffix != ".md" or path.parts[0] in ("crates", "plugin"):
             return None, f"{raw_path} is outside a crate"
     if not crate_paths:
         return None, "no crate changed"
-    packages = affected_packages(metadata, crate_paths)
-    if packages == workspace_packages(metadata):
+    workspace = workspace_packages(metadata)
+    missing = [name for name in ALWAYS_RUN if name not in workspace]
+    if missing:
+        raise ValueError(f"ALWAYS_RUN names unknown workspace crates: {', '.join(missing)}")
+    affected = affected_packages(metadata, crate_paths)
+    packages = sorted({*affected, *ALWAYS_RUN})
+    if packages == workspace:
         return None, "every workspace crate is affected"
-    return packages, f"{len(packages)} affected crate(s)"
+    return packages, f"{len(affected)} affected crate(s) and {len(packages) - len(affected)} always-run"
 
 
 def feature_units(cargo, packages=None):
@@ -219,8 +278,8 @@ def feature_units(cargo, packages=None):
     selection = ["--workspace"] if packages is None else [
         argument for name in packages for argument in ("-p", name)]
     listing = subprocess.check_output(
-        [*cargo, "tree", "--locked", "--edges", "normal,build,dev", "--prefix", "none",
-         "--format", "{p}\t{f}", *selection], cwd=ROOT, text=True)
+        [*cargo, "tree", "--locked", "--color", "never", "--edges", "normal,build,dev",
+         "--prefix", "none", "--format", "{p}\t{f}", *selection], cwd=ROOT, text=True)
     units = {}
     for line in listing.splitlines():
         package, _, features = line.removesuffix(" (*)").partition("\t")
@@ -291,7 +350,7 @@ def scope_command(metadata, arguments, cargo):
             raise ValueError("--test-build-packages needs at least one crate")
         packages, reason = test_build_packages(metadata, requested, cargo)
         if packages is None:
-            print("workspace", "--workspace --lib --bins --tests", sep="\n")
+            print("workspace", "--workspace --bins --tests", sep="\n")
         else:
             print(" ".join(packages), " ".join(
                 [*(argument for name in packages for argument in ("-p", name)),
@@ -446,7 +505,6 @@ def unit_milliseconds(path):
 
 FINISHED_SECONDS = re.compile(r"^\s*Finished\b.*\bin\s+([0-9]*\.?[0-9]+)s\s*$")
 COMPILING_PACKAGE = re.compile(r"^\s*Compiling (\S+) v\d")
-DOCTEST_TARGET = re.compile(r"^\s*Doc-tests (\S+)\s*$")
 TEST_RESULT_SECONDS = re.compile(r"test result:.*\bfinished in ([0-9]*\.?[0-9]+)s\s*$")
 
 
@@ -463,14 +521,11 @@ def finished_milliseconds(text):
     return total if saw else None
 
 
-def mentioned_packages(text, doctest_packages):
+def mentioned_packages(text):
     names = []
     for line in text_lines(text):
         match = COMPILING_PACKAGE.match(line)
         name = match.group(1) if match else None
-        match = DOCTEST_TARGET.match(line)
-        if match:
-            name = doctest_packages.get(match.group(1))
         if name and name not in names:
             names.append(name)
     return names
@@ -502,39 +557,11 @@ def package_test_milliseconds(junit):
     return totals if saw else None
 
 
-def doctest_milliseconds(text, doctest_packages):
-    """Per-package doctest time, resolving Cargo's library target labels."""
-    totals = {}
-    current = None
-    for line in text_lines(text):
-        match = DOCTEST_TARGET.match(line)
-        if match:
-            current = doctest_packages.get(match.group(1))
-            continue
-        if current is None:
-            continue
-        match = TEST_RESULT_SECONDS.search(line)
-        if match:
-            ms = milliseconds(match.group(1))
-            if ms is not None:
-                totals[current] = totals.get(current, 0) + ms
-            current = None
-    return totals or None
-
-
 def libtest_milliseconds(text):
-    """Sum of libtest finished-in times, excluding doctest blocks."""
+    """Sum of libtest finished-in times."""
     total = 0
     saw = False
-    in_doctest = False
     for line in text_lines(text):
-        if DOCTEST_TARGET.match(line):
-            in_doctest = True
-            continue
-        if in_doctest:
-            if TEST_RESULT_SECONDS.search(line):
-                in_doctest = False
-            continue
         match = TEST_RESULT_SECONDS.search(line)
         if match:
             ms = milliseconds(match.group(1))
@@ -554,19 +581,8 @@ class PhaseTimings:
     time under the cargo test fallback, which has no package to credit.
     """
 
-    def __init__(self, packages, metadata):
+    def __init__(self, packages, metadata=None):
         self.packages = list(packages)
-        # Cargo prints the library target name, which may be normalized or
-        # explicitly named. Only unique targets among selected packages can
-        # be attributed from that label alone.
-        owners = {}
-        for package in metadata["packages"]:
-            if package["name"] in self.packages:
-                for target in package["targets"]:
-                    if target["doctest"]:
-                        owners.setdefault(target["name"], set()).add(package["name"])
-        self.doctest_packages = {target: next(iter(names)) for target, names in owners.items()
-                                 if len(names) == 1}
         self.compile = None
         self.test = None
         self.unsplit_compile = 0
@@ -619,10 +635,9 @@ class PhaseTimings:
         if units is not None:
             self.add_compile_units(units)
         else:
-            self.add_unsplit_compile(finished_milliseconds(text), mentioned_packages(text, self.doctest_packages))
+            self.add_unsplit_compile(finished_milliseconds(text), mentioned_packages(text))
         if junit is not None:
             self.add_tests(package_test_milliseconds(junit))
-        self.add_tests(doctest_milliseconds(text, self.doctest_packages))
         if self.test is None:
             ms = libtest_milliseconds(text)
             if ms is not None:
@@ -657,9 +672,7 @@ class PhaseTimings:
         if test_split:
             test_ms = sum(entry["test_ms"] for entry in entries)
         elif self.unsplit_test_seen:
-            # Doctests arrive per package even under the fallback, so they add to the unsplit libtest time.
-            doctest_ms = sum(self.test.values()) if self.test is not None else 0
-            test_ms = self.unsplit_test + doctest_ms
+            test_ms = self.unsplit_test
         else:
             test_ms = None
         return compile_ms, test_ms, entries
@@ -730,6 +743,40 @@ def report_command_evidence(log_path):
               file=sys.stderr, flush=True)
 
 
+class BoundedCapture:
+    """Tail-bounded in-memory copy; the full stream still goes to its log/relay.
+
+    Keeps at most ``limit`` characters/bytes, dropping oldest whole lines, so a
+    verbose or runaway test cannot grow gate memory without limit. The tail
+    retains harness summaries and timing lines callers parse.
+    """
+
+    def __init__(self, limit, is_str=True):
+        self.limit = limit
+        self.parts = deque()
+        self.size = 0
+        self.is_str = is_str
+
+    def append(self, part):
+        if not self.parts and self.size == 0:
+            self.is_str = isinstance(part, str)
+        self.parts.append(part)
+        self.size += len(part)
+        while self.size > self.limit and len(self.parts) > 1:
+            dropped = self.parts.popleft()
+            self.size -= len(dropped)
+        if self.size > self.limit and self.parts:
+            # One line longer than the cap: keep only its tail.
+            only = self.parts[0]
+            self.parts[0] = only[-self.limit:] if self.limit else only[:0]
+            self.size = len(self.parts[0])
+
+    def text(self):
+        if self.is_str:
+            return "".join(self.parts)
+        return b"".join(self.parts)
+
+
 def run_nextest(command, environment):
     """Retain the complete merged stream, relaying diagnostics and failed blocks.
 
@@ -739,7 +786,7 @@ def run_nextest(command, environment):
     exit status and every line that leads with a host-notice prefix.
     """
     notices = []
-    captured = []
+    captured = BoundedCapture(COMMAND_EVIDENCE_BYTES)
     scratch = ROOT / ".orbit/tmp"
     scratch.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(prefix="ci-test-affected-nextest-", suffix=".log",
@@ -774,29 +821,48 @@ def run_nextest(command, environment):
                 log.flush()
                 if exit_code:
                     report_command_evidence(Path(log.name))
-                return exit_code, notices, "".join(captured)
+                return exit_code, notices, captured.text()
             except BaseException:
                 process.terminate()
                 process.wait()
                 raise
 
 
+def _stop_observed_group(process):
+    """Keep the child unreaped until after the last group signal."""
+    if process.returncode is not None:
+        return
+    with contextlib.suppress(OSError):
+        os.killpg(process.pid, signal.SIGTERM)
+    # Waiting on Popen here would reap the group leader and release its PID.
+    # Even a dead, unreaped leader reserves that number through escalation.
+    time.sleep(0.1)
+    with contextlib.suppress(OSError):
+        os.killpg(process.pid, signal.SIGKILL)
+    with contextlib.suppress(OSError):
+        process.kill()
+    with contextlib.suppress(OSError):
+        process.wait()
+
+
 def run_observed(command, environment):
     """Run a command, relay both streams, and return its exit code and merged output.
 
-    Doctest compile lines and the test harness result are on different streams.
-    Both are needed to attribute doctest time to a package. Each pipe has its
+    Cargo compile lines and the test harness result are on different streams.
+    Both are needed to attribute compile time to a package. Each pipe has its
     own reader. A blocking line read waits only for that pipe, so a partial
     line cannot leave the other pipe unread while the child fills it. Lines
     are appended whole, so one stream's bytes never split a timing line.
 
     A relay failure wakes the supervisor before it joins either reader. The
     command owns a session so cleanup can stop descendants holding the pipes,
-    even after the command exits. SIGTERM also enters this cleanup path when
-    the surrounding executor stops the gate gracefully.
+    even after the command exits. Its unreaped leader reserves the group id
+    until the final group signal. SIGTERM also enters this cleanup
+    path when the surrounding executor stops the gate gracefully.
     """
-    process = subprocess.Popen(command, cwd=ROOT, env=environment, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, start_new_session=True)
+    process = subprocess.Popen(
+        command, cwd=ROOT, env=environment, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, start_new_session=True)
     previous_sigterm = None
     started = []
     try:
@@ -805,7 +871,7 @@ def run_observed(command, environment):
                 raise SystemExit(128 + signum)
 
             previous_sigterm = signal.signal(signal.SIGTERM, interrupted)
-        lines = []
+        lines = BoundedCapture(COMMAND_EVIDENCE_BYTES, is_str=False)
         errors = []
         failed = threading.Event()
         lock = threading.Lock()
@@ -840,32 +906,25 @@ def run_observed(command, environment):
                 break
         if errors:
             raise errors[0]
-        return process.wait(), b"".join(lines).decode("utf-8", errors="replace")
+        return process.wait(), lines.text().decode("utf-8", errors="replace")
     except BaseException:
-        # Cleanup must not replace the original relay error. Always kill
-        # the group after the grace, including when its leader has exited:
-        # a descendant may ignore SIGTERM and still hold a reader's pipe.
+        # Cleanup must not replace the original relay error. Kill the group
+        # after the grace, before reaping the leader: a descendant may ignore
+        # SIGTERM and still hold a reader's pipe.
         if previous_sigterm is not None:
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        with contextlib.suppress(OSError):
-            os.killpg(process.pid, signal.SIGTERM)
-        with contextlib.suppress(OSError, subprocess.TimeoutExpired):
-            process.wait(timeout=0.1)
-        with contextlib.suppress(OSError):
-            os.killpg(process.pid, signal.SIGKILL)
-        with contextlib.suppress(OSError):
-            process.kill()
-        with contextlib.suppress(OSError):
-            process.wait()
+        if process is not None:
+            _stop_observed_group(process)
         for thread in started:
             thread.join()
         raise
     finally:
         if previous_sigterm is not None:
             signal.signal(signal.SIGTERM, previous_sigterm)
-        for pipe in (process.stdout, process.stderr):
-            with contextlib.suppress(OSError):
-                pipe.close()
+        if process is not None:
+            for pipe in (process.stdout, process.stderr):
+                with contextlib.suppress(OSError):
+                    pipe.close()
 
 
 def build_budget_command():
@@ -938,12 +997,7 @@ def main():
         packages = affected_packages(metadata, changed)
         print(f"ci-test-affected: base={base}", file=sys.stderr, flush=True)
     target_flags = test_target_flags(metadata, packages)
-    # nextest does not execute doctests; they run through Cargo for the same set.
-    # A bin-only selection has no doctest targets and Cargo rejects --doc for it.
-    doc_packages = sorted(package["name"] for package in metadata["packages"]
-                          if package["name"] in packages
-                          and any(target["doctest"] for target in package["targets"]))
-    selection = dict(packages=packages, target_flags=target_flags, doctest_packages=doc_packages)
+    selection = dict(packages=packages, target_flags=target_flags)
     filters, libtest_filters = [], []
     run_packages, run_target_flags = packages, target_flags
     if failing_tests is not None:
@@ -952,7 +1006,6 @@ def main():
         run_packages, filterset, names = failing_test_runs(packages, failing_tests)
         run_target_flags = test_target_flags(metadata, run_packages)
         filters, libtest_filters = ["-E", filterset, "--test-threads", "1", "--retries", "0"], ["--", "--exact", *names, "--test-threads", "1"]
-        doc_packages = []
     # Checked before the empty-selection return, so a workflow-only change still runs it.
     # A replayed selection carries no diff, so the candidate run that named it decided.
     if changed is not None and not arguments.list and touches_macos_workflow(changed):
@@ -977,8 +1030,8 @@ def main():
     budget = build_budget_command()
     nextest = subprocess.run([*cargo, "nextest", "--version"], cwd=ROOT,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    # One timings object across the test command and the doctest command.
-    # `--timings` is a report of the build those commands already do.
+    # One timings object across the test command.
+    # `--timings` is a report of the build that command already does.
     timings = PhaseTimings(run_packages, metadata)
     with tempfile.TemporaryDirectory(prefix="ci-test-affected-") as report:
         junit = Path(report) / "junit.xml"
@@ -1017,16 +1070,7 @@ def main():
         write_summary(summary, selection, tests_run, base, code, notices, timings.record(), executed)
         return code
 
-    if exit_code or not doc_packages:
-        return finished(exit_code)
-    # Doctests still run, so the summary does not yet report an exit status.
-    write_summary(summary, selection, tests_run, base, None, notices, timings.record(), executed)
-    doc_flags = [argument for name in doc_packages for argument in ("-p", name)]
-    doc_code, doc_output = run_observed(
-        [*budget, "--", *cargo, "test", "--timings", "--no-fail-fast", *doc_flags, "--doc"],
-        test_environment)
-    timings.observe(doc_output)
-    return finished(doc_code)
+    return finished(exit_code)
 
 
 if __name__ == "__main__":

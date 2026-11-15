@@ -16,7 +16,8 @@ use crate::runtime::task::locks::{
 };
 
 pub use orbit_store::contracts::{
-    TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskPage, TaskRow,
+    TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskListHydration,
+    TaskPage, TaskRow,
 };
 
 /// A store-wide scan can omit a corrupt bundle, but must disclose why. Other
@@ -47,6 +48,11 @@ pub struct TaskListQuery {
     pub runs_on: Option<HostOs>,
     pub path: Option<String>,
     pub limit: usize,
+    /// How the store materializes page rows. [`TaskListHydration::EnvelopeOnly`]
+    /// is only for callers whose output keeps envelope-derived fields alone;
+    /// the `pilot_warnings` filter keeps the hydrating path (see
+    /// `query_task_store`).
+    pub hydration: TaskListHydration,
 }
 
 impl Default for TaskListQuery {
@@ -58,6 +64,7 @@ impl Default for TaskListQuery {
             runs_on: None,
             path: None,
             limit: crate::DEFAULT_TASK_LIST_LIMIT,
+            hydration: TaskListHydration::Full,
         }
     }
 }
@@ -106,8 +113,17 @@ pub(crate) struct TaskEligibility {
 /// callers that read status, attribution, tags, relations, context files or
 /// timestamps of the whole workspace.
 pub(crate) fn list_task_metadata_in(store: &dyn TaskStoreBackend) -> Result<Vec<Task>, OrbitError> {
+    list_task_metadata_matching(store, &TaskListFilter::default())
+}
+
+/// [`list_task_metadata_in`] narrowed by `filter`: one freshness pass, and
+/// only the envelopes the filter selects are read.
+pub(crate) fn list_task_metadata_matching(
+    store: &dyn TaskStoreBackend,
+    filter: &TaskListFilter,
+) -> Result<Vec<Task>, OrbitError> {
     Ok(store
-        .task_candidates(&TaskListFilter::default(), usize::MAX)?
+        .task_candidates(filter, usize::MAX)?
         .items
         .into_iter()
         .map(metadata_task)
@@ -148,15 +164,14 @@ fn query_task_store(
         for task in candidates.items {
             let comments = runtime.get_task_comments(&task.id)?;
             let task_id = task.id.clone();
-            let status = task.status;
-            let dependencies = metadata_task(task).dependencies();
-            let is_done = |id: &str| {
-                matches!(
-                    runtime.get_task(id),
-                    Ok(found) if found.status == TaskStatus::Done
-                )
-            };
-            if !super::task_pilot_warnings(status, &comments, &dependencies, &is_done).is_empty() {
+            let task = metadata_task(task);
+            let is_done = |id: &str| runtime.warning_prerequisite_is_done(id);
+            // Same readout the list shows: an unresolvable audit is a held
+            // readout for this task, not an error for the whole page.
+            if !runtime
+                .task_pilot_warning_findings(&task, &comments, &is_done)
+                .is_empty()
+            {
                 ids.insert(task_id);
             }
         }
@@ -180,14 +195,22 @@ fn query_task_store(
                     reference_index.get_or_init(|| TaskReferenceIndex::from_status_index(statuses)),
                 ))
             && query.path.as_deref().is_none_or(|path| {
-                crate::application::search::task_selectors_contain_path(&task.context_files, path)
+                crate::application::task::task_selectors_contain_path(&task.context_files, path)
             })
+    };
+    // The pilot-warnings filter reads audit sidecars and bundle-backed
+    // comments, so it keeps the hydrating path even for compact callers.
+    let hydration = if query.pilot_warnings {
+        TaskListHydration::Full
+    } else {
+        query.hydration
     };
     store.query_task_rows(
         &query.filter,
         query.limit,
         (query.pilot_warnings || query.ready || query.path.is_some() || query.runs_on.is_some())
             .then_some(&residual),
+        hydration,
     )
 }
 
@@ -224,6 +247,7 @@ impl OrbitRuntime {
             runs_on: query.runs_on,
             path: query.path.clone(),
             limit: query.limit,
+            hydration: query.hydration,
         })
     }
 
@@ -253,6 +277,49 @@ impl OrbitRuntime {
         self.stores().tasks().observe_task_candidates(filter, limit)
     }
 
+    /// [`Self::list_task_metadata`] under the observational terms of
+    /// [`Self::observe_task_candidates`]:
+    /// bodyless envelope metadata with no commit-boundary recovery, index
+    /// repair or persisted freshness proofs. An observational caller (such
+    /// as attention) must use this route so a pending task commit is left
+    /// for an ordinary operational read to settle.
+    pub fn observe_task_metadata(&self) -> Result<Vec<Task>, OrbitError> {
+        if !self.coordination_task_reads_visible() {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .observe_task_candidates(&TaskListFilter::default(), usize::MAX)?
+            .items
+            .into_iter()
+            .map(metadata_task)
+            .collect())
+    }
+
+    /// [`Self::observe_task_metadata`] narrowed by the store to
+    /// non-terminal statuses: one observational freshness pass that reads
+    /// only the open envelopes, in the same newest-first order, instead of
+    /// reading every envelope and filtering terminal tasks in Rust.
+    pub fn observe_open_task_metadata(&self) -> Result<Vec<Task>, OrbitError> {
+        if !self.coordination_task_reads_visible() {
+            return Ok(Vec::new());
+        }
+        let open = TaskListFilter {
+            statuses: Some(
+                TaskStatus::ALL
+                    .into_iter()
+                    .filter(|status| !status.is_terminal())
+                    .collect(),
+            ),
+            ..TaskListFilter::default()
+        };
+        Ok(self
+            .observe_task_candidates(&open, usize::MAX)?
+            .items
+            .into_iter()
+            .map(metadata_task)
+            .collect())
+    }
+
     /// [`Self::task_candidates`] answered by the generated index alone, for a
     /// filter it fully covers: the selected ids and creation times, with no
     /// envelope read. `None` sends the caller to [`Self::task_candidates`].
@@ -274,6 +341,7 @@ impl OrbitRuntime {
         filter: &TaskListFilter,
         limit: usize,
     ) -> Result<Option<TaskCandidateKeys>, OrbitError> {
+        super::candidate_checkpoint::notify_candidate_selection()?;
         if !self.coordination_task_reads_visible() {
             return Ok(Some(Default::default()));
         }
@@ -352,10 +420,7 @@ impl OrbitRuntime {
             .filter(|task| statuses.contains(&task.status))
             .filter(|task| {
                 query.path.as_deref().is_none_or(|path| {
-                    crate::application::search::task_selectors_contain_path(
-                        &task.context_files,
-                        path,
-                    )
+                    crate::application::task::task_selectors_contain_path(&task.context_files, path)
                 })
             })
             .collect();

@@ -7,50 +7,25 @@ use std::path::Path;
 
 use orbit_automation::routines::loader::retired_routine_job_reason;
 use orbit_common::OrbitError;
-use orbit_common::fs::io::atomic_write_text;
-use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_types::workflow::automation::members::StateTriggerKind;
-use orbit_types::workflow::{OverlapPolicy, RoutineTarget, RoutineTrigger};
+use orbit_types::workflow::{OverlapPolicy, RoutineTrigger};
 use serde::Serialize;
 
 use super::due::parse_cron;
+use super::edit_contract::{RoutineEditOutcome, RoutineEditRefusal};
+use super::guarded_edit::guarded_routine_edit;
 use super::loader::LoadedRoutine;
-use super::status::{
-    RoutineStatusReport, RoutineToggleRefusal, checkout_edit_report, checkout_refusal,
-    select_listed_routine,
-};
+use super::status::{RoutineStatusReport, checkout_edit_report, select_listed_routine_for_target};
 use super::template::is_seeded_routine_file;
 use crate::OrbitRuntime;
 
 /// Every state-trigger kind; [`trigger_options`] filters it per definition.
-const STATE_TRIGGER_KINDS: [StateTriggerKind; 6] = [
+const STATE_TRIGGER_KINDS: [StateTriggerKind; 4] = [
     StateTriggerKind::PreparationEligible,
     StateTriggerKind::ExecutionFailed,
-    StateTriggerKind::FindingUnverified,
-    StateTriggerKind::PilotWarningsHeld,
-    StateTriggerKind::BlockEscalated,
     StateTriggerKind::DecisionRequested,
+    StateTriggerKind::ResidentDue,
 ];
-
-/// Optimistic outcome for a routine trigger edit.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RoutineTriggerEditOutcome {
-    /// The definition was atomically changed.
-    Changed,
-    /// The requested trigger already matched the current definition.
-    Unchanged,
-    /// The caller's expected trigger was stale, so no write occurred.
-    Conflict {
-        /// The trigger the definition holds now.
-        actual_trigger: Box<RoutineTrigger>,
-    },
-    /// The definition now dispatches a different target than the one the
-    /// caller selected, so no write occurred.
-    TargetConflict {
-        /// The target the definition holds now.
-        actual_target: RoutineTarget,
-    },
-}
 
 /// Which trigger kinds a definition may switch to without changing its
 /// target or policy, which this edit never touches. A state trigger must
@@ -94,10 +69,11 @@ pub fn trigger_options(routine: &LoadedRoutine) -> RoutineTriggerOptions {
 
 /// Select routine `name` from `report` and replace its trigger.
 ///
-/// Selection is [`select_listed_routine`]; the caller's `target` must still
+/// Selection is `select_listed_routine`; the caller's `target` must still
 /// be the definition's, and `expected` the trigger it observed, before
-/// [`set_routine_trigger`] writes. The outer error is a failed or invalid
-/// write.
+/// [`set_routine_trigger`] writes. Every refusal, including a stale trigger
+/// or a retargeted definition, is one [`RoutineEditRefusal`]. The outer error
+/// is a failed or invalid write.
 pub fn edit_listed_routine_trigger(
     report: &RoutineStatusReport,
     name: &str,
@@ -105,17 +81,12 @@ pub fn edit_listed_routine_trigger(
     target: &str,
     expected: &RoutineTrigger,
     trigger: RoutineTrigger,
-) -> Result<Result<RoutineTriggerEditOutcome, RoutineToggleRefusal>, OrbitError> {
-    let routine = match select_listed_routine(report, name, source) {
+) -> Result<Result<RoutineEditOutcome, RoutineEditRefusal>, OrbitError> {
+    let routine = match select_listed_routine_for_target(report, name, source, target) {
         Ok(routine) => routine,
         Err(refusal) => return Ok(Err(refusal)),
     };
-    if routine.definition.target.as_ref_string() != target {
-        return Ok(Ok(RoutineTriggerEditOutcome::TargetConflict {
-            actual_target: routine.definition.target.clone(),
-        }));
-    }
-    set_routine_trigger(routine, expected, trigger).map(Ok)
+    set_routine_trigger(routine, expected, trigger)
 }
 
 /// Replace one routine's trigger in a selected checkout, under the same role
@@ -126,10 +97,11 @@ pub(crate) fn edit_checkout_routine_trigger(
     target: &str,
     expected: &RoutineTrigger,
     trigger: RoutineTrigger,
-) -> Result<RoutineTriggerEditOutcome, OrbitError> {
+) -> Result<RoutineEditOutcome, OrbitError> {
     let report = checkout_edit_report(runtime)?;
-    edit_listed_routine_trigger(&report, name, None, target, expected, trigger)?
-        .map_err(checkout_refusal)
+    Ok(edit_listed_routine_trigger(
+        &report, name, None, target, expected, trigger,
+    )??)
 }
 
 /// Change only the `trigger` block of a routine definition.
@@ -144,64 +116,51 @@ pub fn set_routine_trigger(
     routine: &LoadedRoutine,
     expected: &RoutineTrigger,
     trigger: RoutineTrigger,
-) -> Result<RoutineTriggerEditOutcome, OrbitError> {
-    let raw = std::fs::read_to_string(&routine.path)
-        .map_err(|error| OrbitError::Io(format!("read {}: {error}", routine.path.display())))?;
-    let current = parse_routine_yaml(&raw)?;
-    if current.name != routine.definition.name {
-        return Err(OrbitError::InvalidInput(format!(
-            "routine definition at {} changed identity from '{}' to '{}'",
-            routine.path.display(),
-            routine.definition.name,
-            current.name
-        )));
-    }
-    if current.target != routine.definition.target {
-        return Ok(RoutineTriggerEditOutcome::TargetConflict {
-            actual_target: current.target,
-        });
-    }
-    if &current.trigger != expected {
-        return Ok(RoutineTriggerEditOutcome::Conflict {
-            actual_trigger: Box::new(current.trigger),
-        });
-    }
-    if current.trigger == trigger {
-        return Ok(RoutineTriggerEditOutcome::Unchanged);
-    }
-
-    let mut edited = current;
-    edited.trigger = trigger;
-    edited
-        .validate()
-        .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
-    if edited.trigger.is_cron() {
-        parse_cron(&edited.trigger.cron)?;
-    }
-    if let Some(condition) = &edited.trigger.condition {
-        orbit_automation::condition::check_condition(
-            condition,
-            orbit_automation::condition::ConditionCarrier::Routine,
-        )
-        .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
-    }
-    if let Some(when) = &edited.trigger.when {
-        orbit_automation::condition::check_guard(
-            when,
-            "trigger.when",
-            orbit_automation::condition::ConditionCarrier::Routine,
-        )
-        .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
-    }
-    let rendered = rewrite_trigger_block(&raw, &edited.trigger)?;
-    if parse_routine_yaml(&rendered)? != edited {
-        return Err(OrbitError::Execution(
-            "routine trigger edit changed fields other than trigger".to_string(),
-        ));
-    }
-    atomic_write_text(&routine.path, &rendered)
-        .map_err(|error| OrbitError::Io(format!("write {}: {error}", routine.path.display())))?;
-    Ok(RoutineTriggerEditOutcome::Changed)
+) -> Result<Result<RoutineEditOutcome, RoutineEditRefusal>, OrbitError> {
+    let requested = trigger.clone();
+    guarded_routine_edit(
+        routine,
+        |current| {
+            if &current.trigger != expected {
+                Err(RoutineEditRefusal::StaleTrigger {
+                    actual_trigger: Box::new(current.trigger.clone()),
+                })
+            } else {
+                Ok(())
+            }
+        },
+        |current| current.trigger == trigger,
+        |raw, mut edited| {
+            edited.trigger = requested;
+            edited
+                .validate()
+                .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+            if edited.trigger.is_cron() {
+                parse_cron(&edited.trigger.cron)?;
+            }
+            if let Some(condition) = &edited.trigger.condition {
+                orbit_automation::condition::check_condition(
+                    condition,
+                    orbit_automation::condition::ConditionCarrier::Routine,
+                )
+                .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+            }
+            if let Some(when) = &edited.trigger.when {
+                orbit_automation::condition::check_guard(
+                    when,
+                    "trigger.when",
+                    orbit_automation::condition::ConditionCarrier::Routine,
+                )
+                .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+            }
+            let rendered = rewrite_trigger_block(raw, &edited.trigger)?;
+            Ok((
+                rendered,
+                edited,
+                "routine trigger edit changed fields other than trigger",
+            ))
+        },
+    )
 }
 
 /// Replace the top-level `trigger:` block of a routine document. The block

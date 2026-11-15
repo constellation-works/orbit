@@ -40,6 +40,22 @@ pub struct SourceRepairBinding {
     /// failure hook published. Absent for every other source shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkpoint_owner: Option<SourceRepairOwner>,
+    /// The retained local branch tip the successor adopts when it is not the
+    /// published `head_sha`: an unpublished tip the source run's own
+    /// host-certified rebase recoveries chained from `head_sha`. The remote
+    /// branch and pull request stay bound to `head_sha`, which leases the
+    /// push that publishes this tip. Absent when the candidate is the
+    /// published head.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_head_sha: Option<String>,
+}
+
+impl SourceRepairBinding {
+    /// The commit the successor adopts and continues: the certified local tip
+    /// when one is bound, otherwise the published head.
+    pub fn candidate_head(&self) -> &str {
+        self.candidate_head_sha.as_deref().unwrap_or(&self.head_sha)
+    }
 }
 
 /// Exact original checkpoint owner of a resumed source, bound immutably.

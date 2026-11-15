@@ -1,5 +1,6 @@
 //! Routine and machine clock operations for the dashboard [ORB-10875].
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -9,7 +10,10 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Local, Utc};
-use orbit_cmd::registry_routines::{routine_status_input_paths, routine_statuses};
+use orbit_cmd::registry_routines::{
+    RoutineStoreFingerprint, routine_status_input_paths, routine_status_store_fingerprint,
+    routine_status_task_store_paths, routine_statuses,
+};
 use orbit_common::governance::authorization::{
     AuthorizationDenial, CallerCapabilities, CallerEnvelope, DASHBOARD_CLOCK_CADENCE,
     DASHBOARD_CLOCK_SERVICE, DASHBOARD_JOB_RUN, DASHBOARD_ROUTINE_TOGGLE,
@@ -17,9 +21,9 @@ use orbit_common::governance::authorization::{
 };
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_core::application::routines::{
-    ClockHealth, ClockStatus, FireField, RoutineField, RoutineStatus, RoutineStatusReport,
-    RoutineToggleOutcome, RoutineToggleRefusal, set_clock_cadence, set_clock_enabled,
-    toggle_listed_routine, trigger_options,
+    ClockHealth, ClockStatus, FireField, RoutineEditRefusal, RoutineField, RoutineStatus,
+    RoutineStatusReport, set_clock_cadence, set_clock_enabled, toggle_listed_routine,
+    trigger_options,
 };
 use orbit_core::{AuditEventInsertParams, OrbitRuntime};
 use orbit_types::telemetry::AuditEventStatus;
@@ -30,12 +34,42 @@ use serde_json::{Value, json};
 use super::{blocking, map_runtime_error};
 use crate::state::{DashboardState, Ws};
 
+/// Freshness bound of a served routine health body. Sampled fires, pauses and
+/// definition or config edits change the memo key and recompute at once. Job
+/// runs and the task store move with every run a live drain starts or
+/// finishes, so they only mark the body for one background recompute
+/// ([`RoutineChurn`]) and it is served for up to this bound meanwhile. The
+/// bound also covers what the key cannot see (the clock, due times, automation
+/// state) and in-place updates outside the newest-256 sampled fire/job-run rows.
+const ROUTINE_HEALTH_TTL: Duration = Duration::from_secs(5);
+
+/// Age at which a still-fresh hit starts a background recompute, leaving the
+/// rest of [`ROUTINE_HEALTH_TTL`] for it to land before the entry expires.
+/// A request past the bound, or whose refresh failed or lands late, waits for
+/// compute.
+const ROUTINE_HEALTH_REFRESH_AFTER: Duration = Duration::from_secs(3);
+
 /// Host-wide cache key: selection does not restrict the host's routine list.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) struct RoutineMemoKey {
     inputs: Vec<(PathBuf, Option<(SystemTime, u64)>)>,
+    /// Routine fire, cursor, pause and automation rows in the shared audit
+    /// database. Not the database's file stamp, which every unrelated audit
+    /// write moves.
+    routine_store: Option<String>,
     include_inactive_plugins: bool,
     operator: bool,
+}
+
+/// Inputs routine health reads that a live drain rewrites constantly: job runs
+/// and the task registry files. Keying on them recomputed synchronously, about
+/// 1-2 s each, whenever any run anywhere started or finished; a change instead
+/// serves the previous body, at most [`ROUTINE_HEALTH_TTL`] old, while one
+/// background recompute replaces it.
+#[derive(Hash)]
+struct RoutineChurn {
+    job_runs: Option<String>,
+    task_store: Vec<(PathBuf, Option<(SystemTime, u64)>)>,
 }
 
 /// Record `path`'s modification time and length, recursing into directories.
@@ -110,38 +144,61 @@ pub(super) async fn list_routine_health(
     State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
 ) -> Response {
-    let generated_at = Utc::now();
     let include_inactive_plugins = query.include_inactive_plugins;
     let operator_session = state.operator_session();
     let stamp_state = state.clone();
-    let key = match blocking("routine health inputs", move || {
+    let (key, churn) = match blocking("routine health inputs", move || {
         let mut inputs = Vec::new();
         for path in routine_status_input_paths(stamp_state.global_root())? {
             stamp(&path, &mut inputs);
         }
         inputs.sort();
-        Ok(RoutineMemoKey {
-            inputs,
-            include_inactive_plugins,
-            operator: operator_session,
-        })
+        let mut task_store = Vec::new();
+        for path in routine_status_task_store_paths(stamp_state.global_root()) {
+            stamp(&path, &mut task_store);
+        }
+        let (routine_store, job_runs) =
+            match routine_status_store_fingerprint(stamp_state.global_root()) {
+                Some(RoutineStoreFingerprint { routines, job_runs }) => {
+                    (Some(routines), Some(job_runs))
+                }
+                None => (None, None),
+            };
+        Ok((
+            RoutineMemoKey {
+                inputs,
+                routine_store,
+                include_inactive_plugins,
+                operator: operator_session,
+            },
+            RoutineChurn {
+                job_runs,
+                task_store,
+            },
+        ))
     })
     .await
     {
-        Ok(key) => key,
+        Ok(stamped) => stamped,
         Err(response) => return *response,
     };
     let compute_state = state.clone();
     match state
         .routines_memo()
-        .get_or_compute_for_host(key, Duration::from_secs(5), move || {
-            compute_routine_health(
-                compute_state,
-                generated_at,
-                operator_session,
-                include_inactive_plugins,
-            )
-        })
+        .get_or_compute_for_host_ahead(
+            key,
+            &churn,
+            ROUTINE_HEALTH_TTL,
+            ROUTINE_HEALTH_REFRESH_AFTER,
+            move || {
+                compute_routine_health(
+                    compute_state,
+                    Utc::now(),
+                    operator_session,
+                    include_inactive_plugins,
+                )
+            },
+        )
         .await
     {
         Ok(served) => (served.age_header(), Json((*served.body).clone())).into_response(),
@@ -156,18 +213,28 @@ fn compute_routine_health(
     operator_session: bool,
     include_inactive_plugins: bool,
 ) -> Result<Value, orbit_core::OrbitError> {
+    let started = Instant::now();
     let report = routine_statuses(state.global_root())?;
+    let report_ms = started.elapsed().as_millis();
     let clock = match state.clock_status() {
         Ok(status) => clock_json(&status),
         Err(error) => unavailable_clock_json(&error.to_string()),
     };
-    Ok(report_json(
+    let clock_ms = started.elapsed().as_millis();
+    let body = report_json(
         &report,
         clock,
         generated_at,
         operator_session,
         include_inactive_plugins,
-    ))
+    );
+    tracing::debug!(
+        report_ms,
+        clock_ms,
+        total_ms = started.elapsed().as_millis(),
+        "routine health computed"
+    );
+    Ok(body)
 }
 
 /// `POST /api/routines/toggle` — atomically change one selected workspace's
@@ -182,22 +249,18 @@ pub(super) async fn toggle_routine(
         Ok(workspace) => workspace,
         Err(rejection) => return rejection.into_response(),
     };
+    let audit = OperationAudit::new(
+        &runtime,
+        workspace,
+        "routine.toggle",
+        body.name.as_str(),
+        json!({"source": body.source, "target": body.target, "enabled": body.enabled}),
+    )
+    .with_machine_name(&body.machine_name);
     let caller = match authorized_caller(&DASHBOARD_ROUTINE_TOGGLE, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
-            record_operation_audit(
-                &runtime,
-                workspace,
-                "routine.toggle",
-                &body.name,
-                &body.machine_name,
-                &json!({"source": body.source, "target": body.target, "enabled": body.enabled}),
-                None,
-                Some(&denial),
-                None,
-                Instant::now(),
-            )
-            .await;
+            audit.denied(&denial, Instant::now()).await;
             return authorization_denied(denial);
         }
     };
@@ -226,133 +289,61 @@ pub(super) async fn toggle_routine(
     };
     let outcome = match selected {
         Ok(Ok(outcome)) => outcome,
-        // A replica's owner-only routine is listed with the owner named; a
-        // toggle is refused with the same reason and writes nothing.
-        Ok(Err(RoutineToggleRefusal::OwnerAuthority {
-            reason,
-            owner_machine,
-        })) => {
-            let refusal = json!({
-                "error": reason,
-                "code": "owner_authority",
-                "owner_machine": owner_machine,
-            });
-            return refuse_routine_toggle(&runtime, workspace, &body, &caller, started, refusal)
-                .await;
+        // An unlisted routine is a 404 with nothing to audit.
+        Ok(Err(refusal @ RoutineEditRefusal::NotFound { .. })) => {
+            return routine_edit_refused(&refusal);
         }
-        Ok(Err(RoutineToggleRefusal::NotFound)) => {
-            return named_entity_not_found(
-                "routine_not_found",
-                format!("routine '{}' was not found", body.name),
-            );
-        }
-        Ok(Err(RoutineToggleRefusal::WorkspaceMismatch { source_workspace })) => {
-            let refusal = json!({
-                "error": format!(
-                    "select routine source workspace '{source_workspace}' before changing '{}'",
-                    body.name
-                ),
-                "code": "workspace_mismatch",
-            });
-            return refuse_routine_toggle(&runtime, workspace, &body, &caller, started, refusal)
-                .await;
+        // Every other refusal (owner authority, workspace, stale state,
+        // retargeted definition) wrote nothing; audit it and answer 409.
+        Ok(Err(refusal)) => {
+            return refuse_routine_toggle(&audit, &caller, started, &refusal).await;
         }
         Err(error) => {
             let error_message = error.to_string();
-            record_operation_audit(
-                &runtime,
-                workspace,
-                "routine.toggle",
-                &body.name,
-                &body.machine_name,
-                &json!({"source": body.source, "target": body.target, "enabled": body.enabled}),
-                Some(&caller),
-                None,
-                Some(&error_message),
-                started,
-            )
-            .await;
+            audit.failed(&caller, &error_message, started).await;
             return map_runtime_error(error);
         }
     };
-    let refusal = match &outcome {
-        RoutineToggleOutcome::Changed | RoutineToggleOutcome::Unchanged => None,
-        RoutineToggleOutcome::Conflict { actual_enabled } => Some(json!({
-            "error": "routine state changed while this action was pending; refresh before retrying",
-            "code": "stale_routine_state",
-            "actual_enabled": actual_enabled,
-        })),
-        // The definition was retargeted since the caller selected it.
-        RoutineToggleOutcome::TargetConflict { actual_target } => {
-            Some(target_mismatch(&actual_target.as_ref_string()))
-        }
-    };
-    if let Some(refusal) = refusal {
-        return refuse_routine_toggle(&runtime, workspace, &body, &caller, started, refusal).await;
-    }
-    record_operation_audit(
-        &runtime,
-        workspace,
-        "routine.toggle",
-        &body.name,
-        &body.machine_name,
-        &json!({"source": body.source, "target": body.target, "enabled": body.enabled}),
-        Some(&caller),
-        None,
-        None,
-        started,
-    )
-    .await;
+    audit.succeeded(&caller, started).await;
     Json(json!({
         "name": body.name,
         "source": body.source,
         "target": body.target,
         "machine_name": body.machine_name,
         "enabled": body.enabled,
-        "changed": outcome == RoutineToggleOutcome::Changed,
+        "changed": outcome.changed,
         "message": if body.enabled { "Routine enabled" } else { "Routine disabled" },
     }))
     .into_response()
 }
 
-/// The request's selected target is no longer the definition's target.
-fn target_mismatch(actual_target: &str) -> Value {
-    json!({
-        "error": format!("routine target changed; refresh and confirm '{actual_target}'"),
-        "code": "target_mismatch",
-        "actual_target": actual_target,
-    })
+/// A refused routine definition edit as the dashboard answers it: the core
+/// refusal body, 404 for an unlisted routine and 409 (resolved by refreshing)
+/// for every other refusal.
+pub(super) fn routine_edit_refused(refusal: &RoutineEditRefusal) -> Response {
+    let status = match refusal {
+        RoutineEditRefusal::NotFound { .. } => StatusCode::NOT_FOUND,
+        _ => StatusCode::CONFLICT,
+    };
+    (status, Json(refusal.to_json())).into_response()
+}
+
+/// The audit failure reason of a refused routine definition edit.
+pub(super) fn routine_edit_refusal_reason(refusal: &RoutineEditRefusal) -> String {
+    format!("{}: {}", refusal.code(), refusal.message())
 }
 
 /// Audit an authorized toggle that was refused without writing, then answer
-/// with the refusal as a 409 the client resolves by refreshing.
+/// with the refusal.
 async fn refuse_routine_toggle(
-    runtime: &Arc<OrbitRuntime>,
-    workspace: &str,
-    body: &RoutineToggleRequest,
+    audit: &OperationAudit<'_>,
     caller: &CallerCapabilities,
     started: Instant,
-    refusal: Value,
+    refusal: &RoutineEditRefusal,
 ) -> Response {
-    let reason = format!(
-        "{}: {}",
-        refusal["code"].as_str().unwrap_or("conflict"),
-        refusal["error"].as_str().unwrap_or_default()
-    );
-    record_operation_audit(
-        runtime,
-        workspace,
-        "routine.toggle",
-        &body.name,
-        &body.machine_name,
-        &json!({"source": body.source, "target": body.target, "enabled": body.enabled}),
-        Some(caller),
-        None,
-        Some(&reason),
-        started,
-    )
-    .await;
-    (StatusCode::CONFLICT, Json(refusal)).into_response()
+    let reason = routine_edit_refusal_reason(refusal);
+    audit.failed(caller, &reason, started).await;
+    routine_edit_refused(refusal)
 }
 
 /// `POST /api/routines/clock` — typed native-service or cadence control.
@@ -371,22 +362,18 @@ pub(super) async fn control_clock(
         ClockAction::SetCadence => &DASHBOARD_CLOCK_CADENCE,
     };
     let operation = governed.id;
+    let audit = OperationAudit::new(
+        &runtime,
+        workspace,
+        operation,
+        "clock",
+        json!({"action": body.action, "cadence_seconds": body.cadence_seconds}),
+    )
+    .with_machine_name(&body.machine_name);
     let caller = match authorized_caller(governed, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
-            record_operation_audit(
-                &runtime,
-                workspace,
-                operation,
-                "clock",
-                &body.machine_name,
-                &json!({"action": body.action, "cadence_seconds": body.cadence_seconds}),
-                None,
-                Some(&denial),
-                None,
-                Instant::now(),
-            )
-            .await;
+            audit.denied(&denial, Instant::now()).await;
             return authorization_denied(denial);
         }
     };
@@ -459,34 +446,10 @@ pub(super) async fn control_clock(
     };
     if let Err(error) = mutation {
         let error_message = error.to_string();
-        record_operation_audit(
-            &runtime,
-            workspace,
-            operation,
-            "clock",
-            &body.machine_name,
-            &json!({"action": body.action, "cadence_seconds": body.cadence_seconds}),
-            Some(&caller),
-            None,
-            Some(&error_message),
-            started,
-        )
-        .await;
+        audit.failed(&caller, &error_message, started).await;
         return map_runtime_error(error);
     }
-    record_operation_audit(
-        &runtime,
-        workspace,
-        operation,
-        "clock",
-        &body.machine_name,
-        &json!({"action": body.action, "cadence_seconds": body.cadence_seconds}),
-        Some(&caller),
-        None,
-        None,
-        started,
-    )
-    .await;
+    audit.succeeded(&caller, started).await;
     let state_after = state.clone();
     let after = tokio::task::spawn_blocking(move || state_after.clock_status()).await;
     let (clock, changed) = match after {
@@ -537,7 +500,7 @@ pub(super) fn report_json(
         "session_explanation": if authorized_caller(&DASHBOARD_ROUTINE_TOGGLE, operator_session).is_ok() {
             "Session access: this dashboard server has operator authority. Actions also check workspace and machine selection. Mint creates a task without starting delivery; bounded-window submission has separate permissions."
         } else {
-            "Session access comes from the dashboard server. For operator access, start it with `orbit web serve --operator` (or `orbit web connect`, which does that by default) and reload this page. Opening a terminal does not authorize a running server. Bounded-window submission has separate permissions."
+            "Session access comes from the dashboard server. For operator access, start it with `orbit web serve --operator` (or `orbit web connect`, which does that by default) and reload this page. Neither the server's terminal nor `ORBIT_OPERATOR` grants operator access. Bounded-window submission has separate permissions."
         },
         "clock": clock,
         "cron_zone": host_cron_zone(),
@@ -549,7 +512,7 @@ pub(super) fn report_json(
     })
 }
 
-fn status_json(status: &RoutineStatus) -> Value {
+pub(super) fn status_json(status: &RoutineStatus) -> Value {
     let mut row = status.project(ROUTINE_COLUMNS);
     // The trigger kinds the edit form may offer without touching the target.
     row.insert(
@@ -713,7 +676,11 @@ pub(super) fn authorized_caller(
             .effective_capabilities
             .insert(McpCapability::Operator);
     }
-    let caller = CallerCapabilities::resolve(&CallerEnvelope::from_process_env(&session));
+    // Session state only: the server's own stdin/stderr, `ORBIT_OPERATOR` and
+    // agent envelope never grant here, so a `--no-operator` server on a pty
+    // (an SSH `-tt` tunnel, or a terminal-started `web serve`) stays
+    // read-only, and a granted write is audited as the session [ORB-23047].
+    let caller = CallerCapabilities::resolve(&CallerEnvelope::dashboard_session(&session));
     authorize(operation, &caller)?;
     Ok(caller)
 }
@@ -765,79 +732,152 @@ pub(super) fn selection_conflict(code: &'static str, message: String) -> Respons
         .into_response()
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn record_operation_audit(
-    runtime: &Arc<OrbitRuntime>,
-    workspace: &str,
-    operation: &str,
-    target: &str,
-    machine_name: &str,
-    arguments: &Value,
-    caller: Option<&CallerCapabilities>,
-    denial: Option<&AuthorizationDenial>,
-    failure: Option<&str>,
-    started: Instant,
-) {
-    let status = if denial.is_some() {
-        AuditEventStatus::Denied
-    } else if failure.is_some() {
-        AuditEventStatus::Failure
-    } else {
-        AuditEventStatus::Success
-    };
-    let capabilities = caller
-        .map(|caller| caller.grants().clone())
-        .unwrap_or_default();
-    let provenance = caller
-        .map(|caller| caller.provenance().to_string())
-        .or_else(|| denial.map(|denial| denial.provenance.to_string()));
-    let params = AuditEventInsertParams {
-        execution_id: audit_execution_id("dashboard-operations"),
-        command: "dashboard.operations".to_string(),
-        subcommand: provenance,
-        tool_name: None,
-        target_type: Some(operation.to_string()),
-        target_id: Some(target.to_string()),
-        role: "operator".to_string(),
-        status,
-        exit_code: i32::from(status != AuditEventStatus::Success),
-        duration_ms: i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX),
-        working_directory: runtime
-            .workspace_runtime_binding()
-            .map(|binding| binding.repo_root.display().to_string())
-            .unwrap_or_else(|| runtime.shared_root().display().to_string()),
-        arguments_json: serde_json::to_string(arguments).ok(),
-        stdout_truncated: None,
-        stderr_truncated: None,
-        error_message: denial
-            .map(ToString::to_string)
-            .or_else(|| failure.map(str::to_string)),
-        host: std::env::var("HOSTNAME").ok(),
-        pid: std::process::id(),
-        session_id: None,
-        workspace_id: Some(workspace.to_string()),
-        caller_machine_id: None,
-        caller_machine_name: Some(machine_name.to_string()),
-        process_machine_id: None,
-        process_machine_name: Some(machine_name.to_string()),
-        transport: None,
-        effective_capabilities: capabilities,
-        origin_session_id: None,
-        mcp_call_id: None,
-        lease_id: None,
-        task_id: None,
-        job_run_id: None,
-        activity_id: None,
-        step_index: None,
-    };
-    // A SQLite insert can wait out the busy timeout; keep it off the async
-    // worker like every other store access in this crate.
-    let writer = Arc::clone(runtime);
-    let result = tokio::task::spawn_blocking(move || writer.record_audit_event(&params)).await;
-    let error = match result {
-        Ok(Ok(())) => return,
-        Ok(Err(error)) => error.to_string(),
-        Err(join_error) => join_error.to_string(),
-    };
-    tracing::error!(operation, target, error = %error, "failed to persist dashboard operation audit");
+/// One governed dashboard operation, ready to audit any of its outcomes.
+///
+/// The invariant part (runtime, workspace, operation, target, machine and
+/// arguments) is carried once; each method records exactly one outcome, so
+/// a caller and a denial can never be recorded together or both be absent.
+/// `machine_name` defaults to empty.
+pub(super) struct OperationAudit<'a> {
+    runtime: &'a Arc<OrbitRuntime>,
+    workspace: &'a str,
+    operation: &'a str,
+    target: Cow<'a, str>,
+    machine_name: &'a str,
+    arguments: Value,
+}
+
+impl<'a> OperationAudit<'a> {
+    pub(super) fn new(
+        runtime: &'a Arc<OrbitRuntime>,
+        workspace: &'a str,
+        operation: &'a str,
+        target: impl Into<Cow<'a, str>>,
+        arguments: Value,
+    ) -> Self {
+        Self {
+            runtime,
+            workspace,
+            operation,
+            target: target.into(),
+            machine_name: "",
+            arguments,
+        }
+    }
+
+    pub(super) fn with_machine_name(mut self, machine_name: &'a str) -> Self {
+        self.machine_name = machine_name;
+        self
+    }
+
+    pub(super) fn with_target(mut self, target: impl Into<Cow<'a, str>>) -> Self {
+        self.target = target.into();
+        self
+    }
+
+    pub(super) fn with_arguments(mut self, arguments: Value) -> Self {
+        self.arguments = arguments;
+        self
+    }
+
+    pub(super) async fn denied(&self, denial: &AuthorizationDenial, started: Instant) {
+        self.record(None, Some(denial), None, started).await;
+    }
+
+    pub(super) async fn failed(
+        &self,
+        caller: &CallerCapabilities,
+        failure: &str,
+        started: Instant,
+    ) {
+        self.record(Some(caller), None, Some(failure), started)
+            .await;
+    }
+
+    pub(super) async fn succeeded(&self, caller: &CallerCapabilities, started: Instant) {
+        self.record(Some(caller), None, None, started).await;
+    }
+
+    pub(super) async fn settled(
+        &self,
+        caller: &CallerCapabilities,
+        failure: Option<&str>,
+        started: Instant,
+    ) {
+        self.record(Some(caller), None, failure, started).await;
+    }
+
+    async fn record(
+        &self,
+        caller: Option<&CallerCapabilities>,
+        denial: Option<&AuthorizationDenial>,
+        failure: Option<&str>,
+        started: Instant,
+    ) {
+        let operation = self.operation;
+        let target = &*self.target;
+        let status = if denial.is_some() {
+            AuditEventStatus::Denied
+        } else if failure.is_some() {
+            AuditEventStatus::Failure
+        } else {
+            AuditEventStatus::Success
+        };
+        let capabilities = caller
+            .map(|caller| caller.grants().clone())
+            .unwrap_or_default();
+        let provenance = caller
+            .map(|caller| caller.provenance().to_string())
+            .or_else(|| denial.map(|denial| denial.provenance.to_string()));
+        let params = AuditEventInsertParams {
+            execution_id: audit_execution_id("dashboard-operations"),
+            command: "dashboard.operations".to_string(),
+            subcommand: provenance,
+            tool_name: None,
+            target_type: Some(operation.to_string()),
+            target_id: Some(target.to_string()),
+            role: "operator".to_string(),
+            status,
+            exit_code: i32::from(status != AuditEventStatus::Success),
+            duration_ms: i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX),
+            working_directory: self
+                .runtime
+                .workspace_runtime_binding()
+                .map(|binding| binding.repo_root.display().to_string())
+                .unwrap_or_else(|| self.runtime.shared_root().display().to_string()),
+            arguments_json: serde_json::to_string(&self.arguments).ok(),
+            stdout_truncated: None,
+            stderr_truncated: None,
+            error_message: denial
+                .map(ToString::to_string)
+                .or_else(|| failure.map(str::to_string)),
+            host: std::env::var("HOSTNAME").ok(),
+            pid: std::process::id(),
+            session_id: None,
+            workspace_id: Some(self.workspace.to_string()),
+            caller_machine_id: None,
+            caller_machine_name: Some(self.machine_name.to_string()),
+            process_machine_id: None,
+            process_machine_name: Some(self.machine_name.to_string()),
+            transport: None,
+            effective_capabilities: capabilities,
+            origin_session_id: None,
+            mcp_call_id: None,
+            lease_id: None,
+            task_id: None,
+            job_run_id: None,
+            activity_id: None,
+            step_index: None,
+        };
+        // A SQLite insert can wait out the busy timeout; keep it off the async
+        // worker like every other store access in this crate.
+        let writer = Arc::clone(self.runtime);
+        let result = tokio::task::spawn_blocking(move || writer.record_audit_event(&params)).await;
+        let error = match result {
+            Ok(Ok(())) => return,
+            Ok(Err(error)) => error.to_string(),
+            Err(join_error) => join_error.to_string(),
+        };
+        tracing::error!(operation, target, error = %error, "failed to persist dashboard operation audit");
+    }
 }

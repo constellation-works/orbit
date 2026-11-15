@@ -14,12 +14,19 @@
 //! - Task ids are a *global* primary key in `index.sqlite` and the allocator has
 //!   a single `local` authority, so merging two machines' tasks collides on ids.
 //! - Export copies bundle trees verbatim plus a [`TaskMigrationManifest`].
-//! - Import validates everything *before* mutating state, then keeps free ids,
-//!   renumbers collisions (rewriting relation targets within the imported set),
-//!   rebuilds index rows from bundle YAML, bumps the allocator past the max
-//!   landed id. Fresh bundles and a workspace registration created by a failed
-//!   run are rolled back; owner-wins replacements remain because the incoming
-//!   owner's copy is authoritative.
+//! - Import validates the manifest, bundle integrity, and known-prefix relation
+//!   targets *before* mutating state. A target under a prefix this registry
+//!   knows, or under a prefix of an id this import will register, must be in
+//!   the accepted import set (after conflict selection and renumbering) or
+//!   already registered; otherwise import names the source, relation type and
+//!   missing target and writes nothing. A prefix the import does not register
+//!   and the registry has never issued may still dangle. It then keeps free
+//!   ids, renumbers collisions (rewriting relation targets within the imported
+//!   set), rebuilds index rows from bundle YAML, and bumps the allocator past
+//!   the max landed id. Fresh bundles and a workspace registration created by
+//!   a failed run are rolled back; owner-wins replacements remain because the
+//!   incoming owner's copy is authoritative. Cycles are still rejected when
+//!   the index is rebuilt.
 //! - Idempotency is scoped to *kept* ids: re-importing an archive whose ids are
 //!   free (or already landed unchanged) is a no-op. A `--on-conflict=renumber`
 //!   run is **not** idempotent — a collision means "these are new local tasks,"
@@ -112,11 +119,9 @@ pub use inspect::{
 };
 pub use manifest::{MIGRATION_FORMAT_VERSION, TaskMigrationManifest};
 pub use publication::{
-    AttachmentPolicy, AttachmentPolicyKind, AttachmentScanFailure, AttachmentScanInput,
-    AttachmentScanOutcome, AttachmentSensitivityScanner, OmittedAttachment,
-    PUBLICATION_ENVELOPE_FILE_NAME, PUBLICATION_TASKS_DIR_NAME, PublicationEnvelope,
-    PublicationSnapshotMetadata, PublicationSnapshotOutcome, ScannerFailureBehavior,
-    TASK_PUBLICATION_FORMAT_VERSION,
+    AttachmentPolicy, AttachmentPolicyKind, OmittedAttachment, PUBLICATION_ENVELOPE_FILE_NAME,
+    PUBLICATION_TASKS_DIR_NAME, PublicationEnvelope, PublicationSnapshotMetadata,
+    PublicationSnapshotOutcome, ScannerFailureBehavior, TASK_PUBLICATION_FORMAT_VERSION,
 };
 pub use publish::{
     PublicationCallerRole, PublicationLastSuccess, PublicationPublishOutcome,

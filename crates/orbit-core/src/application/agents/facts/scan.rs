@@ -3,16 +3,18 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::InvocationQuery;
-use orbit_types::task::{TaskHistoryEntry, TaskRelationType};
+use orbit_types::task::TaskRelationType;
 
 use super::super::attribution;
 use super::super::candidates::Candidates;
-use super::super::records::block_cause;
 use super::super::roles::pilots::grade_all;
 use super::attempts::implementation_runs;
+use super::implementer::mark_implementer_less_attempts;
+use super::invocations::AgentInvocationFacts;
+use super::launches::AgentLaunchFacts;
 use super::model::{AgentFacts, RegressionLink, Runner, SCAN_DAYS};
 use super::review::judge_rejects;
-use super::task::task_facts;
+use super::stored::StoredFacts;
 use crate::OrbitRuntime;
 use crate::application::codebase::{
     PilotEvidence, PilotRuns, failed_claim_settlements_of, pilot_evidence,
@@ -46,9 +48,9 @@ pub(in crate::application::agents) fn scan(
 
     let mut runs = implementation_runs(runtime, horizon);
     let run_costs = run_costs(runtime, horizon, computed_at);
-    let leaves = runtime.settled_leaves(false).unwrap_or_else(|error| {
+    let (leaves, late_claims) = runtime.scorecard_claims().unwrap_or_else(|error| {
         tracing::warn!(%error, "agent scorecards: claim settlements unreadable");
-        Vec::new()
+        (Vec::new(), Vec::new())
     });
     let settlements = failed_claim_settlements_of(&leaves);
     let pulled: HashMap<&str, Runner> = leaves
@@ -58,49 +60,58 @@ pub(in crate::application::agents) fn scan(
                 crew: leaf.crew.clone(),
                 model: leaf.crew_model.clone(),
                 run_id: None,
+                reported_effort: leaf.reasoning_effort.clone(),
             };
             (leaf.claim_id.as_str(), runner)
         })
+        .chain(late_claims.iter().map(|late| {
+            let runner = Runner {
+                crew: late.crew.clone(),
+                model: late.crew_model.clone(),
+                run_id: None,
+                reported_effort: late.reasoning_effort.clone(),
+            };
+            (late.claim_id.as_str(), runner)
+        }))
         .collect();
     let candidates = Candidates::open(runtime);
+    let mut stored = StoredFacts::load(runtime, &pulled);
     let mut facts = Vec::new();
     for task in tasks {
         if task.created_at < horizon && task.updated_at < horizon {
             continue;
         }
+        // A human crew's task is operator work: its outcome scores no agent
+        // crew, ranking or usage row.
+        if runtime.is_human_crew(task.crew.as_deref()) {
+            continue;
+        }
         let id = task.id.to_string();
-        let history = runtime.get_task_history(&id).unwrap_or_else(|error| {
-            tracing::warn!(task_id = %id, %error, "agent scorecards: task history unreadable");
-            Vec::new()
-        });
-        let comments = runtime.get_task_comments(&id).unwrap_or_else(|error| {
-            tracing::warn!(task_id = %id, %error, "agent scorecards: task comments unreadable");
-            Vec::new()
-        });
         let task_settlements = settlements.get(&id).map(Vec::as_slice).unwrap_or_default();
-        let classify = |entry: &TaskHistoryEntry| block_cause(entry, task_settlements);
         let task_runs = runs.remove(&id).unwrap_or_default();
-        let mut task_facts = task_facts(
+        let entry = stored.entry(
+            runtime,
             &task,
-            &history,
-            &comments,
+            task_settlements,
             &task_runs,
             &pulled,
-            &classify,
             computed_at,
         );
+        stored.keep(&id, &entry);
+        let mut task_facts = entry.facts;
         judge_rejects(&mut task_facts.reviews, &candidates);
-        // The comparison review of record, scored under purpose
-        // `visual_review` (§11.4). Read only for `verify-mock-ui` tasks.
-        if orbit_types::task::has_verify_mock_ui_tag(&task.tags)
-            && let Ok(Some(artifact)) =
-                runtime.get_task_artifact(&id, orbit_types::task::VISUAL_REVIEW_ARTIFACT)
-        {
-            task_facts.visual_review =
-                super::review::visual_review_facts(&artifact.content, task.updated_at);
-        }
         facts.push(task_facts);
     }
+    stored.save(
+        runtime,
+        facts
+            .iter()
+            .filter(|task| {
+                task.status.is_terminal()
+                    && task.attempts.iter().all(|attempt| attempt.end.is_some())
+            })
+            .map(|task| task.id.as_str()),
+    );
 
     let mut pilot_runs = None;
     let mut pilots = grade_all(pilot_scan(runtime, &mut pilot_runs));
@@ -126,16 +137,37 @@ pub(in crate::application::agents) fn scan(
             tracing::warn!(%error, "agent scorecards: landed diff sizes unavailable");
             BTreeMap::new()
         });
-    let (charges, credits) = attribution::attribute(&facts, &regressions, &pilots);
+    let workspace_id = runtime.stores().jobs().workspace_id().to_string();
     let invocations = runtime.sqlite_store()?.list_invocation_accounting_facts(
         &orbit_store::contracts::InvocationAccountingQuery {
-            workspace_id: Some(runtime.stores().jobs().workspace_id().to_string()),
+            workspace_id: Some(workspace_id.clone()),
             since: Some(horizon),
             until: computed_at,
         },
     )?;
+    // Launch records keep the effort of attempts whose invocation never
+    // completed; a failed read leaves those units effort-unknown rather
+    // than failing every scorecard, as the other telemetry reads do.
+    let launches = runtime
+        .sqlite_store()?
+        .list_agent_executions(&orbit_store::contracts::AgentExecutionQuery {
+            workspace_id: Some(workspace_id),
+            since: Some(horizon),
+            until: computed_at,
+        })
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "agent scorecards: launch records unreadable");
+            Vec::new()
+        });
+    let invocations = AgentInvocationFacts::from(invocations);
+    let launches = AgentLaunchFacts::from(launches);
+    // Before attribution, so an attempt that launched no implementer is
+    // charged no implementer problem.
+    mark_implementer_less_attempts(runtime, &mut facts, &invocations, &launches);
+    let (charges, credits) = attribution::attribute(&facts, &regressions, &pilots);
     Ok(AgentFacts {
         invocations,
+        launches,
         computed_at,
         tasks_scanned,
         tasks: facts,
@@ -143,8 +175,9 @@ pub(in crate::application::agents) fn scan(
         run_costs,
         credits,
         pilots,
+        regressions,
         landed_lines,
-        performance_types: runtime.crew_performance_types().to_vec(),
+        performance_types: runtime.task_types().to_vec(),
     })
 }
 
@@ -174,6 +207,8 @@ pub(super) fn run_costs(
         since: Some(horizon),
         until: Some(until),
         limit: LIMIT,
+        // Costs read only the invocation rows and their task links.
+        skip_tool_calls: true,
         ..Default::default()
     }) {
         Ok(records) if records.len() < LIMIT => records,

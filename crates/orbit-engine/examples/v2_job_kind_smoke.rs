@@ -1,5 +1,6 @@
+// Examples are binaries and export no API, so missing_docs has nothing to check.
 #![allow(missing_docs)]
-// Examples are user-facing smoke binaries that print progress and unwrap setup invariants.
+// Examples are user-facing smoke binaries that print progress and may unwrap setup invariants.
 #![allow(
     clippy::expect_used,
     clippy::print_stderr,

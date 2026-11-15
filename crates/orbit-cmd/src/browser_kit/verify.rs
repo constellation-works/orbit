@@ -1,4 +1,4 @@
-//! `orbit browser-kit verify`: the loopback screenshot smoke test.
+//! `orbit config browser-kit verify`: the loopback screenshot smoke test.
 //!
 //! The test sources the kit's `env.sh` in its own shell, exactly as a
 //! worker's check does, serves a page on loopback, loads it in headless
@@ -31,7 +31,7 @@ const SMOKE_SCRIPT: &str = r#"
 import http from "node:http";
 import { createRequire } from "node:module";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE);
-// The visual capture driver decodes PNGs with the kit's pinned pngjs;
+// Screenshot pixel checks decode PNGs with the kit's pinned pngjs;
 // prove here that it resolves from the kit and decodes a real screenshot.
 const kitRequire = createRequire(process.env.PLAYWRIGHT_MODULE);
 const { PNG } = kitRequire("pngjs");
@@ -88,22 +88,24 @@ pub fn verify(layout: &KitLayout) -> Result<VerifyReport, OrbitError> {
     let kit = KitInspection::inspect(layout);
     if !kit.present {
         return Err(OrbitError::InvalidInput(format!(
-            "no browser kit at {}; run `orbit browser-kit install`",
+            "no browser kit at {}; run `orbit config browser-kit install`",
             layout.root().display()
         )));
     }
     let (Some(version), Some(revision)) = (&kit.playwright_version, &kit.chromium_revision) else {
         return Err(OrbitError::InvalidInput(
-            "the kit has no Playwright module; run `orbit browser-kit install`".to_string(),
+            "the kit has no Playwright module; run `orbit config browser-kit install`".to_string(),
         ));
     };
-    if !kit.browser_installed || !kit.env_script_present {
+    if !kit.browser_installed || kit.executable.is_none() || !kit.env_script_present {
         return Err(OrbitError::InvalidInput(format!(
-            "the kit is incomplete ({}); run `orbit browser-kit install`",
-            if kit.browser_installed {
-                "env.sh is missing".to_string()
+            "the kit is incomplete ({}); run `orbit config browser-kit install`",
+            if !kit.browser_installed || kit.executable.is_none() {
+                format!(
+                    "chromium_headless_shell-{revision} is not installed or its executable is missing"
+                )
             } else {
-                format!("chromium_headless_shell-{revision} is not installed")
+                "env.sh is missing".to_string()
             }
         )));
     }
@@ -195,23 +197,23 @@ pub fn verify(layout: &KitLayout) -> Result<VerifyReport, OrbitError> {
 /// the page under test.
 fn diagnose(output: &str) -> String {
     if output.contains("error while loading shared libraries") || output.contains(".so") {
-        "a shared library is missing: run `orbit browser-kit status` for the unresolved \
-         libraries, then `orbit browser-kit install`"
+        "a shared library is missing: run `orbit config browser-kit status` for the unresolved \
+         libraries, then `orbit config browser-kit install`"
             .to_string()
     } else if output.contains("FontConfig") || output.contains("Fontconfig") {
-        "Chromium crashed in Skia/FontConfig: the host has no fonts; rerun `orbit browser-kit \
+        "Chromium crashed in Skia/FontConfig: the host has no fonts; rerun `orbit config browser-kit \
          install` to unpack fonts into the kit"
             .to_string()
     } else if output.contains("pngjs") {
         "the kit's pixel-compare helper (pngjs) is missing or not at this release's pin: rerun \
-         `orbit browser-kit install`"
+         `orbit config browser-kit install`"
             .to_string()
     } else if output.contains("Executable doesn't exist") {
         "the Playwright module and the installed browser revision are out of step: rerun \
-         `orbit browser-kit install`"
+         `orbit config browser-kit install`"
             .to_string()
     } else {
-        "the smoke test failed; read its output, fix the kit, then rerun `orbit browser-kit \
+        "the smoke test failed; read its output, fix the kit, then rerun `orbit config browser-kit \
          verify`"
             .to_string()
     }

@@ -1,12 +1,12 @@
 // Orbit dashboard task comment thread: expansion, raw/rendered toggle and thread order.
 
-import { el, makeDisclosure, copyWithFeedback, clockStamp } from './common.js';
-import { taskState, fmtAbsTimeValue, absTimeNode } from './task-shared.js';
+import { el, makeDisclosure, copyWithFeedback, clockStamp, formatDateTime } from './common.js';
+import { taskState, absTimeNode, taskDispatchIdentity } from './task-shared.js';
 import { explicitCrewValue, isConfiguredCrewValue } from './task-crew.js';
 import * as taskFields from './task-fields.js';
 
 // ORB-12645: which comments show their Markdown source instead of the rendered
-// body, keyed `<task id>#<index into task.comments>` like
+// body, keyed `<workspace>:<task id>#<index into task.comments>` like
 // `taskState.expandedComments` so a refresh that rebuilds the detail restores
 // the thread the way it was left. The thread order is a page-wide preference,
 // so it persists like the other dashboard presentation prefs.
@@ -24,7 +24,7 @@ let commentPrefs = loadCommentPrefs();
 
    Expansion, the raw/rendered toggle and the thread order are operator state
    rather than task data, so they live in this module — keyed
-   `<task id>#<index into task.comments>` — and survive the 30 s refresh that
+   `<workspace>:<task id>#<index into task.comments>` — and survive the 30 s refresh that
    rebuilds the detail node. */
 const COMMENT_COLLAPSE_HEIGHT_PX = 300;
 // A rendered body is 13px sans at line-height 1.65 (~22px a line), and the
@@ -171,8 +171,8 @@ function pilotAssessmentView({ receipt, assessment }) {
   return view;
 }
 
-export function commentKey(taskId, index) {
-  return `${taskId}#${index}`;
+export function commentKey(task, index) {
+  return `${taskDispatchIdentity(task)}#${index}`;
 }
 
 // Stable across a reorder and across the refresh: the position in
@@ -195,9 +195,8 @@ function isAgentComment(name, task) {
   return value === explicitCrewValue(task) || value === resolved;
 }
 
-// The task context carries absolute time only, and a thread also wants the
-// "how long ago" a reader scans for, on the scale the rest of the dashboard
-// uses.
+// A thread also wants the "how long ago" a reader scans for, on the scale the
+// rest of the dashboard uses. The absolute instant stays in the title.
 function commentAge(value) {
   const at = value ? new Date(value) : null;
   if (!at || Number.isNaN(at.getTime())) return "";
@@ -289,8 +288,8 @@ export function disconnectCommentCards(container) {
   }
 }
 
-function buildCommentCard(task, comment, index, context) {
-  const key = commentKey(task.id, index);
+function buildCommentCard(task, comment, index) {
+  const key = commentKey(task, index);
   const message = commentMessage(comment);
   const writer = comment && comment.by ? String(comment.by) : "?";
   const pilot = pilotAssessment(comment);
@@ -322,9 +321,9 @@ function buildCommentCard(task, comment, index, context) {
       text: writer,
     }),
     isAgentComment(writer, task) ? el("span", { class: "comment-agent-pill", text: "agent" }) : null,
-    absTimeNode(context, comment && comment.at, { class: "comment-at" }),
+    absTimeNode(comment && comment.at, { class: "comment-at" }),
     clockStamp(
-      el("span", { class: "comment-age", text: commentAge(comment && comment.at), title: fmtAbsTimeValue(context, comment && comment.at) }),
+      el("span", { class: "comment-age", text: commentAge(comment && comment.at), title: formatDateTime(comment && comment.at) }),
       comment && comment.at,
       { title: true },
     ),
@@ -440,7 +439,7 @@ export function getCommentHash() {
   return raw.startsWith("#") ? raw : `#${raw}`;
 }
 
-export function buildCommentsPanel(task, context) {
+export function buildCommentsPanel(task) {
   let isCollapsed = commentPrefs.collapsed === true;
   const currentHash = getCommentHash();
   if (currentHash.startsWith(`#comment-${task.id}-`) && taskState.restoredCommentHash !== currentHash) {
@@ -449,7 +448,7 @@ export function buildCommentsPanel(task, context) {
   let classes = "field-block collapsible comments-panel";
   if (isCollapsed) classes += " collapsed";
   const panel = el("div", { class: classes });
-  renderCommentsPanel(panel, task, context);
+  renderCommentsPanel(panel, task);
   return panel;
 }
 
@@ -547,7 +546,7 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
 /* Rendered in place rather than through renderTasks: the thread's order and
    each card's disclosure are this panel's own state, and the detail node is
    diffed on the task payload, which none of them are part of. */
-export function renderCommentsPanel(panel, task, context) {
+export function renderCommentsPanel(panel, task) {
   disconnectCommentCards(panel);
   const isCollapsed = panel.classList && typeof panel.classList.contains === "function"
     ? panel.classList.contains("collapsed")
@@ -564,7 +563,7 @@ export function renderCommentsPanel(panel, task, context) {
     event.stopPropagation();
     commentPrefs = { ...commentPrefs, newestFirst: !commentPrefs.newestFirst };
     saveCommentPrefs();
-    renderCommentsPanel(panel, task, context);
+    renderCommentsPanel(panel, task);
   });
   actions.appendChild(order);
   if (comments.some((comment) => commentIsLong(commentMessage(comment)))) {
@@ -577,9 +576,9 @@ export function renderCommentsPanel(panel, task, context) {
     collapseAll.addEventListener("click", (event) => {
       event.stopPropagation();
       for (let index = 0; index < comments.length; index++) {
-        taskState.expandedComments.delete(commentKey(task.id, index));
+        taskState.expandedComments.delete(commentKey(task, index));
       }
-      renderCommentsPanel(panel, task, context);
+      renderCommentsPanel(panel, task);
     });
     actions.appendChild(collapseAll);
   }
@@ -616,7 +615,7 @@ export function renderCommentsPanel(panel, task, context) {
   const ordered = comments.map((comment, index) => ({ comment, index }));
   if (commentPrefs.newestFirst) ordered.reverse();
   for (const entry of ordered) {
-    thread.appendChild(buildCommentCard(task, entry.comment, entry.index, context));
+    thread.appendChild(buildCommentCard(task, entry.comment, entry.index));
   }
   panel.replaceChildren(head, thread);
 }

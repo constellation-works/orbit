@@ -2,7 +2,7 @@
 //!
 //! Depends on `orbit_types::workflow::activity_job::activity_job` for the type surface (activity/spec/audit
 //! shapes, tool-allowlist helpers). This module wires those types to the
-//! engine's executor infrastructure and to the loop-engine audit pipeline.
+//! engine's executor infrastructure, audit envelopes and payload blob sinks.
 
 pub mod asset_loader;
 pub mod audit_writer;
@@ -35,10 +35,11 @@ pub use asset_loader::{
 pub use catalog::{
     ACTIVITY_REF_PREFIX, CatalogDirectory, CatalogDirectoryList, CatalogError, ResolveError,
     SCRIPT_REF_PREFIX, V2ActivityCatalog, V2JobCatalog, catalog_error_to_orbit,
-    load_activity_catalog_asset, resolve_job_target_refs, resolve_job_target_refs_with_scripts,
-    validate_catalog_activity_tools,
+    job_definition_files, load_activity_catalog_asset, resolve_job_target_refs,
+    resolve_job_target_refs_with_scripts, validate_catalog_activity_tools,
 };
 pub use script_catalog::{
     ScriptArgError, ScriptAsset, ScriptLoadError, ScriptSnapshot, V2ScriptCatalog,
-    load_script_asset, load_script_snapshot, render_script_args,
+    load_script_asset, load_script_snapshot, render_script_args, script_load_refusal,
+    script_stdout_output,
 };

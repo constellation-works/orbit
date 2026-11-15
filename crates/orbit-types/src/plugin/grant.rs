@@ -18,8 +18,8 @@ use super::manifest::{PluginManifest, PluginNetworkPermission, PluginSandbox};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginGrant {
-    /// `permissions.fs.read` / `permissions.fs.write`: the paths the sandbox
-    /// opens for the backend.
+    /// `permissions.fs.read`, `fs.write` and `fs.write_files`: the paths the
+    /// sandbox opens for the backend.
     Fs,
     /// `permissions.network: loopback | any`.
     Network,
@@ -474,6 +474,12 @@ impl PluginManifest {
                         }
                         if !permissions.fs.write.is_empty() {
                             parts.push(format!("write={}", permissions.fs.write.join(",")));
+                        }
+                        if !permissions.fs.write_files.is_empty() {
+                            parts.push(format!(
+                                "write_files={}",
+                                permissions.fs.write_files.join(",")
+                            ));
                         }
                         (!parts.is_empty()).then(|| parts.join(" "))
                     }

@@ -8,6 +8,7 @@ mod task_fields;
 pub use bm25::{bm25_or_page, bm25_page, bm25_top_k};
 pub use index::LexicalIndex;
 pub use store::SearchIndexStats;
+pub use task_fields::TaskSidecarSearchText;
 pub const SOURCE_KIND_TASK: &str = "task";
 pub(crate) struct SearchField {
     pub field: String,

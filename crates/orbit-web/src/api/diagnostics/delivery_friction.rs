@@ -19,8 +19,11 @@
 //! pull request, so `failed_ci` misses failures on runs without it.
 //!
 //! The denominator of every rate is the tasks that reached `done` in the
-//! bucket, dated as `/diagnostics/completions` dates them. A bucket with
-//! fewer than [`MIN_DONE`] done tasks is marked sparse.
+//! bucket, dated as `/diagnostics/completions` dates them: by the durable
+//! transition, so a later write never changes a rate. A done task whose history
+//! has no such transition stays out of every denominator and is counted in
+//! `done.undated`. A bucket with fewer than [`MIN_DONE`] done tasks is marked
+//! sparse.
 //!
 //! The complexity and crew filters narrow the denominator and the families
 //! whose occurrences belong to a task (`auto_fix`, `failed_ci`, `cost`,
@@ -36,7 +39,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use axum::extract::Query;
+use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_core::{OrbitRuntime, V2AuditEventFilter};
@@ -44,11 +47,13 @@ use orbit_types::task::{Task, TaskStatus, UNSET_BUCKET, complexity_bucket, compl
 use orbit_types::workflow::{PR_AUTO_FIX_ADMITTED_EVENT, PrAutoFixAttempt, PrAutoFixBlocker};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use std::sync::Arc;
 
 use super::super::{DiagnosticsQuery, map_runtime_error};
 use super::metrics::DiagnosticsRange;
 use super::trend::{TrendWindow, trend_range};
-use crate::state::Ws;
+use crate::runtime_memo::DASHBOARD_POLL_MEMO_TTL;
+use crate::state::{DashboardState, Ws};
 
 /// A bucket whose denominator is below this many done tasks is sparse.
 const MIN_DONE: u64 = 3;
@@ -249,6 +254,7 @@ fn parse_filters(q: &DeliveryFrictionQuery) -> Result<Filters, String> {
 }
 
 pub(in crate::api) async fn diagnostics_delivery_friction(
+    State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Query(q): Query<DeliveryFrictionQuery>,
 ) -> Response {
@@ -267,13 +273,44 @@ pub(in crate::api) async fn diagnostics_delivery_friction(
         Ok(range) => range,
         Err(error) => return map_runtime_error(error),
     };
-    match super::super::blocking("delivery friction trend", move || {
-        delivery_friction_trend(&runtime, &range, &filters)
-    })
-    .await
+    // Normalized key over every parameter that changes the result: the trend
+    // window plus the parsed families and complexity/crew filters (each in
+    // sorted order). Invalid families, complexities, months and windows
+    // return above and are never cached.
+    let families_key = filters
+        .families
+        .iter()
+        .copied()
+        .map(Family::key)
+        .collect::<Vec<_>>()
+        .join(",");
+    let complexity_key = filters
+        .complexities
+        .as_ref()
+        .map(|set| set.iter().copied().collect::<Vec<_>>().join(","))
+        .unwrap_or_default();
+    let crew_key = filters
+        .crews
+        .as_ref()
+        .map(|set| set.iter().cloned().collect::<Vec<_>>().join(","))
+        .unwrap_or_default();
+    let key = (
+        "delivery_friction".to_string(),
+        format!(
+            "range={}|families={}|complexity={}|crew={}",
+            range.key, families_key, complexity_key, crew_key,
+        ),
+    );
+    let compute_runtime = Arc::clone(&runtime);
+    match state
+        .metrics_trends_memo()
+        .get_or_compute(&runtime, key, DASHBOARD_POLL_MEMO_TTL, move || {
+            delivery_friction_trend(&compute_runtime, &range, &filters)
+        })
+        .await
     {
-        Ok(value) => Json(value).into_response(),
-        Err(response) => *response,
+        Ok(served) => (served.age_header(), Json((*served.body).clone())).into_response(),
+        Err(error) => map_runtime_error(error),
     }
 }
 
@@ -361,10 +398,16 @@ fn delivery_friction_trend(
     filters: &Filters,
 ) -> Result<Value, orbit_core::OrbitError> {
     let read_since = TrendWindow::read_since(range);
-    let done: Vec<_> = runtime
-        .task_terminal_transitions(read_since)?
-        .into_iter()
-        .filter(|row| row.status == TaskStatus::Done)
+    let dates = runtime.task_terminal_dates(read_since)?;
+    let done: Vec<_> = dates
+        .dated
+        .iter()
+        .filter(|row| row.task.status == TaskStatus::Done)
+        .collect();
+    let undated_done: Vec<_> = dates
+        .undated
+        .iter()
+        .filter(|task| task.status == TaskStatus::Done)
         .collect();
     let needs_tasks =
         filters.active() || filters.families.iter().any(|family| family.reads_history());
@@ -374,7 +417,11 @@ fn delivery_friction_trend(
     let metadata = if needs_tasks {
         runtime.list_task_metadata()?
     } else {
-        let ids: BTreeSet<String> = done.iter().map(|row| row.task_id.clone()).collect();
+        let ids: BTreeSet<String> = done
+            .iter()
+            .map(|row| row.task.task_id.clone())
+            .chain(undated_done.iter().map(|task| task.task_id.clone()))
+            .collect();
         runtime.list_task_metadata_for_ids(&ids)?
     };
     let tasks: HashMap<String, Task> = metadata
@@ -426,7 +473,7 @@ fn delivery_friction_trend(
     // `all` windows open at the oldest sample any source read.
     let earliest = done
         .iter()
-        .map(|row| row.at)
+        .map(|row| row.terminal_at)
         .chain(occurrences.iter().map(|occurrence| occurrence.at))
         .min();
     let window = TrendWindow::new(range, earliest);
@@ -435,19 +482,33 @@ fn delivery_friction_trend(
     let mut filtered = Denominator::new(bucket_count);
     let mut unfiltered = Denominator::new(bucket_count);
     for row in &done {
-        let admitted = filters.admits(tasks.get(&row.task_id));
+        let admitted = filters.admits(tasks.get(&row.task.task_id));
         for (denominator, counts) in [(&mut unfiltered, true), (&mut filtered, admitted)] {
             if !counts {
                 continue;
             }
-            if let Some(index) = window.bucket_of(row.at) {
+            if let Some(index) = window.bucket_of(row.terminal_at) {
                 denominator.points[index] += 1;
                 denominator.total += 1;
-            } else if window.in_previous(row.at) {
+            } else if window.in_previous(row.terminal_at) {
                 denominator.previous += 1;
             }
         }
     }
+    let unfiltered_undated = undated_done
+        .iter()
+        .filter(|task| window.may_hold_undated(task.at))
+        .count();
+    let undated = undated_done
+        .iter()
+        .filter(|task| window.may_hold_undated(task.at) && filters.admits(tasks.get(&task.task_id)))
+        .count();
+    let previous_undated = undated_done
+        .iter()
+        .filter(|task| {
+            window.previous_may_hold_undated(task.at) && filters.admits(tasks.get(&task.task_id))
+        })
+        .count();
 
     let admits = |family: Family, task_ids: &[String]| {
         !family.task_scoped()
@@ -530,11 +591,13 @@ fn delivery_friction_trend(
     let mut crews: BTreeMap<&str, u64> = BTreeMap::new();
     let mut complexities: BTreeMap<&str, u64> = BTreeMap::new();
     for row in &done {
-        if window.bucket_of(row.at).is_none() {
+        if window.bucket_of(row.terminal_at).is_none() {
             continue;
         }
-        *complexities.entry(row.complexity.as_str()).or_default() += 1;
-        if let Some(task) = tasks.get(&row.task_id) {
+        *complexities
+            .entry(row.task.complexity.as_str())
+            .or_default() += 1;
+        if let Some(task) = tasks.get(&row.task.task_id) {
             *crews
                 .entry(task.crew.as_deref().unwrap_or(UNKNOWN_CREW))
                 .or_default() += 1;
@@ -560,6 +623,9 @@ fn delivery_friction_trend(
             "previous": window.previous.map(|_| filtered.previous),
             "unfiltered_points": unfiltered.points,
             "unfiltered_total": unfiltered.total,
+            "undated": undated,
+            "previous_undated": window.previous.map(|_| previous_undated),
+            "unfiltered_undated": unfiltered_undated,
         },
         "available_crews": crews
             .into_iter()

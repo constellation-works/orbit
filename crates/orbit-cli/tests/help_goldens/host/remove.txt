@@ -19,5 +19,3 @@ Global options (see 'orbit --help' for descriptions):
   --format <MODE>
   --json
   --header
-
-With only mcp-destinations.toml, removal migrates the retained rows to hosts.toml. The removed legacy host is never contacted, even without --force; every retained host must answer. --force only overrides dependent replica checkouts and pull drains.

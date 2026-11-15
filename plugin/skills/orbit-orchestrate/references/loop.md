@@ -19,7 +19,7 @@ orbit run history --limit 20 --json
 orbit run show <run-id> --json
 ```
 
-CLI `orbit run readiness`, MCP `orbit_workflow_auto` with `action: "status"`,
+CLI `orbit run readiness`, MCP `orbit_workflow` action `auto` with `mode: "status"`,
 and HTTP `GET /api/workflows/auto/readiness` render the same readiness snapshot.
 For MCP status, `task` accepts one task id or a list, `concurrency` previews a
 ceiling, `limit` defaults to 50 (1–500), and `allow_crew` selects configured
@@ -64,6 +64,13 @@ Persist the selected task crew, using the workspace's complexity mapping;
 record a reason for a deliberate exception. Do not silently remap tasks or
 undo an operator's crew change. Reuse existing authorization rather than
 asking for the same permission again.
+
+When comparing the implementer models behind candidate crews, read the
+per-model ranking in [model ranking](model-ranking.md): `orbit agents rank`
+pools each model's crews and effort levels, awards tie bands only on a
+qualified board, and leaves sparse or unmeasured evidence unranked. It is
+not the model-and-effort scorecard, and an observation from it grants no
+authority to change crew policy or a task's crew.
 
 If you take over implementation personally, assign your own configured crew
 before continuing and record the takeover; do not retain the delegation choice
@@ -111,7 +118,7 @@ records the crew's configured model as the task's `orchestrator_model`; pass
 `orchestrator_model` on the call only when your session runs a different model.
 
 ```bash
-orbit tool run orbit.task.add --input '{"workspace":"<selector>","title":"<title>","description":"<description>","complexity":"medium","orchestrator":"<crew>","model":"<agent-family>"}'
+orbit tool run orbit.task.add --input '{"workspace":"<selector>","title":"<title>","description":"<description>","complexity":"medium","orchestrator":"<crew>"}'
 ```
 
 Treat the flag as configuration, not as evidence of who is calling. An MCP
@@ -157,21 +164,21 @@ output schema. Once the task carries verified `context_files` (or a
 `backlog`:
 
 ```bash
-orbit tool run orbit.task.show --input '{"workspace":"<selector>","id":"<task-id>","model":"<agent-family>"}'
-orbit tool run orbit.task.update --input '{"workspace":"<selector>","id":"<task-id>","status":"backlog","model":"<agent-family>"}'
+orbit tool run orbit.task.show --input '{"workspace":"<selector>","id":"<task-id>"}'
+orbit tool run orbit.task.update --input '{"workspace":"<selector>","id":"<task-id>","status":"backlog"}'
 ```
 
 **Never file with `--status backlog`, or promote, a task whose
 `context_files` is empty while a drain is live.** File it as `proposed`, run
 the pilot (or set selectors yourself), then promote. Empty context holds no
 file lock. On 2026-10-10 three website tasks filed straight into the backlog
-of a live four-slot drain each edited `website/src/styles/custom.css`
+of a live four-slot drain each edited the website's then-shared stylesheet
 concurrently, and two of their runs had to be cancelled. A multi-slot drain
 now holds such a task (`awaiting_footprint`, then `awaiting_exclusive_slot`)
 and runs it only alone, which serializes the drain behind it. Task add and
 update warn when they leave one in the backlog.
 
-Use your own agent family for `model`. Ordinary pilot runs prepare context;
+Attribution is your session, not a `model` argument. Ordinary pilot runs prepare context;
 they do not promote. The CI sweep has a separate, explicit admission path
 that can pilot and promote its own warning-free repairs.
 

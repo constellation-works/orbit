@@ -9,12 +9,14 @@
 
 use std::ffi::OsString;
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-use orbit_common::fs::generation::{GenerationGuard, executable_generation};
+use orbit_common::fs::generation::{
+    Access, GenerationGuard, Participant, ParticipantRole, executable_generation,
+};
 use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -26,6 +28,116 @@ use super::integrity::{
 const COMMIT_B: &str = "b1b2b3b4b5b6b7b8b9b0b1b2b3b4b5b6b7b8b9b0";
 const OTHER_COMMIT: &str = "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00";
 const RENDEZVOUS_DEADLINE: Duration = Duration::from_secs(60);
+
+/// An idle federated session owns a generation even before its client sends
+/// initialize. Recovery must refresh it without requiring client traffic.
+#[test]
+fn idle_federated_stdio_sessions_survive_an_already_current_update() {
+    if crate::isolated_test::run_in_child(
+        "update::local_candidate::idle_federated_stdio_sessions_survive_an_already_current_update",
+    ) {
+        return;
+    }
+    let install = LocalInstall::new();
+    let manifest = install.manifest(&install.installed, COMMIT_B, "installed.json");
+    let authority = install.home.join(".orbit");
+    for initialized in [true, false] {
+        let mut command = install.command(&install.installed);
+        command
+            .args(["mcp", "serve", "--mode", "federated", "--operator"])
+            .env(orbit_mcp::LIFECYCLE_INTERVAL_ENV, "50")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped());
+        #[cfg(target_os = "linux")]
+        let child = orbit_common::test_process::retry_executable_busy(|| command.spawn());
+        #[cfg(not(target_os = "linux"))]
+        let child = command.spawn();
+        let mut server = crate::child_guard::ChildGuard::new(child.expect("stdio server"));
+        let pid = server.id();
+        let mut stdin = server.stdin.take().expect("client input");
+        let stdout = server.stdout.take().expect("client output");
+        let (send, receive) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                if send.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        let initialize = serde_json::json!({
+            "jsonrpc":"2.0", "id":1, "method":"initialize",
+            "params":{"protocolVersion":"2024-11-05", "capabilities":{},
+                      "clientInfo":{"name":"idle-recovery", "version":"1"}}
+        });
+        let exchange = |stdin: &mut std::process::ChildStdin, message: &Value| {
+            writeln!(stdin, "{message}").expect("client request");
+            stdin.flush().expect("flush request");
+            let line = receive
+                .recv_timeout(RENDEZVOUS_DEADLINE)
+                .expect("session still answers")
+                .expect("response line");
+            let response: Value = serde_json::from_str(&line).expect("JSON response");
+            assert_eq!(response["id"], message["id"], "{response}");
+            assert!(response.get("result").is_some(), "{response}");
+        };
+        if initialized {
+            exchange(&mut stdin, &initialize);
+            writeln!(
+                stdin,
+                "{}",
+                serde_json::json!({"jsonrpc":"2.0", "method":"notifications/initialized"})
+            )
+            .expect("initialized notification");
+            stdin.flush().expect("flush notification");
+            exchange(
+                &mut stdin,
+                &serde_json::json!({"jsonrpc":"2.0", "id":2, "method":"ping"}),
+            );
+        }
+        let deadline = Instant::now() + RENDEZVOUS_DEADLINE;
+        loop {
+            if crate::generation_fixture::running_digest(&authority, pid).is_some() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "server did not register");
+            assert!(server.try_wait().expect("server status").is_none());
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let output = install
+            .command(&install.installed)
+            .env(orbit_common::fs::generation::QUIESCE_TIMEOUT_ENV, "5")
+            .args(install.install_args(&install.installed, &manifest, COMMIT_B))
+            .output()
+            .expect("recovery update");
+        assert_success(
+            &output,
+            &format!("recovery beside idle stdio (initialized={initialized})"),
+        );
+        let recovered = report(&output);
+        assert_eq!(recovered["outcome"], "already_current", "{recovered}");
+        assert_eq!(recovered["replaced"], false, "{recovered}");
+        assert_converged(&recovered);
+        assert_eq!(recovered["same_generation"][0]["pid"], pid, "{recovered}");
+        assert!(server.try_wait().expect("same server status").is_none());
+        if !initialized {
+            exchange(&mut stdin, &initialize);
+            writeln!(
+                stdin,
+                "{}",
+                serde_json::json!({"jsonrpc":"2.0", "method":"notifications/initialized"})
+            )
+            .expect("initialized notification");
+            stdin.flush().expect("flush notification");
+        }
+        exchange(
+            &mut stdin,
+            &serde_json::json!({"jsonrpc":"2.0", "id":3, "method":"ping"}),
+        );
+        drop(stdin);
+        drop(server);
+        reader.join().expect("stdout reader exited");
+    }
+}
 
 struct LocalInstall {
     root: TempDir,
@@ -788,6 +900,229 @@ fn a_post_swap_failure_recovers_from_a_quoted_install_dir() {
     );
 }
 
+/// The updater pins the candidate in every authority it admitted, including
+/// the discovered workspace's own `.orbit`, which that admission makes an
+/// authority that has served. With a layout migration pending under the
+/// recorded host-global authority, `migrate --confirm` fences that alternate
+/// authority exclusively; the updater's unregistered pin used to refuse it
+/// as an unknown client, leaving `needs_recovery` and a standalone migration
+/// [ORB-20980]. The pin is now handed to that fence for the step.
+///
+/// Re-running the same candidate afterwards renames nothing and converges
+/// again. A live session of the installed bytes that cannot hand over in
+/// place, one running other bytes, or one that never registered still
+/// refuses it; a session that hands over in place is covered with a real
+/// `mcp serve` in the MCP upgrade contract.
+fn a_pending_layout_migration_converges_and_same_generation_clients_survive_recovery() {
+    let install = LocalInstall::new();
+    let (candidate, manifest) = install.candidate("orbit-b");
+    let host_global = install.home.join(".orbit");
+    let workspace_root = install.repo.join(".orbit");
+    // A writing open records the host-global authority, as any client's first
+    // open of a freshly initialized workspace does.
+    let client = install.run(
+        &install.installed,
+        &args(&["task".as_ref(), "list".as_ref(), "--json".as_ref()]),
+    );
+    assert_success(&client, "a client records the workspace's authority");
+    let recorded: Value = serde_json::from_slice(
+        &fs::read(workspace_root.join("state/generation-authority.json"))
+            .expect("the workspace records its authority"),
+    )
+    .expect("authority record JSON");
+    assert_eq!(
+        Path::new(recorded["authority"].as_str().expect("recorded authority"))
+            .canonicalize()
+            .expect("recorded authority resolves"),
+        host_global.canonicalize().expect("host-global resolves"),
+        "the host-global authority protects the workspace"
+    );
+    let identity = orbit_core::composition::compiled_compatibility();
+    let current = identity.workspace_layout.version;
+    let marker = workspace_root.join("state/layout.version");
+    fs::write(&marker, format!("{}\n", current - 1)).expect("leave a layout migration pending");
+
+    let output = install.run(
+        &candidate,
+        &install.install_args(&candidate, &manifest, COMMIT_B),
+    );
+    assert_success(&output, "update with a pending layout migration");
+    let updated = report(&output);
+    assert_eq!(updated["outcome"], "updated", "{updated}");
+    assert_converged(&updated);
+    let workspace_root_reported = updated["workspace_root"].as_str().expect("workspace root");
+    assert_eq!(
+        updated["migration_fenced"],
+        serde_json::json!([workspace_root_reported]),
+        "only the alternate authority is handed to the migration's fence: {updated}"
+    );
+    assert_eq!(
+        fs::read_to_string(&marker).expect("layout marker").trim(),
+        current.to_string(),
+        "the migration ran under the update"
+    );
+    let installed = sha256(&install.installed);
+    assert_eq!(installed, sha256(&candidate));
+
+    // Already-current recovery with nothing live re-pins and converges.
+    let replay = install.run(
+        &install.installed,
+        &install.install_args(&candidate, &manifest, COMMIT_B),
+    );
+    assert_success(&replay, "already-current recovery");
+    let replayed = report(&replay);
+    assert_eq!(replayed["outcome"], "already_current", "{replayed}");
+    assert_eq!(replayed["replaced"], false);
+    assert_converged(&replayed);
+    assert!(replayed.get("same_generation").is_none(), "{replayed}");
+
+    // A session of the installed build that cannot hand over in place is
+    // never proven to release the generation, so it still refuses.
+    let session = Participant {
+        digest: &installed,
+        identity: &identity,
+        role: ParticipantRole::McpServe,
+        access: Access::Write,
+        handover: None,
+        in_activity: false,
+    };
+    let client = GenerationGuard::join(&host_global, &session, Duration::ZERO, || Ok(0))
+        .expect("a same-generation session joins");
+    let refused = install.run(
+        &install.installed,
+        &install.install_args(&candidate, &manifest, COMMIT_B),
+    );
+    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("upgrade admission refused"),
+        "{refused:?}"
+    );
+    drop(client);
+
+    // Neither other bytes nor an incompatible identity is the installed
+    // generation, even when the session advertises stdio handover.
+    let other = sha256(&backup_path(&install.installed));
+    assert_ne!(other, installed);
+    let mut incompatible = identity.clone();
+    incompatible.store_schema.version += 1;
+    incompatible.store_schema.writer_floor = incompatible.store_schema.version;
+    incompatible.store_schema.reader_floor = incompatible.store_schema.version;
+    for (digest, identity) in [(&other, &identity), (&installed, &incompatible)] {
+        let foreign = GenerationGuard::join(
+            &host_global,
+            &Participant {
+                digest,
+                identity,
+                handover: Some(orbit_common::fs::generation::RESUME_MCP_STDIO),
+                ..session
+            },
+            Duration::ZERO,
+            || Ok(0),
+        )
+        .expect("a foreign session joins the empty authority");
+        let record = install.generation_record();
+        let refused = install.run(
+            &install.installed,
+            &install.install_args(&candidate, &manifest, COMMIT_B),
+        );
+        assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(stderr.contains("upgrade admission refused"), "{refused:?}");
+        assert!(stderr.contains("close its MCP client"), "{refused:?}");
+        assert_eq!(install.generation_record(), record);
+        drop(foreign);
+    }
+
+    // A holder that never registered is unknown, so it refuses too.
+    let unregistered = GenerationGuard::acquire(&workspace_root, &installed)
+        .expect("an unregistered holder pins the workspace authority");
+    let refused = install.run(
+        &install.installed,
+        &install.install_args(&candidate, &manifest, COMMIT_B),
+    );
+    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("did not register"),
+        "{refused:?}"
+    );
+    drop(unregistered);
+}
+
+/// The alternate authority the layout migration fences stays protected for
+/// the rest of convergence, not only while the migration runs [ORB-20980].
+/// The update used to release its pin there for `migrate --confirm`, and
+/// nothing protected that authority again: `workspace sync` and the clock
+/// step ran with it empty, so any executable could take it over. The pin
+/// now becomes the migration's fence, lent to the child, and is pinned
+/// again before admission is released.
+///
+/// `workspace sync`, unlike `migrate --confirm`, takes the workspace's
+/// auto-task lock. Holding it stops convergence deterministically after the
+/// migration, while sync waits for it.
+#[cfg(target_os = "linux")]
+fn the_fenced_alternate_authority_stays_pinned_after_its_layout_migration() {
+    let install = LocalInstall::new();
+    let (candidate, manifest) = install.candidate("orbit-b");
+    let host_global = install.home.join(".orbit");
+    let workspace_root = install.repo.join(".orbit");
+    let client = install.run(
+        &install.installed,
+        &args(&["task".as_ref(), "list".as_ref(), "--json".as_ref()]),
+    );
+    assert_success(&client, "a client records the workspace's authority");
+    let current = orbit_core::composition::compiled_compatibility()
+        .workspace_layout
+        .version;
+    let marker = workspace_root.join("state/layout.version");
+    fs::write(&marker, format!("{}\n", current - 1)).expect("leave a layout migration pending");
+
+    let sync_gate = orbit_common::fs::file_lock::acquire_exclusive_file_lock(
+        &workspace_root.join("state/.auto-tasks.json.lock"),
+        "hold workspace sync after the migration",
+        orbit_common::fs::file_lock::FileLockOptions::default(),
+    )
+    .expect("hold the auto-task lock");
+    let update = install
+        .command(&candidate)
+        .args(install.install_args(&candidate, &manifest, COMMIT_B))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start the update");
+    test_env::wait_until("workspace sync to wait behind the migration", || {
+        fs::read_dir(host_global.join(".generation-participants"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name().into_string().ok()?;
+                name.split('-').next()?.parse::<u32>().ok()
+            })
+            .any(|pid| {
+                fs::read(format!("/proc/{pid}/cmdline"))
+                    .is_ok_and(|cmdline| cmdline.windows(14).any(|w| w == b"workspace\0sync"))
+            })
+    });
+    assert_eq!(
+        fs::read_to_string(&marker).expect("layout marker").trim(),
+        current.to_string(),
+        "the migration ran before sync"
+    );
+    let takeover = orbit_common::fs::generation::GenerationUpdate::acquire(&workspace_root);
+    let unprotected = takeover.is_ok();
+    drop(takeover);
+    drop(sync_gate);
+    let output = update.wait_with_output().expect("finish the update");
+    assert!(
+        !unprotected,
+        "the alternate authority was left unpinned after its layout migration: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_success(&output, "update with a pending layout migration");
+    let updated = report(&output);
+    assert_converged(&updated);
+}
+
 /// Point an executable header at the other supported architecture.
 fn retarget(path: &Path) {
     let mut bytes = fs::read(path).expect("read executable");
@@ -835,6 +1170,16 @@ fn local_candidate_contracts_1() {
         (
             "a_post_swap_failure_recovers_from_a_quoted_install_dir",
             a_post_swap_failure_recovers_from_a_quoted_install_dir as fn(),
+        ),
+        (
+            "a_pending_layout_migration_converges_and_same_generation_clients_survive_recovery",
+            a_pending_layout_migration_converges_and_same_generation_clients_survive_recovery
+                as fn(),
+        ),
+        #[cfg(target_os = "linux")]
+        (
+            "the_fenced_alternate_authority_stays_pinned_after_its_layout_migration",
+            the_fenced_alternate_authority_stays_pinned_after_its_layout_migration as fn(),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");

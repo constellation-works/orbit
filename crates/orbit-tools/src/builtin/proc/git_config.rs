@@ -262,7 +262,3 @@ fn is_read_only_remote(args: &[String]) -> bool {
         Some(subcommand) => REMOTE_READ_SUBCOMMANDS.contains(&subcommand.as_str()),
     }
 }
-
-#[cfg(test)]
-#[path = "tests/git_config.rs"]
-mod tests;

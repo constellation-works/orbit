@@ -8,8 +8,6 @@ mod git_test_support;
 mod agents;
 #[path = "http_api/agents_implementers.rs"]
 mod agents_implementers;
-#[path = "http_api/agents_orchestrators.rs"]
-mod agents_orchestrators;
 #[path = "http_api/agents_pilots.rs"]
 mod agents_pilots;
 #[path = "http_api/agents_reviewers.rs"]
@@ -24,14 +22,14 @@ mod audit_contracts;
 mod auto_tasks;
 #[path = "http_api/automation.rs"]
 mod automation;
+#[path = "http_api/backlog_correction.rs"]
+mod backlog_correction;
 #[path = "http_api/backlog_forecast.rs"]
 mod backlog_forecast;
 #[path = "http_api/backlog_outcomes.rs"]
 mod backlog_outcomes;
 #[path = "http_api/backlog_rework.rs"]
 mod backlog_rework;
-#[path = "http_api/brief_accuracy.rs"]
-mod brief_accuracy;
 #[path = "http_api/codebase.rs"]
 mod codebase;
 #[path = "http_api/compression.rs"]
@@ -40,6 +38,8 @@ mod compression;
 mod crews;
 #[path = "http_api/dashboard_assets.rs"]
 mod dashboard_assets;
+#[path = "http_api/dashboard_chrome.rs"]
+mod dashboard_chrome;
 #[path = "http_api/decisions.rs"]
 mod decisions;
 #[path = "http_api/diagnostics_errors.rs"]
@@ -65,6 +65,8 @@ mod host;
 mod host_forward;
 #[path = "http_api/incident_lists.rs"]
 mod incident_lists;
+#[path = "http_api/job_failure_streaks.rs"]
+mod job_failure_streaks;
 #[path = "http_api/job_run_lists.rs"]
 mod job_run_lists;
 #[path = "http_api/lease_listener.rs"]
@@ -85,8 +87,12 @@ mod leases;
 mod log;
 #[path = "http_api/log_render.rs"]
 mod log_render;
+#[path = "http_api/metrics_terminal_dates.rs"]
+mod metrics_terminal_dates;
 #[path = "http_api/metrics_trends.rs"]
 mod metrics_trends;
+#[path = "http_api/notices.rs"]
+mod notices;
 #[path = "http_api/pagination.rs"]
 mod pagination;
 #[path = "http_api/plugins.rs"]
@@ -98,10 +104,16 @@ mod projections;
 mod provider_auth;
 #[path = "http_api/reliability.rs"]
 mod reliability;
+#[path = "http_api/residents.rs"]
+mod residents;
 #[path = "http_api/resource_profiles.rs"]
 mod resource_profiles;
 #[path = "http_api/runs.rs"]
 mod runs;
+#[path = "http_api/schedule_edit_guards.rs"]
+mod schedule_edit_guards;
+#[path = "http_api/scripts.rs"]
+mod scripts;
 #[path = "http_api/support.rs"]
 mod support;
 #[path = "http_api/task_auto_fix.rs"]

@@ -6,7 +6,10 @@
 //! once the provider recovers. A run that still fails, on that or on a
 //! permanent refusal, records a stop with its error instead of leaving the
 //! attempt dispatched. A failed merge request is never resent: its intent
-//! stays unresolved, and the next attempt reconciles it first.
+//! stays unresolved, and the next attempt reconciles it first. A merge the
+//! provider refuses because the base moved (HTTP 405) was never applied, so
+//! the run resolves its intent as unmerged and asks again on fresh evidence,
+//! up to the same attempt ceiling `pr_complete` uses.
 use super::absent_context::{AcceptedLanding, NEW, accepted_landing, setup};
 use super::*;
 
@@ -21,6 +24,10 @@ const STATUS_READ: &str = "--json number,state,isDraft";
 const REQUIRED_READ: &str = "isRequired(pullRequestNumber";
 const MERGE_WRITE: &str = "pulls/42/merge";
 const INTENT: &str = "accepted-fixture:42";
+/// The intent id of the second merge request after one base-modified refusal.
+const RETRY_INTENT: &str = "accepted-fixture:42:2";
+const BASE_MODIFIED_405: &str =
+    "gh: Base branch was modified. Review and try the merge again. (HTTP 405)";
 
 /// One landing run with a check budget, so status reads carry a deadline and
 /// get no in-process retry from the provider adapter. The budget fits both
@@ -87,8 +94,8 @@ fn required_check_transport_preserves_retry_budget_and_merge_authority() {
                 );
                 assert_eq!(
                     calls(&fx, REQUIRED_READ),
-                    2,
-                    "required-check evidence recovers before landing"
+                    3,
+                    "required-check evidence recovers and is rechecked on the mergeable head"
                 );
                 assert_eq!(mutations(&fx), "merge\n");
                 assert_eq!(steps(&host), landed_steps());
@@ -140,7 +147,11 @@ fn required_check_transport_preserves_retry_budget_and_merge_authority() {
             in_fresh_row(sandbox, |row| {
                 let (fx, host) = faulty_landing(row, "unused-fault", TLS, false);
                 fs::write(fx.forge.join("gates-pending"), "pending").unwrap();
-                fs::write(fx.forge.join("policy-unreadable"), "invalid evidence").unwrap();
+                fs::write(
+                    fx.forge.join("required-rollup-truncated"),
+                    "invalid evidence",
+                )
+                .unwrap();
                 let (outcome, waits) = land(&host);
 
                 outcome.expect_err("invalid required-check evidence grants no authority");
@@ -165,6 +176,133 @@ fn required_check_transport_preserves_retry_budget_and_merge_authority() {
                 assert_eq!(
                     steps(&host),
                     [HandoffLandingStep::Stop { repairable: false }]
+                );
+            });
+        },
+    );
+}
+
+/// [ORB-21458] A follower hands off seconds after its PR's checks start:
+/// the rollup and the check-runs API already show the policy-required check
+/// running, but the required-checks GraphQL read has not reported it as
+/// required yet, so no read names a pending *required* check and the
+/// current-gates missing list is empty (the check is present, not absent).
+/// Landing must wait for that check, not stop the handoff; once it passes
+/// the handoff lands with no operator retry. A policy-required check that
+/// has failed instead still stops the handoff.
+#[test]
+fn owner_landing_waits_for_a_policy_required_check_the_required_read_has_not_reported() {
+    isolated(
+        "landing_transport::owner_landing_waits_for_a_policy_required_check_the_required_read_has_not_reported",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let (fx, mut host) = faulty_landing(row, "unused-fault", TLS, false);
+                // Branch-protection required checks only: no review-owed
+                // hosted check may name the pending check for this landing.
+                host.context.owed_hosted_checks.clear();
+                fs::write(fx.forge.join("required-pending-unreported"), "pending").unwrap();
+                let pending = fx.forge.join("required-pending-unreported");
+                let (outcome, waits) = land_with_wait(&host, 120, move |wait| {
+                    if wait == Duration::from_secs(30) {
+                        fs::remove_file(&pending).unwrap();
+                    }
+                });
+
+                assert_eq!(waits, [30], "one normal check poll, no stop: {outcome:?}");
+                assert_eq!(
+                    outcome.expect("pending policy-required check lands once it passes")["phase"],
+                    "landed"
+                );
+                assert_eq!(mutations(&fx), "merge\n");
+                assert_eq!(steps(&host), landed_steps());
+            });
+
+            in_fresh_row(sandbox, |row| {
+                let (fx, mut host) = faulty_landing(row, "unused-fault", TLS, false);
+                host.context.owed_hosted_checks.clear();
+                fs::write(fx.forge.join("required-failed-unreported"), "failed").unwrap();
+                let (outcome, waits) = land(&host);
+
+                outcome.expect_err("a failed policy-required check still stops the handoff");
+                assert!(
+                    waits.is_empty(),
+                    "a failed check is not waited on: {waits:?}"
+                );
+                assert!(mutations(&fx).is_empty());
+                assert_eq!(
+                    steps(&host),
+                    [HandoffLandingStep::Stop { repairable: false }]
+                );
+                let evidence = host.updates.lock().unwrap()[0].evidence.clone();
+                assert!(evidence.contains("cannot be merged"), "{evidence}");
+            });
+        },
+    );
+}
+
+/// [ORB-22350] Every required check has passed and branch policy names
+/// nothing missing or pending, but the provider still reads BLOCKED for a
+/// few seconds after the last check goes green. Landing must re-poll the
+/// merge state within its existing budget instead of holding the handoff
+/// for good; a PR that stays BLOCKED still stops without merging.
+#[test]
+fn owner_landing_re_polls_a_blocked_merge_state_after_required_checks_pass() {
+    isolated(
+        "landing_transport::owner_landing_re_polls_a_blocked_merge_state_after_required_checks_pass",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let (fx, host) = faulty_landing(row, "unused-fault", TLS, false);
+                fs::write(fx.forge.join("blocked-lag"), "blocked").unwrap();
+                let blocked = fx.forge.join("blocked-lag");
+                let (outcome, waits) = land_with_wait(&host, 120, move |wait| {
+                    if wait == Duration::from_secs(30) {
+                        fs::remove_file(&blocked).unwrap();
+                    }
+                });
+
+                assert_eq!(waits, [30], "one normal check poll, no stop: {outcome:?}");
+                assert_eq!(
+                    outcome.expect("a merge state that refreshes within budget lands")["phase"],
+                    "landed"
+                );
+                assert_eq!(mutations(&fx), "merge\n");
+                assert_eq!(steps(&host), landed_steps());
+            });
+
+            in_fresh_row(sandbox, |row| {
+                let (fx, host) = faulty_landing(row, "unused-fault", TLS, false);
+                fs::write(fx.forge.join("blocked-lag"), "blocked").unwrap();
+                let (outcome, waits) = land_with_wait(&host, 300, |_| {});
+
+                let error = outcome.expect_err("a persistently BLOCKED PR still stops");
+                assert!(
+                    matches!(
+                        error,
+                        OrbitError::DeliveryRefused {
+                            refusal:
+                                orbit_types::workflow::DeliveryRefusal::RequirementsUnsatisfied,
+                            ..
+                        }
+                    ),
+                    "the stop keeps delivery_requirements_unsatisfied: {error}"
+                );
+                assert_eq!(
+                    waits,
+                    [30, 30, 30, 30],
+                    "a bounded re-poll within the existing deadline, then the stop"
+                );
+                assert!(
+                    mutations(&fx).is_empty(),
+                    "branch protection is not bypassed"
+                );
+                assert_eq!(
+                    steps(&host),
+                    [HandoffLandingStep::Stop { repairable: false }]
+                );
+                let evidence = host.updates.lock().unwrap()[0].evidence.clone();
+                assert!(
+                    evidence.contains("required reviews or checks are not satisfied"),
+                    "{evidence}"
                 );
             });
         },
@@ -325,6 +463,101 @@ fn owner_landing_retries_transport_failures_and_never_leaves_a_failed_run_dispat
                 reconciled.extend(landed_steps());
                 assert_eq!(steps(&host), reconciled, "reconciled before merging again");
                 assert_eq!(mutations(&fx), "merge\n");
+            });
+        },
+    );
+}
+
+/// [ORB-21765] A merge the provider refuses because the base moved (HTTP 405,
+/// base modified) was never applied. The run resolves its intent as unmerged
+/// and asks again on fresh evidence, as `pr_complete` does, under the same
+/// attempt ceiling.
+#[test]
+fn owner_landing_retries_a_base_modified_merge_refusal_on_fresh_evidence() {
+    isolated(
+        "landing_transport::owner_landing_retries_a_base_modified_merge_refusal_on_fresh_evidence",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let (fx, host) = faulty_landing(row, MERGE_WRITE, BASE_MODIFIED_405, false);
+
+                let (outcome, waits) = land(&host);
+
+                let landed = outcome
+                    .unwrap_or_else(|error| panic!("a base-modified refusal is retried: {error}"));
+                assert_eq!(landed["phase"], "landed");
+                assert_eq!(
+                    calls(&fx, MERGE_WRITE),
+                    2,
+                    "one refused merge, then the landing merge"
+                );
+                assert_eq!(waits, [30], "one normal check poll before asking again");
+                assert_eq!(mutations(&fx), "merge\n", "only the accepted merge lands");
+                assert_eq!(
+                    steps(&host),
+                    [
+                        HandoffLandingStep::PublishIntent {
+                            intent_id: INTENT.into()
+                        },
+                        HandoffLandingStep::ResolveIntent {
+                            intent_id: INTENT.into(),
+                            merged: false,
+                        },
+                        HandoffLandingStep::PublishIntent {
+                            intent_id: RETRY_INTENT.into()
+                        },
+                        HandoffLandingStep::ResolveIntent {
+                            intent_id: RETRY_INTENT.into(),
+                            merged: true,
+                        },
+                        HandoffLandingStep::Complete,
+                    ],
+                    "the refused intent is resolved as unmerged before the retry publishes its own"
+                );
+            });
+
+            // Every request is refused: the attempt ceiling stops the landing
+            // after three refused merges, each intent resolved and none merged.
+            in_fresh_row(sandbox, |row| {
+                let (fx, host) = faulty_landing(row, MERGE_WRITE, BASE_MODIFIED_405, true);
+
+                let (outcome, waits) = land(&host);
+
+                outcome.expect_err("the attempt ceiling stops a persistent base race");
+                assert_eq!(
+                    calls(&fx, MERGE_WRITE),
+                    3,
+                    "three requests, then the ceiling"
+                );
+                assert_eq!(waits, [30, 30], "a poll between refused requests only");
+                assert!(mutations(&fx).is_empty(), "no merge landed");
+                let recorded = steps(&host);
+                assert_eq!(
+                    recorded.last(),
+                    Some(&HandoffLandingStep::Stop { repairable: false }),
+                    "the ceiling records a stop"
+                );
+                let stop = host
+                    .updates
+                    .lock()
+                    .unwrap()
+                    .last()
+                    .unwrap()
+                    .evidence
+                    .clone();
+                assert!(stop.contains("Base branch was modified"), "{stop}");
+                let resolved = recorded
+                    .iter()
+                    .filter(|step| {
+                        matches!(
+                            step,
+                            HandoffLandingStep::ResolveIntent { merged: false, .. }
+                        )
+                    })
+                    .count();
+                assert_eq!(
+                    resolved, 3,
+                    "every refused intent is resolved before the stop"
+                );
             });
         },
     );

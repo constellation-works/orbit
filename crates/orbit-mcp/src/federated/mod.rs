@@ -13,15 +13,19 @@
 //! The mux is deliberately not a fleet registry: remote membership comes only
 //! from the operator's host file ([`load_destinations`]). The accepting machine is an
 //! implicit local destination and is not declared as an SSH row. No
-//! destination's answer is cached between calls.
+//! destination's answer is cached between calls; a routed call may reuse an
+//! idle SSH session to the same destination, never what it said.
 
+mod attention_aggregate;
 mod capability;
 mod config;
 mod descriptor;
 mod host;
+mod notice_aggregate;
 mod probe;
 mod task_route;
 
+pub use self::attention_aggregate::{ATTENTION_FANOUT_BUDGET_SECONDS, AttentionFanout};
 pub use self::capability::{
     CapabilityClasses, McpToolClass, ensure_tool_class_held, mcp_tool_class,
 };
@@ -34,8 +38,6 @@ pub use self::host::{FEDERATED_WORKSPACE_LIST_TOOL, FederatedMcpHost};
 pub use self::probe::{
     CompositeDestinationProbe, DEFAULT_PROBE_TIMEOUT, DEFAULT_ROUTED_DELIVERY_TIMEOUT,
     DestinationProbe, DestinationSnapshot, InProcessDestinationProbe, RoutedSession,
-    SshDestinationProbe,
+    RoutedSessionPool, SshDestinationProbe,
 };
-pub use self::task_route::{
-    ID_ROUTED_TASK_TOOLS, NOT_ID_ROUTED_TOOLS, id_only_task_target, is_id_routed_tool,
-};
+pub use self::task_route::{id_only_task_target, is_id_routed_tool};

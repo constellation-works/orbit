@@ -148,6 +148,7 @@ pub(super) fn pipeline_run(id: &str, state: JobRunState, task_ids: &[&str]) -> J
 fn job_run(id: &str, state: JobRunState, input: Value) -> JobRun {
     let now = Utc::now();
     JobRun {
+        build: None,
         executed_on: None,
         run_id: id.to_string(),
         job_id: "task_pr_pipeline".to_string(),

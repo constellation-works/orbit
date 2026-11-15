@@ -15,20 +15,20 @@ import {
 } from './operations-shared.js';
 import { configureOperationsRoutines, renderClock, renderRoutineRows, scopedRoutines, updateRoutineFailureBadge } from './operations-routines.js';
 import { fetchAndRenderAutoTasks, syncAutoTaskSchedulerNote } from './operations-auto-tasks.js';
+import { fetchAndRenderScripts } from './operations-scripts.js';
 import { lastJobs, renderJobs } from './operations-jobs.js';
 import { startFleetIndicatorRefresh } from './operations-fleet.js';
 
 export { OPERATION_FEEDBACK_CLEAR_MS, initOperations, triggerFeedbackClear } from './operations-shared.js';
 export { startFleetIndicatorRefresh };
 export { fetchAndRenderAutoDrainPane } from './operations-drain.js';
-export { drainHolderCounts } from './operations-drain-capacity.js';
 export { peekRoutineFailures } from './operations-routines.js';
-export { fetchAndRenderJobs } from './operations-jobs.js';
+export { fetchAndRenderJobs, peekJobFailures } from './operations-jobs.js';
 
 function renderOperations(payload, { force = false } = {}) {
   noteCronZone(payload);
   operationsState.lastOperations = payload;
-  if ($("operations-session")) $("operations-session").textContent = payload.session_explanation || "Operations actions require the capabilities granted to this dashboard server. Refresh to load session access details.";
+  if ($("operations-session")) $("operations-session").textContent = payload.session_explanation || "Operations actions require the capabilities granted to this dashboard server. Reload the page to load session access details.";
   const workspace = selectedWorkspaceName();
   const workspaceId = selectedWorkspace()?.id || null;
   const routines = scopedRoutines(payload);
@@ -64,6 +64,10 @@ function throwFirstPanelError(results) {
 export async function fetchAndRenderOperations(subtab = operationsState.context.getOperationsSubtab()) {
   if (subtab === "auto-tasks") {
     await fetchAndRenderAutoTasks();
+    return;
+  }
+  if (subtab === "scripts") {
+    await fetchAndRenderScripts();
     return;
   }
   const routines = fetchJson(withInactivePlugins("/api/routines"));

@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::generation::{
-    CompatibilityIdentity, GENERATION_CONTRACT, HandoverCandidate, LEGACY_GENERATION_CONTRACT,
+    CompatibilityIdentity, GENERATION_CONTRACT, GenerationUpdate, HandoverCandidate,
+    LEGACY_GENERATION_CONTRACT,
 };
 use orbit_common::process::{
     BoundedRunError, run_bounded_capped_complete_typed, run_bounded_capped_typed,
@@ -99,6 +100,26 @@ impl ConvergenceStep {
         }
     }
 
+    /// Record a step that was refused before it ran, for `reason`.
+    pub(super) fn refused(command: &str, reason: &str) -> Self {
+        Self {
+            command: command.to_string(),
+            status: StepStatus::Failed,
+            exit_code: None,
+            detail: Some(reason.to_string()),
+        }
+    }
+
+    /// Fail a step that ran, for what went wrong once it had: `reason`
+    /// follows whatever it reported itself.
+    pub(super) fn fail_after(&mut self, reason: &str) {
+        self.status = StepStatus::Failed;
+        self.detail = Some(match self.detail.take() {
+            Some(detail) => format!("{detail}; {reason}"),
+            None => reason.to_string(),
+        });
+    }
+
     /// Whether this step leaves the installation needing operator follow-up.
     pub fn failed(&self) -> bool {
         self.status == StepStatus::Failed
@@ -112,7 +133,19 @@ pub fn run_step(
     root_argument: Option<&Path>,
     args: &[&str],
 ) -> ConvergenceStep {
-    run_step_reporting(executable, cwd, root_argument, args, false)
+    run_step_reporting(executable, cwd, root_argument, args, false, &[])
+}
+
+/// [`run_step`] for a child that inherits the updater's exclusive generation
+/// `fences` (see [`GenerationUpdate::lend_fences`]).
+pub(super) fn run_step_lending(
+    executable: &Path,
+    cwd: &Path,
+    root_argument: Option<&Path>,
+    args: &[&str],
+    fences: &[&GenerationUpdate],
+) -> ConvergenceStep {
+    run_step_reporting(executable, cwd, root_argument, args, false, fences)
 }
 
 /// [`run_step`] for a step whose own output is the report.
@@ -127,7 +160,7 @@ pub fn run_reporting_step(
     root_argument: Option<&Path>,
     args: &[&str],
 ) -> ConvergenceStep {
-    run_step_reporting(executable, cwd, root_argument, args, true)
+    run_step_reporting(executable, cwd, root_argument, args, true, &[])
 }
 
 fn run_step_reporting(
@@ -136,11 +169,15 @@ fn run_step_reporting(
     root_argument: Option<&Path>,
     args: &[&str],
     report_output: bool,
+    fences: &[&GenerationUpdate],
 ) -> ConvergenceStep {
     let command = args.join(" ");
     let mut process = Command::new(executable);
     if let Some(root) = root_argument {
         process.arg("--root").arg(root);
+    }
+    if !fences.is_empty() {
+        GenerationUpdate::lend_fences(&mut process, fences);
     }
     let output = run_process(process.args(args).current_dir(cwd));
     match output {

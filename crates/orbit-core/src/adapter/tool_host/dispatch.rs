@@ -1,10 +1,12 @@
 use orbit_common::OrbitError;
 use orbit_tools::{OrbitBuiltinAction, OrbitTaskScope, ReservationOwnerContext};
-use orbit_types::tool::{McpCapability, ToolSessionContext};
+use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 use orbit_types::workflow::JobRunTrigger;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::agents::AgentDetailSurface;
+use crate::application::resident::ResidentCallAdmission;
 use crate::runtime::authorization::resolved_caller_capabilities;
 
 /// Everything the dispatch table knows about *who* is making this call.
@@ -32,12 +34,60 @@ fn submission_trigger(session_context: &ToolSessionContext) -> JobRunTrigger {
     }
 }
 
+/// Native commands have no transport; `tool run` supplies a local one.
+/// MCP (including local stdio) always mints an origin session id.
+fn agent_detail_surface(session: &ToolSessionContext) -> AgentDetailSurface {
+    if session.origin_session_id.is_some() || session.transport == Some(McpTransport::SshMcp) {
+        AgentDetailSurface::Mcp
+    } else if session.transport.is_some() {
+        AgentDetailSurface::ToolRun
+    } else {
+        AgentDetailSurface::Cli
+    }
+}
+
 pub(super) fn execute(
     runtime: &OrbitRuntime,
-    _task_scope: &OrbitTaskScope,
+    task_scope: &OrbitTaskScope,
     caller: ToolCaller<'_>,
     action: OrbitBuiltinAction,
     input: Value,
+) -> Result<Value, OrbitError> {
+    let (input, mut redaction_report) =
+        super::artifact_redaction::sanitize_tool_input(action, input)?;
+    // A resident cycle's agent reaches tools only within its cycle's grant;
+    // the trusted run binding, never input, says whether this is one.
+    let ticket = match runtime.admit_resident_cycle_call(
+        task_scope.run_id.as_deref(),
+        super::resident_guard::resident_guard_tool_name(action),
+        super::resident_guard::resident_guard_class(action, &input),
+        &input,
+    )? {
+        ResidentCallAdmission::Proceed => None,
+        ResidentCallAdmission::Ledgered(ticket) => Some(ticket),
+        ResidentCallAdmission::AlreadyDone(answer) => return Ok(answer),
+    };
+    let mut result = execute_admitted(
+        runtime,
+        task_scope,
+        caller,
+        action,
+        input,
+        &mut redaction_report,
+    );
+    if let Some(ticket) = ticket {
+        runtime.close_resident_action(ticket, &mut result)?;
+    }
+    result
+}
+
+fn execute_admitted(
+    runtime: &OrbitRuntime,
+    task_scope: &OrbitTaskScope,
+    caller: ToolCaller<'_>,
+    action: OrbitBuiltinAction,
+    input: Value,
+    redaction_report: &mut super::artifact_redaction::ArtifactRedactionReport,
 ) -> Result<Value, OrbitError> {
     let ToolCaller {
         session_context,
@@ -45,8 +95,6 @@ pub(super) fn execute(
         model,
         reservation_owner,
     } = caller;
-    let (input, mut redaction_report) =
-        super::artifact_redaction::sanitize_tool_input(action, input)?;
     if let Some(mut result) =
         super::worker_tools::execute(runtime, session_context, action, &input, model.as_deref())?
     {
@@ -54,7 +102,7 @@ pub(super) fn execute(
             runtime,
             action,
             &mut result,
-            &mut redaction_report,
+            redaction_report,
             session_context
                 .worker_invocation
                 .as_ref()
@@ -74,9 +122,6 @@ pub(super) fn execute(
     let model_for_audit = model.clone();
     let mut persisted_task_id = None;
     let mut response = match action {
-        OrbitBuiltinAction::AgentInvoke => {
-            super::agent_tools::invoke(runtime, session_context, input, agent, model)
-        }
         OrbitBuiltinAction::AutoTask(verb) => {
             super::auto_task_tools::dispatch(runtime, verb, input)
         }
@@ -92,13 +137,19 @@ pub(super) fn execute(
         OrbitBuiltinAction::DesktopTaskWrite => {
             super::desktop::task::write(runtime, session_context, input, agent, model)
         }
-        OrbitBuiltinAction::Agents(verb) => super::agents_tools::dispatch(runtime, verb, input),
+        OrbitBuiltinAction::Agents(verb) => super::agents_tools::dispatch(
+            runtime,
+            verb,
+            input,
+            agent_detail_surface(session_context),
+        ),
+        OrbitBuiltinAction::Attention(_) => {
+            crate::application::attention::attention_query(runtime, input, session_context)
+        }
         OrbitBuiltinAction::Codebase(verb) => super::codebase_tools::dispatch(runtime, verb, input),
         OrbitBuiltinAction::Automation(verb) => {
             super::automation_tools::dispatch(runtime, verb, input)
         }
-        OrbitBuiltinAction::Crew(verb) => super::crew_tools::dispatch(runtime, verb, input),
-        OrbitBuiltinAction::Visual(verb) => super::visual_tools::dispatch(runtime, verb, input),
         OrbitBuiltinAction::Decision(verb) => super::decision_tools::dispatch(
             runtime,
             verb,
@@ -114,9 +165,6 @@ pub(super) fn execute(
             agent.as_deref(),
             model.as_deref(),
         ),
-        OrbitBuiltinAction::Orchestrator(verb) => {
-            super::orchestrator_tools::dispatch(runtime, verb, input)
-        }
         OrbitBuiltinAction::CommandExec => super::command_tools::exec(runtime, input, agent, model),
         OrbitBuiltinAction::Drain(verb) => {
             super::drain_tools::dispatch(runtime, session_context, verb, input)
@@ -163,9 +211,33 @@ pub(super) fn execute(
             model,
             submission_trigger(session_context),
         ),
-        OrbitBuiltinAction::Lease(verb) => {
-            super::lease_tools::dispatch(runtime, verb, input, agent, model)
+        OrbitBuiltinAction::Notice(verb) => super::notice_tools::dispatch(
+            runtime,
+            task_scope,
+            session_context,
+            verb,
+            input,
+            model.as_deref(),
+        ),
+        OrbitBuiltinAction::Memory(verb) => super::memory_tools::dispatch(
+            runtime,
+            task_scope,
+            session_context,
+            verb,
+            input,
+            model.as_deref(),
+        ),
+        OrbitBuiltinAction::Evolution(verb) => {
+            super::evolution_tools::dispatch(runtime, verb, input)
         }
+        OrbitBuiltinAction::Resident(verb) => super::resident_tools::dispatch(
+            runtime,
+            session_context,
+            verb,
+            input,
+            agent.as_deref(),
+            model.as_deref(),
+        ),
         OrbitBuiltinAction::WorkspaceClaim(verb) => {
             super::workspace_claim_tools::dispatch(runtime, verb, input, agent, model)
         }
@@ -174,7 +246,7 @@ pub(super) fn execute(
         runtime,
         action,
         &mut response,
-        &mut redaction_report,
+        redaction_report,
         persisted_task_id.as_deref(),
         agent_for_audit.as_deref(),
         model_for_audit.as_deref(),

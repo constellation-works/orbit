@@ -1,12 +1,13 @@
 ---
 type: design
 summary: "Spec: Table Rendering"
-last_validated: 2026-10-30
+last_validated: 2026-11-02
+last_updated: 2026-11-02
 ---
 
 # Spec: Table Rendering
 
-In standard table-mode list output, the header is one line and each record is one line. Borders are not drawn, and cells are truncated rather than wrapped. A named detail command is available for many truncated values, but not all yet; current gaps are listed in [detail-commands.md](../references/detail-commands.md). Plain output uses escaped tab-separated fields, so `cut -f` yields whole field values.
+In standard table-mode list output, the header is one line and each record is one line. Borders are not drawn, and cells are truncated rather than wrapped. Named detail commands recover truncated values in full; the audited commands are listed in [detail-commands.md](../references/detail-commands.md). Plain output uses escaped tab-separated fields, so `cut -f` yields whole field values.
 
 ## Why This Exists
 
@@ -28,6 +29,7 @@ Widths are computed from the result set, never declared as literals.
 2. If the sum of natural widths plus gutters fits the sink width, use natural widths and stop.
 3. Otherwise, shrink only columns marked *flexible*, largest first, until the total fits. Columns marked *fixed* (IDs, statuses, timestamps, durations) never shrink.
 4. A flexible column has a floor of 8 display columns. If the total still does not fit with every flexible column at its floor, drop flexible columns from the right until it does, and note the dropped columns on stderr.
+5. If the remaining columns still do not fit — an all-fixed layout wider than the sink, say — render every cell whole and note on stderr that the table is wider than the terminal and that `--format plain` or `--json` carries the full row. Fixed cells are never cut silently.
 
 **Invariant:** the same result set rendered at two terminal widths differs only in truncation and column presence — never in row count, row order, or the value of a fixed column.
 
@@ -67,8 +69,8 @@ The path from current behavior:
 
 1. ~~Change the preset in `crates/orbit-cli/src/output/table.rs` to a borderless one and switch `ContentArrangement` off full-width wrapping.~~ Done [ORB-10567].
 2. ~~Make `add_single_line_row` (now `Table::add_row`) the only exported row constructor; convert the 19 call sites that use `Table::add_row` directly.~~ Done [ORB-10567] — `output::table::Table` wraps `comfy_table`, and its `add_row` is the only constructor reachable from a command module.
-3. ~~Move width computation behind the sink (see [./output-modes.md](./output-modes.md) §1) so it is not resolved from a terminal that may not exist.~~ Done — `OutputSink` prefers `COLUMNS`, falls back to a terminal query, and resolves a zero width for non-terminal sinks; `Table::emit` consumes that resolved width when sizing columns.
-4. ~~Convert `print_audit_event_line` and the `orbit audit list` view from hand-padded format strings to the table path.~~ Done — `audit_event_table` uses per-column sizing. **Remaining:** some count/summary lines that neighbor a table still print to stdout rather than stderr (`orbit migrate`; `orbit doctor` prints its healthy summary and findings section to stdout).
+3. ~~Move width computation behind the sink (see [./output-modes.md](./output-modes.md) §1) so it is not resolved from a terminal that may not exist.~~ Done [ORB-10570] — `OutputSink` prefers `COLUMNS`, falls back to a terminal query, and resolves a zero width for non-terminal sinks; `Table::emit` consumes that resolved width when sizing columns.
+4. ~~Convert `print_audit_event_line` and the `orbit audit list` view from hand-padded format strings to the table path.~~ Done [ORB-10570] — `audit_event_table` uses per-column sizing. Health/status text blocks no longer reach stdout in human modes (`orbit migrate`, `orbit doctor`, `orbit tool doctor`, `orbit skill doctor`); those non-record trailers go to stderr in every mode [ORB-21576]. Doctor repair counts are already fixed [ORB-11597]. The terminal findings section is the full-detail view added by [ORB-14829].
 5. ~~Add per-column *fixed*/*flexible* and alignment metadata at each call site.~~ Done [ORB-10567] for the 21 table call sites, via `Column::fixed` / `Column::number` / `Column::path` / `Column::filtered`.
 
 Step 3 uses the sink contract in [./output-modes.md](./output-modes.md) §1. Step 4 remains per-command and may proceed incrementally.
@@ -77,4 +79,16 @@ The piped form now follows §1: `auto` on a non-terminal sink selects plain outp
 
 No table-mode list snapshot existed to update: the checked-in output goldens capture piped forms, and no golden covers the terminal table form because it needs a terminal (see [../2_design.md §8](../2_design.md#8-test-coverage-of-output)). The migration therefore added fixtures instead: unit rendering assertions at pinned widths (since retired for boundary tests), and an end-to-end *N*-records-is-*N*-lines assertion for `orbit tool list` and `orbit task list` in `crates/orbit-cli/tests/output/table_rendering.rs`.
 
-Which truncatable column has a detail command, and which five views still lack one, is recorded in [../references/detail-commands.md](../references/detail-commands.md).
+The single-record commands for truncatable columns, including diagnostic and parameter detail recovery [ORB-21575], are recorded in [../references/detail-commands.md](../references/detail-commands.md).
+
+## Task References
+
+- [ORB-10567] — Replace bordered wrapping tables with borderless one-line rows and column metadata.
+- [ORB-10570] — Gate color and width at the sink, convert audit tables, and move errors to stderr.
+- [ORB-11597] — Move doctor repair notices to stderr and include repair counts in structured result rows.
+- [ORB-12113] — Keep plain-output columns stable rather than suppressing uniform values.
+- [ORB-14829] — Show full workspace-doctor findings and remediation below its terminal table.
+- [ORB-21575] — Add full detail recovery for audited truncated views.
+- [ORB-21576] — Move non-record health/status trailers off stdout to stderr in every mode.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

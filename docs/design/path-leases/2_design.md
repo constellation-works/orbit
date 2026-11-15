@@ -1,8 +1,8 @@
 ---
 title: Path Leases — Design
 owner: claude
-last_updated: 2026-10-30
-last_validated: 2026-10-30
+last_updated: 2026-11-06
+last_validated: 2026-11-06
 status: Draft
 feature: path-leases
 doc_role: design
@@ -28,7 +28,7 @@ are implemented; preemption remains later work. §1 is what exists today and wha
 ## 1. What exists today
 
 - **Task reservations.** `orbit.task.locks.reserve` reserves either a task's surface or a list of
-  file selectors, with `ttl_seconds` (default 1,800, at most 14,400), and
+  file selectors, with `ttl_seconds` (default 1,800, at most 86,400), and
   `orbit.task.locks.release` releases one by its `reservation-<id>`
   ([commands.rs](../../../crates/orbit-runtime/src/task/locks/commands.rs)). A refused reserve is
   written to the denial log that `orbit codebase` and the pilot scorecard read; 832 such denials
@@ -135,7 +135,7 @@ An overlapping hard request **waits** in the lease queue unless it asked `wait =
 returns today's denial with the holders named. The queue orders by priority, then by age; a
 request older than `lease.aging_minutes` moves up one priority level, capped at `high`. Aging does
 not outrank newer higher-priority requests, so a stream of overlapping `high` requests can hold an
-aged `low` request until its TTL expires.
+aged `low` request until its TTL expires [ORB-18951].
 
 **Precedence with drains.** Drain admission treats a granted hard lease exactly like a held task
 context lock: an overlapping candidate is deferred and the denial names the lease. A queued lease
@@ -253,7 +253,7 @@ Request uses `<selector>... --principal <name> [--mode advisory|hard | --hard]
 [--priority low|normal|high] [--ttl 30m] [--branch <name>] [--base <name>]`.
 Renew takes `<lease-id> [--ttl 30m]`; check takes `<path>... [--lease-id <id>]`.
 Every verb accepts `--json`; a hard request that is refused or queued, and an expansion refused
-to break a deadlock, exit 3. TTL is 1–14400 seconds,
+to break a deadlock, exit 3. TTL is 1–86400 seconds,
 default 1800. Branch bindings drive the release-on-landing checks described in §4
 ([ORB-18554]). The table also includes `notices`, delivered in phase 3, and `expand`,
 queueing and `--no-wait`, delivered in phase 4.
@@ -299,7 +299,8 @@ changing state. It is what an editor hook calls: a Claude Code `PreToolUse` hook
 asks for an `expand` or warns. Enforcement stays advisory unless the hook is configured to deny.
 
 The dashboard gains a Leases view: active and queued leases per path, holders, and recent
-landing notices. **Implemented:** `#leases` reads `GET /api/leases` and pages
+landing notices. When leases are disabled the view shows a neutral off-state naming
+`lease.enabled` instead of a load error [ORB-20477]. **Implemented:** `#leases` reads `GET /api/leases` and pages
 `GET /api/leases/notices` through Orbit Web, with no operator session or lease token, and is
 read-only ([user-interface design §9b](../user-interface/2_design.md#9b-leases)). `orbit task locks list` and the denial log show leases beside reservations.
 
@@ -619,7 +620,7 @@ only reader of forwarding headers; malformed chains use the TCP peer for rejecti
 per 300 seconds; IPv6 /64; 60 token reads and 20 token writes/minute; 2 streams and 8 in-flight
 requests/token; 64 connections; 16 in-flight requests globally; 65536 body bytes; 5 seconds
 for headers/TLS handshake and 10 seconds for the handler/body read; 4096 tracked keys including
-two reserved overflow identities. Configured ranges and settings are in [CONFIG](../../CONFIG.md#lease-listener).
+two reserved overflow identities. Configured ranges and settings are in [CONFIG](../../CONFIG.md#path-leases).
 Live budgets are never evicted at capacity; new addresses and new tokens share distinct
 conservative overflow keys. Idle keys are reclaimed during periodic maintenance.
 
@@ -777,5 +778,7 @@ feature multi-person.
 - [ORB-18553] — delivered the hard-lease queue, aging and expansion.
 - [ORB-18554] — delivered release on landing and expiry notices.
 - [ORB-18555] — delivered the dashboard Leases view.
+- [ORB-18951] — corrected the queue starvation guarantee in §3 (aging caps at `high` and never outranks newer higher-priority requests).
+- [ORB-20477] — gave the dashboard Leases view a neutral off-state when leases are disabled (§6).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

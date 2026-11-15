@@ -1,13 +1,8 @@
-use std::path::{Path, PathBuf};
-
 use chrono::{DateTime, Utc};
 use clap::ValueEnum;
 use colored::{ColoredString, Colorize};
-use orbit_cmd::log_format::{AGENT_OUTPUT_TARGET, format_code, format_source};
-use orbit_core::OrbitError;
+use orbit_cmd::log_format::{self, AGENT_OUTPUT_TARGET};
 use serde_json::Value;
-
-use crate::parse::parse_since;
 
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq, PartialOrd, Ord)]
 #[clap(rename_all = "lower")]
@@ -19,95 +14,16 @@ pub enum LevelFilter {
     Error,
 }
 
-impl LevelFilter {
-    fn rank(self) -> u8 {
-        match self {
-            LevelFilter::Trace => 0,
-            LevelFilter::Debug => 1,
-            LevelFilter::Info => 2,
-            LevelFilter::Warn => 3,
-            LevelFilter::Error => 4,
+impl From<LevelFilter> for log_format::LevelFilter {
+    fn from(level: LevelFilter) -> Self {
+        match level {
+            LevelFilter::Trace => Self::Trace,
+            LevelFilter::Debug => Self::Debug,
+            LevelFilter::Info => Self::Info,
+            LevelFilter::Warn => Self::Warn,
+            LevelFilter::Error => Self::Error,
         }
     }
-
-    pub(crate) fn from_event_level(level: &str) -> Option<LevelFilter> {
-        match level.to_ascii_uppercase().as_str() {
-            "TRACE" => Some(LevelFilter::Trace),
-            "DEBUG" => Some(LevelFilter::Debug),
-            "INFO" => Some(LevelFilter::Info),
-            "WARN" => Some(LevelFilter::Warn),
-            "ERROR" => Some(LevelFilter::Error),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct Filters {
-    target_prefix: Option<String>,
-    min_level: Option<LevelFilter>,
-    since: Option<DateTime<Utc>>,
-}
-
-impl Filters {
-    pub(crate) fn new(
-        target_prefix: Option<String>,
-        min_level: Option<LevelFilter>,
-        since: Option<DateTime<Utc>>,
-    ) -> Self {
-        Self {
-            target_prefix,
-            min_level,
-            since,
-        }
-    }
-
-    pub(crate) fn matches(&self, event: &Value) -> bool {
-        let target = event.get("target").and_then(Value::as_str).unwrap_or("");
-        if let Some(prefix) = &self.target_prefix
-            && !target.starts_with(prefix)
-        {
-            return false;
-        }
-        if let Some(min) = self.min_level {
-            let level = event.get("level").and_then(Value::as_str).unwrap_or("INFO");
-            let event_level = LevelFilter::from_event_level(level).unwrap_or(LevelFilter::Info);
-            if event_level.rank() < min.rank() {
-                return false;
-            }
-        }
-        if let Some(since) = self.since
-            && let Some(ts) = event.get("timestamp").and_then(Value::as_str)
-            && let Ok(parsed) = DateTime::parse_from_rfc3339(ts)
-            && parsed.with_timezone(&Utc) < since
-        {
-            return false;
-        }
-        true
-    }
-}
-
-pub(crate) fn build_filters(
-    target: Option<String>,
-    level: Option<LevelFilter>,
-    since: Option<&str>,
-) -> Result<Filters, OrbitError> {
-    let since = since.map(parse_since).transpose()?;
-    Ok(Filters::new(target, level, since))
-}
-
-pub(crate) fn resolve_log_path(override_path: Option<&Path>) -> Result<PathBuf, OrbitError> {
-    if let Some(path) = override_path {
-        return Ok(path.to_path_buf());
-    }
-    if let Ok(env) = std::env::var("ORBIT_LOG_PATH")
-        && !env.is_empty()
-    {
-        return Ok(PathBuf::from(env));
-    }
-    orbit_common::observability::logging::global_jsonl_log_path().map_err(|err| {
-        OrbitError::InvalidInput(format!("cannot resolve global JSONL log path: {err}"))
-    })
 }
 
 pub(crate) fn format_event_line(event: &Value, use_color: bool) -> String {
@@ -123,8 +39,8 @@ pub(crate) fn format_event_line(event: &Value, use_color: bool) -> String {
         .unwrap_or_else(|| Value::Object(Default::default()));
 
     let time_col = format_timestamp(timestamp);
-    let source_col = format_source(target, &fields);
-    let code_col = format_code(target, level, &fields);
+    let source_col = log_format::format_source(target, &fields);
+    let code_col = log_format::format_code(target, level, &fields);
     let message_col = format_message(target, &fields);
 
     if use_color {

@@ -1,8 +1,15 @@
 //! What task-pilot preparation and the state scheduler's member host agree
-//! on: the reason a stale member settles with and the fingerprints of one
-//! freshness read.
+//! on: the reason a stale member settles with, the fingerprints of one
+//! freshness read, and the atomic reservation decision.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// The atomic pilot reservation decision, or an acquisition refusal before
+/// the reservation operation ran. Operation errors remain errors.
+pub(crate) enum PilotTaskReservation {
+    Reserved(BTreeMap<String, BTreeSet<String>>),
+    Deferred { reason: String },
+}
 
 /// The task outcome reason apply and prepare record for a task the branch
 /// made stale under its claim; the member settles superseded, not failed.

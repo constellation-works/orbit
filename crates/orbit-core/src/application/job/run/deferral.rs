@@ -1,7 +1,7 @@
 //! Runs that stopped without failing because their work was deferred, as
 //! Incidents reads them [ORB-15517].
 //!
-//! A local provider capacity or usage-limit hold, or a claimed leaf's usage
+//! A local provider capacity, usage-limit or unavailability hold, or a claimed leaf's usage
 //! limit, ends `held`, and a CI
 //! sweep whose only gaps were run-scoped retryable errors ends `success`.
 //! Neither leaves a failed run behind, so each records one
@@ -43,15 +43,20 @@ impl OrbitRuntime {
         log_best_effort("record run deferral", run_id.unwrap_or_default(), result);
     }
 
-    /// Record a provider capacity or usage-limit deferral; every other hold
-    /// already names its own resumption.
+    /// Record a provider capacity, usage-limit or unavailability deferral;
+    /// every other hold already names its own resumption.
     pub(crate) fn record_held_deferral(
         &self,
         run: &JobRun,
         held: Option<HeldFailure>,
         message: &str,
     ) {
-        if let Some(held @ (HeldFailure::ProviderCapacity | HeldFailure::ProviderLimit)) = held {
+        if let Some(
+            held @ (HeldFailure::ProviderCapacity
+            | HeldFailure::ProviderLimit
+            | HeldFailure::ProviderUnavailable),
+        ) = held
+        {
             self.record_run_deferral(Some(&run.run_id), held.error_code(), message, Value::Null);
         }
     }

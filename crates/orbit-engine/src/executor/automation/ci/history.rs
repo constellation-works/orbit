@@ -35,7 +35,7 @@ const HISTORY_SCHEMA_VERSION: u64 = 2;
 
 /// Consecutive-sighting counts keyed by `run_id/job_id/operation`, and
 /// unfileable landing-failure streaks keyed by failure identity.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(super) struct RetryableHistory {
     counts: BTreeMap<String, SweepCount>,
     landing_gaps: BTreeMap<String, SweepCount>,

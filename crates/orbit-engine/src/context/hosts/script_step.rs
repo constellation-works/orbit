@@ -5,7 +5,7 @@
 //! executor owns what the answer means for the step (its output, retry and
 //! the `script_execution` audit entry).
 
-use orbit_types::workflow::activity_job::ScriptExecutionRecord;
+use orbit_types::workflow::activity_job::{ScriptExecutionRecord, ScriptOutputSet};
 use serde_json::Value;
 
 /// One attempt of a script step.
@@ -46,6 +46,26 @@ pub struct ScriptStepRan {
     /// The capped, redacted log of stdout and stderr.
     pub log: Vec<u8>,
     pub record: ScriptExecutionRecord,
+    /// The declared output files the host kept, or why it kept none.
+    pub outputs: ScriptStepOutputs,
+}
+
+/// What became of a script's `out/` directory.
+///
+/// The host collects only for a manifest that declares outputs, after exit
+/// 0 with stdout that passes the step's output check. A set is all or
+/// nothing: either every file is stored with its digest before the scratch
+/// directory goes, or none is and the step fails.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScriptStepOutputs {
+    /// Nothing was collected: no outputs declared, or the run did not
+    /// succeed.
+    None,
+    /// The complete stored set.
+    Kept(ScriptOutputSet),
+    /// `out/` broke a rule; `code` is one of the `script_outputs_*`
+    /// failure codes and nothing was kept.
+    Rejected { code: &'static str, message: String },
 }
 
 /// The host's answer for one attempt.

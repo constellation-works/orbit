@@ -23,6 +23,9 @@ Options:
       --task-prefix <PREFIX>
           Immutable task-id namespace for this machine (2-5 uppercase ASCII letters). Required on first init or with --force; reserved artifact namespaces cannot be chosen
 
+      --human-name <NAME>
+          Name of your human crew, the crew for operator work that no drain or task pilot picks up. Used only when no human crew exists yet; otherwise the OS user is the default (offered at an interactive prompt, taken as-is without a terminal or with --non-interactive)
+
   -h, --help
           Print help (see a summary with '-h')
 

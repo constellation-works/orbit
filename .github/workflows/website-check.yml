@@ -18,7 +18,8 @@ on:
 permissions: {}
 
 jobs:
-  # Read live state before allocating build runners; the PR event can be stale.
+  # Best-effort live read: only a live closed/merged state skips build jobs.
+  # Unknown state admits CI; the queued PR event can be stale in either direction.
   pr-state:
     name: Live PR state
     if: ${{ github.event_name == 'pull_request' }}
@@ -28,6 +29,7 @@ jobs:
       pull-requests: read
     outputs:
       state: ${{ steps.state.outputs.state }}
+      changed_files: ${{ steps.state.outputs.changed_files }}
     steps:
       - name: Read live PR state
         id: state
@@ -36,15 +38,23 @@ jobs:
           GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
-          gh api --method GET 'repos/{owner}/{repo}/pulls/${{ github.event.pull_request.number }}' --jq '
-            if .merged == true then "state=merged"
-            elif .state == "open" or .state == "closed" then "state=" + .state
-            else error("Unexpected pull request state") end
-          ' >> "$GITHUB_OUTPUT"
+          if outputs="$(gh api --method GET 'repos/{owner}/{repo}/pulls/${{ github.event.pull_request.number }}' --jq '
+            (if .merged == true then "state=merged"
+              elif .state == "open" or .state == "closed" then "state=" + .state
+              else error("Unexpected pull request state") end),
+            (if (.changed_files | type) == "number"
+              then "changed_files=" + (.changed_files | tostring)
+              else "changed_files=" end)
+          ')" && [ -n "$outputs" ]; then
+            printf '%s\n' "$outputs" >> "$GITHUB_OUTPUT"
+          else
+            printf '%s\n' 'state=unknown' 'changed_files=' >> "$GITHUB_OUTPUT"
+            echo "::warning::Live PR state unavailable; continuing CI without a live state."
+          fi
 
   check:
     needs: pr-state
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.pr-state.outputs.state == 'open') }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.pr-state.outputs.state == 'open' || needs.pr-state.outputs.state == 'unknown')) }}
     name: Check and build
     runs-on: ubuntu-latest
     permissions:

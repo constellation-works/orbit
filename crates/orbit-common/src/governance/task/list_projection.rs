@@ -8,6 +8,15 @@
 
 use serde_json::{Map, Value};
 
+/// Internal transport hint (not a public parameter): a transport whose
+/// result policy will project a default `orbit.task.list` call to
+/// [`MINIMAL_TASK_FIELDS`] sets this to `true` in the call input so the
+/// handler can serve the page from envelopes only. Transports overwrite or
+/// remove any caller-supplied value from their own policy decision, and the
+/// handler ignores it when the call projects rows itself (`fields`/`view`)
+/// or filters on pilot warnings.
+pub const TASK_LIST_COMPACT_HINT: &str = "task_list_compact";
+
 /// The per-task fields of a default `orbit.task.list` row.
 pub const MINIMAL_TASK_FIELDS: &[&str] = &[
     "id",

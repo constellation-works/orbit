@@ -73,7 +73,7 @@ where
         )
     };
     let tasks = lookup
-        .list_tasks()
+        .list_task_metadata()
         .map_err(|error| lookup_error("find_evidence_incomplete_owner", error))?;
     let mut entries = Vec::new();
     for ((branch, workflow), failures) in groups {

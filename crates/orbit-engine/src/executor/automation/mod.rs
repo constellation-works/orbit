@@ -2,6 +2,7 @@ pub(crate) mod ci;
 mod dependabot;
 mod github_host;
 mod input;
+mod read_throttle;
 pub(crate) mod review;
 mod shell;
 mod task_update;
@@ -191,6 +192,7 @@ pub(crate) fn execute_engine_action<
         EngineDeterministicAction::PrPrepare => vcs::prepare_pr_handoff(host, input),
         EngineDeterministicAction::PrPromote => vcs::pr_promote(host, input),
         EngineDeterministicAction::HandoffLand => vcs::handoff_land(host, input),
+        EngineDeterministicAction::PrChecksWatch => vcs::pr_checks_watch(host, input),
         EngineDeterministicAction::PrComplete => vcs::pr_complete(host, input),
     }
 }

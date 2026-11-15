@@ -1,6 +1,7 @@
 //! Read-only diagnostics share persisted scheduler state; inspection never ticks.
 
 use crate::OrbitRuntime;
+use crate::application::automation::AutomationAutoTaskPort;
 use chrono::{DateTime, Utc};
 use orbit_automation::{AutomationError, delivery};
 use orbit_common::OrbitError;
@@ -35,8 +36,7 @@ pub fn unresolvable_delivery_branches(
 ) -> Result<Vec<UnresolvableBranch>, OrbitError> {
     let source = Source::new(&runtime.paths().repo_root);
     let mut unresolvable = Vec::new();
-    for listed in runtime.auto_task_listing(false)? {
-        let definition = listed.definition;
+    for definition in runtime.listed_auto_task_definitions()? {
         let AutoTaskSchedule::Deliveries {
             deliveries_landed: declared,
             ..
@@ -139,7 +139,7 @@ impl UnadmittableDefinition {
 ///
 /// A disabled definition is deliberately quiet: `disabled` already means the
 /// operator turned it off, and saying it is also unadmittable adds nothing.
-pub fn delivery_ownership_refusal(
+pub(crate) fn delivery_ownership_refusal(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
 ) -> Option<UnadmittableDefinition> {
@@ -173,9 +173,9 @@ pub fn unadmittable_delivery_definitions(
     runtime: &OrbitRuntime,
 ) -> Result<Vec<UnadmittableDefinition>, OrbitError> {
     Ok(runtime
-        .auto_task_listing(false)?
+        .listed_auto_task_definitions()?
         .iter()
-        .filter_map(|listed| delivery_ownership_refusal(runtime, &listed.definition))
+        .filter_map(|definition| delivery_ownership_refusal(runtime, definition))
         .collect())
 }
 
@@ -206,8 +206,7 @@ pub fn wedged_delivery_consumers(
     }
     let store = runtime.automation_store()?;
     let mut wedged = Vec::new();
-    for listed in runtime.auto_task_listing(false)? {
-        let definition = listed.definition;
+    for definition in runtime.listed_auto_task_definitions()? {
         if !matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. }) {
             continue;
         }
@@ -254,7 +253,7 @@ pub(super) fn branch_unavailable(source: &Source<'_>, branch: &str) -> Option<St
     })
 }
 
-pub fn inspect_auto_task(
+pub(crate) fn inspect_auto_task(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
     now: DateTime<Utc>,
@@ -267,7 +266,7 @@ pub fn inspect_auto_task(
 /// Inspect a delivery auto-task using the shared open-instance rule's already
 /// computed result. Batch dashboard inspection reuses its request's metadata
 /// listing rather than querying task state again for every definition.
-pub fn inspect_auto_task_with_open_instance(
+pub(crate) fn inspect_auto_task_with_open_instance(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
     now: DateTime<Utc>,
@@ -282,16 +281,7 @@ fn inspect_auto_task_inner(
     now: DateTime<Utc>,
     has_open_instance: impl FnOnce() -> Result<bool, OrbitError>,
 ) -> Result<AutomationDiagnostic, OrbitError> {
-    let AutoTaskSchedule::Deliveries {
-        deliveries_landed: declared,
-        ..
-    } = &definition.schedule
-    else {
-        return Err(OrbitError::InvalidInput("not a delivery definition".into()));
-    };
-    let ownership = ownership::resolve(runtime, declared.owner_machine.as_deref());
-    let trigger = ownership::with_resolved_owner(declared, &ownership);
-    let epoch = ownership::auto_task_epoch(definition, &trigger)?;
+    let (ownership, trigger, epoch) = ownership::resolve_delivery_auto_task(runtime, definition)?;
     let admission_deferred = definition.dedupe == DedupePolicy::SkipIfOpen && has_open_instance()?;
 
     inspect(
@@ -343,17 +333,8 @@ fn inspect_routine_status(
         return super::members::evaluate_with_cache(runtime, definition, true, now, Some(cache));
     }
 
-    let declared = definition
-        .trigger
-        .deliveries_landed
-        .as_ref()
-        .ok_or_else(|| OrbitError::InvalidInput("not a delivery routine".into()))?;
-
-    let ownership = ownership::resolve(runtime, declared.owner_machine.as_deref());
-    let mut effective_trigger = ownership::with_resolved_owner(declared, &ownership);
-    let epoch = ownership::routine_epoch(definition, &effective_trigger)?;
-
-    effective_trigger.retries = effective_trigger.retries.min(definition.policy.retries.max);
+    let (ownership, effective_trigger, epoch) =
+        ownership::resolve_delivery_routine(runtime, definition)?;
 
     inspect(
         runtime,

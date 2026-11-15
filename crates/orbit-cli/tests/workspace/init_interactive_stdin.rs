@@ -21,7 +21,7 @@ use tempfile::{TempDir, tempdir};
 
 const HANG_DEADLINE: Duration = Duration::from_secs(8);
 const SUCCESS_DEADLINE: Duration = Duration::from_secs(60);
-const CLOSED_STDIN_MESSAGE: &str = "stdin closed before an interactive prompt was answered; pass --task-prefix/--machine-name or --non-interactive";
+const CLOSED_STDIN_PROMPT: &str = "stdin closed before an interactive prompt was answered";
 const LINE_TOO_LONG_MESSAGE: &str = "stdin interactive prompt answer is too long";
 
 struct IsolatedHome {
@@ -212,7 +212,7 @@ fn oversized_unterminated_pipe_answer_is_rejected() {
     assert!(output.contains(LINE_TOO_LONG_MESSAGE), "{output}");
 }
 
-fn closed_stdin_keeps_the_existing_message() {
+fn closed_stdin_names_both_identity_flags_and_the_prefix_format() {
     let fixture = IsolatedHome::new();
     let mut child = orbit_init(&fixture.home, &fixture.work, &fixture.empty_path)
         .stdin(Stdio::null())
@@ -229,9 +229,13 @@ fn closed_stdin_keeps_the_existing_message() {
         !status.success(),
         "closed stdin must fail\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
+    // Fresh-identity remedy: both flags, the prefix format, and --non-interactive
+    // for the crew prompts. `--non-interactive` alone is not enough here.
     assert!(
-        output.contains(CLOSED_STDIN_MESSAGE),
-        "expected {CLOSED_STDIN_MESSAGE:?}, got stdout={stdout:?} stderr={stderr:?}"
+        output.contains(CLOSED_STDIN_PROMPT)
+            && names_identity_flags(&output)
+            && output.contains("2-5 uppercase ASCII letters"),
+        "closed stdin must name both identity flags and the prefix format, got stdout={stdout:?} stderr={stderr:?}"
     );
 }
 
@@ -336,8 +340,8 @@ fn init_stdin_contracts_0() {
 fn init_stdin_contracts_1() {
     for (name, check) in [
         (
-            "closed_stdin_keeps_the_existing_message",
-            closed_stdin_keeps_the_existing_message as fn(),
+            "closed_stdin_names_both_identity_flags_and_the_prefix_format",
+            closed_stdin_names_both_identity_flags_and_the_prefix_format as fn(),
         ),
         (
             "piped_machine_name_and_task_prefix_still_complete_interactive_init",

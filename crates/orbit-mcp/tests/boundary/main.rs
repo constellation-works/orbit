@@ -7,6 +7,7 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod attention_fanout;
 #[cfg(unix)]
 mod busy_owner_route;
 mod capability;
@@ -17,7 +18,11 @@ mod listener;
 mod mcp_wire_roundtrip;
 #[cfg(unix)]
 mod oversized_lines;
+mod role_surface;
 mod scripted_destination;
 #[cfg(unix)]
+mod ssh_pool;
+#[cfg(unix)]
 mod ssh_reuse;
+mod storage_access;
 mod task_route;

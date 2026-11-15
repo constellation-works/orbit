@@ -3,7 +3,7 @@ pub(crate) use orbit_core::application::job::{
     RunDisplayStep as RunStepRecord, RunDisplaySteps, RunStepSource as StepSource,
 };
 use orbit_core::runtime::audit::run::RunAuditStep;
-use orbit_core::{JobRun, JobRunStep, NotFoundKind, OrbitError, OrbitRuntime};
+use orbit_core::{JobRun, JobRunStep, OrbitError, OrbitRuntime};
 use orbit_types::workflow::{JobTargetType, PipelineState};
 use serde_json::{Value, json};
 
@@ -85,7 +85,7 @@ pub(crate) fn resolve_run(
     )?
     .into_iter()
     .next()
-    .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, "latest".to_string()))
+    .ok_or(OrbitError::NoJobRuns)
 }
 
 pub(crate) fn resolve_run_step(
@@ -254,6 +254,11 @@ pub(crate) fn run_header_text_with_lock_holders(
                 .collect::<Vec<_>>()
                 .join("; ")
         ));
+    }
+    if let Some(state) = state {
+        for warning in state.pull_drain.pool_crew_exclusion_warnings() {
+            lines.push(format!("{} {warning}", bold("Warning:")));
+        }
     }
     lines.extend(format_child_dispatch_lines(state));
     lines.join("\n")

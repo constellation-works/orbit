@@ -1,6 +1,6 @@
 //! Branch divergence and commit/ref lookup.
 use super::super::git::{BaseSyncMode, git_output, resolve_worktree_start_point};
-use super::super::remote_probe::remote_ref_output;
+use super::super::remote_probe::{exact_remote_branch_sha, remote_ref_output};
 use orbit_common::OrbitError;
 use std::path::Path;
 
@@ -103,7 +103,7 @@ pub(in crate::executor::automation::vcs) fn remote_branch_sha(
         ],
         "branch freshness",
     )?;
-    Ok(probe.stdout.split_whitespace().next().map(str::to_owned))
+    Ok(exact_remote_branch_sha(&probe.stdout, branch))
 }
 
 fn parse_divergence_count(

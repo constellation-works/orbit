@@ -8,8 +8,8 @@ use std::collections::BTreeSet;
 use chrono::{DateTime, Utc};
 use orbit_automation::AutomationError;
 use orbit_automation::condition::{
-    CheckedCondition, ConditionEvaluator, ConditionHost, ConditionObservation, SubjectObservation,
-    TaskFacts, Truth, own_task_ids, self_facts,
+    CheckedCondition, ConditionEvaluator, ConditionHost, ConditionObservation, SelfFacts,
+    SubjectObservation, TaskFacts, Truth, own_task_ids, self_facts,
 };
 use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskHistoryEntry};
@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 
 use super::facts::{self, FactInputs, natural_id_order};
 use crate::OrbitRuntime;
+use crate::application::automation::AutomationAutoTaskPort;
 use crate::application::task::SYSTEM_ACTOR_LABEL;
 
 /// Longest rendering of one `{{subject.*}}` placeholder value.
@@ -35,6 +36,14 @@ pub(crate) enum Target<'a> {
 }
 
 impl Target<'_> {
+    /// The auto-task a mint targets; a job has no accepted-result history.
+    pub(crate) fn auto_task(&self) -> Option<&AutoTaskDefinition> {
+        match self {
+            Self::Mint(definition) => Some(definition),
+            Self::Job(_) => None,
+        }
+    }
+
     pub(crate) fn trigger_label(&self) -> String {
         match self {
             Self::Mint(definition) => format!("auto-task:{}", definition.name),
@@ -67,6 +76,17 @@ impl Host<'_> {
                 if task.tags.contains(&auto_task_tag(&definition.name)))
     }
 
+    /// `self` as the next pass reads it: the fire records, plus the accepted-
+    /// result history when the condition reads `self.last_succeeded_at`.
+    fn self_facts(&self, state: &ConditionState, now: DateTime<Utc>) -> SelfFacts {
+        let facts = self_facts(Some(state), now);
+        if self.checked.reads.self_last_succeeded {
+            facts::with_accepted_history(self.runtime, self.target.auto_task(), facts)
+        } else {
+            facts
+        }
+    }
+
     /// Observe without committing anything: the same view explain shows.
     pub(crate) fn observe_view(
         &self,
@@ -80,9 +100,12 @@ impl Host<'_> {
             } else {
                 own.clone()
             },
-            self_facts: self_facts(Some(state), now),
+            self_facts: self.self_facts(state, now),
         };
-        let gathered = facts::gather(self.runtime, &self.checked.reads, now, &inputs)?;
+        let mut gathered = facts::gather(self.runtime, &self.checked.reads, now, &inputs)?;
+        gathered
+            .unavailable
+            .extend(facts::unreadable_history_note(&inputs.self_facts));
         let evaluator = ConditionEvaluator::new(&gathered.facts);
         let rearm = |subject: Option<&TaskFacts>| {
             self.checked
@@ -253,8 +276,7 @@ impl Host<'_> {
         definition: &AutoTaskDefinition,
         fire: &ConditionFire,
     ) -> Result<String, OrbitError> {
-        let mut params =
-            crate::application::auto_tasks::scheduler::mint_params(self.runtime, definition);
+        let mut params = self.runtime.auto_task_mint_task_params(definition);
         params.title = render_placeholders(&params.title, Some(fire));
         params.description = render_placeholders(&params.description, Some(fire));
         let captured = serde_json::to_string_pretty(&fire.captured)
@@ -326,7 +348,7 @@ impl ConditionHost for Host<'_> {
     fn admission_deferral(&self, _fire: &ConditionFire) -> Result<Option<String>, AutomationError> {
         if let Target::Mint(definition) = self.target
             && definition.dedupe == DedupePolicy::SkipIfOpen
-            && let Some(open) = self.runtime.open_auto_task_instance(definition)?
+            && let Some(open) = self.runtime.open_auto_task_instance_id(definition)?
         {
             return Ok(Some(format!("open_instance {open}")));
         }

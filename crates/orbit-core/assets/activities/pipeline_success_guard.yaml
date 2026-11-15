@@ -69,6 +69,9 @@ spec:
       held_count:
         type: integer
         minimum: 0
+      rejected_apply_held_count:
+        type: integer
+        minimum: 0
       results:
         type: array
         items:

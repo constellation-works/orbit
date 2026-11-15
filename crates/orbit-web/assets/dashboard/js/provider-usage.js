@@ -1,5 +1,5 @@
 // Provider usage in the top bar: the selected host's readings, one compact chip
-// per provider account. A chip opens a dialog with the detail the old title
+// per provider login. A chip opens a dialog with the detail the old title
 // tooltip held: every window with its gate and reset, the weekly pressure and
 // the crews held back. Hover previews it, focus or click opens it and a click
 // or the Pin button keeps it open. The readings ride the host resource poll
@@ -27,9 +27,10 @@ const WINDOW_ORDER = { five_hour: 0, seven_day: 1 };
 const RANK = { critical: 3, elevated: 2, ok: 1, unknown: 0 };
 
 // What the host's pressure means, from the admission contract: a higher value
-// expires sooner unused; the owner only orders equal work by it and never
-// holds any back.
-const PRESSURE_EXPLAINED = 'Above ×1 this provider\'s weekly allowance would expire unused, so its crews are pulled sooner among otherwise equal work; below ×1 they are pulled later; at ×1 nothing changes. It only orders work and never holds any back.';
+// means the weekly allowance expires sooner unused. The number is always shown;
+// it changes scheduling only under the opt-in `usage_pressure` crew selection
+// and even then it never holds work back.
+const PRESSURE_EXPLAINED = 'Above ×1 this provider\'s weekly allowance would expire unused sooner; below ×1 later; at ×1 or with no weekly reading it is neutral. The value is shown for information. It affects scheduling only when workflow.crew_selection is "usage_pressure": then crew pool draws weight higher-pressure crews more, and pull offers tied on priority favor tasks whose pool holds the highest-pressure crew. Under the default static policy, scheduling ignores it. It never holds any work back.';
 
 /// A window id as words: `five_hour` reads `5-hour`, `seven_day_opus` under
 /// scope `opus` reads `7-day`, `gemini-argon-wtu-weekly` under scope `argon`
@@ -131,32 +132,66 @@ function pressureValue(pressure) {
 
 const accountLabel = pressure => pressure.account ? `${pressure.provider}/${pressure.account}` : pressure.provider;
 
+const sharesDefaultLogin = pressure => pressure?.shares_default_login === true;
+
 /// Readings grouped by account when pressure is available, otherwise by
 /// provider and scope for older hosts. A group takes its worst reading's
 /// severity (then the more used window), and is stale or gating off only when
-/// every one of its readings is, since each window also flags itself.
+/// every one of its readings is, since each window also flags itself. The host
+/// marks per-model crews of one shared credential with `shares_default_login`;
+/// only those readings and pressures fold into the provider's row. Any other
+/// account with no reading is its own row (`no usage reported`), even when
+/// that provider already has one, and a row never takes a pressure from a
+/// different account than the readings it shows.
 function providerGroups(described, pressures) {
+  const sharing = new Set((pressures || []).filter(sharesDefaultLogin).map(accountLabel));
   const groups = new Map();
+  const ensure = key => { if (!groups.has(key)) groups.set(key, []); };
   for (const item of described) {
-    const key = pressures ? item.account : item.provider;
-    if (!groups.has(key)) groups.set(key, []);
+    const key = pressures && sharing.has(item.account) ? item.account.split('/')[0] : (pressures ? item.account : item.provider);
+    ensure(key);
     groups.get(key).push(item);
   }
-  for (const pressure of pressures || []) {
-    const label = accountLabel(pressure);
-    if (!groups.has(label)) groups.set(label, []);
+  if (pressures) {
+    for (const pressure of pressures) {
+      const label = accountLabel(pressure);
+      if (groups.has(label)) continue;
+      if (sharesDefaultLogin(pressure)) {
+        ensure(pressure.provider);
+        continue;
+      }
+      // A bare pressure belongs to the provider row when that row exists.
+      // An unflagged account is its own row, never folded into another login.
+      if (!pressure.account && groups.has(pressure.provider)) continue;
+      ensure(label);
+    }
   }
   const byUsage = (a, b) => (b.used ?? -1) - (a.used ?? -1) || a.order - b.order;
   return [...groups].map(([provider, items]) => {
     items.sort(byUsage);
     const worst = items.reduce((a, b) => RANK[b.severity] > RANK[a.severity] ? b : a, items[0] || null);
     return {
-      provider, items, worst, pressure: pressures?.find(value => accountLabel(value) === provider) || null,
+      provider, items, worst,
+      pressure: pressureFor(provider, pressures),
       severity: worst?.severity || 'unknown',
       stale: items.length > 0 && items.every(item => item.stale),
       gatingOff: items.length > 0 && items.every(item => item.gatingOff),
     };
   }).sort((a, b) => RANK[b.severity] - RANK[a.severity]);
+}
+
+/// The pressure of the login `provider` names. A bare row prefers the
+/// account-null pressure, then a `shares_default_login` pressure of that
+/// provider. An account row uses only its own unflagged pressure.
+function pressureFor(provider, pressures) {
+  if (!pressures) return null;
+  if (!provider.includes('/')) {
+    return pressures.find(value => value.provider === provider && !value.account)
+      || pressures.find(value => value.provider === provider && sharesDefaultLogin(value))
+      || null;
+  }
+  const own = pressures.find(value => accountLabel(value) === provider);
+  return own && !sharesDefaultLogin(own) ? own : null;
 }
 
 function pillFor(group) {

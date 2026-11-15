@@ -2,12 +2,14 @@ use orbit_common::OrbitError;
 use orbit_common::governance::authorization::agent_context_declared;
 use orbit_common::security::redaction::redact_all;
 use orbit_types::identity::normalize_attribution_label;
-use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    ArtifactWriter, CANDIDATE_DISCARDED_EVENT, FINAL_RECOVERY_DECIDED_EVENT,
-    GRANTED_TOOLS_CHANGED_EVENT, RecordedFinalRecovery, Task, TaskDecision, TaskHistoryEntry,
-    TaskStatus, canonical_artifact_path, granted_tools_change_note,
+    ArtifactWriter, CANDIDATE_DISCARDED_EVENT, CREW_ASSIGNED_EVENT, CrewAssignmentState,
+    CrewSource, FINAL_RECOVERY_DECIDED_EVENT, GRANTED_TOOLS_CHANGED_EVENT, RecordedCrewAssignment,
+    RecordedFinalRecovery, Task, TaskDecision, TaskHistoryEntry, TaskStatus,
+    canonical_artifact_path, granted_tools_change_note,
 };
+use orbit_types::workflow::{SOURCE_REPAIR_KEY, SOURCE_REPAIR_LINKED};
+use serde_json::Value;
 
 use super::super::TaskRecordUpdateParams;
 use super::super::TaskRecords;
@@ -16,14 +18,19 @@ use super::super::helpers::{
     describe_optional_field_value,
 };
 use super::super::lifecycle::{
-    FORCED_STATUS_EVENT, ensure_completion_run_stopped, ensure_post_deploy_criteria_met,
-    ensure_status_change_allowed, ensure_status_change_not_run_owned,
+    FORCED_STATUS_EVENT, HUMAN_CREW_BYPASS_NOTE, ensure_completion_run_stopped,
+    ensure_post_deploy_criteria_met, ensure_status_change_allowed,
+    ensure_status_change_not_run_owned,
 };
 use super::super::params::TaskUpdateParams;
-use super::artifacts::admit_task_artifact_as;
-use super::entry::{LockedTaskUpdate, StatusAuthority, TaskUpdateContext, task_field_writer};
+use super::artifacts::admit_task_artifact;
+use super::entry::{
+    LockedTaskUpdate, StatusAuthority, TaskFieldWriter, TaskUpdateContext, task_field_writer,
+};
 use crate::OrbitRuntime;
-use crate::application::task::TaskReviewPort;
+use crate::application::task::{
+    TaskEvolutionPort, TaskJobPort, TaskResidentPort, TaskReviewPort, TaskRow,
+};
 
 impl OrbitRuntime {
     /// Apply an update, holding the task's write lock across the whole
@@ -42,9 +49,17 @@ impl OrbitRuntime {
         params: TaskUpdateParams,
         context: TaskUpdateContext,
     ) -> Result<Task, OrbitError> {
-        // The lock hook takes `FnMut` because it is a trait object, but the
-        // body must run exactly once and consumes its inputs; `take()` makes
-        // both facts explicit rather than forcing the params to be cloneable.
+        Ok(self.update_task_applied(id, params, context)?.0)
+    }
+
+    /// [`Self::update_task_with_context`], also returning the post-write row
+    /// when the write did not change status or attach evidence.
+    pub(super) fn update_task_applied(
+        &self,
+        id: &str,
+        params: TaskUpdateParams,
+        context: TaskUpdateContext,
+    ) -> Result<(Task, Option<TaskRow>), OrbitError> {
         // An operator's or agent's own move back to backlog or someday may
         // also close the task's undelivered PRs; Orbit's own holds and
         // requeues keep them for the run that continues the candidate.
@@ -61,28 +76,19 @@ impl OrbitRuntime {
             && context.agent.is_none()
             && context.model.is_none()
             && params.is_comment_only();
-        let mut inputs = Some((params, context));
-        let mut updated: Option<LockedTaskUpdate> = None;
-        let mut body = || {
-            let (params, context) = inputs.take().ok_or_else(|| {
-                OrbitError::Execution("task update body was invoked more than once".to_string())
-            })?;
-            updated = Some(self.update_task_locked(id, params, context)?);
-            Ok(())
-        };
-        let tasks = self.stores().tasks();
-        if operator_comment {
-            tasks.with_task_comment_write_lock(id, &mut body)?;
+        let locked = if operator_comment {
+            self.with_task_comment_write_locked(id, || {
+                self.update_task_locked(id, params, context)
+            })?
         } else {
-            tasks.with_task_write_lock(id, &mut body)?;
-        }
+            self.with_task_write_locked(id, || self.update_task_locked(id, params, context))?
+        };
         let LockedTaskUpdate {
             task: updated,
+            row,
             previous_status,
             status_note,
-        } = updated.ok_or_else(|| {
-            OrbitError::Execution("task update body did not run under the task lock".to_string())
-        })?;
+        } = locked;
 
         // Cascading friction/task resolution touches *other* records, so it
         // stays outside this task's lock.
@@ -97,7 +103,15 @@ impl OrbitRuntime {
                 discarded,
             );
         }
-        Ok(updated)
+        // A status change can append history after this lock (resolves, pull
+        // request closure). Keep the in-memory row only while that cannot
+        // have happened, so a full response does not serve a stale sidecar.
+        let row = if previous_status == updated.status {
+            row
+        } else {
+            None
+        };
+        Ok((updated, row))
     }
 
     pub(super) fn update_task_locked(
@@ -120,27 +134,35 @@ impl OrbitRuntime {
             guard_work_start,
         } = context;
         let (canonical_agent, canonical_model) = match actor_override.as_ref() {
-            Some(_) => crate::context::trusted_write_identity(agent.as_deref(), model.as_deref()),
+            Some(_) => {
+                crate::runtime::context::trusted_write_identity(agent.as_deref(), model.as_deref())
+            }
             None => self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?,
         };
         let task = self.get_task(id)?;
+        self.admit_locked_resident_comment(
+            &task,
+            params.comment.as_deref(),
+            operator_decision_authority
+                && canonical_agent.is_none()
+                && canonical_model.is_none()
+                && !agent_context_declared(),
+        )?;
         let comment_only = params.is_comment_only();
+        if params.review_settlement.is_some() && (!system_writer || params.comment.is_none()) {
+            return Err(OrbitError::PolicyDenied(
+                "review settlement metadata requires a system verdict comment".to_string(),
+            ));
+        }
         // Gate records are certificates and authority, not agent claims.
         // Only the trusted system entry point may write them; an actor label
         // or artifact/tool field cannot opt into that authority. Normalize
         // before checking exactly the key the store will persist.
-        // Only an operator surface may write under `mocks/` (§2.4): no
-        // agent identity and no agent envelope, as `operator_write` below
-        // derives from the same facts.
-        let allow_mocks = operator_decision_authority
-            && canonical_agent.is_none()
-            && canonical_model.is_none()
-            && !agent_context_declared();
         for artifact in &mut params.upsert_artifacts {
             if system_writer {
                 artifact.path = canonical_artifact_path(&artifact.path)?;
             } else {
-                admit_task_artifact_as(self, &task, artifact, allow_mocks)?;
+                admit_task_artifact(self, &task, artifact)?;
             }
         }
         if let Some(expected_status) = expected_status
@@ -158,70 +180,6 @@ impl OrbitRuntime {
         {
             ensure_status_change_not_run_owned(self, id)?;
         }
-        if requested_status == Some(TaskStatus::Done)
-            && status_authority != StatusAuthority::Lifecycle
-        {
-            ensure_completion_run_stopped(
-                self,
-                &task,
-                params.job_run_id.as_ref().and_then(|id| id.as_deref()),
-                calling_run_id.as_deref(),
-            )?;
-            let human_force = status_authority == StatusAuthority::Forced
-                && operator_decision_authority
-                && canonical_agent.is_none()
-                && canonical_model.is_none()
-                && !agent_context_declared();
-            if !human_force {
-                ensure_post_deploy_criteria_met(self, &task)?;
-                self.ensure_mutation_proposals_applied(&task)?;
-            }
-        }
-        // [granted-tools §4] An attributed completion is held the same way:
-        // a task is never done while a mutation it proposed did not happen.
-        if requested_status == Some(TaskStatus::Done)
-            && status_authority == StatusAuthority::Lifecycle
-        {
-            self.ensure_mutation_proposals_applied(&task)?;
-        }
-        let status_note = status_note
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(redact_all);
-        if status_note.is_some() && requested_status.is_none() {
-            return Err(OrbitError::InvalidInput(
-                "`note` requires a status change; use `comment` for free-form discussion"
-                    .to_string(),
-            ));
-        }
-        if let Some(target) = requested_status
-            && status_authority == StatusAuthority::Lifecycle
-        {
-            ensure_status_change_allowed(self, &task, &params, target)?;
-        }
-        // Promotion to backlog validates a `verify-mock-ui` task's mocks
-        // against the manifest at the base (visual-review §2.3), over the
-        // tags and artifacts this update would leave stored.
-        if requested_status == Some(TaskStatus::Backlog) && !system_writer {
-            let mut effective = task.clone();
-            if let Some(tags) = &params.tags {
-                effective.tags = tags.clone();
-            }
-            if orbit_types::task::has_verify_mock_ui_tag(&effective.tags) {
-                let mut artifacts = self.get_task_artifacts(id).unwrap_or_default();
-                for upsert in &params.upsert_artifacts {
-                    artifacts.retain(|stored| stored.path != upsert.path);
-                    artifacts.push(upsert.clone());
-                }
-                self.ensure_backlog_mock_admission(&effective, Some(artifacts))?;
-            }
-        }
-        if params.discard_candidate && task.status == TaskStatus::InProgress {
-            return Err(OrbitError::InvalidInput(format!(
-                "task {id} is in-progress; discard a preserved candidate after its run stops"
-            )));
-        }
         // The label matches the one `operator_write` derives below. An agent
         // identity does not consult it, and resolving it would repeat work
         // the canonical pair already settled.
@@ -238,12 +196,124 @@ impl OrbitRuntime {
             canonical_model.as_deref(),
             &classification_label,
         );
+        // An operator moving a human crew's task is not held to the lifecycle
+        // table or its plan, review, evidence and verdict gates: the operator
+        // does that work outside any pipeline. Only an attributed operator
+        // surface qualifies — the same writer class `--force` requires — so an
+        // agent, an MCP caller or Orbit's own machinery keeps the lifecycle,
+        // and assigning a task to a human crew is never a way to skip review.
+        // The move out of `done` or `archived` keeps the force rules.
+        let human_crew_bypass = if requested_status.is_some()
+            && status_authority == StatusAuthority::Lifecycle
+            && !system_writer
+            && !matches!(task.status, TaskStatus::Done | TaskStatus::Archived)
+            && writer == TaskFieldWriter::Operator
+        {
+            self.human_crew(task.crew.as_deref())
+                .map(|crew| crew.name.clone())
+        } else {
+            None
+        };
+        // The gates below see the bypass as the human override they already
+        // implement; only the history entry tells the two apart.
+        let gate_authority = if human_crew_bypass.is_some() {
+            StatusAuthority::Forced
+        } else {
+            status_authority
+        };
+        if requested_status == Some(TaskStatus::Done)
+            && gate_authority != StatusAuthority::Lifecycle
+        {
+            ensure_completion_run_stopped(
+                self,
+                &task,
+                params.job_run_id.as_ref().and_then(|id| id.as_deref()),
+                calling_run_id.as_deref(),
+            )?;
+            let human_force = gate_authority == StatusAuthority::Forced
+                && operator_decision_authority
+                && canonical_agent.is_none()
+                && canonical_model.is_none()
+                && !agent_context_declared();
+            if !human_force {
+                ensure_post_deploy_criteria_met(self, &task)?;
+                self.ensure_mutation_proposals_applied(&task)?;
+            }
+        }
+        // [granted-tools §4] An attributed completion is held the same way:
+        // a task is never done while a mutation it proposed did not happen.
+        if requested_status == Some(TaskStatus::Done)
+            && gate_authority == StatusAuthority::Lifecycle
+        {
+            self.ensure_mutation_proposals_applied(&task)?;
+        }
+        let status_note = status_note
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(redact_all);
+        if status_note.is_some() && requested_status.is_none() {
+            return Err(OrbitError::InvalidInput(
+                "`note` requires a status change; use `comment` for free-form discussion"
+                    .to_string(),
+            ));
+        }
+        if let Some(target) = requested_status
+            && gate_authority == StatusAuthority::Lifecycle
+        {
+            ensure_status_change_allowed(self, &task, &params, target)?;
+        }
+        if params.discard_candidate && task.status == TaskStatus::InProgress {
+            return Err(OrbitError::InvalidInput(format!(
+                "task {id} is in-progress; discard a preserved candidate after its run stops"
+            )));
+        }
+        // Only the caller's own replacement counts: normalization may write
+        // back a re-canonicalized stored list for an unrelated edit.
+        let explicit_context_files = params.context_files.is_some();
         let validated = self.validate_and_normalize_task_field_edits(id, &task, params, writer)?;
         let crew_assignment = validated.crew_assignment;
         let crew_source = validated.crew_source;
         let crew_redraw_history = validated.crew_redraw_history;
         let granted_tools_change = validated.granted_tools_change;
         params = validated.params;
+        if explicit_context_files
+            && !system_writer
+            && let (Some(owner), Some(requested)) =
+                (artifact_owner.as_deref(), params.context_files.as_ref())
+            && *requested != task.context_files
+            && self.live_source_repair_owned_by(&task, owner)?
+        {
+            return Err(OrbitError::PolicyDenied(format!(
+                "task {id} is being repaired by source-repair run `{owner}`, whose publication \
+                 authority is bound to the admitted task scope, so this run cannot replace \
+                 `context_files`; nothing in this update was written. Resend it without \
+                 `context_files` (execution_summary and comment are accepted) and keep your \
+                 changes in the worktree: the delivery commit widens `context_files` with the \
+                 paths you actually changed."
+            )));
+        }
+        // Operator work is completed by its operator: an agent-attributed
+        // update cannot close a human crew's task, before or after a crew
+        // change in the same write.
+        if requested_status == Some(TaskStatus::Done)
+            && status_authority == StatusAuthority::Lifecycle
+            && writer == TaskFieldWriter::Agent
+        {
+            let next_crew = params
+                .crew
+                .as_ref()
+                .map_or(task.crew.as_deref(), Option::as_deref);
+            if let Some(human) = self
+                .human_crew(task.crew.as_deref())
+                .or_else(|| self.human_crew(next_crew))
+            {
+                return Err(OrbitError::PolicyDenied(format!(
+                    "task {id} is assigned to human crew '{}': only an operator may move it to done",
+                    human.name
+                )));
+            }
+        }
         // A plain blocked/review-to-backlog move on an attributed surface applies
         // the same publication authentication as `orbit task requeue`:
         // refuse before writing what the next run would refuse, and record
@@ -348,6 +418,21 @@ impl OrbitRuntime {
             None
         };
         let mut append_history: Vec<TaskHistoryEntry> = Vec::new();
+        if let Some(settlement) = &params.review_settlement {
+            let comment = append_comments.first().ok_or_else(|| {
+                OrbitError::InvalidInput(
+                    "review settlement metadata requires a non-empty verdict comment".to_string(),
+                )
+            })?;
+            append_history.push(settlement.history_entry(comment.at, &comment.by));
+        }
+        if let Some(edit) = self.pilot_requirement_edit_history(&task, &params, &effective_label)? {
+            append_history.push(edit);
+        }
+        // Field validation admitted only an operator's skip [ORB-21238].
+        if let Some(skip) = self.pilot_skip_history(&task, &params, &effective_label)? {
+            append_history.push(skip);
+        }
         if let Some(preserved) = backlog_preservation {
             // The `requeued` decision is written only with its preservation
             // record, exactly as `write_candidate_requeue` writes it.
@@ -366,6 +451,10 @@ impl OrbitRuntime {
                         run_id,
                         decision: "operator_requeue".to_string(),
                         outcome: RecordedFinalRecovery::Requeued,
+                        // An operator requeue judges no fault.
+                        fault: Default::default(),
+                        fault_evidence: String::new(),
+                        fault_judged_by: None,
                     }),
                 });
             }
@@ -392,15 +481,20 @@ impl OrbitRuntime {
                     .is_some_and(|source| *source != task.crew_source))
         {
             let source = match &crew_assignment {
-                Some(assignment) if assignment.source == "explicit" => "explicit name".to_string(),
+                Some(assignment) if assignment.source == CrewSource::Explicit => {
+                    "explicit name".to_string()
+                }
                 Some(assignment) => format!("pool draw ({})", assignment.source),
                 None if replacement.is_none() => "pool draw (no crew available)".to_string(),
                 None => "explicit name".to_string(),
             };
+            let after_source = crew_source
+                .clone()
+                .unwrap_or_else(|| task.crew_source.clone());
             append_history.push(TaskHistoryEntry {
                 at: chrono::Utc::now(),
                 by: effective_label.clone(),
-                event: "crew_assigned".to_string(),
+                event: CREW_ASSIGNED_EVENT.to_string(),
                 note: Some(format!(
                     "crew changed from `{}` to `{}` via {source}",
                     describe_optional_field_value(task.crew.as_deref()),
@@ -409,7 +503,10 @@ impl OrbitRuntime {
                 from_status: None,
                 to_status: None,
                 operation_id: None,
-                decision: None,
+                decision: Some(TaskDecision::CrewAssignment(RecordedCrewAssignment::new(
+                    CrewAssignmentState::new(task.crew.clone(), task.crew_source.clone()),
+                    CrewAssignmentState::new(replacement.clone(), after_source),
+                ))),
             });
         }
         if let (Some((before, state)), Some(after)) =
@@ -471,7 +568,7 @@ impl OrbitRuntime {
         // A forced transition is still a transition: naming it in history is
         // what separates a human override from a governed lifecycle move.
         let status_event =
-            if status_authority == StatusAuthority::Forced && requested_status.is_some() {
+            if gate_authority == StatusAuthority::Forced && requested_status.is_some() {
                 Some(FORCED_STATUS_EVENT.to_string())
             } else if guard_work_start
                 && requested_status == Some(TaskStatus::InProgress)
@@ -488,53 +585,91 @@ impl OrbitRuntime {
         let evidence_attached = !params.upsert_artifacts.is_empty();
         let previous_status = task.status;
         let written_note = status_note.clone();
-        let mut updated = self.with_mutation(|| {
-            let updated = self.stores().task_records().update(
-                id,
-                TaskRecordUpdateParams {
-                    artifact_owner_run_id: artifact_owner.clone(),
-                    artifact_writer,
-                    actor: effective_label.clone(),
-                    crew_source: crew_source.clone(),
-                    planned_by: attribution.planned_by.clone(),
-                    implemented_by: attribution.implemented_by.clone(),
-                    status_event: status_event.clone(),
-                    status_note,
-                    append_comments: append_comments.clone(),
-                    append_history: append_history.clone(),
-                    expected_status: expected_status.map(|status| vec![status]),
-                    operator_comment: comment_only && operator_write && !agent_context_declared(),
-                    ..TaskRecordUpdateParams::from(params)
-                },
-            )?;
-            let event = if previous_status == TaskStatus::Archived
-                && updated.status != TaskStatus::Archived
-            {
-                OrbitEvent::TaskUnarchived { id: id.to_string() }
-            } else if previous_status != TaskStatus::Archived
-                && updated.status == TaskStatus::Archived
-            {
-                OrbitEvent::TaskArchived { id: id.to_string() }
-            } else {
-                OrbitEvent::TaskUpdated { id: id.to_string() }
-            };
-            Ok((updated.clone(), event))
-        })?;
+        // The forced entry names the human-crew bypass; the operator's own
+        // note, optional, follows it.
+        let status_note = match (&human_crew_bypass, status_note) {
+            (Some(crew), Some(note)) => Some(format!("{HUMAN_CREW_BYPASS_NOTE} '{crew}': {note}")),
+            (Some(crew), None) => Some(format!("{HUMAN_CREW_BYPASS_NOTE} '{crew}'")),
+            (None, note) => note,
+        };
+        let row = self.stores().task_records().update_returning_row(
+            id,
+            TaskRecordUpdateParams {
+                artifact_owner_run_id: artifact_owner.clone(),
+                artifact_writer,
+                actor: effective_label.clone(),
+                crew_source: crew_source.clone(),
+                planned_by: attribution.planned_by.clone(),
+                implemented_by: attribution.implemented_by.clone(),
+                status_event: status_event.clone(),
+                status_note,
+                append_comments: append_comments.clone(),
+                append_history: append_history.clone(),
+                expected_status: expected_status.map(|status| vec![status]),
+                operator_comment: comment_only && operator_write && !agent_context_declared(),
+                ..TaskRecordUpdateParams::from(params)
+            },
+        )?;
+        let mut updated = row.task.clone();
+        let mut row = Some(row);
+
+        self.project_task_checkpoint_costs(&append_comments)?;
 
         if evidence_attached {
+            // Evidence resume can change the task after the write. The
+            // in-memory row would hide that, so the response reads again.
             self.resume_review_evidence(id)?;
             updated = self.get_task(id)?;
-        }
-        if task.title != updated.title
-            || task.description != updated.description
-            || task.acceptance_criteria != updated.acceptance_criteria
-        {
-            self.schedule_task_quality_after_commit(&updated);
+            row = None;
         }
         Ok(LockedTaskUpdate {
             task: updated,
+            row,
             previous_status,
             status_note: written_note,
         })
+    }
+}
+
+impl OrbitRuntime {
+    /// Whether `owner` is the live source-repair run this task's history
+    /// links to it [ORB-21019].
+    ///
+    /// Read under the task's write lock from the run store and the system
+    /// `source_repair_linked` history entry; request input and actor labels
+    /// contribute nothing. A run that is terminal, carries no source-repair
+    /// admission for this task, or was never linked by the system is not one.
+    fn live_source_repair_owned_by(&self, task: &Task, owner: &str) -> Result<bool, OrbitError> {
+        let Some(run) = self.stored_job_run(owner)? else {
+            return Ok(false);
+        };
+        if run.state.is_terminal() {
+            return Ok(false);
+        }
+        let Some(admission) = run
+            .input
+            .as_ref()
+            .and_then(|input| input.get(SOURCE_REPAIR_KEY))
+        else {
+            return Ok(false);
+        };
+        let Some(request_key) = admission.get("request_key").and_then(Value::as_str) else {
+            return Ok(false);
+        };
+        if admission["binding"]["task_id"].as_str() != Some(task.id.as_str()) {
+            return Ok(false);
+        }
+        Ok(self.get_task_history(&task.id)?.iter().any(|entry| {
+            entry.event == SOURCE_REPAIR_LINKED
+                && entry.by == SYSTEM_ACTOR_LABEL
+                && entry
+                    .note
+                    .as_deref()
+                    .and_then(|note| serde_json::from_str::<Value>(note).ok())
+                    .is_some_and(|link| {
+                        link["run_id"].as_str() == Some(owner)
+                            && link["request_key"].as_str() == Some(request_key)
+                    })
+        }))
     }
 }

@@ -3,14 +3,15 @@
 //! A tier prices one model request by its own prompt, so invocation totals
 //! cannot say which requests reached it. Codex writes each request's
 //! `last_token_usage` to its session rollout under `CODEX_HOME`. Claude's
-//! message stream shows each request's prompt but not its final output, so it
-//! can only show that no request reached a tier. Other providers report only
+//! partial message stream pairs each request's input buckets with its final
+//! output, requiring correlated message start/delta/stop and a terminal result. Other providers report only
 //! totals, and record none.
 
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use orbit_types::telemetry::TokenUsage;
+use orbit_types::workflow::activity_job::Provider;
 
 use super::claude::claude_long_prompt_requests;
 use super::codex::codex_long_prompt_requests;
@@ -20,13 +21,15 @@ use super::codex::codex_long_prompt_requests;
 ///
 /// `stdout` is the run's capture; `stdout_complete` is false when it was
 /// truncated, which may have dropped Claude messages but leaves Codex's
-/// rollout whole. `codex_home` is the `CODEX_HOME` the Codex child
+/// rollout whole. Codex uses the latest rollout `task_started` boundary and
+/// requires stdout's `turn.started`; earlier resumed turns are excluded, and a
+/// missing boundary leaves usage unknown. `codex_home` is the `CODEX_HOME` the Codex child
 /// ran with, and `model` the provider-reported model the invocation is priced
 /// as. `None` means the run's per-request usage is unknown; an empty list
 /// means it is known and no request reached the floor.
 #[must_use]
 pub fn provider_long_prompt_requests(
-    provider: &str,
+    provider: Provider,
     stdout: &[u8],
     stdout_complete: bool,
     codex_home: Option<&Path>,
@@ -34,8 +37,18 @@ pub fn provider_long_prompt_requests(
     now: DateTime<Utc>,
 ) -> Option<Vec<TokenUsage>> {
     match provider {
-        "claude" if stdout_complete => claude_long_prompt_requests(stdout, model),
-        "codex" => codex_long_prompt_requests(stdout, codex_home?, now),
-        _ => None,
+        Provider::Claude if stdout_complete => claude_long_prompt_requests(stdout, model),
+        Provider::Codex => codex_long_prompt_requests(stdout, codex_home?, now),
+        Provider::Claude
+        | Provider::Gemini
+        | Provider::Grok
+        | Provider::Copilot
+        | Provider::Ollama
+        | Provider::OpenaiCompat
+        | Provider::Antigravity
+        | Provider::Cursor
+        | Provider::Pi
+        | Provider::Opencode
+        | Provider::Muse => None,
     }
 }

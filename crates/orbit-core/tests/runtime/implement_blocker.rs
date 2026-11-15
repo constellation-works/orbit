@@ -121,7 +121,7 @@ fn implementer_env(activity: &str) -> test_env::ScopedEnv {
         ("ORBIT_TASK_ACTOR_KIND", Some("agent")),
         (ACTIVITY_NAME_ENV, Some(activity)),
         (ACTIVITY_TOOL_POLICY_ENV, Some("deny")),
-        (ACTIVITY_TOOLS_DENY_ENV, Some("orbit.agent.invoke")),
+        (ACTIVITY_TOOLS_DENY_ENV, Some("orbit.command.exec")),
     ])
 }
 

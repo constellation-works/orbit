@@ -2,18 +2,21 @@
 // The modules split out of tasks.js import this one, and it imports none of
 // them, so they share state and re-render the list without import cycles.
 
-import { clockStamp, el, getWorkspace, hostWriteRefusal, isAggregateView, isHttpUrl, runHref, withHost, withWorkspace } from './common.js';
+import { bindRunLink, clockStamp, el, formatDateTime, getRegisteredHosts, getWorkspace, hostWriteRefusal, isAggregateView, isHttpUrl, runHref, withHost, withWorkspace } from './common.js';
 
 export const $ = (id) => document.getElementById(id);
+// Rows a Tasks section loads first and adds per "Show more" [ORB-24677].
+export const TASK_SECTION_STEP = 25;
 
 // Module-level state more than one task module reads or reassigns. An ES
 // module cannot reassign an imported `let`, so each value is a property here.
 export const taskState = {
-  lastCrewPayload: { default_crew: null, crews: [] },
+  lastCrewPayload: { default_crew: null, crews: [], human_crews: [], viewer_human_crew: null },
   // The list row whose detail the side pane shows. One task at a time: the pane
   // beside the list replaces the inline accordion, so selecting another row
   // moves the pane to it and the list itself never reflows around a detail.
   selectedTaskId: null,
+  selectedTaskWorkspace: null,
   taskActionNotice: null,
   pinnedExternalTask: null,
   // The task the Tasks hash names with `open=`: the one selected and still
@@ -33,6 +36,8 @@ export const taskState = {
   focusPaneTitle: false,
   // A status change folded the pane: focus goes back to the row it came from.
   rowFocusAfterRender: null,
+  // A section head just folded or opened: the render keeps focus on it.
+  sectionToggleFocus: null,
   // The last context a render ran with, for the keyboard and pane handlers that
   // are wired once.
   paneContext: null,
@@ -46,20 +51,14 @@ export const taskState = {
   // A status change made from a task's open detail folds that detail in: the row
   // has moved to its new status group. The change's feedback and undo then show
   // on the collapsed row, or in a notice above the list while the new status is
-  // filtered out, until the feedback expires. Keyed by task id; the value is the
+  // filtered out, until the feedback expires. Keyed by workspace-scoped task identity; the value is the
   // updated record, which the undo acts on when the list no longer holds the row.
   foldedStatusTasks: new Map(),
   // ORB-12235: the same feedback shape for the writable fields in the expanded
   // detail — the complexity select and the inline text editors. `fieldFeedback`
-  // is keyed `<task id>:<field>` because one detail can hold several editors.
+  // is keyed `<workspace>:<task id>:<field>` because one detail can hold several editors.
   complexityFeedback: new Map(),
   fieldFeedback: new Map(),
-  // `open_decisions` on a task is compact: each request lists only its answer
-  // ids. The label and one-line consequence that tell an operator what an id
-  // does live on the decisions API, so the detail reads them from
-  // `GET /api/decisions?task_id=` once per set of open requests and renders no
-  // answer control until they are in hand.
-  taskDecisionLoads: new Map(),
   // Operator records (pilot-admission / post-deploy): a refused record's typed
   // code and message, kept with the action like a refused recovery.
   operatorRecordRefusals: new Map(),
@@ -68,7 +67,7 @@ export const taskState = {
   // a task returned to backlog be shipped again without reloading the page.
   shipInFlightTaskIds: new Set(),
   // ORB-12645: which comments the operator has opened, keyed
-  // `<task id>#<index into task.comments>` so a refresh that rebuilds the detail
+  // `<workspace>:<task id>#<index into task.comments>` so a refresh that rebuilds the detail
   // restores the thread the way it was left.
   expandedComments: new Set(),
   restoredCommentHash: null,
@@ -89,6 +88,19 @@ export function setRenderer(fn) {
   taskRenderer = fn;
 }
 
+// An answered decision changes what waits on the operator. The task list reads
+// that from a cache task-nav.js owns, so it subscribes here instead of being
+// imported by the modules that answer decisions.
+const decisionAnsweredListeners = new Set();
+
+export function onDecisionAnswered(listener) {
+  decisionAnsweredListeners.add(listener);
+}
+
+export function notifyDecisionAnswered() {
+  for (const listener of decisionAnsweredListeners) listener();
+}
+
 export function rerender(context) {
   taskRenderer(taskList(context), context);
 }
@@ -97,20 +109,10 @@ export function taskList(context) {
   return context && typeof context.getTasks === "function" ? context.getTasks() : [];
 }
 
-export function searchQueryValue(context) {
-  return context && typeof context.getSearchQuery === "function"
-    ? context.getSearchQuery()
-    : "";
-}
-
 export function activeStatusSet(context) {
   return context && typeof context.getActiveStatuses === "function"
     ? context.getActiveStatuses()
     : new Set();
-}
-
-export function setSearchQuery(context, value) {
-  if (context && typeof context.setSearchQuery === "function") context.setSearchQuery(value);
 }
 
 export function setActiveStatuses(context, statuses) {
@@ -127,20 +129,22 @@ export function statusTransitions(task) {
     : [];
 }
 
+// The operator moves a human crew's task to any status without the lifecycle
+// gates, and the server applies it as a plain PATCH. A task already `done` or
+// `archived` keeps the governed list and the forced override.
+export function usesHumanCrewBypass(task) {
+  if (!task || !task.human_crew || task.status === "done" || task.status === "archived") return false;
+  return Boolean(task.human_crew.name);
+}
+
 export function statusTransition(task, targetStatus) {
   return statusTransitions(task).find((transition) => transition.status === targetStatus) || null;
 }
 
-export function fmtAbsTimeValue(context, value) {
-  return context && typeof context.fmtAbsTime === "function"
-    ? context.fmtAbsTime(value)
-    : (value || "-");
-}
-
 // An absolute time in a task detail. The detail is kept while its task is
 // unchanged, so the time is stamped for a UTC/Local switch to repaint.
-export function absTimeNode(context, value, attrs = {}) {
-  return clockStamp(el("span", { ...attrs, text: fmtAbsTimeValue(context, value) }), value);
+export function absTimeNode(value, attrs = {}) {
+  return clockStamp(el("span", { ...attrs, text: formatDateTime(value) }), value);
 }
 
 export function refreshTasks(context) {
@@ -186,9 +190,26 @@ export function taskWorkspacePath(task, path) {
 
 // The dashboard address of run `runId` in the task's own workspace, so an
 // aggregate view or a task pinned from another workspace opens the run where it
-// lives. A task with no known workspace falls back to the selected one.
+// lives. A task with no known workspace falls back to the selected one. The
+// task's bound run opens on the host its recorded execution machine names when
+// the host file registers that machine, not on whichever host is selected; the
+// host finds the run's records under whatever workspace id it keeps them.
+function taskRunScope(task, runId) {
+  const scope = task && task.workspace_id ? { workspace: task.workspace_id } : {};
+  const machine = task && String(task.job_run_id || "") === String(runId) ? task.job_run_machine : null;
+  if (machine && machine.machine_id) {
+    const host = getRegisteredHosts().find((row) => row.machine_id === machine.machine_id);
+    if (host) scope.host = host.name;
+  }
+  return scope;
+}
+
 export function taskRunHref(task, runId) {
-  return runHref(runId, task && task.workspace_id ? { workspace: task.workspace_id } : {});
+  return runHref(runId, taskRunScope(task, runId));
+}
+
+export function bindTaskRunLink(link, task, runId) {
+  return bindRunLink(link, runId, taskRunScope(task, runId));
 }
 
 export function taskMutationPath(task, suffix = "") {
@@ -221,6 +242,11 @@ export function plural(count, word) {
 
 export function taskDispatchIdentity(task) {
   return `${task.workspace_id || getWorkspace() || ''}:${task.id}`;
+}
+
+export function isSelectedTask(task) {
+  return task.id === taskState.selectedTaskId &&
+    (!taskState.selectedTaskWorkspace || taskDispatchIdentity(task) === `${taskState.selectedTaskWorkspace}:${task.id}`);
 }
 
 export const MUTATION_UNDO_WINDOW_MS = 8000;

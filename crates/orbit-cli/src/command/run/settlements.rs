@@ -10,16 +10,10 @@ use super::format::summarize_error_message;
 #[derive(Args)]
 #[command(
     after_help = "Lists, newest first, the failure and release settlements that claimed leaves on \
-follower hosts sent this owner. The leaves ran elsewhere, so `orbit run history` here never lists \
-them. EVIDENCE is the most specific class the settlement carried: provider_unavailable, \
-baseline_red, forge_unavailable, evidence_hold, final_recovery, failure or summary; claims settled \
-before the owner recorded settlements read as unrecorded unless their release kept a class.\n\
-review_decision_pending marks a before-landing review refusal awaiting a recorded decision: \
-the claim still fails and blocks the task, but failure scans count it separately. Older records \
-without the flag read as false.\n\
-JSON shape: {\"settlements\":[{\"task_id\",\"claim_id\",\"machine_id\",\"machine_name\",\
-\"drain_run_id\",\"leaf_run_id\",\"phase\",\"last_event\",\"settled_at\",\"kind\",\"evidence\",\
-\"failure_class\",\"review_decision_pending\",\"crew\",\"crew_model\",\"failed_step_id\",\"reason\"}]}\n\
+follower hosts sent this owner; `orbit run history` here never lists them. EVIDENCE is the most \
+specific class the settlement carried.\n\
+Evidence classes, failure accounting, run evidence and the JSON fields: installed Orbit skill \
+`references/setup/distributed-drain.md`.\n\
 Examples:\n  orbit run settlements\n  orbit run settlements --since 7d\n  \
 orbit run settlements --since 2026-10-01T00:00:00Z --no-reconcile --json"
 )]
@@ -29,8 +23,7 @@ pub struct RunSettlementsArgs {
     #[arg(long)]
     pub since: Option<String>,
 
-    /// Report stored claim records as-is: skip recovery of an interrupted
-    /// coordination commit, and fail instead while one is pending
+    /// Report stored claim records as-is, without recovering an interrupted commit
     #[arg(long)]
     pub no_reconcile: bool,
 }
@@ -79,9 +72,5 @@ impl Execute for RunSettlementsArgs {
 
 /// A wire enum's JSON name, or `-` when absent.
 fn doc_label<T: serde::Serialize>(value: &Option<T>) -> String {
-    value
-        .as_ref()
-        .and_then(|value| serde_json::to_value(value).ok())
-        .and_then(|value| value.as_str().map(str::to_string))
-        .unwrap_or_else(|| "-".to_string())
+    orbit_common::protocol::serde_string_label(value).unwrap_or_else(|| "-".to_string())
 }

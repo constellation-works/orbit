@@ -1,7 +1,8 @@
 // Orbit dashboard task detail: the detail body, its tabs and the runs tab.
 
-import { captureWorkspaceVisit, el, elapsedDurationInfo, fetchJson, fmtDuration, isAggregateView, makeDisclosure, makeToggleRow, stateCell } from './common.js';
-import { absTimeNode, canMutateTask, fmtAbsTimeValue, pullRequestLink, refreshTasks, rerender, taskRunHref, taskState, taskWorkspacePath, GITHUB_PR_REF_SYSTEM } from './task-shared.js';
+import { captureWorkspaceVisit, copyWithFeedback, el, elapsedDurationInfo, fetchJson, fmtDuration, formatDateTime, isAggregateView, makeDisclosure, makeToggleRow, stateCell } from './common.js';
+import { humanCrewFor } from './task-crew.js';
+import { absTimeNode, canMutateTask, pullRequestLink, refreshTasks, rerender, bindTaskRunLink, taskState, taskWorkspacePath, GITHUB_PR_REF_SYSTEM, taskDispatchIdentity } from './task-shared.js';
 import { buildAttentionCallout, buildDeliveryPanel, buildDeliveryProgress, claimAttention, deliverySteps, lastKnownClaims } from './distributed.js';
 import { buildTaskMeta, buildStageStrip } from './task-lifecycle.js';
 import { buildActionsRow } from './task-actions.js';
@@ -11,6 +12,7 @@ import { buildExternalRefs } from './task-relations.js';
 import * as taskHistory from './task-history.js';
 import * as taskReadiness from './task-readiness.js';
 import * as taskEvidence from './task-evidence.js';
+import * as taskDecision from './task-decision.js';
 import * as taskFields from './task-fields.js';
 import * as taskComments from './task-comments.js';
 import * as taskWhyStuck from './task-why-stuck.js';
@@ -27,33 +29,76 @@ export function taskRunsTabActive() {
   return activeDetailTab === "runs";
 }
 
-export function primeTaskRuns(taskId, payload, task = null) {
-  if (typeof taskId !== "string" || !taskId || !payload || typeof payload !== "object") return;
-  const previous = taskRunLoads.get(taskId);
+export function primeTaskRuns(task, payload) {
+  if (!task?.id || !payload || typeof payload !== "object") return;
+  const previous = taskRunLoads.get(taskDispatchIdentity(task));
   const items = Array.isArray(payload.items) ? payload.items : [];
-  taskRunLoads.set(taskId, {
+  const failed = typeof payload.error === "string";
+  taskRunLoads.set(taskDispatchIdentity(task), {
     pending: false,
-    error: typeof payload.error === "string" ? payload.error : null,
-    items: typeof payload.error === "string" && previous?.items ? previous.items : items,
-    total: Number.isFinite(payload.total) ? payload.total : items.length,
-    at: Date.now(),
+    error: failed ? payload.error : null,
+    // A failed first read knows nothing about the run history: keep `items`
+    // null (as the direct-read path does) so the tab shows the error alone —
+    // never "No runs recorded" or a zero count — and keep the entry stale so
+    // opening the tab refetches instead of standing on the failure for the
+    // freshness window.
+    items: failed ? (previous?.items ?? null) : items,
+    total: failed ? (previous?.total ?? null) : (Number.isFinite(payload.total) ? payload.total : items.length),
+    at: failed ? (previous?.at ?? 0) : Date.now(),
   });
   if (task && taskRunsTabActive()) {
-    const node = document.getElementById(`detail-${taskId}-runs`);
-    if (node) renderTaskRuns(node, task, taskState.paneContext);
+    const node = document.getElementById(`detail-${task.id}-runs`);
+    if (node?.dataset.taskIdentity === taskDispatchIdentity(task)) renderTaskRuns(node, task, taskState.paneContext);
   }
 }
 // The detail's own controls — status, complexity, crew and each field editor —
 // keep their feedback outside the task object, so the detail's diff hash has to
 // see it the way the row's hash sees the status/crew entries. Without this a
 // saved or failed note would never paint.
-export function detailFeedbackSignature(taskId) {
+export function detailFeedbackSignature(task) {
+  const taskId = taskDispatchIdentity(task);
   const parts = [feedbackSignature(taskState.statusFeedback, taskId), feedbackSignature(taskState.complexityFeedback, taskId), feedbackSignature(taskState.crewFeedback, taskId)];
   for (const field of Object.keys(taskFields.TASK_FIELD_EDITORS)) {
-    parts.push(feedbackSignature(taskState.fieldFeedback, taskFields.fieldFeedbackKey(taskId, field)));
+    parts.push(feedbackSignature(taskState.fieldFeedback, taskFields.fieldFeedbackKey(task, field)));
   }
   return parts.join("|");
 }
+// Fenced commands in a task description, in order.
+export function humanTaskCommands(text) {
+  const out = [];
+  const re = /```[^\n]*\n([\s\S]*?)```/g;
+  let m; while ((m = re.exec(String(text || "")))) { const c = m[1].replace(/\n$/, ""); if (c.trim()) out.push(c); }
+  return out;
+}
+export function humanTaskSteps(text) {
+  return String(text || "").split("\n").map((l) => l.trim()).filter((l) => /^([-*]|\d+[.)])\s+/.test(l)).map((l) => l.replace(/^([-*]|\d+[.)])\s+/, ""));
+}
+// Compact human-crew panel: summary, steps, one copy button per command,
+// plus copy-all (the verify/run-all action).
+export function buildHumanTaskPanel(task) {
+  const crew = humanCrewFor(task);
+  if (!crew) return null;
+  const desc = String(task.description || "");
+  const summary = desc.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean)[0] || task.title || "";
+  const steps = humanTaskSteps(desc);
+  const commands = humanTaskCommands(desc);
+  const panel = el("div", { class: "human-task-panel" });
+  panel.appendChild(el("div", { class: "human-task-head" }, [
+    el("span", { class: "human-task-badge", text: `For you · ${crew.name}` }),
+    commands.length ? (() => { const b = el("button", { class: "action human-copy-all", type: "button", text: "Copy all commands" }); b.addEventListener("click", (e) => { e.stopPropagation(); copyWithFeedback(b, commands.join("\n")); }); return b; })() : null,
+  ]));
+  if (summary) panel.appendChild(el("p", { class: "human-task-summary", text: summary.replace(/^#+\s*/, "") }));
+  if (steps.length) { const ol = el("ol", { class: "human-task-steps" }); for (const s of steps) ol.appendChild(el("li", { text: s.replace(/`([^`]+)`/g, "$1") })); panel.appendChild(ol); }
+  for (const cmd of commands) {
+    const btn = el("button", { class: "action human-copy-cmd", type: "button", text: "Copy" });
+    btn.setAttribute("aria-label", `Copy command: ${cmd.split("\n")[0]}`);
+    btn.addEventListener("click", (e) => { e.stopPropagation(); copyWithFeedback(btn, cmd); });
+    panel.appendChild(el("div", { class: "human-command" }, [el("pre", { class: "human-command-code", text: cmd }), btn]));
+  }
+  if (!steps.length && !commands.length) panel.appendChild(el("p", { class: "field-empty", text: "No steps or commands in the description yet." }));
+  return panel;
+}
+
 export function buildTaskDetail(task, context, drain = null) {
   const detail = el("div", { class: "row-detail task-detail" });
   detail.addEventListener("click", (e) => e.stopPropagation());
@@ -142,6 +187,9 @@ export function buildTaskDetail(task, context, drain = null) {
   const known = lastKnownClaims(task.id);
   if (known) paintDelivery(known);
 
+  const humanPanel = buildHumanTaskPanel(task);
+  if (humanPanel) leftCol.appendChild(humanPanel);
+
   if (showsEditor("acceptance_criteria")) {
     const count = Array.isArray(task.acceptance_criteria) ? task.acceptance_criteria.length : 0;
     const actions = actionSlot();
@@ -151,7 +199,7 @@ export function buildTaskDetail(task, context, drain = null) {
       ...(count ? { count } : {}),
     });
     if (taskWhyStuck.isLongCriteria(task.acceptance_criteria)) {
-      const open = taskState.expandedCriteria.has(task.id);
+      const open = taskState.expandedCriteria.has(taskDispatchIdentity(task));
       if (!open) block.classList.add("clamped");
       const toggle = el("button", {
         class: "ac-toggle",
@@ -163,8 +211,8 @@ export function buildTaskDetail(task, context, drain = null) {
         event.stopPropagation();
         const nowOpen = block.classList.contains("clamped");
         block.classList.toggle("clamped", !nowOpen);
-        if (nowOpen) taskState.expandedCriteria.add(task.id);
-        else taskState.expandedCriteria.delete(task.id);
+        if (nowOpen) taskState.expandedCriteria.add(taskDispatchIdentity(task));
+        else taskState.expandedCriteria.delete(taskDispatchIdentity(task));
         toggle.setAttribute("aria-expanded", String(nowOpen));
         toggle.textContent = nowOpen ? "Show less" : "Show full AC";
       });
@@ -176,7 +224,7 @@ export function buildTaskDetail(task, context, drain = null) {
     const actions = actionSlot();
     const block = addField(leftCol, "Description", taskFields.taskMarkdownPanel(editor("description", actions)), false, false, { actions, class: "description-block" });
     if (taskWhyStuck.isLongDescription(task.description)) {
-      const open = taskState.expandedDescriptions.has(task.id);
+      const open = taskState.expandedDescriptions.has(taskDispatchIdentity(task));
       if (!open) block.classList.add("clamped");
       const toggle = el("button", {
         class: "description-toggle",
@@ -188,8 +236,8 @@ export function buildTaskDetail(task, context, drain = null) {
         event.stopPropagation();
         const nowOpen = block.classList.contains("clamped");
         block.classList.toggle("clamped", !nowOpen);
-        if (nowOpen) taskState.expandedDescriptions.add(task.id);
-        else taskState.expandedDescriptions.delete(task.id);
+        if (nowOpen) taskState.expandedDescriptions.add(taskDispatchIdentity(task));
+        else taskState.expandedDescriptions.delete(taskDispatchIdentity(task));
         toggle.setAttribute("aria-expanded", String(nowOpen));
         toggle.textContent = nowOpen ? "Show less" : "Show full description";
       });
@@ -201,24 +249,39 @@ export function buildTaskDetail(task, context, drain = null) {
   // operator records each with a `post-deploy: met|failed <N>` comment.
   // The folded sections read as one group of disclosure rows.
   const disclosures = el("div", { class: "detail-disclosures" });
+  // ORB-23322: the `completion.hold` rule that kept a `--complete` run's task
+  // in review, with what it matched and the run it held.
+  if (task.completion_hold && typeof task.completion_hold === "object") {
+    const hold = task.completion_hold;
+    addField(disclosures, "Held for review", el("div", { class: "completion-hold" }, [
+      el("p", { text: taskHistory.completionHoldSummary(hold) }),
+      el("p", { class: "muted", text: `Run ${hold.run_id || "?"} was authorized to complete this task; approve it to finish.` }),
+    ]), true, false);
+  }
   if (Array.isArray(task.owed_criteria) && task.owed_criteria.length) {
     addField(disclosures, "Owed after deploy", taskEvidence.buildOwedCriteria(task.owed_criteria, task, detail, context), true, false, {
       count: task.owed_criteria.length,
     });
   }
 
-  if (Array.isArray(task.open_decisions) && task.open_decisions.length) {
-    addField(disclosures, "Decision needed", taskEvidence.buildOpenDecisions(task, detail, context), true, false, {
-      count: task.open_decisions.length,
+  const disclosedDecisions = taskDecision.disclosedDecisions(task);
+  if (disclosedDecisions.length) {
+    addField(disclosures, "Decision needed", taskDecision.buildOpenDecisions(task, detail, context), true, false, {
+      count: disclosedDecisions.length,
     });
   }
+  // Answered state (picked option, by whom, when) for any task.
+  const decisionHistoryBlock = addField(disclosures, "Decision history", taskDecision.buildAnsweredDecisions(task), true, true);
+  decisionHistoryBlock.hidden = true;
 
+  // The rendered Markdown is the disclosure's whole body, so it sits in the
+  // disclosure card with no card of its own (the description keeps its card).
   if (task.plan && task.plan.trim()) {
-    addField(disclosures, "Plan", taskFields.taskMarkdownPanel(taskFields.markdownView(task.plan)), true, true);
+    addField(disclosures, "Plan", taskFields.markdownView(task.plan), true, true, { class: "task-markdown-disclosure" });
   }
 
   if (task.execution_summary && task.execution_summary.trim()) {
-    addField(disclosures, "Execution summary", taskFields.taskMarkdownPanel(taskFields.markdownView(task.execution_summary)), true, true);
+    addField(disclosures, "Execution summary", taskFields.markdownView(task.execution_summary), true, true, { class: "task-markdown-disclosure" });
   }
 
   if (task.review && typeof task.review === "object") {
@@ -239,7 +302,7 @@ export function buildTaskDetail(task, context, drain = null) {
 
   // The overview leads; context, history, runs, artifacts and the thread each
   // have a tab of their own, so the pane shows one subject at a time.
-  const history = taskHistory.buildTaskHistory(task, context);
+  const history = taskHistory.buildTaskHistory(task);
   const artifacts = Array.isArray(task.artifacts) ? task.artifacts.length : 0;
   const comments = Array.isArray(task.comments) ? task.comments.length : 0;
   const runs = el("div", { class: "task-runs", id: `detail-${task.id}-runs` });
@@ -263,7 +326,7 @@ export function buildTaskDetail(task, context, drain = null) {
     showsEditor("context_files") ? actionFooter("context_files", "Context files actions", contextFilesEditSlot) : null,
   ].filter(Boolean);
   const commentsContent = el("div", { class: "comments-tab-content" }, [
-    comments > 0 ? taskComments.buildCommentsPanel(task, context) : el("p", { class: "field-empty", text: "No comments yet." }),
+    comments > 0 ? taskComments.buildCommentsPanel(task) : el("p", { class: "field-empty", text: "No comments yet." }),
   ]);
   // ORB-12516: distributed claim provenance and the owner's handoff actions.
   // The tab appears only once a read finds a claim this workspace holds for
@@ -301,11 +364,13 @@ export function buildTaskDetail(task, context, drain = null) {
   const [tabStrip, ...tabPanels] = sections;
   const band = el("div", { class: "detail-band" });
   band.appendChild(metaBlock);
+  const triageBadges = taskReadiness.buildActiveTriageBadges(task);
+  if (triageBadges.length) band.appendChild(el("div", { class: "task-active-triage" }, triageBadges));
   const blockCallout = taskWhyStuck.buildTaskBlockCallout(task, context, detail);
   if (blockCallout) band.appendChild(blockCallout);
   const whyStuck = taskWhyStuck.buildWhyStuckCard(task);
   if (whyStuck) band.appendChild(whyStuck);
-  const pilotCallout = taskReadiness.buildPilotWarnings(task);
+  const pilotCallout = taskReadiness.buildPilotWarnings(task, detail, context);
   if (pilotCallout) band.appendChild(pilotCallout);
   const admissionCallout = taskReadiness.buildPilotAdmissionHold(task, detail, context);
   if (admissionCallout) band.appendChild(admissionCallout);
@@ -323,7 +388,7 @@ export function buildTaskDetail(task, context, drain = null) {
     onTaskChanged: () => refreshTasks(context),
     onClaims: paintDelivery,
     onContent: (rendered) => detail.setTabAvailable("delivery", rendered),
-    formatTime: (value) => fmtAbsTimeValue(context, value),
+    formatTime: (value) => formatDateTime(value),
     pullRequest,
   }));
   renderTaskRuns(runs, task, context);
@@ -428,22 +493,25 @@ function buildDetailTabs(task, detail, tabs, context) {
 // store's task filter. Read when the tab shows, at most once per freshness
 // window, and painted in place so a read never rebuilds the detail.
 function taskRunCount(task) {
-  const load = taskRunLoads.get(task.id);
+  const load = taskRunLoads.get(taskDispatchIdentity(task));
   return load && load.items ? load.total : null;
 }
 
 function loadTaskRuns(task, context, fallback = null) {
-  const previous = taskRunLoads.get(task.id);
-  const target = () => document.getElementById(`detail-${task.id}-runs`) || fallback;
+  const previous = taskRunLoads.get(taskDispatchIdentity(task));
+  const target = () => {
+    const node = document.getElementById(`detail-${task.id}-runs`);
+    return node?.dataset.taskIdentity === taskDispatchIdentity(task) ? node : fallback;
+  };
   if (previous && (previous.pending || Date.now() - previous.at < TASK_RUNS_FRESH_MS)) return;
   if (isAggregateView() && !task.workspace_id) {
-    taskRunLoads.set(task.id, { pending: false, error: "Task workspace is unknown", items: null, total: null, at: Date.now() });
+    taskRunLoads.set(taskDispatchIdentity(task), { pending: false, error: "Task workspace is unknown", items: null, total: null, at: Date.now() });
     renderTaskRuns(target(), task, context);
     return;
   }
   const visit = captureWorkspaceVisit();
   const load = { pending: true, error: null, items: previous ? previous.items : null, total: previous ? previous.total : null, at: Date.now() };
-  taskRunLoads.set(task.id, load);
+  taskRunLoads.set(taskDispatchIdentity(task), load);
   renderTaskRuns(target(), task, context);
   fetchJson(taskWorkspacePath(task, `/api/job-runs?task_id=${encodeURIComponent(task.id)}&limit=${TASK_RUNS_LIMIT}`)).then(
     (payload) => {
@@ -457,14 +525,15 @@ function loadTaskRuns(task, context, fallback = null) {
   ).finally(() => {
     load.pending = false;
     load.at = Date.now();
-    if (!visit.isCurrent() || taskRunLoads.get(task.id) !== load) return;
+    if (!visit.isCurrent() || taskRunLoads.get(taskDispatchIdentity(task)) !== load) return;
     renderTaskRuns(target(), task, context);
   });
 }
 
 function renderTaskRuns(node, task, context) {
   if (!node) return;
-  const load = taskRunLoads.get(task.id);
+  node.dataset.taskIdentity = taskDispatchIdentity(task);
+  const load = taskRunLoads.get(taskDispatchIdentity(task));
   const children = [];
   if (!load || (load.pending && !load.items && !load.error)) {
     const note = el("p", { class: "panel-placeholder", text: "Loading runs…", role: "status", "aria-live": "polite" });
@@ -474,7 +543,7 @@ function renderTaskRuns(node, task, context) {
       const retry = el("button", { class: "action", type: "button", text: "Retry" });
       retry.addEventListener("click", (event) => {
         event.stopPropagation();
-        taskRunLoads.delete(task.id);
+        taskRunLoads.delete(taskDispatchIdentity(task));
         loadTaskRuns(task, context, node);
       });
       children.push(el("div", { class: "action-error", text: `Could not load runs: ${load.error}`, role: "alert" }), retry);
@@ -483,7 +552,7 @@ function renderTaskRuns(node, task, context) {
       children.push(el("p", { class: "field-empty", text: "No runs recorded for this task." }));
     } else if (load.items) {
       const list = el("ul", { class: "task-run-list" });
-      for (const run of load.items) list.appendChild(buildTaskRun(run, task, context));
+      for (const run of load.items) list.appendChild(buildTaskRun(run, task));
       children.push(list);
       if (load.total > load.items.length) {
         children.push(el("p", { class: "task-runs-more", text: `Latest ${load.items.length} of ${load.total} runs.` }));
@@ -492,20 +561,22 @@ function renderTaskRuns(node, task, context) {
   }
   node.replaceChildren(...children);
   const count = document.getElementById(`detail-${task.id}-tab-runs`)?.querySelector?.(".detail-tab-count");
-  if (count) count.textContent = load && load.items ? String(load.total) : "";
+  if (count && document.getElementById(`detail-${task.id}-runs`) === node) {
+    count.textContent = load && load.items ? String(load.total) : "";
+  }
 }
 
-function buildTaskRun(run, task, context) {
+function buildTaskRun(run, task) {
   const runId = String(run.run_id || "");
   const link = el("a", { class: "mono task-run-id", text: runId });
-  link.href = taskRunHref(task, runId);
+  bindTaskRunLink(link, task, runId);
   const when = run.started_at || run.scheduled_at || run.finished_at;
   const { durationMs } = elapsedDurationInfo(run);
   return el("li", { class: "task-run" }, [
     el("div", { class: "task-run-head" }, [link, stateCell(run.state || "unknown")]),
     el("div", { class: "task-run-meta" }, [
       run.job_id ? el("span", { class: "task-run-job", text: run.job_id }) : null,
-      when ? absTimeNode(context, when) : null,
+      when ? absTimeNode(when) : null,
       durationMs != null ? el("span", { text: fmtDuration(durationMs) }) : null,
     ]),
     run.error_message ? el("div", { class: "task-run-error", text: run.error_message }) : null,
@@ -530,7 +601,7 @@ export function buildTaskDetailPlaceholder(task, state, context) {
     retry.type = "button";
     retry.addEventListener("click", (e) => {
       e.stopPropagation();
-      forgetTaskDetailLoad(task.id);
+      forgetTaskDetailLoad(task);
       rerender(context);
     });
     detail.appendChild(el("div", { class: "actions" }, [retry]));

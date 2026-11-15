@@ -152,8 +152,8 @@ pub(super) fn admission_line(
     Some(format!("Admission: {label} — {}", decisions.join("; ")))
 }
 
-/// The head the starvation guard has protected over `head_stuck_passes`
-/// passes without a better miss, while it is still the head.
+/// The head the starvation guard has protected over 20 passes without a
+/// better miss, while it is still the head.
 fn stuck_head_line(
     forecast: &Value,
     mut title: impl FnMut(&str) -> Option<String>,

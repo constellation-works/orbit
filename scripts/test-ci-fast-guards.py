@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise guardrail routing, source registration and dependency policy."""
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -10,10 +11,25 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 
 SCRIPTS = Path(__file__).resolve().parent
+
+
+def native_nice_ceiling():
+    """Return the highest nice value this host lets a process lower itself to.
+
+    The ceiling is native: Linux stops at 19 and Darwin at 20, so a caller
+    already there cannot be observed running any lower. Probe it in a child
+    instead of guessing."""
+    probe = ("import os\n"
+             "try:\n    os.setpriority(os.PRIO_PROCESS, 0, 40)\n"
+             "except OSError:\n    pass\n"
+             "print(os.getpriority(os.PRIO_PROCESS, 0))\n")
+    return int(subprocess.run([sys.executable, "-c", probe], check=True,
+                              text=True, capture_output=True).stdout)
 
 
 class GuardrailTests(unittest.TestCase):
@@ -36,8 +52,18 @@ class GuardrailTests(unittest.TestCase):
                         GUARD_TEST_LOG=str(self.log), GUARD_TEST_METADATA=str(self.metadata),
                         GUARD_TEST_BIN=str(self.bin / "fixture-test-bin"),
                         GUARD_TEST_CALLS=str(self.guard_calls))
-        for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "NEXTEST_SHARDS", "NEXTEST_PARTITIONS"):
+        for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "NEXTEST_SHARDS", "NEXTEST_PARTITIONS",
+                    "GUARD_TEST_NICE_ATTEMPTED"):
             self.env.pop(key, None)
+        # A caller already at the host's nice ceiling cannot be observed running
+        # lower, so the fallback `nice` marks the processes it lowered. It runs
+        # the real `nice`, so a refusal still fails visibly.
+        self.nice_ceiling = native_nice_ceiling()
+        real_nice = shutil.which("nice")
+        self.assertIsNotNone(real_nice, "the priority fixtures need the host's nice")
+        self.write_executable(self.bin / "nice",
+                              "#!/bin/sh\nGUARD_TEST_NICE_ATTEMPTED=1\nexport GUARD_TEST_NICE_ATTEMPTED\n"
+                              f"exec {shlex.quote(real_nice)} \"$@\"\n")
         # Pin the guard pool's width and ignore any host build-budget file.
         self.env.update(ORBIT_CARGO_JOBS="4", ORBIT_BUILD_BUDGET_DIR=str(self.root / "budget"))
         self.targets = self.root / "targets.json"
@@ -99,7 +125,8 @@ if env_log:
                               "RUSTC_WORKSPACE_WRAPPER": os.environ.get("RUSTC_WORKSPACE_WRAPPER"),
                               "CLIPPY_ARGS": os.environ.get("CLIPPY_ARGS"),
                               "idle": idle is not None and os.sched_getscheduler(0) == idle,
-                              "nice": os.getpriority(os.PRIO_PROCESS, 0)}) + "\\n")
+                              "nice": os.getpriority(os.PRIO_PROCESS, 0),
+                              "nice_attempted": os.environ.get("GUARD_TEST_NICE_ATTEMPTED") == "1"}) + "\\n")
 if sys.argv[1] == "metadata":
     print(open(os.environ["GUARD_TEST_METADATA"]).read())
 elif sys.argv[1] == "test" and "--message-format" in sys.argv:
@@ -118,8 +145,12 @@ elif sys.argv[1] == "test":
         raise SystemExit(int(os.environ.get("GUARD_TEST_DOC_EXIT", "0")))
     args = sys.argv[2:]
     split = args.index("--") if "--" in args else len(args)
-    for line in fixture_libtest.cargo_listing(fixture_libtest.load_targets(), args[:split], args[split:]):
+    lines = fixture_libtest.cargo_listing(fixture_libtest.load_targets(), args[:split], args[split:])
+    for line in lines:
         print(line)
+    if "--list" not in sys.argv:
+        print(f"test result: ok. {len(lines)} passed; 0 failed; 0 ignored; "
+              "0 measured; 0 filtered out; finished in 0.00s")
 ''')
         # Stands in for a compiled test binary: logs its argv like the cargo
         # stub and lists the tests of the target it was built for.
@@ -168,11 +199,28 @@ else:
                               env=dict(self.env, **(env_overrides or {})),
                               text=True, capture_output=True)
 
+    def partition_listing(self, archive):
+        """Return the listing the partition guard proves after its one extraction.
+
+        The guard extracts the archive once (the last cargo call logged) and
+        lists every selection from that extraction's metadata."""
+        *_, extract = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual(extract[:-1], ["nextest", "list", "--archive-file", archive,
+                                        "--workspace-remap", str(self.root), "--extract-to"])
+        extracted = extract[-1]
+        self.assertTrue(extracted.startswith(f"{self.root}/.orbit/tmp/"), "the guard extracts inside the checkout")
+        return ["--", "cargo", "nextest", "list",
+                "--binaries-metadata", f"{extracted}/target/nextest/binaries-metadata.json",
+                "--cargo-metadata", f"{extracted}/target/nextest/cargo-metadata.json",
+                "--workspace-remap", str(self.root), "--target-dir-remap", f"{extracted}/target"]
+
     def prepare_ci(self):
         source = (SCRIPTS / "ci-guardrails.sh").read_text()
-        for name in re.findall(r'\$repo_root/scripts/([\w.-]+)', source):
-            self.write_executable(self.scripts / name,
-                                  f'#!/bin/bash\nprintf "%s\\n" "$@" > "$GUARD_TEST_CALLS/{name}"\n')
+        for relative in re.findall(r'\$repo_root/((?:scripts|docs/standards)/[\w.-]+)', source):
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self.write_executable(path,
+                                  f'#!/bin/bash\nprintf "%s\\n" "$@" > "$GUARD_TEST_CALLS/{path.name}"\n')
         shutil.copy2(SCRIPTS / "ci-guardrails.sh", self.scripts / "ci-guardrails.sh")
         shutil.copy2(SCRIPTS / "check-ci-macos.sh", self.scripts / "check-ci-macos.sh")
         # The lint wrapper is the environment under test, not a guard.
@@ -222,15 +270,31 @@ jobs:
         self.assertEqual(result.returncode, 0, result.stderr)
         return result
 
-    def assert_self_tests(self, ran):
-        # Discover the fixture's executable tests; assertions are about what
-        # the runner executed, not a pinned source-list or count.
-        expected = {path.name for path in self.scripts.glob("test-*")
-                    if path.name != "test-qa-full-sweep.py"}
+    # Real test-* files that ci-guardrails.sh does not run as self-tests
+    # (bench/manual fixtures and a data allowlist), enumerated independently
+    # of the fixture stubs so a dropped run_guard line cannot shrink the
+    # expected set together with the actual set.
+    NON_GUARD_TEST_FILES = {
+        "test-bench-compiler-cache.py", "test-check-npm-package.py",
+        "test-codeql-path-barriers.py", "test-desktop-advisories.py",
+        "test-shell-waits-allowlist.json", "test-state-backup.py",
+        "test-visual-fixture-server.py",
+    }
+
+    def assert_self_tests(self, ran, mode="--guards"):
+        expected = {path.name for path in SCRIPTS.glob("test-*")
+                    if path.is_file() and path.suffix in (".py", ".sh")
+                    and path.name not in self.NON_GUARD_TEST_FILES
+                    and path.name != "test-qa-full-sweep.py"}
         actual = {path.name for path in self.guard_calls.iterdir()} & expected
-        self.assertEqual(actual, expected if ran else set())
-        self.assertTrue((self.guard_calls / "test-qa-full-sweep.py").exists(),
-                        "the live surface inventory must run on crates changes")
+        self.assertEqual(actual, expected if ran and mode != "--guards-qa" else set())
+        self.assertEqual((self.guard_calls / "test-qa-full-sweep.py").exists(),
+                         mode != "--guards-core",
+                         "the live inventory runs locally or in the dedicated QA job")
+        if mode != "--guards-core":
+            self.assertEqual((self.guard_calls / "test-qa-full-sweep.py").read_text().split(),
+                             ["--check"] if ran else ["--check", "--static"],
+                             "input selection must govern the QA fixture as well as other self-tests")
 
     def prepare_python_prerequisite(self):
         self.prepare_ci()
@@ -312,7 +376,8 @@ exec {shlex.quote(sys.executable)} "$@"
         self.prepare_ci()
         self.init_ci_git()
         for path in ("scripts/new-guard.sh", ".github/new.yml", "Makefile",
-                     "install.sh", "RELEASING.md", "plugin/new.json", ".cargo/config.toml"):
+                     "install.sh", "RELEASING.md", "docs/dev/qa/path-leases-listener-sudo.md",
+                     "plugin/new.json", ".cargo/config.toml"):
             with self.subTest(path=path):
                 target = self.root / path
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -345,6 +410,100 @@ exec {shlex.quote(sys.executable)} "$@"
         result = self.run_guard("ci-guardrails.sh", "--fast")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_self_tests(True)
+
+    def test_pull_request_guards_select_self_tests_by_their_inputs(self):
+        """The CI guardrails job on a pull request (CI_SELF_TESTS=changed)
+        selects self-tests as --fast does; a push runs every one. The QA
+        sweep's inventory check always runs, its fixture self-test only with
+        the others."""
+        self.prepare_ci()
+        self.init_ci_git()
+        modes = ("--guards", "--guards-core", "--guards-qa")
+        for mode in modes:
+            result = self.run_guard("ci-guardrails.sh", mode, env_overrides={"CI_SELF_TESTS": "changed"})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assert_self_tests(False, mode)
+            if mode != "--guards-core":
+                self.assertEqual((self.guard_calls / "test-qa-full-sweep.py").read_text().split(), ["--check", "--static"])
+            result = self.run_guard("ci-guardrails.sh", mode, env_overrides={"CI_SELF_TESTS": "all"})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assert_self_tests(True, mode)
+        target = self.root / "scripts/new-guard.sh"
+        target.write_text("# changed self-test input\n")
+        for mode in modes:
+            result = self.run_guard("ci-guardrails.sh", mode, env_overrides={"CI_SELF_TESTS": "changed"})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assert_self_tests(True, mode)
+            if mode != "--guards-core":
+                self.assertEqual((self.guard_calls / "test-qa-full-sweep.py").read_text().split(), ["--check"])
+
+    def test_listener_sudo_recipe_selects_self_tests_and_ordinary_docs_do_not(self):
+        """A recipe-only edit runs the executable fixture. Ordinary Markdown does not."""
+        self.prepare_ci()
+        self.init_ci_git()
+        # The crate commit is the base, so the only candidate input is the file below.
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+        ordinary = self.root / "docs/guide.md"
+        ordinary.parent.mkdir(parents=True, exist_ok=True)
+        ordinary.write_text("# guide\n")
+        for flag, env in (("--fast", None), ("--guards", {"CI_SELF_TESTS": "changed"})):
+            with self.subTest(path="docs/guide.md", flag=flag):
+                result = self.run_guard("ci-guardrails.sh", flag, env_overrides=env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_self_tests(False)
+                self.assertFalse((self.guard_calls / "test-path-leases-listener-sudo.py").exists())
+        ordinary.unlink()
+        recipe = self.root / "docs/dev/qa/path-leases-listener-sudo.md"
+        recipe.parent.mkdir(parents=True, exist_ok=True)
+        recipe.write_text("# recipe\n")
+        for flag, env in (("--fast", None), ("--guards", {"CI_SELF_TESTS": "changed"})):
+            with self.subTest(path=recipe.name, flag=flag):
+                result = self.run_guard("ci-guardrails.sh", flag, env_overrides=env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_self_tests(True)
+                self.assertTrue((self.guard_calls / "test-path-leases-listener-sudo.py").exists())
+
+    def test_vendored_standards_inputs_select_self_tests_and_ordinary_docs_do_not(self):
+        """A docs/standards, AGENTS.md or CLAUDE.md-only edit runs the self-tests."""
+        self.prepare_ci()
+        self.init_ci_git()
+        # The crate commit is the base, so the only candidate input is the file below.
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+        ordinary = self.root / "docs/guide.md"
+        ordinary.parent.mkdir(parents=True, exist_ok=True)
+        ordinary.write_text("# guide\n")
+        for flag, env in (("--fast", None), ("--guards", {"CI_SELF_TESTS": "changed"}),
+                          ("--guards-core", {"CI_SELF_TESTS": "changed"}),
+                          ("--guards-qa", {"CI_SELF_TESTS": "changed"})):
+            with self.subTest(path="docs/guide.md", flag=flag):
+                result = self.run_guard("ci-guardrails.sh", flag, env_overrides=env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_self_tests(False, flag)
+        ordinary.unlink()
+        # The reported reproduction touches only docs/standards/check.sh.
+        check = self.root / "docs/standards/check.sh"
+        original = check.read_text()
+        check.write_text(original + "# changed input\n")
+        for flag, env in (("--fast", None), ("--guards", {"CI_SELF_TESTS": "changed"}),
+                          ("--guards-core", {"CI_SELF_TESTS": "changed"}),
+                          ("--guards-qa", {"CI_SELF_TESTS": "changed"})):
+            with self.subTest(path="docs/standards/check.sh", flag=flag):
+                result = self.run_guard("ci-guardrails.sh", flag, env_overrides=env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_self_tests(True, flag)
+        check.write_text(original)
+        for path in ("docs/standards/STD-99-test/STD-99.md", "AGENTS.md", "CLAUDE.md"):
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("# changed input\n")
+            for flag, env in (("--fast", None), ("--guards", {"CI_SELF_TESTS": "changed"}),
+                          ("--guards-core", {"CI_SELF_TESTS": "changed"}),
+                          ("--guards-qa", {"CI_SELF_TESTS": "changed"})):
+                with self.subTest(path=path, flag=flag):
+                    result = self.run_guard("ci-guardrails.sh", flag, env_overrides=env)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assert_self_tests(True, flag)
+            target.unlink()
 
     def test_unresolvable_base_runs_every_self_test(self):
         self.prepare_ci()
@@ -393,7 +552,7 @@ open(os.path.join(os.environ["GUARD_TEST_CALLS"], "test-compiler-cache-namespace
         self.assertIn(production_clippy, calls)
         self.assertFalse(any("--all-targets" in call for call in calls))
         listing = ["nextest", "list", "--list-type", "binaries-only", "--message-format", "json",
-                   "--workspace", "--lib", "--bins", "--tests"]
+                   "--workspace", "--bins", "--tests"]
         self.assertIn(listing, calls)
         runs = [call for call in calls if call[:2] == ["nextest", "run"]]
         self.assertEqual(len(runs), 1, calls)
@@ -405,18 +564,16 @@ open(os.path.join(os.environ["GUARD_TEST_CALLS"], "test-compiler-cache-namespace
         self.assertIn("--cargo-metadata", run)
         # Repository guards never share the host with the workspace suites:
         # the last pool member and the last exclusive suite end before nextest
-        # starts. The production clippy, doctest and documentation chain starts
+        # starts. The production clippy and documentation chain starts
         # after the listing.
         self.assertLess(calls.index(["guard-end", "test-cpu-utilisation.py"]), calls.index(run), calls)
         self.assertLess(calls.index(["guard-end", "test-compiler-cache-namespaces.sh"]),
                         calls.index(run), calls)
         clippy = calls.index(production_clippy)
-        doctests = calls.index(["test", "--no-fail-fast", "--workspace", "--doc"])
         self.assertLess(calls.index(listing), clippy, calls)
-        self.assertLess(clippy, doctests, calls)
-        self.assertLess(doctests, calls.index(["doc", "--no-deps", "--workspace"]), calls)
-        for phase in ("doctests", "documentation"):
-            self.assertIn((phase, "0"), phases)
+        self.assertLess(clippy, calls.index(["doc", "--no-deps", "--workspace"]), calls)
+        self.assertIn(("documentation", "0"), phases)
+        self.assertFalse(any("--doc" in call for call in calls), calls)
         # A background check failure must keep its status and timing in the
         # final diagnostic tail, and the chain's later phases still report.
         original = (self.bin / "cargo").read_text()
@@ -429,8 +586,7 @@ open(os.path.join(os.environ["GUARD_TEST_CALLS"], "test-compiler-cache-namespace
         self.assertEqual(result.returncode, 23, result.stderr)
         self.assertRegex(result.stderr, r"ci-guardrails-phase: clippy-production wall_seconds=\d+ exit=23")
         phases = re.findall(r"ci-guardrails-phase: (\S+) wall_seconds=\d+ exit=(\d+)", result.stderr)
-        for phase in ("doctests", "documentation"):
-            self.assertIn((phase, "0"), phases)
+        self.assertIn(("documentation", "0"), phases)
         # A failed test build must keep its status and must not be followed by
         # tests.
         (self.bin / "cargo").write_text(original.replace(
@@ -494,9 +650,26 @@ log("end {name}")
                               f'sleep {hold}\n'
                               f'printf "end {name}\\n" >> "{events}"\n')
 
+    def assert_runs_lowered(self, row, foreground):
+        """Assert a logged cargo call ran below the foreground's priority.
+
+        Linux's idle class or a higher nice value shows it directly. A
+        foreground already at the host's nice ceiling cannot be outranked, so
+        there the call must sit at that ceiling and have gone through the
+        fallback `nice` that the foreground did not."""
+        if row["idle"] and not foreground["idle"]:
+            return
+        if foreground["nice"] < self.nice_ceiling:
+            self.assertGreater(row["nice"], foreground["nice"], (row, foreground))
+            return
+        self.assertEqual(row["nice"], self.nice_ceiling, (row, foreground))
+        self.assertTrue(row["nice_attempted"] and not foreground["nice_attempted"], (row, foreground))
+
     def write_priority_stub(self, name, priorities, events=None, hold=0):
         # Records whether the guard runs lowered: in Linux's idle class, or else
-        # at a higher nice value than this test process.
+        # at a higher nice value than this test process. A caller already at the
+        # nice ceiling cannot go higher, so there the fallback `nice` must have run.
+        caller = os.getpriority(os.PRIO_PROCESS, 0)
         self.write_executable(self.scripts / name, f'''#!/usr/bin/env python3
 import json, os, time
 def log(event):
@@ -505,8 +678,11 @@ def log(event):
             stream.write(event + "\\n")
 log("start {name}")
 idle = getattr(os, "SCHED_IDLE", None)
+nice = os.getpriority(os.PRIO_PROCESS, 0)
 lowered = ((idle is not None and os.sched_getscheduler(0) == idle)
-           or os.getpriority(os.PRIO_PROCESS, 0) > {os.getpriority(os.PRIO_PROCESS, 0)})
+           or nice > {caller}
+           or ({caller} == {self.nice_ceiling} == nice
+               and os.environ.get("GUARD_TEST_NICE_ATTEMPTED") == "1"))
 with open({str(priorities)!r}, "a") as stream:
     stream.write(json.dumps([{name!r}, lowered]) + "\\n")
 time.sleep({hold})
@@ -559,8 +735,9 @@ log("end {name}")
         os.mkfifo(right)
         installer, mcp = "test-installer-security.sh", "test-mcp-registry-publish-workflow.sh"
         third = "test-check-unused-dependencies.py"
-        # Two cargo jobs admit two members at once: the first pair rendezvous and hold,
-        # so the third starts only after the oldest of them has ended.
+        # Two cargo jobs admit two members at once. The pair rendezvous and
+        # hold, so the third starts only after one of them has ended, and
+        # never while both still hold the two slots.
         self.write_overlapping_member(installer, events, outgoing=left, incoming=right, hold=0.5)
         self.write_overlapping_member(mcp, events, outgoing=right, incoming=left, hold=0.5)
         self.write_event_stub(third, events)
@@ -569,7 +746,46 @@ log("end {name}")
                                                "ORBIT_CARGO_JOBS": "2"})
         self.assertEqual(result.returncode, 0, result.stderr)
         log = events.read_text().splitlines()
-        self.assertLess(log.index(f"end {installer}"), log.index(f"start {third}"), log)
+        self.assertLess(log.index(f"start {installer}"), log.index(f"start {third}"), log)
+        self.assertLess(log.index(f"start {mcp}"), log.index(f"start {third}"), log)
+        self.assertTrue(
+            log.index(f"end {installer}") < log.index(f"start {third}")
+            or log.index(f"end {mcp}") < log.index(f"start {third}"),
+            log)
+        running = 0
+        widest = 0
+        for line in log:
+            if line.startswith("start "):
+                running += 1
+                widest = max(widest, running)
+            elif line.startswith("end "):
+                running -= 1
+        self.assertLessEqual(widest, 2, log)
+
+    def test_slow_oldest_guard_does_not_hold_a_finished_slot(self):
+        self.prepare_ci()
+        events = self.root / "events"
+        slow, fast, nxt = (
+            "check-orphan-modules.sh",
+            "check-workflow-action-pins.sh",
+            "test-qa-full-sweep.py",
+        )
+        # The oldest member outlives the second. Launch-order reaping would
+        # keep the second member's slot until the oldest ends; a free slot
+        # starts the third while the oldest is still running.
+        self.write_event_stub(slow, events, hold=1.0)
+        self.write_event_stub(fast, events, hold=0)
+        self.write_event_stub(nxt, events, hold=0)
+        result = self.run_guard("ci-guardrails.sh", "--fast",
+                                env_overrides={"CI_TEST_BASE": "missing-delivery-base",
+                                               "ORBIT_CARGO_JOBS": "2"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = events.read_text().splitlines()
+        # The two first members are both in flight; their start lines can
+        # pass each other. The third must start after the fast one ends and
+        # while the slow oldest is still running.
+        self.assertLess(log.index(f"end {fast}"), log.index(f"start {nxt}"), log)
+        self.assertLess(log.index(f"start {nxt}"), log.index(f"end {slow}"), log)
 
     def test_make_ci_fast_reports_failing_guard_name(self):
         self.prepare_ci()
@@ -675,6 +891,29 @@ log("end {name}")
                 if not succeeds:
                     self.assertIn("FAILED check-public-artifact-ids.py", result.stderr)
                     self.assertIn("concrete artifact ID", result.stderr)
+
+    def test_ci_gates_reject_modified_vendored_standards(self):
+        """The public CI gates must enforce the vendored standards checksums."""
+        self.prepare_ci()
+        standards = self.root / "docs/standards"
+        shutil.copytree(SCRIPTS.parent / "docs/standards", standards, dirs_exist_ok=True)
+        shutil.copy2(SCRIPTS.parent / "AGENTS.md", self.root / "AGENTS.md")
+        shutil.copy2(SCRIPTS.parent / "Makefile", self.root)
+        standard = standards / "STD-01-cli-surface/STD-01.md"
+        original = standard.read_bytes()
+        commands = (("make", "ci-guards"),
+                    ("/bin/bash", str(self.scripts / "ci-guardrails.sh"), "--guards"))
+        for command in commands:
+            for modified in (False, True, False):
+                with self.subTest(command=command, modified=modified):
+                    standard.write_bytes(original + b"\nhand edit\n" if modified else original)
+                    result = subprocess.run(command, cwd=self.root, env=self.env,
+                                            text=True, capture_output=True, timeout=60)
+                    self.assertEqual(result.returncode == 0, not modified,
+                                     result.stdout + result.stderr)
+                    if modified:
+                        self.assertIn("vendored files do not match", result.stderr)
+                        self.assertIn("FAILED check.sh", result.stderr)
 
     def test_static_qa_inventory_uses_offline_metadata_and_no_self_tests(self):
         """QA's isolated child must retain the static lane's no-network contract."""
@@ -854,8 +1093,8 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         result = self.run_guard("ci-guardrails.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        folded = ["test", "--workspace", "--lib", "--bins", "--tests", "--examples", "--locked",
-                  "--no-run", "--message-format", "json"]
+        folded = ["test", "--workspace", "--bins", "--tests", "--examples", "--locked",
+                  "--no-run", "--timings", "--message-format", "json"]
         self.assertIn(folded, calls)
         observed = [json.loads(line) for line in env_log.read_text().splitlines()]
         lint = {
@@ -870,38 +1109,38 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                          [dict(argv=folded, **lint)])
         # The workspace test listing runs in the main shell; nextest keeps its priority.
         listed = [row for row in observed if row["argv"][:2] == ["nextest", "list"]]
-        foreground = {key: listed[0][key] for key in ("idle", "nice")}
-        # Cargo fingerprints this environment. The nextest listing and the
-        # doctest build must see exactly the folded build's values, or each
-        # recompiles every workspace member before it can run.
+        foreground = {key: listed[0][key] for key in ("idle", "nice", "nice_attempted")}
+        # Cargo fingerprints this environment. The nextest listing must see
+        # exactly the folded build's values, or it recompiles every workspace
+        # member before it can run.
         listing = [row for row in observed if row["argv"][:2] == ["nextest", "list"]]
-        doctests = [row for row in observed if "--doc" in row["argv"]]
         self.assertEqual(len(listing), 1, observed)
-        self.assertEqual(len(doctests), 1, observed)
-        for row in (*listing, *doctests):
+        self.assertFalse(any("--doc" in row["argv"] for row in observed), observed)
+        for row in listing:
             self.assertEqual({key: row[key] for key in lint}, lint, row)
-        # Documentation runs under production Clippy's lint environment, so it
+        # Documentation runs under the one lint environment, so it
         # reuses that pass's check of the workspace instead of repeating it.
+        # Production code denies clippy::disallowed_methods through the
+        # crate-root attributes, which override this `-A`.
         production_lint = {
             "RUSTC_WORKSPACE_WRAPPER": "clippy-driver",
             "CLIPPY_ARGS": (
                 "-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__"
-                "-D__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__"
+                "-A__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__"
             ),
         }
         production = [row for row in observed if row["argv"][:1] in (["check"], ["doc"])]
         self.assertEqual([row["argv"][0] for row in production], ["check", "doc"], observed)
         for row in production:
             self.assertEqual({key: row[key] for key in production_lint}, production_lint, row)
-        # The production clippy, doctest and documentation chain overlaps the
+        # The production clippy and documentation chain overlaps the
         # tests only at lowered priority, so it cannot take CPU time from their
         # deadline assertions; the tests themselves keep normal priority. The
         # workflow test build is lowered too: it overlaps the exclusive suites.
-        background = [*production, *doctests, *builds]
-        self.assertEqual(len(background), 4, observed)
+        background = [*production, *builds]
+        self.assertEqual(len(background), 3, observed)
         for row in background:
-            self.assertTrue((row["idle"] and not foreground["idle"]) or
-                            row["nice"] > foreground["nice"], (row, foreground))
+            self.assert_runs_lowered(row, foreground)
         runs = [row for row in observed if row["argv"][:2] == ["nextest", "run"]]
         self.assertEqual(len(runs), 1, observed)
         self.assertEqual({key: runs[0][key] for key in foreground}, foreground)
@@ -925,20 +1164,27 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(foreground["nice"], os.getpriority(os.PRIO_PROCESS, 0))
         background = [row for row in observed
                       if row["argv"][0] in ("check", "test", "doc")]
-        self.assertEqual(len(background), 2, observed)
+        self.assertEqual(len(background), 3, observed)
         for row in background:
-            self.assertGreater(row["nice"], foreground["nice"], (row, foreground))
+            # Without the idle class only nice remains, so it must be attempted.
+            self.assertFalse(row["idle"], row)
+            self.assertTrue(row["nice_attempted"], row)
+            self.assert_runs_lowered(row, foreground)
 
     def test_split_ci_modes_together_run_the_full_ci_work(self):
         """The hosted test-build and Check jobs split the full run between them."""
         self.prepare_ci()
+        # The Check runner installs cargo-deny. Make presence deterministic:
+        # an installed host tool previously made the empty-helper assertion
+        # fail, while hosts without it never exercised the supply-chain phase.
+        self.write_executable(self.bin / "cargo-deny", "#!/bin/sh\nexit 0\n")
         self.init_ci_git()
         env_log = self.root / "cargo-env.log"
         self.env["GUARD_TEST_ENV_LOG"] = str(env_log)
-        folded = ["test", "--workspace", "--lib", "--bins", "--tests", "--examples", "--locked",
-                  "--no-run", "--message-format", "json"]
+        folded = ["test", "--workspace", "--bins", "--tests", "--examples", "--locked",
+                  "--no-run", "--timings", "--message-format", "json"]
         archive = str(self.root / "nextest-archive.tar.zst")
-        archive_call = ["nextest", "archive", "--locked", "--workspace", "--lib", "--bins", "--tests",
+        archive_call = ["nextest", "archive", "--locked", "--workspace", "--bins", "--tests",
                         "--archive-file", archive]
 
         # --test-archive: the folded build, then the archive the shards run.
@@ -965,23 +1211,31 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         result = self.run_guard("ci-guardrails.sh", "--test-partitions", archive,
                                 env_overrides={"NEXTEST_SHARDS": "3"})
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.log.read_text(), "", "the partition guard neither builds nor archives")
+        self.assertEqual(len(self.log.read_text().splitlines()), 1,
+                         "the partition guard neither builds nor archives; it extracts once")
         self.assertEqual((self.guard_calls / "check-nextest-partitions.py").read_text().splitlines(),
-                         ["--shards", "3", "--", "cargo", "nextest", "list", "--archive-file", archive,
-                          "--workspace-remap", str(self.root)])
-        # Hosted CI has three shard jobs but four partitions: the build job
-        # runs one. An explicit partition count takes precedence over the
-        # legacy shard-count fallback exercised above.
+                         ["--shards", "3", *self.partition_listing(archive)])
+        # Hosted CI has three required shard jobs but five partitions: two
+        # additional test runners run one each. An explicit partition
+        # count takes precedence over the legacy shard-count fallback above.
         result = self.run_guard("ci-guardrails.sh", "--test-partitions", archive,
-                                env_overrides={"NEXTEST_SHARDS": "3", "NEXTEST_PARTITIONS": "4"})
+                                env_overrides={"NEXTEST_SHARDS": "3", "NEXTEST_PARTITIONS": "5"})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.guard_calls / "check-nextest-partitions.py").read_text().splitlines(),
-                         ["--shards", "4", "--", "cargo", "nextest", "list", "--archive-file", archive,
-                          "--workspace-remap", str(self.root)])
+                         ["--shards", "5", *self.partition_listing(archive)])
+        # An `affected:` scope lists the shards' package filter and admits
+        # empty shards.
+        result = self.run_guard("ci-guardrails.sh", "--test-partitions", archive,
+                                env_overrides={"NEXTEST_PARTITIONS": "5",
+                                               "CI_TEST_SCOPE": "affected:orbit-cli,orbit-exec"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.guard_calls / "check-nextest-partitions.py").read_text().splitlines(),
+                         ["--shards", "5", "--allow-empty", *self.partition_listing(archive),
+                          "-E", "package(orbit-cli) | package(orbit-exec)"])
         self.assertEqual({path.name for path in self.guard_calls.iterdir()} - {"require-python.sh"},
                          {"check-nextest-partitions.py"}, "no repository guard or self-test runs")
         phases = re.findall(r"ci-guardrails-phase: (\S+) wall_seconds=\d+ exit=(\d+)", result.stderr)
-        self.assertEqual(phases, [("workspace-test-partitions", "0")])
+        self.assertEqual(phases, [("workspace-test-archive-extract", "0"), ("workspace-test-partitions", "0")])
         # A partition gap fails the job with the guard's status.
         self.write_executable(self.scripts / "check-nextest-partitions.py", "#!/bin/sh\nexit 7\n")
         result = self.run_guard("ci-guardrails.sh", "--test-partitions", archive,
@@ -989,52 +1243,74 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertIn("ci-guardrails-phase: workspace-test-partitions wall_seconds=", result.stderr)
 
-        # Hosted doctests reuse the archive build's libraries on that runner,
-        # after upload, rather than compiling them again in the Check job.
-        self.log.write_text("")
-        env_log.write_text("")
-        result = self.run_guard("ci-guardrails.sh", "--test-doctests")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        doctest_call = ["test", "--no-fail-fast", "--workspace", "--doc"]
-        self.assertEqual([json.loads(line) for line in self.log.read_text().splitlines()],
-                         [doctest_call], "doctests must not trigger a separate production check or test build")
-        [doctests] = [json.loads(line) for line in env_log.read_text().splitlines()]
-        for key in ("RUSTC_WORKSPACE_WRAPPER", "CLIPPY_ARGS"):
-            self.assertEqual(doctests[key], archived[0][key],
-                             "doctests must reuse the folded build's Cargo fingerprint")
-        self.assertIn("ci-guardrails-phase: doctests wall_seconds=", result.stderr)
-        result = self.run_guard("ci-guardrails.sh", "--test-doctests",
-                                env_overrides={"GUARD_TEST_DOC_EXIT": "9"})
-        self.assertEqual(result.returncode, 9, result.stderr)
-        self.assertRegex(result.stderr, r"ci-guardrails-phase: doctests wall_seconds=\d+ exit=9")
-
-        # --checks: everything else, with no doctests, test build or nextest.
+        # --checks: formatting, production Clippy, documentation and the
+        # Apple-target type-check, with no guard, self-test, test
+        # build or nextest. The type-check uses plain rustc.
         for call in self.guard_calls.iterdir():
             call.unlink()
         self.log.write_text("")
         env_log.write_text("")
         result = self.run_guard("ci-guardrails.sh", "--checks")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_self_tests(True)
-        self.assertTrue((self.guard_calls / "test-ci-download-verified.py").exists())
+        self.assertEqual({path.name for path in self.guard_calls.iterdir()} - {"require-python.sh"},
+                         {"cargo-deny.sh"}, "Check runs the supply-chain helper; guards run in their own job")
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertNotIn(folded, calls)
         self.assertFalse(any(call[:1] == ["nextest"] for call in calls), calls)
+        apple = ["check", "--workspace", "--lib", "--bins", "--tests", "--target", "aarch64-apple-darwin"]
         for expected in (["fmt", "--all", "--", "--check"], ["check", "--workspace", "--lib", "--bins"],
-                         ["doc", "--no-deps", "--workspace"]):
+                         ["doc", "--no-deps", "--workspace"], apple):
             self.assertIn(expected, calls)
+        self.assertLess(calls.index(["doc", "--no-deps", "--workspace"]), calls.index(apple))
         self.assertFalse(any("--doc" in call for call in calls), calls)
+        checks_env = [json.loads(line) for line in env_log.read_text().splitlines()]
+        apple_rows = [row for row in checks_env if row["argv"] == apple]
+        self.assertEqual(len(apple_rows), 1, checks_env)
+        self.assertIsNone(apple_rows[0]["RUSTC_WORKSPACE_WRAPPER"])
+        self.assertIsNone(apple_rows[0]["CLIPPY_ARGS"])
         phases = dict(re.findall(r"ci-guardrails-phase: (\S+) wall_seconds=\d+ exit=(\d+)", result.stderr))
-        for phase in ("fmt", "clippy-production", "documentation", "repository-guards"):
+        for phase in ("fmt", "clippy-production", "documentation", "apple-target-check", "supply-chain"):
             self.assertEqual(phases.get(phase), "0", result.stderr)
+        self.assertNotIn("repository-guards", phases)
+
+        # --guards: every repository guard and self-test, and no Cargo build.
+        self.log.write_text("")
+        result = self.run_guard("ci-guardrails.sh", "--guards")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_self_tests(True)
+        self.assertTrue((self.guard_calls / "test-ci-download-verified.py").exists())
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertFalse(any(call[:1] in (["fmt"], ["check"], ["doc"], ["nextest"]) or folded == call
+                             for call in calls), calls)
+        phases = dict(re.findall(r"ci-guardrails-phase: (\S+) wall_seconds=\d+ exit=(\d+)", result.stderr))
+        self.assertEqual(phases, {"guard-pool": "0", "exclusive-self-tests": "0", "repository-guards": "0"},
+                         result.stderr)
+        self.assertEqual((self.guard_calls / "test-qa-full-sweep.py").read_text().split(), ["--check"])
         # The check chain shares the host with the exclusive suites, so it runs
         # lowered like the build it replaces there.
         observed = [json.loads(line) for line in env_log.read_text().splitlines()]
         formatting = next(row for row in observed if row["argv"][:1] == ["fmt"])
         for row in observed:
-            if row["argv"][:1] in (["check"], ["doc"]) or "--doc" in row["argv"]:
-                self.assertTrue((row["idle"] and not formatting["idle"]) or row["nice"] > formatting["nice"],
-                                (row, formatting))
+            if row["argv"][:1] in (["check"], ["doc"]):
+                self.assert_runs_lowered(row, formatting)
+
+        # The two hosted routes must execute the same guard set exactly once.
+        # Each runner performs its own Python preflight; it is not guard work.
+        all_guards = {call.name for call in self.guard_calls.iterdir()} - {"require-python.sh"}
+        result = self.run_guard("ci-guardrails.sh", "--guards-core")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        core_guards = {call.name for call in self.guard_calls.iterdir()} - {"require-python.sh"}
+        result = self.run_guard("ci-guardrails.sh", "--guards-qa")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        qa_guards = {call.name for call in self.guard_calls.iterdir()} - {"require-python.sh"}
+        self.assertEqual(core_guards | qa_guards, all_guards)
+        self.assertFalse(core_guards & qa_guards, "hosted routes must not duplicate a guard")
+        self.assertEqual(qa_guards, {"test-qa-full-sweep.py"})
+        self.assertIn("qa-guards wall_seconds=", result.stderr)
+        self.write_executable(self.scripts / "test-qa-full-sweep.py", "#!/bin/sh\nexit 23\n")
+        result = self.run_guard("ci-guardrails.sh", "--guards-qa")
+        self.assertEqual(result.returncode, 23, result.stderr)
+        self.assertRegex(result.stderr, r"qa-guards wall_seconds=\d+ exit=23")
 
     def test_an_affected_scope_builds_and_archives_only_its_build_set(self):
         """A pull request's `affected:` scope narrows the folded build and the
@@ -1046,13 +1322,12 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                               'import os, sys\n'
                               'assert sys.argv[1:] == ["--test-build-packages", "orbit-types"], sys.argv\n'
                               'print(os.environ["GUARD_TEST_BUILD_SET"])\n')
-        listing = ["--", "cargo", "nextest", "list", "--archive-file", archive, "--workspace-remap", str(self.root)]
         cases = (
-            ("orbit-types\n-p orbit-types --lib --bins --tests\nfeature anchors: none",
-             ["-p", "orbit-types", "--lib"], ["--allow-empty"]),
-            ("workspace\n--workspace --lib --bins --tests\nthis checkout has no crate orbit-types",
-             ["--workspace", "--lib"], []),
-            ("", ["--workspace", "--lib"], []),
+            ("orbit-types\n-p orbit-types --bins --tests\nfeature anchors: none",
+             ["-p", "orbit-types"], ["--allow-empty"]),
+            ("workspace\n--workspace --bins --tests\nthis checkout has no crate orbit-types",
+             ["--workspace"], []),
+            ("", ["--workspace"], []),
         )
         for build_set, selection, partition_options in cases:
             with self.subTest(build_set=build_set.split("\n", 1)[0]):
@@ -1062,7 +1337,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                     "GUARD_TEST_BUILD_SET": build_set})
                 self.assertEqual(result.returncode, 0, result.stderr)
                 calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-                self.assertIn(["test", *selection, "--bins", "--tests", "--examples", "--locked", "--no-run",
+                self.assertIn(["test", *selection, "--bins", "--tests", "--examples", "--locked", "--no-run", "--timings",
                                "--message-format", "json"], calls)
                 self.assertIn(["nextest", "archive", "--locked", *selection, "--bins", "--tests",
                                "--archive-file", archive], calls)
@@ -1070,7 +1345,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                                         env_overrides={"NEXTEST_SHARDS": "3"})
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual((self.guard_calls / "check-nextest-partitions.py").read_text().splitlines(),
-                                 ["--shards", "3", *partition_options, *listing])
+                                 ["--shards", "3", *partition_options, *self.partition_listing(archive)])
 
     def test_macos_check_defaults_to_per_package_listing(self):
         # Without --workspace-build (the macOS job and local runs, whose `-p`
@@ -1196,7 +1471,7 @@ raise SystemExit(101)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("orbit-types fixture_test names a crate outside this build; not listed", result.stdout)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        self.assertIn(["test", "-p", "orbit-web", "--bins", "--tests", "--examples", "--locked", "--no-run",
+        self.assertIn(["test", "-p", "orbit-web", "--bins", "--tests", "--examples", "--locked", "--no-run", "--timings",
                        "--message-format", "json"], calls)
         self.assertFalse(any(call[:1] == ["fixture-test-bin"] for call in calls), calls)
 
@@ -1219,6 +1494,19 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertIn(["cargo-deny.sh", "check"], calls)
 
     def dependency_result(self, owner, dependency, kind=None):
+        # The guard scans this single-file module and fails closed when it is
+        # absent [ORB-23019]; the stubbed rg finds no matches in the empty file.
+        app = self.root / "crates/orbit-core/src/application"
+        app.mkdir(parents=True, exist_ok=True)
+        (app / "tag_instructions.rs").write_text("")
+        config = self.root / "crates/orbit-config/src"
+        for relative in ("aliases.rs", "seeding.rs", "config_document.rs", "plugin_enablement.rs",
+                         "unknown.rs", "resolved/compatibility.rs", "config_io.rs", "crew_defaults.rs"):
+            path = config / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+        for relative in ("crew", "operation", "provider_limit", "layering", "registry"):
+            (config / relative).mkdir(exist_ok=True)
         (self.root / "Cargo.toml").write_text(
             '[workspace]\n[workspace.dependencies]\ntempfile = "3"\n'
         )
@@ -1280,6 +1568,8 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         result = self.run_guard("check-goldens.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        # Every leg carries a single filter: libtest runs the union of its
+        # filters, so a second filter would mask a dead first one (ORB-24436).
         self.assertEqual(
             calls,
             [
@@ -1287,6 +1577,8 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                     "test",
                     "-p",
                     "orbit-core",
+                    "-p",
+                    "orbit-cli",
                     "--test",
                     "ci_failure_goldens",
                     "ci_failure_fixture_goldens",
@@ -1297,13 +1589,26 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                     "test",
                     "-p",
                     "orbit-tools",
+                    "-p",
+                    "orbit-cli",
                     "--test",
                     "tools",
                     "--",
                     "public_tool_surface::github_log_goldens::",
+                ],
+                [
+                    "test",
+                    "-p",
+                    "orbit-tools",
+                    "-p",
+                    "orbit-cli",
+                    "--test",
+                    "tools",
+                    "--",
                     "mcp_definitions::",
                 ],
-                ["test", "-p", "orbit-cli", "--test", "output", "--", "help_goldens::", "output_goldens::"],
+                ["test", "-p", "orbit-cli", "--test", "output", "--", "help_goldens::"],
+                ["test", "-p", "orbit-cli", "--test", "output", "--", "output_goldens::"],
                 [
                     "test",
                     "-p",
@@ -1314,12 +1619,23 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                     "--",
                     "--exact",
                 ],
-                ["test", "-p", "orbit-exec", "--test", "sandbox_profile_goldens"],
-                ["test", "-p", "orbit-core", "--test", "sandbox_profile_goldens"],
-                ["test", "-p", "orbit-store", "--lib",
+                [
+                    "test",
+                    "-p",
+                    "orbit-exec",
+                    "-p",
+                    "orbit-core",
+                    "-p",
+                    "orbit-cli",
+                    "--test",
+                    "sandbox_profile_goldens",
+                ],
+                ["test", "-p", "orbit-store", "-p", "orbit-cli", "--lib",
                  "driver::sqlite::migration::tests::ledger::registry::store_schema_prefix_goldens",
-                 "--", "--exact",
-                 "driver::sqlite::migration::tests::ledger::registry::task_registry_schema_prefix_goldens"],
+                 "--", "--exact"],
+                ["test", "-p", "orbit-store", "-p", "orbit-cli", "--lib",
+                 "driver::sqlite::migration::tests::ledger::registry::task_registry_schema_prefix_goldens",
+                 "--", "--exact"],
             ],
         )
 
@@ -1338,12 +1654,13 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         "logs": os.environ.get("ORBIT_UPDATE_LOG_GOLDENS"),
         "store_schema": os.environ.get("ORBIT_UPDATE_STORE_SCHEMA_GOLDENS"),
     }) + "\\n")
+print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s")
 ''',
         )
         result = self.run_guard("check-goldens.sh", "--update")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        self.assertEqual(len(calls), 7)
+        self.assertEqual(len(calls), 9)
         for call in calls:
             self.assertEqual(call["help"], "1")
             self.assertEqual(call["output"], "1")
@@ -1356,6 +1673,83 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         result = self.run_guard("check-goldens.sh", "--fast")
         self.assertEqual(result.returncode, 2)
         self.assertIn("usage: check-goldens.sh [--update]", result.stderr)
+
+    def test_goldens_without_summary_fails(self):
+        # A successful cargo with no harness summary is missing evidence,
+        # not a pass. check-goldens.sh runs under `set -euo pipefail`, so
+        # the first summary-less leg's refusal exits the script: only that
+        # first refusal is exercised here, not all nine legs.
+        self.write_executable(
+            self.bin / "cargo",
+            '#!/usr/bin/env python3\nimport json, os, sys\n'
+            'with open(os.environ["GUARD_TEST_LOG"], "a") as log:\n'
+            '    log.write(json.dumps(sys.argv[1:]) + "\\n")\n',
+        )
+        result = self.run_guard("check-goldens.sh")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("no test-result summary", result.stderr)
+
+    def test_goldens_dead_filter_beside_live_filter_fails(self):
+        """A dead filter must fail even when a sibling filter matches (ORB-24436).
+
+        libtest runs the union of its filters and prints one aggregate
+        summary per binary, so a leg passing two filters to one invocation
+        reports passes while one filter matches nothing. The fake cargo
+        below emulates that union: every golden filter matches a canned
+        test except ``mcp_definitions::``."""
+        self.write_executable(
+            self.bin / "cargo",
+            '''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["GUARD_TEST_LOG"], "a") as log:
+    log.write(json.dumps(sys.argv[1:]) + "\\n")
+LIVE = [
+    "ci_failure_fixture_goldens",
+    "public_tool_surface::github_log_goldens::case_one",
+    "help_goldens::case_help",
+    "output_goldens::case_output",
+    "mcp_roundtrip::mcp_serve_tools_list_matches_production_snapshot",
+    "sandbox_profile_goldens_case",
+    "driver::sqlite::migration::tests::ledger::registry::store_schema_prefix_goldens",
+    "driver::sqlite::migration::tests::ledger::registry::task_registry_schema_prefix_goldens",
+]
+args = sys.argv[2:]
+split = args.index("--") if "--" in args else len(args)
+cargo_args, libtest_args = args[:split], args[split + 1:]
+exact = "--exact" in libtest_args
+filters = []
+index = 0
+while index < len(cargo_args):
+    token = cargo_args[index]
+    if token in ("-p", "--test", "--bin"):
+        index += 2
+        continue
+    if not token.startswith("-"):
+        filters.append(token)
+    index += 1
+filters += [token for token in libtest_args if not token.startswith("-")]
+if not filters:
+    matched = list(LIVE)
+elif exact:
+    matched = [test for test in LIVE if test in filters]
+else:
+    matched = [test for test in LIVE if any(f in test for f in filters)]
+for test in matched:
+    print(f"test {test} ... ok")
+print(f"test result: ok. {len(matched)} passed; 0 failed; 0 ignored; "
+      "0 measured; 0 filtered out; finished in 0.00s")
+''',
+        )
+        result = self.run_guard("check-goldens.sh")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("matched zero tests", result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertIn(
+            ["test", "-p", "orbit-tools", "-p", "orbit-cli",
+             "--test", "tools", "--", "mcp_definitions::"],
+            calls,
+            "the dead filter must run in its own invocation to be judged alone",
+        )
 
     def use_real_ripgrep(self):
         real_rg = shutil.which("rg")
@@ -1840,20 +2234,28 @@ class CargoDenyGuardrailTests(unittest.TestCase):
 
     def write_fake_deny(self):
         self.fake_deny.write_text('''#!/usr/bin/env python3
-import json, os, sys
+import json, os, sys, tomllib
 log = os.environ.get("FAKE_DENY_LOG")
 config_content = None
 config_path = None
+config_parse_error = None
+parsed_db_path = None
 if "--config" in sys.argv:
     idx = sys.argv.index("--config") + 1
     if idx < len(sys.argv):
         config_path = sys.argv[idx]
         if os.path.exists(config_path):
             config_content = open(config_path).read()
+            try:
+                parsed_db_path = tomllib.loads(config_content).get("advisories", {}).get("db-path")
+            except Exception as error:
+                config_parse_error = f"{type(error).__name__}: {error}"
 entry = {
     "argv": sys.argv[1:],
     "config_path": config_path,
     "config_content": config_content,
+    "config_parse_error": config_parse_error,
+    "parsed_db_path": parsed_db_path,
 }
 if log:
     with open(log, "a") as f:
@@ -1898,6 +2300,33 @@ sys.exit(int(os.environ.get("FAKE_DENY_EXIT", "0")))
         self.assertEqual(result.returncode, 0, result.stderr)
         entries = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertIn(f'db-path = "{override_dir}"', entries[0]["config_content"])
+
+    def test_override_paths_with_quotes_and_literal_backslashes_round_trip(self):
+        for variable in ("CARGO_DENY_DB_PATH", "ORBIT_CARGO_DENY_DB_PATH"):
+            with self.subTest(variable=variable):
+                override_dir = self.root / f'{variable}-quote"-literal\\n-backslash'
+                override_dir.mkdir()
+                result = self.run_script("check", env_overrides={variable: str(override_dir)})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                entry = json.loads(self.log.read_text().splitlines()[-1])
+                self.assertIsNone(entry["config_parse_error"], entry["config_content"])
+                self.assertEqual(entry["parsed_db_path"], str(override_dir))
+
+    def test_explicit_config_is_not_rewritten_for_database_override(self):
+        config_path = self.root / "explicit.toml"
+        config_path.write_text('[advisories]\ndb-path = "explicit"\n')
+        override_dir = self.root / "ignored_override"
+        override_dir.mkdir()
+        result = self.run_script(
+            "check", "--config", str(config_path),
+            env_overrides={"CARGO_DENY_DB_PATH": str(override_dir)},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        entry = json.loads(self.log.read_text().splitlines()[-1])
+        self.assertEqual(entry["config_path"], str(config_path))
+        self.assertIsNone(entry["config_parse_error"], entry["config_content"])
+        self.assertEqual(entry["parsed_db_path"], "explicit")
+        self.assertTrue(config_path.exists())
 
     def test_direct_repo_path_resolves_container(self):
         repo_dir = self.root / "advisory-db-3157b0e258782691"
@@ -1999,6 +2428,40 @@ class ErrorTranslationGuardTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("defines unregistered translator 'stray_error_to_orbit'", result.stdout)
 
+    def test_space_root_and_spaced_quoted_filenames_are_scanned(self):
+        spaced = self.root / "space root"
+        shutil.copytree(self.root / "crates", spaced / "crates")
+        script = spaced / "check-error-translation.sh"
+        script.write_text(self.SCRIPT.read_text())
+        script.chmod(0o755)
+        clean = subprocess.run(["/bin/bash", str(script), str(spaced)],
+                               text=True, capture_output=True)
+        self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
+        # An unregistered translator in a spaced, quoted filename.
+        stray = spaced / "crates/orbit-cli/src/quo'te stray.rs"
+        stray.parent.mkdir(parents=True, exist_ok=True)
+        stray.write_text("fn stray_error_to_orbit() {}\n")
+        # Ad-hoc mappings for both registry kinds in spaced filenames.
+        mapping = spaced / "crates/orbit-cli/src/ad hoc.rs"
+        mapping.write_text(
+            "fn f() { let _ = AutomationError::X => OrbitError::Y; }\n"
+            "fn g() { let _ = TaskError::X => OrbitError::Y; }\n")
+        result = subprocess.run(["/bin/bash", str(script), str(spaced)],
+                                text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("stray_error_to_orbit", result.stdout)
+        self.assertIn("maps 'AutomationError' to OrbitError ad hoc", result.stdout)
+        self.assertIn("maps 'TaskError' to OrbitError ad hoc", result.stdout)
+        self.assertNotIn("error translation guard passed", result.stdout)
+
+    def test_scan_failure_cannot_yield_success(self):
+        broken = self.root / "crates/orbit-cli/src/broken.rs"
+        broken.parent.mkdir(parents=True, exist_ok=True)
+        broken.symlink_to(self.root / "crates/orbit-cli/src/missing-target.rs")
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("error translation guard passed", result.stdout)
+
     def test_allowlisted_translator_outside_registry_passes(self):
         self.write_source("orbit-cli", "stray.rs", "fn stray_error_to_orbit() {}\n")
         text = self.SCRIPT.read_text()
@@ -2047,6 +2510,23 @@ class OrphanModuleTests(unittest.TestCase):
         self.assertEqual(executed.returncode, 0, executed.stdout + executed.stderr)
         self.assertEqual(set(re.findall(r"^test (.*) \.\.\. ok$", executed.stdout,
                                         re.MULTILINE)), expected)
+
+    def test_disconnected_directory_modules_and_sibling_tests_are_rejected(self):
+        self.write_source("lib.rs", "mod foo;\n#[cfg(test)] mod tests;\n")
+        self.write_source("foo/mod.rs", "mod child;\n")
+        self.write_source("foo/child.rs", "#[test] fn child_runs() {}\n")
+        self.write_source("tests/mod.rs", "mod case;\n")
+        self.write_source("tests/case.rs", "#[test] fn case_runs() {}\n")
+        self.assertEqual(self.run_guard().returncode, 0)
+        self.write_source("lib.rs", "// both declarations removed\n")
+        self.compile_and_execute(set())
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(set(re.findall(r"^orphan(?: test)? module: (\S+)",
+                                        result.stdout, re.MULTILINE)), {
+            "crates/fixture/src/foo/mod.rs", "crates/fixture/src/foo/child.rs",
+            "crates/fixture/src/tests/mod.rs", "crates/fixture/src/tests/case.rs",
+        })
 
     def test_spaced_and_escaped_paths_register_only_compiler_destinations(self):
         # Source spellings are Rust escapes, not Python's decoded strings.
@@ -2175,8 +2655,8 @@ class OrphanModuleTests(unittest.TestCase):
         self.check_trailing_comment_paths("live.rs")
 
     def test_trailing_comment_paths_reject_uncompiled_default_files(self):
-        # mod.rs is exempt from candidate checks: a missed override otherwise
-        # silently licenses the default sibling without any false-positive clue.
+        # A directory owner is registered only by its actual declaring path;
+        # a missed override must not license the default sibling.
         self.check_trailing_comment_paths("mod.rs")
 
     def test_symlinked_crate_roots_register_only_their_logical_children(self):
@@ -2556,6 +3036,206 @@ class OrphanModuleTests(unittest.TestCase):
         })
 
 
+class ScriptFailClosedTests(unittest.TestCase):
+    def setUp(self):
+        scratch = SCRIPTS.parent / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(prefix="script-fail-closed-", dir=scratch)
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        (self.root / "scripts").mkdir()
+
+    def test_public_ids_after_test_only_non_module_items_are_rejected(self):
+        guard = self.root / "scripts/check-public-artifact-ids.py"
+        shutil.copy2(SCRIPTS / guard.name, guard)
+        source = self.root / "crates/fixture/src/lib.rs"
+        source.parent.mkdir(parents=True)
+        for item in ("use std::fmt;", "fn helper() {}", "const HELPER: u8 = 0;"):
+            with self.subTest(item=item):
+                source.write_text('#[cfg(test)]\n' + item + '\nmod production {\n'
+                                  '    pub const LABEL: &str = "ORB-12345";\n}\n')
+                result = subprocess.run([sys.executable, str(guard)], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("ORB-12345", result.stderr)
+
+    def test_checkout_under_tests_directory_still_scans_crate_sources(self):
+        checkout = self.root / "tests" / "orbit"
+        guard = checkout / "scripts/check-public-artifact-ids.py"
+        guard.parent.mkdir(parents=True)
+        shutil.copy2(SCRIPTS / guard.name, guard)
+        source = checkout / "crates/example/src/lib.rs"
+        source.parent.mkdir(parents=True)
+        source.write_text('pub const LABEL: &str = "ORB-123";\n')
+        skipped = checkout / "crates/example/src/tests/hidden.rs"
+        skipped.parent.mkdir(parents=True)
+        skipped.write_text('pub const LABEL: &str = "ORB-999";\n')
+        result = subprocess.run([sys.executable, str(guard)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("ORB-123", result.stderr)
+        self.assertNotIn("ORB-999", result.stderr)
+        self.assertIn("crates/example/src/lib.rs", result.stderr)
+
+    def test_crate_guides_require_ripgrep(self):
+        guard = self.root / "scripts/check-crate-agent-guides.sh"
+        shutil.copy2(SCRIPTS / guard.name, guard)
+        crates = self.root / "crates"
+        for name in ("orbit-cli", "orbit-cmd", "orbit-common", "orbit-core", "orbit-engine",
+                     "orbit-mcp", "orbit-runtime", "orbit-store", "orbit-types"):
+            directory = crates / name
+            directory.mkdir(parents=True)
+            (directory / "CLAUDE.md").write_text("Guide\n")
+            (directory / "AGENTS.md").symlink_to("CLAUDE.md")
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        for tool in ("dirname", "find", "sort", "readlink"):
+            (bin_dir / tool).symlink_to(shutil.which(tool))
+        result = subprocess.run(["/bin/bash", str(guard)], capture_output=True, text=True,
+                                env=dict(os.environ, PATH=str(bin_dir)))
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("ripgrep", result.stderr)
+
+    def test_cache_rejects_unset_or_empty_home_before_any_path_operation(self):
+        guard = SCRIPTS / "compiler-cache.sh"
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        marker = self.root / "path-operation"
+        # Never let a regressed HOME check actually touch /compiler or /bin.
+        for tool in ("mkdir", "rm", "curl", "dirname", "sccache"):
+            stub = bin_dir / tool
+            stub.write_text('#!/bin/sh\n: > "$PATH_OPERATION"\nexit 99\n')
+            stub.chmod(0o755)
+        for home in (None, ""):
+            for command in (("status",), ("setup", "--install"), ("remove", "--yes")):
+                with self.subTest(home=home, command=command):
+                    env = dict(os.environ, PATH=str(bin_dir), PATH_OPERATION=str(marker))
+                    env.pop("HOME", None)
+                    env.pop("SCCACHE_DIR", None)
+                    if home is not None:
+                        env["HOME"] = home
+                    marker.unlink(missing_ok=True)
+                    result = subprocess.run(["/bin/bash", str(guard), *command], env=env,
+                                            text=True, capture_output=True)
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("HOME is unset", result.stderr)
+                    self.assertEqual(result.stdout, "")
+                    self.assertFalse(marker.exists(), "derived a path before rejecting HOME")
+
+
+class DoctestFenceGuardTests(unittest.TestCase):
+    """Script boundary for runnable fences in line and block doc comments."""
+
+    def setUp(self):
+        scratch = SCRIPTS.parent / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(prefix="doctest-fences-", dir=scratch)
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        guard = self.root / "scripts" / "check-doctest-fences.sh"
+        guard.parent.mkdir(parents=True)
+        shutil.copy2(SCRIPTS / "check-doctest-fences.sh", guard)
+        self.guard = guard
+        self.source = self.root / "crates" / "probe" / "src" / "lib.rs"
+        self.source.parent.mkdir(parents=True)
+
+    def run_guard(self, source):
+        self.source.write_text(source)
+        return subprocess.run(["/bin/bash", str(self.guard)], text=True, capture_output=True)
+
+    def assert_fence_at(self, source, line):
+        result = self.run_guard(source)
+        diagnostic = f"crates/probe/src/lib.rs:{line}:"
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(result.stderr.count(diagnostic), 1, result.stderr)
+        self.assertIn("runnable Rust doc fence", result.stderr)
+        self.assertEqual(result.stdout, "")
+        return result
+
+    def assert_clean(self, source):
+        result = self.run_guard(source + "pub fn value() {}\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout, "check-doctest-fences: no runnable Rust doc fences\n")
+        self.assertEqual(result.stderr, "")
+
+    def test_block_doc_runnable_rust_fences_report_path_and_line(self):
+        # The observed false negative: a block doc rustdoc runs and the guard missed.
+        cases = {
+            "outer": "/**\n```rust\nassert_eq!(1, 2);\n```\n*/\npub fn value() {}\n",
+            "inner": "/*!\n```rust\nassert_eq!(1, 2);\n```\n*/\npub fn value() {}\n",
+            "starred-outer": "/**\n * ```rust\n * assert_eq!(1, 2);\n * ```\n */\npub fn value() {}\n",
+            "starred-inner": "/*!\n * ```rust\n * assert_eq!(1, 2);\n * ```\n */\npub fn value() {}\n",
+        }
+        for name, source in cases.items():
+            with self.subTest(name=name):
+                self.assert_fence_at(source, 2)
+
+    def test_block_doc_fence_content_is_not_a_second_fence(self):
+        source = "/**\n```rust\nlet marker = \"```\";\n```\n*/\npub fn value() {}\n"
+        result = self.assert_fence_at(source, 2)
+        self.assertNotIn("crates/probe/src/lib.rs:3:", result.stderr)
+
+    def test_line_doc_runnable_rust_fences_still_fail(self):
+        outer = "/// ```rust\n/// assert_eq!(1, 2);\n/// ```\npub fn value() {}\n"
+        inner = "//! ```rust\n//! assert_eq!(1, 2);\n//! ```\npub fn value() {}\n"
+        with self.subTest(name="outer"):
+            self.assert_fence_at(outer, 1)
+        with self.subTest(name="inner"):
+            self.assert_fence_at(inner, 1)
+
+    def test_long_runnable_fences_fail_in_line_and_block_docs(self):
+        cases = {
+            "line-four-backtick": ("/// ````rust\n/// assert_eq!(1, 2);\n/// ````\npub fn value() {}\n", 1),
+            "line-five-backtick": ("/// `````rust\n/// assert_eq!(1, 2);\n/// `````\npub fn value() {}\n", 1),
+            "line-four-tilde": ("/// ~~~~rust\n/// assert_eq!(1, 2);\n/// ~~~~\npub fn value() {}\n", 1),
+            "block-four-backtick": ("/**\n````rust\nassert_eq!(1, 2);\n````\n*/\npub fn value() {}\n", 2),
+            "block-four-tilde": ("/**\n~~~~rust\nassert_eq!(1, 2);\n~~~~\n*/\npub fn value() {}\n", 2),
+        }
+        for name, (source, line) in cases.items():
+            with self.subTest(name=name):
+                self.assert_fence_at(source, line)
+
+    def test_long_fence_closes_only_on_long_run_without_info(self):
+        short_stays = "/**\n````rust\n```\nassert_eq!(1, 2);\n````\n*/\npub fn value() {}\n"
+        result = self.assert_fence_at(short_stays, 2)
+        self.assertNotIn("crates/probe/src/lib.rs:3:", result.stderr)
+        longer_closes = "/**\n````rust\nassert_eq!(1, 2);\n`````\n*/\npub fn value() {}\n"
+        self.assert_fence_at(longer_closes, 2)
+        info_stays = "/// ````rust\n/// assert_eq!(1, 2);\n/// ```` rust\n/// ````\npub fn value() {}\n"
+        result = self.assert_fence_at(info_stays, 1)
+        self.assertNotIn("crates/probe/src/lib.rs:3:", result.stderr)
+
+    def test_embedded_close_inside_long_ignore_stays_clean(self):
+        cases = {
+            "line-ignore": "/// ````ignore\n/// ```\n/// not rust\n/// ````\npub fn value() {}\n",
+            "block-text": "/**\n````text\n```\nnot rust\n````\n*/\npub fn value() {}\n",
+        }
+        for name, source in cases.items():
+            with self.subTest(name=name):
+                self.assert_clean(source)
+
+    def test_ignored_and_non_rust_fences_pass(self):
+        cases = {
+            "line-ignore": "/// ```rust,ignore\n/// assert_eq!(1, 2);\n/// ```\n",
+            "line-text": "/// ```text\n/// not rust\n/// ```\n",
+            "inner-line-json": "//! ```json\n//! {}\n//! ```\n",
+            "block-ignore": "/**\n```rust,ignore\nassert_eq!(1, 2);\n```\n*/\n",
+            "block-text": "/*!\n```yaml\nkey: true\n```\n*/\n",
+            "ignore-closed-in-block": "/// ```rust,ignore\n/**\nstill ignored\n```\n*/\n",
+            "banner-not-doc": "/***\n```rust\nassert_eq!(1, 2);\n```\n*/\n",
+            "raw-string": (
+                'const SAMPLE: &str = r#"\n'
+                "/**\n"
+                "```rust\n"
+                "assert_eq!(1, 2);\n"
+                "```\n"
+                "*/\n"
+                '"#;\n'
+            ),
+        }
+        for name, source in cases.items():
+            with self.subTest(name=name):
+                self.assert_clean(source)
+
+
 class PythonPreflightTests(unittest.TestCase):
     """Drive scripts/require-python.sh and the make gates with a stub python3."""
 
@@ -2633,5 +3313,63 @@ class PythonPreflightTests(unittest.TestCase):
         self.assertFalse(self.log.exists(), "a gate ran before the Python preflight")
 
 
+# These cases assert rendezvous, relative completion times or lane ordering.
+# Run them alone, as before. Other cases own independent roots, subprocess
+# environments and result objects; none changes this interpreter's globals.
+SERIAL_CASES = {
+    "test_full_ci_runs_every_self_test_on_crates_only_diff",
+    "test_parallel_guards_rendezvous_and_all_failures_are_named",
+    "test_exclusive_self_tests_run_one_at_a_time_beside_a_lowered_pool",
+    "test_pool_width_is_the_build_budget_cargo_jobs",
+    "test_slow_oldest_guard_does_not_hold_a_finished_slot",
+}
+
+
+def individual_cases(suite):
+    for entry in suite:
+        if isinstance(entry, unittest.TestSuite):
+            yield from individual_cases(entry)
+        else:
+            yield entry
+
+
+def run_guardrail_case(case):
+    result = unittest.TestResult()
+    case(result)
+    return result
+
+
+def run_guardrail_cases():
+    """Run every fixture once; retain serial timing controls and all diagnostics."""
+    cases = list(individual_cases(unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])))
+    serial = [case for case in cases if case._testMethodName in SERIAL_CASES]
+    concurrent = [case for case in cases if case._testMethodName not in SERIAL_CASES]
+    cpus = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
+    workers = max(1, min(4, cpus))
+    started = time.perf_counter()
+    results = [run_guardrail_case(case) for case in serial]
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results.extend(pool.map(run_guardrail_case, concurrent))
+    problems = [(kind, case, trace) for result in results
+                for kind, entries in (("ERROR", result.errors), ("FAIL", result.failures))
+                for case, trace in entries]
+    for kind, case, trace in problems:
+        print(f"{'=' * 70}\n{kind}: {case}\n{'-' * 70}\n{trace}", file=sys.stderr)
+    for result in results:
+        for case, reason in result.skipped:
+            print(f"SKIP: {case}: {reason}", file=sys.stderr)
+        for case in result.unexpectedSuccesses:
+            print(f"UNEXPECTED SUCCESS: {case}", file=sys.stderr)
+    ran = sum(result.testsRun for result in results)
+    passed = bool(cases) and ran == len(cases) and all(result.wasSuccessful() for result in results)
+    print(f"Ran {ran} tests in {time.perf_counter() - started:.3f}s "
+          f"({len(serial)} serial, {workers} fixture workers)", file=sys.stderr)
+    print("OK" if passed else f"FAILED (cases={len(cases)}, ran={ran})", file=sys.stderr)
+    return 0 if passed else 1
+
+
 if __name__ == "__main__":
-    unittest.main()
+    if len(sys.argv) > 1:
+        unittest.main()
+    else:
+        sys.exit(run_guardrail_cases())

@@ -66,7 +66,7 @@ pub(in crate::api) async fn get_task_artifact(
 
 fn artifact_response_policy(media_type: &str) -> ArtifactResponsePolicy {
     // The inline allowlist is the shared artifact policy, not a web-only rule:
-    // the dashboard and `orbit.task.artifact.get` must agree on which media
+    // the dashboard and `orbit.task.artifact` action `get` must agree on which media
     // types may be rendered rather than downloaded.
     let content_type = inline_safe_artifact_media_type(media_type);
     ArtifactResponsePolicy {

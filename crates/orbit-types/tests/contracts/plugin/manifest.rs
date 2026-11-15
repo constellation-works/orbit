@@ -282,3 +282,41 @@ fn spec_build_refusals_name_their_field() {
         assert_eq!(&error.field, field, "{}", error.message);
     }
 }
+
+/// The additive permission is explicit in consent and absent from legacy
+/// serializations; an old manifest does not acquire any new capability.
+#[test]
+fn exact_file_writes_are_explicit_and_legacy_permissions_stay_unchanged() {
+    let mut manifest = minimal();
+    manifest.spec.permissions.fs.read = vec!["/data".into()];
+    let legacy = serde_json::to_value(&manifest).expect("serialize legacy manifest");
+    assert!(
+        legacy["spec"]["permissions"]["fs"]
+            .get("write_files")
+            .is_none()
+    );
+    let roundtrip: PluginManifest =
+        serde_json::from_value(legacy.clone()).expect("old shape parses");
+    assert_eq!(serde_json::to_value(roundtrip).unwrap(), legacy);
+
+    manifest.spec.permissions.fs.write_files = vec!["{{config.runtime_file}}".into()];
+    manifest
+        .validate_structure()
+        .expect("new file template is valid");
+    let requests = manifest.grant_requests();
+    assert_eq!(
+        requests[0].requested.as_deref(),
+        Some("read=/data write_files={{config.runtime_file}}")
+    );
+    let value = serde_json::to_value(&manifest).unwrap();
+    let parsed: PluginManifest = serde_json::from_value(value).expect("new shape parses");
+    assert_eq!(
+        parsed.spec.permissions.fs.write_files,
+        ["{{config.runtime_file}}"]
+    );
+    manifest.spec.permissions.fs.write_files = vec!["{{unknown}}".into()];
+    assert_eq!(
+        manifest.validate_structure().unwrap_err().field,
+        "spec.permissions.fs.write_files[0]"
+    );
+}

@@ -1,18 +1,21 @@
 //! The agent scorecard CLI, derived from the agents operation registry.
 //!
-//! Both verbs call the read-only `orbit.agents.*` tools, so `--json` is the
+//! The verbs call the read-only `orbit.agents.*` tools, so `--json` is the
 //! payload the dashboard's Agents view reads. What is left here is the text
-//! rendering, shared with the deprecated `orbit orchestrator` aliases: one
-//! row per crew and model for `scorecard`, and one row's terms with the tasks
-//! behind every count for `show`.
+//! rendering: one row per crew and model for `scorecard`, one row's terms
+//! with the tasks behind every count for `show`, and one row per recorded
+//! required-check failure for `ci-failures`.
 //!
 //! `vision-probe` is hand-wired: it launches one canary run per crew and
-//! prints whether each model returned the code.
+//! prints whether each model returned the code. `rank` is hand-wired too:
+//! the model ranking is a CLI and dashboard read, and `rank calibrate`
+//! writes the workspace's noise-scale seasons.
 
 use std::fmt::Write as _;
 
 use clap::{Args, Subcommand};
 use orbit_common::governance::agents::AgentsVerb;
+use orbit_core::application::agents::RankQuery;
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::Value;
 
@@ -33,9 +36,78 @@ pub enum AgentsSubcommand {
     // Scorecard and show, derived from the agents operation registry.
     #[command(flatten)]
     Operation(Invocation<AgentsVerb>),
+    /// Rank implementer models by quality and reliability, in tie bands
+    #[command(long_about = RANK_LONG_ABOUT)]
+    Rank(AgentsRankArgs),
     /// Check that each crew's model sees images: run the canary per crew
     #[command(long_about = VISION_PROBE_LONG_ABOUT)]
     VisionProbe(AgentsVisionProbeArgs),
+}
+
+const RANK_LONG_ABOUT: &str = "Rank implementer models by quality and reliability, in tie bands.
+
+One row per model, its crews and effort levels pooled. Each measure (escaped \
+regressions, review outcome, implementer CI failures, implementer-fault final \
+recoveries, crew-caused rework, tool-call errors) is compared with what the \
+fleet achieves on the same task tiers, divided by the season's noise scale, \
+weighted, and shrunk toward the other eligible models. Measures Orbit does not \
+record yet are shown as unmeasured and leave the weights.
+
+The ranked window (--window, 30 days) ends --settle-lag (14 days) before \
+--until, so late escaped regressions have arrived; --live ends it at --until \
+instead and is provisional. A model needs at least 30 implemented tasks \
+and at least one assessed tier with at least 5 tasks to be \
+ranked, and the board needs three such models. A ranked model spanning \
+exactly one assessed tier is flagged 'single tier: <tier>'. Models \
+whose scores are not distinguishable share a band, cheapest first.
+
+Use 'orbit agents rank calibrate' to freeze a new season's noise scales in the \
+workspace's state; until then the scales are estimated from the ranked window.";
+
+#[derive(Args)]
+#[command(args_conflicts_with_subcommands = true)]
+pub struct AgentsRankArgs {
+    #[command(subcommand)]
+    pub action: Option<AgentsRankAction>,
+    #[command(flatten)]
+    pub selection: AgentsRankSelection,
+    /// Rank the window ending at --until, unsettled and provisional
+    #[arg(long)]
+    pub live: bool,
+}
+
+#[derive(Subcommand)]
+pub enum AgentsRankAction {
+    /// Freeze a new season's noise scales from the settled window
+    Calibrate(AgentsRankSelection),
+}
+
+#[derive(Args)]
+pub struct AgentsRankSelection {
+    /// Time window, such as 7d or 30d [default: 30d]
+    #[arg(long, value_name = "WINDOW")]
+    pub window: Option<String>,
+    /// End before the settle lag: an RFC 3339 instant or a duration ago such as 7d [default: now]
+    #[arg(long, value_name = "WHEN")]
+    pub until: Option<String>,
+    /// How long before --until the ranked window ends [default: 14d]
+    #[arg(long, value_name = "DURATION")]
+    pub settle_lag: Option<String>,
+    /// Which tasks count by derived execution: managed, all or interactive [default: managed]
+    #[arg(long, value_name = "SCOPE")]
+    pub execution: Option<String>,
+}
+
+impl AgentsRankSelection {
+    fn query(&self, live: bool) -> Result<RankQuery, OrbitError> {
+        RankQuery::parse(
+            self.window.as_deref(),
+            self.until.as_deref(),
+            self.settle_lag.as_deref(),
+            self.execution.as_deref(),
+            live,
+        )
+    }
 }
 
 const VISION_PROBE_LONG_ABOUT: &str = "Check that each crew's model sees images.
@@ -65,6 +137,21 @@ impl Execute for AgentsCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let invocation = match self.command {
             AgentsSubcommand::Operation(invocation) => invocation,
+            AgentsSubcommand::Rank(args) => {
+                let (value, blocks) = match &args.action {
+                    None => {
+                        let value = runtime.agent_rank(&args.selection.query(args.live)?)?;
+                        let blocks = rank_blocks(&value);
+                        (value, blocks)
+                    }
+                    Some(AgentsRankAction::Calibrate(selection)) => {
+                        let value = runtime.agent_rank_calibrate(&selection.query(false)?)?;
+                        let blocks = calibrate_blocks(&value);
+                        (value, blocks)
+                    }
+                };
+                return Ok(Payload::blocks(value, blocks).into());
+            }
             AgentsSubcommand::VisionProbe(args) => {
                 let report = runtime.vision_probe(&args.crews, args.timeout_seconds)?;
                 let value = serde_json::to_value(&report)
@@ -77,10 +164,10 @@ impl Execute for AgentsCommand {
         let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
         let blocks = match spec.verb {
             AgentsVerb::Scorecard if value["per_task"] == true => per_task_blocks(&value),
-            AgentsVerb::Scorecard if value["shadow"] == true => shadow_blocks(&value),
             AgentsVerb::Scorecard if value["by_type"] == true => by_type_blocks(&value),
             AgentsVerb::Scorecard => scorecard_blocks(&value),
             AgentsVerb::Show => show_blocks(&value),
+            AgentsVerb::CiFailures => ci_failure_blocks(&value),
         };
         Ok(Payload::blocks(value, blocks).into())
     }
@@ -90,7 +177,7 @@ impl Execute for AgentsCommand {
 ///
 /// The selection line and the units footer are status, not records, so they
 /// are notices: stderr in every mode, which keeps stdout to the rows alone.
-pub(crate) fn scorecard_blocks(value: &Value) -> Vec<Block> {
+fn scorecard_blocks(value: &Value) -> Vec<Block> {
     let terms = value["terms"].as_array().cloned().unwrap_or_default();
     let computed = value["status"] != "not_computed";
     let empty = if computed {
@@ -103,11 +190,11 @@ pub(crate) fn scorecard_blocks(value: &Value) -> Vec<Block> {
     };
     let mut columns = vec![
         Column::new("RANK").number(),
-        Column::new("CREW").fixed(),
-        Column::new("MODEL"),
-        Column::new("EFFORT"),
+        Column::new("ROW"),
+        Column::new("CREWS"),
         Column::new("UNITS").number(),
         Column::new("SCORE").number(),
+        Column::new("INTERVAL"),
     ];
     columns.extend(
         terms
@@ -127,11 +214,14 @@ pub(crate) fn scorecard_blocks(value: &Value) -> Vec<Block> {
             } else {
                 number(&row["rank"])
             },
-            text(&row["crew"]),
-            text(&row["model"]),
-            effort_labels(&row["effort_breakdown"]),
+            text(&row["label"]),
+            row["crews"]
+                .as_array()
+                .map(|crews| crews.iter().map(text).collect::<Vec<_>>().join(", "))
+                .unwrap_or_else(|| text(&row["crew"])),
             number(&row["units"]),
             number(&row["score"]),
+            interval(&row["interval"]),
         ];
         cells.extend(
             terms
@@ -147,7 +237,7 @@ pub(crate) fn scorecard_blocks(value: &Value) -> Vec<Block> {
             "each term per 100 units, weighted and summed"
         };
         table = table.trailing_notice(format!(
-            "Units: {}. Score: {formula}; a row above the fleet average ({}) is pulled down toward it.\nWeights: {}",
+            "Units: {}. Score: {formula}; a row above the fleet average ({}) is pulled down toward it.\nInterval: the 10th to 90th percentile of a fixed-seed resample of the row's own units; `-` for an unranked row.\nWeights: {}",
             text(&value["unit"]),
             number(&value["fleet_average"]),
             terms
@@ -160,73 +250,49 @@ pub(crate) fn scorecard_blocks(value: &Value) -> Vec<Block> {
     vec![Block::table(table)]
 }
 
-/// The shadow share report: one row per crew in a pool and type, then the
-/// draws that recorded no performance factor.
-fn shadow_blocks(value: &Value) -> Vec<Block> {
-    let mut recorded = Table::new(vec![
-        Column::new("POOL").fixed(),
-        Column::new("TYPE"),
-        Column::new("CREW").fixed(),
-        Column::new("DRAWS").number(),
-        Column::new("STATIC").number(),
-        Column::new("DRAWN").number(),
-        Column::new("WOULD-BE").number(),
-    ])
-    .keep_all_columns()
-    .empty_message("no recorded draw in the window".to_string());
-    for pool in value["pools"].as_array().into_iter().flatten() {
-        for crew in pool["crews"].as_array().into_iter().flatten() {
-            recorded.add_row(vec![
-                text(&pool["pool"]),
-                text(&pool["type"]),
-                text(&crew["crew"]),
-                number(&crew["draws"]),
-                percent(&crew["static_share"]),
-                percent(&crew["drawn_share"]),
-                percent(&crew["would_be_share"]),
-            ]);
-        }
+/// One row per recorded required-check failure, newest first, with the
+/// per-class counts as a notice.
+pub(crate) fn ci_failure_blocks(value: &Value) -> Vec<Block> {
+    let columns = vec![
+        Column::new("RECORDED"),
+        Column::new("TASK").fixed(),
+        Column::new("CLASS"),
+        Column::new("HEAD").fixed(),
+        Column::new("CHECK"),
+        Column::new("SIGNATURE"),
+    ];
+    let mut table = Table::new(columns).empty_message("no recorded CI failure in the window");
+    for record in value["records"].as_array().into_iter().flatten() {
+        let class = text(&record["class"]);
+        let recorded = text(&record["recorded_class"]);
+        table.add_row(vec![
+            text(&record["recorded_at"]),
+            text(&record["task_id"]),
+            if class == recorded {
+                class
+            } else {
+                format!("{class} (was {recorded})")
+            },
+            text(&record["head_sha"]).chars().take(12).collect(),
+            text(&record["check"]),
+            text(&record["signature"]),
+        ]);
     }
-    let mut unrecorded = Table::new(vec![
-        Column::new("POOL").fixed(),
-        Column::new("CREW").fixed(),
-        Column::new("DRAWS").number(),
-        Column::new("STATIC").number(),
-        Column::new("DRAWN").number(),
-    ])
-    .keep_all_columns()
-    .empty_message("No draws without a performance record in the window.".to_string());
-    for pool in value["static_draws"]["pools"]
-        .as_array()
-        .into_iter()
-        .flatten()
-    {
-        for crew in pool["crews"].as_array().into_iter().flatten() {
-            unrecorded.add_row(vec![
-                text(&pool["pool"]),
-                text(&crew["crew"]),
-                number(&crew["draws"]),
-                percent(&crew["static_share"]),
-                percent(&crew["drawn_share"]),
-            ]);
-        }
-    }
-    vec![
-        Block::text(
-            "Shares are the mean of each draw's weight share. Would-be applies the recorded factor the draw did not use. Draws without a performance record are listed separately and counted as static."
-                .to_string(),
-        ),
-        Block::table(recorded),
-        Block::text("Draws without a performance record".to_string()),
-        Block::table(unrecorded),
-    ]
+    let counts = ["code", "flaky", "infrastructure", "unknown"]
+        .iter()
+        .map(|class| format!("{class} {}", number(&value["counts"][*class])))
+        .collect::<Vec<_>>()
+        .join(", ");
+    table = table.trailing_notice(format!("Window: {}. {counts}.", text(&value["window"])));
+    vec![Block::table(table)]
 }
 
-/// The by-type matrix: one row per (crew, model, tier, type) cell.
+/// The by-type matrix: one row per (model, recorded effort, tier, type)
+/// cell, with the crews that contributed to it.
 pub(crate) fn by_type_blocks(value: &Value) -> Vec<Block> {
     let columns = vec![
-        Column::new("CREW").fixed(),
-        Column::new("MODEL"),
+        Column::new("CREWS").fixed(),
+        Column::new("ROW"),
         Column::new("TIER"),
         Column::new("TYPE"),
         Column::new("N").number(),
@@ -254,8 +320,18 @@ pub(crate) fn by_type_blocks(value: &Value) -> Vec<Block> {
         ));
     for cell in value["cells"].as_array().into_iter().flatten() {
         table.add_row(vec![
-            text(&cell["crew"]),
-            text(&cell["model"]),
+            cell["crews"]
+                .as_array()
+                .map(|crews| crews.iter().map(text).collect::<Vec<_>>().join(", "))
+                .unwrap_or_else(|| text(&cell["crew"])),
+            {
+                let label = text(&cell["label"]);
+                if label.is_empty() {
+                    text(&cell["model"])
+                } else {
+                    label
+                }
+            },
             text(&cell["tier"]),
             text(&cell["type"]),
             number(&cell["n"]),
@@ -272,8 +348,8 @@ pub(crate) fn by_type_blocks(value: &Value) -> Vec<Block> {
 fn per_task_blocks(value: &Value) -> Vec<Block> {
     let terms = value["terms"].as_array().cloned().unwrap_or_default();
     let mut columns = vec![
-        Column::new("CREW").fixed(),
-        Column::new("MODEL"),
+        Column::new("CREWS").fixed(),
+        Column::new("ROW"),
         Column::new("TIER"),
         Column::new("TYPE"),
         Column::new("TAGS"),
@@ -299,8 +375,18 @@ fn per_task_blocks(value: &Value) -> Vec<Block> {
                 .unwrap_or_default()
         };
         let mut cells = vec![
-            text(&task["crew"]),
-            text(&task["model"]),
+            task["crews"]
+                .as_array()
+                .map(|crews| crews.iter().map(text).collect::<Vec<_>>().join(", "))
+                .unwrap_or_else(|| text(&task["crew"])),
+            {
+                let label = text(&task["label"]);
+                if label.is_empty() {
+                    text(&task["model"])
+                } else {
+                    label
+                }
+            },
             text(&task["tier"]),
             text(&task["type"]),
             join("tags"),
@@ -317,7 +403,7 @@ fn per_task_blocks(value: &Value) -> Vec<Block> {
 }
 
 /// One row's terms, then the tasks behind each nonzero count.
-pub(crate) fn show_blocks(value: &Value) -> Vec<Block> {
+fn show_blocks(value: &Value) -> Vec<Block> {
     let row = &value["row"];
     let standing = if row["unjudged"] == true {
         "unjudged: no unit judged yet".to_string()
@@ -327,9 +413,12 @@ pub(crate) fn show_blocks(value: &Value) -> Vec<Block> {
         format!("rank {}", number(&row["rank"]))
     };
     let mut blocks = vec![Block::text(format!(
-        "{} · {} ({standing})\n{}\n{} {} · score {} · fleet average {}",
-        text(&row["crew"]),
-        text(&row["model"]),
+        "{} ({standing}) · crews {}\n{}\n{} {} · score {} · fleet average {}",
+        text(&row["label"]),
+        row["crews"]
+            .as_array()
+            .map(|crews| crews.iter().map(text).collect::<Vec<_>>().join(", "))
+            .unwrap_or_else(|| text(&row["crew"])),
         selection_line(value),
         number(&row["units"]),
         text(&value["unit"]),
@@ -338,9 +427,12 @@ pub(crate) fn show_blocks(value: &Value) -> Vec<Block> {
     ))];
 
     blocks.push(Block::text(format!(
-        "Recorded effort: {}",
+        "Completed invocations by crew and effort, not this row's scored units: {}",
         effort_labels(&row["effort_breakdown"])
     )));
+    if let Some(sources) = effort_source_labels(&row["effort_sources"]) {
+        blocks.push(Block::text(format!("Effort source: {sources}")));
+    }
 
     let terms = value["terms"].as_array().cloned().unwrap_or_default();
     let normalised = row["expected"].is_object();
@@ -410,6 +502,147 @@ pub(crate) fn show_blocks(value: &Value) -> Vec<Block> {
     blocks
 }
 
+/// One row per model in board order, a column per recorded measure's
+/// contribution, and notices for the selection, scales and unmeasured
+/// measures.
+fn rank_blocks(value: &Value) -> Vec<Block> {
+    let measures: Vec<Value> = value["measures"].as_array().cloned().unwrap_or_default();
+    let recorded: Vec<&Value> = measures
+        .iter()
+        .filter(|measure| measure["status"] != "unmeasured")
+        .collect();
+    let mut columns = vec![
+        Column::new("RANK").number(),
+        Column::new("MODEL"),
+        Column::new("TASKS").number(),
+        Column::new("SCORE").number(),
+        Column::new("P10-P90"),
+        Column::new("COST RATIO").number(),
+    ];
+    columns.extend(
+        recorded
+            .iter()
+            .map(|measure| Column::new(&text(&measure["label"]).to_uppercase()).number()),
+    );
+    let provisional = if value["live"] == true {
+        " · live, provisional".to_string()
+    } else {
+        format!(" · settle lag {}", text(&value["settle_lag"]))
+    };
+    let season = match value["season"]["season"].as_u64() {
+        Some(season) => format!("season {season} scales"),
+        None => "scales estimated from this window (no season calibrated)".to_string(),
+    };
+    let mut table = Table::new(columns)
+        .keep_all_columns()
+        .empty_message("no implementer model in the window".to_string())
+        .trailing_notice(format!(
+            "implementer models · {} to {}{provisional} · {} tasks · {season} · computed {}",
+            text(&value["since"]),
+            text(&value["until"]),
+            text(&value["execution"]),
+            text(&value["computed_at"]),
+        ));
+    for row in value["rows"].as_array().into_iter().flatten() {
+        let interval = &row["interval"];
+        let mut cells = vec![
+            if row["eligible"] != true {
+                "-".to_string()
+            } else {
+                row["rank_label"].as_str().unwrap_or("-").to_string()
+            },
+            match row["single_tier"].as_str() {
+                Some(tier) => format!("{} (single tier: {tier})", text(&row["model"])),
+                None => text(&row["model"]),
+            },
+            number(&row["units"]),
+            number(&row["score"]),
+            if interval.is_object() {
+                format!("{}-{}", number(&interval["p10"]), number(&interval["p90"]))
+            } else {
+                "-".to_string()
+            },
+            if row["cost"]["cost_unknown"] == true {
+                "unknown".to_string()
+            } else {
+                number(&row["cost"]["ratio"])
+            },
+        ];
+        cells.extend(
+            recorded
+                .iter()
+                .map(|measure| number(&row["measures"][text(&measure["key"])]["contribution"])),
+        );
+        table.add_row(cells);
+    }
+    let unmeasured: Vec<String> = measures
+        .iter()
+        .filter(|measure| measure["status"] == "unmeasured")
+        .map(|measure| format!("{} ({})", text(&measure["label"]), text(&measure["reason"])))
+        .collect();
+    if !unmeasured.is_empty() {
+        table = table.trailing_notice(format!(
+            "Unmeasured, outside the weights: {}",
+            unmeasured.join("; ")
+        ));
+    }
+    table = table.trailing_notice(format!(
+        "Score: 100 + 10 × weighted noise-unit residuals against the same-mix expectation, shrunk toward the other eligible models (K = 30); measure columns are score points before shrinkage.{}",
+        if value["qualified"] == true {
+            String::new()
+        } else {
+            format!(
+                " Board not qualified: {} eligible models of 3 needed, so no bands or ranks.",
+                number(&value["eligible_models"])
+            )
+        }
+    ));
+    if value["unattributed"]["tasks"].as_u64().unwrap_or(0) > 0 {
+        table = table.trailing_notice(format!(
+            "Unattributed: {} tasks whose runs recorded no model count in the fleet expectation only.",
+            number(&value["unattributed"]["tasks"])
+        ));
+    }
+    vec![Block::table(table)]
+}
+
+/// The calibrated season: its window, reference size and scales.
+fn calibrate_blocks(value: &Value) -> Vec<Block> {
+    let season = &value["season"];
+    let mut table = Table::new(vec![
+        Column::new("MEASURE").fixed(),
+        Column::new("WEIGHT").number(),
+        Column::new("SCALE").number(),
+        Column::new("RAW").number(),
+        Column::new("FLOOR").number(),
+    ])
+    .keep_all_columns()
+    .trailing_notice(format!(
+        "season {} · calibrated on {} to {} · {} tasks · n_ref {} · {} draws · {} seasons on file",
+        number(&season["season"]),
+        text(&season["since"]),
+        text(&season["until"]),
+        number(&season["tasks"]),
+        number(&season["n_ref"]),
+        number(&season["draws"]),
+        number(&value["seasons_on_file"]),
+    ));
+    let precise = |value: &Value| match value.as_f64() {
+        Some(value) => format!("{value:.4}"),
+        None => "-".to_string(),
+    };
+    for scale in season["scales"].as_array().into_iter().flatten() {
+        table.add_row(vec![
+            text(&scale["key"]),
+            number(&scale["weight"]),
+            precise(&scale["scale"]),
+            precise(&scale["raw"]),
+            precise(&scale["floor"]),
+        ]);
+    }
+    vec![Block::table(table)]
+}
+
 /// One row per probed crew: executor, mode, result and any visual hold.
 fn vision_probe_blocks(value: &Value) -> Vec<Block> {
     let mut table = Table::new(vec![
@@ -447,8 +680,13 @@ fn vision_probe_blocks(value: &Value) -> Vec<Block> {
 }
 
 fn selection_line(value: &Value) -> String {
+    // Only implementer counts read the execution scope.
+    let execution = match value["execution"].as_str() {
+        Some(scope) if value["role"] == "implementers" => format!(" · {scope} tasks"),
+        _ => String::new(),
+    };
     format!(
-        "{} · window {} · minimum support {} · {} tasks scanned · computed {}",
+        "{} · window {} · minimum support {}{execution} · {} tasks scanned · computed {}",
         text(&value["role"]),
         text(&value["window"]),
         number(&value["min_support"]),
@@ -461,11 +699,13 @@ fn text(value: &Value) -> String {
     value.as_str().unwrap_or_default().to_string()
 }
 
-/// A share as a percent to one place. `number` collapses `0.5102` to `0.5`.
-fn percent(value: &Value) -> String {
-    value
-        .as_f64()
-        .map_or_else(|| "-".to_string(), |share| format!("{:.1}%", share * 100.0))
+/// A row's score interval as `p10 to p90`; `-` when the row has none.
+fn interval(value: &Value) -> String {
+    if value["p10"].is_number() && value["p90"].is_number() {
+        format!("{} to {}", number(&value["p10"]), number(&value["p90"]))
+    } else {
+        "-".into()
+    }
 }
 
 /// A count, rate or score; `-` when the payload has none.
@@ -484,22 +724,63 @@ fn number(value: &Value) -> String {
     }
 }
 
+/// The row's units by the source that decided their effort, as
+/// `invocation 12, crew label 3`; `None` when the row reports none.
+fn effort_source_labels(value: &Value) -> Option<String> {
+    let sources = value.as_object().filter(|sources| !sources.is_empty())?;
+    Some(
+        sources
+            .iter()
+            .map(|(source, units)| format!("{} {}", source.replace('_', " "), number(units)))
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
+}
+
+/// A breakdown entry's effort in the same words as the dashboard: a null
+/// effort is the provider default, and `"unknown"` (or a missing name) is
+/// effort unknown. The two stay distinct.
+fn recorded_effort_name(value: &Value) -> String {
+    if value.is_null() {
+        return "provider default".to_string();
+    }
+    let name = text(value);
+    if name.is_empty() || name == "unknown" {
+        "effort unknown".to_string()
+    } else {
+        name
+    }
+}
+
+/// Completed invocations by contributing crew and recorded effort. This is
+/// not the row's scored units, so each entry names its crew.
 fn effort_labels(value: &Value) -> String {
     let labels = value
         .as_array()
         .into_iter()
         .flatten()
         .map(|row| {
-            if row["reasoning_effort"].is_null() {
-                "provider default".to_string()
+            let effort = recorded_effort_name(&row["reasoning_effort"]);
+            let crew = text(&row["crew"]);
+            let who = if crew.is_empty() {
+                effort
             } else {
-                text(&row["reasoning_effort"])
+                format!("{crew} / {effort}")
+            };
+            if row.get("invocations").is_some_and(|count| !count.is_null()) {
+                format!(
+                    "{who} ({} invocations, {} tasks)",
+                    number(&row["invocations"]),
+                    number(&row["tasks"])
+                )
+            } else {
+                who
             }
         })
         .collect::<Vec<_>>();
     if labels.is_empty() {
-        "unknown".into()
+        "effort unknown".into()
     } else {
-        labels.join(", ")
+        labels.join("; ")
     }
 }

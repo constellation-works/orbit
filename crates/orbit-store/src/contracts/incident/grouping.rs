@@ -561,6 +561,27 @@ fn merge_incident_into(root: &mut FailureIncident, child: FailureIncident) {
     root.propagation.extend(child.propagation);
 }
 
+// Test-only seams for the sibling tests/ directory. Production builds never compile
+// these, so the helpers above stay private (STD-02 R19; test_layout.md "Layout shapes"
+// describes the #[cfg(test)] probe).
 #[cfg(test)]
-#[path = "tests/grouping.rs"]
-mod tests;
+pub(super) fn probe_push_unique(target: &mut Vec<String>, value: Option<&str>) {
+    push_unique(target, value);
+}
+
+#[cfg(test)]
+pub(super) fn probe_sort_samples(samples: &mut [IncidentEventRef]) {
+    sort_samples(samples);
+}
+
+#[cfg(test)]
+pub(super) fn probe_group_run_cascades(failures: &[AuditEvent]) -> Vec<FailureIncident> {
+    group_run_cascades(failures)
+}
+
+#[cfg(test)]
+pub(super) fn probe_collapse_cited_run_cascades(
+    incidents: Vec<FailureIncident>,
+) -> Vec<FailureIncident> {
+    collapse_cited_run_cascades(incidents)
+}

@@ -31,6 +31,7 @@ fn run_owner_equivalence_pairs_pid_with_its_start_time_token() {
 
     let now = Utc::now();
     let mut run = JobRun {
+        build: None,
         executed_on: None,
         run_id: "jrun-owner".to_string(),
         job_id: "job-owner".to_string(),

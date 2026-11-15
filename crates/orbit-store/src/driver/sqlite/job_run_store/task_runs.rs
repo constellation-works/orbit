@@ -44,7 +44,7 @@ impl Store {
                 .collect::<Vec<_>>()
                 .join(" UNION ALL ");
             let sql = format!(
-                "SELECT job_runs.{JOB_RUN_COLUMNS}, requested.task_id FROM ({pages}) AS requested
+                "SELECT job_runs.{JOB_RUN_COLUMNS}, requested.task_id AS requested_task_id FROM ({pages}) AS requested
                  CROSS JOIN job_runs WHERE job_runs.workspace_id = ?1
                  AND job_runs.run_id = requested.run_id"
             );
@@ -54,7 +54,10 @@ impl Store {
             let mut statement = conn.prepare(&sql).map_err(sqlite_store_error)?;
             let rows = statement
                 .query_map(params.as_slice(), |row| {
-                    Ok((row.get::<_, String>(17)?, row_to_job_run(row)?))
+                    Ok((
+                        row.get::<_, String>("requested_task_id")?,
+                        row_to_job_run(row)?,
+                    ))
                 })
                 .map_err(sqlite_store_error)?;
             for row in rows {
@@ -72,10 +75,8 @@ impl Store {
         let steps = read_steps_for_runs(&conn, workspace_id, &run_ids)?;
         for runs in result.values_mut() {
             runs.sort_by(|a, b| {
-                b.finished_at
-                    .or(b.started_at)
-                    .unwrap_or(b.created_at)
-                    .cmp(&a.finished_at.or(a.started_at).unwrap_or(a.created_at))
+                b.recency_at()
+                    .cmp(&a.recency_at())
                     .then_with(|| a.run_id.cmp(&b.run_id))
             });
             for run in runs {

@@ -1,0 +1,12 @@
+{
+  "fixture": "fleet-notices",
+  "frozen_instant": "2026-01-01T12:00:00Z",
+  "tasks": [],
+  "notices": [
+    {
+      "kind": "incident",
+      "title": "Merge queue paused while the shared runner pool is rebuilt",
+      "body": "Landings wait until the pool is back. Delivery runs keep going and their candidates stay ready."
+    }
+  ]
+}

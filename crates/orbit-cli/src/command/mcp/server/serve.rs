@@ -41,8 +41,7 @@ pub(in super::super) struct StdioLaunch {
 /// This is the entry point an SSH caller reaches, and its `--operator` is a
 /// statement there exactly as it is locally: the caller composed that argv over
 /// an SSH login to this machine, which is ownership of it, so there is no
-/// second authorization for the destination to make [ORB-12564]. A leftover
-/// file from the retired destination-side model is named once and ignored.
+/// second authorization for the destination to make [ORB-12564].
 pub(in super::super) fn serve_mcp_stdio(
     global_root: PathBuf,
     remote_caller_machine_id: Option<String>,
@@ -52,7 +51,6 @@ pub(in super::super) fn serve_mcp_stdio(
     launch: StdioLaunch,
     toolsets: McpToolsetSelection,
 ) -> Result<(), OrbitError> {
-    orbit_mcp::warn_ignored_caller_authorization(&global_root);
     let (host, mut session_context) = compose_server(
         global_root,
         remote_caller_machine_id,
@@ -68,6 +66,69 @@ pub(in super::super) fn serve_mcp_stdio(
         block_on_server(orbit_mcp::serve_stdio_with_context(host, session_context))?
     };
     finish_stdio_session(exit)
+}
+
+/// The federated client a workspace-less CLI notice list or a fanned-out
+/// `orbit attention` aggregates through: this machine in-process plus every
+/// configured remote over SSH, the same composition the federated server
+/// serves. The SSH-only routed client cannot answer for the local owner, so
+/// a CLI aggregation composed from it alone would degrade this machine on
+/// every call.
+pub(crate) fn federated_aggregate_client(
+    global_root: PathBuf,
+    authority: McpSessionAuthority,
+) -> Result<federated::FederatedMcpHost, OrbitError> {
+    let remotes = federated::load_destinations(&global_root)?;
+    let identity = orbit_mcp::mcp_server_identity(&global_root, None, authority)?;
+    let destinations = federated::federated_membership(
+        identity.process_machine_id.clone(),
+        identity.process_machine_name.clone(),
+        remotes,
+    );
+    let global_root_for_fanout = global_root.clone();
+    let local_machine = Arc::new(ServerMcpHost::new(
+        global_root,
+        identity.process_machine_id.clone(),
+        identity.process_machine_name.clone(),
+    ));
+    let probe = federated::CompositeDestinationProbe::new(
+        Arc::new(federated::InProcessDestinationProbe::new(
+            local_machine,
+            identity.session_context.clone(),
+        )),
+        Arc::new(federated::SshDestinationProbe::new(
+            identity.process_machine_id.clone(),
+            federated::DEFAULT_PROBE_TIMEOUT,
+            federated::DEFAULT_ROUTED_DELIVERY_TIMEOUT,
+            None,
+            authority,
+        )),
+    );
+    Ok(
+        federated::FederatedMcpHost::new(destinations, Arc::new(probe))
+            .with_attention_fanout(attention_fanout(&global_root_for_fanout)),
+    )
+}
+
+/// The attention fan-out with the registered host names items are
+/// attributed to. Its deadline is fixed; an unreadable host file leaves the
+/// names empty, since the caller already validated it.
+pub(crate) fn attention_fanout(global_root: &std::path::Path) -> federated::AttentionFanout {
+    let mut fanout = federated::AttentionFanout::default();
+    if let Ok(registry) = orbit_registry::hosts::load_host_registry(global_root) {
+        fanout.host_names = registry
+            .hosts()
+            .entries()
+            .iter()
+            .map(|host| (host.machine_id.clone(), host.name.clone()))
+            .collect();
+        if let Some(local) = registry.local() {
+            fanout
+                .host_names
+                .insert(local.id.clone(), local.name.clone());
+        }
+    }
+    fanout
 }
 
 /// Serve the federated mux: the accepting machine plus operator-configured
@@ -144,7 +205,8 @@ pub(in super::super) fn serve_mcp_federated_stdio(
             .with_task_prefix_routing(task_prefixes)
             .with_local_mirror_hint(Arc::new(move |task_id| {
                 orbit_cmd::hosts::local_mirror_workspace(&mirror_root, task_id)
-            })),
+            }))
+            .with_attention_fanout(attention_fanout(&global_root_for_bridge)),
     );
     let host = with_claimed_owner_bridge(
         host,
@@ -196,21 +258,23 @@ pub(in super::super) fn serve_mcp_listener(
     // machine label to trust; each accepted connection contributes only the
     // peer address it was observed at.
     //
-    // For the same reason the socket serves agent authority only: it
-    // authenticates no client, so every accepted connection would otherwise
-    // inherit whatever authority the listening process was started with.
+    // The socket admits a peer only when that peer's user id is this process,
+    // checked before any byte is read. It still serves agent authority only:
+    // matching the user id is not a promotion to operator, and a listener must
+    // not hand the process's authority to every admitted session. Operator
+    // remains the explicit `orbit mcp serve --operator` path.
     //
     // It binds a workspace only when the operator names one (`orbit --workspace
     // <selector> mcp listen`). That is a default and never authority: it is
     // resolved against the registry per call, a client that announces a
-    // workspace or passes one per call takes precedence, and any peer could
-    // already name the same workspace itself. Without it a socket is shared by
-    // whoever can reach it, so each session names its own workspace, and the
-    // managed-child `ORBIT_WORKSPACE` envelope is not read here.
+    // workspace or passes one per call takes precedence, and an admitted peer
+    // could already name the same workspace itself. Without it each session
+    // names its own workspace, and the managed-child `ORBIT_WORKSPACE` envelope
+    // is not read here.
     //
-    // This reasoning is unchanged by argv-propagated remote authority: SSH
-    // authenticates the caller before Orbit runs, and a socket authenticates
-    // nobody at all [ORB-12564].
+    // SSH authenticates the caller before Orbit runs. A TCP peer is admitted
+    // only when its local user id matches this process; that check does not
+    // make the listener an operator session [ORB-12564].
     let (host, session_context) = compose_server(
         global_root,
         None,

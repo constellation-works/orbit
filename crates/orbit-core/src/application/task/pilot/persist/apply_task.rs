@@ -4,7 +4,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
-use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     Task, TaskOsRequirement, TaskRelation, TaskRelationType, TaskStatus, normalize_task_tags,
 };
@@ -12,20 +11,22 @@ use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::task::{TaskAutomationPort, TaskJobPort};
+use crate::application::task::{TaskAutomationPort, TaskJobPort, finding_fingerprint};
 
 use super::super::apply::admission::{
     Admission, AppliedTaskMaterial, PreparedTaskSnapshot, ValidatedTask,
 };
-use super::super::explore_brief::{BriefProvenance, store_explore_brief};
 use super::atomic::{
     applied_material, apply_atomic_with_retries, resulting_fingerprint, with_task_locks,
 };
 use super::drift::task_snapshot_drift;
-use super::history::{assessment_history_summary, material_change_detail, status_only_fingerprint};
+use super::history::{
+    NoTargetPilotAssessment, NoTargetPilotReceipt, assessment_history_summary,
+    material_change_detail, status_only_fingerprint,
+};
 #[cfg(test)]
 use super::lock_hook;
-use super::reports::{source_superseded, superseded_task};
+use super::reports::{source_superseded, superseded_task, superseded_with_current};
 
 /// Lock rounds before an assessment whose dependency graph keeps growing
 /// between discovery and its locks is refused as stale.
@@ -152,6 +153,14 @@ pub(in super::super) fn apply_task(
                 }
                 Err(error) => return Err(error),
             };
+            // One history read covers the receipt, superseded and creation
+            // checks below. The task locks are held, so no concurrent
+            // mutation to these tasks can intervene before the atomic write.
+            let history = runtime.get_task_history(&task.task_id)?;
+            let already_applied = history.iter().any(|event| {
+                event.event == "task_pilot_applied"
+                    && event.receipt() == Some(task.operation_id.as_str())
+            });
             // Re-read under the discovered locks even on replay. A replay
             // may approve only dependencies actually stored, never edges the
             // original write skipped or edges it would add on a new apply.
@@ -161,7 +170,7 @@ pub(in super::super) fn apply_task(
                 graph_changed = true;
                 return Ok(());
             };
-            if operation_was_applied(runtime, &task.task_id, &task.operation_id)? {
+            if already_applied {
                 match admit(&current, task, &graph) {
                     Ok(admission) => task.set_admission(admission),
                     Err(refusal) => {
@@ -180,7 +189,7 @@ pub(in super::super) fn apply_task(
                 return Ok(());
             }
             if let Some(superseded) =
-                superseded_task(runtime, &task.task_id, &snapshot, policy, ci_sweep)?
+                superseded_with_current(runtime, &current, &history, &snapshot, policy, ci_sweep)?
             {
                 outcome = Some(ApplyTaskOutcome::Superseded(superseded));
                 return Ok(());
@@ -213,9 +222,17 @@ pub(in super::super) fn apply_task(
                 }
                 return Ok(());
             }
-            if runtime.context_creation_state(&current)?.identity()
-                != snapshot.context_creation_identity
-            {
+            // Same locked history: no second history read for the grant check.
+            let creation_identity = orbit_types::task::ContextCreationState::resolve(
+                &current.id,
+                &current.context_files,
+                current.updated_at,
+                history
+                    .iter()
+                    .map(|entry| (entry.event.as_str(), entry.note.as_deref())),
+            )
+            .identity();
+            if creation_identity != snapshot.context_creation_identity {
                 outcome = Some(ApplyTaskOutcome::Stale(
                     CONTEXT_CREATION_CHANGED,
                     CONTEXT_CREATION_CHANGED_DETAIL.to_string(),
@@ -278,7 +295,7 @@ pub(in super::super) fn apply_task(
                 history_summary.push_str("; ");
                 history_summary.push_str(warning);
             }
-            if task.after.is_empty() {
+            let no_target_assessment = if task.after.is_empty() {
                 // Record the meaning *after* the atomic write. A marker made
                 // from the prepared task would immediately be stale when the
                 // pilot changes its complexity or status.
@@ -301,10 +318,20 @@ pub(in super::super) fn apply_task(
                     " [no-target-assessed:{}:{fingerprint}]",
                     target_status.cli_name()
                 ));
-            }
-            let mut requirements =
+                Some(NoTargetPilotAssessment {
+                    status: target_status,
+                    fingerprint,
+                })
+            } else {
+                None
+            };
+            // Only mentions the pilot did not classify as the change's
+            // subject hold: a missing or malformed classification holds.
+            let mut requirements = super::super::admission::invoked_operator_requirements(
+                &task.assessment,
                 super::super::validation_tools::ImplementationLane::resolve(runtime)
-                    .operator_requirements(&current);
+                    .operator_requirements(&current),
+            );
             // A typed post-deploy measurement is the operator's work after
             // landing, not a tool requirement for candidate admission.
             requirements.retain(|requirement| {
@@ -358,6 +385,8 @@ pub(in super::super) fn apply_task(
                     .as_ref()
                     .map(|fingerprints| fingerprints.status_neutral.clone()),
                 material_components: fingerprints.map(|fingerprints| fingerprints.components),
+                finding_fingerprint: Some(finding_fingerprint(&assessed)),
+                status: Some(target_status),
             };
             let operator_hold = (!requirements.is_empty()).then(|| {
                 crate::application::task::OperatorValidationHold::new(&assessed, requirements)
@@ -389,25 +418,45 @@ pub(in super::super) fn apply_task(
                     task.post_deploy.clone(),
                 )
             });
-            // Artifact first, receipt second. The brief names this receipt and
-            // the material it seals, so a crash between the two writes leaves
-            // a brief no receipt matches, which is never delivered.
-            let explore_brief = task.explore_brief.as_ref().map(|decision| {
-                store_explore_brief(
-                    runtime,
-                    decision,
-                    &BriefProvenance {
-                        task_id: &task.task_id,
-                        material_fingerprint: written
-                            .material
-                            .as_ref()
-                            .map(|(fingerprint, _)| fingerprint.as_str()),
-                        receipt_operation_id: &task.operation_id,
-                        pilot_run_id: task.pilot_run_id.as_deref(),
-                        pilot_crew: task.pilot_crew.as_deref(),
-                    },
-                )
-            });
+            let audit = serde_json::to_value(NoTargetPilotReceipt {
+                    no_target_assessment,
+                    audit: json!({
+                    "assessment": task.assessment,
+                    "assessed_requirements": super::super::freshness::pilot_requirements_material(&assessed),
+                    "operator_validation_hold": operator_hold,
+                    "host_operational_hold": host_operational_hold,
+                    "native_os_hold": native_os_hold,
+                    "post_deploy": post_deploy,
+                    "context_files_before": snapshot.context_files,
+                    "complexity_before": snapshot.complexity,
+                    "complexity_after": task.complexity,
+                    "applied_material": written,
+                    "pilot_run_id": task.pilot_run_id,
+                    // What a later re-check diffs the task against.
+                    super::super::recheck::RECHECK_BASIS: super::super::recheck::recheck_basis(
+                        &assessed,
+                        &assessed.context_files,
+                        &assessed.tags,
+                        prepared["source"]["source_revision"].as_str(),
+                    ),
+                    }),
+                })
+                .map_err(|error| {
+                    OrbitError::Execution(format!("serialize task-pilot audit: {error}"))
+                })?;
+            let summary = format!(
+                "selectors {} → {}; crew {}; complexity {} → {}; {}",
+                snapshot.context_files.len(),
+                task.after.len(),
+                assessed.crew.as_deref().unwrap_or("unassigned"),
+                snapshot
+                    .complexity
+                    .map_or_else(|| "unassigned".into(), |value| value.to_string()),
+                task.complexity,
+                history_summary,
+            );
+            let audit_note =
+                runtime.persist_pilot_audit(&task.task_id, &task.operation_id, &summary, audit)?;
             let mutation_params = AtomicTaskMutationParams {
                 actor: super::super::PILOT_ACTOR.to_string(),
                 operation_id: task.operation_id.clone(),
@@ -439,36 +488,22 @@ pub(in super::super) fn apply_task(
                     )
                     .chain(crew_redraw_history)
                     .collect(),
-                audit_note: serde_json::to_string(&json!({
-                    "assessment": task.assessment,
-                    "operator_validation_hold": operator_hold,
-                    "host_operational_hold": host_operational_hold,
-                    "native_os_hold": native_os_hold,
-                    "post_deploy": post_deploy,
-                    "context_files_before": snapshot.context_files,
-                    "complexity_before": snapshot.complexity,
-                    "complexity_after": task.complexity,
-                    "applied_material": written,
-                    "pilot_run_id": task.pilot_run_id,
-                    "explore_brief": explore_brief,
-                }))
-                .map_err(|error| {
-                    OrbitError::Execution(format!("serialize task-pilot audit: {error}"))
-                })?,
+                audit_note,
             };
             let mutation = apply_atomic_with_retries(runtime, &task.task_id, &mutation_params)?;
             match mutation {
                 AtomicTaskMutationOutcome::Applied => {
+                    // The atomic write applied exactly the assessed material
+                    // sealed in `written` while these locks were held (any
+                    // concurrent change fails as Stale instead). Reusing its
+                    // fingerprint removes one task read and one material
+                    // fingerprint per applied task without changing evidence.
+                    let fingerprint = written
+                        .material
+                        .as_ref()
+                        .map(|(fingerprint, _)| fingerprint.clone());
                     task.applied_material = Some(written);
-                    runtime.record_event(OrbitEvent::TaskUpdated {
-                        id: task.task_id.clone(),
-                    })?;
-                    outcome = Some(ApplyTaskOutcome::Applied(resulting_fingerprint(
-                        runtime,
-                        &task.task_id,
-                        &snapshot,
-                        policy,
-                    )?));
+                    outcome = Some(ApplyTaskOutcome::Applied(fingerprint));
                 }
                 AtomicTaskMutationOutcome::AlreadyApplied => {
                     task.applied_material =

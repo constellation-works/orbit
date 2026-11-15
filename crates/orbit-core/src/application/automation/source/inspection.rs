@@ -4,7 +4,7 @@
 //! reftable refs (extensions it does not implement), keeps the bounded Git
 //! commands, so its status is unchanged.
 
-use orbit_automation::{AutomationError, DeferredReason, delivery::digest};
+use orbit_automation::{AutomationError, DeferredReason};
 use orbit_types::workflow::automation::SourceRevision;
 
 use super::Source;
@@ -67,22 +67,12 @@ impl Source<'_> {
             Err(error) if error.code() == git2::ErrorCode::NotFound => String::new(),
             Err(error) => return Err(unavailable(error)),
         };
-        let normalized = remote.trim_end_matches(".git");
-        let repository = normalized
-            .strip_prefix("https://github.com/")
-            .or_else(|| normalized.strip_prefix("git@github.com:"))
-            .map(str::to_owned)
-            .unwrap_or_else(|| {
-                // `git rev-parse --path-format=absolute --git-common-dir`
-                // prints the canonical path without libgit2's trailing slash.
-                let common = repo.commondir().to_string_lossy();
-                let identity = if remote.is_empty() {
-                    common.trim_end_matches('/')
-                } else {
-                    &remote
-                };
-                format!("git:{}", digest(identity.as_bytes()))
-            });
+        let repository = super::repository_identity(&remote, || {
+            // `git rev-parse --path-format=absolute --git-common-dir`
+            // prints the canonical path without libgit2's trailing slash.
+            let common = repo.commondir().to_string_lossy();
+            Ok(common.trim_end_matches('/').to_owned())
+        })?;
         // Preserve preparation's local-ahead rule, but never refresh origin.
         // Missing/unreadable tracking refs fall back to local, as before.
         let head = if preparation && !remote.is_empty() {

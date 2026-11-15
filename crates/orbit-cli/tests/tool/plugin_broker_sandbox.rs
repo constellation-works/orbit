@@ -290,7 +290,7 @@ for ns in ['execfixture', 'mcpfixture']:
     result = subprocess.run([orbit, 'tool', 'run', ns + '.echo', '--input', '{}'], capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
     rows.append(json.loads(result.stdout))
-server = subprocess.Popen([orbit, 'mcp', 'serve'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=sys.stderr, text=True)
+server = subprocess.Popen([orbit, 'mcp', 'serve', '--toolset', 'exec,plugins'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=sys.stderr, text=True)
 def send(message):
     server.stdin.write(json.dumps(message) + '\n')
     server.stdin.flush()
@@ -966,7 +966,8 @@ printf '{{"ok":true,"output":{{"result":"%s"}}}}\n' "$result"
         assert_eq!(host.calls(), ["ops.probe", "ops.probe"]);
 
         {
-            let mut agent = McpServer::start(&host, &[], &[("ORBIT_OPERATOR", "1")]);
+            let mut agent =
+                McpServer::start(&host, &["--toolset", "plugins"], &[("ORBIT_OPERATOR", "1")]);
             assert!(
                 !agent.call("ops_probe")["isError"]
                     .as_bool()

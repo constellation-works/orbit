@@ -84,10 +84,10 @@ pub struct Task {
     pub job_run_machine: Option<ExecutionLocation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,
-    /// Assignment provenance: `explicit`, `pool:<complexity>`, or `default`.
-    /// Absent on legacy records; assignment history can recover it.
+    /// Assignment provenance; see [`CrewSource`]. Absent on legacy records;
+    /// assignment history can recover it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub crew_source: Option<String>,
+    pub crew_source: Option<CrewSource>,
     /// Explicit named crew that owns orchestration of this task. This is
     /// attribution metadata only; execution resolution continues to use `crew`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -212,9 +212,14 @@ impl Task {
         }
     }
 
+    /// The task's current pull request: the LAST recorded `github-pr` ref.
+    /// Storage appends (`push_external_ref_if_missing`), and a task requeued
+    /// with a discarded candidate keeps its closed earlier PR ref ahead of the
+    /// fresh one, so the newest recorded PR is the current delivery.
     pub fn github_pr_number(&self) -> Option<&str> {
         self.external_refs
             .iter()
+            .rev()
             .find(|external_ref| external_ref.system == GITHUB_PR_EXTERNAL_REF_SYSTEM)
             .map(|external_ref| external_ref.id.as_str())
     }
@@ -370,8 +375,18 @@ pub fn resolve_task_dependencies(
     task: &Task,
     status_by_id: &BTreeMap<OrbitId, TaskStatus>,
 ) -> Vec<ResolvedTaskDependency> {
-    let reference_index = TaskReferenceIndex::from_status_index(status_by_id);
-    resolve_task_dependencies_with_index(task, status_by_id, &reference_index)
+    resolve_task_dependencies_lazily(task, &LazyTaskReferenceIndex::new(status_by_id))
+}
+
+/// [`resolve_task_dependencies`] over a [`LazyTaskReferenceIndex`] the caller
+/// shares between the projections of one task.
+pub(crate) fn resolve_task_dependencies_lazily(
+    task: &Task,
+    reference_index: &LazyTaskReferenceIndex<'_>,
+) -> Vec<ResolvedTaskDependency> {
+    resolve_task_dependencies_by(task, reference_index.status_by_id, |target| {
+        reference_index.is_not_verifiable_here(task, target)
+    })
 }
 
 /// Resolve dependency targets using prefix knowledge derived from one status
@@ -382,6 +397,16 @@ pub fn resolve_task_dependencies_with_index(
     status_by_id: &BTreeMap<OrbitId, TaskStatus>,
     reference_index: &TaskReferenceIndex,
 ) -> Vec<ResolvedTaskDependency> {
+    resolve_task_dependencies_by(task, status_by_id, |target| {
+        reference_index.is_not_verifiable_here(task, target, status_by_id)
+    })
+}
+
+fn resolve_task_dependencies_by(
+    task: &Task,
+    status_by_id: &BTreeMap<OrbitId, TaskStatus>,
+    is_not_verifiable_here: impl Fn(&str) -> bool,
+) -> Vec<ResolvedTaskDependency> {
     task.dependencies()
         .into_iter()
         .map(|dependency_id| ResolvedTaskDependency {
@@ -390,7 +415,7 @@ pub fn resolve_task_dependencies_with_index(
                 .get(&dependency_id)
                 .map(|status| status.to_string())
                 .unwrap_or_else(|| {
-                    if reference_index.is_not_verifiable_here(task, &dependency_id, status_by_id) {
+                    if is_not_verifiable_here(&dependency_id) {
                         TASK_REFERENCE_NOT_VERIFIABLE_HERE.to_string()
                     } else {
                         "missing".to_string()
@@ -400,23 +425,19 @@ pub fn resolve_task_dependencies_with_index(
         .collect()
 }
 
-/// Project typed relations with a marker on unresolved foreign-prefix task
-/// targets. Resolvable and locally missing targets retain their stored shape.
-pub fn resolve_task_relations(
+/// Project typed relations using a shared lazy reference index.
+pub(crate) fn project_task_relations_lazily(
     task: &Task,
-    status_by_id: &BTreeMap<OrbitId, TaskStatus>,
+    reference_index: &LazyTaskReferenceIndex<'_>,
 ) -> Vec<ResolvedTaskRelation> {
-    let reference_index = TaskReferenceIndex::from_status_index(status_by_id);
-    resolve_task_relations_with_index(task, status_by_id, &reference_index)
+    project_task_relations_by(task, |target| {
+        reference_index.is_not_verifiable_here(task, target)
+    })
 }
 
-/// Resolve relation targets using prefix knowledge derived from one status
-/// projection. Callers that inspect several tasks from the same projection
-/// should create one [`TaskReferenceIndex`] and reuse it.
-pub fn resolve_task_relations_with_index(
+fn project_task_relations_by(
     task: &Task,
-    status_by_id: &BTreeMap<OrbitId, TaskStatus>,
-    reference_index: &TaskReferenceIndex,
+    is_not_verifiable_here: impl Fn(&str) -> bool,
 ) -> Vec<ResolvedTaskRelation> {
     task.relations
         .iter()
@@ -424,8 +445,7 @@ pub fn resolve_task_relations_with_index(
             relation_type: relation.relation_type,
             target: relation.target.clone(),
             regression: relation.regression.clone(),
-            verification: reference_index
-                .is_not_verifiable_here(task, &relation.target, status_by_id)
+            verification: is_not_verifiable_here(&relation.target)
                 .then(|| TASK_REFERENCE_NOT_VERIFIABLE_HERE.to_string()),
         })
         .collect()
@@ -439,7 +459,6 @@ pub fn resolve_task_relations_with_index(
 #[derive(Debug)]
 pub struct TaskReferenceIndex {
     known_prefixes: BTreeSet<String>,
-    indexed_task_count: usize,
 }
 
 impl TaskReferenceIndex {
@@ -450,14 +469,7 @@ impl TaskReferenceIndex {
                 .keys()
                 .filter_map(|id| task_id_prefix(id).map(ToOwned::to_owned))
                 .collect(),
-            indexed_task_count: status_by_id.len(),
         }
-    }
-
-    /// Number of task IDs examined while building this snapshot's prefix set.
-    /// This provides bounded-work evidence without depending on wall-clock time.
-    pub fn indexed_task_count(&self) -> usize {
-        self.indexed_task_count
     }
 
     /// Whether a missing valid task target belongs to a prefix this snapshot
@@ -469,16 +481,53 @@ impl TaskReferenceIndex {
         target: &str,
         status_by_id: &BTreeMap<OrbitId, TaskStatus>,
     ) -> bool {
-        if status_by_id.contains_key(target) || !is_valid_orb_task_id(target) {
-            return false;
+        foreign_prefix_to_verify(task, target, status_by_id)
+            .is_some_and(|target_prefix| !self.known_prefixes.contains(target_prefix))
+    }
+}
+
+/// The prefix of a missing, valid `target` outside `task`'s own prefix: the
+/// only case [`TaskReferenceIndex::is_not_verifiable_here`] needs the
+/// snapshot's prefix set for. `None` decides the target is verifiable here.
+fn foreign_prefix_to_verify<'a>(
+    task: &Task,
+    target: &'a str,
+    status_by_id: &BTreeMap<OrbitId, TaskStatus>,
+) -> Option<&'a str> {
+    if status_by_id.contains_key(target) || !is_valid_orb_task_id(target) {
+        return None;
+    }
+    let target_prefix = task_id_prefix(target)?;
+    (task_id_prefix(&task.id) != Some(target_prefix)).then_some(target_prefix)
+}
+
+/// A [`TaskReferenceIndex`] built on the first target that needs it. Building
+/// one scans every id in the status snapshot, which for a listing is the
+/// whole registry, while most tasks only name targets the snapshot holds or
+/// that share their own prefix. A per-task projection that resolves several
+/// reference fields shares one, so it scans at most once and usually never.
+pub(crate) struct LazyTaskReferenceIndex<'a> {
+    status_by_id: &'a BTreeMap<OrbitId, TaskStatus>,
+    index: std::cell::OnceCell<TaskReferenceIndex>,
+}
+
+impl<'a> LazyTaskReferenceIndex<'a> {
+    pub(crate) fn new(status_by_id: &'a BTreeMap<OrbitId, TaskStatus>) -> Self {
+        Self {
+            status_by_id,
+            index: std::cell::OnceCell::new(),
         }
-        let Some(target_prefix) = task_id_prefix(target) else {
-            return false;
-        };
-        if task_id_prefix(&task.id).is_some_and(|source_prefix| source_prefix == target_prefix) {
-            return false;
-        }
-        !self.known_prefixes.contains(target_prefix)
+    }
+
+    /// [`TaskReferenceIndex::is_not_verifiable_here`] against this snapshot.
+    fn is_not_verifiable_here(&self, task: &Task, target: &str) -> bool {
+        foreign_prefix_to_verify(task, target, self.status_by_id).is_some_and(|target_prefix| {
+            !self
+                .index
+                .get_or_init(|| TaskReferenceIndex::from_status_index(self.status_by_id))
+                .known_prefixes
+                .contains(target_prefix)
+        })
     }
 }
 
@@ -725,7 +774,7 @@ pub fn automatic_dispatch_cmp_with_expiry(
 }
 
 /// How far work only the requesting executor can run reaches in automatic
-/// dispatch order [ORB-17304]: the `workflow.admission_affinity` setting.
+/// dispatch order [ORB-17304]; owner admission fixes it at `band` [ORB-22808].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AdmissionAffinityReach {
@@ -738,6 +787,11 @@ pub enum AdmissionAffinityReach {
     /// No affinity: the canonical band, priority, expiry, age and ID order.
     Off,
 }
+
+/// The former `workflow.admission_affinity` default, fixed when the key was
+/// removed [ORB-22808]: work only the requesting executor can run leads its
+/// band, ahead of higher-priority work other executors can run.
+pub const ADMISSION_AFFINITY: AdmissionAffinityReach = AdmissionAffinityReach::Band;
 
 impl AdmissionAffinityReach {
     /// Every accepted spelling, in declaration order.

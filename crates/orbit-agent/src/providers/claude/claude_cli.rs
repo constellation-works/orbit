@@ -60,7 +60,7 @@ impl ClaudeCliTransport {
 
     // Static Claude CLI flags live in the executor definition; this transport
     // adds per-request toggles and the flags Orbit's response contract needs.
-    pub(crate) fn args(&self) -> Vec<String> {
+    pub(crate) fn args(&self, conversation_ref: Option<&str>) -> Vec<String> {
         // [ORB-10746] Structured output is what actually enforces the Orbit
         // response envelope; the prompt contract is guidance the model may
         // ignore, and in `jrun-20260812-0312-9` did.
@@ -81,13 +81,16 @@ impl ClaudeCliTransport {
         // edit. Not `json --verbose`: that prints the whole session as one
         // line, which a run longer than the 1 MiB stdout capture loses, and
         // with it the terminal `result`. Completion reads only that terminal
-        // `result` (`project_claude_response`).
+        // `result` (`project_claude_response`). Partial messages supply final
+        // request usage; the runner drops redundant content-block stream
+        // events before bounded capture, retaining message start/delta/stop.
         let mut args = vec![
             "--json-schema".to_string(),
             response_envelope_json_schema_arg(),
             "--output-format".to_string(),
             "stream-json".to_string(),
             "--verbose".to_string(),
+            "--include-partial-messages".to_string(),
         ];
 
         if let Some(model) = &self.model {
@@ -97,6 +100,10 @@ impl ClaudeCliTransport {
         if let Some(effort) = self.reasoning_effort {
             args.push("--effort".to_string());
             args.push(effort.to_string());
+        }
+        if let Some(conversation_ref) = conversation_ref.map(str::trim).filter(|s| !s.is_empty()) {
+            args.push("--resume".to_string());
+            args.push(conversation_ref.to_string());
         }
         args
     }

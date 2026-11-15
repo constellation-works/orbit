@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Crate-Boundary Error Translation"
-last_validated: 2026-10-29
+last_validated: 2026-11-12
 ---
 # Crate-Boundary Error Translation
 
@@ -46,13 +46,15 @@ caller never re-derives it with `error.to_string().contains(...)`: any message
 can quote such text (a child's stderr, a remote reply), and rewording a message
 would silently change behaviour.
 
-When a class must not change the wire contract, give it a variant that displays
-and codes exactly like the variant it refines:
+Carry the native class in a dedicated variant. Preserve the original layer for
+context, and choose the wire code according to the cause:
 
 - `StorageAccessDenied { layer, message }`: a read-only or access-denied
   failure from `io::Error` kinds (`From<io::Error>`, `OrbitError::storage_io`)
-  or SQLite codes (`storage::sqlite::sqlite_error`). It reads and codes as the
-  `Io`, `Store` or `Migration` error named by `layer`. Query it with
+  or SQLite codes (`storage::sqlite::sqlite_error`). It displays as the
+  `Io`, `Store` or `Migration` error named by `layer`, but CLI and MCP report
+  `storage_access_denied` rather than a generic I/O, store or migration code.
+  A denied layout-marker read is therefore never `migration_failed`. Query it with
   `is_readonly_or_access_failure()` and `storage_layer()`. Wrap a
   `rusqlite::Error` with `.map_err(sqlite_store_error)`, or `sqlite_error` to
   add context; `OrbitError::Store(e.to_string())` drops the class.
@@ -72,6 +74,19 @@ and codes exactly like the variant it refines:
   codes and serializes as `Execution`. Query it with `private_vcs_failure()`.
   An Orbit diagnostic that reports such a failure keeps its class only when
   it is rebuilt from the cause; plain `Execution` text is never transient.
+- `ForgeUnavailable(ForgePushHoldFailure { hold, message })`: a delivery push
+  the forge refused past its retry budget. The push operation builds the hold
+  once, and the dispatcher lifts it to `DispatchError::ForgeUnavailableHold`. It
+  reads, codes and serializes as `Execution`. Query it with `forge_push_hold()`.
+  Only a persisted message with no structured hold is decoded from text, through
+  `ForgeUnavailableHold::from_text`.
+- `WorkflowEvidenceUnavailable(WorkflowEvidenceUnavailable { reason })`: Orbit
+  could not read or verify the evidence a workflow prerequisite decision needs.
+  It reads, codes and serializes as `Execution`, and `reason` is diagnostic only.
+  The prerequisite snapshot retries this variant and no other. The expired
+  completion deadline stays a `DeliveryRefused`, and provider failures stay
+  `PrivateVcs`. Appending a CI retry diagnostic turns it into `Execution` with the
+  same text, because the suffix does not belong in `reason`.
 
 Each wildcard match in another crate must name the new variant wherever it
 names the twin, because `OrbitError` is `#[non_exhaustive]` and an unnamed
@@ -95,7 +110,8 @@ pub enum DispatchError {
 ```
 
 The translator lives next to the error. It preserves protocol skew, validation failures as
-`JobValidation`, recoverable VCS conflicts, and live-completion refusals; other dispatch errors
+`JobValidation`, recoverable VCS conflicts, live-completion refusals, delivery refusals, and
+owner-route unavailability as a typed `RemoteTool` with its wire code; other dispatch errors
 collapse to `InvalidInput`.
 
 ```rust
@@ -112,6 +128,22 @@ pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
         DispatchError::TaskCompletionLiveRun { task_id, run_id } => {
             OrbitError::TaskCompletionLiveRun { task_id, run_id }
         }
+        DispatchError::DeliveryRefused {
+            action,
+            refusal,
+            message,
+        } => OrbitError::DeliveryRefused {
+            refusal,
+            message: format!("deterministic action `{action}` refused: {message}"),
+        },
+        DispatchError::OwnerRouteUnavailable { action, message } => OrbitError::RemoteTool {
+            code: orbit_types::workflow::OWNER_ROUTE_UNAVAILABLE_ERROR_CODE.into(),
+            payload: serde_json::json!({
+                "code": orbit_types::workflow::OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,
+                "message": message,
+            }),
+            message: format!("deterministic action `{action}` failed: {message}"),
+        },
         other => OrbitError::InvalidInput(format!("{other}")),
     }
 }

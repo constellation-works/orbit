@@ -8,10 +8,10 @@
 // runs table and the run-detail meta in app.js).
 //
 // Receives one-time context via initRuns(runsContext()) containing the
-// callbacks (fetchAndRender*, navigateToRun) and getters (activeRunId, lastRuns,
-// formatters) that the actions and render depend on. No direct import from app.js.
+// callbacks (fetchAndRender*, navigateToRun) and getters (activeRunId, lastRuns)
+// that the actions and render depend on. No direct import from app.js.
 
-import { captureWorkspaceVisit, getWorkspace, hostWriteRefusal, onWorkspaceChange, panelCanRender, describePullSettlements, makeCopyButton, el, stateCell, syncNodes, postJson, fetchJson, makeRowDisclosure, enableRovingRows, formatDateTime, elapsedDurationInfo, getWindow, setWindow, persistScopeToUrl, notifyScopeChange, DASHBOARD_WINDOWS, bindTaskLink } from './common.js';
+import { captureWorkspaceVisit, getWorkspace, hostWriteRefusal, onWorkspaceChange, panelCanRender, describePullSettlements, makeCopyButton, el, stateCell, syncNodes, postJson, fetchJson, makeRowDisclosure, enableRovingRows, fmtDuration, formatAge, formatDateTime, elapsedDurationInfo, getWindow, setWindow, persistScopeToUrl, notifyScopeChange, DASHBOARD_WINDOWS, bindRunLink, bindTaskLink } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -46,15 +46,50 @@ const cancelRequestsInFlight = new Set();
 // Pipeline groups the operator has opened, by group key. Groups start folded.
 const expandedRunGroups = new Set();
 const replayRequestsInFlight = new Set();
-let runFilter = (() => {
-  const value = new URL(window.location.href).searchParams.get("run_state") || "all";
-  return RUN_FILTERS.has(value) ? value : "all";
-})();
+// The address owns these three filters: the query string names the state
+// (`run_state`) and the task or job id, so a reload, a copied link, Back and
+// Forward all read them from there (adoptRunFiltersFromAddress).
+const initialRunFilters = runFiltersFromAddress();
+let runFilter = initialRunFilters.state;
 // A hand-built URL may set both. The search field edits one of them and
 // clears the other; until that edit, the API applies them together.
-let runTaskId = (new URL(window.location.href).searchParams.get("task_id") || "").trim();
-let runJobId = (new URL(window.location.href).searchParams.get("job_id") || "").trim();
+let runTaskId = initialRunFilters.taskId;
+let runJobId = initialRunFilters.jobId;
 let runQueryTimer = null;
+
+// Ids in an address are untrusted input: keep only id-shaped values.
+function parseRunIdParam(value) {
+  const id = String(value || "").trim();
+  return /^[\w.:@/-]{1,128}$/.test(id) ? id : "";
+}
+
+function runFiltersFromAddress() {
+  const params = new URLSearchParams(window.location.search);
+  const state = params.get("run_state") || "all";
+  return {
+    state: RUN_FILTERS.has(state) ? state : "all",
+    taskId: parseRunIdParam(params.get("task_id")),
+    jobId: parseRunIdParam(params.get("job_id")),
+  };
+}
+
+/// Take the state filter and the task or job id filter from the address, for
+/// a load, Back or Forward onto Jobs › History. The chips, search field, list
+/// and address then agree: a change reloads the list, and an address that
+/// named something unusable is rewritten in place to what is shown.
+export function adoptRunFiltersFromAddress() {
+  const { state, taskId, jobId } = runFiltersFromAddress();
+  const changed = state !== runFilter || taskId !== runTaskId || jobId !== runJobId;
+  runFilter = state;
+  runTaskId = taskId;
+  runJobId = jobId;
+  persistRunFilters();
+  if (!changed) return;
+  clearRunsFetchTimer();
+  const input = document.querySelector(".runs-toolbar .runs-query");
+  if (input && input.value !== (runTaskId || runJobId)) input.value = runTaskId || runJobId;
+  if (hasCtx("markRunsLoading")) showRunsLoading();
+}
 
 // Task ids are PREFIX-digits with a 2-5 letter prefix outside the ADR, L,
 // and F artifact namespaces. Anything else in the search field is a job id.
@@ -116,14 +151,6 @@ function doFetchAndRenderRunEvents() {
     try { return _runsCtx.fetchAndRenderRunEvents(); } catch (_) { return Promise.resolve(); }
   }
   return Promise.resolve();
-}
-
-function fmtTimestampValue(v) {
-  return hasCtx("fmtTimestamp") ? _runsCtx.fmtTimestamp(v) : (v || "-");
-}
-
-function fmtDurationValue(v) {
-  return hasCtx("fmtDuration") ? _runsCtx.fmtDuration(v) : (v == null ? "-" : String(v));
 }
 
 export function initRuns(ctx) {
@@ -451,7 +478,7 @@ async function cancelRunInVisit(run, btn, host, visit) {
     ]);
   } catch (e) {
     if (!visit.isCurrent()) return;
-    showRunActionError(host, `${runId} was cancelled, but the view could not refresh: ${e.message || e}. Use Refresh to update it.`);
+    showRunActionError(host, `${runId} was cancelled, but the view could not refresh: ${e.message || e}. Reload the page to update it.`);
     console.error(e);
   }
   if (visit.isCurrent() && notice && host && host.id !== "runs-body") {
@@ -603,7 +630,7 @@ async function resumeRun(run, btn, host) {
   } catch (e) {
     if (!visit.isCurrent()) return;
     // The resume was accepted; only the list is stale.
-    showRunActionError(host, `${runId} was resumed, but the list could not refresh: ${(e && e.message) || e}. Use Refresh to update it.`);
+    showRunActionError(host, `${runId} was resumed, but the list could not refresh: ${(e && e.message) || e}. Reload the page to update it.`);
     console.error(e);
   }
 }
@@ -812,7 +839,7 @@ function persistRunFilters() {
   else url.searchParams.delete("task_id");
   if (runJobId) url.searchParams.set("job_id", runJobId);
   else url.searchParams.delete("job_id");
-  if (url.href !== window.location.href) history.replaceState(null, "", url);
+  if (url.href !== window.location.href) history.replaceState(history.state, "", url);
 }
 
 function clearRunsFetchTimer() {
@@ -865,10 +892,6 @@ function applyRunQuery(raw) {
     doFetchAndRenderRuns().catch((error) => console.error(error));
   }, 250);
   if (runQueryTimer && typeof runQueryTimer.unref === "function") runQueryTimer.unref();
-}
-
-export function getRunFilter() {
-  return runFilter;
 }
 
 export function formatRunCount(shown, fetched, meta) {
@@ -1007,7 +1030,7 @@ function runsQueryInput() {
   input.type = "search";
   input.placeholder = "Task or job id";
   input.setAttribute("aria-label", "Filter runs by task or job id");
-  input.title = "A task id such as ORB-15159 filters by task. Any other id filters by job. The address can set both.";
+  input.title = "A task id filters by task. Any other id filters by job. The address can set both.";
   input.autocomplete = "off";
   input.spellcheck = false;
   input.tabIndex = 0;
@@ -1103,7 +1126,7 @@ function runCountCell(value, kind) {
 
 function runDurationCell(run) {
   const { durationMs, isLive, longRun } = runDurationInfo(run);
-  const formatted = fmtDurationValue(durationMs);
+  const formatted = fmtDuration(durationMs);
   const text = (isLive && formatted !== "-") ? `${formatted} ↻` : formatted;
   return el("span", { class: "duration" }, [
     text,
@@ -1311,7 +1334,7 @@ function runGroupRow(group, attributed, listed) {
     runTaskLinks(first),
     failedAt,
     el("span", { class: "run-id-cell" }, [el("span", { class: "run-group-count", text: `${runs.length} runs` })]),
-    el("span", { class: "when", text: fmtTimestampValue(ts), title: ts ? formatDateTime(ts) : "" }),
+    el("span", { class: "when", text: formatAge(ts), title: ts ? formatDateTime(ts) : "" }),
     runCountCell(denials, "denials"),
     runCountCell(toolFails, "tool-fails"),
     el("span", { class: "duration", text: "—" }),
@@ -1335,39 +1358,33 @@ function runRow(r, attributed, body, { child = false } = {}) {
   const ts = r.finished_at || r.started_at || r.scheduled_at || r.created_at;
   const friction = runFriction(r);
   const { durationMs, isLive } = runDurationInfo(r);
-  const formattedDuration = fmtDurationValue(durationMs);
+  const formattedDuration = fmtDuration(durationMs);
   const runIdSpan = makeCopyButton(r.run_id, { class: "run-id", title: "Copy run ID" });
   const runIdCell = el("span", { class: "run-id-cell" }, [runIdSpan]);
   if (r.retry_source_run_id) {
     const sourceId = r.retry_source_run_id;
-    const lineage = el("button", {
+    const lineage = el("a", {
       class: "run-lineage",
       text: `from ${sourceId}`,
       title: `Open source run ${sourceId}`,
     });
-    lineage.addEventListener("click", (e) => {
-      e.stopPropagation();
-      doNavigateToRun(sourceId, r.workspace_id);
-    });
+    bindRunLink(lineage, sourceId, { workspace: r.workspace_id || getWorkspace() });
     runIdCell.appendChild(lineage);
   }
   const resumedAsId = resumedRunIdsBySource.get(runIdentity(r));
   if (resumedAsId) {
-    const lineage = el("button", {
+    const lineage = el("a", {
       class: "run-lineage resumed-as",
       text: `resumed as ${resumedAsId}`,
       title: `Open resumed run ${resumedAsId}`,
     });
-    lineage.addEventListener("click", (e) => {
-      e.stopPropagation();
-      doNavigateToRun(resumedAsId, r.workspace_id);
-    });
+    bindRunLink(lineage, resumedAsId, { workspace: r.workspace_id || getWorkspace() });
     runIdCell.appendChild(lineage);
   }
   // The job cell is the row's button: the row also holds the copy-id,
   // lineage and run actions, so it cannot be a button itself. Its text is
   // clipped in a narrow column, so its tooltip is the full job name.
-  const openButton = el("button", { class: "id", text: r.job_id, title: r.job_id });
+  const openButton = bindRunLink(el("a", { class: "id", text: r.job_id, title: r.job_id }), r.run_id, { workspace: r.workspace_id || getWorkspace() });
   const rowCells = [
     el("span", { class: "state" }, [stateCell(r.state)]),
     attributed ? el("span", { class: "run-workspace", text: r.workspace_name || r.workspace_id, title: r.workspace_id }) : null,
@@ -1375,7 +1392,7 @@ function runRow(r, attributed, body, { child = false } = {}) {
     runTaskLinks(r),
     runFailedAtCell(r),
     runIdCell,
-    el("span", { class: "when", text: fmtTimestampValue(ts), title: ts ? formatDateTime(ts) : "" }),
+    el("span", { class: "when", text: formatAge(ts), title: ts ? formatDateTime(ts) : "" }),
     runCountCell(friction.denials, "denials"),
     runCountCell(friction.toolFails, "tool-fails"),
     runDurationCell(r),
@@ -1391,7 +1408,10 @@ function runRow(r, attributed, body, { child = false } = {}) {
   row.dataset.hash += `-${JSON.stringify(r.tasks)}-${JSON.stringify(r.task_ids)}`;
   // A run row opens the run detail view rather than disclosing inline, so its
   // button has no expansion state.
-  makeRowDisclosure(row, openButton, { onToggle: () => doNavigateToRun(r.run_id, r.workspace_id) });
+  makeRowDisclosure(row, openButton, { onToggle: (event) => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    openButton.click();
+  } });
   return row;
 }
 

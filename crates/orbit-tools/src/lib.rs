@@ -3,6 +3,7 @@
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 //! Builtin tool registry providing the standard Orbit toolset for agents and jobs.
 //!
 //! Implements and registers all built-in tools that agents can invoke during
@@ -33,17 +34,19 @@
 
 pub(crate) mod builtin;
 pub mod external;
+mod family;
 pub mod github_cli;
-mod mcp_annotations;
-mod mcp_rules;
-pub use mcp_rules::{ID_ROUTED_TASK_TOOLS, NOT_ID_ROUTED_TOOLS, builtin_mcp_rules};
+mod mcp;
+pub use mcp::builtin_mcp_rules;
 pub mod plugin;
 mod registry;
 pub mod tool_suggestions;
 
+mod artifact_materialize;
 mod context;
 mod fs_audit;
 mod host;
+mod program_policy;
 mod tool;
 
 /// Default network operation timeout (15 s). Used for most GitHub API calls
@@ -60,8 +63,8 @@ pub(crate) const TIMEOUT_LONG_MS: u64 = 60_000;
 
 pub use builtin::orbit::pipeline::invoke::has_pipeline_child_admission;
 pub use context::{
-    ActivityBinding, DeterministicStepPrograms, ProcSpawnBudget, ReservationOwnerContext,
-    ToolCaller, ToolContext, WitnessedProgramGrant,
+    ActivityBinding, DeterministicStepPrograms, PROC_SPAWN_MAX_TIMEOUT_MINUTES, ProcSpawnBudget,
+    ReservationOwnerContext, ToolCaller, ToolContext, WitnessedProgramGrant,
 };
 pub use fs_audit::{FsAuditLogger, FsCallEvent, FsCallEventKind};
 pub use host::{

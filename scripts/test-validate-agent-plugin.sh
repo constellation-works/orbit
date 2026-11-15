@@ -11,23 +11,38 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 2
 fi
 
-if ! grep -Fqx 'from __future__ import annotations' "$validator"; then
-  echo "test-validate-agent-plugin: validator must defer annotations for Python 3.9" >&2
-  exit 1
-fi
+python3 - "$validator" <<'PY'
+import ast
+import sys
+from pathlib import Path
 
-python3 - <<'PY'
-from __future__ import annotations
-
-from typing import Any
-
-
-def accepts_optional_mapping(value: dict[str, Any] | None) -> list[str]:
-    return [] if value is None else list(value)
-
-
-assert accepts_optional_mapping(None) == []
-assert accepts_optional_mapping({"supported": True}) == ["supported"]
+validator = Path(sys.argv[1])
+text = validator.read_text(encoding="utf-8")
+marker = "<<'PY'\n"
+start = text.find(marker)
+if start < 0:
+    print("test-validate-agent-plugin: validator embedded Python not found", file=sys.stderr)
+    raise SystemExit(1)
+start += len(marker)
+end = text.find("\nPY", start)
+if end < 0:
+    print("test-validate-agent-plugin: validator embedded Python not terminated", file=sys.stderr)
+    raise SystemExit(1)
+source = text[start:end]
+try:
+    tree = ast.parse(source, filename=str(validator), feature_version=(3, 9))
+except SyntaxError as exc:
+    print(f"test-validate-agent-plugin: validator is not Python 3.9 compatible: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+first = tree.body[0] if tree.body else None
+has_future = (
+    isinstance(first, ast.ImportFrom)
+    and first.module == "__future__"
+    and any(alias.name == "annotations" for alias in first.names)
+)
+if not has_future:
+    print("test-validate-agent-plugin: validator must defer annotations for Python 3.9", file=sys.stderr)
+    raise SystemExit(1)
 PY
 
 fixture_root="$(mktemp -d "${TMPDIR:-/tmp}/orbit-agent-plugin.XXXXXX")"
@@ -48,6 +63,7 @@ python3 - "$repo_root" "$validator" "$base_fixture" "$fixture_root" <<'PY'
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -61,12 +77,13 @@ fixture_root = Path(sys.argv[4])
 errors: list[str] = []
 
 
-def run_validator(root: Path) -> subprocess.CompletedProcess[str]:
+def run_validator(root: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(validator), str(root)],
         check=False,
         capture_output=True,
         text=True,
+        env=env,
     )
 
 
@@ -76,18 +93,21 @@ def clone_fixture(name: str) -> Path:
     return dest
 
 
-def expect_failure(root: Path, needle: str, label: str) -> None:
-    result = run_validator(root)
+def expect_failure(root: Path, needle: str, label: str, env: dict[str, str] | None = None) -> None:
+    result = run_validator(root, env)
     if result.returncode == 0:
         errors.append(f"{label}: expected validator failure")
         return
     combined = result.stdout + result.stderr
+    if "Traceback" in combined:
+        errors.append(f"{label}: validator leaked a traceback\n{combined}")
+        return
     if needle not in combined:
         errors.append(f"{label}: stderr/stdout missing {needle!r}\n{combined}")
 
 
-def expect_success(root: Path, label: str) -> None:
-    result = run_validator(root)
+def expect_success(root: Path, label: str, env: dict[str, str] | None = None) -> None:
+    result = run_validator(root, env)
     if result.returncode != 0:
         errors.append(f"{label}: expected validator success, got {result.returncode}\n{result.stdout + result.stderr}")
 
@@ -169,6 +189,56 @@ payload["mcpServers"]["orbit"]["args"] = ["-y", "@orbit-tools/cli@0.5.1", "mcp",
 (broken / "plugin" / "mcp.json").write_text(json.dumps(payload), encoding="utf-8")
 expect_failure(broken, "stale launch pin", "stale 0.5.1 pin")
 
+# The Orbit launch is required on every packaged manifest, not only when args
+# are already a list and the server key is named orbit.
+def write_json(path: Path, payload: dict) -> None:
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+broken = clone_fixture("absent-orbit-server")
+payload = load(broken / "plugin" / "mcp.json")
+payload["mcpServers"] = {"helper": {"type": "stdio", "command": "true", "args": []}}
+write_json(broken / "plugin" / "mcp.json", payload)
+expect_failure(broken, "mcpServers.orbit", "absent orbit server")
+
+broken = clone_fixture("absent-orbit-args")
+payload = load(broken / "plugin" / "mcp.json")
+del payload["mcpServers"]["orbit"]["args"]
+write_json(broken / "plugin" / "mcp.json", payload)
+expect_failure(broken, "mcpServers.orbit.args", "absent orbit args")
+
+broken = clone_fixture("malformed-orbit-args")
+payload = load(broken / "plugin" / "mcp.json")
+payload["mcpServers"]["orbit"]["args"] = {"cmd": "serve"}
+write_json(broken / "plugin" / "mcp.json", payload)
+expect_failure(broken, "mcpServers.orbit.args", "malformed orbit args")
+
+broken = clone_fixture("empty-orbit-args")
+payload = load(broken / "plugin" / "mcp.json")
+payload["mcpServers"]["orbit"]["args"] = []
+write_json(broken / "plugin" / "mcp.json", payload)
+expect_failure(broken, "MCP launch must be", "empty orbit args")
+
+for label, relative in (
+    ("claude", "plugin/.mcp.json"),
+    ("codex", "plugin/.codex-plugin/plugin.json"),
+):
+    broken = clone_fixture(f"absent-orbit-{label}")
+    payload = load(broken / relative)
+    payload["mcpServers"] = {"helper": {"command": "true", "args": []}}
+    write_json(broken / relative, payload)
+    expect_failure(broken, "mcpServers.orbit", f"absent orbit server in {label}")
+
+    broken = clone_fixture(f"absent-orbit-args-{label}")
+    payload = load(broken / relative)
+    del payload["mcpServers"]["orbit"]["args"]
+    write_json(broken / relative, payload)
+    expect_failure(broken, "mcpServers.orbit.args", f"absent orbit args in {label}")
+
 # Negative: missing required mcp.json.
 broken = clone_fixture("missing-mcp")
 (broken / "plugin" / "mcp.json").unlink()
@@ -183,6 +253,16 @@ expect_failure(broken, "plugin/plugin.json is missing", "missing plugin.json")
 broken = clone_fixture("malformed-plugin-manifest")
 (broken / "plugin" / "plugin.json").write_text("{not-json", encoding="utf-8")
 expect_failure(broken, "not valid JSON", "malformed plugin.json")
+
+# Negative: non-UTF8 plugin.json must fail cleanly, not with a traceback.
+broken = clone_fixture("nonutf8-plugin-manifest")
+(broken / "plugin" / "plugin.json").write_bytes(b"\xff\xfe\x00bad")
+expect_failure(broken, "not valid JSON", "non-UTF8 plugin.json")
+
+# Negative: non-UTF8 SKILL.md must fail cleanly, not with a traceback.
+broken = clone_fixture("nonutf8-skill")
+(broken / "plugin" / "skills" / "orbit" / "SKILL.md").write_bytes(b"\xff\xfe\x00bad")
+expect_failure(broken, "cannot be read", "non-UTF8 SKILL.md")
 
 # Negative: ownership drift away from constellation-works.
 broken = clone_fixture("owner-drift")
@@ -247,6 +327,28 @@ payload["mcpServers"]["helper"] = {
 (broken / "plugin" / "mcp.json").write_text(json.dumps(payload), encoding="utf-8")
 expect_failure(broken, "mcpServers.helper.cwd must be plugin-relative", "second server cwd traversal")
 
+# Every additional server must have a usable stdio launch.
+for label, launch in (
+    ("missing-command", {}),
+    ("blank-command", {"command": "  "}),
+    ("non-string-command", {"command": []}),
+    ("bad-args", {"command": "helper", "args": "not-an-array"}),
+    ("bad-arg-item", {"command": "helper", "args": [42]}),
+):
+    broken = clone_fixture(f"helper-{label}")
+    path = broken / "plugin" / "mcp.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["mcpServers"]["helper"] = {"type": "stdio", **launch}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    expect_failure(broken, "mcpServers.helper.", f"helper {label}")
+
+good = clone_fixture("helper-valid")
+path = good / "plugin" / "mcp.json"
+payload = json.loads(path.read_text(encoding="utf-8"))
+payload["mcpServers"]["helper"] = {"type": "stdio", "command": "helper", "args": ["serve"]}
+path.write_text(json.dumps(payload), encoding="utf-8")
+expect_success(good, "valid helper with independent launch")
+
 # Positive: bare placeholders and safe descendants are accepted.
 for label, cwd in (
     ("bare-root", "${PLUGIN_ROOT}"),
@@ -258,6 +360,25 @@ for label, cwd in (
     good = clone_fixture(f"cwd-ok-{label}")
     set_orbit_cwd(good, cwd)
     expect_success(good, f"legitimate cwd {label}")
+
+# HOME=/ is not a user-specific home. A substring match would reject every
+# slash-containing value, including the @orbit-tools/cli pin.
+root_home = dict(os.environ)
+root_home["HOME"] = "/"
+expect_success(base_fixture, "valid package when HOME is /", root_home)
+
+embedded_home = "/srv/orbit-plugin-home"
+embedded = clone_fixture("embedded-home")
+mcp_path = embedded / "plugin" / "mcp.json"
+mcp_payload = json.loads(mcp_path.read_text(encoding="utf-8"))
+pinned = mcp_payload["mcpServers"]["orbit"]["args"]
+mcp_payload["mcpServers"]["orbit"]["args"] = [
+    arg if "@orbit-tools/cli@" not in arg else arg + embedded_home for arg in pinned
+]
+mcp_path.write_text(json.dumps(mcp_payload), encoding="utf-8")
+home_env = dict(os.environ)
+home_env["HOME"] = embedded_home
+expect_failure(embedded, "user-specific absolute home path", "embedded home in launch arg", home_env)
 
 if errors:
     print("test-validate-agent-plugin: failed", file=sys.stderr)

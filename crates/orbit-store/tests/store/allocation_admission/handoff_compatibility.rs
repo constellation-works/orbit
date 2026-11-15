@@ -11,9 +11,12 @@ enum ReleasedSettlementKind {
     Release,
 }
 
+// The settlement record as owners before the reported effort read it: no
+// `reasoning_effort` field, and no refusal of unknown ones.
 #[derive(serde::Deserialize)]
 struct ReleasedSettlement {
     kind: ReleasedSettlementKind,
+    crew_model: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -93,10 +96,22 @@ fn handoff_attribution_keeps_older_lifecycle_readers_and_replays_working() {
         serde_json::from_value(serde_json::to_value(&states[0]).unwrap()).unwrap();
     assert_eq!(projected.settlement, state.settlement);
     // Keep the released vocabulary operational as well: both existing kinds
-    // still settle through the public boundary and remain readable by old clients.
-    for (key, kind) in [
-        ("legacy-fail", ReleasedSettlementKind::Fail),
-        ("legacy-release", ReleasedSettlementKind::Release),
+    // still settle through the public boundary and remain readable by old
+    // clients, including with the follower's reported effort [ORB-23825]: a
+    // wire name, the provider default (`null`), or none, as an older follower
+    // reports.
+    for (key, kind, effort) in [
+        (
+            "legacy-fail",
+            ReleasedSettlementKind::Fail,
+            Some(Some("high".to_string())),
+        ),
+        (
+            "legacy-release",
+            ReleasedSettlementKind::Release,
+            Some(None),
+        ),
+        ("legacy-unreported", ReleasedSettlementKind::Fail, None),
     ] {
         delivery.owner.create_task_in(key, &[key]);
         let claim = delivery.owner.pull(&owner_request(key)).claim.unwrap();
@@ -105,7 +120,12 @@ fn handoff_attribution_keeps_older_lifecycle_readers_and_replays_working() {
             claim.claim_id.clone(),
             claim.executed_on.machine_id,
             None,
-        );
+        )
+        .with_attribution(ClaimAttribution {
+            crew_model: Some("reported-model".into()),
+            reasoning_effort: effort.clone(),
+            ..ClaimAttribution::default()
+        });
         let evidence = ClaimEvidence {
             summary: Some("existing settlement remains readable".into()),
             ..Default::default()
@@ -121,9 +141,24 @@ fn handoff_attribution_keeps_older_lifecycle_readers_and_replays_working() {
             .execution_claim_state(&claim.claim_id)
             .unwrap()
             .unwrap();
-        let legacy: ReleasedLifecycle =
-            serde_json::from_value(serde_json::to_value(record).unwrap()).unwrap();
-        assert_eq!(legacy.settlement.unwrap().kind, kind);
+        let settlement = record.settlement.as_ref().unwrap();
+        assert_eq!(settlement.reasoning_effort, effort, "{key}");
+        let encoded = serde_json::to_value(&record).unwrap();
+        match &effort {
+            None => assert!(
+                encoded["settlement"].get("reasoning_effort").is_none(),
+                "an unreported effort stays absent: {encoded}"
+            ),
+            Some(effort) => assert_eq!(
+                encoded["settlement"]["reasoning_effort"],
+                serde_json::json!(effort),
+                "{encoded}"
+            ),
+        }
+        let legacy: ReleasedLifecycle = serde_json::from_value(encoded).unwrap();
+        let legacy = legacy.settlement.unwrap();
+        assert_eq!(legacy.kind, kind);
+        assert_eq!(legacy.crew_model.as_deref(), Some("reported-model"));
     }
 }
 
@@ -365,4 +400,157 @@ fn already_open_inline_writers_are_refused_atomically_at_the_store_boundary() {
     }
     assert_eq!(migrated.schema_version().unwrap(), SUPPORTED_SCHEMA_VERSION);
     delivery.accept(Some(OWNER_POLICY)).unwrap();
+}
+
+/// The selective policy an earlier owner stored on a claim that captured no
+/// before-PR or before-landing timing.
+fn persisted_selective_policy() -> orbit_types::workflow::SelectiveBeforeLandingPolicy {
+    orbit_types::workflow::SelectiveBeforeLandingPolicy {
+        mode: orbit_types::workflow::SelectiveBeforeLandingMode::Observe,
+        risk_threshold: None,
+        risk_model_identity: None,
+        paths: vec!["crates/**".into()],
+        unknown_risk: orbit_types::workflow::SelectiveUnknownRisk::Review,
+        sources: std::collections::BTreeMap::new(),
+        digest: "sha256:legacy-selective".into(),
+    }
+}
+
+fn selective_only_ship() -> AdmissionShipContract {
+    let mut ship = before_pr_ship();
+    ship.before_pr = false;
+    ship.before_landing = false;
+    let review = ship
+        .review
+        .as_mut()
+        .expect("the before-PR fixture carries a review contract");
+    review.selective_before_landing = Some(persisted_selective_policy());
+    ship
+}
+
+fn refused_as(ship: AdmissionShipContract, request_id: &str) -> String {
+    let owner = Coordinated::fixture();
+    owner.create_task(request_id);
+    let mut request = owner_request(request_id);
+    request.ship = ship;
+    owner
+        .try_pull(&request)
+        .expect_err("malformed review contract")
+        .to_string()
+}
+
+#[test]
+fn persisted_selective_only_claim_accepts_a_non_light_pr_handoff() {
+    if !allocation_admission_isolated(
+        "handoff_compatibility::persisted_selective_only_claim_accepts_a_non_light_pr_handoff",
+    ) {
+        return;
+    }
+    let ship = selective_only_ship();
+    assert!(
+        ship.review_contract_consistent(),
+        "a retained selective-only contract stays a consistent stored shape"
+    );
+    let delivery = Delivery::admit(ship);
+    assert!(
+        matches!(
+            delivery.handoff.candidate.delivery,
+            orbit_types::workflow::handoff::HandoffDelivery::PullRequest { number: 1.. }
+        ),
+        "the fixture handoff is a non-light pull request"
+    );
+    assert_eq!(delivery.handoff.review, HandoffReview::not_required());
+    delivery
+        .accept(None)
+        .expect("timing none needs no review evidence");
+    delivery.assert_status(TaskStatus::Review);
+    let found = delivery
+        .owner
+        .backends
+        .commit_boundary
+        .lookup_admission(
+            &AdmissionIdentity::trusted_remote(delivery.claim.executed_on.clone()),
+            "first",
+        )
+        .unwrap();
+    let AdmissionLookup::Found { receipt, .. } = found else {
+        panic!("stored receipt missing: {found:?}");
+    };
+    let stored = receipt
+        .request
+        .ship
+        .review
+        .as_ref()
+        .expect("the selective contract stays on the receipt");
+    assert_eq!(
+        stored.selective_before_landing.as_ref(),
+        Some(&persisted_selective_policy()),
+        "selective bytes stay on the stored claim"
+    );
+    assert!(!receipt.request.ship.before_pr && !receipt.request.ship.before_landing);
+
+    let mut drifted = selective_only_ship();
+    drifted
+        .review
+        .as_mut()
+        .unwrap()
+        .required_validation_commands = Some(vec!["other".into()]);
+    Delivery::admit(drifted)
+        .accept(None)
+        .expect("a selective command list is not a review requirement");
+
+    let mut evidenced = Delivery::admit(selective_only_ship());
+    let issued = certificate(&evidenced.handoff, ReviewVerdict::Accept);
+    evidenced.reviewed(&issued);
+    let error = evidenced.accept(None).unwrap_err().to_string();
+    assert!(
+        error.contains(HandoffReviewRefusal::ReviewEvidenceUnexpected.as_str()),
+        "{error}"
+    );
+
+    for (label, ship) in [
+        ("before-pr", before_pr_ship()),
+        ("before-landing", before_landing_ship()),
+    ] {
+        let delivery = Delivery::admit(ship);
+        let error = delivery.accept(None).expect_err(label).to_string();
+        assert!(
+            error.contains(HandoffReviewRefusal::ReviewEvidenceMissing.as_str()),
+            "{label}: {error}"
+        );
+        assert_eq!(
+            delivery.owner.task_status(&delivery.claim.task_id),
+            TaskStatus::InProgress,
+            "{label}"
+        );
+    }
+    let mut landed = before_landing_ship();
+    landed.review.as_mut().unwrap().selective_before_landing = Some(persisted_selective_policy());
+    let error = Delivery::admit(landed)
+        .accept(None)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains(HandoffReviewRefusal::ReviewEvidenceMissing.as_str()),
+        "a selective field does not waive before-landing review: {error}"
+    );
+
+    let mut bare = before_pr_ship();
+    bare.before_pr = false;
+    let refused = refused_as(bare, "bare-review");
+    assert!(
+        refused.contains("invalid_input"),
+        "a review contract with no timing and no selective field is still malformed: {refused}"
+    );
+    let mut commands = selective_only_ship();
+    commands
+        .review
+        .as_mut()
+        .unwrap()
+        .required_validation_commands = None;
+    let refused = refused_as(commands, "unlisted");
+    assert!(
+        refused.contains("invalid_input"),
+        "a selective contract without its captured command list is still malformed: {refused}"
+    );
 }

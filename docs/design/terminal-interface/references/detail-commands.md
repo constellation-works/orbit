@@ -1,15 +1,28 @@
 ---
 type: design
 summary: "Reference: Detail Commands Behind Truncatable List Columns"
-last_updated: 2026-10-26
-last_validated: 2026-10-18
+last_updated: 2026-11-02
+last_validated: 2026-11-02
 ---
 
 # Reference: Detail Commands Behind Truncatable List Columns
 
 [specs/table-rendering.md §4](../specs/table-rendering.md) makes truncation a promise: a list command that can cut column *C* must have a named command that prints *C* in full for one record. This table records, for every list view rendered through `crates/orbit-cli/src/output/table.rs`, which columns can be truncated and where the whole value lives (ORB-10567).
 
-Only *flexible* columns are ever truncated — fixed columns render whole or are absent — so a view with no flexible column needs no detail counterpart. `--format json` / `--json` carries full values everywhere and is the fallback where no detail command exists.
+Only *flexible* columns are ever truncated — fixed columns render whole or are absent — so a view with no flexible column needs no detail counterpart. `--format json` / `--json` and plain output carry full values everywhere; human detail selectors below recover one record without terminal-width truncation.
+
+`orbit task add` requires `--title` and `--complexity` (low, medium, hard or
+xhard); its `--description` remains optional. The tool-call surface has its own
+requirements: `orbit tool show <name>` marks fields required by schema branches
+as `conditional` and prints the object-level input constraints as JSON Schema.
+For `orbit.task.add`, ordinary creation requires `description` and `complexity`;
+with `request_id`, `workspace`, `description` and `acceptance_criteria` are required
+and `complexity` is not accepted. The same rendering applies to other tools with
+conditional schemas, including `orbit.task.update` and `orbit.pipeline.invoke`.
+`--parameter <name>` includes the same constraints. JSON inspection includes the
+full declared `input_schema` and each parameter's `requirement` (`required`,
+`conditional` or `optional`); the existing `required` boolean continues to describe
+unconditional requirements from the flat parameter metadata.
 
 `orbit tool show <name>` also prints persisted metadata for disabled external tools listed by `orbit tool list --all`. Inspection preserves their disabled state; `orbit tool run` remains refused until the tool is enabled.
 
@@ -31,17 +44,41 @@ Only *flexible* columns are ever truncated — fixed columns render whole or are
 | `orbit search` | `ID/PATH`, `TITLE/SUMMARY` | per hit kind: `orbit task show`, `orbit friction show` |
 | `orbit codebase analytics` | `PATH`, `PATHS`, `RANKINGS` | `orbit codebase show <path>` (rankings, counts and the tasks behind each); `--json` for coupled pairs and the regression cross-tabs |
 
+## Diagnostic and nested detail recovery
+
+| List view | Truncatable columns | Full single-record command |
+|-----------|--------------------|----------------------------|
+| `orbit doctor` | `DETAILS` | `orbit doctor --check <check>` |
+| `orbit tool doctor` | `DETAILS` | `orbit tool doctor <name>` |
+| `orbit skill doctor` | `DETAILS` | `orbit skill doctor <id>` |
+| `orbit tool show <name>` (parameters) | `DESCRIPTION` | `orbit tool show <name> --parameter <parameter>` |
+
+Each selector uses the exact name printed in the list (CHECK, TOOL, SKILL or
+parameter NAME). It prints a labeled detail record with the full message or
+description, including embedded newlines; terminal width never cuts it. An
+unknown selector fails explicitly. JSON returns the selected record as an
+object (skill detail groups all diagnostics for that skill in `findings`);
+unselected lists retain their existing complete arrays and plain rows.
+Workspace doctor detail includes remediation and retains the selected check's
+failure exit status. `--check` cannot combine with `--problems` or repair flags.
+The selector chooses output after diagnostics run; it does not promise to run
+only that check or tool.
+
+Workspace doctor's full non-ok findings section already landed [ORB-14829].
+It remains available below the terminal table; `--check` also recovers ok/info
+rows that intentionally have no findings section. This closes the remaining
+per-record gaps [ORB-21575] without duplicating findings in list rows.
+
+`orbit migrate` is a fixed-shape status readout: COMPONENT, CURRENT and
+SUPPORTED are all fixed columns. Component labels (`workspace layout` and
+`store schema`) therefore stay whole, even on a narrow terminal; overflow is
+reported on stderr. No migration column is truncatable and no deeper command
+is required. Plain and JSON retain the full report.
+
 ## Gaps
 
-These views can truncate a column and have no detail command. Listed rather than invented — closing them is separate work, and `--json` is the interim answer.
-
-| List view | Truncatable columns | Note |
-|-----------|--------------------|------|
-| `orbit doctor` | `DETAILS` | Diagnostic output; the message is authored short. No per-check detail command. |
-| `orbit tool doctor` | `DETAILS` | As above. |
-| `orbit skill doctor` | `DETAILS` | As above. |
-| `orbit tool show` (parameters) | `DESCRIPTION` | Already the detail view; the parameter description has no deeper surface than `--json`. |
-| `orbit migrate` (inspection readout) | `COMPONENT` | Lists every component, but the column is flexible, so a narrow sink can cut it. `--json` carries the full report. |
+None in the views audited above [ORB-21575]. Adding a flexible column still
+requires a documented single-record command under the accepted contract.
 
 ## Run history
 
@@ -63,7 +100,15 @@ duration or RFC 3339 timestamp and compares creation time. All predicates run
 in the store before ordering and `--limit`, so unrelated newer runs cannot
 hide matching history. Existing `--job` and `--no-reconcile` options still apply.
 
-CLI run JSON and `orbit.workflow.run.list` expose `task_ids` using the same
+CLI run JSON and `orbit.run` action `list` expose `task_ids` using the same
 nullable array as the dashboard: sorted, unique, nonempty IDs extracted from
 submitted `task_ids`/`task_id`, or null for a task-free run. Listing identities
 never reads task records; title lookup is reserved for detail views.
+
+## Task References
+
+- [ORB-10567] — Replace bordered wrapping tables with borderless one-line rows and column metadata.
+- [ORB-14829] — Show full workspace-doctor findings and remediation below its terminal table.
+- [ORB-21575] — Add full detail recovery for audited truncated views.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

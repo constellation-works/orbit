@@ -302,6 +302,63 @@ fn find_payloads(dir: &Path) -> Vec<PathBuf> {
     found
 }
 
+/// Covered tasks keep the bundle matcher's substring contract through the
+/// index alone: a short Unicode needle folds Unicode on both sides, and a
+/// raw tab inside a field is preserved rather than normalized to a space.
+fn covered_search_preserves_unicode_and_raw_whitespace_substrings() {
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = OrbitRuntime::from_roots(
+        &root.path().join("global"),
+        &root.path().join("repo/.orbit"),
+    )
+    .unwrap();
+    let unicode = runtime
+        .add_task(TaskAddParams {
+            title: "CAFÉNOIR".into(),
+            description: "Search fixture".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let raw = runtime
+        .add_task(TaskAddParams {
+            title: "unrelated fixture".into(),
+            description: "prefixalpha\tbetasuffix".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let found = |query: &str| {
+        runtime
+            .global_search(GlobalSearchParams {
+                query: Some(query.into()),
+                kind: GlobalSearchKind::Task,
+                limit: 10,
+                ..Default::default()
+            })
+            .unwrap()
+            .results
+            .iter()
+            .filter_map(|hit| hit.id.clone())
+            .collect::<Vec<_>>()
+    };
+    for phase in ["indexed", "reindexed"] {
+        if phase == "reindexed" {
+            runtime.search_reindex().unwrap();
+        }
+        assert!(
+            found("ÉN").contains(&unicode.id),
+            "{phase}: short Unicode needle finds the covered task"
+        );
+        assert!(
+            found("alpha\tbeta").contains(&raw.id),
+            "{phase}: raw tab substring finds the covered task"
+        );
+        assert!(
+            !found("alpha beta").contains(&raw.id),
+            "{phase}: a space is not conflated with a raw tab"
+        );
+    }
+}
+
 /// Counts the FTS page queries the lexical store executes.
 struct Queries(Arc<AtomicU64>);
 
@@ -524,5 +581,6 @@ crate::scenario_table!(
     full_search_page_skips_any_term_scan_scenarios,
     full_search_page_skips_any_term_scan,
     rejecting_filter_does_not_page_the_any_term_match_set,
-    one_search_takes_the_task_commit_lock_once
+    one_search_takes_the_task_commit_lock_once,
+    covered_search_preserves_unicode_and_raw_whitespace_substrings
 );

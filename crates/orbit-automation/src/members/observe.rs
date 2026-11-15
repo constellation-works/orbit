@@ -3,13 +3,33 @@
 use super::{MemberHost, MemberPage};
 use crate::AutomationError;
 use orbit_types::workflow::automation::members::*;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 pub(super) use orbit_types::workflow::automation::members::MEMBER_CAPACITY as CAPACITY;
 
 pub(super) struct Absorbed {
     pub deferred: usize,
     pub fresh_unready: bool,
+}
+
+type AcceptedKey = (String, String, Vec<String>);
+
+/// Per-evaluation memo of host answers shared by the trial fold (which only
+/// reads `deferred`) and the real fold in `evaluate`. Both folds walk the
+/// same page, so the second fold reuses the first fold's verdicts instead of
+/// repeating the host round-trips. The memo lives for one `evaluate` pass
+/// only; the next tick asks the host again.
+#[derive(Debug, Default)]
+pub(super) struct HostMemo {
+    accepted: HashMap<AcceptedKey, Option<bool>>,
+}
+
+fn accepted_key(member: &StateMember) -> AcceptedKey {
+    (
+        member.key.clone(),
+        member.fingerprint.clone(),
+        member.task_ids.clone(),
+    )
 }
 
 /// Fold one page into the working set without exceeding [`CAPACITY`], and
@@ -21,6 +41,7 @@ pub(super) fn absorb(
     host: &dyn MemberHost,
     members: &mut MemberState,
     page: &MemberPage,
+    memo: &mut HostMemo,
 ) -> Result<Absorbed, AutomationError> {
     let mut absorbed = Absorbed {
         deferred: 0,
@@ -48,7 +69,18 @@ pub(super) fn absorb(
         // Explicit assessments use the same material contract as routines.
         // Reuse the latest accepted output, including an unready verdict,
         // before trusting an older consumer-local assessment or scheduling.
-        if let Some(ready) = host.accepted_assessment(&member)? {
+        // The per-evaluation memo serves the trial and real folds from the
+        // same verdicts, so the host is asked once per candidate.
+        let memo_key = accepted_key(&member);
+        let accepted = match memo.accepted.get(&memo_key) {
+            Some(cached) => *cached,
+            None => {
+                let verdict = host.accepted_assessment(&member)?;
+                memo.accepted.insert(memo_key.clone(), verdict);
+                verdict
+            }
+        };
+        if let Some(ready) = accepted {
             absorbed.fresh_unready |= !ready;
             members.pending.remove(&member.key);
             // The task audit remains the authority. Retire superseded local
@@ -68,12 +100,12 @@ pub(super) fn absorb(
             continue;
         }
 
-        // Already assessed at exactly this fingerprint, or under an earlier
-        // contract whose assessment still holds: nothing left to apply.
-        if members.assessed.get(&member.key).is_some_and(|assessed| {
-            assessed.resulting_fingerprint == member.fingerprint
-                || host.carries_forward(&member, assessed)
-        }) {
+        // Already assessed at exactly this fingerprint: nothing left to apply.
+        if members
+            .assessed
+            .get(&member.key)
+            .is_some_and(|assessed| assessed.resulting_fingerprint == member.fingerprint)
+        {
             members.pending.remove(&member.key);
             continue;
         }

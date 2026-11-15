@@ -177,7 +177,7 @@ pub(in crate::executor::automation::vcs) fn execute(
 }
 
 /// Run one VCS process and return its outcome, failed or not.
-pub(super) fn run_vcs_process(
+pub(in crate::executor::automation::vcs) fn run_vcs_process(
     program: &str,
     args: Vec<String>,
     current_dir: Option<&Path>,
@@ -196,22 +196,14 @@ pub(super) fn run_vcs_process(
             current_dir: current_dir.map(|path| path.to_string_lossy().into_owned()),
             timeout_ms: Some(timeout_ms),
             stdin_mode: StdinMode::Null,
-            environment_mode: EnvironmentMode::ClearAndSet(super::super::git::vcs_environment(&[
-                "GH_TOKEN",
-                "GITHUB_TOKEN",
-                "GH_ENTERPRISE_TOKEN",
-                "GITHUB_ENTERPRISE_TOKEN",
-                "GH_HOST",
-                "GH_CONFIG_DIR",
-                "XDG_CONFIG_HOME",
-            ])),
+            environment_mode: EnvironmentMode::ClearAndSet(super::super::git::gh_environment()),
             debug: false,
         }
     };
     run_process(&request, &NoSandbox)
 }
 
-pub(super) fn succeeded(
+pub(in crate::executor::automation::vcs) fn succeeded(
     result: orbit_exec::ExecutionResult,
     operation: &str,
 ) -> Result<orbit_exec::ExecutionResult, OrbitError> {

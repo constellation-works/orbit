@@ -23,7 +23,7 @@ Options:
           Preselect this workspace in the dashboard, by registered name, logical ID (`ws_*`), or local checkout path. Defaults to the workspace containing the current directory. Distinct from `--root`, which chooses which registry is served
 
       --operator
-          Grant operator capability for the dashboard's governed controls — Operations, and the owner's handoff approve/revoke/recover actions — without a TTY or ORBIT_OPERATOR. `orbit web connect` passes this by default
+          Grant operator capability for the dashboard's governed controls — Operations, and the owner's handoff approve/revoke/recover actions. This flag is the dashboard's only operator grant: the server's terminal and ORBIT_OPERATOR are ignored. `orbit web connect` passes it by default
 
   -h, --help
           Print help (see a summary with '-h')

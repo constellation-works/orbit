@@ -58,7 +58,9 @@ pub use write_grants::{
 };
 
 /// Every existing path matched by any of `rules`: absolute globs in the
-/// profile grammar, resolved canonically from one walk per search root.
+/// profile grammar, resolved canonically from one walk per search root. A
+/// matched dangling symlink is returned as its own entry, so an exclusion
+/// still names it; any other resolution failure is an error.
 ///
 /// A kernel ruleset binds inodes, so a caller compiling one from glob rules
 /// needs the paths those rules name today: the plugin backend's boundary

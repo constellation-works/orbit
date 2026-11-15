@@ -4,14 +4,26 @@ use super::*;
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_store::contracts::{TaskDocumentUpdateParams, TaskHistoryUpdateParams};
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
-use orbit_types::task::{TaskComplexity, TaskEnvelopeV2, TaskHistoryEntry};
+use orbit_types::task::{
+    CrewAssignmentState, RecordedCrewAssignment, TaskComplexity, TaskDecision, TaskEnvelopeV2,
+    TaskHistoryEntry,
+};
 
 const REFUSAL: &str = "published source is live, discarded, changed, or lacks an applied requeue";
+
+/// How a fixture redraw records its `crew_redrawn` entry.
+#[derive(Clone, Copy)]
+enum Recorded {
+    /// The note alone, as entries written before the typed decision.
+    LegacyNote,
+    /// The note beside its typed crew-assignment decision.
+    Typed,
+}
 
 /// Record the durable shape a usage-pressure admission redraw writes
 /// [ORB-17770]: the crew moves under its unchanged automatic source, beside a
 /// system `crew_redrawn` entry naming both crews.
-fn redraw_crew(f: &Fixture, to: &str) {
+fn redraw_crew(f: &Fixture, to: &str, recorded: Recorded) {
     let task = f.runtime.get_task(&f.task).unwrap();
     let from = task.crew.clone().expect("an assigned crew");
     let source = task.crew_source.clone().expect("an automatic crew source");
@@ -45,7 +57,15 @@ fn redraw_crew(f: &Fixture, to: &str) {
                     from_status: None,
                     to_status: None,
                     operation_id: None,
-                    decision: None,
+                    decision: match recorded {
+                        Recorded::LegacyNote => None,
+                        Recorded::Typed => Some(TaskDecision::CrewAssignment(
+                            RecordedCrewAssignment::new(
+                                CrewAssignmentState::new(Some(from.clone()), Some(source.clone())),
+                                CrewAssignmentState::new(Some(to.into()), Some(source.clone())),
+                            ),
+                        )),
+                    },
                 }],
                 ..Default::default()
             },
@@ -69,14 +89,16 @@ fn resume(f: &Fixture) -> (orbit_types::workflow::JobRun, Value, Result<Value, S
 }
 
 /// F2026-10-594: admission redrew the crew of a requeued published task twice,
-/// and the next run could not adopt the reviewed, CI-green publication.
+/// and the next run could not adopt the reviewed, CI-green publication. The
+/// older redraw is a legacy note-only entry and the newer one carries the
+/// typed decision, so the undo walk reads both shapes.
 pub(super) fn system_crew_redraws_keep_the_preserved_publication_adoptable() {
     let mut f = Fixture::new();
     publication(&mut f);
     requeue(&mut f);
     let preserved = f.runtime.get_task(&f.task).unwrap();
-    redraw_crew(&f, "sol");
-    redraw_crew(&f, "sonnet");
+    redraw_crew(&f, "sol", Recorded::LegacyNote);
+    redraw_crew(&f, "sonnet", Recorded::Typed);
     let redrawn = f.runtime.get_task(&f.task).unwrap();
     assert_eq!(redrawn.crew.as_deref(), Some("sonnet"));
     assert_eq!(redrawn.crew_source, preserved.crew_source);
@@ -115,7 +137,7 @@ pub(super) fn crew_redraws_keep_every_other_adoption_refusal() {
         let mut f = Fixture::new();
         publication(&mut f);
         requeue(&mut f);
-        redraw_crew(&f, "sol");
+        redraw_crew(&f, "sol", Recorded::LegacyNote);
         let human = |params: TaskUpdateParams| {
             f.runtime
                 .update_task_as_human(&f.task, params, "human".into())
@@ -177,7 +199,7 @@ pub(super) fn crew_redraws_keep_every_other_adoption_refusal() {
                     crew: Some(Some("fixture".into())),
                     ..Default::default()
                 });
-                redraw_crew(&f, "sonnet");
+                redraw_crew(&f, "sonnet", Recorded::Typed);
             }
             "discarded" => human(TaskUpdateParams {
                 discard_candidate: true,

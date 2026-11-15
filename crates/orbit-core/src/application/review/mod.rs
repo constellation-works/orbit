@@ -24,6 +24,7 @@ use orbit_common::OrbitError;
 
 mod admission;
 mod automation_port;
+mod candidate_size_port;
 mod coverage;
 pub(crate) mod crew;
 mod distributed_port;
@@ -34,19 +35,20 @@ mod fulfilment;
 pub(crate) use fulfilment::test_support as fulfilment_test_support;
 mod gate;
 mod handoff;
+mod handoff_repair;
 mod landing;
+mod landing_dispatch_port;
 mod projection;
 pub(crate) mod reconciliation;
 mod switches;
 mod task_port;
-#[cfg(test)]
-mod tests;
 
 pub use admission::pull_review_request_refusal;
 pub(crate) use admission::{
     input_run_review_admission, local_route_before_landing_conflict,
     local_route_before_pr_conflict, local_route_run_option_refusal, run_review_admission,
 };
+pub(in crate::application) use candidate_size_port::ReviewCandidateSizePort;
 pub(in crate::application) use distributed_port::ReviewDistributedPort;
 pub(crate) use fulfilment::fulfil_review_evidence;
 pub use fulfilment::{
@@ -59,11 +61,10 @@ pub(crate) use gate::{
 /// The owner handoff console [ORB-12516]: what an authorized owner surface
 /// reads and the typed refusals it renders. Adapters above Core cannot reach
 /// `orbit-store`, so these are the only shapes they need.
-pub use handoff::{
-    DistributedClaimState, ExpectedCandidate, HANDOFF_CONSOLE_SCHEMA, HandoffConsoleRefusal,
-};
+pub use handoff::{DistributedClaimState, ExpectedCandidate, HandoffConsoleRefusal};
 pub(crate) use landing::record_review_landing;
-pub use projection::task_review_projection;
+pub(in crate::application) use landing_dispatch_port::ReviewLandingDispatchPort;
+pub(crate) use projection::task_review_projection;
 pub use switches::{
     AfterLandingSwitch, BeforeLandingSwitch, BeforePrSwitch, ReviewSwitches, review_switches,
     review_switches_view,
@@ -77,7 +78,7 @@ pub(crate) const REVIEW_AUDIT: &str = "review.gate";
 /// coordinator captured, and the follower's pull drain, which declares its
 /// captured value on every pull [ORB-13992].
 ///
-/// A claimed leaf (`CLAIMED_LEAF_JOBS`) is never submitted: the pull store
+/// A claimed leaf (`orbit_types::workflow::CLAIMED_DELIVERY_LEAF_JOBS`) is never submitted: the pull store
 /// creates it with the admission its claim's ship contract captured, so this
 /// host's settings never decide its review, and a submission naming the
 /// reserved key for one is refused like any other [ORB-13908].
@@ -86,8 +87,8 @@ pub(crate) const REVIEW_ADMITTED_JOBS: &[&str] = &[
     "workspace_pull_pipeline",
     "task_auto_pipeline",
     "task_gate_pipeline",
-    "task_pr_pipeline",
-    "task_local_pipeline",
+    orbit_types::workflow::TASK_PR_PIPELINE_JOB,
+    orbit_types::workflow::TASK_LOCAL_PIPELINE_JOB,
 ];
 
 /// Longest resume chain followed back to its first run.

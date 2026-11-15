@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Command Pattern"
-last_validated: 2026-10-29
+last_validated: 2026-11-12
 ---
 # Command Pattern
 
@@ -11,6 +11,9 @@ In this codebase, Command = the `Tool` trait at `crates/orbit-tools/src/tool.rs`
 pub trait Tool: Send + Sync {
     fn schema(&self) -> ToolSchema;
     fn input_schema(&self) -> Option<Value> { None }
+    fn declared_id_route(&self) -> McpIdRouteDeclaration {
+        McpIdRouteDeclaration::Unspecified
+    }
     fn execution_kind(&self) -> ToolExecutionKind { ToolExecutionKind::Mutating }
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError>;
 }
@@ -24,9 +27,9 @@ Destructive CLI commands never prompt or read stdin. New irreversible single act
 `--confirm` and refuse before mutation when it is absent. A migration or bulk
 cleanup command is non-destructive by default (report/dry-run) and uses
 `--confirm` to apply. Existing spellings may remain as compatibility aliases
-(`--yes` for worktree and temporary-file GC); plugin removal keeps its
-existing `--yes` flag. New commands must not introduce another confirmation
-spelling. Reversible mutations should
+(`--yes` for worktree and temporary-file GC, `--apply` for audit, runs and
+journal GC, `--yes` for plugin removal). New commands must not introduce
+another confirmation spelling. Reversible mutations should
 instead document and test their recovery command.
 
 Two codebase-specific shapes carry non-obvious lessons; everything else is straightforward `impl Tool`.

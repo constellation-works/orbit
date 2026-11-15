@@ -304,6 +304,8 @@ fn script_grants_cannot_override_state_or_git_protections() {
         writable: &writable,
         masked: &masked,
         home: None,
+        inputs: &[],
+        network: orbit_exec::ScriptSandboxNetwork::None,
     };
     let args =
         compile_linux_script_argv(&spec, &[], &["/bin/true".into()]).expect("compile profile");
@@ -335,6 +337,55 @@ fn script_grants_cannot_override_state_or_git_protections() {
     assert!(
         compile_linux_script_argv(&spec, &[], &["/bin/true".into()]).is_err(),
         "a grant must not expose an enclosing state tree"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn script_read_grants_cannot_expose_enclosing_state() {
+    use orbit_exec::{ScriptSandboxSpec, compile_linux_script_argv};
+    use std::fs;
+
+    let dir = tempfile::tempdir().expect("fixture");
+    let workspace = dir.path().join("workspace");
+    let state = workspace.join(".orbit");
+    let cwd = state.join("state/worktrees/run");
+    let sibling = state.join("state/tasks");
+    let other = dir.path().join("other");
+    let scratch = dir.path().join("scratch");
+    for path in [&cwd, &sibling, &other, &scratch] {
+        fs::create_dir_all(path).expect("fixture directory");
+    }
+    let alias = dir.path().join("workspace-alias");
+    std::os::unix::fs::symlink(&workspace, &alias).expect("alias");
+    let masked = vec![state.clone()];
+    let compile = |readable: &[std::path::PathBuf]| {
+        let spec = ScriptSandboxSpec {
+            cwd: &cwd,
+            cwd_writable: true,
+            scratch: &scratch,
+            readable,
+            writable: &[],
+            masked: &masked,
+            home: None,
+            inputs: &[],
+            network: orbit_exec::ScriptSandboxNetwork::None,
+        };
+        compile_linux_script_argv(&spec, &[], &["/bin/true".into()])
+    };
+    for root in [&workspace, &alias, &state, &sibling] {
+        assert!(
+            compile(std::slice::from_ref(root)).is_err(),
+            "read root {} must not expose the enclosing state tree",
+            root.display()
+        );
+    }
+    let args = compile(&[other.clone(), cwd.join("sub")]).expect("unrelated read root");
+    let other = other.to_str().expect("path");
+    assert!(
+        args.windows(3)
+            .any(|triple| triple[0] == "--ro-bind" && triple[1] == other && triple[2] == other),
+        "an unrelated read root stays bound"
     );
 }
 
@@ -381,6 +432,8 @@ fn script_profile_preserves_masks_with_overlapping_grant() {
             writable: &writable,
             masked: &masked,
             home: None,
+            inputs: &[],
+            network: orbit_exec::ScriptSandboxNetwork::None,
         },
         argv: &argv,
         env: &[],
@@ -510,6 +563,8 @@ mod script_linked_worktree {
             writable: &[],
             masked: &[],
             home: None,
+            inputs: &[],
+            network: orbit_exec::ScriptSandboxNetwork::None,
         };
         let argv = compile_linux_script_argv(&spec, &[], &["/usr/bin/true".to_string()])
             .expect("compile profile");
@@ -588,6 +643,8 @@ mod script_linked_worktree {
                 writable: &[],
                 masked: &[],
                 home: None,
+                inputs: &[],
+                network: orbit_exec::ScriptSandboxNetwork::None,
             },
             argv: &argv,
             env: &env,
@@ -623,4 +680,360 @@ mod script_linked_worktree {
             "the common Git config is unchanged"
         );
     }
+}
+
+/// The failing shape of a granted script whose read root is a file under the
+/// masked global root (`~/.orbit/bin/orbit`): the mask must neither hide the
+/// file nor leave the credential deny for `~/.orbit/run` nowhere to mount.
+#[cfg(target_os = "linux")]
+#[test]
+fn script_read_root_under_masked_global_root_starts_and_keeps_state_hidden() {
+    use orbit_exec::{ScriptRunEnd, ScriptSandboxRequest, ScriptSandboxSpec, run_script_sandboxed};
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("fixture");
+    let home = dir.path().join("home");
+    let global = home.join(".orbit");
+    let tool = global.join("bin/orbit");
+    let cwd = dir.path().join("work");
+    let scratch = dir.path().join("scratch");
+    for path in [
+        &global.join("bin"),
+        &global.join("run"),
+        &global.join("state"),
+        &cwd,
+        &scratch,
+    ] {
+        fs::create_dir_all(path).expect("fixture directory");
+    }
+    for name in orbit_exec::SCRIPT_SCRATCH_DIRS {
+        fs::create_dir_all(scratch.join(name)).expect("scratch directory");
+    }
+    fs::write(&tool, "#!/bin/sh\necho tool-ran\n").expect("tool");
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).expect("tool mode");
+    fs::write(global.join("state/secret"), "secret").expect("state");
+    fs::write(global.join("run/web-session.secret"), "secret").expect("run");
+    let masked = vec![global.clone()];
+    let readable = vec![tool.clone()];
+    let spec = ScriptSandboxSpec {
+        cwd: &cwd,
+        cwd_writable: false,
+        scratch: &scratch,
+        readable: &readable,
+        writable: &[],
+        masked: &masked,
+        home: Some(home.as_os_str()),
+        inputs: &[],
+        network: orbit_exec::ScriptSandboxNetwork::None,
+    };
+
+    let args = compile_args(&spec);
+    let position = |flag: &str, path: &std::path::Path| {
+        let path = path.to_str().expect("path");
+        args.windows(2)
+            .rposition(|pair| pair[0] == flag && pair[1] == path)
+            .unwrap_or_else(|| panic!("no `{flag} {path}`"))
+    };
+    let run_deny = position("--tmpfs", &global.join("run"));
+    assert!(
+        position("--tmpfs", &global) < run_deny,
+        "the credential deny mounts inside the mask"
+    );
+    assert!(
+        run_deny < position("--remount-ro", &global),
+        "the mask goes read-only only after the credential denies"
+    );
+    assert!(
+        position("--tmpfs", &global) < position("--ro-bind", &tool),
+        "a read root inside the mask is bound over it"
+    );
+
+    if !build_sandbox_available("script_read_root_under_masked_global_root_starts") {
+        return;
+    }
+    let script = format!(
+        "'{}' && test ! -e '{}/state/secret' && test ! -e '{}/run/web-session.secret'",
+        tool.display(),
+        global.display(),
+        global.display()
+    );
+    let argv = vec!["/bin/sh".into(), "-c".into(), script];
+    let run = run_script_sandboxed(ScriptSandboxRequest {
+        sandbox: spec,
+        argv: &argv,
+        env: &[],
+        launcher: &[],
+        launcher_env: &[],
+        stdin: vec![],
+        timeout: Duration::from_secs(20),
+        scratch_cap_bytes: u64::MAX,
+    })
+    .expect("run script");
+    assert_eq!(
+        run.end,
+        ScriptRunEnd::Exited(0),
+        "{}",
+        String::from_utf8_lossy(&run.log)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "tool-ran\n");
+
+    fn compile_args(spec: &ScriptSandboxSpec<'_>) -> Vec<String> {
+        orbit_exec::compile_linux_script_argv(spec, &[], &["/bin/true".into()])
+            .expect("compile profile")
+    }
+}
+
+/// A declared input is bound read-only at `in/<name>`, and one that overlaps
+/// a masked tree is refused, since the mask applies only at its host path.
+#[cfg(target_os = "linux")]
+#[test]
+fn script_inputs_are_read_only_at_in_and_never_expose_masked_state() {
+    use orbit_exec::{
+        ScriptRunEnd, ScriptSandboxInput, ScriptSandboxRequest, ScriptSandboxSpec,
+        compile_linux_script_argv, run_script_sandboxed,
+    };
+    use std::fs;
+
+    let dir = tempfile::tempdir().expect("fixture");
+    let root = dir.path().canonicalize().expect("physical fixture");
+    let cwd = root.join("work");
+    let state = cwd.join(".orbit");
+    let scratch = root.join("scratch");
+    fs::create_dir_all(cwd.join("dist/sub")).expect("input tree");
+    fs::create_dir_all(&state).expect("state");
+    for name in orbit_exec::SCRIPT_SCRATCH_DIRS {
+        fs::create_dir_all(scratch.join(name)).expect("scratch directory");
+    }
+    fs::write(cwd.join("brief.txt"), "brief\n").expect("input file");
+    fs::write(cwd.join("dist/sub/a.txt"), "a\n").expect("nested input");
+    let masked = vec![state.clone()];
+    let inputs = vec![
+        ScriptSandboxInput {
+            source: cwd.join("brief.txt"),
+            name: "brief.txt".to_string(),
+        },
+        ScriptSandboxInput {
+            source: cwd.join("dist"),
+            name: "dist".to_string(),
+        },
+    ];
+    let spec = ScriptSandboxSpec {
+        cwd: &cwd,
+        cwd_writable: true,
+        scratch: &scratch,
+        readable: &[],
+        writable: &[],
+        masked: &masked,
+        home: None,
+        inputs: &inputs,
+        network: orbit_exec::ScriptSandboxNetwork::None,
+    };
+    let argv = compile_linux_script_argv(&spec, &[], &["/bin/true".into()]).expect("compile");
+    let bound = argv.windows(3).any(|w| {
+        w[0] == "--ro-bind"
+            && w[1] == cwd.join("dist").display().to_string()
+            && w[2] == "/orbit-script/in/dist"
+    });
+    assert!(bound, "the input is bound read-only at in/<name>: {argv:?}");
+    for exposing in [cwd.clone(), state.clone()] {
+        let leaking = vec![ScriptSandboxInput {
+            source: exposing.clone(),
+            name: "tree".to_string(),
+        }];
+        let spec = ScriptSandboxSpec {
+            inputs: &leaking,
+            ..spec
+        };
+        assert!(
+            compile_linux_script_argv(&spec, &[], &["/bin/true".into()]).is_err(),
+            "input {} overlaps the masked state tree",
+            exposing.display()
+        );
+    }
+
+    if !build_sandbox_available("script_inputs_are_read_only_at_in_and_never_expose_masked_state") {
+        return;
+    }
+    let script = "cat /orbit-script/in/brief.txt /orbit-script/in/dist/sub/a.txt \
+                  && ! sh -c 'echo x > /orbit-script/in/brief.txt' 2>/dev/null \
+                  && ! sh -c 'echo x > /orbit-script/in/dist/new' 2>/dev/null \
+                  && ! sh -c ': > /orbit-script/in/extra' 2>/dev/null \
+                  && echo writes-refused";
+    let argv = vec!["/bin/sh".into(), "-c".into(), script.to_string()];
+    let run = run_script_sandboxed(ScriptSandboxRequest {
+        sandbox: spec,
+        argv: &argv,
+        env: &path_env(),
+        launcher: &[],
+        launcher_env: &[],
+        stdin: vec![],
+        timeout: Duration::from_secs(20),
+        scratch_cap_bytes: u64::MAX,
+    })
+    .expect("run script");
+    assert_eq!(
+        run.end,
+        ScriptRunEnd::Exited(0),
+        "{}",
+        String::from_utf8_lossy(&run.log)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "brief\na\nwrites-refused\n"
+    );
+    assert_eq!(
+        fs::read_to_string(cwd.join("brief.txt")).unwrap(),
+        "brief\n"
+    );
+    assert!(!cwd.join("dist/new").exists());
+}
+
+/// Script steps phase 5: the grant's network decides what a script reaches,
+/// shown against two listeners on the host's loopback, so no external
+/// service is needed. Under a port-confined network (`network: https` is
+/// port 443; the test admits the first listener's port the same way) the
+/// script completes a request on the admitted port and Landlock refuses the
+/// other; under `none` neither host listener exists for it; under `any`
+/// both answer.
+#[cfg(target_os = "linux")]
+#[test]
+fn script_network_grants_reach_only_what_they_allow() {
+    use orbit_exec::{
+        ScriptRunEnd, ScriptSandboxNetwork, ScriptSandboxRequest, ScriptSandboxSpec,
+        run_script_sandboxed,
+    };
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let dir = tempfile::tempdir().expect("fixture");
+    let cwd = dir.path().join("work");
+    let scratch = dir.path().join("scratch");
+    std::fs::create_dir_all(&cwd).expect("cwd");
+    for name in orbit_exec::SCRIPT_SCRATCH_DIRS {
+        std::fs::create_dir_all(scratch.join(name)).expect("scratch directory");
+    }
+    let spec = ScriptSandboxSpec {
+        cwd: &cwd,
+        cwd_writable: false,
+        scratch: &scratch,
+        readable: &[],
+        writable: &[],
+        masked: &[],
+        home: None,
+        inputs: &[],
+        network: ScriptSandboxNetwork::None,
+    };
+    let compiled = |network| {
+        orbit_exec::compile_linux_script_argv(
+            &ScriptSandboxSpec { network, ..spec },
+            &[],
+            &["/bin/true".into()],
+        )
+        .expect("compile profile")
+    };
+    assert!(
+        !compiled(ScriptSandboxNetwork::None).contains(&"--share-net".to_string()),
+        "network none keeps its own network namespace"
+    );
+    for network in [
+        ScriptSandboxNetwork::TcpPort(443),
+        ScriptSandboxNetwork::Any,
+    ] {
+        assert!(
+            compiled(network).contains(&"--share-net".to_string()),
+            "{network:?} shares the host network"
+        );
+    }
+
+    if !build_sandbox_available("script_network_grants_reach_only_what_they_allow") {
+        return;
+    }
+    if let Err(reason) =
+        orbit_exec::probe_script_sandbox_network(ScriptSandboxNetwork::TcpPort(443))
+    {
+        orbit_exec::report_bwrap_deferral(
+            "script_network_grants_reach_only_what_they_allow",
+            &reason,
+        );
+        return;
+    }
+    let serve = |reply: &'static str| {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a loopback listener");
+        let port = listener.local_addr().expect("listener address").port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                // Read the whole request headers before replying: bash may
+                // flush `printf ... >&3` in pieces, and a single read can
+                // catch a prefix, reply and close while the tail is still in
+                // flight, which resets the connection and loses the reply.
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                let mut request = Vec::new();
+                let mut buf = [0u8; 256];
+                loop {
+                    match stream.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            request.extend_from_slice(&buf[..n]);
+                            if request.len() > 4096 || request.windows(4).any(|w| w == b"\r\n\r\n")
+                            {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let _ = write!(stream, "HTTP/1.0 200 OK\r\n\r\n{reply}\n");
+            }
+        });
+        port
+    };
+    let admitted = serve("admitted-answered");
+    let other = serve("other-answered");
+    let script = format!(
+        "fetch() {{\n\
+           if exec 3<>/dev/tcp/127.0.0.1/$1 2>/dev/null; then\n\
+             printf 'GET / HTTP/1.0\\r\\n\\r\\n' >&3; tail -n 1 <&3; exec 3<&-\n\
+           else echo \"$1-unreachable\"; fi\n\
+         }}\n\
+         fetch {admitted}\n\
+         fetch {other}\n"
+    );
+    let argv = vec!["/bin/bash".to_string(), "-c".to_string(), script];
+    let run = |network| {
+        let run = run_script_sandboxed(ScriptSandboxRequest {
+            sandbox: ScriptSandboxSpec { network, ..spec },
+            argv: &argv,
+            env: &path_env(),
+            launcher: &[],
+            launcher_env: &[],
+            stdin: vec![],
+            timeout: Duration::from_secs(30),
+            scratch_cap_bytes: u64::MAX,
+        })
+        .expect("run script");
+        assert_eq!(
+            run.end,
+            ScriptRunEnd::Exited(0),
+            "{network:?}: {}",
+            String::from_utf8_lossy(&run.log)
+        );
+        String::from_utf8_lossy(&run.stdout).into_owned()
+    };
+    assert_eq!(
+        run(ScriptSandboxNetwork::TcpPort(admitted)),
+        format!("admitted-answered\n{other}-unreachable\n"),
+        "a port-confined grant reaches its port and nothing else"
+    );
+    assert_eq!(
+        run(ScriptSandboxNetwork::None),
+        format!("{admitted}-unreachable\n{other}-unreachable\n"),
+        "network none reaches no host listener"
+    );
+    assert_eq!(
+        run(ScriptSandboxNetwork::Any),
+        "admitted-answered\nother-answered\n",
+        "network any reaches every host listener"
+    );
 }

@@ -118,10 +118,11 @@ pub(super) fn gap_fit_selection(
 ) -> Result<GapFitPass, PassError> {
     let settings = runtime.auto_concurrency_settings();
     let previous = previous_head(runtime, input);
+    let (max_wait_minutes, stuck_passes) = runtime.auto_concurrency_head_guard();
     let head_wait = HeadWait {
         previous: previous.as_ref(),
-        max_wait: Duration::minutes(i64::from(settings.head_max_wait_minutes)),
-        stuck_passes: settings.head_stuck_passes,
+        max_wait: Duration::minutes(i64::from(max_wait_minutes)),
+        stuck_passes,
         now: Utc::now(),
     };
     if !can_admit {
@@ -140,7 +141,7 @@ pub(super) fn gap_fit_selection(
             mode,
             forecast,
             settings.admit_cpu_percent,
-            settings.admit_memory_percent,
+            orbit_config::AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT,
             &workspace_id,
             head_wait,
         );

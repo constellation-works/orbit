@@ -43,6 +43,7 @@ fn seed_run(runtime: &OrbitRuntime, id: &str, state: JobRunState) {
 fn seed_job_run(runtime: &OrbitRuntime, id: &str, job_id: &str, state: JobRunState) {
     let now = Utc::now();
     let run = JobRun {
+        build: None,
         run_id: id.into(),
         job_id: job_id.into(),
         attempt: 1,
@@ -163,6 +164,7 @@ fn fleet_reliability_totals_reconcile_mixed_outcomes_over_http() {
                     "succeeded": 1,
                     "failed": 1,
                     "cascaded": 0,
+                    "upgrade_paused": 0,
                     "cancelled": 1,
                     "skipped": 1,
                     "held": 2,
@@ -174,6 +176,7 @@ fn fleet_reliability_totals_reconcile_mixed_outcomes_over_http() {
                 "succeeded",
                 "failed",
                 "cascaded",
+                "upgrade_paused",
                 "cancelled",
                 "skipped",
                 "held",
@@ -235,6 +238,7 @@ fn fleet_reliability_counts_a_delivery_and_its_wrapper_echoes_once() {
                     "succeeded": 1,
                     "failed": 2,
                     "cascaded": 2,
+                    "upgrade_paused": 0,
                     "cancelled": 0,
                     "skipped": 0,
                     "held": 0,

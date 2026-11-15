@@ -36,7 +36,7 @@ pub struct EvidenceFulfilmentTick {
 impl OrbitRuntime {
     /// Why this runtime fulfils no evidence hold, if it does not: a claimed
     /// worker, a replica checkout, or a host other than Linux.
-    pub fn review_evidence_fulfilment_disabled_reason(&self) -> Option<String> {
+    pub(crate) fn review_evidence_fulfilment_disabled_reason(&self) -> Option<String> {
         self.fulfilment_disabled_refusal().map(|(_, reason)| reason)
     }
 

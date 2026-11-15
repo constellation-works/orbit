@@ -13,6 +13,12 @@ use std::path::PathBuf;
 mod association;
 #[path = "source_repair/crew_redraw.rs"]
 mod crew_redraw;
+#[path = "source_repair/decision_answer.rs"]
+mod decision_answer;
+#[path = "source_repair/desktop_native.rs"]
+mod desktop_native;
+#[path = "source_repair/discarded_successors.rs"]
+mod discarded_successors;
 #[path = "source_repair/escalated_publication.rs"]
 mod escalated_publication;
 #[path = "source_repair/failed_publication.rs"]
@@ -26,6 +32,8 @@ use fixture::{Fixture, git};
 mod completion;
 #[path = "source_repair/generations.rs"]
 mod generations;
+#[path = "source_repair/handoff_landing.rs"]
+mod handoff_landing;
 #[path = "source_repair/handoff_requeue.rs"]
 mod handoff_requeue;
 #[path = "source_repair/inline_completion_retry.rs"]
@@ -40,14 +48,20 @@ mod publication;
 mod published_owner;
 #[path = "source_repair/reconciliation.rs"]
 mod reconciliation;
+#[path = "source_repair/repair_reservations.rs"]
+mod repair_reservations;
 #[path = "source_repair/replay.rs"]
 mod replay;
+#[path = "source_repair/resumed_in_place.rs"]
+mod resumed_in_place;
 #[path = "source_repair/resumed_recovery.rs"]
 mod resumed_recovery;
 #[path = "source_repair/review_requeue.rs"]
 mod review_requeue;
 #[path = "source_repair/reviewers.rs"]
 mod reviewers;
+#[path = "source_repair/unresumable_requeue.rs"]
+mod unresumable_requeue;
 use completion::mutation::{
     enabled_completion_refuses_repair_and_mutation_provenance,
     expired_completion_budget_never_merges,
@@ -55,7 +69,6 @@ use completion::mutation::{
 use completion::policy::{
     candidate_drift_refuses_equivalent_policy_retry, equivalent_policy_drift_retries_observation,
     relevant_policy_drift_preserves_publication,
-    risk_threshold_policy_retries_observation_until_a_predicate_changes,
 };
 use completion::prerequisite::{
     later_prerequisite_read_failure_resumes_only_completion,
@@ -69,6 +82,7 @@ use completion::{
     configured_review_requires_unchanged_host_certificate,
     empty_requirements_still_bind_completion_policy,
     moved_base_and_empty_requirements_retry_unchanged_completion,
+    refreshed_preparation_retry_admits_unchanged_and_refuses_drift,
     refused_receipts_stop_before_agent_or_republication,
     repeated_observation_failure_holds_after_one_retry,
     timing_alias_rewrites_preserve_published_completion_authentication,
@@ -78,6 +92,9 @@ use completion::{
 use crew_redraw::{
     crew_redraws_keep_every_other_adoption_refusal,
     system_crew_redraws_keep_the_preserved_publication_adoptable,
+};
+use discarded_successors::{
+    discard_across_successors_keeps_every_refusal, discard_survives_unpublished_held_successors,
 };
 use failed_successors::{
     failed_pre_adoption_chain_rebinds_the_original_publication,
@@ -97,6 +114,10 @@ use published_owner::{
     unrecorded_publication_move_is_refused,
 };
 use replay::lost_spawn_reply_reconciles_the_reserved_run_after_older_retries;
+use unresumable_requeue::{
+    candidate_resume_identity_refusals_name_their_predicate,
+    requeue_refuses_a_publication_candidate_resume_would_refuse,
+};
 
 fn cancelled_candidate_requires_explicit_intent_and_continues_same_branch() {
     let f = Fixture::new();
@@ -578,10 +599,12 @@ fn current_policy_is_captured_and_review_runs_at_its_scheduled_boundary() {
             std::fs::write(&f.answer, answer.to_string()).unwrap();
         }
 
-        let answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
-        assert_eq!(
-            answer["isDraft"], true,
-            "source recovery preserves the explicit draft hold"
+        let gh_calls = std::fs::read_to_string(f._root.path().join("gh-calls")).unwrap();
+        assert!(
+            !gh_calls
+                .lines()
+                .any(|call| call.split_whitespace().take(2).eq(["pr", "ready"])),
+            "source recovery must not request removal of the explicit draft hold: {gh_calls}"
         );
 
         let mut gate = json!({"job_run_id":id,"completed_task_ids":[f.task],"workspace_path":checkout,"base":"main","base_sha":setup["base_sha"],"base_sync":"remote","mode":"pr"});
@@ -863,6 +886,8 @@ crate::scenario_table!(
     failed_requeued_publisher_is_inspected_and_submitted_without_a_successor,
     failed_requeued_direct_publisher_retains_authority_and_drift_refusals,
     published_completion_requeue_adopts_without_reimplementation,
+    requeue_refuses_a_publication_candidate_resume_would_refuse,
+    candidate_resume_identity_refusals_name_their_predicate,
     system_crew_redraws_keep_the_preserved_publication_adoptable,
     crew_redraws_keep_every_other_adoption_refusal,
     published_requeue_is_admitted_past_held_locks_and_reuses_its_pr,
@@ -872,6 +897,8 @@ crate::scenario_table!(
     published_requeue_refuses_changed_scope_head_and_incomplete_source,
     stopped_successor_is_explicitly_bound_when_repairing_older_publication,
     legacy_publication_behind_a_stopped_successor_cannot_start_fresh,
+    discard_survives_unpublished_held_successors,
+    discard_across_successors_keeps_every_refusal,
     failed_pre_adoption_chain_rebinds_the_original_publication,
     failed_successor_chain_keeps_every_neighboring_refusal,
     cancelled_published_repair_accepts_fresh_generation,
@@ -890,22 +917,50 @@ crate::scenario_table!(
     timing_alias_rewrites_preserve_published_completion_authentication,
     unchanged_publication_retries_only_completion,
     equivalent_policy_drift_retries_observation,
+);
+
+crate::scenario_table!(
+    published_completion_scenarios_policy,
     relevant_policy_drift_preserves_publication,
-    risk_threshold_policy_retries_observation_until_a_predicate_changes,
     candidate_drift_refuses_equivalent_policy_retry,
     moved_base_and_empty_requirements_retry_unchanged_completion,
     empty_requirements_still_bind_completion_policy,
+);
+
+crate::scenario_table!(
+    published_completion_scenarios_retry,
     repeated_observation_failure_holds_after_one_retry,
-    completion_reuse_refuses_drift,
+    refreshed_preparation_retry_admits_unchanged_and_refuses_drift,
     changed_base_gets_fresh_native_validation,
+);
+
+crate::scenario_table!(
+    published_completion_scenarios_reuse,
+    completion_reuse_refuses_drift,
+);
+
+crate::scenario_table!(
+    published_completion_scenarios_authority,
     concurrent_and_lost_admission_keep_one_completion_budget,
     unknown_merge_reply_is_reconciled_without_republication,
     configured_review_requires_unchanged_host_certificate,
+);
+
+crate::scenario_table!(
+    published_completion_scenarios_refusals,
     refused_receipts_stop_before_agent_or_republication,
     enabled_completion_refuses_repair_and_mutation_provenance,
     expired_completion_budget_never_merges,
+);
+
+crate::scenario_table!(
+    published_completion_scenarios_prerequisites,
     later_prerequisite_read_failure_resumes_only_completion,
     prerequisite_read_after_mutation_provenance_never_resumes,
     transient_required_check_and_merge_capability_reads_resume_completion,
+);
+
+crate::scenario_table!(
+    published_completion_scenarios_permanent_prerequisites,
     permanent_required_check_and_merge_capability_answers_do_not_resume
 );

@@ -10,11 +10,13 @@
 # Uses private CARGO_TARGET_DIR values per tree. The same-path pair empties
 # and reuses one private target sequentially to keep cache keys identical.
 # The disk cache and UDS live
-# only under the exclusively owned bench workdir. Python 3 resolves paths before
-# any writes; the cache must be a strict descendant, separate from generated
-# trees, targets and outputs, so resets cannot remove an operator cache or the
-# active benchmark tree. Does not enable a global host cache.
+# only under the bench workdir this invocation exclusively claims. Python 3
+# resolves paths and claims the workdir before any writes; the cache must be
+# a strict descendant, separate from generated trees, targets and outputs, so
+# resets cannot remove an operator cache or the active benchmark tree. Does
+# not enable a global host cache.
 set -euo pipefail
+umask 077
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -36,6 +38,8 @@ SCCACHE_BIN=""
 # during the benchmark; this is path admission, not a filesystem sandbox.
 validated_paths="$(python3 - "$WORKDIR" "$CACHE_DIR" "$RESULT" <<'PYPATHS'
 from pathlib import Path
+import os
+import secrets
 import sys
 
 
@@ -66,7 +70,8 @@ try:
         "real-custom-b", "probe", "probe-target", "probe-c", "probe-d",
         "probe-c-target", "probe-d-target", "bin",
     )
-    files = ("sccache.sock", "last-elapsed", "bwrap-probe.err")
+    files = ("sccache.sock", "last-elapsed", "bwrap-probe.err",
+             ".orbit-compiler-cache-bench-owner")
     reserved = [work / name for name in directories + files]
     for path in reserved + [work / "bin" / "sccache"]:
         if path.is_symlink():
@@ -85,9 +90,62 @@ try:
             refuse(f"not a directory: {path}")
     if result.exists() and not result.is_file():
         refuse(f"not a regular result file: {result}")
+    # Establish exclusive ownership before the caller installs cleanup,
+    # writes the result/cache, copies trees or invokes any transport. A new
+    # workdir is claimed with an atomic mkdir; a pre-existing workdir may be
+    # claimed only while it holds no file at all (empty subdirectories and
+    # internal symlinks, as in private cache layouts, are fine). Either way
+    # an O_EXCL owner marker is the collision boundary a second invocation
+    # cannot cross, and every destructive consumer re-verifies it.
+    if Path(sys.argv[1]).is_symlink():
+        refuse(f"benchmark workdir is a symlink: {sys.argv[1]}")
+    marker = work / ".orbit-compiler-cache-bench-owner"
+    if overlaps(cache, marker) or overlaps(result, marker):
+        refuse(f"cache/result overlaps the ownership marker: {marker}")
+    token = secrets.token_hex(32)
+    created_workdir = False
+    if not work.exists():
+        work.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.mkdir(work, 0o700)
+            created_workdir = True
+        except FileExistsError:
+            refuse(f"benchmark workdir was claimed by another invocation: {work}")
+    else:
+        stack = [work]
+        while stack:
+            current = stack.pop()
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    if entry.is_symlink():
+                        target = Path(entry.path).resolve()
+                        if target != work and work not in target.parents:
+                            refuse("benchmark workdir contains a symlink "
+                                   f"leaving the workdir: {entry.path}")
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(Path(entry.path))
+                        continue
+                    refuse(f"benchmark workdir already contains a file: {entry.path}")
+    try:
+        fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as output:
+            output.write(token + "\n")
+            output.flush()
+            os.fsync(output.fileno())
+    except FileExistsError:
+        refuse(f"benchmark workdir is already claimed: {work}")
+    except OSError:
+        if created_workdir:
+            try:
+                os.rmdir(work)
+            except OSError:
+                pass
+        raise
     print(work)
     print(cache)
     print(result)
+    print(token)
 except (OSError, RuntimeError, ValueError) as error:
     print(f"bench-compiler-cache: refusing paths: {error}", file=sys.stderr)
     sys.exit(1)
@@ -97,9 +155,48 @@ PYPATHS
   IFS= read -r WORKDIR
   IFS= read -r CACHE_DIR
   IFS= read -r RESULT
+  IFS= read -r OWNER_TOKEN
 } <<<"$validated_paths"
+[[ -n "$WORKDIR" && -n "$CACHE_DIR" && -n "$RESULT" && -n "$OWNER_TOKEN" ]] || {
+  printf 'bench-compiler-cache: refusing paths: could not claim benchmark workdir\n' >&2
+  exit 1
+}
 BENCH_UDS="$WORKDIR/sccache.sock"
 HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
+
+# Every destructive or writing consumer re-verifies the claim made during
+# admission, so a marker removed or replaced after admission preserves the
+# trees instead of deleting through an unowned workdir.
+verify_bench_ownership() {
+  python3 - "$WORKDIR" "$OWNER_TOKEN" <<'PYOWN'
+from pathlib import Path
+import stat
+import sys
+
+work, token = Path(sys.argv[1]), sys.argv[2]
+try:
+    if not token or "\n" in token or "\r" in token:
+        raise ValueError("missing ownership token")
+    work_stat = work.lstat()
+    if stat.S_ISLNK(work_stat.st_mode) or not stat.S_ISDIR(work_stat.st_mode):
+        raise ValueError(f"workdir is not an owned directory: {work}")
+    if work.resolve(strict=True) != work:
+        raise ValueError(f"workdir path is aliased: {work}")
+    marker = work / ".orbit-compiler-cache-bench-owner"
+    marker_stat = marker.lstat()
+    if stat.S_ISLNK(marker_stat.st_mode) or not stat.S_ISREG(marker_stat.st_mode):
+        raise ValueError(f"ownership marker is not a regular file: {marker}")
+    if marker.read_text(encoding="utf-8").rstrip("\n") != token:
+        raise ValueError(f"workdir is not owned by this invocation: {work}")
+except (OSError, RuntimeError, UnicodeError, ValueError) as error:
+    print(f"bench-compiler-cache: refusing paths: {error}", file=sys.stderr)
+    raise SystemExit(1)
+PYOWN
+}
+
+require_bench_ownership() {
+  verify_bench_ownership || exit 1
+}
 
 stop_owned_daemon() {
   [[ -n "$SCCACHE_BIN" && -x "$SCCACHE_BIN" ]] || return 0
@@ -108,22 +205,49 @@ stop_owned_daemon() {
 }
 
 cleanup() {
-  stop_owned_daemon
-  rm -rf "$WORKDIR/a" "$WORKDIR/b" "$WORKDIR/a-target" "$WORKDIR/b-target" \
-    "$WORKDIR/warm-target" \
-    "$WORKDIR/probe-c" "$WORKDIR/probe-d" "$WORKDIR/probe-c-target" "$WORKDIR/probe-d-target"
+  local status=$?
+  trap - EXIT
+  trap '' HUP INT TERM
+  if verify_bench_ownership; then
+    stop_owned_daemon
+    rm -rf "$WORKDIR/a" "$WORKDIR/b" "$WORKDIR/a-target" "$WORKDIR/b-target" \
+      "$WORKDIR/warm-target" \
+      "$WORKDIR/probe-c" "$WORKDIR/probe-d" "$WORKDIR/probe-c-target" "$WORKDIR/probe-d-target" \
+      || status=1
+  else
+    printf 'bench-compiler-cache: preserving unverified cleanup paths under: %s\n' "$WORKDIR" >&2
+    if [[ "$status" == 0 ]]; then
+      status=1
+    fi
+  fi
+  exit "$status"
 }
 trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
+require_bench_ownership
 mkdir -p "$WORKDIR" "$CACHE_DIR" "$(dirname "$RESULT")"
+require_bench_ownership
+set -o noclobber
 : >"$RESULT"
+set +o noclobber
 
 # Remove the directory entry itself, never glob through a preexisting target
 # or source tree. rm does not follow symlinks within it. All callers use fixed
-# direct children of the canonical, exclusively owned workdir admitted above.
+# direct children of the canonical workdir claimed above, and each reset
+# re-verifies that claim before deleting.
 reset_bench_directory() {
+  require_bench_ownership
   rm -rf -- "$1"
   mkdir -p "$1"
+}
+
+reset_cache_directory() {
+  require_bench_ownership
+  rm -rf -- "$CACHE_DIR"
+  mkdir -p "$CACHE_DIR"
 }
 
 log() {
@@ -161,6 +285,7 @@ resolve_sccache() {
 
 install_isolated_sccache() {
   local os arch asset url tmp dest checksum actual
+  require_bench_ownership
   os="$(uname -s)"
   arch="$(uname -m)"
   # SHA-256 digests from the v0.17.0 release assets; keep in step with
@@ -334,8 +459,7 @@ CACHE_ENV=(
 
 log ""
 log "### unnormalized copy-tree baseline (no stable mounts; unique cwd/paths expected to miss)"
-rm -rf "$CACHE_DIR"
-mkdir -p "$CACHE_DIR"
+reset_cache_directory
 sccache_stats
 run_build "unnormalized-a-cold" "$WORKDIR/a" "$WORKDIR/a-target" "${CACHE_ENV[@]}"
 unnormalized_a="$(cat "$WORKDIR/last-elapsed")"
@@ -349,8 +473,7 @@ log ""
 log "### same-path cache cold fill and warm rebuild (identical cwd, argv and CARGO_* environment)"
 log "Fresh build output on both arms; the private target path is reused sequentially, never shared between workers. This measures dependency reuse, not cross-worktree normalization."
 stop_owned_daemon
-rm -rf "$CACHE_DIR"
-mkdir -p "$CACHE_DIR"
+reset_cache_directory
 sccache_stats
 run_build "same-path-cold" "$WORKDIR/a" "$WORKDIR/warm-target" "${CACHE_ENV[@]}"
 cache_a="$(cat "$WORKDIR/last-elapsed")"
@@ -371,8 +494,8 @@ if [[ -e /tmp/orbit-workspace/Cargo.toml && -e "$ROOT/Cargo.toml" ]] \
   log "### real Linux stable source mount + custom CARGO_TARGET_DIR (same checkout, two private targets)"
   log "Demonstrates cwd normalization and unaliased custom targets. Different CARGO_TARGET_DIR values can still miss; this is not the same-path warm pair or a cross-worktree reuse measurement."
   stop_owned_daemon
-  rm -rf "$CACHE_DIR"
-  mkdir -p "$CACHE_DIR" "$WORKDIR/real-custom-a" "$WORKDIR/real-custom-b"
+  reset_cache_directory
+  mkdir -p "$WORKDIR/real-custom-a" "$WORKDIR/real-custom-b"
   sccache_stats
   run_build "real-mount-custom-cold" "$ROOT" "$WORKDIR/real-custom-a" "${CACHE_ENV[@]}"
   real_custom_cold="$(cat "$WORKDIR/last-elapsed")"
@@ -458,9 +581,11 @@ if can_create_ns; then
   cp "$ROOT/.cargo/config.toml" "$WORKDIR/probe-d/.cargo/"
   (cd "$WORKDIR/probe-c" && cargo generate-lockfile >/dev/null)
   cp "$WORKDIR/probe-c/Cargo.lock" "$WORKDIR/probe-d/Cargo.lock"
+  require_bench_ownership
   conc_start="$(now)"
   PATH="$PATH" TMPDIR="$WORKDIR" SCCACHE_DIR="$CACHE_DIR" \
     SCCACHE_SERVER_UDS="$BENCH_UDS" ORBIT_COMPILER_CACHE_BIN="$SCCACHE_BIN" \
+    ORBIT_COMPILER_CACHE_BENCH_OWNER="$OWNER_TOKEN" \
     ORBIT_COMPILER_CACHE_REQUIRE_NS="$REQUIRE_NS" \
     "$ROOT/scripts/test-compiler-cache-namespaces.sh" | tee -a "$RESULT"
   conc_wall="$(secs "$conc_start" "$(now)")"

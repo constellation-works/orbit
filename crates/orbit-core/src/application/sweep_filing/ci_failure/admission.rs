@@ -6,13 +6,14 @@
 //! evidence and the proposed task's generated identity.
 
 use orbit_engine::DispatchError;
-use orbit_types::task::{CI_FAILURE_KEY_TAG_PREFIX, NO_AUTO_APPROVE_TAG, Task, TaskStatus};
+use orbit_types::task::{CI_FAILURE_KEY_TAG_PREFIX, Task, TaskStatus};
 use serde_json::{Value, json};
 
 use crate::application::contracts::CI_FAILURE_TAG;
 use crate::application::task::pilot::input::{required_string, required_string_array};
 use crate::application::task::pilot::{
-    PromotionFindings, auto_approval_opted_out, promotion_findings, recommendation_has_evidence,
+    PromotionFindings, auto_approval_hold_classification, auto_approval_opted_out,
+    promotion_findings, recommendation_has_evidence,
 };
 use crate::application::task::{
     CiSweepAdmission, CiSweepAdmissionDecision, CiSweepFilingEvidence, PILOT_VERIFIED_NO_DIFF,
@@ -104,8 +105,8 @@ pub(crate) fn assess_ci_sweep_admission(
     let (decision, classification, evidence) = if auto_approval_opted_out(&task.tags) {
         (
             PromotionDecision::Withhold,
-            NO_AUTO_APPROVE_TAG,
-            json!("the task is tagged no-auto-approve; a human must approve it"),
+            auto_approval_hold_classification(&task.tags),
+            json!("the task is tagged no-auto-approve or no-drain; a human must approve it"),
         )
     } else if let Some(finding) = release_action {
         (

@@ -7,7 +7,7 @@ use orbit_exec::{
     sandbox_exec_program_for_audit,
 };
 use orbit_types::workflow::ExecutorSandboxKind;
-use serde_json::Value;
+use orbit_types::workflow::activity_job::Provider;
 
 use super::super::dispatcher::ResolvedSandbox;
 use super::spawn::linux_bwrap_mask;
@@ -93,50 +93,6 @@ pub(super) fn try_audit_argv_for_dispatch(
     }
 }
 
-/// Apply a trusted-host `provider_sandbox` label to the provider CLI config.
-///
-/// Codex is the only provider whose inner sandbox is a dynamic `--sandbox`
-/// flag. Other providers ignore the label here because they have no
-/// configurable inner sandbox to honour.
-pub(super) fn apply_trusted_host_provider_sandbox(
-    provider: &str,
-    input: &Value,
-    provider_config: &mut HashMap<String, String>,
-) {
-    let Some(label) = input.get("provider_sandbox").and_then(Value::as_str) else {
-        return;
-    };
-    let Some((_, mode)) = orbit_types::workflow::parse_provider_sandbox_label(label) else {
-        return;
-    };
-    if provider == "codex" {
-        provider_config.insert("sandbox".to_string(), mode.to_string());
-    }
-}
-
-/// Select an explorer's enforced read-only inner sandbox when Orbit's
-/// executor sandbox does not wrap the provider [ORB-16814].
-///
-/// Codex is the only provider whose inner sandbox is a dynamic `--sandbox`
-/// mode. Returns whether that mode was applied. A provider that returns
-/// false has no enforced read-only mode, so dispatch must refuse the
-/// explorer before spawn: its activity profile and instruction are not an
-/// OS boundary.
-pub(super) fn apply_read_only_provider_sandbox(
-    provider: &str,
-    provider_config: &mut HashMap<String, String>,
-) -> bool {
-    if provider == "codex" {
-        provider_config.insert(
-            "sandbox".to_string(),
-            orbit_types::workflow::activity_job::EXPLORE_PROVIDER_SANDBOX_MODE.to_string(),
-        );
-        true
-    } else {
-        false
-    }
-}
-
 /// Pin codex's `--sandbox` to `danger-full-access`, drop gemini's `-s` /
 /// `--sandbox` toggle, drop grok's `--sandbox <profile>` value, and turn off
 /// Muse's default-on sandbox so the inner CLI sandbox does not double-encode
@@ -185,7 +141,7 @@ pub(super) fn apply_provider_static_arg_fixups(provider: &str, static_args: &mut
 /// Returns the provider print-timeout it injected, if any, so completion can
 /// tell a run that spent that budget from one that exited early. [ORB-14683]
 pub(super) fn apply_provider_runtime_arg_fixups(
-    provider: &str,
+    provider: Provider,
     args: &mut Vec<String>,
     remaining_deadline: Duration,
 ) -> Option<Duration> {

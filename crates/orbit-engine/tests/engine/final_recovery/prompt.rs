@@ -43,7 +43,7 @@ fn the_recovery_prompt_lists_only_the_steps_admitted_for_this_failure() {
     std::fs::write(
         &cli,
         "#!/bin/sh\ncat > envelope.json\n\
-         printf '%s\\n' '{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"decision\":\"resume\",\"step_id\":\"work\",\"rationale\":\"rerun the contract\"},\"error\":null}'\n",
+         printf '%s\\n' '{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"decision\":\"resume\",\"step_id\":\"work\",\"rationale\":\"rerun the contract\",\"fault\":\"implementer\",\"fault_evidence\":\"run fixture: deliver failed on the candidate\"},\"error\":null}'\n",
     ).unwrap();
     std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
     let mut host = RecoveryHost::new([(
@@ -68,6 +68,7 @@ fn the_recovery_prompt_lists_only_the_steps_admitted_for_this_failure() {
         panic!("final recovery must dispatch an agent");
     };
     spec.provider = Provider::Claude;
+    spec.model = Some("fixture-model".to_string());
     spec.tools = Vec::new();
     spec.tool_disallow_list = None;
     spec.wall_clock_timeout_seconds = 30;
@@ -81,6 +82,10 @@ fn the_recovery_prompt_lists_only_the_steps_admitted_for_this_failure() {
         run.result,
         run.details,
         host.applications()
+    );
+    assert_eq!(
+        host.applications()[0].fault.judged_by.as_deref(),
+        Some("claude")
     );
     let prompt = std::fs::read_to_string(assigned.join("envelope.json")).unwrap();
     let envelope: Value = serde_json::from_str(prompt.lines().last().unwrap()).unwrap();

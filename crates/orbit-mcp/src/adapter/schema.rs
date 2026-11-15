@@ -1,12 +1,10 @@
 use std::sync::Arc;
 
-use orbit_common::governance::friction::{
-    DEFAULT_FRICTION_TAGS, FRICTION_TITLE_MAX_CHARS, friction_tag_aliases_literal,
-};
-use orbit_common::protocol::tool_schema::tool_input_schema_for;
+use orbit_common::governance::friction::{DEFAULT_FRICTION_TAGS, FRICTION_TITLE_MAX_CHARS};
+use orbit_common::governance::tool_schema::tool_input_schema_for;
 use orbit_types::tool::{
-    McpIdRoute, McpInputDecoration, McpToolAnnotations, McpToolDefinition, McpToolScope, ToolParam,
-    ToolSchema,
+    McpIdRoute, McpInputDecoration, McpToolAnnotations, McpToolDefinition, McpToolScope,
+    TOOL_ACTION_FIELD, ToolParam, ToolSchema, tool_family,
 };
 use rmcp::model::{JsonObject, Tool, ToolAnnotations};
 use serde_json::{Value, json};
@@ -40,6 +38,28 @@ fn tool_annotations(annotations: McpToolAnnotations) -> ToolAnnotations {
 /// Canonical name of the authoritative server's workspace selector.
 pub(crate) const WORKSPACE_SELECTOR_PARAM: &str = "workspace";
 
+/// One description for every advertised `workspace` selector.
+///
+/// Required versus optional stays in the schema `required` array. Routing
+/// rules live in the installed Orbit skill `references/task-fields.md`.
+pub(crate) const WORKSPACE_SELECTOR_DESCRIPTION: &str =
+    "Workspace selector from orbit_workspace_list.";
+
+/// Property descriptions on these tools are hand-written one-sentence contract.
+const HAND_AUTHORED_PROPERTY_TOOLS: &[&str] =
+    &["orbit.task.add", "orbit.task.update", "orbit.task.list"];
+const HAND_AUTHORED_PROPERTY_CAP: usize = 200;
+/// Other property descriptions stay short so `tools/list` cannot regrow.
+const ADVERTISED_PROPERTY_CAP: usize = 48;
+/// Tool descriptions that tests and the skill link require whole.
+const PRESERVED_TOOL_DESCRIPTIONS: &[&str] = &[
+    "orbit.task.add",
+    "orbit.task.update",
+    "orbit.task.list",
+    "orbit.task.show",
+];
+const ADVERTISED_TOOL_DESCRIPTION_CAP: usize = 80;
+
 /// A tool's own declared input schema, as advertised before the host adds its
 /// selector: every keyword verbatim except the root `type`, which is always
 /// `"object"` — MCP's `inputSchema` must describe an object and `tools/call`
@@ -61,50 +81,6 @@ pub(crate) enum WorkspaceBinding {
     Unbound,
 }
 
-const BOUND_SESSION_SELECTOR_DESCRIPTION: &str = "Workspace selector for the authoritative server: a registered workspace name, a logical \
-     workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this \
-     session, which is already bound to a workspace — by `orbit mcp serve --workspace` at \
-     launch or `_meta.orbit.workspace` at initialize. Pass it to address a different \
-     registered workspace; never inferred from the server process cwd.";
-
-const UNBOUND_SESSION_SELECTOR_DESCRIPTION: &str = "Workspace selector for the authoritative server: a registered workspace name, a logical \
-     workspace ID (`ws_*`), or an absolute path registered on that server. Required in this \
-     session, which is bound to no workspace, so a call that omits it is refused. Sessions \
-     bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at \
-     initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. \
-     If none is listed, run `orbit init` and then `orbit workspace init` from the project \
-     directory. Never inferred from the server process cwd.";
-
-/// Federated callers copy the list token; they must not mint a v1 local form.
-const FEDERATED_SELECTOR_DESCRIPTION: &str = "Copy the `selector` field from federated `orbit.workspace.list` to address a workspace. \
-     Do not parse or construct the token. A call without a host-qualified selector is refused.";
-
-/// An id-routed task tool on a bound authoritative session: the binding is
-/// the default, and a remote prefix is refused rather than relayed.
-const ID_ROUTED_BOUND_SELECTOR_DESCRIPTION: &str = "Workspace selector for the authoritative server: a registered workspace name, a logical \
-     workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this \
-     session, which is already bound to a workspace — by `orbit mcp serve --workspace` at \
-     launch or `_meta.orbit.workspace` at initialize. Pass it to address a different \
-     registered workspace. An id whose prefix belongs to another registered host is refused \
-     with `task_prefix_remote`, naming that host; this server does not relay. Never inferred \
-     from the server process cwd.";
-
-/// An id-routed task tool on an unbound authoritative session: the id
-/// addresses the task, so the selector is optional.
-const ID_ROUTED_UNBOUND_SELECTOR_DESCRIPTION: &str = "Optional workspace selector for the authoritative server: a registered workspace \
-     name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. \
-     Omitted, this session, which is bound to no workspace, resolves the task id through this \
-     server's task registry. An id whose prefix belongs to another registered host is refused \
-     with `task_prefix_remote`, naming that host; this server does not relay. Never inferred \
-     from the server process cwd.";
-
-/// An id-routed task tool on the federated mux: an id-only call goes to the
-/// host the id's prefix names.
-const FEDERATED_ID_ROUTED_SELECTOR_DESCRIPTION: &str = "Optional. Omit it to deliver the call to the host the task id's prefix names. To address \
-     a specific workspace instead, copy the `selector` field from federated \
-     `orbit.workspace.list`; do not parse or construct the token. A read there may be another \
-     host's mirror, and that host refuses a write to a task it does not hold.";
-
 /// How this session advertises the workspace selector on workspace-scoped tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum SelectorAdvertisement {
@@ -112,17 +88,6 @@ pub(crate) enum SelectorAdvertisement {
     Authoritative(WorkspaceBinding),
     /// Federated mux: copy `selector` from federated `orbit.workspace.list`.
     Federated,
-}
-
-impl WorkspaceBinding {
-    fn selector_description(self, id_routed: bool) -> &'static str {
-        match (self, id_routed) {
-            (Self::Bound, false) => BOUND_SESSION_SELECTOR_DESCRIPTION,
-            (Self::Unbound, false) => UNBOUND_SESSION_SELECTOR_DESCRIPTION,
-            (Self::Bound, true) => ID_ROUTED_BOUND_SELECTOR_DESCRIPTION,
-            (Self::Unbound, true) => ID_ROUTED_UNBOUND_SELECTOR_DESCRIPTION,
-        }
-    }
 }
 
 /// Advertise the workspace selector on every workspace-scoped tool.
@@ -139,7 +104,9 @@ pub(super) fn ensure_workspace_selector(
         SelectorAdvertisement::Authoritative(binding) => {
             ensure_authoritative_selector(schema, definition, binding, id_routed);
         }
-        SelectorAdvertisement::Federated => ensure_federated_selector(schema, id_routed),
+        SelectorAdvertisement::Federated => {
+            ensure_federated_selector(schema, id_routed, definition.rules.workspace_optional)
+        }
     }
 }
 
@@ -161,48 +128,70 @@ fn ensure_authoritative_selector(
     binding: WorkspaceBinding,
     id_routed: bool,
 ) {
-    // The owning definition may declare an authoritative optional filter
-    // whose wording must survive session binding.
-    if definition.rules.declared_workspace_selector {
-        return;
-    }
     let Some(properties) = selector_properties(schema) else {
         return;
     };
+    // A declared filter keeps its required-ness. Every other path still
+    // inserts the selector when the tool did not declare one. The description
+    // is the same line either way.
+    if definition.rules.declared_workspace_selector {
+        set_workspace_description(properties);
+        return;
+    }
+    if definition.rules.workspace_optional {
+        properties.insert(
+            WORKSPACE_SELECTOR_PARAM.to_string(),
+            json!({
+                "type": "string",
+                "description": WORKSPACE_SELECTOR_DESCRIPTION,
+            }),
+        );
+        unrequire_property(schema, WORKSPACE_SELECTOR_PARAM);
+        return;
+    }
     if !properties.contains_key(WORKSPACE_SELECTOR_PARAM) {
         properties.insert(
             WORKSPACE_SELECTOR_PARAM.to_string(),
             json!({
                 "type": "string",
-                "description": binding.selector_description(id_routed),
+                "description": WORKSPACE_SELECTOR_DESCRIPTION,
             }),
         );
+    } else {
+        set_workspace_description(properties);
     }
     if binding == WorkspaceBinding::Unbound && !id_routed {
         require_property(schema, WORKSPACE_SELECTOR_PARAM);
     }
 }
 
-fn ensure_federated_selector(schema: &mut JsonObject, id_routed: bool) {
+fn set_workspace_description(properties: &mut JsonObject) {
+    if let Some(property) = properties
+        .get_mut(WORKSPACE_SELECTOR_PARAM)
+        .and_then(Value::as_object_mut)
+    {
+        property.insert(
+            "description".to_string(),
+            json!(WORKSPACE_SELECTOR_DESCRIPTION),
+        );
+    }
+}
+
+fn ensure_federated_selector(schema: &mut JsonObject, id_routed: bool, workspace_optional: bool) {
     let Some(properties) = selector_properties(schema) else {
         return;
     };
-    // Replace any v1 local wording a tool declared itself. Federated callers
-    // copy the list token; an id-routed task tool may instead omit it and
-    // route by the id's prefix.
-    let description = if id_routed {
-        FEDERATED_ID_ROUTED_SELECTOR_DESCRIPTION
-    } else {
-        FEDERATED_SELECTOR_DESCRIPTION
-    };
+    // Replace any v1 local wording a tool declared itself. Required-ness
+    // still follows the route: an id-routed or workspace-optional tool may
+    // omit the selector. The description is the shared line.
     properties.insert(
         WORKSPACE_SELECTOR_PARAM.to_string(),
         json!({
             "type": "string",
-            "description": description,
+            "description": WORKSPACE_SELECTOR_DESCRIPTION,
         }),
     );
-    if id_routed {
+    if id_routed || workspace_optional {
         // A tool that declared its own selector as required is still
         // addressable by id here.
         unrequire_property(schema, WORKSPACE_SELECTOR_PARAM);
@@ -235,39 +224,27 @@ fn unrequire_property(schema: &mut JsonObject, property: &str) {
     }
 }
 
-pub(crate) fn build_input_schema_with_friction_taxonomy(
-    tool_name: &str,
-    params: &[ToolParam],
-    taxonomy: Option<&[(String, String)]>,
+pub(super) fn build_input_schema(tool_name: &str, params: &[ToolParam]) -> JsonObject {
+    tool_input_schema_for(tool_name, params)
+}
+
+pub(super) fn apply_input_decoration(
+    schema: &mut JsonObject,
     decoration: McpInputDecoration,
-) -> JsonObject {
-    let mut schema = tool_input_schema_for(tool_name, params);
+    taxonomy: Option<&[(String, String)]>,
+) {
     if decoration == McpInputDecoration::Friction {
-        decorate_friction_schema(&mut schema, taxonomy);
+        decorate_friction_schema(schema, taxonomy);
     }
     if decoration == McpInputDecoration::Search {
         if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
             if let Some(query) = properties.get_mut("query").and_then(Value::as_object_mut) {
                 query.insert("minLength".to_string(), json!(1));
             }
-            if let Some(alternatives) = properties
-                .get_mut("tag")
-                .and_then(|tag| tag.get_mut("anyOf"))
-                .and_then(Value::as_array_mut)
+            if let Some(tag) = properties.get_mut("tag").and_then(Value::as_object_mut)
+                && tag.get("type").and_then(Value::as_str) == Some("array")
             {
-                for alternative in alternatives {
-                    if let Some(option) = alternative.as_object_mut() {
-                        match option.get("type").and_then(Value::as_str) {
-                            Some("string") => {
-                                option.insert("minLength".to_string(), json!(1));
-                            }
-                            Some("array") => {
-                                option.insert("minItems".to_string(), json!(1));
-                            }
-                            _ => {}
-                        }
-                    }
-                }
+                tag.insert("minItems".to_string(), json!(1));
             }
         }
         // A query or tag narrows any search; `kind: friction` alone lists
@@ -281,7 +258,6 @@ pub(crate) fn build_input_schema_with_friction_taxonomy(
             ] }]),
         );
     }
-    schema
 }
 
 fn decorate_friction_schema(schema: &mut JsonObject, taxonomy: Option<&[(String, String)]>) {
@@ -296,7 +272,6 @@ fn decorate_friction_schema(schema: &mut JsonObject, taxonomy: Option<&[(String,
     let Some(tags) = properties.get_mut("tags").and_then(Value::as_object_mut) else {
         return;
     };
-    let using_workspace_taxonomy = taxonomy.is_some_and(|entries| !entries.is_empty());
     let fallback;
     let entries = match taxonomy.filter(|entries| !entries.is_empty()) {
         Some(entries) => entries,
@@ -312,30 +287,244 @@ fn decorate_friction_schema(schema: &mut JsonObject, taxonomy: Option<&[(String,
         .iter()
         .map(|(tag, _description)| tag.clone())
         .collect::<Vec<_>>();
-    if let Some(alternatives) = tags.get_mut("anyOf").and_then(Value::as_array_mut) {
-        for alternative in alternatives {
-            if alternative.get("type").and_then(Value::as_str) == Some("array")
-                && let Some(items) = alternative.get_mut("items").and_then(Value::as_object_mut)
-            {
-                items.insert("enum".to_string(), json!(values));
-            }
-        }
+    if tags.get("type").and_then(Value::as_str) == Some("array")
+        && let Some(items) = tags.get_mut("items").and_then(Value::as_object_mut)
+    {
+        items.insert("enum".to_string(), json!(values));
     }
-    let vocabulary = entries
-        .iter()
-        .map(|(tag, description)| format!("`{tag}` — {description}"))
-        .collect::<Vec<_>>()
-        .join("; ");
-    let fallback_note = if using_workspace_taxonomy {
-        ""
-    } else {
-        " The bound workspace's `.orbit/frictions/tags.yaml` may extend this default vocabulary."
-    };
+    // The vocabulary and its workspace override live in the installed skill,
+    // not in the advertised schema.
     tags.insert(
         "description".to_string(),
-        Value::String(format!(
-            "Friction taxonomy tags as a string or array. Vocabulary: {vocabulary}. Accepted aliases: {}.{fallback_note}",
-            friction_tag_aliases_literal()
-        )),
+        Value::String("Friction taxonomy tags.".to_string()),
     );
+}
+
+/// Shorten advertised property descriptions after workspace selection.
+///
+/// `orbit.task.add`, `orbit.task.update` and `orbit.task.list` keep the
+/// one-sentence descriptions written on the operation. Every other tool is
+/// capped so the operator `tools/list` stays inside its byte budget.
+pub(super) fn slim_advertised_property_descriptions(schema: &mut JsonObject, tool_name: &str) {
+    let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else {
+        return;
+    };
+    let hand_authored = HAND_AUTHORED_PROPERTY_TOOLS.contains(&tool_name);
+    // A family's descriptions are already one sentence each, and its
+    // `action` list names every action's required fields, so neither is cut.
+    let family = tool_family(tool_name).is_some();
+    for (name, property) in properties.iter_mut() {
+        if name == WORKSPACE_SELECTOR_PARAM || (family && name == TOOL_ACTION_FIELD) {
+            continue;
+        }
+        let Some(object) = property.as_object_mut() else {
+            continue;
+        };
+        let Some(description) = object.get("description").and_then(Value::as_str) else {
+            continue;
+        };
+        let slim = if hand_authored || family {
+            cap_description(description, HAND_AUTHORED_PROPERTY_CAP)
+        } else {
+            advertised_other_property_description(description)
+        };
+        if slim != description {
+            object.insert("description".to_string(), Value::String(slim));
+        }
+    }
+}
+
+/// First complete sentence or clause, for tools other than preserved writes.
+///
+/// A shortened tool description keeps the source's docs pointer when it has
+/// one, so detail moved into installed references still reaches agents.
+pub(super) fn advertised_tool_description(tool_name: &str, description: &str) -> String {
+    if PRESERVED_TOOL_DESCRIPTIONS.contains(&tool_name) {
+        return description.to_string();
+    }
+    let shortened = cap_description(description, ADVERTISED_TOOL_DESCRIPTION_CAP);
+    if shortened.contains("references/") {
+        return shortened;
+    }
+    match docs_pointer_sentence(description) {
+        Some(pointer) if !shortened.contains(&pointer) => {
+            let separator = if shortened.ends_with('.') { " " } else { ". " };
+            format!("{shortened}{separator}{pointer}")
+        }
+        _ => shortened,
+    }
+}
+
+fn advertised_other_property_description(description: &str) -> String {
+    let sentence = first_sentence(description);
+    let lower = sentence.to_ascii_lowercase();
+    if lower.contains("string or array")
+        || lower.contains("string or an array")
+        || lower.contains("comma-separated")
+    {
+        return "Array of strings.".to_string();
+    }
+    cap_description(description, ADVERTISED_PROPERTY_CAP)
+}
+
+/// The sentence carrying a docs pointer (`references/…` or an installed
+/// skill), when the source has one.
+fn docs_pointer_sentence(text: &str) -> Option<String> {
+    split_sentences(text).into_iter().find(|sentence| {
+        sentence.contains("references/")
+            || sentence.contains("installed Orbit skill")
+            || sentence.contains("installed skill")
+    })
+}
+
+fn first_sentence(text: &str) -> &str {
+    let trimmed = text.trim();
+    split_sentences(trimmed)
+        .into_iter()
+        .next()
+        .map(|sentence| {
+            let start = trimmed.find(&sentence).unwrap_or(0);
+            &trimmed[start..start + sentence.len()]
+        })
+        .unwrap_or(trimmed)
+}
+
+/// Split on sentence-ending periods: a `.` followed by an uppercase letter,
+/// a digit or a backtick, so dotted names and abbreviations stay whole.
+fn split_sentences(text: &str) -> Vec<String> {
+    let trimmed = text.trim();
+    let mut sentences = Vec::new();
+    let mut start = 0usize;
+    let bytes = trimmed.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'.' {
+            let mut next = index + 1;
+            while next < bytes.len() && bytes[next] == b' ' {
+                next += 1;
+            }
+            if next > index + 1
+                && next < bytes.len()
+                && (bytes[next].is_ascii_uppercase()
+                    || bytes[next].is_ascii_digit()
+                    || bytes[next] == b'`')
+            {
+                let sentence = trimmed[start..=index].trim();
+                if !sentence.is_empty() {
+                    sentences.push(sentence.to_string());
+                }
+                start = next;
+                index = next;
+                continue;
+            }
+        }
+        index += 1;
+    }
+    let tail = trimmed[start..].trim();
+    if !tail.is_empty() {
+        sentences.push(tail.to_string());
+    }
+    sentences
+}
+
+/// Words a complete sentence or clause never ends with.
+const DANGLING_END_WORDS: &[&str] = &[
+    "a", "an", "the", "and", "or", "but", "nor", "by", "with", "without", "within", "for", "to",
+    "of", "in", "on", "at", "from", "as", "per", "via", "over", "under", "into", "onto", "between",
+    "through", "during", "before", "after", "about", "against", "whose", "which", "that", "this",
+    "is", "are", "was", "were", "be", "been", "has", "have", "had", "e.g", "i.e",
+];
+
+fn is_complete_candidate(head: &str) -> bool {
+    let candidate = head.trim().trim_end_matches([',', ';', ':']);
+    if candidate.chars().count() < 10 {
+        return false;
+    }
+    if !candidate.matches('`').count().is_multiple_of(2) {
+        return false;
+    }
+    let opens = candidate.matches('(').count();
+    let closes = candidate.matches(')').count();
+    if opens != closes {
+        return false;
+    }
+    let last_word = candidate
+        .rsplit(|ch: char| ch.is_whitespace())
+        .next()
+        .unwrap_or("")
+        .trim_matches(|ch: char| "`\"'().,;:".contains(ch))
+        .to_ascii_lowercase();
+    !last_word.is_empty() && !DANGLING_END_WORDS.contains(&last_word.as_str())
+}
+
+/// A clause cut is only valid when it does not slice a value list: a comma
+/// after a `:` list introduction is part of the list, not a clause boundary.
+fn clause_candidate(head: &str, delimiter: char) -> Option<String> {
+    // A head that already contains a comma is likely a value list in
+    // progress; cutting at its next comma would present a partial list.
+    if delimiter == ',' && (head.contains(": ") || head.contains(',')) {
+        return None;
+    }
+    if !is_complete_candidate(head) {
+        return None;
+    }
+    let candidate = head.trim().trim_end_matches([',', ';', ':']);
+    if candidate.ends_with('.') {
+        Some(candidate.to_string())
+    } else {
+        Some(format!("{candidate}."))
+    }
+}
+
+/// Clause boundaries in `text`, as (char count of the head, delimiter, head).
+fn clause_boundaries(text: &str) -> Vec<(usize, char, &str)> {
+    let mut boundaries = Vec::new();
+    let mut char_count = 0usize;
+    for (byte_index, ch) in text.char_indices() {
+        char_count += 1;
+        if matches!(ch, ';' | ',' | ':') {
+            boundaries.push((char_count - 1, ch, &text[..byte_index]));
+        } else if ch == '(' && byte_index > 0 && text[..byte_index].ends_with(' ') {
+            boundaries.push((char_count - 1, '(', &text[..byte_index]));
+        }
+    }
+    boundaries
+}
+
+/// Shorten to a complete sentence or clause. The cap is a preference, never
+/// a licence to cut mid-clause: when no clause ends within it, the first
+/// clause or sentence beyond it is kept whole.
+fn cap_description(text: &str, max_chars: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    let Some(first) = split_sentences(trimmed).into_iter().next() else {
+        return trimmed.to_string();
+    };
+    if first.chars().count() <= max_chars {
+        return first;
+    }
+    let boundaries = clause_boundaries(&first);
+    // Strong boundaries first (`;`, then `:`), then commas, within the cap.
+    for wanted in [';', ':', ','] {
+        if let Some(candidate) = boundaries
+            .iter()
+            .filter(|(count, delimiter, _)| *count <= max_chars && *delimiter == wanted)
+            .rev()
+            .find_map(|(_, delimiter, head)| clause_candidate(head, *delimiter))
+        {
+            return candidate;
+        }
+    }
+    // No safe boundary within the cap: keep the first complete clause beyond
+    // it rather than inventing a sentence by truncating mid-clause.
+    if let Some(candidate) = boundaries
+        .iter()
+        .filter(|(count, _, _)| *count > max_chars)
+        .find_map(|(_, delimiter, head)| clause_candidate(head, *delimiter))
+    {
+        return candidate;
+    }
+    first
 }

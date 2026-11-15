@@ -28,6 +28,11 @@ macro_rules! environment_methods {
         /// check: the owner delivery path validates nothing.
         fn required_validation_commands(&self) -> Vec<String>;
 
+        /// `completion.hold`: the admitted rules, in configured order, that
+        /// keep a completion-authorized run's task in `review` [ORB-23322].
+        /// Empty holds nothing.
+        fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule>;
+
         /// The owner's review gates (`review.baseline_commands`). With the
         /// required commands they are the gates whose Bubblewrap deferrals an
         /// implementer may hand off for a native replay [ORB-15287].
@@ -77,8 +82,11 @@ macro_rules! environment_methods {
         fn agent_provider_config(&self) -> HashMap<String, String>;
         /// How long a provider process may produce no output and use no CPU
         /// before its step fails as stalled. `None` disables the check and leaves
-        /// only the wall-clock deadline. The built-in window is 30 minutes.
+        /// only the wall-clock deadline. Hosts answer [`AGENT_STALL_MINUTES`](crate::AGENT_STALL_MINUTES).
         fn agent_stall_window(&self) -> Option<std::time::Duration>;
+        /// Workspace override for this exact activity's CLI wall-clock budget.
+        /// `None` keeps the activity declaration (or the runner default).
+        fn activity_wall_clock_timeout_seconds(&self, activity_name: &str) -> Option<u64>;
         /// The complete environment an agent subprocess is launched with.
         ///
         /// Launchers clear the child environment and apply exactly what this
@@ -123,12 +131,10 @@ macro_rules! environment_methods {
         /// shell under `[workflow.validation_env]`, including workspace-selected
         /// build output bindings applied by host validation runners.
         fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment;
-        /// Workspace output bindings for cache identity. Configured hosts override
-        /// this with a config-only read so observational cache queries do not probe
-        /// a login shell. The default shares the host's environment contract.
-        fn validation_build_output_env(&self) -> Vec<String> {
-            self.validation_subprocess_environment().build_output_env
-        }
+        /// Workspace output bindings for cache identity. Configured hosts can use
+        /// a config-only read so observational cache queries do not probe a login
+        /// shell. The test-only host shares its environment contract.
+        fn validation_build_output_env(&self) -> Vec<String>;
 
         /// The authoritative shared Orbit registry root to hand a spawned CLI
         /// agent as `ORBIT_REGISTRY_ROOT`.
@@ -161,9 +167,10 @@ macro_rules! environment_methods {
         fn list_job_runs_for_gc(&self) -> Result<Vec<JobRun>, OrbitError>;
         /// Admitted rebuildable paths, independent of checkout-authored commands.
         fn worktree_reclaim_patterns(&self) -> Vec<String>;
-        /// `worktree.parked_reclaim_after_hours`: how long a task must have been
-        /// parked in `someday` before the scheduled sweep may remove its run's
-        /// worktree. `None` keeps parked worktrees.
+        /// How long a task must have been parked in `someday` before the
+        /// scheduled sweep may remove its run's worktree, normally
+        /// [`WORKTREE_PARKED_RECLAIM_AFTER_HOURS`](crate::WORKTREE_PARKED_RECLAIM_AFTER_HOURS).
+        /// `None` keeps parked worktrees.
         fn worktree_parked_reclaim_after_hours(&self) -> Option<u64>;
         /// A task's settlement state for worktree GC, read from the store that
         /// owns the workspace's tasks. `run_id` is the run whose worktree is
@@ -209,16 +216,15 @@ macro_rules! environment_methods {
         /// resolved. Workflow commit attribution treats this as opaque config
         /// data and falls back when the run or model is unavailable.
         fn resolved_crew_model(&self, run_id: &str) -> Result<Option<String>, OrbitError>;
-        fn run_tool_with_context_and_role(
+        fn run_tool_with_context(
             &self,
             name: &str,
             input: Value,
-            role: Role,
             tool_context: ToolContext,
         ) -> Result<Value, OrbitError>;
         /// Execute an engine-private VCS/PR operation for deterministic shipment.
         ///
-        /// Unlike `run_tool_with_context_and_role`, this boundary never consults
+        /// Unlike `run_tool_with_context`, this boundary never consults
         /// the public Tool registry, public authorization, or an activity
         /// allowlist. `OrbitRuntime` answers with
         /// [`crate::run_private_vcs_operation`]; tests may substitute an

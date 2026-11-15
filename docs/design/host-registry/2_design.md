@@ -3,7 +3,7 @@ summary: "Host Registry — Design"
 type: design
 title: "Host Registry — Design"
 owner: codex
-last_updated: 2026-10-26
+last_updated: 2026-11-11
 last_validated: 2026-10-19
 status: Accepted
 feature: host-registry
@@ -23,18 +23,18 @@ The live implementation has five layers.
 | Layer | Owns | Must not own |
 |---|---|---|
 | orbit-types | Workspace identity DTOs, machine/workspace identifier validation, lifecycle enums and schema constants | Files, runtime construction, transport |
-| orbit-registry | Machine identity lifecycle and legacy host.toml migration; workspace catalog parsing, mutation, validation, health and file I/O; the host file's schema, validation, legacy fallback and atomic writes | CLI orchestration, MCP framing, Core execution |
+| orbit-registry | Machine identity lifecycle; workspace catalog parsing, mutation, validation, health and file I/O; the host file's schema, validation and atomic writes | CLI orchestration, MCP framing, Core execution |
 | orbit-config | Global machine settings schema and config.toml I/O | Workspace catalog persistence and runtime composition |
 | orbit-cmd | Registry-aware selection and Core runtime construction; the `orbit host` operations, which join the host file to the federated identity probe | Registry schemas or persistence |
 | CLI, Web and MCP server | User/API inputs, presentation, refresh timing and request dispatch | Alternate catalog semantics |
 
-MachineIdentity and the one-release host.toml migration live in orbit-registry. The machine settings schema and config.toml I/O live in orbit-config. Shared primitives such as validate_machine_id, validate_machine_name and the machine-ID namespace constants live in orbit-types so identity validation remains persistence-neutral.
+MachineIdentity lives in orbit-registry. The machine settings schema and config.toml I/O live in orbit-config. Shared primitives such as validate_machine_id, validate_machine_name and the machine-ID namespace constants live in orbit-types so identity validation remains persistence-neutral.
 
-Registry loads that need migration re-read `workspaces.json` while holding
+Registry loads that need canonicalization re-read `workspaces.json` while holding
 `with_registry_lock` before persisting it. This preserves registrations written
-after the initial read. Loads that need no migration remain lock-free; callers that
+after the initial read. Loads that need no canonicalization remain lock-free; callers that
 already hold the re-entrant registry lock can keep it across their complete
-read-modify-write operation. Read-only loaders never persist migration.
+read-modify-write operation. Read-only loaders never persist canonicalization.
 
 ## 2. Machine identity
 
@@ -52,11 +52,11 @@ The current file is:
 - machine.task_prefix is chosen once for task allocation. Fresh values are two to five uppercase ASCII letters and cannot use reserved artifact namespaces. Existing migrated installations may retain ORB.
 - The [machine] table has no machine mode. Topology is not a persisted identity decision.
 
-orbit init is the creation and migration surface. A fresh non-interactive initialization requires both machine name and task prefix. Repeated initialization without `--force` returns the existing identity without rewriting it.
+orbit init is the creation surface. A fresh non-interactive initialization requires both machine name and task prefix. Repeated initialization without `--force` returns the existing identity without rewriting it.
 
-The legacy ~/.orbit/host.toml file is folded into the [machine] table in ~/.orbit/config.toml, then removed when the write succeeds. Its host_id becomes machine.name; a missing machine_id is generated, and a missing task_prefix becomes the legacy ORB namespace. If host.toml disagrees with an existing [machine] table, loading fails and asks the operator to reconcile the files rather than choosing one.
+A legacy ~/.orbit/host.toml left as the only identity source is refused naming both files, telling the operator to copy `machine_id` as `[machine] id`, `host_id` as `machine.name` and `task_prefix` as `machine.task_prefix` into ~/.orbit/config.toml by hand and delete `host.toml`. When an existing [machine] table is present, a leftover host.toml is ignored.
 
-Strict consumers call load_machine_identity. An absent identity, or a malformed or incomplete [machine] table, is an error rather than a hostname fallback. inspect_machine_identity exposes an absent identity for bootstrap callers and attempts the legacy host.toml migration. MCP identity presentation is intentionally more tolerant: an absent local identity may be represented for audit as host/local, but that fallback is not persisted. A valid legacy identity is used from memory if the migration cannot write.
+Strict consumers call load_machine_identity. An absent identity, or a malformed or incomplete [machine] table, is an error rather than a hostname fallback. inspect_machine_identity exposes an absent identity for bootstrap callers, except that a sole legacy host.toml is refused as above rather than migrated. MCP identity presentation is intentionally more tolerant: an absent local identity may be represented for audit as host/local, but that fallback is not persisted.
 
 ### Display-name changes
 
@@ -76,7 +76,7 @@ The prefix is also the unit of task *authority* across hosts: the host whose pre
 - Load validates every entry: `name` passes the machine-name validator and is unique case-insensitively across entries and the local `machine.name`; `machine_id` is valid, unique (`ambiguous_destination`) and never the local id (`host_is_local`); `task_prefix` is a valid stored prefix, unique, and never the local prefix (`task_prefix_conflict`); `ssh` is an SSH alias or `user@host` with no leading `-`, whitespace or shell metacharacters. Unknown keys and any other `schema_version` fail the load and keep the bytes.
 - Writes validate first, serialize canonically sorted by name, and replace the file atomically under a lock. The commit re-reads both host files under that lock and refuses if either changed since the command loaded them.
 - `orbit_registry::hosts::load_host_routes` is the one loader for federated serve, follower pull drains and replica worktree GC.
-- For one release, when only the legacy `~/.orbit/mcp-destinations.toml` exists its rows are read as routes with no name or prefix. The first `orbit host add`, `rename` or `remove` probes every retained legacy row, writes them to the host file (named after the remote's `machine.name`, or its SSH target when that is taken, with a numeric suffix when the SSH target is taken too) and deletes the legacy file. Adding a host already in the legacy file commits and reports the migration; removing a legacy row never contacts that host, with or without `--force`. If a retained row does not answer, the mutation refuses with `legacy_host_unreachable` and changes neither file. Doctor names a concrete `orbit host add <existing-ssh-target>` command to migrate the file. Both files at once fail every load with `host_file_conflict`.
+- The retired `~/.orbit/mcp-destinations.toml` is never parsed. Its presence alone or beside `hosts.toml` fails every load with `host_file_conflict`, naming the path and the remedy: move it aside, run `orbit host add <ssh-target>` for each `ssh` row, then delete the moved file. JSON compatibility fields remain: `legacy` on host rows and lists is always `false`, and `HostChange.migrated` is always `[]`.
 
 The `orbit host` operations live in orbit-cmd so the CLI and the dashboard share them. They probe a host with the federated MCP session (`ssh -T -F <orbit-ssh-config> -- <target> orbit mcp serve --remote-caller-machine-id <local id>`, agent authority, federated probe budget) and read the discovery envelope's `machine_id`, `machine_name`, `task_prefix`, `binary_version`, `protocol_fingerprint` and optional `host_os`. A probe that answers with a different `machine_id` or `task_prefix` than the entry fails closed with `host_identity_mismatch`; the entry is never rewritten from a probe.
 
@@ -101,11 +101,11 @@ An identity-bearing machine must use explicit ownership data:
 
 Installations without host identity retain a narrow standalone compatibility path: a missing checkout role may canonicalize to owner. Once host identity exists, missing or contradictory roles fail closed, and so does a replica whose logical owner is missing; an owner checkout with no logical owner has it canonicalized to the local `machine_id`.
 
-### Parsing, migration and writes
+### Parsing and writes
 
 - A missing workspaces.json loads as an empty schema-v1 registry.
 - Malformed JSON, unknown fields, invalid role tokens, duplicate identities, broken checkout references, contradictions and unsupported future schemas fail without rewriting the file.
-- An unversioned legacy catalog can be split into logical workspaces and local checkouts and written back atomically when its role is unambiguous. Identity-bearing legacy data with no explicit checkout role is rejected rather than guessed. A legacy owner_host_ids key is accepted and dropped during the current compatibility release.
+- An unversioned (pre-path-free) catalog is refused by name and left unchanged; rebuild it by re-running `orbit workspace init` in each checkout. A legacy owner_host_ids key is accepted and dropped during the current compatibility release.
 - Successful saves validate a clone, serialize canonical JSON, and use atomic replacement. Rejected mutations leave the prior file intact.
 - Canonicalization sorts and deduplicates path overrides.
 
@@ -145,7 +145,7 @@ RegisteredRuntimeFactory also carries replica ownership into Core's coordination
 
 ### CLI
 
-The main CLI opens ordinary runtimes through RegisteredRuntimeFactory using cwd, --root and optional --workspace. `task show` and `task artifact get` are the exceptions, on both the human subcommands and `orbit tool run orbit.task.show` and `orbit tool run orbit.task.artifact.get`: without `--workspace` or a tool-input `workspace` it opens the checkout the coordination task registry names as the task ID's owner, so it works from a foreign checkout, a linked worktree, and from a directory that is no workspace at all, and it reports the owning workspace name and logical ID. With an explicit workspace selector it is the ordinary registered bootstrap, and the selector filters. Linked-worktree runtime identities are not selectors. Workspace init, sync, role, list, show, source-remote, ship-mode, publication, remove and teardown are the current workspace CLI surface. `orbit host add|list|show|rename|remove` manages remote hosts ([§2a](#2a-remote-hosts), [specs/host-commands.md](./specs/host-commands.md), [ORB-14448]). It opens no workspace runtime, leaves `[machine]` alone, and lists the local host first, read in-process; change the machine display name with `orbit config set --global machine.name <value>`. `orbit doctor` adds a `hosts` row that probes every registered host. `workspace init --role replica` reports whether the owner has a host entry and never adds one. There is no workspace owner-link command.
+The main CLI opens ordinary runtimes through RegisteredRuntimeFactory using cwd, --root and optional --workspace. `task show` and `task artifact get` are the exceptions, on both the human subcommands and `orbit tool run orbit.task.show` and `orbit tool run orbit.task.artifact`: without `--workspace` or a tool-input `workspace` it opens the checkout the coordination task registry names as the task ID's owner, so it works from a foreign checkout, a linked worktree, and from a directory that is no workspace at all, and it reports the owning workspace name and logical ID. With an explicit workspace selector it is the ordinary registered bootstrap, and the selector filters. Linked-worktree runtime identities are not selectors. Workspace init, sync, role, list, show, source-remote, ship-mode, publication, remove and teardown are the current workspace CLI surface. `orbit host add|list|show|rename|remove` manages remote hosts ([§2a](#2a-remote-hosts), [specs/host-commands.md](./specs/host-commands.md), [ORB-14448]). It opens no workspace runtime, leaves `[machine]` alone, and lists the local host first, read in-process; change the machine display name with `orbit config set --global machine.name <value>`. `orbit doctor` adds a `hosts` row that probes every registered host. `workspace init --role replica` reports whether the owner has a host entry and never adds one. There is no workspace owner-link command.
 
 Before any runtime opens, the CLI routes a call that addresses one task by id (`task show`, `update`, `artifact get|put`, `review-reset`, `reconcile-review`, `requeue`, and `orbit tool run` of an id-routed tool) by the id's prefix when it carries no `--workspace`, tool-input `workspace`, `--root` or `ORBIT_ROOT`. A local prefix runs in-process as above. A registered host's prefix is delivered there over the federated client route with the caller's own authority, and the answer names that host. Any other prefix fails with `unknown_task_prefix`, and an unreachable holder with `owner_unreachable`, which names a local mirror's workspace when one exists. A claimed worker never prefix-routes. A selector naming a registered remote host is delivered there the same way for these routable task commands and `orbit tool run`. `--host <host>` on those task subcommands and `orbit tool run` (with `--workspace`) and on `orbit run auto --pull` reads that host's live list and substitutes the selector it lists; host-local commands, including `task list` and `task add`, reject `--host` with the `ssh <target> orbit …` to run instead. Local-only task commands also refuse remote-qualified `--workspace` selectors with an SSH or `orbit tool run` hint ([specs/host-routing.md](./specs/host-routing.md#--host)).
 
@@ -159,7 +159,7 @@ Orbit Web loads local workspaces from orbit-registry, derives checkout-path heal
 
 ### MCP
 
-orbit-mcp reads orbit-registry identity state to describe the accepting process and exposes machine-local discovery definitions. The CLI MCP server resolves each workspace-scoped call against the accepting machine's registry, composes the runtime, and dispatches through Core. `orbit.task.show` and `orbit.task.artifact.get` are the exceptions: an id-only call follows the globally unique task ID through the host task registry. These servers do not relay: an id-only call to an id-routed tool whose prefix is a registered remote host's fails with `task_prefix_remote`, naming that host, instead of reporting the task missing. Ambient initialize metadata — including a linked-worktree runtime identity — is not a filter. An explicit per-call `workspace` remains fail-closed.
+orbit-mcp reads orbit-registry identity state to describe the accepting process and exposes machine-local discovery definitions. The CLI MCP server resolves each workspace-scoped call against the accepting machine's registry, composes the runtime, and dispatches through Core. `orbit.task.show` and `orbit.task.artifact` action `get` are the exceptions ([ORB-23280]): an id-only call follows the globally unique task ID through the host task registry. These servers do not relay: an id-only call to an id-routed tool whose prefix is a registered remote host's fails with `task_prefix_remote`, naming that host, instead of reporting the task missing. Ambient initialize metadata — including a linked-worktree runtime identity — is not a filter. An explicit per-call `workspace` remains fail-closed.
 
 orbit.workspace.list returns active logical workspaces that have a checkout registered on the accepting machine. Its envelope carries the accepting machine's `machine_id` and, additively, its `machine_name`, `task_prefix`, `binary_version`, `protocol_fingerprint` and optional `host_os`; the private federated discovery path carries the same keys. This includes locally registered replicas and excludes active checkoutless catalog entries; owner_machine_id is not a discovery filter. Remote MCP uses direct SSH stdio, and the local proxy does not resolve workspaces, inspect checkouts or read the remote registry.
 
@@ -174,15 +174,15 @@ Older databases may retain tables and migration records from the removed fleet-r
 | Condition | Result |
 |---|---|
 | [machine] absent on strict path | Actionable initialization error |
-| legacy host.toml is valid and config has no identity | Fold into [machine] and remove the legacy file when writable |
-| legacy host.toml disagrees with [machine] | Error asking for manual reconciliation |
+| legacy host.toml present and config has no identity | Error naming both files with the manual repair; file left unchanged |
+| legacy host.toml present beside [machine] | Ignored; [machine] wins |
 | [machine] malformed or incomplete | Error; no hostname fallback |
 | workspaces.json absent | Empty registry |
-| workspaces.json malformed, contradictory or future | Error; original bytes retained |
+| workspaces.json malformed, contradictory, future or pre-path-free (no schema_version) | Error; original bytes retained |
 | selector unknown, ambiguous, inactive or checkoutless | Runtime construction refused |
 | task prefix conflicts after allocation | Runtime construction refused |
 | hosts.toml malformed, unknown key, future schema or duplicate name/id/prefix | Every consumer refuses; original bytes retained |
-| hosts.toml and mcp-destinations.toml both present | `host_file_conflict` on every consumer |
+| mcp-destinations.toml present, alone or beside hosts.toml | `host_file_conflict` on every consumer |
 | id-only task call, prefix neither local nor registered | `unknown_task_prefix`; no host is dialed |
 | id-only task call, prefix's host does not answer | `owner_unreachable`; no local mirror fallback |
 | id-only task call to a v1 MCP server, prefix is a registered remote host's | `task_prefix_remote` |
@@ -197,5 +197,6 @@ Older databases may retain tables and migration records from the removed fleet-r
 - [ORB-14449] implemented task-prefix routing and --host selection.
 - [ORB-14451] implemented dashboard Settings › Hosts through shared registry operations.
 - [ORB-16763] added registration-time host OS facts for serving-host crew selection.
+- [ORB-23280] consolidated MCP tool families behind an action field, so id-routed artifact and recovery calls name an action.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

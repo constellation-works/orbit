@@ -2,15 +2,18 @@
 type: design
 summary: "Delivery automation operations [ORB-11330]"
 tags: [automation-triggers]
-last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_updated: 2026-11-14
+last_validated: 2026-11-14
 ---
 
 # Delivery automation operations [ORB-11330]
 
 Delivery triggers are opt-in. The host clock tick evaluates routines and auto-task
-definitions in-process. Routines submit ordinary jobs, and auto-tasks create ordinary backlog tasks for the normal
-approval/admission lifecycle. There is no new daemon or coverage submission tool.
+definitions in-process. Routines submit ordinary jobs; auto-task definitions mint
+ordinary tasks through the normal approval/admission lifecycle. A `backlog`
+template becomes `proposed` unless its normalized minted tags include
+`no-diff-expected`, and explicit non-`backlog` statuses are preserved. There is
+no new daemon or coverage submission tool.
 
 Delivery observation reuses recorded provider results, including a confirmed
 absence of a PR. A lookup that fails or returns ambiguous identities retries
@@ -43,8 +46,7 @@ Initialization
 does not overwrite existing workspace definitions. After-landing review is
 `delivery-code-review`'s own `enabled` flag (`orbit auto-task toggle
 delivery-code-review on|off`) [ORB-13992]; the deprecated
-`operation.review_policy = after-landing` still enables it, without editing its
-file, while no operator has configured it. See the [review
+`operation.review_policy = after-landing` no longer enables it. See the [review
 gate](../review-gate/2_design.md). The shipped defaults carry a
 `__ORBIT_BASE_BRANCH__` placeholder for `branch`; `orbit workspace init` and
 `orbit workspace sync` render it to the workspace's registered base branch, so a
@@ -207,7 +209,7 @@ range, including unattributed neighbors. Fill in the actual checks and findings,
 replace the action ID placeholder with the current task ID, and attach:
 
 ```sh
-orbit tool run orbit.task.artifact.put --input '{"id":"<assigned task>","source_path":".orbit/tmp/automation-coverage.json","path":"automation-coverage.json","model":"codex"}'
+orbit tool run orbit.task.artifact --input '{"action":"put","id":"<assigned task>","source_path":".orbit/tmp/automation-coverage.json","path":"automation-coverage.json","model":"codex"}'
 ```
 
 The version-2 schema has these required fields:
@@ -251,7 +253,7 @@ settles as `review_closed_without_execution_summary`: coverage stays owed and
 the retry budget applies. `orbit auto-task show` reports the reason on the
 active attempt.
 
-`orbit.task.artifact.put` — and any task update attaching
+`orbit.task.artifact` action `put` — and any task update attaching
 `automation-coverage.json` — refuses a file that does not parse as this schema
 and stores nothing, returning the field/index and parse error (for example
 `checks[0].observation: invalid type: map, expected a string at line 137 column 4`).
@@ -394,7 +396,7 @@ retrying. Exhausted, failed and waived states are distinct from coverage; waiver
 
 ```sh
 orbit auto-task update delivery-code-review --waive-batch <batch-id> --waiver-reason "<reason>"
-orbit tool run orbit.auto_task.update --input '{"name":"delivery-code-review","waive_batch":{"batch_id":"<batch-id>","reason":"<reason>"}}'
+orbit tool run orbit.auto_task --input '{"action":"update","name":"delivery-code-review","waive_batch":{"batch_id":"<batch-id>","reason":"<reason>"}}'
 ```
 
 Only the current settled failed/exhausted batch may be waived. The archived
@@ -587,7 +589,7 @@ A fetch that keeps failing while that ref is missing, or still matches the
 cursor, is visible on each tick as `source_fetch_failed`; doctor does not
 contact the network to rediscover it.
 
-A recorded stall that outlives `automation.stall_window_minutes` (default 60) is
+A recorded stall that outlives 60 minutes (fixed since [ORB-22808]) is
 logged once at `warn` and filed once as friction; before that window it is
 recorded but quiet. A `history_diverged` stall clears itself only when the orphaned revision is
 provably reachable from the branch head again, which moves no debt and needs no
@@ -683,25 +685,22 @@ and never adopts the pins it left behind. Attempt ids, receipts and action keys
 are unchanged.
 
 The checkpoint that settles, exhausts or retires the attempt releases its owned
-pin once it commits, except when the accepted result is a pre-upgrade
-`material_v1` assessment whose compatibility check still needs that revision; a
-retry keeps it, and a checkpoint that loses the generation fence releases
-nothing. Current `material_v2` results release at settlement. A release first
-requires the owner record to match, then deletes the ref only while it still
-names the attempt's commit; a refusal or failure is logged and leaves the pin.
-Admission refuses to pin into a namespace whose record names another owner, and
-never rebinds an existing pin to a different commit.
+pin once it commits; a retry keeps it, and a checkpoint that loses the
+generation fence releases nothing. A release first requires the owner record to
+match, then deletes the ref only while it still names the attempt's commit; a
+refusal or failure is logged and leaves the pin. Admission refuses to pin into
+a namespace whose record names another owner, and never rebinds an existing pin
+to a different commit.
 
 Releases before owner scoping pinned every attempt at the shared top level,
-`refs/orbit/automation/<attempt id>`. Those pins carry no owner, and an earlier
-client or another root sharing the repository may still read one, so they are
-read only as an exact fallback and never deleted by settlement or cleanup.
-`orbit doctor --fix-automation-pins` reclaims this owner's leaked pins: under
-the routine sweep lock it lists the owned namespace, then inventories this
-owner's consumers and this workspace's live pilot runs, keeps every pin an
-in-flight attempt, a live run or an accepted assessment names, and deletes the
-rest at their listed commit. It reports legacy pins and other owners'
-namespaces as retained without listing their contents
+`refs/orbit/automation/<attempt id>`. Those pins carry no owner, so they are
+never written or deleted by settlement or cleanup. `orbit doctor
+--fix-automation-pins` reclaims this owner's leaked pins: under the routine
+sweep lock it lists the owned namespace, then inventories this owner's
+consumers and this workspace's live pilot runs, keeps every pin an in-flight
+attempt or a live run names, and deletes the rest at their listed commit,
+including a pin that only an accepted assessment names. It reports legacy pins
+and other owners' namespaces as retained without listing their contents
 ([health-checks runbook](../../runbooks/health-checks.md#release-leaked-automation-attempt-pins)).
 
 The source currently understands GitHub PR evidence and authorized local direct
@@ -742,31 +741,23 @@ excluded landings with their certificate and assurance label.
 ## State preparation [ORB-11331]
 
 > Failed-run triage is retired ([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)): the `execution_failed`
-> trigger kind still parses but has no shipped target and fires nothing. `preparation_eligible`,
-> `finding_unverified` and `pilot_warnings_held` schedule work.
+> trigger kind still parses but has no shipped target and fires nothing. `finding_unverified` and
+> `pilot_warnings_held` are retired the same way [ORB-22844]. `preparation_eligible` schedules work.
 
-The same routine sweep now accepts `trigger.state` with one of four kinds.
-`finding_unverified` [ORB-15662] targets `job:finding_verification_pipeline`.
-It observes review-filed bug findings (type `bug` tagged `code-review`,
+The same routine sweep accepts `trigger.state`. `finding_unverified` [ORB-15662]
+targeted `job:finding_verification_pipeline` until [ORB-22844] removed that job; the kind
+still parses, observes nothing, and a routine on it loads as retired. It observed review-filed bug findings (type `bug` tagged `code-review`,
 `delivery-code-review`, `security-review` or `qa-sweep`) in `proposed`,
-`someday` or `backlog` that carry no CONFIRMED verdict. Its fingerprint is the
-finding as filed: title, description, criteria, tags, type and selectors. It
-takes no `eligibility` or `freshness` block. The seeded
-`finding_verification.yaml` ships `enabled: false`, with the same
-seed-time `owner_machine` and `branch` as `task_pilot.yaml`. See
-[finding-verification](../finding-verification/2_design.md#7-state-trigger).
-`pilot_warnings_held` targets `job:escalation_triage_pipeline`: it observes
-proposed tasks whose latest task-pilot assessment holds promotion on warnings
-and records one triage marker per assessment. The seeded
-`pilot_warning_triage.yaml` also ships `enabled: false` with the same seed-time
-`owner_machine` and `branch`; see
+`someday` or `backlog` that carried no CONFIRMED verdict. See
+[archived finding verification](../_archived/finding-verification/2_design.md#7-state-trigger).
+`pilot_warnings_held` targeted `job:escalation_triage_pipeline` and is retired with its seeded
+`pilot_warning_triage.yaml` [ORB-22844]; the dashboard's Triage action still runs that job for
+one held task. See
 [Pilot warning holds](2_design.md#61-pilot-warning-holds-pilot_warnings_held).
-`block_escalated` targets the same job with `subject: block`: it observes
-blocked tasks whose block episode awaits triage and settles from the
-`blocked_task_triaged` marker for that episode. The seeded
-`blocked_task_triage.yaml` ships `enabled: false` with the same seed-time
-`owner_machine` and `branch`; see
-[Escalated blocks](2_design.md#62-escalated-blocks-block_escalated). Core
+`block_escalated` is retired: final recovery decides blocked tasks, so the
+seeded `blocked_task_triage.yaml` is gone and the loader skips a routine on that
+trigger as inert; see
+[Retired escalated blocks](2_design.md#62-retired-escalated-blocks-block_escalated). Core
 supplies authoritative task envelopes, pinned source and run/history evidence;
 `orbit-automation::members` owns due decisions, material fingerprints, incident
 identity, frozen attempts and receipt acceptance. Store uses its existing
@@ -791,8 +782,8 @@ both old and new definitions. A sweep preview reports
 the same source and target conflicts with it: a temporal (cron) routine and a
 state routine, or two state routines of the same trigger kind. Two state
 routines with different kinds on one target do not conflict, because each owns
-a distinct consumer and member set, so the seeded `pilot_warning_triage` and
-`blocked_task_triage` routines run side by side. `orbit routine show` and
+a distinct consumer and member set, so state routines of different kinds on one
+target run side by side. `orbit routine show` and
 `list` report the same skip for a skipped state routine instead of the
 evaluator's dry-run reason, so it never reads as `debouncing`.
 
@@ -814,7 +805,7 @@ trigger:
     deadline_minutes: 90
     eligibility:                                # optional; these are the defaults
       statuses: [proposed, backlog]
-      exclude_tags: [no-diff-expected, no-diff-needed]
+      exclude_tags: [no-diff-expected, no-diff-needed, no-pilot]
       require_tags: []
       task_types: []
     freshness:                                  # optional; overrides config per key
@@ -829,7 +820,8 @@ policy:
 `eligibility` [ORB-12745] is the predicate a `preparation_eligible` consumer
 evaluates. Absent, or with any key absent, it resolves to the rule that was
 previously hard-coded: `proposed` or `backlog` tasks not tagged
-`no-diff-expected` / `no-diff-needed`, of any type, with no required tags.
+`no-diff-expected`, `no-diff-needed`, or `no-pilot`, of any type, with no
+required tags.
 `statuses` must be a non-empty subset of those two; `task_types` empty admits
 every type; unknown keys, blank tags, and a tag both required and excluded fail
 the definition closed, and a non-default block is rejected on any other trigger kind.
@@ -841,10 +833,16 @@ fingerprint, so changing it invalidates assessments accepted under the old
 one, while the default adds nothing and keeps the fingerprints accepted before
 the block existed. Explicit task-ID runs do not consult it.
 
-`freshness` [ORB-13638] decides which edits make an assessed task due again;
-eligibility only decides whether it is fingerprinted at all, so a task that
-newly becomes eligible is piloted while retagging an eligible, already-assessed
-one is not. Each key resolves routine block, then `config.toml`
+`freshness` [ORB-13638] selects the material checked for drift during pilot
+preparation and apply. Eligibility selects never-assessed tasks for their first
+automatic pilot. Once a task has an applied assessment, unrelated material or
+policy edits leave it settled. The routine, drain and scheduled discovery
+queue a fresh pilot when the description or criteria changed after the applied
+assessment and no live execution claim holds the task, and a failed repilot holds it until its meaning changes again or an
+operator acts. Request another pilot explicitly with
+`orbit task repilot <id>`, `orbit.task.recover` action `repilot`, task update `repilot: true`, or a
+decision option action `re_pilot`. Description/criteria edits hold dispatch as
+`pilot_assessment_stale` until a new assessment completes, unless an operator skips pilot admission with `no-pilot`. Adding the tag after a receipt or while a pilot is pending requires operator authority; unverified review findings and other readiness and delivery holds still apply. When the latest assessment holds promotion, that request runs as a re-check [ORB-21124]: the pilot gets the prior assessment, its holding findings and a field-level task diff, returns `resolved`, `still_holds` or `changed` per holding finding, and apply keeps the untouched prior fields under the same revision proofs (`mode: recheck`, `prior_assessment_id`). It falls back to a full assessment, recording `mode_reason`, when selector-path objects changed since the prior source revision, the title or description changed beyond a 0.6 word-set similarity, the prior is older than the `task_pilot_pipeline` input `recheck_max_age_hours` (default 72, 0 disables), the prior was itself a re-check, or the operator asked for `--full` (`full_pilot: true`). Each key resolves routine block, then `config.toml`
 `[workflow.task_pilot_freshness]`, then the default: `material_fields`
 `[title, description, criteria, plan, selectors]` and `source_sensitivity:
 ignore`. The opt-in fields are `tags`, `crew` (with the resolved
@@ -861,19 +859,19 @@ readiness and `pilot_fingerprint` resolve the same value for a consumer, and
 a non-default one is folded into the fingerprint. Pilots still pin and record
 the source revision they assessed against, whichever mode applies.
 
-Assessments accepted under the earlier `material_v1` fingerprint, which
-hashed every field and the source revision, are carried forward rather than
-re-piloted: a scheduled member stays fresh while the `material_v1` hash
-recomputed at the revision its receipt pinned still matches, and becomes due
-at the first edit that hash covers. Settlement keeps the pin for a legacy result
-that still matches this hash; once its assessment is replaced, doctor cleanup
-can release the now-unreferenced pin. The pinned revision is read from that one
-attempt's owned ref, falling back to its exact legacy ref, never by listing a
-namespace, and a failure to recompute the
-hash is logged before the member is assessed again. Assessments accepted since
-the upgrade carry the current contract, so their attempt's pin is released at
-settlement; `orbit doctor --fix-automation-pins` keeps any legacy assessment
-pin still needed for carry-forward.
+An accepted atomic task receipt settles automatic preparation across unrelated
+material or consumer policy changes; description/criteria edits make an eligible
+proposed or backlog task due for reassessment when no live execution claim or
+unresolved failed pilot holds it. A member receipt certified under the retired
+pre-2026-09-27 fingerprint contract is piloted again; its owned source pin is
+released at settlement, and doctor cleanup reclaims one that only that receipt
+still names. Scheduling reuse does not certify edited
+requirements for dispatch: new receipts seal description/criteria independently
+of configurable fingerprints, and older recorded component hashes are compared
+when available. Future requirement edits to older receipts that lack those hashes
+record a receipt-scoped stale marker in the same task mutation, including
+desktop edits. Unchanged legacy task receipts remain usable across upgrades;
+requirement edits queue reassessment through the same automatic path.
 
 Cron, deliveries and state triggers are mutually exclusive; state kinds have
 fixed pipeline targets, require one owner and forbid overlap. Retry limits are
@@ -886,16 +884,38 @@ Due members are admitted in batches [ORB-12746]. One pass claims up to
 `1..=min(50, max_items)`; the default is capped by `max_items`) that Core admits
 and that share one pinned source, oldest first, into a single attempt, and
 dispatches one pipeline run carrying every member's task id as an explicit
-`task_ids` entry. Finding verification also requires one stored `task.crew`
+`task_ids` entry. Finding verification (removed in [ORB-22844]) also required one stored `task.crew`
 [ORB-12761], so a member whose crew disagrees stays pending for the next
 admission. Task-pilot preparation admits every due crew in that batch
 ([ORB-16839]): prepare partitions the run by each task's stored crew and then
 into groups of at most five, so two crews are assessed in that one run as
-separate partitions instead of one rejected bundle. Run start admits the mix
-only for the run the live attempt admitted, checked against that attempt and
-its action key [ORB-16860]. A hand-assembled `orbit run task-pilot` list that
-mixes crews, or any other job whose input merely carries a claim, is still
-refused at run start.
+separate partitions instead of one rejected bundle. Run start admits a mixed
+pilot bundle for the run the live preparation attempt admitted, checked against
+that attempt and its action key [ORB-16860], or for a pilot dispatched by a live
+`--approve-proposed` drain. The latter must be recorded as a child dispatch of
+that drain; a forged record or an ended drain is refused. The supported
+`orbit run task-pilot` command groups explicit ids by stored crew and submits one
+homogeneous run per crew. A
+hand-assembled direct `orbit run job task_pilot_pipeline` with mixed crews, or
+any other job whose input merely carries a claim, is still refused at run
+start.
+
+For CLI pilots, `--base-branch` names a branch on `origin` (or a local
+branch when there is no origin). A locally resolvable commit passed in its
+place is refused before any run is submitted or task changed. An exact
+remote branch takes precedence even when its name looks like a commit ID;
+preparation still fetches and pins that branch's head. If the origin check
+fails, correct the remote access and retry. To inspect a specific commit,
+keep the branch identity separate and pass the existing pipeline input:
+
+```bash
+orbit run job task_pilot_pipeline --input base_branch=agent-main \
+  --input source_revision=<FULL_COMMIT_ID>
+```
+
+`source_revision` must be a full commit ID available in the workspace's Git
+object store. It pins that exact commit independently of the branch head.
+
 A burst of *N* same-crew eligible tasks still yields one run with ⌈N/5⌉ pilot
 partitions and up to five concurrent workers instead of *N* serial runs;
 members beyond the batch stay pending for the next admission. The attempt's
@@ -1040,5 +1060,7 @@ part of this implementation.
   definition's own `enabled` flag.
 - [ORB-14164] — state-member attempt pins live under one Orbit root and
   workspace namespace.
+- [ORB-21124] — made a pilot request on a held assessment run as a targeted
+  re-check (`mode: recheck`) rather than a full assessment.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

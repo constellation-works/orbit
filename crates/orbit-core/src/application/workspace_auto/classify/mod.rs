@@ -1,6 +1,8 @@
 mod admission;
 mod forecast;
 mod gap_fit;
+mod leaf_settlement;
+mod load_failure;
 mod lock_busy;
 mod pool;
 mod waiting;
@@ -11,4 +13,5 @@ mod waiting;
 pub(crate) mod release_failure_hook;
 
 pub(crate) use admission::classify_workspace_auto_tasks;
+pub(super) use load_failure::{leaf_load_failure_holds, retain_leaf_load_failure_holds};
 pub(super) use pool::{DEFAULT_CANDIDATE_POOL, candidate_pool_limit, templated_u64};

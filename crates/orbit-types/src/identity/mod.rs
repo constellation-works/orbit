@@ -4,29 +4,44 @@ mod actor;
 mod agent_family;
 mod agent_pair;
 mod artifact_ids;
+mod auto_effort;
 mod crew_env;
 mod digest;
 mod error;
+mod human_crew;
 mod id;
 mod machine;
+mod workspace;
 pub use error::{IdentityError, ProviderModelError};
 
 pub use actor::{
     ActorIdentity, agent_from_model, is_automation_actor, normalize_attribution_label,
-    normalize_optional_attribution_label, provider_for_agent_family, provider_from_model,
+    normalize_optional_attribution_label, provider_for_agent_family,
 };
 pub use agent_family::AgentFamily;
 pub use agent_pair::{
-    AgentModelPair, Crew, CrewAssignment, ReasoningEffort, agent_family_from_cli,
-    all_agent_families, infer_agent_family_from_model, normalize_agent_family_for_model,
-    require_canonical_agent_family, resolve_crew, validate_antigravity_model,
+    AgentModelPair, CREW_EFFORT_SEPARATOR, Crew, CrewAssignment, ReasoningEffort,
+    agent_family_from_cli, all_agent_families, crew_reference_base, find_crew,
+    infer_agent_family_from_model, normalize_agent_family_for_model,
+    require_canonical_agent_family, resolve_crew, same_crew_family, validate_antigravity_model,
 };
 pub use artifact_ids::{is_valid_adr_id, is_valid_friction_id, validate_friction_id};
-pub use crew_env::CrewEnvVar;
+pub use auto_effort::{
+    AUTO_EFFORT, AutoEffortBasis, AutoEffortChoice, AutoEffortSignal, auto_effort_base,
+    auto_effort_reference,
+};
+pub use crew_env::{CrewEnvSource, CrewEnvVar};
 pub use digest::lower_hex;
+pub use human_crew::{
+    AGENT_CREW_KIND, HUMAN_CREW_KIND, HumanCrew, find_human_crew, human_crew_refusal,
+};
 pub use id::OrbitId;
 pub use machine::{
     LEGACY_TASK_PREFIX, MACHINE_ID_PREFIX, REGISTRY_IDENTIFIER_MAX_BYTES, validate_machine_id,
     validate_machine_name, validate_new_task_prefix, validate_registry_identifier,
     validate_stored_task_prefix,
+};
+pub use workspace::{
+    WORKSPACE_ID_PREFIX, canonicalize_workspace_id, validate_workspace_id,
+    validate_workspace_partition_id,
 };

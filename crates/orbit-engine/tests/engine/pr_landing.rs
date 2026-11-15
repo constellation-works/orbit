@@ -54,6 +54,7 @@ use std::process::Command;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use tempfile::TempDir;
+mod absent_check_runs;
 mod absent_context;
 pub(super) use absent_context::adopted_policy_cases;
 #[path = "pr_landing/auto_fix/scenarios.rs"]
@@ -66,6 +67,8 @@ mod draft_handoff;
 mod flaky;
 mod infrastructure;
 mod landing_transport;
+mod mentions;
+mod review_watch;
 #[cfg(target_os = "linux")]
 mod stable_build_mount;
 use super::git_fixture;
@@ -254,7 +257,7 @@ fn previous_published_head_metadata_lag_refuses_unverified_or_persistent_heads()
     isolated(
         "previous_published_head_metadata_lag_refuses_unverified_or_persistent_heads",
         |sandbox| {
-            for case in "persistent review_only time_cap third_head third_after_old remote_missing remote_moved_after_old review_mismatch review_only_third no_checkpoint".split_whitespace() {
+            for case in "persistent review_only time_cap third_head third_after_old remote_missing remote_missing_branch_unknown remote_missing_branch_missing remote_missing_branch_at_previous remote_moved_after_old review_mismatch review_only_third no_checkpoint".split_whitespace() {
                 assert_previous_head_refusal(sandbox, case, false);
             }
         },
@@ -287,9 +290,28 @@ fn previous_published_head_pull_ref_lag_settles_with_exact_merge_pin(sandbox: &P
         assert_landed_exactly(&fx, &host, &candidate, "candidate");
     }
 }
+/// Regression for ORB-23811: right after Orbit's own replacement push, `refs/pull/<N>/head` can be momentarily absent while the task branch already names the candidate. That absence is lag, so completion polls until the ref settles on the candidate.
+fn previous_published_head_absent_pull_ref_settles_with_exact_merge_pin(sandbox: &Path) {
+    let (fx, host) = fx_host(sandbox);
+    open_review(&fx, &host);
+    let input = fx.republished_completion_input(&host);
+    let candidate = input["published_head_sha"].as_str().unwrap().to_string();
+    assert_eq!(fx.remote_tip(BRANCH), candidate, "branch ref is replaced");
+    fx.script_heads(&[&fx.candidate, &candidate], Some(&candidate));
+    fx.write_forge("remote-heads", format!("absent\n{candidate}\n"));
+    let before = fx.status_reads();
+    let completed = action_ok(&host, "pr_complete", &input);
+    assert_eq!(completed["merge"]["stale_head_observations"], 1);
+    assert_eq!(completed["merge"]["waited_seconds"], 5);
+    assert_eq!(fx.status_reads() - before, 3);
+    assert_landed_exactly(&fx, &host, &candidate, "candidate");
+}
 /// Both lag observers are fail-closed: only the known previous head may be
 /// retried, while the task branch is still at the candidate and within bounds.
-#[allow(clippy::print_stderr)]
+#[allow(
+    clippy::print_stderr,
+    reason = "the isolated row log reads the scenario name from stderr when this refusal case fails"
+)]
 fn assert_previous_head_refusal(sandbox: &Path, case: &str, pull: bool) {
     eprintln!(
         "scenario: {} {case}",
@@ -346,8 +368,28 @@ fn assert_previous_head_refusal(sandbox: &Path, case: &str, pull: bool) {
             metadata.push(fx.base_sha.clone());
             (2, "delivery_evidence_stale")
         }
+        // An absent pull ref with the task branch at the candidate is lag
+        // (ORB-23811), so it polls until the bounded wait is spent.
         "remote_missing" => {
             remote = None;
+            input["max_wait_seconds"] = json!(240);
+            (4, "delivery_evidence_stale")
+        }
+        "remote_missing_branch_unknown" => {
+            remote = None;
+            input.as_object_mut().unwrap().remove("head");
+            fx.write_forge("pr-head", "");
+            (1, "delivery_evidence_stale")
+        }
+        // Without independent branch evidence an absent pull ref refuses at once.
+        "remote_missing_branch_missing" => {
+            remote = None;
+            fx.remote_git(&["update-ref", "-d", &format!("refs/heads/{BRANCH}")]);
+            (1, "delivery_evidence_stale")
+        }
+        "remote_missing_branch_at_previous" => {
+            remote = None;
+            fx.remote_git(&["update-ref", &format!("refs/heads/{BRANCH}"), &fx.candidate]);
             (1, "delivery_evidence_stale")
         }
         "remote_moved_after_old" => {
@@ -413,7 +455,61 @@ fn assert_previous_head_refusal(sandbox: &Path, case: &str, pull: bool) {
     }
     let before = fx.status_reads();
     let error = action_err(&host, "pr_complete", &input);
-    assert!(error.to_string().contains(error_code), "{case}: {error}");
+    let message = error.to_string();
+    assert!(message.contains(error_code), "{case}: {message}");
+    match case {
+        "remote_missing" => {
+            assert!(
+                message.contains("pull ref 'refs/pull/42/head' is absent after the bounded wait"),
+                "{case}: absent pull-ref diagnosis: {message}"
+            );
+            assert!(
+                !message.contains("names the previous head"),
+                "{case}: {message}"
+            );
+        }
+        "remote_missing_branch_missing" => {
+            assert!(
+                message.contains("pull ref 'refs/pull/42/head' is absent and branch"),
+                "{case}: absent pull-ref diagnosis: {message}"
+            );
+            assert!(
+                !message.contains("names the previous head"),
+                "{case}: {message}"
+            );
+        }
+        "remote_missing_branch_unknown" => {
+            assert!(
+                message.contains(
+                    "pull ref 'refs/pull/42/head' is absent and the task branch is unknown"
+                ),
+                "{case}: absent pull-ref diagnosis: {message}"
+            );
+            assert!(
+                !message.contains("names the previous head"),
+                "{case}: {message}"
+            );
+        }
+        "remote_missing_branch_at_previous" => {
+            assert!(
+                message.contains("pull ref 'refs/pull/42/head' is absent and branch"),
+                "{case}: absent pull-ref diagnosis: {message}"
+            );
+            assert!(
+                !message.contains("names the previous head"),
+                "{case}: {message}"
+            );
+        }
+        "persistent" | "persistent_after_metadata" | "time_cap" if pull => assert!(
+            message.contains("remote head still names the previous head after the bounded wait"),
+            "{case}: previous-head diagnosis changed: {message}"
+        ),
+        "branch_missing" | "branch_at_previous" if pull => assert!(
+            message.contains("remote head still names the previous head and branch"),
+            "{case}: previous-head diagnosis changed: {message}"
+        ),
+        _ => {}
+    }
     assert_eq!(fx.status_reads() - before, expected_reads, "{case}");
     assert_nothing_landed(&fx, &host, TaskStatus::Review, case);
 }
@@ -463,6 +559,111 @@ fn pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr(sand
         assert_eq!(fx.forge_state("pr-base").as_deref(), Some(BASE));
         assert!(host.comments(TASK_ID).is_empty());
     }
+}
+fn pr_open_refuses_a_reused_pr_targeting_another_base(sandbox: &Path) {
+    for (case, live_base, omit_base) in rows_by_name! {
+        "retargeted" => (Some("other-base"), false);
+        "unknown" => (None, true)
+    } {
+        let (fx, host) = fx_host(sandbox);
+        fx.write_forge("pr-head", format!("{BRANCH}\n"));
+        if let Some(base) = live_base {
+            fx.write_forge("pr-base", format!("{base}\n"));
+        } else {
+            fx.write_forge("pr-base", format!("{BASE}\n"));
+            fx.write_forge("omit-pr-base", "");
+        }
+        let _ = omit_base;
+        let error = action_err(
+            &host,
+            "pr_open",
+            &fx.open_input(&fx.candidate, &fx.base_sha),
+        );
+        let message = error.to_string();
+        assert!(message.contains("pr reuse refused"), "{case}: {message}");
+        if live_base.is_some() {
+            assert!(message.contains("other-base"), "{case}: {message}");
+            assert!(message.contains(BASE), "{case}: {message}");
+        } else {
+            assert!(
+                message.contains("did not report baseRefName"),
+                "{case}: {message}"
+            );
+        }
+        assert!(
+            fx.forge_lines("created-prs").is_empty(),
+            "{case}: no duplicate PR"
+        );
+        assert!(
+            !fx.forge_calls().iter().any(|call| call == "pr create"),
+            "{case}: {message}"
+        );
+        assert_eq!(host.status(TASK_ID), TaskStatus::InProgress, "{case}");
+    }
+    // Matching-base reuse still succeeds without creating a second PR.
+    let (fx, host) = fx_host(sandbox);
+    fx.write_forge("pr-head", format!("{BRANCH}\n"));
+    fx.write_forge("pr-base", format!("{BASE}\n"));
+    let opened = open_ok(&fx, &host);
+    assert_eq!(opened["pr_created"], false);
+    assert_eq!(opened["pr_reused"], true);
+    assert_eq!(opened["pr_number"], PR_NUMBER);
+    assert_eq!(opened["base"], BASE);
+    assert!(fx.forge_lines("created-prs").is_empty());
+}
+fn a_failure_handoff_refuses_a_reused_pr_targeting_another_base(sandbox: &Path) {
+    let (fx, host) = fx_host(sandbox);
+    fx.write_forge("pr-head", format!("{BRANCH}\n"));
+    fx.write_forge("pr-base", "other-base\n");
+    fx.write_repo("src/wip.txt", "blocked work\n");
+    let error = action_err(
+        &host,
+        "pr_failure_handoff",
+        &json!({
+            "failed_step_id": "validate", "error_code": "pipeline_step_failed",
+            "error_message": "required validation did not pass", "run_id": RUN_ID,
+            "job_input": {"task_ids": [TASK_ID], "base_branch": BASE, "base_sync": "local"},
+            "pipeline": {"worktree": {"job_run_id": RUN_ID, "workspace_path": fx.repo},
+                "sync_base": {"head": BRANCH, "base": BASE, "base_ref": BASE, "base_sha": fx.base_sha}},
+        }),
+    );
+    let message = error.to_string();
+    assert!(message.contains("pr reuse refused"), "{message}");
+    assert!(message.contains("other-base"), "{message}");
+    assert!(fx.forge_lines("created-prs").is_empty(), "no duplicate PR");
+}
+fn blocked_completion_reports_only_measured_ancestry_without_stale_ci_provenance(sandbox: &Path) {
+    // Behind candidate: ancestry is measured, stale-merge is not asserted.
+    let (fx, host) = fx_host(sandbox);
+    open_review(&fx, &host);
+    fx.advance_base();
+    fx.script_checks(&["failure"]);
+    let error = action_err(&host, "pr_complete", &fx.complete_input()).to_string();
+    assert!(error.contains("commits behind base"), "{error}");
+    assert!(
+        error.contains("does not establish that red required checks ran against a stale merge ref"),
+        "{error}"
+    );
+    assert!(
+        !error.contains("so any red required check ran against a stale merge ref"),
+        "{error}"
+    );
+    assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, "behind");
+    // Current candidate: ancestry is measured, current-merge failure is not asserted.
+    let (fx, host) = fx_host(sandbox);
+    open_review(&fx, &host);
+    fx.script_checks(&["failure"]);
+    let error = action_err(&host, "pr_complete", &fx.complete_input()).to_string();
+    assert!(error.contains("is current with base"), "{error}");
+    assert!(
+        error.contains("does not establish which merge CI tested"),
+        "{error}"
+    );
+    assert!(
+        !error.contains("so this is a failure at the current candidate and base"),
+        "{error}"
+    );
+    assert_nothing_landed(&fx, &host, TaskStatus::Review, "current");
 }
 fn pr_open_retries_http_499_pr_views_and_stops_at_the_existing_attempt_ceiling(sandbox: &Path) {
     let (fx, host) = fx_host(sandbox);
@@ -1061,6 +1262,37 @@ fn required_checks_the_head_has_not_reported_are_awaited_before_completion(sandb
         }
     }
 }
+/// [ORB-22486] A BLOCKED head whose only running check is not required by
+/// readable policy stops at once; the rollup-only wait is owner landing only
+/// and never arms auto-merge, pinned or not.
+fn a_running_non_required_check_stops_blocked_completion_without_auto_merge(sandbox: &Path) {
+    use orbit_types::workflow::DeliveryRefusal;
+    for pinned in [true, false] {
+        let case = if pinned { "pinned" } else { "unpinned" };
+        let (fx, host) = fx_host(sandbox);
+        open_for_completion(&fx, &host);
+        fx.script_checks(&["optional_pending"]);
+        fx.write_forge("gates", "test");
+        let mut input = fx.complete_input();
+        if !pinned {
+            input.as_object_mut().unwrap().remove("published_head_sha");
+            input.as_object_mut().unwrap().remove("reviewed_head_sha");
+        }
+        let error = action_err(&host, "pr_complete", &input);
+        assert!(
+            matches!(
+                error,
+                OrbitError::DeliveryRefused {
+                    refusal: DeliveryRefusal::RequirementsUnsatisfied,
+                    ..
+                }
+            ),
+            "{case}: stops as delivery_requirements_unsatisfied: {error}"
+        );
+        assert_eq!(fx.status_reads(), 1, "{case}: stops on the first read");
+        assert_nothing_landed(&fx, &host, TaskStatus::Review, case);
+    }
+}
 // Batch merge of the checked head [ORB-15701]
 fn batch_merge_input(fx: &Fixture) -> Value {
     json!({
@@ -1162,15 +1394,23 @@ fn a_base_modified_merge_refusal_retries_the_same_candidate_on_fresh_evidence(sa
         );
         // Every read after the refusal, up to the one that permits the retry.
         let fresh_reads = checks.len().max(2) - 1;
-        let mut expected = vec!["pr view", "repo view", "api graphql", MERGE_CALL];
+        let mut expected = vec![
+            "pr view",
+            "api graphql",
+            "repo view",
+            "api graphql",
+            MERGE_CALL,
+        ];
         for check in checks.iter().skip(1) {
             expected.push("pr view");
-            if *check == "pending" {
+            // [ORB-24403] A BLOCKED poll whose rollup still shows the
+            // cached required check pending re-reads no required checks.
+            if *check != "pending" {
                 expected.push("api graphql");
             }
         }
         if checks.len() == 1 {
-            expected.push("pr view");
+            expected.extend(["pr view", "api graphql"]);
         }
         expected.extend(["repo view", "api graphql", MERGE_CALL, "pr view"]);
         assert_eq!(fx.forge_calls()[published..], expected, "{case}");
@@ -1215,7 +1455,15 @@ fn other_merge_refusals_fail_on_the_first_request(sandbox: &Path) {
         "malformed_body" => (BASE_MODIFIED);
         "trailing_stderr" => ("retried after a proxy reset");
         "transport_timeout" => ("Client.Timeout exceeded");
-        "server_error" => ("Server Error (HTTP 502)")
+        "server_error_mixed_auth" => ("Bad credentials");
+        "server_error_malformed" => ("Server Error (HTTP 502)");
+        "server_error_mismatched" => ("Server Error (HTTP 502)");
+        "server_error_contradictory" => ("Server Error (HTTP 502)");
+        "server_error_trailing" => ("HTTP 403");
+        "server_error_wrong_status" => ("HTTP 502");
+        "server_error_auth_detail" => ("HTTP 502");
+        "invalid_success" => ("invalid JSON");
+        "unconfirmed_success" => ("did not confirm a synchronous merge")
     } {
         let (fx, host) = fx_host(sandbox);
         open_for_completion(&fx, &host);
@@ -1233,6 +1481,125 @@ fn other_merge_refusals_fail_on_the_first_request(sandbox: &Path) {
         assert!(host.landings().is_empty(), "{outcome}");
         assert!(host.completion_notes().is_empty(), "{outcome}");
         assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{outcome}");
+        test_env::record_scenario_pass(&format!("merge-refusal-{outcome}"));
+    }
+    for case in [
+        "open",
+        "closed",
+        "contradictory",
+        "missing_merge_commit",
+        "missing_merge_time",
+        "malformed_merge_time",
+        "malformed_merge_commit",
+        "missing_head",
+        "missing_state",
+        "head",
+        "branch",
+        "base",
+        "pr_number",
+        "repository",
+        "missing_identity",
+        "missing_base_pin",
+        "missing_head_pin",
+        "missing_candidate_pin",
+        "read_auth",
+        "read_502",
+        "read_invalid",
+        "zero_budget",
+    ] {
+        let (fx, host) = fx_host(sandbox);
+        open_for_completion(&fx, &host);
+        fx.script_merges(&["server_error"]);
+        let mut evidence = json!({"number":42,"url":"https://github.com/orbit/test/pull/42",
+            "state":"MERGED","mergedAt":"2026-11-05T08:24:36Z","mergeCommit":{"oid":fx.candidate},
+            "headRefName":BRANCH,"headRefOid":fx.candidate,"baseRefName":BASE});
+        match case {
+            "open" => evidence["state"] = json!("OPEN"),
+            "closed" => {
+                evidence["state"] = json!("CLOSED");
+                evidence["mergedAt"] = Value::Null;
+                evidence["mergeCommit"] = Value::Null;
+            }
+            "contradictory" => evidence["state"] = json!("CLOSED"),
+            "missing_merge_commit" => evidence["mergeCommit"] = Value::Null,
+            "missing_merge_time" => evidence["mergedAt"] = Value::Null,
+            "malformed_merge_time" => evidence["mergedAt"] = json!("not a timestamp"),
+            "malformed_merge_commit" => evidence["mergeCommit"] = json!({"oid":"not a commit"}),
+            "missing_head" => evidence["headRefOid"] = Value::Null,
+            "missing_state" => {
+                evidence.as_object_mut().unwrap().remove("state");
+            }
+            "head" => evidence["headRefOid"] = json!(fx.base_sha),
+            "branch" => evidence["headRefName"] = json!("other-branch"),
+            "base" => evidence["baseRefName"] = json!("other-base"),
+            "pr_number" => evidence["number"] = json!(43),
+            "repository" => evidence["url"] = json!("https://github.com/other/repo/pull/42"),
+            "missing_identity" => {
+                evidence.as_object_mut().unwrap().remove("url");
+            }
+            "read_auth" => fx.write_forge("reconcile-error", "gh: Bad credentials (HTTP 401)"),
+            "read_502" => fx.write_forge("reconcile-error", "gh: Server Error (HTTP 502)"),
+            "read_invalid" => evidence = json!("not PR metadata"),
+            "zero_budget" | "missing_base_pin" | "missing_head_pin" | "missing_candidate_pin" => {}
+            _ => unreachable!(),
+        }
+        // OPEN is explicitly unmerged; the contradictory row retains merge evidence.
+        if case == "open" {
+            evidence["mergedAt"] = Value::Null;
+            evidence["mergeCommit"] = Value::Null;
+        }
+        fx.write_forge("reconcile-status", evidence.to_string());
+        let mut input = fx.complete_input();
+        if case == "zero_budget" {
+            input["max_wait_seconds"] = json!(0);
+        }
+        let missing_pin = match case {
+            "missing_base_pin" => Some("base"),
+            "missing_head_pin" => Some("head"),
+            "missing_candidate_pin" => Some("published_head_sha"),
+            _ => None,
+        };
+        if let Some(pin) = missing_pin {
+            input.as_object_mut().unwrap().remove(pin);
+        }
+        let error = action_err(&host, "pr_complete", &input).to_string();
+        assert!(
+            error.contains("Server Error (HTTP 502)"),
+            "{case}: original diagnostic: {error}"
+        );
+        assert!(
+            error.contains("read-only reconciliation was inconclusive"),
+            "{case}: {error}"
+        );
+        assert_eq!(
+            fx.merge_requests(),
+            squash(&fx.candidate),
+            "{case}: no second mutation"
+        );
+        assert_eq!(
+            fx.status_reads(),
+            if case == "zero_budget" || missing_pin.is_some() {
+                1
+            } else {
+                2
+            },
+            "{case}: bounded read"
+        );
+        assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{case}");
+        assert!(host.landings().is_empty(), "{case}");
+        assert!(host.completion_notes().is_empty(), "{case}");
+        assert_eq!(
+            host.history(TASK_ID)
+                .iter()
+                .filter(
+                    |row| row.event == orbit_types::workflow::PR_COMPLETION_MUTATION_STARTED_EVENT
+                )
+                .count(),
+            1,
+            "{case}"
+        );
+        assert_eq!(fx.head(), fx.candidate, "{case}: no rewrite");
+        test_env::record_scenario_pass(&format!("ambiguous-reconciliation-refused-{case}"));
     }
 }
 /// Shared by the two refresh-refusal tests: after one base-modification refusal, the fresh read in each case must refuse without a second merge request, leaving the checkout, landings and task untouched.
@@ -1283,25 +1650,64 @@ fn a_base_race_refresh_refuses_unmet_gates_without_another_merge(sandbox: &Path)
     );
 }
 fn an_already_merged_refresh_reconciles_without_another_merge_request(sandbox: &Path) {
-    let (fx, host) = fx_host(sandbox);
-    open_for_completion(&fx, &host);
-    fx.script_merges(&["base_modified+merged"]);
-    let completed = action_ok(&host, "pr_complete", &fx.complete_input());
-    assert_eq!(fx.merge_requests().len(), 1, "no second mutation");
-    let landed = fx.remote_tip(BASE);
-    let merge = &completed["merge"];
-    assert_eq!(merge["merged"], true);
-    assert_eq!(merge["landed_commit"], landed.as_str());
-    assert_eq!(merge["managed_merge"], false);
-    assert_eq!(
-        merge["delivery_evidence"]["head_sha"],
-        fx.candidate.as_str()
-    );
-    let landings = host.landings();
-    assert_eq!(landings.len(), 1);
-    assert!(!landings[0].managed_merge);
-    assert_eq!(landings[0].landed_commit.as_deref(), Some(landed.as_str()));
-    assert_eq!(host.status(TASK_ID), TaskStatus::Done);
+    for (outcome, reviewed) in [
+        ("server_error+merged", true),
+        ("server_error+merged", false),
+        ("internal_error+merged", true),
+        ("bad_gateway+merged", true),
+        ("unavailable+merged", true),
+        ("gateway_timeout+merged", true),
+        ("empty_error_body+merged", true),
+        ("base_modified+merged", true),
+    ] {
+        let (fx, host) = fx_host(sandbox);
+        open_for_completion(&fx, &host);
+        fx.script_merges(&[outcome]);
+        let input = if reviewed {
+            fx.complete_input()
+        } else {
+            fx.complete_ungated_input()
+        };
+        let completed = action_ok(&host, "pr_complete", &input);
+        assert_eq!(
+            fx.merge_requests(),
+            squash(&fx.candidate),
+            "{outcome}: no second mutation"
+        );
+        assert_eq!(fx.status_reads(), 2, "{outcome}: exactly one fresh read");
+        assert_eq!(fx.forge_calls().last().unwrap(), "pr view");
+        let mutations = host
+            .history(TASK_ID)
+            .into_iter()
+            .filter(|row| row.event == orbit_types::workflow::PR_COMPLETION_MUTATION_STARTED_EVENT)
+            .collect::<Vec<_>>();
+        assert_eq!(mutations.len(), 1, "{outcome}: durable mutation intent");
+        let provenance: Value = serde_json::from_str(mutations[0].note.as_ref().unwrap()).unwrap();
+        assert_eq!(provenance["head_sha"], fx.candidate);
+        assert_eq!(provenance["pr_number"], PR_NUMBER);
+        let landed = fx.remote_tip(BASE);
+        let merge = &completed["merge"];
+        assert_eq!(merge["merged"], true);
+        assert_eq!(merge["landed_commit"], landed.as_str());
+        assert_eq!(merge["managed_merge"], false);
+        assert_eq!(
+            merge["delivery_evidence"]["head_sha"],
+            fx.candidate.as_str()
+        );
+        let landings = host.landings();
+        if reviewed {
+            assert_eq!(landings.len(), 1);
+            assert!(!landings[0].managed_merge);
+            assert_eq!(landings[0].landed_commit.as_deref(), Some(landed.as_str()));
+            assert_eq!(landings[0].reviewed_head_sha, fx.candidate);
+        } else {
+            assert!(landings.is_empty(), "no review to attribute");
+        }
+        assert_eq!(host.completion_notes().len(), 1);
+        assert!(host.completion_notes()[0].contains(&landed));
+        assert_eq!(host.status(TASK_ID), TaskStatus::Done);
+        test_env::record_scenario_pass(&format!("reconciled-{outcome}-reviewed-{reviewed}"));
+    }
 }
 fn repeated_base_races_stop_at_the_attempt_ceiling_within_the_wait_budget(sandbox: &Path) {
     for (case, max_wait_seconds, requests, refusal) in rows_by_name! {
@@ -1402,6 +1808,54 @@ fn pr_open_refuses_a_stacked_base_already_merged_into_the_landing_branch(sandbox
             "{}",
             comment.message
         );
+    }
+}
+fn pr_open_judges_a_stacked_repair_by_its_own_marker_not_its_fixes_quote(sandbox: &Path) {
+    const ORIGINAL: &str = "feat: original [ORB-21284]";
+    const REPAIR: &str = "fix: first repair [ORB-21300]";
+    let repair_message =
+        format!("{REPAIR}\n\nFixes: 5cac195ba9ab (\"{ORIGINAL}\")\nRegression-From: ORB-21284");
+    for (case, repair_landed) in [("repair unmerged", false), ("repair landed", true)] {
+        let mut fx = Fixture::new(sandbox);
+        fx.git(&["branch", "main", &fx.base_sha]);
+        fx.git(&["checkout", "main"]);
+        fx.write_repo("original.txt", "original\n");
+        fx.git(&["add", "original.txt"]);
+        fx.git(&["commit", "-m", ORIGINAL]);
+        if repair_landed {
+            // A squash merge: the repair's subject survives, its sha does not.
+            fx.write_repo("repair.txt", "repaired\n");
+            fx.git(&["add", "repair.txt"]);
+            fx.git(&["commit", "-m", REPAIR]);
+        }
+        fx.git(&["push", "origin", "main"]);
+        fx.git(&["checkout", BASE]);
+        fx.write_repo("payload.txt", "repaired\n");
+        fx.git(&["add", "payload.txt"]);
+        fx.git(&["commit", "-m", &repair_message]);
+        fx.git(&["push", "origin", BASE]);
+        fx.git(&["checkout", BRANCH]);
+        fx.rebase_candidate();
+        let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+        let mut input = fx.open_input(&fx.candidate, &fx.base_sha);
+        input["landing_branch"] = json!("main");
+        if repair_landed {
+            let error = action_err(&host, "pr_open", &input);
+            assert!(
+                error.to_string().contains("already landed"),
+                "{case}: {error}"
+            );
+            assert!(error.to_string().contains("[ORB-21300]"), "{case}: {error}");
+            assert!(
+                !error.to_string().contains("[ORB-21284]"),
+                "{case}: {error}"
+            );
+            assert!(fx.forge_calls().is_empty(), "{case}");
+        } else {
+            let opened = action_ok(&host, "pr_open", &input);
+            assert_eq!(opened["pr_created"], true, "{case}: {opened}");
+            assert_eq!(fx.forge_state("pr-base").as_deref(), Some(BASE), "{case}");
+        }
     }
 }
 fn pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate(sandbox: &Path) {
@@ -2727,10 +3181,30 @@ fn an_implementer_blocker_keeps_the_dirty_candidate_without_a_pr(sandbox: &Path)
         "still drafting\n"
     );
     assert_eq!(host.status(TASK_ID), TaskStatus::Blocked);
-    let (_, event, note) = locked(&host.status_events).last().cloned().unwrap();
+    let (_, event, note, decision) = locked(&host.status_events).last().cloned().unwrap();
     assert_eq!(event.as_deref(), Some("task_blocked_by_agent"));
     let note = note.unwrap();
     assert!(note.contains("kind=environment") && is_task_blocked_by_agent(None, Some(&note)));
+    assert_eq!(
+        decision,
+        Some(orbit_types::task::TaskDecision::AgentBlocked {
+            blocker: AgentBlocker {
+                kind: "environment".to_string(),
+                evidence: "the toolchain the task needs is not installed".to_string(),
+            }
+        }),
+        "the blocker is recorded typed on the blocking entry"
+    );
+    assert_eq!(
+        note,
+        format!(
+            "[task_blocked_by_agent] kind=environment an agent declared a blocker: run={}, \
+             failed_step=implement_bundle, candidate={head_before}, branch={}; no PR was opened",
+            handoff["handoff_run_id"].as_str().unwrap(),
+            handoff["branch"].as_str().unwrap(),
+        ),
+        "the note keeps its pre-decision text for older readers"
+    );
     assert!(
         host.comments(TASK_ID)
             .iter()
@@ -2749,7 +3223,8 @@ fn implementation_handoff_contracts(sandbox: &Path) {
     for (name, step, code, contents, decision, detail) in rows_by_name! {
         "a_provider_failure_commits_the_candidate_without_a_pr_or_a_status_write" => ("implement_one", "provider_refusal", "half written\n", "held_provider_failure", Some(("provider_failure", "provider_refusal")));
         "an_upgrade_refused_reviewer_holds_the_candidate_without_blocking_the_task" => ("review", "upgrade_pending", "reviewer fix in progress\n", "held_upgrade_pending", Some(("blocker_kind", "orbit.generation_switch_pending")));
-        "a_child_its_parent_stopped_waiting_for_holds_its_candidate" => ("validate", "child_timeout", "implementation under validation\n", "held_child_timeout", None)
+        "a_child_its_parent_stopped_waiting_for_holds_its_candidate" => ("validate", "child_timeout", "implementation under validation\n", "held_child_timeout", None);
+        "an_owner_signoff_hold_commits_the_candidate_without_a_pr_or_a_status_write" => ("implement_one", "owner_signoff_required", "validated candidate\n", "held_owner_signoff", None)
     } {
         run_named_row(sandbox, name, |row| {
             let message = match code {
@@ -2767,6 +3242,10 @@ fn implementation_handoff_contracts(sandbox: &Path) {
                 }
                 // [ORB-15643] The parent stopped waiting during validation.
                 "child_timeout" => "child_timeout: parent run jrun-parent stopped waiting for child run jrun-child after 14400 s".into(),
+                // [ORB-23966] The implementer waits on recorded owner approval.
+                "owner_signoff_required" => {
+                    "The validated candidate awaits recorded owner approval.".into()
+                }
                 _ => unreachable!("unknown held failure {code}"),
             };
             let (fx, host) = fx_host(row);
@@ -2782,6 +3261,32 @@ fn implementation_handoff_contracts(sandbox: &Path) {
                 assert_eq!(fx.git(&["show", "HEAD:src/wip.txt"]), "half written");
             }
             assert_committed_held(&fx, &host, &handoff, &head_before, &remote_before, name);
+            if code == "owner_signoff_required" {
+                assert_eq!(fx.git(&["show", "HEAD:src/wip.txt"]), "validated candidate");
+                assert!(
+                    handoff["task_spec_digest"].is_string(),
+                    "{name}: the handoff records the spec digest for resume: {handoff}"
+                );
+                let comments = host.comments(TASK_ID);
+                assert!(
+                    comments.iter().any(|comment| {
+                        comment.message.contains("Owner sign-off")
+                            && comment.message.contains(&fx.head())
+                            && comment.message.contains(BRANCH)
+                            && comment.message.contains("approval is recorded")
+                    }),
+                    "{name}: a system comment names the held candidate and the operator's next step: {comments:?}"
+                );
+                assert!(
+                    host.history(TASK_ID).iter().any(|entry| {
+                        entry.event == orbit_types::workflow::CANDIDATE_HELD_EVENT
+                            && entry.note.as_deref().is_some_and(|note| {
+                                note.contains(&fx.head()) && note.contains(BRANCH)
+                            })
+                    }),
+                    "{name}: the task history records the held candidate"
+                );
+            }
         });
     }
 }
@@ -2969,7 +3474,7 @@ fn a_required_command_red_on_the_base_holds_the_task_without_a_pr(sandbox: &Path
     assert_held_without_pr(&fx, &handoff, &remote_before, "baseline-red");
     assert_eq!(fx.head(), fx.candidate, "the candidate is kept");
     assert_eq!(host.status(TASK_ID), TaskStatus::Backlog);
-    let (_, event, note) = locked(&host.status_events).last().cloned().unwrap();
+    let (_, event, note, _) = locked(&host.status_events).last().cloned().unwrap();
     assert_eq!(event.as_deref(), Some(BASELINE_RED_HOLD_EVENT));
     assert_eq!(
         note.as_deref().and_then(BaselineRedHold::from_text),
@@ -3575,7 +4080,7 @@ fn a_red_base_during_pr_revalidation_holds_the_task(sandbox: &Path) {
     assert_eq!(handoff["pr_created"], false);
     assert_eq!(host.status(TASK_ID), TaskStatus::Backlog);
     assert_eq!(fx.remote_tip(BRANCH), remote_before);
-    let (_, event, note) = locked(&host.status_events).last().cloned().unwrap();
+    let (_, event, note, _) = locked(&host.status_events).last().cloned().unwrap();
     assert_eq!(event.as_deref(), Some(BASELINE_RED_HOLD_EVENT));
     assert_eq!(
         note.as_deref().and_then(BaselineRedHold::from_text),
@@ -3850,12 +4355,82 @@ fn conflicting_base_advances_after_recovery_are_chased_until_the_bound(sandbox: 
         chased += 1;
         recovered = recover_completion(&fx, &host, &conflict, &format!("resolved {chased}\n"));
     };
-    assert!(exhausted.to_string().contains("base_chase_exhausted:"));
-    assert!(chased >= 1, "at least one more bounded recovery ran");
+    assert!(
+        matches!(&exhausted, OrbitError::DeliveryRefused { refusal, .. }
+            if refusal.error_code() == "base_chase_exhausted"),
+        "exhaustion must hold completion for the drain, not fail and strand review: {exhausted}"
+    );
+    assert_eq!(
+        chased, 2,
+        "ORB-21441: one attempt keeps the two-chase bound"
+    );
     assert_eq!(fx.head(), recovered, "the last certified recovery is kept");
     assert_eq!(fx.git(&["status", "--porcelain"]), "");
     assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, "chase");
+
+    // The owner drain resumes the stopped completion with its certified
+    // checkpoint, while the new run owns a fresh, bounded attempt ledger.
+    let retry = "jrun-chase-retry";
+    let mut resumed = completion_retry_input(&host, &input, RUN_ID, retry);
+    for chase in 1..=2 {
+        let conflict = completion_conflict(action(&host, "pr_complete", &resumed));
+        recover_completion_in_run(&fx, &host, &conflict, &format!("retry {chase}\n"), retry);
+        fx.commit_on_base(FEATURE, &format!("base during retry {chase}\n"));
+    }
+    let exhausted_retry = action_err(&host, "pr_complete", &resumed);
+    assert!(
+        matches!(exhausted_retry, OrbitError::DeliveryRefused { refusal, .. }
+        if refusal.error_code() == "base_chase_exhausted"),
+        "ORB-21441: a resumed attempt also stops after two chases"
+    );
+    assert_eq!(
+        host.rebase_recovery_attempts(retry, COMPLETE_STEP)
+            .unwrap()
+            .len(),
+        2
+    );
+    let final_retry = "jrun-chase-stable";
+    resumed = completion_retry_input(&host, &input, retry, final_retry);
+    let conflict = completion_conflict(action(&host, "pr_complete", &resumed));
+    recover_completion_in_run(&fx, &host, &conflict, "resolved after yield\n", final_retry);
+    fx.script_checks(&["dirty", "success"]);
+    let completed = action_ok(&host, "pr_complete", &resumed);
+    assert_eq!(completed["merge"]["merged"], true);
+    assert_eq!(host.status(TASK_ID), TaskStatus::Done);
+    assert_eq!(
+        host.rebase_recovery_attempts(RUN_ID, COMPLETE_STEP)
+            .unwrap()
+            .len(),
+        chased + 1
+    );
+    assert_eq!(
+        host.rebase_recovery_attempts(final_retry, COMPLETE_STEP)
+            .unwrap()
+            .len(),
+        1
+    );
 }
+/// Copy the certified source checkpoint and authenticate the same-job retry
+/// ancestry, as the owner's checkpoint resume does.
+fn completion_retry_input(host: &DeliveryHost, input: &Value, source: &str, retry: &str) -> Value {
+    for (run, parent) in [(source, None), (retry, Some(source))] {
+        locked(&host.runs).entry(run.into()).or_insert_with(|| {
+            serde_json::from_value(json!({
+                "run_id": run, "job_id": "task_pr_pipeline", "attempt": 1,
+                "state": "held", "scheduled_at": Utc::now(), "created_at": Utc::now(),
+                "retry_source_run_id": parent,
+            }))
+            .unwrap()
+        });
+    }
+    let mut state = host.read_run_state(source).unwrap().unwrap();
+    state.run_id = retry.into();
+    locked(&host.run_states).insert(retry.into(), state);
+    let mut resumed = input.clone();
+    resumed["run_id"] = json!(retry);
+    resumed
+}
+
 /// [`Fixture::complete_ungated_input`] as the dispatcher hands it to the completion step.
 fn completion_with_step(fx: &Fixture) -> Value {
     let mut input = fx.complete_ungated_input();
@@ -3875,13 +4450,23 @@ fn recover_completion(
     conflict: &RecoverableVcsConflict,
     resolution: &str,
 ) -> String {
+    recover_completion_in_run(fx, host, conflict, resolution, RUN_ID)
+}
+
+fn recover_completion_in_run(
+    fx: &Fixture,
+    host: &DeliveryHost,
+    conflict: &RecoverableVcsConflict,
+    resolution: &str,
+    run_id: &str,
+) -> String {
     fs::write(fx.repo.join(FEATURE), resolution).unwrap();
     fx.git(&["add", FEATURE]);
     fx.git(&["-c", "core.editor=true", "rebase", "--continue"]);
     let head = fx.head();
     let attempt = host
         .begin_rebase_recovery_attempt(
-            RUN_ID,
+            run_id,
             COMPLETE_STEP,
             &RebaseRecoveryAttemptScope {
                 workspace_path: path_str(&fx.repo).to_string(),
@@ -3891,10 +4476,10 @@ fn recover_completion(
         )
         .unwrap();
     host.checkpoint_rebase_recovery(
-        RUN_ID,
+        run_id,
         COMPLETE_STEP,
         &json!({
-            "run_id": RUN_ID,
+            "run_id": run_id,
             "step_id": COMPLETE_STEP,
             "task_ids": [TASK_ID],
             "workspace_path": fx.repo,
@@ -4041,6 +4626,7 @@ fn admitted_review(attempt_id: &str, lineage: &str) -> Value {
                 model: "review-model".into(),
                 reasoning_effort: None,
                 eligible_pool: Vec::new(),
+                auto_effort: None,
             },
             owed_evidence: Vec::new(),
             owner_owed_evidence: Vec::new(),
@@ -4249,6 +4835,29 @@ fn a_failed_review_revalidation_rejects_and_preserves_both_commits(sandbox: &Pat
     assert_eq!(fx.remote_tip(BRANCH), fixed_head, "both commits are pushed");
     assert_eq!(fx.forge_state("pr-head"), None, "no PR is opened");
     assert_eq!(host.status(TASK_ID), TaskStatus::Blocked);
+    let history = host.history(TASK_ID);
+    let failures: Vec<_> = history
+        .iter()
+        .filter_map(|entry| {
+            orbit_types::workflow::RecordedReviewFixValidationFailure::from_entry(entry)
+                .map(|failure| (entry, failure))
+        })
+        .collect();
+    assert_eq!(failures.len(), 1);
+    let (entry, failure) = &failures[0];
+    assert_eq!(failure.schema_version, 1);
+    assert_eq!(failure.run_id, RUN_ID);
+    assert_eq!(failure.attempt_id.as_deref(), Some("rvw-fixes-1"));
+    assert_eq!(failure.candidate_commit, fixed_head);
+    assert!(entry.decision.is_none(), "no new task decision shape");
+    let comments = host.comments(TASK_ID);
+    let comment = comments.last().unwrap();
+    assert_eq!((entry.at, &entry.by), (comment.at, &comment.by));
+    assert_eq!(
+        orbit_types::workflow::review_fix_validation_failure_times(&history, &comments),
+        vec![comment.at],
+        "the typed event and its escalation comment count once"
+    );
     assert_eq!(
         host.releases()
             .into_iter()
@@ -4463,7 +5072,10 @@ fn bare_tip(bare: &Path, branch: &str) -> Option<String> {
 }
 /// A lease and publication must follow the effective destination, including a
 /// composed rewrite whose decoy already holds the candidate [ORB-17686].
-#[allow(clippy::print_stderr)]
+#[allow(
+    clippy::print_stderr,
+    reason = "the isolated row log reads the scenario name from stderr when this destination case fails"
+)]
 fn assert_effective_push_destination(sandbox: &Path, case: &str) {
     eprintln!("scenario: effective push destination {case}");
     let (fx, host) = fx_host(sandbox);
@@ -4901,6 +5513,17 @@ impl Fixture {
             .map(|value| value.parse().unwrap())
             .unwrap_or(0)
     }
+    /// Answers to successive required-checks reads; the last repeats
+    /// (`empty`, `truncated`, `fail` or `success`; see [`FAKE_GH`]).
+    fn script_required_check_outcomes(&self, outcomes: &[&str]) {
+        self.script_lines("required-checks-outcomes", outcomes);
+        fs::write(self.forge.join("required-checks-reads"), "0\n").unwrap();
+    }
+    fn required_check_reads(&self) -> usize {
+        self.forge_state("required-checks-reads")
+            .map(|value| value.parse().unwrap())
+            .unwrap_or(0)
+    }
     /// Script PR metadata independently of the real remote PR head ref.
     fn script_heads(&self, heads: &[&str], remote_head: Option<&str>) {
         self.script_lines("heads", heads);
@@ -5129,9 +5752,15 @@ struct DeliveryHost {
     os: Mutex<Option<EvidenceHostOs>>,
     /// The workspace's PR settings and delivery conventions.
     pr_config: Mutex<orbit_engine::PrConfig>,
+    completion_hold_rules: Mutex<Vec<orbit_types::workflow::CompletionHoldRule>>,
 }
 type Widening = (String, ContextWideningStep, String, Vec<String>);
-type StatusEvent = (String, Option<String>, Option<String>);
+type StatusEvent = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<orbit_types::task::TaskDecision>,
+);
 impl DeliveryHost {
     fn new(repo: &Path, status: TaskStatus) -> Self {
         Self {
@@ -5221,6 +5850,9 @@ impl DeliveryHost {
     fn releases(&self) -> Vec<ReviewReleaseRequest> {
         locked(&self.releases).clone()
     }
+    fn set_completion_hold_rules(&self, rules: Vec<orbit_types::workflow::CompletionHoldRule>) {
+        *locked(&self.completion_hold_rules) = rules;
+    }
     fn set_context_files(&self, id: &str, selectors: &[&str]) {
         locked(&self.tasks).get_mut(id).unwrap().context_files =
             selectors.iter().map(ToString::to_string).collect();
@@ -5239,6 +5871,29 @@ impl DeliveryHost {
     }
     fn history(&self, id: &str) -> Vec<TaskHistoryEntry> {
         locked(&self.history).get(id).cloned().unwrap_or_default()
+    }
+    /// Rewrite every `pr_section_gap` entry as a build before the typed
+    /// decision recorded it: the same note, no decision.
+    fn as_legacy_section_gap_history(&self) {
+        for entries in locked(&self.history).values_mut() {
+            for entry in entries
+                .iter_mut()
+                .filter(|entry| entry.event == orbit_types::workflow::PR_SECTION_GAP_EVENT)
+            {
+                entry.decision = None;
+            }
+        }
+    }
+    /// The typed section-gap decisions recorded for a task, oldest first.
+    fn section_gap_decisions(&self, id: &str) -> Vec<orbit_types::workflow::PrSectionGap> {
+        self.history(id)
+            .into_iter()
+            .filter(|entry| entry.event == orbit_types::workflow::PR_SECTION_GAP_EVENT)
+            .filter_map(|entry| match entry.decision {
+                Some(orbit_types::task::TaskDecision::PrSectionGap(gap)) => Some(gap),
+                _ => None,
+            })
+            .collect()
     }
     fn completion_notes(&self) -> Vec<String> {
         locked(&self.completion_notes).clone()
@@ -5283,6 +5938,9 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
     fn pr_config(&self) -> orbit_engine::PrConfig {
         locked(&self.pr_config).clone()
     }
+    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule> {
+        locked(&self.completion_hold_rules).clone()
+    }
     fn get_job_run(&self, run_id: &str) -> Res<Option<JobRun>> {
         Ok(locked(&self.runs).get(run_id).cloned())
     }
@@ -5325,14 +5983,26 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
         _tasks: &[String],
         _handoff: Option<&str>,
         plan: &orbit_types::workflow::CiRerunPlan,
+        now_ms: u64,
     ) -> Res<orbit_types::workflow::CiRerunAdmission> {
-        let decision = orbit_types::workflow::decide_ci_rerun(&self.history(TASK_ID), plan);
+        let decision = orbit_types::workflow::decide_ci_rerun_with_policy(
+            &self.history(TASK_ID),
+            plan,
+            locked(&self.pr_config).ci_infrastructure_retry,
+            now_ms,
+        );
         if matches!(decision, orbit_types::workflow::CiRerunAdmission::Reserved) {
             self.seed_reserved(
                 orbit_types::workflow::CI_RERUN_RESERVED_EVENT,
                 plan,
                 "forge/retry-reserved",
             );
+            locked(&self.history)
+                .get_mut(TASK_ID)
+                .unwrap()
+                .last_mut()
+                .unwrap()
+                .at = chrono::DateTime::from_timestamp_millis(now_ms as i64).unwrap();
         }
         let forge = self.repo.parent().unwrap().join("forge");
         if matches!(decision, orbit_types::workflow::CiRerunAdmission::Reserved)
@@ -5560,6 +6230,7 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
             task_id.to_string(),
             update.status_event,
             update.status_note,
+            update.status_decision,
         ));
         locked(&self.comments)
             .entry(task_id.to_string())
@@ -5857,9 +6528,12 @@ check() {
             if [ "$1" = mixed_success ]; then test_state=COMPLETED; conclusion=SUCCESS; fi
             if [ "$1" = mixed_failure ]; then test_state=COMPLETED; conclusion=FAILURE; fi
             printf '{"__typename":"CheckRun","name":"test","status":"%s","conclusion":"%s","isRequired":true},{"__typename":"CheckRun","name":"coverage","status":"COMPLETED","conclusion":"FAILURE","isRequired":false}' "$test_state" "$conclusion" ;;
+        optional_pending) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true},{"__typename":"CheckRun","name":"optional","status":"IN_PROGRESS","conclusion":"","isRequired":false}' ;;
         pending) printf '{"__typename":"CheckRun","name":"test","status":"IN_PROGRESS","conclusion":""}' ;;
         success) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS"}' ;;
-        failure|dirty_failure) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE"}' ;;
+        # A completed skip (a docs-only head) or neutral result.
+        skipped|neutral) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"%s"}' "$(printf '%s' "$1" | tr a-z A-Z)" ;;
+        failure|dirty_failure|clean_failure|unstable_failure) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE"}' ;;
         # Two required failures. `test` then `lint`, or the reverse. Both
         # carry isRequired so the policy read does not tag only the last node.
         paired_pending|paired_failure|paired_failure_reversed)
@@ -5881,6 +6555,12 @@ status() {
     draft_field=${1:-0}
     pr_head=$(cat "$forge/pr-head")
     pr_base=$(cat "$forge/pr-base")
+    if [ -f "$forge/merge-requests" ] && [ -f "$forge/reconcile-status" ]; then
+        printf '%s\n' "$(( $(cat "$forge/reads") + 1 ))" > "$forge/reads"
+        if [ -f "$forge/reconcile-error" ]; then cat "$forge/reconcile-error" >&2; exit 1; fi
+        cat "$forge/reconcile-status"
+        return
+    fi
     if [ -f "$forge/merged" ]; then
         touch "$forge/merged-reads"
         # GitHub keeps headRefOid after the head branch is deleted. `land`
@@ -5925,7 +6605,11 @@ status() {
             remote_head=$(sed -n "${head_read}p" "$forge/remote-heads")
             [ -n "$remote_head" ] || remote_head=$(tail -n 1 "$forge/remote-heads")
             [ "$remote_head" != current ] || remote_head=$(head_sha)
-            git --git-dir="$remote" update-ref refs/pull/42/head "$remote_head"
+            if [ "$remote_head" = absent ]; then
+                git --git-dir="$remote" update-ref -d refs/pull/42/head
+            else
+                git --git-dir="$remote" update-ref refs/pull/42/head "$remote_head"
+            fi
         fi
     fi
     merged_at=null
@@ -5933,9 +6617,14 @@ status() {
     case "$observed" in
         mixed_pending|mixed_failure) merge_state=BLOCKED; rollup=$(check "$observed") ;;
         mixed_success) merge_state=CLEAN; rollup=$(check "$observed") ;;
+        optional_pending) merge_state=BLOCKED; rollup=$(check optional_pending) ;;
         pending) merge_state=BLOCKED; rollup=$(check pending) ;;
         success) merge_state=CLEAN; rollup=$(check success) ;;
+        # Branch protection accepts a skipped or neutral required check.
+        skipped|neutral) merge_state=CLEAN; rollup=$(check "$observed") ;;
         failure) merge_state=BLOCKED; rollup=$(check failure) ;;
+        clean_failure) merge_state=CLEAN; rollup=$(check failure) ;;
+        unstable_failure) merge_state=UNSTABLE; rollup=$(check failure) ;;
         paired_pending|paired_failure|paired_failure_reversed) merge_state=BLOCKED; rollup=$(check "$observed") ;;
         aggregate_failure|aggregate_mixed_failure)
             merge_state=BLOCKED
@@ -6005,6 +6694,7 @@ create() {
         case "$1" in
             --base) printf '%s\n' "$2" > "$forge/pr-base"; shift 2 ;;
             --head) printf '%s\n' "$2" > "$forge/pr-head"; shift 2 ;;
+            --title) printf '%s' "$2" > "$forge/pr-title"; shift 2 ;;
             --body) printf '%s' "$2" > "$forge/pr-body"; shift 2 ;;
             --draft) touch "$forge/pr-draft"; shift ;;
             --label) printf '%s\n' "$2" >> "$forge/pr-labels"; shift 2 ;;
@@ -6199,7 +6889,33 @@ merge() {
         protection) refuse 405 "At least 1 approving review is required by reviewers with write access." ;;
         auth) refuse 403 "Resource not accessible by integration" ;;
         head_modified) refuse 409 "Head branch was modified. Review and try the merge again." ;;
+        server_error+merged) land "$sha"; refuse 502 "Server Error" ;;
+        internal_error+merged) land "$sha"; refuse 500 "Internal Server Error" ;;
+        bad_gateway+merged) land "$sha"; refuse 502 "Bad Gateway" ;;
+        unavailable+merged) land "$sha"; refuse 503 "Service Unavailable" ;;
+        gateway_timeout+merged) land "$sha"; refuse 504 "Gateway Timeout" ;;
+        empty_error_body+merged) land "$sha"; printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
         server_error) refuse 502 "Server Error" ;;
+        server_error_mixed_auth) refuse 502 "Bad credentials" ;;
+        server_error_malformed)
+            printf '<html>upstream error</html>\n'
+            printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
+        server_error_mismatched)
+            printf '{"message":"Bad credentials","status":"502"}\n'
+            printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
+        server_error_contradictory)
+            printf '{"message":"Server Error","status":"502","merged":true,"sha":"%s"}\n' "$sha"
+            printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
+        server_error_wrong_status)
+            printf '{"message":"Server Error","status":"403"}\n'
+            printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
+        server_error_auth_detail)
+            printf '{"message":"Server Error","status":"502","errors":["Bad credentials"]}\n'
+            printf 'gh: Server Error (HTTP 502)\n' >&2; exit 1 ;;
+        server_error_trailing)
+            printf 'gh: Server Error (HTTP 502)\ngh: permission denied (HTTP 403)\n' >&2; exit 1 ;;
+        invalid_success) printf 'invalid-json\n'; return ;;
+        unconfirmed_success) printf '{"merged":false}\n'; return ;;
         mismatched_body)
             printf '{"message":"Pull Request is not mergeable","status":"405"}\n'
             printf 'gh: %s (HTTP 405)\n' "$base_modified" >&2
@@ -6265,7 +6981,10 @@ if [ -f "$forge/infrastructure" ]; then
         "api repos/{owner}/{repo}/actions/runs/700/attempts/1/jobs?per_page=100") cat "$forge/infra-jobs"; exit ;;
         "api repos/{owner}/{repo}/actions/workflows/600") cat "$forge/infra-workflow"; exit ;;
         "api repos/{owner}/{repo}/check-suites/800") cat "$forge/infra-suite"; exit ;;
-        "run view") cat "$forge/infra-log"; exit ;;
+        "run view")
+            # A planted marker hangs the job-log read until the supervisor kills it.
+            if [ -f "$forge/infra-log-hang" ]; then sleep 30; fi
+            cat "$forge/infra-log"; exit ;;
         "run rerun")
             [ -f "$forge/infra-reserved" ] || { echo 'rerun without durable reservation' >&2; exit 2; }
             mode=$(cat "$forge/infrastructure")
@@ -6279,7 +6998,10 @@ if [ -f "$forge/infrastructure" ]; then
             case "$2" in
                 *'/commits/'*'/status?'*) cat "$forge/infra-statuses-$phase"; exit ;;
                 *'/commits/'*'/check-runs?'*) cat "$forge/infra-checks-$phase"; exit ;;
-                *'/actions/runs?head_sha='*) cat "$forge/infra-runs-$phase"; exit ;;
+                *'/actions/runs?head_sha='*)
+                    # A planted marker hangs this read until the supervisor kills it.
+                    if [ -f "$forge/infra-runs-hang" ]; then sleep 30; fi
+                    cat "$forge/infra-runs-$phase"; exit ;;
                 *'/contents/'*) cat "$forge/infra-contents"; exit ;;
             esac ;;
     esac
@@ -6330,7 +7052,8 @@ case "$1 ${2:-}" in
                 ;;
         esac
         if [ -f "$forge/pr-head" ]; then
-            printf '[{"number":%s,"title":"Landing","headRefName":"%s","author":{"login":"orbit"}}]\n' "$number_json" "$(cat "$forge/pr-head")"
+            pr_list_base=$(cat "$forge/pr-base" 2>/dev/null || echo agent-main)
+            printf '[{"number":%s,"title":"Landing","headRefName":"%s","baseRefName":"%s","author":{"login":"orbit"}}]\n' "$number_json" "$(cat "$forge/pr-head")" "$pr_list_base"
         else
             echo '[]'
         fi ;;
@@ -6370,10 +7093,13 @@ case "$1 ${2:-}" in
                 python3 - "$forge" "$number_json" "$url" <<'PYVIEW'
 import json, pathlib, sys
 forge = pathlib.Path(sys.argv[1])
-print(json.dumps({"number": json.loads(sys.argv[2]), "title": "Landing",
+view = {"number": json.loads(sys.argv[2]), "title": "Landing",
     "body": (forge / "pr-body").read_text() if (forge / "pr-body").exists() else "",
     "isDraft": (forge / "pr-draft").exists() or (forge / "draft-merge-state").exists(),
-    "headRefName": (forge / "pr-head").read_text().strip(), "files": [], "commits": [], "url": sys.argv[3]}))
+    "headRefName": (forge / "pr-head").read_text().strip(), "files": [], "commits": [], "url": sys.argv[3]}
+if not (forge / "omit-pr-base").exists():
+    view["baseRefName"] = (forge / "pr-base").read_text().strip() if (forge / "pr-base").exists() else "agent-main"
+print(json.dumps(view))
 PYVIEW
                 ;;
         esac ;;
@@ -6383,11 +7109,25 @@ PYVIEW
             *statusCheckRollup*)
                 observed=$(sed -n "$(cat "$forge/reads")p" "$forge/checks")
                 [ -n "$observed" ] || observed=$(tail -n 1 "$forge/checks")
+                if [ -f "$forge/required-checks-outcomes" ]; then
+                    rc_reads=$(( $(cat "$forge/required-checks-reads" 2>/dev/null || echo 0) + 1 ))
+                    printf '%s\n' "$rc_reads" > "$forge/required-checks-reads"
+                    rc_outcome=$(sed -n "${rc_reads}p" "$forge/required-checks-outcomes")
+                    [ -n "$rc_outcome" ] || rc_outcome=$(tail -n 1 "$forge/required-checks-outcomes")
+                    case "$rc_outcome" in
+                        empty) exit 0 ;;
+                        truncated) printf '{"data":{"repository":{"pullRequest":{"headR'; exit 0 ;;
+                        fail) echo 'unexpected end of JSON input' >&2; exit 1 ;;
+                        tls) echo 'Post "https://api.github.com/graphql": net/http: TLS handshake timeout' >&2; exit 1 ;;
+                        success) ;;
+                        *) echo "fake gh: unknown required-checks outcome '$rc_outcome'" >&2; exit 2 ;;
+                    esac
+                fi
                 if [ -f "$forge/required-auth" ]; then echo 'HTTP 401: Bad credentials' >&2; exit 1; fi
                 if [ -f "$forge/required-policy" ]; then cat "$forge/required-policy"; exit; fi
                 rollup=$(check "$observed")
                 case "$observed" in
-                    mixed_*|paired_failure|paired_failure_reversed) ;;
+                    mixed_*|paired_failure|paired_failure_reversed|optional_pending) ;;
                     *) rollup=$(printf '%s' "$rollup" | sed 's/}$/,"isRequired":true}/') ;;
                 esac
                 printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[%s]}}}}]}}}}}\n' "$(head_sha)" "$(head_sha)" "$rollup"
@@ -6511,7 +7251,10 @@ fn run_rows(parent: &Path, rows: &[(&str, Scenario)]) {
         run_named_row(parent, name, scenario);
     }
 }
-#[allow(clippy::print_stderr)]
+#[allow(
+    clippy::print_stderr,
+    reason = "the isolated row log reads the scenario name from stderr before the row body runs"
+)]
 fn run_named_row(parent: &Path, name: &str, scenario: impl FnOnce(&Path)) {
     eprintln!("scenario: {name}");
     in_fresh_row(parent, scenario);
@@ -6552,8 +7295,8 @@ container_groups! {
 test_groups! {
     pr_body_and_promotion_contracts => [pr_promote_records_the_pull_request_page_with_its_number, pr_open_appends_the_review_fixes_section_to_the_published_body],
     metadata_lag_pins_and_repair => [previous_published_head_metadata_lag_keeps_exact_delivery_and_review_pins, previous_published_head_metadata_lag_after_in_run_conflict_repair],
-    pr_open_branch_identity => [pr_open_accepts_a_fresh_stacked_base_at_the_landing_tip, pr_open_refuses_a_stacked_base_already_merged_into_the_landing_branch, pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate],
-    pr_create_retry_contracts => [pr_open_permanent_create_failures_never_retry_or_look_up_again, pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr, pr_open_stops_transient_creation_at_the_attempt_ceiling_in_the_create_phase],
+    pr_open_branch_identity => [pr_open_accepts_a_fresh_stacked_base_at_the_landing_tip, pr_open_refuses_a_stacked_base_already_merged_into_the_landing_branch, pr_open_judges_a_stacked_repair_by_its_own_marker_not_its_fixes_quote, pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate],
+    pr_create_retry_contracts => [pr_open_permanent_create_failures_never_retry_or_look_up_again, pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr, pr_open_stops_transient_creation_at_the_attempt_ceiling_in_the_create_phase, pr_open_refuses_a_reused_pr_targeting_another_base, a_failure_handoff_refuses_a_reused_pr_targeting_another_base],
     pr_lookup_retry_contracts => [pr_open_retries_http_499_pr_views_and_stops_at_the_existing_attempt_ceiling, pr_lookup_retry_classification_preserves_refusals_and_nonmatching_tokens],
     pr_number_and_push_transports => [pr_open_preserves_provider_number_representations, fixture_push_guard_checks_all_effective_push_urls, fixture_push_refuses_non_file_transports_without_network],
     git_push_effective_destination_contracts => [git_push_publishes_to_effective_push_destination_not_fetch_remote, git_push_probes_composed_rewrite_destination_not_its_rewrite, git_push_refuses_self_pointing_effective_push_url],
@@ -6561,7 +7304,7 @@ test_groups! {
     base_race_candidate_identity => [a_base_race_refresh_refuses_a_changed_candidate_without_another_merge, an_already_merged_refresh_reconciles_without_another_merge_request],
     merge_refusal_bounds => [other_merge_refusals_fail_on_the_first_request, repeated_base_races_stop_at_the_attempt_ceiling_within_the_wait_budget],
     recovered_base_advances => [conflicting_base_advances_after_recovery_are_chased_until_the_bound, a_recovered_completion_rebase_follows_a_clean_base_advance_and_lands],
-    review_checks_and_delivery => [a_failed_or_blocked_check_never_merges_and_the_task_stays_in_review, passing_checks_merge_the_reviewed_candidate_and_record_its_delivery, required_checks_the_head_has_not_reported_are_awaited_before_completion],
+    review_checks_and_delivery => [a_failed_or_blocked_check_never_merges_and_the_task_stays_in_review, passing_checks_merge_the_reviewed_candidate_and_record_its_delivery, required_checks_the_head_has_not_reported_are_awaited_before_completion, blocked_completion_reports_only_measured_ancestry_without_stale_ci_provenance, a_running_non_required_check_stops_blocked_completion_without_auto_merge],
     review_fix_revalidation => [a_before_landing_fix_lands_under_its_lease_and_an_unreviewed_head_never_merges, a_failed_review_revalidation_rejects_and_preserves_both_commits, a_red_base_during_pr_revalidation_holds_the_task],
     review_repair_leases => [a_merged_lease_preserves_the_review_repair_and_any_other_move_loses_the_lease, a_conflicting_reviewed_pr_is_rebased_for_re_review_then_completes],
     claimed_validation_failures => [identityless_diagnostics_hold_only_for_matching_completed_runs, a_claimed_candidate_on_a_red_base_fails_typed_with_both_logs, a_claimed_candidate_that_cannot_reach_the_network_fails_transient, a_required_command_red_on_the_base_holds_the_task_without_a_pr],
@@ -6639,10 +7382,17 @@ fn pull_ref_pins_and_identity() {
     isolated("pull_ref_pins_and_identity", |sandbox| {
         run_rows(
             sandbox,
-            &[(
-                "previous_published_head_pull_ref_lag_settles_with_exact_merge_pin",
-                previous_published_head_pull_ref_lag_settles_with_exact_merge_pin as fn(&Path),
-            )],
+            &[
+                (
+                    "previous_published_head_pull_ref_lag_settles_with_exact_merge_pin",
+                    previous_published_head_pull_ref_lag_settles_with_exact_merge_pin as fn(&Path),
+                ),
+                (
+                    "previous_published_head_absent_pull_ref_settles_with_exact_merge_pin",
+                    previous_published_head_absent_pull_ref_settles_with_exact_merge_pin
+                        as fn(&Path),
+                ),
+            ],
         );
         pull_ref_identity_refusals(sandbox);
     });

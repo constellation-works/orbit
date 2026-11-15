@@ -4,8 +4,10 @@
 
 mod coordination;
 mod query;
+mod recovery_revision;
 mod registry;
 
 pub use coordination::*;
 pub use query::*;
+pub use recovery_revision::FinalRecoveryTaskRevision;
 pub use registry::*;

@@ -244,46 +244,56 @@ fn clock_credentials(global_root: &Path, pass: &[String]) -> ClockCredentials {
 }
 
 /// The routed Claude crews, split by whether each maps its own credential
-/// through `[crews.<name>] env`: `(shared, own)`, where `own` lists each
-/// credential source as `(crew, source)`.
-fn routed_claude_crews(config: &ResolvedConfig) -> (bool, Vec<(String, String)>) {
+/// through `[crews.<name>] env`: `(shared, any_own, own)`, where `own` lists
+/// each credential source variable as `(crew, source)` and `any_own` also
+/// counts a crew whose credential comes from a `file:` source.
+fn routed_claude_crews(config: &ResolvedConfig) -> (bool, bool, Vec<(String, String)>) {
     let Ok(names) = routed_crew_names(config) else {
-        return (false, Vec::new());
+        return (false, false, Vec::new());
     };
     let mut shared = false;
+    let mut any_own = false;
     let mut own = Vec::new();
     for crew in names.iter().filter_map(|name| config.crews.get(name)) {
         if crew.assignment.provider != "claude" {
             continue;
         }
-        let sources: Vec<(String, String)> = crew
+        let credentials: Vec<_> = crew
             .env
             .iter()
             .filter(|entry| CREDENTIALS.contains(&entry.name.as_str()))
-            .map(|entry| (crew.name.clone(), entry.source.clone()))
             .collect();
-        if sources.is_empty() {
+        if credentials.is_empty() {
             shared = true;
+        } else {
+            any_own = true;
         }
-        own.extend(sources);
+        // A `file:` credential is read by the host at spawn, so the clock
+        // environment never has to hold it.
+        own.extend(credentials.into_iter().filter_map(|entry| {
+            entry
+                .source
+                .variable()
+                .map(|source| (crew.name.clone(), source.to_string()))
+        }));
     }
-    (shared, own)
+    (shared, any_own, own)
 }
 
 /// The `claude-worker-token` row for this workspace and host.
 pub(super) fn doctor_check_claude_worker_token(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     let macos = cfg!(target_os = "macos");
     let global_root = runtime.global_root();
-    let (claude_routed, crew_credentials, config_load_error) = if macos {
+    let (claude_routed, crew_credentialed, crew_credentials, config_load_error) = if macos {
         match ResolvedConfig::load(&ConfigRoots::new(&global_root, runtime.shared_root())) {
             Ok(config) => {
-                let (routed, credentials) = routed_claude_crews(&config);
-                (routed, credentials, None)
+                let (routed, credentialed, credentials) = routed_claude_crews(&config);
+                (routed, credentialed, credentials, None)
             }
-            Err(error) => (false, Vec::new(), Some(error.to_string())),
+            Err(error) => (false, false, Vec::new(), Some(error.to_string())),
         }
     } else {
-        (false, Vec::new(), None)
+        (false, false, Vec::new(), None)
     };
     let pass = runtime.env_pass_names();
     let clock = if macos {
@@ -295,7 +305,7 @@ pub(super) fn doctor_check_claude_worker_token(runtime: &OrbitRuntime) -> Worksp
         macos,
         config_load_error,
         claude_routed,
-        crew_credentialed: !crew_credentials.is_empty(),
+        crew_credentialed,
         crew_sources_missing_from_clock: crew_sources_missing_from_clock(
             &global_root,
             &clock,

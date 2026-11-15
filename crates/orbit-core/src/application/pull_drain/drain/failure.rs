@@ -6,8 +6,8 @@ use std::path::Path;
 use orbit_common::text::floor_char_boundary;
 use orbit_store::contracts::{
     ClaimAttribution, ClaimCandidateRef, ClaimEvidence, ClaimFailure, ClaimFinalRecovery,
-    ClaimMutation, ClaimPullRequest, ClaimedReviewCarry, LocalPullAdmission, LocalPullPhase,
-    ProviderUnavailable,
+    ClaimMutation, ClaimPullRequest, ClaimedReviewCarry, LeafRootCause, LeafRunReport,
+    LocalPullAdmission, LocalPullPhase, ProviderUnavailable,
 };
 use orbit_types::workflow::{
     BASELINE_RED_MARKER, BaselineRedHold, CandidateCarry, CandidateCarryOutput, ClaimFailureClass,
@@ -39,7 +39,8 @@ const MAX_FAILURE_EXCERPT_BYTES: usize = 8 * 1024;
 /// [ORB-15573], a missing validation tool, an unreachable owner, a red base,
 /// an inconclusive or interrupted run) releases it, and the drain excludes
 /// the leaf's crew for its window when the failure
-/// [says so](ClaimFailure::excludes_crew).
+/// [says so](ClaimFailure::excludes_crew). External-prerequisite releases
+/// retain that evidence, but the owner holds their tasks for an operator.
 ///
 /// Every follower process that settles a terminal leaf computes it here, so
 /// the leaf's own worker, a cancel and a drain pass agree on the value.
@@ -92,24 +93,75 @@ pub(crate) fn leaf_attribution(run: &orbit_types::workflow::JobRun) -> ClaimAttr
     }
 }
 
-/// Copy the leaf `run`'s crew and model onto a failure or release that names
-/// neither. Attribution only: the owner keeps them on the claim's settlement
-/// record. A typed handoff carries no evidence, so its delivery reports them
-/// beside it instead. Like [`attach_claimed_review`], every writer stamps
-/// before the first recorded settlement, which is the one the owner receives.
+/// The job, build and failing step `run`'s own record holds [ORB-20906]: its
+/// recorded fields only, never the executing process's current build or text
+/// read out of a diagnostic. A build or step the record never held is absent.
+///
+/// `diagnostic` is the terminalizing caller's typed `(code, message)`. That
+/// caller settles inside its terminal write and records the matching job-level
+/// step only afterwards, and only when the run holds no error yet. So it stands
+/// in for that step here on the same condition: a recorded error always wins.
+pub(crate) fn leaf_run_report(
+    run: &orbit_types::workflow::JobRun,
+    diagnostic: Option<(&str, &str)>,
+) -> LeafRunReport {
+    let has_cause = |cause: &LeafRootCause| cause.code.is_some() || cause.message.is_some();
+    let root_cause = crate::application::job::run_error_step(run)
+        .map(|step| LeafRootCause {
+            step: Some(step.target_id.to_string()),
+            code: step
+                .error_code
+                .clone()
+                .or_else(|| step.failure_code.as_ref().map(ToString::to_string)),
+            message: step.error_message.clone(),
+        })
+        .map(LeafRootCause::bounded)
+        .filter(has_cause)
+        .or_else(|| {
+            diagnostic.map(|(code, message)| {
+                LeafRootCause {
+                    step: Some(run.job_id.to_string()),
+                    code: Some(code.to_string()),
+                    message: Some(message.to_string()),
+                }
+                .bounded()
+            })
+        });
+    LeafRunReport {
+        run_id: run.run_id.to_string(),
+        job_id: run.job_id.to_string(),
+        build: run.build.clone(),
+        root_cause,
+    }
+}
+
+/// Copy the leaf `run`'s crew and model, and its run record's job, build and
+/// failing step, onto a failure or release that does not already carry them.
+/// Attribution and evidence only: the owner keeps them on the claim's
+/// settlement record and in its separate evidence row. A typed handoff
+/// carries no evidence, so its delivery reports crew and model beside it
+/// instead. Like [`attach_claimed_review`], every writer stamps before the
+/// first recorded settlement, which is the one the owner receives; that is
+/// also what keeps the evidence the leaf's own, taken before any later
+/// executable can resend it.
 pub(crate) fn attach_leaf_attribution(
     mut settlement: ClaimMutation,
     run: Option<&orbit_types::workflow::JobRun>,
+    diagnostic: Option<(&str, &str)>,
 ) -> ClaimMutation {
-    let Some(attribution) = run.map(leaf_attribution) else {
+    let Some(run) = run else {
         return settlement;
     };
+    let attribution = leaf_attribution(run);
     match &mut settlement {
-        ClaimMutation::Fail(evidence) | ClaimMutation::Release(evidence)
-            if evidence.crew.is_none() && evidence.crew_model.is_none() =>
-        {
-            evidence.crew = attribution.crew;
-            evidence.crew_model = attribution.crew_model;
+        ClaimMutation::Fail(evidence) | ClaimMutation::Release(evidence) => {
+            if evidence.crew.is_none() && evidence.crew_model.is_none() {
+                evidence.crew = attribution.crew;
+                evidence.crew_model = attribution.crew_model;
+            }
+            if evidence.leaf_run.is_none() {
+                evidence.leaf_run = Some(leaf_run_report(run, diagnostic));
+            }
         }
         _ => {}
     }
@@ -142,9 +194,20 @@ pub(crate) fn leaf_failure_settlement(
     }
     let final_recovery = state
         .and_then(|state| state.final_recovery.as_ref())
-        .and_then(|checkpoint| checkpoint.decision.clone())
-        .filter(|decision| !matches!(decision, FinalRecoveryDecision::Resume { .. }));
-    let failure = leaf_failure(record, run, diagnostic, final_recovery.as_ref(), state);
+        .and_then(|checkpoint| {
+            checkpoint
+                .decision
+                .clone()
+                .map(|decision| (decision, checkpoint.fault.clone()))
+        })
+        .filter(|(decision, _)| !matches!(decision, FinalRecoveryDecision::Resume { .. }));
+    let failure = leaf_failure(
+        record,
+        run,
+        diagnostic,
+        final_recovery.as_ref().map(|(decision, _)| decision),
+        state,
+    );
     // [ORB-14274] An operator who cancelled with `--block` asked for the
     // legacy outcome: the cancel stays typed but fails the claim.
     let operator_blocks = run.state == JobRunState::Cancelled
@@ -175,7 +238,11 @@ pub(crate) fn leaf_failure_settlement(
             (Some(hold), _, _) => baseline_red_release(record, run, hold, &failure),
             (None, _, Some(green)) => green,
             (None, Some(forge), None) => forge_hold_release(record, run, forge, &failure),
-            (None, None, None) => release_evidence(record, &release_reason(run, &failure)),
+            (None, None, None) => release_evidence(
+                record,
+                &release_reason(run, &failure),
+                failure.class.requires_operator_decision(),
+            ),
         };
         evidence.baseline_red = hold;
         evidence.forge_hold = forge;
@@ -191,14 +258,16 @@ pub(crate) fn leaf_failure_settlement(
         return ClaimMutation::Release(evidence);
     }
     let mut summary = terminal_failure_summary_with(run, diagnostic);
-    let final_recovery = final_recovery.map(|decision| {
+    let final_recovery = final_recovery.map(|(decision, fault)| {
         summary.push_str(&format!(
-            "\nFinal recovery decided `{}`; the owner applies it.",
-            decision.kind()
+            "\nFinal recovery decided `{}` (fault: {}); the owner applies it.",
+            decision.kind(),
+            fault.fault
         ));
         ClaimFinalRecovery {
             run_id: run.run_id.clone(),
             decision,
+            fault,
         }
     });
     ClaimMutation::Fail(ClaimEvidence {
@@ -299,14 +368,14 @@ fn leaf_failure(
     final_recovery: Option<&FinalRecoveryDecision>,
     state: Option<&PipelineState>,
 ) -> ClaimFailure {
-    let last_failed = run
-        .steps
-        .iter()
-        .rev()
-        .find(|step| step.error_code.is_some() || step.error_message.is_some());
+    let last_failed = run.steps.iter().rev().find(|step| {
+        step.error_code.is_some() || step.failure_code.is_some() || step.error_message.is_some()
+    });
     let step_class = |step: &orbit_types::workflow::JobRunStep| {
-        ClaimFailureClass::of_step_failure(
-            step.error_code.as_deref(),
+        // Branch on the step's typed failure code; a record with no code
+        // field falls back to the legacy marker inside the classifier.
+        ClaimFailureClass::of_step_failure_code(
+            step.typed_failure_code().as_ref(),
             step.error_message.as_deref(),
         )
         .map(|class| (class, step.error_message.clone().unwrap_or_default()))
@@ -334,8 +403,11 @@ fn leaf_failure(
             })
             .or_else(|| {
                 diagnostic.and_then(|(code, message)| {
-                    ClaimFailureClass::of_step_failure(Some(code), Some(message))
-                        .map(|class| (class, message.to_string()))
+                    ClaimFailureClass::of_step_failure_code(
+                        Some(&orbit_types::workflow::StepFailureCode::parse(code)),
+                        Some(message),
+                    )
+                    .map(|class| (class, message.to_string()))
                 })
             })
     };
@@ -354,12 +426,18 @@ fn leaf_failure(
     let owner_busy = typed.as_ref().is_some_and(|(class, reason)| {
         *class == ClaimFailureClass::Transient && is_owner_busy(Some(reason))
     });
+    let operator_stopped = orbit_types::workflow::is_operator_stopped(
+        run.state,
+        diagnostic
+            .map(|(code, _)| code)
+            .or_else(|| last_failed.and_then(|step| step.error_code.as_deref())),
+    );
     let (class, reason) = typed.unwrap_or_else(|| {
         let reason = last_failed
             .and_then(|step| step.error_message.clone())
             .or_else(|| diagnostic.map(|(_, message)| message.to_string()))
             .unwrap_or_else(|| format!("leaf {} terminated as {}", run.run_id, run.state));
-        let class = if run.state == JobRunState::Interrupted {
+        let class = if run.state == JobRunState::Interrupted || operator_stopped {
             ClaimFailureClass::Transient
         } else if matches!(
             final_recovery,
@@ -384,8 +462,14 @@ fn leaf_failure(
             .into_iter()
             .chain(diagnostic.map(|(_, message)| message))
             .any(|message| message.contains(REVIEW_LANDING_DECISION_PENDING));
-    // [ORB-14617] A forge hold's text leads with its JSON; say it plainly.
-    let mut reason = match ForgeUnavailableHold::from_text(&reason) {
+    // [ORB-14617] A forge hold's text leads with its JSON; say it plainly. A
+    // resumed run's state starts from its source's hold, so that hold speaks
+    // only for a run that ended held. Any other record has only its message.
+    let held = (run.state == JobRunState::Held)
+        .then(|| state.and_then(|state| state.pull_drain.forge_hold.clone()))
+        .flatten()
+        .or_else(|| ForgeUnavailableHold::from_text(&reason));
+    let mut reason = match held {
         Some(hold) => format!(
             "the forge refused the push of {} to {} {} times over {} s",
             hold.head_sha,
@@ -410,7 +494,7 @@ fn leaf_failure(
     // Reconciliation's liveness identity (or a candidate-carry refusal) can
     // exhaust the reason bound before its trailing worker cause. Keep that
     // evidence first without changing the failure class selected above.
-    if run.state == JobRunState::Interrupted
+    if (run.state == JobRunState::Interrupted || operator_stopped)
         && let Some(clause) = diagnostic
             .and_then(|(_, message)| message.split_once("; worker exit: "))
             .or_else(|| reason.split_once("; worker exit: "))
@@ -448,6 +532,9 @@ fn leaf_failure(
 }
 
 /// Orbit's typed failure markers, which a failure's reason quotes without.
+/// The owner-route entry cleans only the reason text of legacy records
+/// written before the typed step-failure code; classification branches
+/// on the typed code in [`leaf_failure`].
 const FAILURE_MARKERS: [&str; 10] = [
     FORGE_UNAVAILABLE_MARKER,
     PROVIDER_UNAVAILABLE_MARKER,
@@ -699,7 +786,7 @@ fn release_reason(run: &orbit_types::workflow::JobRun, failure: &ClaimFailure) -
 /// back. Nothing is recorded as a failure — the work either never ran or was
 /// stopped on purpose.
 pub(crate) fn release_settlement(record: &LocalPullAdmission, why: &str) -> ClaimMutation {
-    ClaimMutation::Release(release_evidence(record, why))
+    ClaimMutation::Release(release_evidence(record, why, false))
 }
 
 /// [`release_settlement`] for a launched leaf an operator stopped: typed
@@ -726,19 +813,28 @@ pub(crate) fn operator_cancel_release(
         provider_refusal: false,
         owner_busy: false,
     };
-    let mut evidence = release_evidence(record, &format!("{why}{}", candidate_note(&failure)));
+    let mut evidence =
+        release_evidence(record, &format!("{why}{}", candidate_note(&failure)), false);
     evidence.failure = Some(failure);
     ClaimMutation::Release(evidence)
 }
 
-pub(super) fn release_evidence(record: &LocalPullAdmission, why: &str) -> ClaimEvidence {
+pub(super) fn release_evidence(
+    record: &LocalPullAdmission,
+    why: &str,
+    operator_hold: bool,
+) -> ClaimEvidence {
+    let disposition = if operator_hold {
+        "The owner holds this task for an operator decision before another attempt."
+    } else {
+        "The task is back in the backlog and can be pulled again."
+    };
     let drain = &record.request.run_context.run_id;
     let machine = &record.destination.execution_machine_id;
     ClaimEvidence {
         summary: Some(format!("released by follower drain {drain}: {why}")),
         comment: Some(format!(
-            "Follower drain {drain} on {machine} released this claim: {why}. The task is back \
-             in the backlog and can be pulled again."
+            "Follower drain {drain} on {machine} released this claim: {why}. {disposition}"
         )),
         ..Default::default()
     }

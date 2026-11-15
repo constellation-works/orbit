@@ -1,12 +1,12 @@
 ---
 title: "Spec: Auto-task steps and durable waiting"
 owner: codex
-last_updated: 2026-10-30
-last_validated: 2026-10-30
+last_updated: 2026-11-07
+last_validated: 2026-11-04
 status: Draft
 feature: activity-job
 type: design
-summary: "Proposed auto-task targets in existing jobs, with durable CEL waiting, keyed task binding, accepted evidence and expiry."
+summary: "Auto-task targets in existing jobs, with durable CEL waiting, keyed task binding, accepted evidence and expiry; phases 1 and 2 built."
 tags: [activity-job, condition-triggers, auto-tasks]
 ---
 
@@ -14,10 +14,12 @@ tags: [activity-job, condition-triggers, auto-tasks]
 
 This is an extension to existing jobs. Phase 1 (§7) has shipped:
 `target: auto-task:<name>`, `wait_until`, `expire_when`, `reuse_when`,
-`require_result` and the CEL facts below load, are checked and are explained,
-but no binary runs such a job yet. Such a job declares `schemaVersion: 3`
-([ORB-20237]), must stay disabled, and submission is refused before any run
-or task exists. It replaces the unmerged proposal for
+`require_result` and the CEL facts below load, are checked and are explained.
+Such a job declares `schemaVersion: 3` ([ORB-20237]). Phase 2 ([ORB-20158])
+runs it: keyed bind or mint, parked waits, admission rechecks and
+partial-branch checkpoints. Phase 3 ([ORB-20165]) validates declared completion
+contracts: a step with `require_result` is accepted only on a system-validated
+receipt. It replaces the unmerged proposal for
 a separate auto-sequence definition type.
 **Auto-sequence** may be an informal name for a job composing auto-tasks; it has
 no separate directory, loader, trigger carrier, commands or lifecycle.
@@ -34,7 +36,7 @@ recovery. What is missing is a step that binds an auto-task and waits for its
 accepted completion, plus durable conditional waiting. Source checked at
 `8217460c0`: `JobV2StepBody` is in
 `crates/orbit-types/src/workflow/activity_job/job_v2.rs`; named targets resolve in
-`crates/orbit-engine/src/activity_job/catalog.rs`; `run_step` in
+`crates/orbit-engine/src/activity_job/catalog/resolve.rs`; `run_step` in
 `crates/orbit-engine/src/activity_job/job_executor/step.rs` evaluates `when` once
 and treats false as a successful skip. Waiting cannot reuse that meaning.
 
@@ -71,9 +73,13 @@ delivery finalization to unrelated child tasks.
 | Field | Meaning |
 |---|---|
 | Existing `when` | Evaluate once; false skips successfully, without retry. Existing grammar and template semantics stay unchanged. |
-| Proposed step `wait_until` | CEL readiness predicate; false waits, unknown waits with the missing fact shown. Re-evaluate until true or expired. Absent means immediately ready once job structure reaches the step. |
-| Proposed step `expire_when` | CEL terminal predicate; true ends this unfinished step as `timeout`. It does not cancel its bound task. |
-| Proposed job `spec.expire_when` | Finite outer CEL deadline for jobs containing auto-task steps; prevents an unbounded wait even if a step never becomes ready. |
+| Shipped step `wait_until` | CEL readiness predicate; false waits, unknown waits with the missing fact shown. Re-evaluate until true or expired. Absent means immediately ready once job structure reaches the step. |
+| Shipped step `expire_when` | CEL terminal predicate; true ends this unfinished step as `timeout`. It does not cancel its bound task. |
+| Shipped job `spec.expire_when` | Finite outer CEL deadline for jobs containing auto-task steps; prevents an unbounded wait even if a step never becomes ready. |
+
+These fields are shipped in the auto-task job schema and runtime. The job-wait
+`board.empty` fact below is also shipped, but belongs to that wait environment;
+it is not the aggregate `board.empty` read proposed for condition triggers.
 
 Initially the new step wait fields are admitted only on auto-task targets. Job
 expiry is admitted only when such a target exists. A `when` guard remains an
@@ -82,7 +88,7 @@ use `wait_until` instead. A skipped step does not produce accepted prerequisite
 evidence. No new expression is fed to the shipped equality-only `when` parser.
 
 Use the type-checked subset from the
-[condition-trigger design](../../condition-triggers/1_scope.md), with its size,
+[condition-trigger design](../../condition-triggers/1_scope.md) ([ORB-19990]), with its size,
 cost, literal-read and unknown-value rules. `now` is the owner's pass timestamp.
 The additional wait environment is typed:
 
@@ -114,12 +120,12 @@ task/host/file conditions without a bindable subject are refused explicitly.
 
 ## 3. Board conditions, time spacing and maximum wait
 
-`board.empty` is a proposed read matching the release-prep unfinished-task gate:
-no backlog, in-progress or review tasks. It does not mean only "no eligible
-backlog". Proposed, blocked and someday tasks are excluded and shown as such in
-explain; use explicit status counts if they should block. Scheduled tasks retain
-their stored status and count according to that status. Open release-blocking
-findings are also checked by the result contract below.
+In a job wait, `board.empty` is a shipped read matching the release-prep
+unfinished-task gate: no backlog, in-progress or review tasks. It does not mean
+only "no eligible backlog". Proposed, blocked and someday tasks are excluded and
+shown as such in explain; use explicit status counts if they should block.
+Scheduled tasks retain their stored status and count according to that status.
+Open release-blocking findings are also checked by the result contract below.
 
 Exclude only the current step's bound task from its mint/admission board view.
 Sibling children and outside work count normally; a child cannot block its own
@@ -258,74 +264,58 @@ No cross-workspace task binding or follower-owned coordination is introduced.
 
 ## 6. Release-readiness example
 
-All additions are illustrative proposed syntax; these examples are disabled.
-`full-qa-sweep` must resolve to the actual intended definition before enabling.
-The job is an ordinary catalog job with one condition-triggered routine:
+The two independent, handwritten examples are version controlled and disabled:
 
-```yaml
-# .orbit/routines/release-readiness.yaml
-schemaVersion: 1
-name: release-readiness
-enabled: false
-trigger:
-  condition:
-    scope: workspace
-    when: >-
-      now >= timestamp('2026-10-31T00:00:00-07:00') && board.empty
-      && (!has(auto_tasks['release-prep'].last_succeeded_at)
-          || now - auto_tasks['release-prep'].last_succeeded_at >= duration('24h'))
-    for_minutes: 30
-target: job:release-readiness
-policy:
-  overlap: forbid
-  timeout_minutes: 1440
-  retries: { max: 0 }
-```
+| Source | Owner installation path |
+| --- | --- |
+| `crates/orbit-core/assets/jobs/examples/release_readiness.yaml` | `.orbit/resources/jobs/release-readiness.yaml` |
+| `docs/examples/release-readiness-routine.yaml` | `.orbit/routines/release-readiness.yaml` |
 
-```yaml
-# .orbit/jobs/release-readiness.yaml
-schemaVersion: 3
-kind: Job
-metadata:
-  name: release-readiness
-spec:
-  state: disabled
-  kind: workflow
-  max_active_runs: 1
-  expire_when: "now >= job.started_at + duration('24h')"
-  steps:
-    - id: qa
-      target: auto-task:full-qa-sweep
-      wait_until: "board.empty"
-      require_result: release-readiness/v1
-      reuse_when: >-
-        result.status == 'passed' && result.revision == job.source_revision
-        && now - result.completed_at <= duration('24h')
-    - id: security
-      target: auto-task:security-review
-      wait_until: "self.prev.status == 'done' && board.empty"
-      expire_when: "now >= self.wait_started_at + duration('8h')"
-      require_result: release-readiness/v1
-      reuse_when: >-
-        result.status == 'passed' && result.revision == job.source_revision
-        && now - result.completed_at <= duration('24h')
-    - id: prepare
-      target: auto-task:release-prep
-      require_result: release-readiness/v1
-      wait_until: >-
-        steps['qa'].status == 'done' && steps['security'].status == 'done'
-        && board.empty
-```
+The current catalog loads jobs from `.orbit/resources/jobs/`; the earlier
+illustrative `.orbit/jobs/` path is not a catalog installation directory.
+Neither example is seeded or registered globally. The job is an ordinary catalog
+job, with one condition-triggered routine. Full QA targets the owner's existing
+`qa-full-sweep` definition, not recent-changes `qa-sweep`, a duplicate full-QA
+definition, or the generic coordinator. Step display IDs do not select targets.
 
-"After October 30" here means October 31 at midnight in Los Angeles, with the
-explicit offset on that date; use October 30 for "on or after October 30". The
-30-minute initial quiet hold is independent of optional spacing between steps.
-For spacing, replace security's `wait_until` with the expression in §3. An
-eight-hour security wait starts when the preceding sequential QA step settles,
-within the 24-hour outer job bound.
+The routine requires an empty backlog, in-progress and review board continuously
+for 30 minutes and no accepted `release-prep` in the preceding 24 hours. These
+per-bucket condition facts spell the job wait's aggregate `board.empty`.
+Proposed, blocked and someday tasks do not count. There is no fixed calendar
+start: `on_enable: fire_existing` lets an already-true condition enter the
+30-minute continuity hold when the owner enables it, instead of baselining that
+subject until a later false-to-true edge. The hold starts from observation,
+not from an assumed period of quiet before activation.
+A readable history with no accepted receipt permits the first run. A missing
+or invalid definition, missing completion declaration, or unreadable history is
+unknown, including under `!has()`, and cannot fire the routine. Task `done`,
+mint time and merge time do not advance this history [ORB-22676].
 
-For independently eligible QA and security, replace the sequential `steps` list
-with existing parallel structure, retaining the outer expiry:
+The job pins the configured integration branch's exact SHA at admission. QA,
+security and preparation each require `release-readiness/v1`; QA and security
+run sequentially behind `board.empty`. Only each step's own bound child is
+excluded from its admission board view. Preparation explicitly requires both
+prior steps to be accepted `done`. A failed or skipped branch cannot supply that
+proof. Before preparation mints, the upstream contract rechecks both receipts'
+workspace, task/run, definition digest, pinned source, completion age and durable
+evidence references, plus current source freshness and unresolved blockers.
+Accepted no-diff evidence needs no PR or merge. A busy or nothing-to-release
+preparation probe holds the step and never advances accepted history or creates
+an accepted canonical handoff.
+
+The job has a finite durable 24-hour expiry, including queues, parking, restart
+and downtime. The security step additionally expires eight hours after activation.
+The routine uses `overlap: forbid`, a matching 1440-minute horizon and zero retries;
+the parked job retains its active identity and `max_active_runs: 1`. Expiry stops
+new admission and retains bindings and partial evidence; it does not cancel an
+already-running child. Normal authority, approval and host admission still apply.
+There is deliberately no `reuse_when` in this composition: every execution
+obtains fresh checks, while restart preserves and revalidates accepted checkpoints
+rather than reminting them. A job that wants to reuse a recent accepted check adds
+`reuse_when` to that step ([ORB-22649], below).
+
+For independently eligible checks, the existing parallel structure can replace
+QA and security, retaining the same outer expiry and typed contracts:
 
 ```yaml
 steps:
@@ -334,36 +324,66 @@ steps:
       join: { mode: all }
       branches:
         - id: qa
-          target: auto-task:full-qa-sweep
+          target: auto-task:qa-full-sweep
           wait_until: "board.empty"
           require_result: release-readiness/v1
         - id: security
           target: auto-task:security-review
-          wait_until: "now >= job.started_at + duration('30m') && board.empty"
+          wait_until: "board.empty"
           require_result: release-readiness/v1
   - id: prepare
     target: auto-task:release-prep
     require_result: release-readiness/v1
-    wait_until: "board.empty"
+    wait_until: >-
+      steps['qa'].status == 'done' && steps['security'].status == 'done'
+      && board.empty
 ```
 
-Security becomes eligible 30 minutes after job admission irrespective of QA's
-completion. Its board-empty guard may still wait for QA's task to finish.
-Preparation follows the successful `all` join. Waiting is not skipped-success,
-so a branch cannot satisfy `all` merely by failing to become ready. Existing
-`when` skips retain their no-op meaning; never use them to waive prerequisites.
+The `all` join and durable per-branch checkpoints preserve successful siblings
+on restart. The board guards still serialize active children. Waiting is not a
+successful skip: never replace a prerequisite's `wait_until` with `when`.
 
-The routine's explicit overlap policy and the parked job's active identity
-prevent interim empty-board edges from queuing another readiness execution.
-Its 24-hour timeout horizon matches the job bound; a shorter routine staleness
-horizon must not free the overlap fence while that parked job is still live.
-The finite wait must be enforced by durable job expiry, not merely by dropping
-the routine's overlap record. No automatic whole-job retries are configured.
+### Owner installation and activation prerequisites
+
+Installation and activation belong to the owner follow-up [ORB-20132], after
+compatible deployment. This task changes no live configuration or release state.
+
+1. Verify compatible owner **and every participating host/client** separately:
+   schemaVersion 3 auto-task jobs, finite expiry and parked/partial checkpoints,
+   condition-trigger owner firing, named accepted history, typed completion
+   validation, and the workspace layout must all be supported. A local load or
+   explain is not fleet compatibility or deployment evidence. Older clients must
+   refuse these assets, not silently drop guards.
+2. Follow [the adapter installation guide](../../../../examples/release-readiness/README.md).
+   Install its script manifest and disabled `security-review` and `release-prep`
+   examples only after comparing owner overrides. Keep the repository adapter,
+   inventory, QA harness, helper and macOS workflow inputs at their declared
+   paths; obtain a current digest-bound script grant and verify a real sandboxed
+   adapter launch on the owner. An unavailable sandbox is a hold, not a pass.
+3. Add only the documented `completion` block to the native owner
+   `.orbit/auto_tasks/qa-full-sweep.yaml`. Preserve its template, enabled state,
+   `hard` complexity and all supplemental forecast scenarios. Do not copy the
+   bundled coordinator over it or create another full-QA definition. Its evidence
+   must discharge all inventory and capability requirements for the pinned SHA.
+4. Verify the existing owner-authorized pull route admits the full-QA child on
+   a Mac and excludes ineligible hosts, without changing host/provider policy.
+   The owner coordinates durable Mac and other required platform evidence;
+   imported evidence must satisfy the adapter's exact-candidate contract. An
+   isolated eligibility fixture does not certify a real full-QA execution.
+5. Copy the two composition sources to the paths above **still disabled**.
+   Use `orbit job show release-readiness`, `orbit routine show release-readiness`
+   and `orbit automation explain job:release-readiness --json` /
+   `orbit automation explain routine:release-readiness --json` to verify target
+   resolution, readable accepted history, guards, expiry, and definition digests.
+   Resolve every hold before activation; never substitute another target's report.
+6. Only after isolated integration evidence, sandbox launch and all-host
+   compatibility checks pass may the owner deliberately enable the three target
+   definitions, job and routine, under existing approval, drain and paid-provider
+   policy. Enabling the composition grants no dispatch, merge or release authority.
 
 Preparation keeps its unfinished-work, no-release and canonical-task checks.
 This job does not tag, bump versions, publish, promote branches or acquire
-release authority. Enabling a routine/job does not enable its target definitions
-or grant approval, dispatch or paid-provider authority.
+release authority.
 
 ## 7. Surfaces, compatibility and delivery
 
@@ -382,8 +402,12 @@ and long-lived clients keep shipped behavior unless they opt into the extension.
 
 Deliver in phases: (1) disabled schema, target resolution and CEL explain
 (shipped, see "Phase 1 as built" below);
-(2) keyed bind/mint, parked waits, admission and partial-branch checkpoints;
-(3) QA, security and preparation readiness adapters plus disabled job/routine examples.
+(2) keyed bind/mint, parked waits, admission and partial-branch checkpoints
+(built, see "Phase 2 as built");
+(3) QA, security and preparation readiness contracts (built, see "Phase 3 as
+built"), the accepted-history condition consumers ([ORB-20397], [ORB-22676],
+shipped), and disabled, nonseeded job/routine examples ([ORB-20166], shipped as
+disabled examples installed only after owner prerequisites).
 None silently expands the already-filed condition-language phase-1 task. Actual
 enablement, provider work and release timing remain operator decisions.
 
@@ -396,19 +420,19 @@ enablement, provider work and release timing remain operator decisions.
   header, omitted when 2, and is never inferred from the remaining fields, so
   a 3 survives normalization and a serialized round trip
   ([Auto-task jobs declare schemaVersion 3](../4_decisions.md#auto-task-jobs-declare-schemaversion-3)).
-  Every `schemaVersion: 3` job is phase-1 only, even with no extension field
-  left: it must stay disabled and cannot be submitted or run until its author
-  removes the keys and declares 2 again. Activities stay `schemaVersion: 2`.
+  A `schemaVersion: 3` job keeps the version even with no extension field
+  left. Activities stay `schemaVersion: 2`. Phase 1 also kept every such job
+  disabled and refused to submit it; phase 2 lifts that.
 - **Shape.** `orbit-types` parses the new keys. An auto-task step admits only
   `id`, `stage`, `when`, `target` and the four wait keys, so a key this binary
   does not know is refused, not dropped. `timeout_seconds: 0`, a serialized
   ref's default, is the one exception. The wait keys are refused on any other
-  step. The engine keeps an `auto-task:` ref through target resolution, and
-  `validate_job` refuses the job before its first step.
+  step. The engine keeps an `auto-task:` ref through target resolution;
+  `validate_job` refuses one inside `loop` or `fan_out` before the first step.
 - **Checks.** `orbit-automation`'s condition checker gains a typed job scope
   (`condition/job_wait.rs`), and Core runs it at catalog load, so a refused
   job leaves the catalog with a per-file diagnostic, like a parse error. It
-  refuses `state: enabled`, a missing, non-restricted, non-positive or
+  refuses a missing, non-restricted, non-positive or
   over-168h `spec.expire_when`, more than 32 auto-task steps, a target inside
   `loop` or `fan_out`, and an unregistered `require_result`. Inside the
   expressions it also refuses type errors, unknown or computed `steps[]`
@@ -419,7 +443,9 @@ enablement, provider work and release timing remain operator decisions.
   branch the read is refused. `job.source_revision` is required-typed when a
   step requires `release-readiness/v1`, which pins the revision at admission;
   otherwise it needs `has()`. So does `result.revision`, except under that
-  contract. `board` adds `empty` to the condition board fields, and
+  contract. The job-wait schema adds aggregate `board.empty`; condition-trigger
+  `board` still exposes only per-bucket `empty` fields. Condition triggers (not
+  job waits) read `auto_tasks['<name>'].last_succeeded_at` [ORB-22676].
   `tasks['<ID>']` stays readable.
 - **Explain.** `orbit automation explain job:<name>` (MCP
   `orbit.automation.explain`) reports the outer bound, the revision pin, and
@@ -437,6 +463,118 @@ enablement, provider work and release timing remain operator decisions.
   guard keeps a newer binary from bootstrapping while an older live client
   holds the workspace. That covers binaries built between [ORB-20157] and
   [ORB-20237], which would accept the `schemaVersion: 2` form.
+
+### Phase 2 as built
+
+- **Freeze.** Submission checks the waits again and, for a job with an
+  auto-task step, pins its YAML as the run's definition snapshot (a catalog
+  job included) and records a versioned checkpoint in the run state:
+  admission time, outer deadline, and the integration branch's commit when a
+  step requires `release-readiness/v1` (refused if it cannot be pinned).
+  A resume keeps its source's checkpoint, so deadlines include queue time and
+  downtime. Only a detached submission runs such a job; the foreground
+  `orbit job run <path>` refuses it.
+- **Step pass.** The engine (`job_executor/auto_task.rs`) asks the host to
+  observe the step, then checkpoints before each effect: activation, a
+  reservation, then admission. Observation reads the bound task's terminal
+  receipt with the owner's recorded settlement time, then expiry, then
+  readiness, in that order. Completed (`done`) is accepted. Archived,
+  rejected or missing tasks are not, and nothing remints them. A receipt
+  settled after the deadline is not accepted, and the step times out. A
+  checkpoint error stops the step before any effect.
+- **Admission.** Core (`auto_tasks/job_step.rs`) admits under the auto-task
+  cursor sidecar lock, the fence scheduled and manual mints already hold.
+  A step's action key is `<run>:<step>`. Its mint records a
+  `job_step_invocation` creation receipt on the task, so a lost reply
+  resolves to that task instead of a second mint. Under the fence it
+  rechecks expiry, the definition's current enablement and its own
+  workspace condition or schedule guard, and `wait_until`. With
+  `skip_if_open` dedupe it binds an open instance, or holds when that
+  instance was minted for other inputs or the job pins a revision. Mints
+  consume no schedule cursor. The board view excludes only the step's own
+  bound task, so two parallel `board.empty` branches serialize: one binds and
+  the other parks until it finishes. A task, host or file condition has no
+  bindable subject in a job step and holds. After those rechecks and the
+  prior-proof revalidation, a step with `reuse_when` judges it before binding or
+  minting (see Reuse below).
+- **Parking.** A waiting, held or bound step parks the run. The run stays
+  `running`, so it counts against `max_active_runs`. Its checkpoint records
+  the park and its worker exits, holding no provider, thread, worktree or
+  drain slot. Orphan reconciliation and the worker supervisor skip a parked
+  run. The sweep wakes it when due (at most 60 s later, or at the deadline).
+  The woken worker adopts it by a compare-and-set on its park, so it resumes
+  once. A job disabled or removed while parked cancels the run.
+- **Parallel.** A succeeded branch is checkpointed and restored on replay
+  without rerunning it. A target branch restores its output. A succeeded
+  loop, fan-out, or nested parallel restores that output and the pipeline
+  entries it exposed (nested step outputs and fan-in collect and error
+  aliases). A branch that has not succeeded runs again. A block whose join
+  can still pass parks while any branch is parked; its join semantics are
+  unchanged.
+- **Start guard.** A minted task starts only while its step admits it. Local
+  submission and owner pull-claim admission recheck the live run,
+  the binding, the step (not settled or expired), the definition and
+  `wait_until`. After interruption or failure, the unique live descendant
+  linked by `retry_source_run_id` may admit the original child only when its
+  checkpoint preserves the frozen definition, binding, action key, input
+  digest, activation and reservation times, and original deadline. The
+  creation receipt keeps naming the minting run. A lineage with no live
+  continuation, ambiguous or unreadable lineage, or a changed obligation
+  holds the child. Bound existing work is never restricted.
+- **Older writers.** The checkpoint carries a version, and a binary refuses
+  to rewrite a newer one. A workspace this binary opens is at layout version
+  7 (`auto-task-job-checkpoints`, a breaking migration), so a binary that
+  would drop the checkpoint or reap a parked run cannot open it.
+
+### Phase 3 as built
+
+[ORB-20165] accepts a step's result only on evidence checked against owner records.
+
+- **Opt-in declaration.** `AutoTaskDefinition.completion` names a contract, an adapter
+  script, a form, an evidence artifact and a maximum age. A definition without it
+  serializes and behaves as before, and an older binary refuses a file carrying it.
+  `require_result` and `completion.contract` must both be present and equal; either one
+  alone holds.
+- **Receipt.** The owner supplies the receipt's workspace, definition, digest, task, run,
+  revision and completion time: the frozen target, the pinned revision, the task's
+  recorded history, and a run that actually carried the task. `task.job_run_id` and the
+  `auto-task:<name>` tag are writable, so neither is trusted alone; the creation receipt
+  proves the task was minted for the required definition, contract and source inputs.
+  The minting step must also match its reservation key; compatible jobs binding the
+  same open task retain their own keys and independently accept its completion.
+  The evidence manifest must match these
+  values and cannot state a time or status. An artifact written after completion, or
+  whose digest differs, is refused. The final message is never read.
+- **Adapter.** A granted workspace script judges the evidence through the existing script
+  step, with its sandbox and digest-bound grant. Its verdict is `passed`, `blocked` or
+  `unavailable`, and only `passed` makes a receipt. Core holds no release severity,
+  QA scenario or version policy; those live in the workspace adapter. Absent adapter, grant,
+  capability or evidence holds and later times out, never falling back to another command.
+- **History.** Only an accepted job-step result advances the per-definition history kept
+  beside the schedule cursor. `auto_task_accepted_history` returns `Latest`, `Missing` or
+  `Unreadable`, which never collapses into missing, and a corrupt file stays in place. A
+  scheduled mint has no creation receipt, so it never advances history. Busy-board and
+  nothing-to-release probes are `blocked`, so they hold and advance nothing.
+- **Hold and recheck.** A completed task whose result holds stays held until expiry, so a
+  finding resolved in time clears it. Before a step with a contract mints, the admission
+  fence revalidates each prior contract step at adapter depth: receipt provenance, exact
+  source against the current integration revision, age and finding disposition, even when
+  a checkpoint reused it. A raw `done`, a skipped step or a no-op cannot discharge it. The
+  observation path stays read-only; the start guard checks records only.
+- **Reuse.** [ORB-22649] binds `result` in `reuse_when` to the definition's latest
+  accepted receipt (`auto_task_accepted_history`). The admission fence judges it after the
+  rechecks above and before binding or minting. Missing history judges no candidate, and
+  the step binds or mints. Unreadable history, or a predicate that is unknown, holds the
+  step, because whether a reusable result exists cannot be decided. A true predicate is not
+  enough. The owner then revalidates the receipt as if this execution had bound its task:
+  same definition, contract and frozen digest, this execution's pinned revision, the
+  contract's `max_age_minutes` (the "expired" bound), a creation receipt for the same
+  inputs, unchanged completion time and evidence, and a `passed` adapter verdict now. A
+  receipt that fails any check does not match: the step mints fresh evidence and the reason
+  is logged. A matched receipt settles the step `done` with `minted: false`, bound to the
+  original task, which never starts again. Its checkpointed result is revalidated like any
+  other before a later step mints, so a reused proof that has aged or lost its adapter
+  verdict holds that later step.
 
 ## 8. Acceptance and honest limitations
 
@@ -462,17 +600,21 @@ Typed target resolution, persistent parking and per-branch checkpoints are real
 work even though this is a smaller authoring model. Board emptiness remains a
 snapshot; admission is rechecked and stale source evidence holds the job. The
 first version excludes dynamic loop/fan-out targets, cross-workspace references
-and arbitrary artifact predicates. QA/security readiness adapters do not exist
-merely because their auto-task templates do; no release-readiness run is ready
-to enable until those contracts are implemented and validated.
+and arbitrary artifact predicates. The QA, security and preparation contracts are
+opt-in workspace configuration, and their examples ship disabled and nonseeded; no
+release-readiness run is ready to enable until an owner installs them and a
+sandboxed adapter launch has been observed.
 
 ## Task References
 
-- ORB-19973 — records Daniel's decision to reuse jobs with an auto-task step.
-- ORB-19990 — covers condition-language schema/explain only; this proposal does
-  not change that task or authorize job extension implementation.
-- [ORB-20157] — phase 1: define, check and explain disabled auto-task steps.
-- [ORB-20237] — require `schemaVersion: 3` for auto-task jobs and fence older
-  clients with layout migration 5.
+- [ORB-19990] — Define and explain the typed condition-language schema.
+- [ORB-20157] — Define, validate and explain disabled auto-task job steps (phase 1).
+- [ORB-20237] — Require schemaVersion 3 for auto-task jobs and fence older clients.
+- [ORB-20158] — Execute keyed auto-task bind/mint, parked waits and partial-branch checkpoints (phase 2).
+- [ORB-20165] — Validate readiness evidence contracts and provide accepted-result history (phase 3).
+- [ORB-20166] — Compose and validate disabled release-readiness job/routine examples.
+- [ORB-20397] — Expose accepted-result history through condition success facts.
+- [ORB-22676] — Read named accepted-result histories from routine conditions.
+- [ORB-22649] — Add historical result reuse to auto-task job steps.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

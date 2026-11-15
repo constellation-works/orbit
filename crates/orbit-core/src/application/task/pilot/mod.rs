@@ -33,15 +33,6 @@
 //! `user_facing_ui` finding adds the `ui` tag to a task that lacks it; apply
 //! never removes one.
 //!
-//! A task whose preparation requested an explore brief may carry one in its
-//! assessment. Apply validates it and writes the system-written
-//! `explore-brief.json` artifact before the receipt; an invalid brief is
-//! dropped with its reason in the audit and never fails the assessment.
-//!
-//! An implement dispatch then receives that brief only while it is current:
-//! the task's material is still what the receipt sealed, and the code it
-//! covers has not drifted too far from the run's base (`brief_delivery`).
-//!
 //! An applied assessment also holds or gates the task: backlog holds from
 //! applied findings (`admission`), prerequisite resolution (`blockers`) and
 //! verified-no-diff holds (`no_diff`).
@@ -50,11 +41,12 @@ mod admission;
 mod apply;
 mod assessment;
 mod attachment_budget;
+mod audit;
+pub(crate) mod auto_effort;
 mod blockers;
-mod brief_delivery;
 mod cfg_gate;
+mod consequential;
 mod drain_promotion;
-mod explore_brief;
 mod freshness;
 pub(crate) mod input;
 mod no_diff;
@@ -62,6 +54,8 @@ mod persist;
 mod post_deploy;
 mod prepare;
 mod promotion;
+mod recheck;
+mod skip;
 pub(crate) mod source;
 mod validation_tools;
 
@@ -73,13 +67,16 @@ pub(crate) use admission::{
 pub(crate) use apply::apply;
 pub(super) use assessment::member_ready;
 use assessment::{
-    normalize_evidence_gaps, required_machine, required_os, retained_review_evidence, review_filed,
-    reviewed_evidence_drops, routing_os, unauthorized_missing_targets, user_facing_ui,
-    validate_after_selectors, validate_recommendations,
+    SelectorCheck, contract_conflicts, normalize_evidence_gaps, required_machine, required_os,
+    retained_review_evidence, review_filed, reviewed_evidence_drops, routing_os,
+    unauthorized_missing_targets, user_facing_ui, validate_after_selectors,
+    validate_recommendations,
 };
 pub(crate) use blockers::{normalize_pilot_self_blockers, pilot_blocker_task_ids};
 pub(crate) use drain_promotion::{
-    approval_disqualification, approved_by_drain, held_classification,
+    ExplicitAssessmentReuse, approval_disqualification, approval_note, approved_by_drain,
+    classify_explicit_assessment_reuse, held_classification, live_execution_claim_tasks,
+    promote_reusable_assessment,
 };
 use input::{requested_workspace_root, required_string, required_string_array};
 pub(crate) use no_diff::{NoDiffClosure, PILOT_VERIFIED_NO_DIFF, VerifiedNoDiff};
@@ -88,13 +85,59 @@ use post_deploy::post_deploy;
 pub(crate) use prepare::prepare;
 pub use promotion::task_pilot_warnings;
 pub(crate) use promotion::{
-    HeldPilotWarnings, PromotionFindings, auto_approval_opted_out, held_pilot_warnings,
-    promotion_findings, recommendation_has_evidence, warning_hold_findings,
+    FOOTPRINT_UNRESOLVED, HeldPilotWarnings, PromotionFindings, auto_approval_hold_classification,
+    auto_approval_opted_out, held_pilot_warnings, promotion_findings, recommendation_has_evidence,
+    warning_hold_findings,
 };
 pub(crate) use source::requested_base_branch;
 
-use orbit_types::task::{CommentReceipt, TaskComment, TaskStatus};
+use std::borrow::Cow;
+
+use chrono::{DateTime, Utc};
+use orbit_types::task::{CommentReceipt, TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus};
 use serde_json::{Value, json};
+
+use super::helpers::SYSTEM_ACTOR_LABEL;
+use super::legacy_decisions;
+
+/// History event `system` records on a task whose task-pilot run finished
+/// without deciding about it. Its typed decision names the run. Later drains
+/// hold the task on it until a real change, whichever drain or standalone
+/// run dispatched that pilot [ORB-19544].
+pub(crate) const UNRESOLVED_PILOT_EVENT: &str = "task_pilot_unresolved";
+
+/// The history entry recording that pilot run `run_id` left a task
+/// undecided. The note keeps the JSON text history views have always shown;
+/// readers take the run from the typed decision.
+pub(crate) fn unresolved_pilot_entry(run_id: &str, at: DateTime<Utc>) -> TaskHistoryEntry {
+    TaskHistoryEntry {
+        at,
+        by: SYSTEM_ACTOR_LABEL.to_string(),
+        event: UNRESOLVED_PILOT_EVENT.to_string(),
+        note: Some(json!({ "pilot_run_id": run_id }).to_string()),
+        from_status: None,
+        to_status: None,
+        operation_id: None,
+        decision: Some(TaskDecision::PilotUnresolved {
+            pilot_run_id: run_id.to_string(),
+        }),
+    }
+}
+
+/// The run an undecided-pilot record names: its typed decision, or the JSON
+/// note of a record written before the decision existed.
+pub(crate) fn unresolved_pilot_run_id(entry: &TaskHistoryEntry) -> Option<Cow<'_, str>> {
+    if entry.event != UNRESOLVED_PILOT_EVENT {
+        return None;
+    }
+    match &entry.decision {
+        Some(TaskDecision::PilotUnresolved { pilot_run_id }) => {
+            Some(Cow::Borrowed(pilot_run_id.as_str()))
+        }
+        Some(_) => None,
+        None => legacy_decisions::unresolved_pilot_note_run_id(entry).map(Cow::Owned),
+    }
+}
 
 /// Whether an explicit pilot selection may assess a task in `status`. Prepare
 /// and an operator surface's pre-submission check share the predicate.
@@ -158,17 +201,16 @@ fn superseded_outcome(task_id: &str, reason: &str, status: TaskStatus, detail: &
 /// [ORB-11980].
 pub(super) const VALIDATION_TOOL_WARNINGS: &str = "validation_tool_warnings";
 
+/// Prepared-snapshot and partition field listing the `(criterion, tool)`
+/// operator-only tool mentions the deterministic detector found, which the
+/// pilot classifies in `operator_tool_classifications` [ORB-21291]. Written
+/// only when a task has one, so other tasks keep their prepared shape.
+pub(super) const OPERATOR_TOOL_CANDIDATES: &str = "operator_tool_candidates";
+
 /// Prepared-snapshot fields carrying the task's durable context creation
 /// grant: the exact selectors it authorizes and the identity of the record.
 pub(super) const CONTEXT_CREATION_SELECTORS: &str = "context_creation_selectors";
 pub(super) const CONTEXT_CREATION_IDENTITY: &str = "context_creation_identity";
-
-/// Prepared-snapshot field marking a task the configuration requests an
-/// explore brief for, and the partition field listing those tasks for the
-/// pilot (`workflow.explore_brief.*`). Both are written only when a task
-/// requests one, so a workspace without briefs keeps its prepared shape.
-pub(super) const EXPLORE_BRIEF_REQUESTED: &str = "explore_brief_requested";
-pub(super) const EXPLORE_BRIEF_TASK_IDS: &str = "explore_brief_task_ids";
 
 /// Assessment fields apply attaches: granted creation targets the pilot
 /// omitted and apply kept, and dropped missing selectors no grant covers,
@@ -188,6 +230,13 @@ pub(super) const CONTEXT_EVIDENCE_DROPPED: &str = "context_evidence_dropped";
 /// the pinned revision: null, or `{"evidence": "..."}` citing `path:line`.
 /// Apply records it as a REJECTED finding verdict and rejects the task.
 pub(super) const FINDING_INVALID: &str = "finding_invalid";
+
+/// The pilot's typed finding that an acceptance criterion names behaviour
+/// the pinned code or contract contradicts: an array of
+/// `{"criterion": <1-based index>, "evidence": "..."}`. Every entry holds
+/// promotion; there is no advisory opt-out. Absent or null on a historical
+/// receipt reads as empty.
+pub(super) const CONTRACT_CONFLICTS: &str = "contract_conflicts";
 
 /// Assessment field apply attaches when it rewrote a model formatting slip
 /// (today a scalar or missing `evidence_gaps`) instead of rejecting it.

@@ -116,6 +116,12 @@ impl RoutedSession for InProcessRoutedSession {
     }
 
     fn advertised_tools(&mut self) -> Result<Vec<String>, OrbitError> {
+        if let Some(definitions) = self.inner.dynamic_mcp_tool_definitions()? {
+            return Ok(definitions
+                .iter()
+                .map(|definition| mcp_advertised_tool_name(&definition.schema.name))
+                .collect());
+        }
         Ok(self
             .inner
             .list_mcp_tool_definitions()?
@@ -125,6 +131,16 @@ impl RoutedSession for InProcessRoutedSession {
     }
 
     fn supports_tool_argument(&mut self, name: &str, argument: &str) -> Result<bool, OrbitError> {
+        if let Some(definitions) = self.inner.dynamic_mcp_tool_definitions()? {
+            return Ok(definitions.iter().any(|definition| {
+                definition.schema.name == name
+                    && definition
+                        .schema
+                        .parameters
+                        .iter()
+                        .any(|parameter| parameter.name == argument)
+            }));
+        }
         Ok(self
             .inner
             .list_mcp_tool_definitions()?
@@ -162,6 +178,9 @@ impl RoutedSession for InProcessRoutedSession {
         }
         destination_context.trace_id = call_context.trace_id;
         destination_context.self_reported_actor = call_context.self_reported_actor;
+        // In-process hops carry the client name a remote hop would announce
+        // at initialize, so the local destination answers a candidate read.
+        destination_context.mcp_client_name = call_context.mcp_client_name;
         self.inner.call_tool(name, arguments, destination_context)
     }
 }

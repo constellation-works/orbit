@@ -1,3 +1,4 @@
+#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 //! `orbit-web` — HTTP API, dashboard UI, and remote web connection.
 //!
 //! This crate isolates the axum-based dashboard (HTML/JS assets + `/api/*`
@@ -11,15 +12,15 @@
 //! workspace (global mode; see ORB-10029). [`lease_router`] exposes just the
 //! lease API over a [`LeaseBackend`] for servers with their own authentication.
 //! [`lease_intake`] is the Unix socket Orbit Web serves to the lease listener
-//! user when `lease.intake.peer_user` is set, and the client the listener
-//! calls it with. [`lease_listener`] is that listener: the lease routes and
-//! `/healthz` behind lease-token authentication, run by `orbit lease listen`
-//! as the listener user.
+//! user when there is an intake peer user, and the client the listener calls
+//! it with. [`lease_listener`] is that listener: the lease routes and
+//! `/healthz` behind lease-token authentication, run as the listener user.
+//! Path leases are not configurable [ORB-22808], so Orbit Web serves no
+//! intake socket and no command starts the listener.
 //! All routes, content types, defaults, and graceful shutdown are preserved.
 
 mod api;
 mod assets;
-mod browser_session;
 mod connect;
 mod doctor_report;
 mod health;
@@ -44,8 +45,6 @@ mod tests;
 pub use api::leases::{
     LeaseBackend, LeaseBackendResult, LeaseCaller, LeaseCallerToken, LeaseNoticePages, lease_router,
 };
-pub use api::session::RequireBrowserSession;
-pub use browser_session::{OpenArgs, open_dashboard};
 pub use connect::{ConnectArgs, connect};
 
 pub(crate) use serve::{DEFAULT_DASHBOARD_PORT, default_workspace_selection, open_browser};
@@ -77,4 +76,5 @@ pub(crate) const DASHBOARD_CSS: &str = concat!(
     include_str!("../assets/dashboard/css/settings.css"),
     include_str!("../assets/dashboard/css/plugins.css"),
     include_str!("../assets/dashboard/css/leases.css"),
+    include_str!("../assets/dashboard/css/notices.css"),
 );

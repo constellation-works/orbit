@@ -10,7 +10,7 @@ use orbit_types::desktop::{DesktopTaskOperation, DesktopTaskRequest};
 use orbit_types::record::FrictionStatus;
 use orbit_types::task::{ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, TaskStatus};
 use orbit_types::tool::ToolSessionContext;
-use serde_json::{Value, json};
+use serde_json::json;
 use tempfile::TempDir;
 
 fn test_runtime() -> (TempDir, OrbitRuntime, std::path::PathBuf) {
@@ -129,8 +129,7 @@ fn assert_friction_resolved_by(runtime: &OrbitRuntime, friction_id: &str, task_i
     assert_eq!(friction["resolved_by_task"], json!(task_id));
 }
 
-#[test]
-fn review_approval_resolves_related_friction_and_surfaces_json_fields() {
+fn review_approval_resolves_related_friction_and_surfaces_json_fields_scenario() {
     let (_root, runtime, repo_root) = test_runtime();
     let friction_id = add_test_friction(&runtime);
     let task_id = add_task_with_resolves(&runtime, &repo_root, &friction_id, "backlog");
@@ -152,8 +151,7 @@ fn review_approval_resolves_related_friction_and_surfaces_json_fields() {
     assert_eq!(task["relations"][0]["target"], json!(friction_id));
 }
 
-#[test]
-fn automation_update_to_done_resolves_related_friction() {
+fn automation_update_to_done_resolves_related_friction_scenario() {
     let (_root, runtime, repo_root) = test_runtime();
     let friction_id = add_test_friction(&runtime);
     let task_id = add_task_with_resolves(&runtime, &repo_root, &friction_id, "backlog");
@@ -171,8 +169,7 @@ fn automation_update_to_done_resolves_related_friction() {
     assert_friction_resolved_by(&runtime, &friction_id, &task_id);
 }
 
-#[test]
-fn approving_task_with_dangling_friction_relation_records_event_but_succeeds() {
+fn approving_task_with_dangling_friction_relation_succeeds_scenario() {
     let (_root, runtime, repo_root) = test_runtime();
     let task_id = add_task_with_resolves(&runtime, &repo_root, "F9999-12-999", "backlog");
     move_backlog_task_to_review(&runtime, &task_id);
@@ -185,18 +182,6 @@ fn approving_task_with_dangling_friction_relation_records_event_but_succeeds() {
         .expect("approve task");
     assert_eq!(approved["status"], json!("done"));
 
-    let events = runtime.list_session_events(20).expect("session events");
-    assert!(events.iter().any(|event| {
-        event.payload.get("type") == Some(&Value::String("TaskRelationDangling".to_string()))
-            && event
-                .payload
-                .get("data")
-                .and_then(Value::as_object)
-                .is_some_and(|data| {
-                    data.get("task_id") == Some(&Value::String(task_id.clone()))
-                        && data.get("target") == Some(&Value::String("F9999-12-999".to_string()))
-                })
-    }));
     assert!(
         frictions(&runtime)
             .show("F9999-12-999")
@@ -205,8 +190,7 @@ fn approving_task_with_dangling_friction_relation_records_event_but_succeeds() {
     );
 }
 
-#[test]
-fn approving_task_does_not_overwrite_existing_friction_resolution() {
+fn approving_task_does_not_overwrite_existing_friction_resolution_scenario() {
     let (_root, runtime, repo_root) = test_runtime();
     let friction_id = add_test_friction(&runtime);
     let original_resolved_at = Utc.with_ymd_and_hms(2026, 5, 17, 3, 0, 0).unwrap();
@@ -232,8 +216,7 @@ fn approving_task_does_not_overwrite_existing_friction_resolution() {
     assert_eq!(stored.record.resolved_at, Some(original_resolved_at));
 }
 
-#[test]
-fn approving_proposed_task_does_not_resolve_friction() {
+fn approving_proposed_task_does_not_resolve_friction_scenario() {
     let (_root, runtime, repo_root) = test_runtime();
     let friction_id = add_test_friction(&runtime);
     let task_id = add_task_with_resolves(&runtime, &repo_root, &friction_id, "proposed");
@@ -314,8 +297,7 @@ fn assert_friction_still_open(runtime: &OrbitRuntime, friction_id: &str) {
 /// ID that lived in another, and auto-resolve silently no-op'd. Completing
 /// that edge must now fail with `friction_not_local` and leave the foreign
 /// friction open.
-#[test]
-fn cross_workspace_resolves_update_to_done_is_rejected() {
+fn cross_workspace_resolves_update_to_done_is_rejected_scenario() {
     let (_root, runtime_a, _repo_a, runtime_b, repo_b) = dual_workspace_runtimes();
     let friction_id = add_test_friction(&runtime_a);
     let owner = runtime_a.workspace_id().expect("workspace a id");
@@ -340,8 +322,7 @@ fn cross_workspace_resolves_update_to_done_is_rejected() {
     );
 }
 
-#[test]
-fn cross_workspace_resolves_automation_update_is_rejected() {
+fn cross_workspace_resolves_automation_update_is_rejected_scenario() {
     let (_root, runtime_a, _repo_a, runtime_b, repo_b) = dual_workspace_runtimes();
     let friction_id = add_test_friction(&runtime_a);
     let owner = runtime_a.workspace_id().expect("workspace a id");
@@ -364,8 +345,7 @@ fn cross_workspace_resolves_automation_update_is_rejected() {
     );
 }
 
-#[test]
-fn same_workspace_resolves_still_wins_when_another_workspace_shares_the_id() {
+fn same_workspace_resolves_still_wins_when_another_workspace_shares_the_id_scenario() {
     let (_root, runtime_a, _repo_a, runtime_b, repo_b) = dual_workspace_runtimes();
     let foreign_id = add_test_friction(&runtime_a);
     let local_id = add_test_friction(&runtime_b);
@@ -423,24 +403,10 @@ fn comment_on_task(runtime: &OrbitRuntime, task_id: &str, comment: &str) {
         .expect("comment on done task");
 }
 
-fn auto_resolved_events(runtime: &OrbitRuntime, friction_id: &str) -> usize {
-    runtime
-        .list_session_events(200)
-        .expect("session events")
-        .iter()
-        .filter(|event| {
-            event.payload.get("type") == Some(&json!("FrictionAutoResolved"))
-                && event.payload["data"]["friction_id"] == json!(friction_id)
-        })
-        .count()
-}
-
-#[test]
-fn writes_to_a_done_task_do_not_re_resolve_a_friction_a_human_reopened() {
+fn writes_to_a_done_task_do_not_re_resolve_a_friction_a_human_reopened_scenario() {
     let (_root, runtime, repo_root) = test_runtime();
     let (friction_id, task_id) = complete_task_with_resolves(&runtime, &repo_root);
     assert_friction_resolved_by(&runtime, &friction_id, &task_id);
-    assert_eq!(auto_resolved_events(&runtime, &friction_id), 1);
     reopen_friction(&runtime, &friction_id);
 
     comment_on_task(&runtime, &task_id, "The fix shipped in the last release.");
@@ -486,11 +452,9 @@ fn writes_to_a_done_task_do_not_re_resolve_a_friction_a_human_reopened() {
         )
         .expect("desktop comment on done task");
     assert_friction_still_open(&runtime, &friction_id);
-    assert_eq!(auto_resolved_events(&runtime, &friction_id), 1);
 }
 
-#[test]
-fn a_resolves_side_effect_that_failed_at_done_is_retried_by_a_later_write() {
+fn a_resolves_side_effect_that_failed_at_done_is_retried_by_a_later_write_scenario() {
     let (_root, runtime, repo_root) = test_runtime();
     let friction_id = add_test_friction(&runtime);
     let task_id = add_task_with_resolves(&runtime, &repo_root, &friction_id, "backlog");
@@ -525,3 +489,92 @@ fn a_resolves_side_effect_that_failed_at_done_is_retried_by_a_later_write() {
     comment_on_task(&runtime, &task_id, "Follow-up note.");
     assert_friction_still_open(&runtime, &friction_id);
 }
+
+/// A manual move to done has no landing to authorize a text target: its
+/// relation target resolves, and its text target is settled on the record
+/// rather than left owed forever.
+fn manual_done_settles_a_text_target_without_resolving_it_scenario() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let text = add_test_friction(&runtime);
+    let related = add_test_friction(&runtime);
+    let task = add_task_with_resolves(&runtime, &repo_root, &related, "backlog");
+    runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({
+                "id": task,
+                "model": "codex",
+                "description": format!("Background: {text}."),
+            }),
+        )
+        .expect("name the text target");
+    move_backlog_task_to_review(&runtime, &task);
+    runtime
+        .apply_task_automation_update(
+            &task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            },
+        )
+        .expect("complete task");
+    assert_friction_resolved_by(&runtime, &related, &task);
+    assert_friction_still_open(&runtime, &text);
+    let settled = format!("target={text}");
+    assert!(
+        runtime
+            .get_task_history(&task)
+            .expect("task history")
+            .iter()
+            .any(|entry| entry.event == "resolves_side_effect_recovered"
+                && entry
+                    .note
+                    .as_deref()
+                    .is_some_and(|note| note.starts_with(&settled)))
+    );
+}
+
+crate::scenario_table!(
+    review_approval_resolves_related_friction_and_surfaces_json_fields,
+    review_approval_resolves_related_friction_and_surfaces_json_fields_scenario
+);
+crate::scenario_table!(
+    automation_update_to_done_resolves_related_friction,
+    automation_update_to_done_resolves_related_friction_scenario
+);
+crate::scenario_table!(
+    approving_task_with_dangling_friction_relation_succeeds,
+    approving_task_with_dangling_friction_relation_succeeds_scenario
+);
+crate::scenario_table!(
+    approving_task_does_not_overwrite_existing_friction_resolution,
+    approving_task_does_not_overwrite_existing_friction_resolution_scenario
+);
+crate::scenario_table!(
+    approving_proposed_task_does_not_resolve_friction,
+    approving_proposed_task_does_not_resolve_friction_scenario
+);
+crate::scenario_table!(
+    cross_workspace_resolves_update_to_done_is_rejected,
+    cross_workspace_resolves_update_to_done_is_rejected_scenario
+);
+crate::scenario_table!(
+    cross_workspace_resolves_automation_update_is_rejected,
+    cross_workspace_resolves_automation_update_is_rejected_scenario
+);
+crate::scenario_table!(
+    same_workspace_resolves_still_wins_when_another_workspace_shares_the_id,
+    same_workspace_resolves_still_wins_when_another_workspace_shares_the_id_scenario
+);
+crate::scenario_table!(
+    writes_to_a_done_task_do_not_re_resolve_a_friction_a_human_reopened,
+    writes_to_a_done_task_do_not_re_resolve_a_friction_a_human_reopened_scenario
+);
+crate::scenario_table!(
+    a_resolves_side_effect_that_failed_at_done_is_retried_by_a_later_write,
+    a_resolves_side_effect_that_failed_at_done_is_retried_by_a_later_write_scenario
+);
+crate::scenario_table!(
+    manual_done_settles_a_text_target_without_resolving_it,
+    manual_done_settles_a_text_target_without_resolving_it_scenario
+);

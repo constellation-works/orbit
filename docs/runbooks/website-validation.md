@@ -5,7 +5,7 @@ tags: [operations, website, sandbox, playwright, validation]
 paths: ["website/**"]
 related_features: [orbit-docs]
 related_artifacts: ["ORB-11329", "ORB-11379", "F2026-10-688"]
-last_validated: 2026-10-29
+last_validated: 2026-11-14
 ---
 
 # Validate Website Changes in a Job-Run Sandbox
@@ -112,7 +112,7 @@ candidate dependencies, generated pages and output directories are untouched.
 Prefer the host's
 [browser kit](../../crates/orbit-core/assets/skills/orbit-setup/references/browser-checks.md):
 in a worker, source `"$ORBIT_BROWSER_KIT_ENV"`, which Orbit sets once
-`orbit browser-kit install` has verified the kit; by hand, source
+`orbit config browser-kit install` has verified the kit; by hand, source
 `~/.local/chromium-deps/env.sh`. The disposable installation below is the
 fallback when neither is available.
 
@@ -365,28 +365,25 @@ confirm playback pauses without advancing. Save the screenshots, decoded
 frame timestamps and browser measurements with the task evidence. Do not
 publish or access a live dashboard as part of this local regression check.
 
-### Project overview card navigation
-
-After `npm run build`, run this browser check through the foreground wrapper above. The
-wrapper owns preview on `PREVIEW_PORT` until the checker exits, and refuses to start the
-checker if that port is taken:
-
-```bash
-run_foreground_preview_check command node "$REPO/website/scripts/check-project.mjs" \
-  "$PLAYWRIGHT_MODULE" "$PREVIEW_URL" .orbit/tmp/project-links-browser
-```
-
-The check opens `/project/`, activates the Contributing and Privacy cards, and verifies
-that each navigation reaches the expected root route and renders its destination heading.
-It saves the visited URLs, response statuses, and headings under the evidence directory.
-
 ### Inline code layout checks
 
-After `npm run check` and `npm run build`, run this browser regression check through the
-foreground wrapper above. It keeps the built `dist/` served on loopback at
-`PREVIEW_PORT` until the checker exits, and refuses to start if that port is taken; the
-staged Playwright package from "Stage Playwright and Chromium" above satisfies
-the browser requirement:
+Run this built-site leg only from a genuinely authorized operator or validator
+surface with explicit access to `website/dist/`. The checker discovers routes by
+reading the built output (`htmlRoutes()` in `website/scripts/check-inline-code.mjs`
+reads `../dist/`), so route discovery and the browser check both require that
+access. A repository validator is not automatically authorized to access a denied
+path. The same denied-read refusal as the `security.txt` generated-asset rule
+above applies: after a denial, do not inspect `website/dist/` with Read, `grep`,
+`rg`, another executable, a copy, or a wrapper, and do not broaden the committed
+permission to bypass it.
+
+On an authorized surface, after `npm run check` and `npm run build`, run this browser
+regression check through the foreground wrapper above. It keeps the built `dist/` served
+on loopback at `PREVIEW_PORT` until the checker exits, and refuses to start if that port
+is taken; the staged Playwright package from "Stage Playwright and Chromium" above satisfies
+the browser requirement. The foreground wrapper owns the preview for the managed-agent
+run, and a port conflict remains a refusal: free the port or choose another rather than
+sharing or reusing a server this run does not own:
 
 ```bash
 run_foreground_preview_check command node "$REPO/website/scripts/check-inline-code.mjs" \
@@ -399,13 +396,20 @@ The script discovers every built HTML page and checks 375, 768, 1024, 1280 and
 code clipping, delimiter-only line breaks, single-line desktop keys, and table
 and page width. On `/reference/cli/`, it checks every table for code clipping,
 preserved copy text, and first-line alignment between the command/option and
-its description. It opens disclosures, selects each provider panel, measures
+its description. It opens disclosures, measures
 glyph line breaks and code/container bounds, checks that `.`, `,`, `;`, `:` or
 `)` after a code stays on the code's last line, checks that links containing
-only code keep their underline (painted, for four known links at 1280px),
+only code keep their underline (painted, for the known links at 1280px),
 checks mobile page overflow, and
 verifies the agents provider table's width and borders. It saves measurements
 and failure screenshots in the evidence directory.
+
+When `website/dist/` access is denied or otherwise unavailable, leave this leg
+blocked/not-run: record the denied path, the command not run, and this section as
+the source-based reference for what the check would have covered, then record the
+required authorized follow-up as a re-run of this check from an authorized operator
+or validator surface with explicit `website/dist/` access. Do not substitute a
+scratch fixture, a copied tree, or another executable as built-site evidence.
 
 When changing a Markdown plugin, run
 `ASTRO_TELEMETRY_DISABLED=1 npm exec -- astro sync --force` in `website/`

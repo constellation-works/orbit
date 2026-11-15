@@ -1,5 +1,7 @@
 //! Fulfilment attempt decisions survive the newest-run scan window.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use chrono::{DateTime, Duration, Utc};
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::JobRunQuery;
@@ -63,20 +65,59 @@ fn recent_runs(fixture: &Fixture) -> Vec<JobRun> {
 
 /// Explicit timestamps age the hold out, without sleeps or competing work.
 /// Include different holds of this same task to guard against substituting
-/// a bounded task history for the bounded job history.
+/// a bounded task history for the bounded job history. One transaction writes
+/// the whole window; the ids stay outside the minted `jrun-` sequence.
 fn age_out(fixture: &Fixture, key: &str) {
+    static BATCH: AtomicU64 = AtomicU64::new(0);
+    let batch = BATCH.fetch_add(1, Ordering::Relaxed);
     let now = Utc::now();
+    let job_id = REVIEW_EVIDENCE_FULFILMENT_JOB.to_string();
+    let mut runs = Vec::with_capacity(201);
+    let mut states = Vec::with_capacity(201);
     for index in 0..201 {
-        seed_run(
-            fixture,
-            json!({
-                "task_id": fixture.task_id,
-                "hold_key": format!("other-hold-{index}"),
-            }),
-            now + Duration::milliseconds(index),
-            Some(json!({"retryable": false, "reason": "findings_reported"})),
-        );
+        let at = now + Duration::milliseconds(index);
+        let input = json!({
+            "task_id": fixture.task_id,
+            "hold_key": format!("other-hold-{batch}-{index}"),
+        });
+        let run_id = format!("age-out-{batch}-{index:04}");
+        let mut state = PipelineState::new(run_id.clone(), job_id.clone(), input.clone());
+        state.pipeline["fulfil"] = json!({"retryable": false, "reason": "findings_reported"});
+        runs.push(JobRun {
+            build: None,
+            executed_on: None,
+            run_id,
+            job_id: job_id.clone(),
+            attempt: 1,
+            state: JobRunState::Success,
+            scheduled_at: at,
+            started_at: None,
+            finished_at: Some(at),
+            duration_ms: None,
+            created_at: at,
+            pid: None,
+            pid_start_time: None,
+            input: Some(input),
+            retry_source_run_id: None,
+            knowledge_metrics: None,
+            resolved_crew: None,
+            crew_model: None,
+            steps: Vec::new(),
+        });
+        states.push(state);
     }
+    let paired: Vec<_> = runs
+        .iter()
+        .zip(states.iter())
+        .map(|(run, state)| (run, Some(state)))
+        .collect();
+    let workspace_id = fixture.runtime.workspace_id().unwrap();
+    fixture
+        .runtime
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_runs_for_workspace(&workspace_id, &paired)
+        .unwrap();
     let window = recent_runs(fixture);
     assert_eq!(window.len(), 200);
     assert!(
@@ -128,9 +169,10 @@ fn retryable_and_missing_outcomes_keep_their_budget_after_aging_out() {
         );
         return;
     }
+    // `candidate_unreachable` recorded a different reason string and otherwise
+    // repeated this row. The job still reports `disk_insufficient`.
     for output in [
         Some(json!({"retryable": true, "reason": "disk_insufficient"})),
-        Some(json!({"retryable": true, "reason": "candidate_unreachable"})),
         None,
     ] {
         let (fixture, hold) = held(Stub::Clean, CODEQL);

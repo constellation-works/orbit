@@ -1,4 +1,4 @@
-//! Security sweeps use config layering, report what the floor excluded, and
+//! Security sweeps apply the fixed moderate floor, report what it excluded, and
 //! consolidate historical per-alert tasks without losing duplicate owners.
 //! Regression for the moderate alerts silently omitted on 2026-10-06/07.
 
@@ -9,17 +9,13 @@ use orbit_tools::ToolContext;
 use orbit_types::task::{CodeScanningAlertEvidence, TaskDecision, TaskRelation, TaskRelationType};
 use serde_json::{Value, json};
 
-fn fixture(global: Option<&str>, workspace: Option<&str>) -> (tempfile::TempDir, OrbitRuntime) {
+fn fixture() -> (tempfile::TempDir, OrbitRuntime) {
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global_root = root.path().join("home/.orbit");
     let workspace_root = root.path().join("repo/.orbit");
-    for (path, severity) in [(&global_root, global), (&workspace_root, workspace)] {
+    for path in [&global_root, &workspace_root] {
         std::fs::create_dir_all(path).unwrap();
-        // An existing workspace file with no floor must still inherit global.
-        let config = severity.map_or_else(String::new, |severity| {
-            format!("[security_alert_sweep]\nmin_severity = {severity:?}\n")
-        });
-        std::fs::write(path.join("config.toml"), config).unwrap();
+        std::fs::write(path.join("config.toml"), "").unwrap();
     }
     let runtime = OrbitRuntime::from_roots(&global_root, &workspace_root).unwrap();
     (root, runtime)
@@ -57,7 +53,7 @@ fn consolidation_retires_every_duplicate_alert_owner_once() {
     // Duplicate owners alone also need consolidation even though the group
     // contains only one unique alert.
     for numbers in [vec![81, 81], vec![81, 81, 82]] {
-        let (root, runtime) = fixture(None, None);
+        let (root, runtime) = fixture();
         let prerequisite = runtime
             .add_task(TaskAddParams {
                 title: "Shared prerequisite".to_string(),
@@ -174,55 +170,31 @@ fn consolidation_retires_every_duplicate_alert_owner_once() {
     }
 }
 
-fn filing_applies_each_config_layer_and_reports_the_effective_source() {
-    for (global, workspace, floor, source, filed, excluded) in [
-        (None, None, "moderate", "built-in", 1, vec![72]),
-        (None, Some("high"), "high", "workspace", 0, vec![71, 72]),
-        (Some("high"), None, "high", "global", 0, vec![71, 72]),
-        (
-            Some("critical"),
-            Some("moderate"),
-            "moderate",
-            "workspace",
-            1,
-            vec![72],
-        ),
-        (
-            Some("moderate"),
-            Some("high"),
-            "high",
-            "workspace",
-            0,
-            vec![71, 72],
-        ),
-    ] {
-        let (_root, runtime) = fixture(global, workspace);
-        let output = file(&runtime, snapshot(), None);
-        assert_eq!(output["min_severity"], floor);
-        assert_eq!(output["min_severity_source"], source);
-        assert_eq!(
-            output["filed_count"], filed,
-            "moderate findings must not silently disappear (2026-10-06/07 sweep incident)"
-        );
-        let numbers: Vec<_> = output["excluded_below_min_severity"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|alert| alert["number"].as_u64().unwrap())
-            .collect();
-        assert_eq!(numbers, excluded);
-        if filed > 0 {
-            let task = runtime
-                .get_task(output["filed"][0]["task_id"].as_str().unwrap())
-                .unwrap();
-            assert!(task.tags.iter().any(|tag| tag == "dependabot-sweep"));
-            assert!(task.description.contains("rustls"));
-        }
-    }
+fn filing_applies_the_fixed_floor_and_reports_its_source() {
+    let (_root, runtime) = fixture();
+    let output = file(&runtime, snapshot(), None);
+    assert_eq!(output["min_severity"], "moderate");
+    assert_eq!(output["min_severity_source"], "built-in");
+    assert_eq!(
+        output["filed_count"], 1,
+        "moderate findings must not silently disappear (2026-10-06/07 sweep incident)"
+    );
+    let numbers: Vec<_> = output["excluded_below_min_severity"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|alert| alert["number"].as_u64().unwrap())
+        .collect();
+    assert_eq!(numbers, vec![72]);
+    let task = runtime
+        .get_task(output["filed"][0]["task_id"].as_str().unwrap())
+        .unwrap();
+    assert!(task.tags.iter().any(|tag| tag == "dependabot-sweep"));
+    assert!(task.description.contains("rustls"));
 }
 
-fn input_overrides_config_for_one_filing_and_secrets_ignore_the_floor() {
-    let (_root, runtime) = fixture(Some("high"), Some("moderate"));
+fn input_overrides_the_floor_for_one_filing_and_secrets_ignore_it() {
+    let (_root, runtime) = fixture();
     let mut snapshot = snapshot();
     snapshot["code_scanning"] = json!({"collected": true, "open_alerts": [{
         "number": 81, "security_severity": "moderate", "rule_id": "rust/example",
@@ -250,39 +222,12 @@ fn input_overrides_config_for_one_filing_and_secrets_ignore_the_floor() {
 
     let configured_output = file(&runtime, snapshot, None);
     assert_eq!(configured_output["min_severity"], "moderate");
-    assert_eq!(configured_output["min_severity_source"], "workspace");
+    assert_eq!(configured_output["min_severity_source"], "built-in");
     assert_eq!(configured_output["filed_count"], 2);
     assert_eq!(
         configured_output["excluded_below_min_severity"][0]["number"],
         72
     );
-}
-
-fn invalid_severity_is_rejected_by_config_admission_with_its_key() {
-    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
-    let global = root.path().join("global");
-    let workspace = root.path().join("workspace");
-    std::fs::create_dir_all(&global).unwrap();
-    std::fs::create_dir_all(&workspace).unwrap();
-    for invalid_layer in [&global, &workspace] {
-        std::fs::write(global.join("config.toml"), "").unwrap();
-        std::fs::write(workspace.join("config.toml"), "").unwrap();
-        std::fs::write(
-            invalid_layer.join("config.toml"),
-            "[security_alert_sweep]\nmin_severity = \"urgent\"\n",
-        )
-        .unwrap();
-        let error = orbit_config::load_effective_config(&orbit_config::ConfigRoots::new(
-            &global, &workspace,
-        ))
-        .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("security_alert_sweep.min_severity"),
-            "{error}"
-        );
-    }
 }
 
 fn code_alert(number: u64, rule: &str, path: &str, line: u64) -> Value {
@@ -348,7 +293,7 @@ fn code_tasks(runtime: &OrbitRuntime) -> usize {
 /// re-filed alert #484 thirteen minutes after its owner was rejected as a false
 /// positive (on-call ORB-15178, failure class B10).
 fn rejected_code_scanning_owner_suppresses_refiling_until_the_alert_changes() {
-    let (_root, runtime) = fixture(None, None);
+    let (_root, runtime) = fixture();
     let rule = "rust/cleartext-logging";
     let path = "crates/a/src/lib.rs";
 
@@ -393,7 +338,7 @@ fn rejected_code_scanning_owner_suppresses_refiling_until_the_alert_changes() {
         code_snapshot(484, rule, "crates/b/src/lib.rs"),
         code_snapshot(484, "rust/path-injection", path),
     ] {
-        let (_root, runtime) = fixture(None, None);
+        let (_root, runtime) = fixture();
         let first = file(&runtime, code_snapshot(484, rule, path), None);
         let owner = first["filed"][0]["task_id"].as_str().unwrap().to_string();
         runtime
@@ -413,7 +358,7 @@ fn rejected_owner_distinguishes_punctuation_only_path_and_rule_changes() {
     let rule = "rust/cleartext-logging";
     let path = "crates/foo-bar/src/lib.rs";
 
-    let (_root, runtime) = fixture(None, None);
+    let (_root, runtime) = fixture();
     let first = file(&runtime, code_snapshot(484, rule, path), None);
     assert_eq!(first["filed_count"], 1, "{first}");
     let owner = first["filed"][0]["task_id"].as_str().unwrap().to_string();
@@ -432,7 +377,7 @@ fn rejected_owner_distinguishes_punctuation_only_path_and_rule_changes() {
         code_snapshot(484, "rust/cleartext-logging-v2", path),
         code_alerts_snapshot(vec![code_alert(484, rule, path, 120)]),
     ] {
-        let (_root, runtime) = fixture(None, None);
+        let (_root, runtime) = fixture();
         let first = file(&runtime, code_snapshot(484, rule, path), None);
         let owner = first["filed"][0]["task_id"].as_str().unwrap().to_string();
         runtime
@@ -448,7 +393,7 @@ fn rejected_owner_distinguishes_punctuation_only_path_and_rule_changes() {
 /// a sibling's old location must file that alert again; the unchanged sibling
 /// stays suppressed by the same rejected task.
 fn rejected_grouped_owner_refills_alert_moved_onto_a_sibling_location() {
-    let (_root, runtime) = fixture(None, None);
+    let (_root, runtime) = fixture();
     let rule = "rust/cleartext-logging";
     let original = code_alerts_snapshot(vec![
         code_alert(484, rule, "crates/a/src/lib.rs", 12),
@@ -506,7 +451,7 @@ fn rejected_grouped_owner_refills_alert_moved_onto_a_sibling_location() {
 /// a verdict on the alert, so a still-open alert whose covering task finished
 /// must be filed again.
 fn rejection_naming_a_covering_task_does_not_suppress_code_scanning_refiling() {
-    let (_root, runtime) = fixture(None, None);
+    let (_root, runtime) = fixture();
     let snapshot = || code_snapshot(484, "rust/cleartext-logging", "crates/a/src/lib.rs");
     let first = file(&runtime, snapshot(), None);
     let owner = first["filed"][0]["task_id"].as_str().unwrap().to_string();
@@ -524,7 +469,7 @@ fn rejection_naming_a_covering_task_does_not_suppress_code_scanning_refiling() {
 
 fn rejected_source_uses_supersedes_before_legacy_consolidation_comments() {
     for (typed, terminal) in [(true, false), (true, true), (false, false)] {
-        let (root, runtime) = fixture(None, None);
+        let (root, runtime) = fixture();
         let snapshot = || code_snapshot(484, "rust/cleartext-logging", "crates/a/src/lib.rs");
         let first = file(&runtime, snapshot(), None);
         let source_id = first["filed"][0]["task_id"].as_str().unwrap();
@@ -621,7 +566,7 @@ fn typed_evidence(number: u64, line: u64) -> CodeScanningAlertEvidence {
 fn typed_code_scanning_evidence_consolidates_despite_edited_prose() {
     // Filing a single alert records the typed decision and renders the
     // same human-readable evidence bullets from it.
-    let (_root, runtime) = fixture(None, None);
+    let (_root, runtime) = fixture();
     let filed = file(
         &runtime,
         code_snapshot(484, "rust/cleartext-logging", "crates/a/src/lib.rs"),
@@ -656,7 +601,7 @@ fn typed_code_scanning_evidence_consolidates_despite_edited_prose() {
     );
 
     // Typed records whose prose was edited past recognition still group.
-    let (_root, runtime) = fixture(None, None);
+    let (_root, runtime) = fixture();
     let mut source_ids = Vec::new();
     for number in [81_u64, 82] {
         let source = runtime
@@ -701,7 +646,7 @@ fn typed_code_scanning_evidence_consolidates_despite_edited_prose() {
 
     // A creation entry carrying a different decision is mismatched: the
     // valid legacy markdown in its description must not be consulted.
-    let (_root, runtime) = fixture(None, None);
+    let (_root, runtime) = fixture();
     for number in [81_u64, 82] {
         runtime
             .add_task(TaskAddParams {
@@ -746,7 +691,7 @@ fn consolidate_on(runtime: &OrbitRuntime) -> Value {
 }
 
 fn mixed_legacy_and_typed_code_scanning_evidence_with_missing_guid_consolidates() {
-    let (_root, runtime) = fixture(None, None);
+    let (_root, runtime) = fixture();
 
     // 1. Mixed pair with missing GUID (alert 81 is legacy with guid `unknown`,
     //    alert 82 is typed with empty guid ""). Both share the same cause:
@@ -1040,9 +985,8 @@ fn mixed_legacy_and_typed_code_scanning_evidence_with_missing_guid_consolidates(
 crate::scenario_table!(
     consolidation_retires_every_duplicate_alert_owner_once_scenarios,
     consolidation_retires_every_duplicate_alert_owner_once,
-    filing_applies_each_config_layer_and_reports_the_effective_source,
-    input_overrides_config_for_one_filing_and_secrets_ignore_the_floor,
-    invalid_severity_is_rejected_by_config_admission_with_its_key,
+    filing_applies_the_fixed_floor_and_reports_its_source,
+    input_overrides_the_floor_for_one_filing_and_secrets_ignore_it,
     mixed_legacy_and_typed_code_scanning_evidence_with_missing_guid_consolidates,
     rejected_code_scanning_owner_suppresses_refiling_until_the_alert_changes,
     rejected_owner_distinguishes_punctuation_only_path_and_rule_changes,

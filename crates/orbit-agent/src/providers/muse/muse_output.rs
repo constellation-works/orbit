@@ -36,8 +36,11 @@
 //! a string `payload_type` means the stream cannot be trusted, and the whole
 //! output reduces to empty, which carries no envelope and so fails closed.
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
-use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
+use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource, ToolCallTrace};
+use orbit_types::workflow::activity_job::Provider;
 use serde_json::Value;
 
 use super::super::usage_window::top_level_frames;
@@ -141,6 +144,60 @@ fn terminal_info(payload: Option<&Value>) -> TerminalInfo {
     }
 }
 
+/// Tool calls on a Muse `--json` stream, from `tool.result` records only.
+///
+/// `None` when the capture has no Muse record, so other providers are left
+/// alone. `side_effect_intent` is not a tool call. The answer projection
+/// still keeps only the terminal text; result text is counted, not stored.
+pub(crate) fn recorded_muse_tool_calls(stdout: &[u8]) -> Option<Vec<ToolCallTrace>> {
+    let mut saw_record = false;
+    let mut calls: Vec<ToolCallTrace> = Vec::new();
+    let mut by_id: HashMap<String, usize> = HashMap::new();
+    for (_, frame) in top_level_frames(stdout) {
+        let Some(payload_type) = frame.get("payload_type").and_then(Value::as_str) else {
+            continue;
+        };
+        saw_record = true;
+        if payload_type != "tool.result" {
+            continue;
+        }
+        let Some(payload) = frame.get("payload").and_then(Value::as_object) else {
+            continue;
+        };
+        let Some(name) = payload
+            .get("correlation_facts")
+            .and_then(Value::as_object)
+            .and_then(|facts| facts.get("tool_name"))
+            .and_then(Value::as_str)
+            .filter(|name| !name.is_empty())
+        else {
+            continue;
+        };
+        let bytes = payload
+            .get("text")
+            .and_then(Value::as_str)
+            .map(|text| text.len() as u64)
+            .unwrap_or(0);
+        if let Some(id) = payload.get("call_id").and_then(Value::as_str)
+            && let Some(&index) = by_id.get(id)
+        {
+            calls[index].result_bytes = bytes;
+            continue;
+        }
+        let index = calls.len();
+        if let Some(id) = payload.get("call_id").and_then(Value::as_str) {
+            by_id.insert(id.to_string(), index);
+        }
+        calls.push(ToolCallTrace {
+            seq: (index + 1) as u32,
+            tool_name: name.to_string(),
+            result_bytes: bytes,
+            result_payload: None,
+        });
+    }
+    saw_record.then_some(calls)
+}
+
 /// Return the terminal record's text for tracing and diagnostics,
 /// or empty bytes when the stream is malformed or carries no terminal text.
 ///
@@ -180,8 +237,8 @@ pub(crate) fn project_muse_response(stdout: &[u8]) -> Vec<u8> {
 /// child-task records never count as failure evidence. Completed terminals
 /// and malformed streams yield `None`. Unbounded in the prose it selects;
 /// the caller bounds and redacts it, and this helper bounds it again.
-pub fn muse_terminal_failure_diagnostic(provider: &str, stdout: &[u8]) -> Option<String> {
-    if provider != "muse" {
+pub fn muse_terminal_failure_diagnostic(provider: Provider, stdout: &[u8]) -> Option<String> {
+    if provider != Provider::Muse {
         return None;
     }
     let info = last_terminal(stdout)?;

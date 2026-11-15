@@ -1,13 +1,12 @@
 use orbit_common::OrbitError;
 use orbit_store::contracts::{ClaimEvidence, ClaimWorkerUpdate};
+use orbit_types::task::{self, RecordedReviewSettlement, ReviewSettlementGate};
 use orbit_types::workflow::{REVIEW_GATE_ARTIFACT, ReviewCertificate};
 use serde_json::json;
 
 use crate::OrbitRuntime;
 use crate::application::review::gate::context::GateContext;
-use crate::application::review::gate::judgement::{
-    Delivery, comment_lead, verdict_comment, write_artifact,
-};
+use crate::application::review::gate::judgement::{Delivery, verdict_comment, write_artifact};
 use crate::application::task::TaskUpdateParams;
 
 /// Give every task the certificate artifact and verdict comment, writing
@@ -34,7 +33,14 @@ pub(super) fn publish_certificate(
             Delivery::BeforePr
         };
         let comment = verdict_comment(certificate, &delivery);
-        let lead = comment_lead(certificate, &delivery);
+        let settlement = RecordedReviewSettlement::from_certificate(
+            certificate,
+            if landing {
+                ReviewSettlementGate::BeforeLanding
+            } else {
+                ReviewSettlementGate::BeforePr
+            },
+        );
         let current = runtime.get_task_artifact(&task.id, REVIEW_GATE_ARTIFACT)?;
         let current_matches = current
             .as_ref()
@@ -61,12 +67,14 @@ pub(super) fn publish_certificate(
         }
         // The status line may differ on a replay, so a comment already
         // posted for this attempt and verdict counts as disclosed.
-        let disclosed = runtime
-            .get_task_comments(&task.id)?
-            .iter()
-            .any(|existing| existing.message.trim_start().starts_with(&lead));
+        let disclosed = task::recorded_review_settlements(
+            &runtime.get_task_history(&task.id)?,
+            &runtime.get_task_comments(&task.id)?,
+        )
+        .iter()
+        .any(|(_, held)| held.same_publication(&settlement));
         if !disclosed {
-            post_comment(runtime, context, &task.id, &comment)?;
+            post_comment(runtime, context, &task.id, &comment, &settlement)?;
         }
     }
     Ok(())
@@ -79,6 +87,7 @@ fn post_comment(
     context: &GateContext,
     task_id: &str,
     comment: &str,
+    settlement: &RecordedReviewSettlement,
 ) -> Result<(), OrbitError> {
     if context.claimed {
         runtime.route_worker_host_tool(
@@ -88,6 +97,7 @@ fn post_comment(
                 "_worker_update": ClaimWorkerUpdate {
                     evidence: ClaimEvidence {
                         comment: Some(comment.to_string()),
+                        review_settlement: Some(settlement.clone()),
                         ..ClaimEvidence::default()
                     },
                     ..ClaimWorkerUpdate::default()
@@ -100,6 +110,7 @@ fn post_comment(
         task_id,
         TaskUpdateParams {
             comment: Some(comment.to_string()),
+            review_settlement: Some(settlement.clone()),
             ..TaskUpdateParams::default()
         },
         None,

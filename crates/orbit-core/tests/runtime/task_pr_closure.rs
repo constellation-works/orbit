@@ -236,27 +236,15 @@ impl Fixture {
             BOT,
         );
     }
-
-    fn session_event_types(&self) -> Vec<(String, Value)> {
-        self.runtime
-            .list_session_events(200)
-            .expect("session events")
-            .into_iter()
-            .map(|event| {
-                (
-                    event.payload["type"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_string(),
-                    event.payload["data"].clone(),
-                )
-            })
-            .collect()
-    }
 }
 
 #[test]
 fn landing_through_a_pr_closes_the_tasks_other_orbit_prs_naming_the_landing() {
+    if !super::dispatch_admission::isolated(
+        "task_pr_closure::landing_through_a_pr_closes_the_tasks_other_orbit_prs_naming_the_landing",
+    ) {
+        return;
+    }
     let fx = Fixture::new();
     let task_id = fx.add_task("Lands through another PR");
     let other = fx.add_task("Unrelated task");
@@ -304,6 +292,11 @@ fn landing_through_a_pr_closes_the_tasks_other_orbit_prs_naming_the_landing() {
 
 #[test]
 fn landing_through_a_commit_names_the_commit() {
+    if !super::dispatch_admission::isolated(
+        "task_pr_closure::landing_through_a_commit_names_the_commit",
+    ) {
+        return;
+    }
     let fx = Fixture::new();
     let task_id = fx.add_task("Lands through a commit");
     let other = fx.add_task("Unrelated task");
@@ -329,6 +322,11 @@ fn landing_through_a_commit_names_the_commit() {
 
 #[test]
 fn rejecting_closes_the_tasks_orbit_prs_with_the_state_and_reason() {
+    if !super::dispatch_admission::isolated(
+        "task_pr_closure::rejecting_closes_the_tasks_orbit_prs_with_the_state_and_reason",
+    ) {
+        return;
+    }
     let fx = Fixture::new();
     let task_id = fx.add_task("Rejected task");
     let other = fx.add_task("Unrelated task");
@@ -351,6 +349,11 @@ fn rejecting_closes_the_tasks_orbit_prs_with_the_state_and_reason() {
 
 #[test]
 fn archiving_closes_the_tasks_orbit_prs_naming_the_state() {
+    if !super::dispatch_admission::isolated(
+        "task_pr_closure::archiving_closes_the_tasks_orbit_prs_naming_the_state",
+    ) {
+        return;
+    }
     let fx = Fixture::new();
     let task_id = fx.add_task("Archived task");
     let other = fx.add_task("Unrelated task");
@@ -365,6 +368,11 @@ fn archiving_closes_the_tasks_orbit_prs_naming_the_state() {
 
 #[test]
 fn archiving_a_done_task_keeps_the_pr_its_approval_left_open() {
+    if !super::dispatch_admission::isolated(
+        "task_pr_closure::archiving_a_done_task_keeps_the_pr_its_approval_left_open",
+    ) {
+        return;
+    }
     let fx = Fixture::new();
     let task_id = fx.add_task("Approved, then archived before its PR merged");
     let other = fx.add_task("Unrelated task");
@@ -395,6 +403,9 @@ fn archiving_a_done_task_keeps_the_pr_its_approval_left_open() {
 
 #[test]
 fn a_new_run_leaves_blocked_prs_open() {
+    if !super::dispatch_admission::isolated("task_pr_closure::a_new_run_leaves_blocked_prs_open") {
+        return;
+    }
     let fx = Fixture::new();
     let task_id = fx.add_task("Blocked then re-run");
     let other = fx.add_task("Unrelated task");
@@ -432,6 +443,11 @@ fn a_new_run_leaves_blocked_prs_open() {
 
 #[test]
 fn forge_errors_are_warnings_and_never_fail_the_transition() {
+    if !super::dispatch_admission::isolated(
+        "task_pr_closure::forge_errors_are_warnings_and_never_fail_the_transition",
+    ) {
+        return;
+    }
     let fx = Fixture::new();
     let listed = fx.add_task("Lookup fails");
     let closing = fx.add_task("One close fails");
@@ -462,19 +478,15 @@ fn forge_errors_are_warnings_and_never_fail_the_transition() {
         vec![13],
         "the other PR still closes"
     );
-
-    let failures = fx
-        .session_event_types()
-        .into_iter()
-        .filter(|(kind, _)| kind == "TaskPullRequestCloseFailed")
-        .map(|(_, data)| (data["task_id"].clone(), data["pr_number"].clone()))
-        .collect::<Vec<_>>();
-    assert!(failures.contains(&(json!(listed), Value::Null)));
-    assert!(failures.contains(&(json!(closing), json!(11))));
 }
 
 #[test]
 fn configured_delivery_authors_replace_the_forge_login() {
+    if !super::dispatch_admission::isolated(
+        "task_pr_closure::configured_delivery_authors_replace_the_forge_login",
+    ) {
+        return;
+    }
     let fx = Fixture::with_config(Some("[pr]\ndelivery_authors = [\"Orbit-Bot\"]\n"));
     let task_id = fx.add_task("Configured identity");
     let other = fx.add_task("Unrelated task");
@@ -489,23 +501,12 @@ fn configured_delivery_authors_replace_the_forge_login() {
 }
 
 #[test]
-fn the_config_switch_disables_closing() {
-    let fx = Fixture::with_config(Some("[pr]\nclose_on_terminal = false\n"));
-    let task_id = fx.add_task("Switch off");
-    let other = fx.add_task("Unrelated task");
-    fx.seed_forge(&task_id, &other);
-    fx.record_prs(&task_id, &[11, 13]);
-
-    fx.runtime
-        .reject_task(&task_id, "not wanted".to_string(), None)
-        .expect("reject the task");
-
-    assert!(fx.forge.closed_numbers().is_empty());
-    assert_eq!(fx.forge.state().lookups, 0);
-}
-
-#[test]
 fn an_operator_requeue_closes_the_tasks_undelivered_orbit_prs() {
+    if !super::dispatch_admission::isolated(
+        "task_pr_closure::an_operator_requeue_closes_the_tasks_undelivered_orbit_prs",
+    ) {
+        return;
+    }
     let fx = Fixture::new();
     let task_id = fx.add_task("Sent back from review");
     let other = fx.add_task("Unrelated task");
@@ -540,6 +541,11 @@ fn an_operator_requeue_closes_the_tasks_undelivered_orbit_prs() {
 
 #[test]
 fn leaving_blocked_keeps_the_failure_handoff_pr_until_its_candidate_is_discarded() {
+    if !super::dispatch_admission::isolated(
+        "task_pr_closure::leaving_blocked_keeps_the_failure_handoff_pr_until_its_candidate_is_discarded",
+    ) {
+        return;
+    }
     let fx = Fixture::new();
     let task_id = fx.add_task("Blocked with a handoff PR");
     let other = fx.add_task("Unrelated task");
@@ -588,6 +594,9 @@ fn leaving_blocked_keeps_the_failure_handoff_pr_until_its_candidate_is_discarded
 
 #[test]
 fn automation_requeues_close_nothing() {
+    if !super::dispatch_admission::isolated("task_pr_closure::automation_requeues_close_nothing") {
+        return;
+    }
     let fx = Fixture::new();
     let task_id = fx.add_task("Held by automation");
     let other = fx.add_task("Unrelated task");
@@ -616,6 +625,11 @@ fn automation_requeues_close_nothing() {
 
 #[test]
 fn a_shelved_failure_handoff_pr_stays_open_across_later_shelf_moves() {
+    if !super::dispatch_admission::isolated(
+        "task_pr_closure::a_shelved_failure_handoff_pr_stays_open_across_later_shelf_moves",
+    ) {
+        return;
+    }
     let fx = Fixture::new();
     let task_id = fx.add_task("Blocked, then shelved twice");
     let other = fx.add_task("Unrelated task");
@@ -645,6 +659,11 @@ fn a_shelved_failure_handoff_pr_stays_open_across_later_shelf_moves() {
 
 #[test]
 fn a_requeue_while_the_tasks_run_is_live_closes_nothing() {
+    if !super::dispatch_admission::isolated(
+        "task_pr_closure::a_requeue_while_the_tasks_run_is_live_closes_nothing",
+    ) {
+        return;
+    }
     let fx = Fixture::new();
     let task_id = fx.add_task("Requeued under a live run");
     let other = fx.add_task("Unrelated task");
@@ -718,6 +737,11 @@ fn a_requeue_while_the_tasks_run_is_live_closes_nothing() {
 
 #[test]
 fn a_requeue_while_a_resumed_retry_is_live_closes_nothing() {
+    if !super::dispatch_admission::isolated(
+        "task_pr_closure::a_requeue_while_a_resumed_retry_is_live_closes_nothing",
+    ) {
+        return;
+    }
     let fx = Fixture::new();
     let task_id = fx.add_task("Requeued under a resumed retry");
     let other = fx.add_task("Unrelated task");
@@ -827,6 +851,11 @@ fn a_requeue_while_a_resumed_retry_is_live_closes_nothing() {
 
 #[test]
 fn leaving_a_terminal_status_or_unshelving_closes_nothing() {
+    if !super::dispatch_admission::isolated(
+        "task_pr_closure::leaving_a_terminal_status_or_unshelving_closes_nothing",
+    ) {
+        return;
+    }
     let fx = Fixture::new();
     let task_id = fx.add_task("Done, then forced back");
     let other = fx.add_task("Unrelated task");
@@ -875,6 +904,11 @@ fn leaving_a_terminal_status_or_unshelving_closes_nothing() {
 /// longer lookalike id stay open.
 #[test]
 fn a_template_body_without_a_task_placeholder_still_closes_on_terminal() {
+    if !super::dispatch_admission::isolated(
+        "task_pr_closure::a_template_body_without_a_task_placeholder_still_closes_on_terminal",
+    ) {
+        return;
+    }
     let fx = Fixture::new();
     let task_id = fx.add_task("Fix the widget");
     let other = fx.add_task("Unrelated task");

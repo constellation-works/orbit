@@ -10,8 +10,8 @@ use crate::OrbitRuntime;
 use crate::application::task::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use crate::application::task::TaskRecords;
 use crate::application::task::{
-    FindingEvidence, InvalidFinding, SYSTEM_ACTOR_LABEL, TaskAttributionInput, TaskUpdateParams,
-    VerdictConfidence, VerdictSource, VerdictWrite, assemble_task_attribution,
+    AnalyzedFinding, FindingEvidence, InvalidFinding, SYSTEM_ACTOR_LABEL, TaskAttributionInput,
+    TaskUpdateParams, VerdictConfidence, VerdictSource, VerdictWrite, assemble_task_attribution,
 };
 
 /// Apply an automation update while holding the task write lock across the
@@ -92,12 +92,12 @@ fn apply_task_automation_update_under_lock(
         )?;
     }
     if update.status == Some(TaskStatus::Done) && existing_task.status != TaskStatus::Done {
-        crate::application::task::ensure_post_deploy_criteria_met(runtime, &existing_task)?;
-        runtime.ensure_mutation_proposals_applied(&existing_task)?;
-        runtime.ensure_resolves_are_workspace_local(&existing_task)?;
+        crate::application::task::ensure_completion_gates(runtime, &existing_task)?;
     }
-    let (agent, model) =
-        crate::context::trusted_write_identity(update.agent.as_deref(), update.model.as_deref());
+    let (agent, model) = crate::runtime::context::trusted_write_identity(
+        update.agent.as_deref(),
+        update.model.as_deref(),
+    );
     let runtime_model_identity = <OrbitRuntime as RuntimeHost>::actor_model_identity(runtime);
     let attribution = assemble_task_attribution(
         &existing_task,
@@ -145,7 +145,11 @@ fn apply_task_automation_update_under_lock(
                 implemented_by: attribution.implemented_by.clone(),
                 external_refs,
                 status_event: update.status_event.clone(),
-                status_note: update.status_note.clone(),
+                status_note: update
+                    .status_note
+                    .as_deref()
+                    .map(orbit_common::security::redaction::redact_all),
+                status_decision: update.status_decision.clone(),
                 append_comments: update.append_comments.clone(),
                 append_history: update.append_history.clone(),
                 expected_status: Some(vec![existing_task.status]),
@@ -196,7 +200,7 @@ pub(super) fn apply_task_automation_update(
             "_worker_update": orbit_store::contracts::ClaimWorkerUpdate {
                 status: update.status, plan: update.plan, context_files: update.context_files,
                 external_refs: update.external_refs, status_note: update.status_note,
-                evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment, artifacts: vec![], provider_unavailable: None, baseline_red: None, final_recovery: None, failure: None, evidence_hold: None, held_pull_request: None, forge_hold: None, claimed_review: None, crew: None, crew_model: None},
+                evidence: orbit_store::contracts::ClaimEvidence {review_settlement: None, summary: update.execution_summary, comment, artifacts: vec![], provider_unavailable: None, baseline_red: None, final_recovery: None, failure: None, evidence_hold: None, held_pull_request: None, forge_hold: None, claimed_review: None, crew: None, crew_model: None, leaf_run: None},
                 ..Default::default()
             }
         }))?;
@@ -222,6 +226,12 @@ pub(super) fn reject_invalid_finding(
     let crew = RuntimeHost::get_job_run(runtime, &report.run_id)?.and_then(|run| run.resolved_crew);
     let finding = InvalidFinding {
         source: VerdictSource::Implementer,
+        analyzed: AnalyzedFinding {
+            fingerprint: &report.finding_fingerprint,
+            status: TaskStatus::InProgress,
+            // A task in progress admits no other route's verdict.
+            history_boundary: None,
+        },
         verified_sha: &report.tested_head,
         base_branch,
         confidence: VerdictConfidence::High,

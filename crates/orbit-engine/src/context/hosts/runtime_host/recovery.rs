@@ -39,6 +39,9 @@ macro_rules! recovery_methods {
         /// `PipelineState` (`step_outputs[step_index]`,
         /// `compound_outputs[step_index]`, and `pipeline` by key) so an
         /// interrupted run can be resumed without re-executing completed steps.
+        /// `script_outputs` holds the script output sets behind the exposed
+        /// entries, by pipeline key (`script_output_sets[step_index]`), and
+        /// belongs to the same write.
         /// Both halves belong to one write: a step recorded as completed without
         /// its compound outputs would resume with those entries missing. A host
         /// without run storage records nothing. Checkpoint failures are non-fatal to the run: the executor
@@ -50,7 +53,73 @@ macro_rules! recovery_methods {
             step_id: &str,
             output: &Value,
             compound_outputs: &BTreeMap<String, Value>,
+            script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
         ) -> Result<(), DispatchError>;
+
+        /// Persist the checkpoint of a top-level step its `when:` skipped. It
+        /// records what [`Self::checkpoint_step`] records for a null output
+        /// (the step stays `success`, which readers of completed steps rely
+        /// on) and also marks the step skipped, so a resumed run leaves its
+        /// output absent from later templates, as the uninterrupted run did,
+        /// while an executed step's null output is still restored. Non-fatal,
+        /// like `checkpoint_step`.
+        fn checkpoint_skipped_step(
+            &self,
+            run_id: &str,
+            step_index: u32,
+            step_id: &str,
+        ) -> Result<(), DispatchError>;
+
+        /// Observe one `auto-task:` step pass deterministically (ORB-20158):
+        /// its durable record, the frozen definition's hold, the bound task's
+        /// terminal receipt, the deadline, expiry and readiness at the owner's
+        /// pass time. Writes nothing. A host that cannot observe refuses, so
+        /// the step never mints on a guess.
+        fn observe_auto_task_step(
+            &self,
+            run_id: &str,
+            request: &AutoTaskStepRequest,
+        ) -> Result<AutoTaskObservation, DispatchError>;
+
+        /// Durably record an `auto-task:` step's record in the run's versioned
+        /// checkpoint before the engine relies on it. Fail-closed: the engine
+        /// admits nothing after an error.
+        fn checkpoint_auto_task_step(
+            &self,
+            run_id: &str,
+            step_id: &str,
+            record: &AutoTaskStepRecord,
+        ) -> Result<(), DispatchError>;
+
+        /// Resolve the step's durable reservation under the owner admission
+        /// fence: an existing task minted for its action key, a compatible
+        /// open instance, a hold, or one keyed mint after re-checking
+        /// readiness, guards and expiry. Requires a checkpointed reservation.
+        fn admit_auto_task_step(
+            &self,
+            run_id: &str,
+            step_id: &str,
+        ) -> Result<AutoTaskAdmission, DispatchError>;
+
+        /// Durably record a succeeded branch of a `parallel:` block in a job
+        /// with auto-task steps, so a replay restores it instead of running
+        /// it again. Fail-closed. A target branch's `output` is that
+        /// branch's raw output. A compound branch (`loop`, `fan_out`, or a
+        /// nested `parallel`) stores an opaque object the engine reads
+        /// back: the branch output plus the other pipeline entries it
+        /// exposed. Hosts persist the value unchanged.
+        fn checkpoint_parallel_branch(
+            &self,
+            run_id: &str,
+            step_id: &str,
+            branch_id: &str,
+            output: &Value,
+        ) -> Result<(), DispatchError>;
+
+        /// Park the run: it stays live and counts against its job's
+        /// `max_active_runs`, holds no worker, and the owner clock resumes it
+        /// at `park.wake_at`. Orphan reconciliation tells it from worker loss.
+        fn park_job_run(&self, run_id: &str, park: &ParkedWait) -> Result<(), DispatchError>;
 
         /// Persist diagnostic output from an incomplete step without marking it
         /// successful or making it eligible for resume skipping.
@@ -59,9 +128,7 @@ macro_rules! recovery_methods {
             _run_id: &str,
             _step_id: &str,
             _output: &Value,
-        ) -> Result<(), DispatchError> {
-            Ok(())
-        }
+        ) -> Result<(), DispatchError>;
 
         /// Persist a successful terminal failure activity separately from normal
         /// step checkpoints. The failed step remains failed; this records only the
@@ -101,9 +168,7 @@ macro_rules! recovery_methods {
             _run_id: &str,
             _pull_request: &str,
             proposed: u64,
-        ) -> Result<u64, OrbitError> {
-            Ok(proposed)
-        }
+        ) -> Result<u64, OrbitError>;
 
         /// Bind native validation to task meaning and the effective completion policy.
         /// Hosts without this evidence never reuse a published completion prefix.
@@ -111,9 +176,7 @@ macro_rules! recovery_methods {
             &self,
             _run_id: &str,
             _task_ids: &[String],
-        ) -> Result<Option<String>, OrbitError> {
-            Ok(None)
-        }
+        ) -> Result<Option<String>, OrbitError>;
 
         /// Classify a transient completion observation after authenticating the
         /// publication and its receipts. This grants no authority to retry mutations.
@@ -131,9 +194,7 @@ macro_rules! recovery_methods {
             _run_id: &str,
             _task_id: &str,
             _step_id: &str,
-        ) -> Result<bool, OrbitError> {
-            Ok(false)
-        }
+        ) -> Result<bool, OrbitError>;
 
         /// [ORB-13907] Act on an admitted final recovery's decision: record it,
         /// and apply every decision but `resume` to the task through the
@@ -144,6 +205,17 @@ macro_rules! recovery_methods {
             run_id: &str,
             application: &FinalRecoveryApplication,
         ) -> Result<FinalRecoveryApplied, OrbitError>;
+
+        /// Persist bounded scratch evidence for this run's admitted recovery task.
+        /// The host authenticates the task, reads files under the assigned
+        /// worktree's scratch directory and carries claimed evidence to its owner.
+        fn persist_final_recovery_evidence(
+            &self,
+            run_id: &str,
+            task_id: &str,
+            workspace: &std::path::Path,
+            evidence: &Value,
+        ) -> Result<(), OrbitError>;
 
         /// Reserve the host-only identity of one preparation or rebase recovery
         /// of `step_id`, before issuing its certificate (and, for conflicts,
@@ -207,8 +279,8 @@ macro_rules! recovery_methods {
             proc_allowed_programs: Option<&[String]>,
         ) -> ToolContext;
 
-        /// Record one dispatch's invocation: its provider, model, crew account
-        /// and trace.
+        /// Record one dispatch's launch identity before its provider starts.
+        /// This includes the provider, model, and crew account.
         fn begin_agent_execution(
             &self,
             run_id: &str,
@@ -218,6 +290,8 @@ macro_rules! recovery_methods {
             identity: &orbit_types::telemetry::AgentExecutionIdentity,
         ) -> Result<Option<i64>, OrbitError>;
 
+        /// Record one dispatch's invocation: its provider, model, crew account
+        /// and trace.
         fn persist_invocation_trace(
             &self,
             job_run_id: &str,

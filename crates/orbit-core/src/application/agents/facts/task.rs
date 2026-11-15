@@ -5,21 +5,23 @@ use orbit_types::task::{
     GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskComment, TaskHistoryEntry, TaskRelationType,
     TaskStatus, tags_at,
 };
-use orbit_types::workflow::ReviewVerdict;
+use orbit_types::workflow::{self, ReviewVerdict};
 
 use super::super::records::{
     Cause, blocked_pr, bounded, cites_criteria, is_operator_requeue, landed, landing_pr,
     restart_cause, run_spans, spec_blocker_kind, spec_documents,
 };
 use super::super::roles::pilot_warnings::settle;
-use super::attempts::{assigned_runner, runner};
-use super::model::{Attempt, FiledFinding, Problem, Record, Review, RunRecord, Runner, TaskFacts};
-use super::review::{failed_fix, settlement};
+use super::attempts::{
+    assigned_runner, execution_mode, final_attempt, landed_at, opened_by_claim, runner,
+};
+use super::model::{Attempt, FiledFinding, Problem, Record, RunRecord, Runner, TaskFacts};
+use super::review;
 use crate::application::task::{is_review_finding, latest_verification};
 
 /// The facts of one task. `classify` gives the cause a block or run exit
 /// records.
-pub(super) fn task_facts(
+pub(in crate::application::agents) fn task_facts(
     task: &Task,
     history: &[TaskHistoryEntry],
     comments: &[TaskComment],
@@ -31,31 +33,27 @@ pub(super) fn task_facts(
     let spans = run_spans(history);
     let attempts: Vec<Attempt> = spans
         .iter()
-        .map(|span| Attempt {
-            start: span.start,
-            end: span.end,
-            runner: runner(runs, span.start, span.end.or(Some(now)))
-                .unwrap_or_else(|| assigned_runner(task, history, pulled, span.start)),
-            tags: tags_at(history, &task.tags, span.start),
+        .map(|span| {
+            let matched = runner(runs, span.start, span.end.or(Some(now)));
+            Attempt {
+                start: span.start,
+                end: span.end,
+                job: matched.is_some() || opened_by_claim(history, span.start),
+                local: matched.is_some(),
+                implementer: true,
+                runner: matched
+                    .unwrap_or_else(|| assigned_runner(task, history, pulled, span.start)),
+                tags: tags_at(history, &task.tags, span.start),
+            }
         })
         .collect();
     let landed = landed(task.status, history);
     let dropped = matches!(task.status, TaskStatus::Archived | TaskStatus::Rejected) && !landed;
-    let landed_at = landed
-        .then(|| {
-            history
-                .iter()
-                .rev()
-                .find(|entry| entry.to_status == Some(TaskStatus::Done))
-                .map(|entry| entry.at)
-        })
-        .flatten();
-    let final_attempt = landed
-        .then(|| match landed_at {
-            Some(at) => attempts.iter().rposition(|attempt| attempt.start <= at),
-            None => attempts.len().checked_sub(1),
-        })
-        .flatten();
+    let landed_at = landed.then(|| landed_at(history)).flatten();
+    let starts: Vec<_> = attempts.iter().map(|attempt| attempt.start).collect();
+    let final_attempt = final_attempt(landed, landed_at, &starts);
+    let jobs: Vec<bool> = attempts.iter().map(|attempt| attempt.job).collect();
+    let execution = execution_mode(task.status, history, &jobs, final_attempt, !runs.is_empty());
     let mut records = Vec::new();
 
     // Spec defects recorded on the task's own history. An edited task counts
@@ -185,29 +183,19 @@ pub(super) fn task_facts(
         });
     }
 
-    // Review gate settlements and escalations of reviewer fixes, from the
-    // comments the gate posts. A replayed settlement is counted once.
-    let mut reviews: Vec<Review> = Vec::new();
-    for comment in comments {
-        if let Some(review) = settlement(comment) {
-            if !reviews
-                .iter()
-                .any(|seen| seen.attempt_id == review.attempt_id)
-            {
-                reviews.push(review);
-            }
-        } else if failed_fix(comment) {
-            if let Some(review) = reviews.iter_mut().rfind(|review| review.at <= comment.at) {
-                review.fix_failed = true;
-            }
-            records.push(Record {
-                problem: Problem::FailedFix,
-                at: comment.at,
-                detail: "reviewer fixes failed owner revalidation".to_string(),
-                cause: None,
-                ended: None,
-            });
+    // Decode settlements and fix-validation failures once at the facts boundary.
+    let mut reviews = review::review_settlement_facts(history, comments);
+    for at in workflow::review_fix_validation_failure_times(history, comments) {
+        if let Some(review) = reviews.iter_mut().rfind(|review| review.at <= at) {
+            review.fix_failed = true;
         }
+        records.push(Record {
+            problem: Problem::FailedFix,
+            at,
+            detail: "reviewer fixes failed owner revalidation".to_string(),
+            cause: None,
+            ended: None,
+        });
     }
     // An incomplete review is infrastructure's when the block that followed
     // its settlement is.
@@ -250,19 +238,6 @@ pub(super) fn task_facts(
         id: task.id.to_string(),
         title: task.title.clone(),
         status: task.status,
-        orchestrator: task
-            .orchestrator
-            .as_deref()
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .map(str::to_string),
-        orchestrator_model: task
-            .orchestrator_model
-            .as_deref()
-            .map(str::trim)
-            .filter(|model| !model.is_empty())
-            .map(str::to_string),
-        origin: task.origin,
         tags: task.tags.clone(),
         context_files: task.context_files.clone(),
         complexity: task.complexity,
@@ -271,12 +246,10 @@ pub(super) fn task_facts(
         dropped,
         attempts,
         final_attempt,
+        execution,
         landed_at,
         records,
         reviews,
-        // Filled by the scan from `visual/review.json`; the per-task
-        // facts pass reads no artifacts.
-        visual_review: None,
         filed,
         warnings,
     }

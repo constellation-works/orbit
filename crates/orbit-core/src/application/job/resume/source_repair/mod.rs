@@ -2,12 +2,14 @@
 
 mod admission;
 mod adoption;
+mod certified_rebase;
 mod completion;
 mod escalated_publication;
 mod handoff;
 mod identity;
 mod inline_publication;
 mod observation;
+mod proof;
 mod publication;
 mod published_owner;
 mod reconciliation;
@@ -18,7 +20,6 @@ use std::collections::BTreeSet;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_common::fs::git::run_git;
 use orbit_common::security::release::sha256_hex;
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::JobRunQuery;
@@ -34,6 +35,7 @@ use crate::OrbitRuntime;
 use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
 use crate::runtime::run_input::carried_task_ids;
 use admission::{
-    RepairLink, digest, field, refuse, run_evidence_digest, task_digest, task_pr_association,
+    RepairLink, digest, field, refuse, refuse_run_state, run_evidence_digest, task_digest,
+    task_pr_association,
 };
 pub(crate) use published_owner::PublishedResume;

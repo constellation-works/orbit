@@ -101,13 +101,13 @@ fn no_root_path_available() -> bool {
 /// The command that resolves `unresolved` on this host.
 pub(super) fn fix(unresolved: &[String]) -> String {
     if debian_like() {
-        "orbit browser-kit install (unpacks the packages into the kit without root), or \
-         orbit browser-kit install --with-deps (installs them system-wide with sudo)"
+        "orbit config browser-kit install (unpacks the packages into the kit without root), or \
+         orbit config browser-kit install --with-deps (installs them system-wide with sudo)"
             .to_string()
     } else {
         format!(
             "Install the distribution packages that provide {} with the system package manager \
-             (for example `dnf provides '*/{}'`), then rerun `orbit browser-kit install`",
+             (for example `dnf provides '*/{}'`), then rerun `orbit config browser-kit install`",
             unresolved.join(", "),
             unresolved.first().map(String::as_str).unwrap_or("libX.so")
         )
@@ -174,7 +174,7 @@ pub(super) const FONT_UNRESOLVED: &str = "fonts: no usable font found";
 fn font_fix() -> String {
     "Install a font package so Chromium has a font to render with (for example \
      fonts-dejavu-core on Debian/Ubuntu, or the distribution package that provides \
-     DejaVu Sans), then rerun `orbit browser-kit install`"
+     DejaVu Sans), then rerun `orbit config browser-kit install`"
         .to_string()
 }
 

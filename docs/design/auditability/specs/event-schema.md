@@ -1,7 +1,8 @@
 ---
 type: design
 summary: Spec: Audit Event Schema
-last_validated: 2026-10-29
+last_validated: 2026-11-03
+last_updated: 2026-11-14
 ---
 
 # Spec: Audit Event Schema
@@ -36,11 +37,13 @@ Required invariants:
 - Error messages are redacted before insertion.
 - Command rows do not embed full provider request/response bodies.
 - Legacy `host`, `session_id`, and `job_run_id` retain their meanings: executing-process hostname, legacy session correlation, and canonical run correlation respectively.
-- MCP rows may add `workspace_id`, caller/process machine and display-host IDs, transport, the complete effective capability set, `origin_session_id`, `mcp_call_id`, and `lease_id`.
-- `mcp_call_id` is generated once before preflight and is shared by the call's denial or dispatch outcome. Two calls in one origin session have distinct call IDs.
+- MCP rows may add `workspace_id`, caller/process machine and display-host IDs, transport, the complete effective capability set, `origin_session_id`, per-call `trace_id`, best-effort `caller_ip`, the untrusted `self_reported_actor`, and, on federated routed calls only, the compatibility `mcp_call_id`. V1 MCP sessions carry no execution leases, so `lease_id` stays null on their rows.
+- Host-authorized application calls add an optional `application` object containing the non-secret consent record, the active scope index and callback flag. Consent v2 also records `scope_name`, `match` (`exact` or `constrained`; a missing `match` means exact, including every row written before v2), `bindings` (identity and digest values only), `text_digests` (sha256 and length, never the text), `predicate` (the task state admission read) and, on a callback row, `entry_execution_id` (the entry row's `execution_id`). `orbit audit show` of an entry lists the callback rows whose `entry_execution_id` matches, the newest 100 at most; past that it marks the list incomplete. A constrained refusal adds `refused` (`scope_name`, `field`, `constraint`) and no values from the call. A constrained, named or rate-limited consent expires no later than 30 days after consent. An optional per-scope `rate_limit` is off unless the operator sets one. The credential secret is not included.
+- `trace_id` is minted once per `tools/call` by the accepting MCP server and is shared by that call's denial or dispatch outcome. Two calls in one origin session have distinct trace IDs. A federated routed call may also carry the compatibility `mcp_call_id`; it is not required on every MCP row and is not the direct per-call correlation key.
 - MCP capability authorization and filters use set membership. There is no authorizing member, ordinal, ceiling, or max-capability field.
 - External MCP JSON may populate only the legacy workspace address selector. Trusted audit identity and correlation come from the adapter/runtime and authenticated managed envelope; standalone MCP role is `unverified`.
-- A trusted leased-run ID fills an empty `job_run_id` or must match it; audit adds `lease_id`, not another run column.
+- A trusted managed-run ID fills an empty `job_run_id` or must match it. Managed-run correlation adds no lease column for v1 MCP sessions, which carry no execution leases.
+- MCP `initialize` may supply `self_reported_actor`: an unverified client claim kept in its own column. It never changes `role`, the canonical `actor_*` projection, or any authorization decision.
 
 Failure modes:
 
@@ -49,7 +52,7 @@ Failure modes:
   would otherwise bypass destructors. Closed stdout during rendering unwinds
   to the rendering boundary so the success row can be persisted first.
 - If audit insertion fails during `Drop`, the CLI prints a warning and does not mask the command result.
-- If a tool implementation succeeds but its runtime audit insertion fails, the call fails closed and does not surface a successful result. The non-fatal `Drop` rule applies only to guard-side RAII persistence.
+- If a successful tool call's runtime audit insertion is lock-busy, it is retried once. If the insertion still fails, a read-only call returns its result unchanged with a warning, and a mutating call returns success with `audit_warning` (`code: audit_row_unpersisted`, naming the committed `tool` and `id`), because the mutation is already committed. A failed tool call keeps its own error. The non-fatal `Drop` rule applies only to guard-side RAII persistence.
 - If runtime initialization fails before the guard exists, no command audit row is written.
 
 ### V2 Activity/Job Audit Event
@@ -68,26 +71,25 @@ Required invariants:
 
 Failure modes:
 
-- If v2 audit-store persistence fails, in-memory event capture remains the load-bearing smoke-verification path.
+- If v2 audit-store persistence fails, the writer counts and logs the failure and the run continues. No in-memory copy of the event is kept, so sink-backed snapshots omit it and the durable trail is incomplete for that event.
 - If a worker thread emits events, it must install the parent stack snapshot before emission.
 - If an activity/job run fails before writer construction, no v2 audit event is expected.
 
-### Loop Audit Event
+### Historical Loop Audit Rows
 
-Loop audit events are sink events represented by `LoopAuditEvent`; the durable runtime sink persists them as v2 audit rows.
+The retired HTTP agent loop wrote `source: loop_event` rows to `v2_audit_events`.
+Their payloads remain opaque JSON and are neither rewritten nor emitted by current
+runtime code. Generic audit-row handling and retention still apply.
 
-Required invariants:
+### Audit Blobs
 
-- Every event includes `run_id`.
-- Session-scoped events include `session_id`.
-- HTTP request/response bodies and tool input/output payloads are stored as blob hashes, not inline bodies.
-- Policy denials record the denied tool and reason.
-- Blob bytes are redacted before hashing and writing.
+`AuditSink::write_blob` stores payload bytes separately from envelope events.
+Blob bytes are redacted before hashing and writing.
 
 Failure modes:
 
-- If a blob write fails, the sink may return an `error:<message>` reference; readers must treat that as a failed payload capture.
-- If no durable sink is installed, `NullSink` intentionally drops events and blobs. Production activity/job callers should not use it.
+- If a blob write fails, the sink returns an `error:<message>` sentinel. `V2AuditWriter` counts and logs the audit failure and returns no blob reference, so the sentinel never reaches an envelope as a reference.
+- `NullSink` intentionally drops blobs and returns an empty reference. Production activity/job callers should use a durable sink.
 
 ### Invocation Trace
 
@@ -108,3 +110,9 @@ Required invariants:
 ## Agent Signature
 
 Last revised by codex / gpt-5.5 for [T20260508-8].
+
+## Task References
+
+- **[T20260508-8]** — Record backend: cli subprocess cwd in v2 audit and live tracing.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

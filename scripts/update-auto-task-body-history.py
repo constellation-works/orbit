@@ -20,10 +20,36 @@ ASSETS = Path("crates/orbit-core/assets/auto_tasks")
 OUTPUT = ROOT / ASSETS / "body-history.json"
 SOURCES = ROOT / "crates/orbit-cli/tests/fixtures/auto-task-body-history/sources.json"
 PLACEHOLDER = "__ORBIT_BASE_BRANCH__"
+# A revision counts as landed only when reachable from an integration
+# branch. Task-branch commits are reachable from HEAD but, after a squash
+# merge, never become ancestors of the integration branch, so recording
+# them makes `--check` fail there. Prefer the remote integration branch;
+# fall back to HEAD's first-parent history when no integration ref exists
+# (e.g. the isolated fixtures in the generator's test).
+INTEGRATION_REF_GROUPS = (
+    ("origin/agent-main", "agent-main"),
+    ("origin/main", "main"),
+    ("origin/master", "master"),
+)
 
 
 def git(*args):
     return subprocess.check_output(["git", *args], cwd=ROOT, text=True)
+
+
+def ref_available(ref):
+    return not subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=ROOT,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    ).returncode
+
+
+def integration_refs():
+    for group in INTEGRATION_REF_GROUPS:
+        refs = [ref for ref in group if ref_available(ref)]
+        if refs:
+            return refs
+    return []
 
 
 def commit_available(revision):
@@ -37,13 +63,32 @@ def source(path, revision):
     # Missing commits in a shallow clone must not erase previously shipped bodies.
     if not commit_available(revision):
         return None
-    return git("show", f"{revision}:{path}")
+    # A revision that deleted the asset has no body; the earlier ones do.
+    shown = subprocess.run(
+        ["git", "show", f"{revision}:{path}"], cwd=ROOT, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )
+    return shown.stdout if shown.returncode == 0 else ""
 
 
 def record(raw, revision):
     # Match the v1 definition's serde defaults/omissions before fingerprinting.
-    definition = yaml.safe_load(raw)
-    template = definition["template"]
+    where = f"auto-task body at {revision}" if revision else "current auto-task body"
+    try:
+        definition = yaml.safe_load(raw)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"{where}: invalid YAML: {exc}") from exc
+    if not isinstance(definition, dict):
+        raise ValueError(f"{where}: definition must be a mapping, got {type(definition).__name__}")
+    template = definition.get("template")
+    if not isinstance(template, dict):
+        raise ValueError(f"{where}: template must be a mapping, got {type(template).__name__}")
+    if "schedule" not in definition:
+        raise ValueError(f"{where}: missing schedule")
+    if not isinstance(definition["schedule"], dict):
+        raise ValueError(
+            f"{where}: schedule must be a mapping, got {type(definition['schedule']).__name__}"
+        )
     settings = {
         "enabled": definition.get("enabled", True),
         "schedule": definition["schedule"],
@@ -75,11 +120,16 @@ def record(raw, revision):
             template.pop(field, None)
     probe = definition.get("skip_if_unchanged")
     if probe:
+        if not isinstance(probe, dict):
+            raise ValueError(f"{where}: skip_if_unchanged must be a mapping, got {type(probe).__name__}")
+        cursor = probe.get("cursor")
+        if not isinstance(cursor, dict):
+            raise ValueError(f"{where}: skip_if_unchanged.cursor must be a mapping, got {type(cursor).__name__}")
         # Shipped probes used agent-main before branch rendering was introduced.
-        if probe["ref"] == "agent-main":
+        if probe.get("ref") == "agent-main":
             probe["ref"] = PLACEHOLDER
-        if not probe["cursor"].get("legacy_tags"):
-            probe["cursor"].pop("legacy_tags", None)
+        if not cursor.get("legacy_tags"):
+            cursor.pop("legacy_tags", None)
     else:
         definition.pop("skip_if_unchanged", None)
     canonical = json.dumps(definition, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
@@ -106,6 +156,8 @@ def main():
         parser.exit(1, "body history check requires full Git history; fetch with --unshallow\n")
     history = json.loads(OUTPUT.read_text()) if OUTPUT.exists() else {}
     sources = json.loads(SOURCES.read_text()) if SOURCES.exists() else {}
+    parents = git("rev-list", "--parents", "-n", "1", "HEAD").split()[1:]
+    refs = integration_refs()
     snapshots = {}
     names = set(history) | {asset.stem for asset in (ROOT / ASSETS).glob("*.yaml")}
     for name in sorted(names):
@@ -115,19 +167,46 @@ def main():
         snapshots[name] = {}
         current_path = ROOT / path
         current = record(current_path.read_text(), "") if current_path.exists() else None
-        # Only integration commits are trusted; uncommitted edits never gain provenance.
-        revisions = git("log", "--first-parent", "--format=%H", "HEAD", "--", path).splitlines()
+        # Include each side's first-parent history at a merge head. In a PR
+        # that merges its base, HEAD's first parent is the task branch, not
+        # the integration branch. Prefer the parents to the synthetic merge
+        # commit when selecting provenance for an identical body.
+        starts = parents if len(parents) > 1 else []
+        revisions = []
+        for start in [*reversed(starts), "HEAD"]:
+            revisions.extend(git("log", "--first-parent", "--format=%H", start, "--", path).splitlines())
+        revisions = list(dict.fromkeys(revisions))
+        if refs:
+            # Keep only revisions landed on an integration branch. This
+            # still includes merged-base history at a PR head that merges
+            # its base: those commits are ancestors of the integration
+            # branch even though HEAD's first parent is the task branch.
+            landed_revisions = set()
+            for ref in refs:
+                landed_revisions.update(
+                    git("log", "--first-parent", "--format=%H", ref, "--", path).splitlines())
+            revisions = [revision for revision in revisions if revision in landed_revisions]
         landed = set(revisions)
-        # A recorded revision that is a known commit but not on the asset's
-        # first-parent history never landed (e.g. a pre-squash draft), so it
-        # must not be retained as a shipped body. Unavailable revisions are
-        # retained below via their source fixture, as in a shallow checkout.
-        candidates = [
-            old["revision"] for old in history.get(name, [])
-            if old["revision"] in landed or not commit_available(old["revision"])
-        ] + revisions
+        # Reject available draft bodies absent from these histories. Retain
+        # unavailable revisions via their fixture, as in a shallow checkout.
+        landed_bodies = [record(raw, revision) for revision in revisions
+                         if (raw := source(path, revision))]
+        candidates = []
+        for old in history.get(name, []):
+            revision = old["revision"]
+            raw = source(path, revision)
+            # An older record may name a pre-squash commit whose same body
+            # did land under another SHA. Keep its stable provenance even if
+            # the draft object happens to exist in this checkout.
+            if (revision in landed or raw is None
+                    or (raw and any(same_body(record(raw, revision), body)
+                                    for body in landed_bodies))):
+                candidates.append(revision)
+        candidates += revisions
         for revision in candidates:
             raw = source(path, revision)
+            if raw == "":
+                continue
             if raw is None:
                 raw = originals.get(revision)
             if raw is None:
@@ -158,4 +237,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    try:
+        main()
+    except (ValueError, OSError, subprocess.CalledProcessError) as exc:
+        print(f"update-auto-task-body-history: {exc}", file=sys.stderr)
+        sys.exit(1)

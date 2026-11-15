@@ -61,6 +61,13 @@ fn reserved_aliases_and_duplicate_canonical_requirements_cannot_create_a_hold() 
     ] {
         cases.push(vec!["evidence/check.json".into(), alias.into()]);
     }
+    for paths in [
+        ["evidence/x.json", "evidence/x.log.json"],
+        ["evidence/x", "evidence/x.json"],
+        ["evidence/x.log.json", "evidence/x.json"],
+    ] {
+        cases.push(paths.into_iter().map(str::to_string).collect());
+    }
     for paths in cases {
         let mut fixture = Fixture::new();
         fixture.admit();
@@ -114,4 +121,66 @@ fn valid_requirement_and_log_aliases_use_canonical_store_keys() {
         fixture.runtime.get_task(&fixture.task_id).unwrap().status,
         TaskStatus::Backlog
     );
+}
+
+#[test]
+fn distinct_requirements_keep_independent_evidence() {
+    if !super::dispatch_admission::isolated(
+        "review_evidence_paths::distinct_requirements_keep_independent_evidence",
+    ) {
+        return;
+    }
+    let mut fixture = Fixture::new();
+    fixture.admit();
+    fixture.put_report(&report(
+        &fixture,
+        &["evidence/first.json", "evidence/second.json"],
+    ));
+    assert!(fixture.settle().is_err());
+    let hold: ReviewEvidenceHold = serde_json::from_slice(
+        &fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+            .unwrap()
+            .unwrap()
+            .content,
+    )
+    .unwrap();
+    for (index, name) in ["first", "second"].into_iter().enumerate() {
+        let log_path = format!("evidence/{name}.log.json");
+        let result_path = format!("evidence/{name}.json");
+        attach_as_operator(
+            &fixture,
+            &log_path,
+            &json!({"command": format!("external check {index}")}),
+        );
+        attach_as_operator(
+            &fixture,
+            &result_path,
+            &json!({
+                "schema_version": 1, "attempt_id": hold.attempt_id, "candidate": hold.candidate,
+                "kind": "codeql", "name": "External check", "command": format!("external check {index}"),
+                "outcome": "passed", "log_artifact": log_path,
+            }),
+        );
+        if index == 0 {
+            assert_eq!(
+                fixture.runtime.get_task(&fixture.task_id).unwrap().status,
+                TaskStatus::InProgress
+            );
+        }
+    }
+    assert_eq!(
+        fixture.runtime.get_task(&fixture.task_id).unwrap().status,
+        TaskStatus::Backlog
+    );
+    for (index, name) in ["first", "second"].into_iter().enumerate() {
+        let log = fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, &format!("evidence/{name}.log.json"))
+            .unwrap()
+            .unwrap();
+        let log: Value = serde_json::from_slice(&log.content).unwrap();
+        assert_eq!(log["command"], format!("external check {index}"));
+    }
 }

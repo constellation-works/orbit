@@ -15,13 +15,13 @@ use super::super::input::{canonicalize_existing_dir, input_string_field, require
 use super::claim::carry_to_durable_ref;
 use super::freshness::commit_sha;
 use super::git::{
-    GitTimeoutBudget, GitTimeoutBudgetGuard, direct_remote_target, fetch_remote_base,
-    git_command_success, git_output, git_success, normalize_base_branch,
-    verify_direct_remote_target,
+    GitTimeoutBudget, GitTimeoutBudgetGuard, direct_remote_target, fetch_remote_base, git_output,
+    git_success, normalize_base_branch, verify_direct_remote_target,
 };
 use super::handoff::{
-    FAILED_HANDOFF_ACTOR, FailedHandoffPhase, HandoffContext, completed_task_ids_from_input,
-    load_handoff_context, record_failed_handoff,
+    FAILED_HANDOFF_ACTOR, FailedHandoffPhase, HandoffContext, comment_already_recorded,
+    completed_task_ids_from_input, forge_hold_operation_id, load_handoff_context,
+    record_failed_handoff,
 };
 use super::operations;
 use super::pr::{PrMergeState, classify_pr_state, read_pr_status};
@@ -51,8 +51,8 @@ pub(in crate::executor::automation) fn push_batch_changes<H: RuntimeHost + ?Size
         }
         Err(error) => {
             if let Some(context) = handoff.as_ref() {
-                match ForgeUnavailableHold::from_text(&error.to_string()) {
-                    Some(hold) => record_forge_hold(host, context, &hold)?,
+                match error.forge_push_hold() {
+                    Some(failure) => record_forge_hold(host, context, &failure.hold)?,
                     None => record_failed_handoff(
                         host,
                         context,
@@ -127,16 +127,14 @@ pub(in crate::executor::automation::vcs) fn record_published_pr_head<H: RuntimeH
     host.apply_task_automation_update(
         task_id,
         TaskAutomationUpdate {
-            append_history: vec![orbit_types::task::TaskHistoryEntry {
-                at: Utc::now(),
-                by: "system".to_string(),
-                event: PR_AUTO_FIX_PUSHED_EVENT.to_string(),
-                note: Some(note),
-                from_status: None,
-                to_status: None,
-                operation_id: None,
-                decision: None,
-            }],
+            append_history: vec![
+                orbit_types::task::TaskHistoryEntry::new(
+                    Utc::now(),
+                    "system",
+                    PR_AUTO_FIX_PUSHED_EVENT,
+                )
+                .with_note(Some(note)),
+            ],
             ..TaskAutomationUpdate::default()
         },
     )
@@ -172,12 +170,9 @@ fn record_forge_hold<H: RuntimeHost + ?Sized>(
         hold.waited_ms / 1000,
         hold.diagnostic,
     );
+    let operation_id = forge_hold_operation_id(&context.batch_id);
     for task in &context.tasks {
-        if host
-            .get_task_comments(&task.id)?
-            .iter()
-            .any(|comment| comment.message.starts_with(&header))
-        {
+        if comment_already_recorded(&host.get_task_comments(&task.id)?, &operation_id, &header) {
             continue;
         }
         host.apply_task_automation_update(
@@ -187,7 +182,7 @@ fn record_forge_hold<H: RuntimeHost + ?Sized>(
                     at: Utc::now(),
                     by: FAILED_HANDOFF_ACTOR.to_string(),
                     message: message.clone(),
-                    operation_id: None,
+                    operation_id: Some(operation_id.clone()),
                 }],
                 ..TaskAutomationUpdate::default()
             },
@@ -536,16 +531,10 @@ fn push_decision(
     ]);
     let fetch_refs: Vec<&str> = fetch_args.iter().map(String::as_str).collect();
     git_success(workspace_path, &fetch_refs)?;
-    if git_command_success(
-        workspace_path,
-        &["merge-base", "--is-ancestor", remote_sha, local_sha],
-    )? {
+    if crate::executor::automation::vcs::git::is_ancestor(workspace_path, remote_sha, local_sha)? {
         return Ok(PushDecision::FastForward);
     }
-    if git_command_success(
-        workspace_path,
-        &["merge-base", "--is-ancestor", local_sha, remote_sha],
-    )? {
+    if crate::executor::automation::vcs::git::is_ancestor(workspace_path, local_sha, remote_sha)? {
         return Ok(PushDecision::RemoteAhead);
     }
     Ok(PushDecision::Diverged)
@@ -649,16 +638,7 @@ fn repair_commits(
     lease: &str,
     local_sha: &str,
 ) -> Result<Option<Vec<String>>, OrbitError> {
-    if !git_command_success(
-        workspace_path,
-        &[
-            "merge-base",
-            "--is-ancestor",
-            "--end-of-options",
-            lease,
-            local_sha,
-        ],
-    )? {
+    if !crate::executor::automation::vcs::git::is_ancestor(workspace_path, lease, local_sha)? {
         return Ok(None);
     }
     let listed = git_output(
@@ -719,16 +699,7 @@ fn merge_commit_on_base(
         return Ok(false);
     }
     let remote_base = format!("refs/remotes/origin/{base}");
-    git_command_success(
-        workspace_path,
-        &[
-            "merge-base",
-            "--is-ancestor",
-            "--end-of-options",
-            merge_commit,
-            &remote_base,
-        ],
-    )
+    crate::executor::automation::vcs::git::is_ancestor(workspace_path, merge_commit, &remote_base)
 }
 
 /// Where the repair was pushed, or why neither ref accepted it.

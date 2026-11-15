@@ -111,9 +111,10 @@ impl OrbitRuntime {
             run_id: run_id.clone(),
         };
         let tasks = self.stores().tasks();
-        let claim = tasks.resolve_execution_claims()?.into_iter().find(|claim| {
-            claim.claim.task_id == task.id && claim.bound_run.as_ref() == Some(&bound)
-        });
+        let claim = tasks
+            .resolve_task_execution_claims(&task.id)?
+            .into_iter()
+            .find(|claim| claim.bound_run.as_ref() == Some(&bound));
         let handoff = match &claim {
             Some(claim) => tasks.find_accepted_handoff(&claim.claim.claim_id)?,
             None => None,
@@ -139,7 +140,7 @@ impl OrbitRuntime {
 }
 
 /// A handed-off pull request as the provider reports it now, checked against
-/// the handoff's repository, number and landing branch.
+/// the handoff's repository, number, source branch and landing branch.
 pub(crate) struct HandoffPullRequest {
     pub(crate) number: u64,
     pub(crate) url: String,
@@ -179,8 +180,8 @@ impl OrbitRuntime {
     }
 
     /// The accepted handoff's pull request, read by number. The provider's
-    /// answer must identify that delivery: its number, repository and landing
-    /// branch.
+    /// answer must identify that delivery: its number, repository, source
+    /// branch and landing branch.
     pub(crate) fn observe_handoff_pull_request(
         &self,
         number: u64,
@@ -211,6 +212,12 @@ pub(super) fn handoff_pull_request(
             candidate.repository
         )));
     };
+    if status.head_branch.as_deref() != Some(candidate.source_branch.as_str()) {
+        return Err(invalid(&format!(
+            "pull request #{number} no longer matches the handoff's source branch {}",
+            candidate.source_branch
+        )));
+    }
     if status.base_branch.as_deref() != Some(candidate.landing_branch.as_str()) {
         return Err(invalid(&format!(
             "pull request #{number} no longer targets the handoff's landing branch {}",

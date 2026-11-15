@@ -4,6 +4,7 @@ use orbit_tools::{
     OrbitBuiltinAction, OrbitTaskScope, OrbitToolHost, ReservationOwnerContext, ToolContext,
     ToolRegistry,
 };
+use orbit_types::task::{PipelineChildAdmissionMeta, ReservationOwnerMetadata};
 use serde_json::{Value, json};
 use std::sync::{
     Arc,
@@ -37,9 +38,18 @@ fn domain_operator_modes_never_dispatch_from_a_managed_run() {
         ..Default::default()
     };
     let calls: Vec<(&str, Value)> = vec![
-        ("orbit.task.retry_handoff", json!({})),
-        ("orbit.task.recover_claim", json!({})),
-        ("orbit.task.revoke_handoff", json!({})),
+        (
+            "orbit.task.retry_handoff",
+            json!({"handoff_id":"hand-1","expected_candidate_commit":"c","expected_base_commit":"b","expected_latest_attempt":1,"expected_latest_state":"stopped","reason":"retry","request_key":"rk"}),
+        ),
+        (
+            "orbit.task.recover_claim",
+            json!({"claim_id":"claim-1","expected_phase":"running","status":"backlog","reason":"recover","request_key":"rk"}),
+        ),
+        (
+            "orbit.task.revoke_handoff",
+            json!({"handoff_id":"hand-1","expected_candidate_commit":"c","expected_base_commit":"b","reason":"revoke","request_key":"rk"}),
+        ),
         (
             "orbit.workflow.auto",
             json!({"workspace":"ws_fixture","action":"start","for_seconds":60}),
@@ -98,9 +108,14 @@ fn trusted_child_admission_preserves_internal_pipeline_invocation() {
         orbit_host: Some(host.clone()),
         reservation_owner: Some(ReservationOwnerContext {
             owner_run_id: "jrun-managed".into(),
-            owner_metadata_json: Some(
-                json!({"pipeline_child_admission":{"parent_run_id":"jrun-managed"}}).to_string(),
-            ),
+            owner_metadata: Some(ReservationOwnerMetadata {
+                pipeline_child_admission: Some(PipelineChildAdmissionMeta {
+                    action: "ship".to_string(),
+                    parent_step_id: None,
+                    blocking: false,
+                }),
+                ..Default::default()
+            }),
         }),
         ..Default::default()
     };

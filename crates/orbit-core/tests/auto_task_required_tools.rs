@@ -9,26 +9,18 @@ orbit_common::isolate_test_process!();
 use std::path::Path;
 
 use chrono::{Duration, Utc};
+use orbit_core::OrbitRuntime;
 use orbit_core::application::auto_tasks::state::{cursor_state_path, load_cursor_state};
 use orbit_core::application::auto_tasks::{SchedulerOptions, run_auto_task_scheduler_at};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{AutoTaskDefinition, OrbitRuntime};
 use orbit_types::task::{TaskArtifact, TaskStatus, TaskType};
-use orbit_types::workflow::{AutoTaskSchedule, SWEEP_CURSOR_ARTIFACT};
+use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule, SWEEP_CURSOR_ARTIFACT};
 use serde_json::Value;
 
 const BUNDLED_AUTO_TASKS: &[(&str, &str)] = &[
     (
         "architecture-audit",
         include_str!("../assets/auto_tasks/architecture-audit.yaml"),
-    ),
-    (
-        "backlog-hygiene",
-        include_str!("../assets/auto_tasks/backlog-hygiene.yaml"),
-    ),
-    (
-        "ci-budget-watch",
-        include_str!("../assets/auto_tasks/ci-budget-watch.yaml"),
     ),
     (
         "code-health-sweep",
@@ -45,10 +37,6 @@ const BUNDLED_AUTO_TASKS: &[(&str, &str)] = &[
     (
         "doc-duties",
         include_str!("../assets/auto_tasks/doc-duties.yaml"),
-    ),
-    (
-        "flaky-test-hunt",
-        include_str!("../assets/auto_tasks/flaky-test-hunt.yaml"),
     ),
     (
         "friction-curation",
@@ -162,7 +150,7 @@ fn qa_full_sweep_tool_contracts_and_symbolic_cursor_mints_next_sweep() {
         "orbit.task.add",
         "orbit.task.list",
         "orbit.task.update",
-        "orbit.task.artifact.put",
+        "orbit.task.artifact:put",
     ] {
         assert!(
             has_required_tool(&definition, tool),
@@ -170,7 +158,10 @@ fn qa_full_sweep_tool_contracts_and_symbolic_cursor_mints_next_sweep() {
         );
     }
     let description = &definition.template.description;
-    let attachments = tool_payloads(description, "orbit.task.artifact.put");
+    let attachments = tool_payloads(description, "orbit.task.artifact")
+        .into_iter()
+        .filter(|payload| payload["action"] == "put")
+        .collect::<Vec<_>>();
     assert!(
         !attachments.is_empty(),
         "the coordinator provides an artifact payload"
@@ -203,8 +194,8 @@ fn qa_full_sweep_tool_contracts_and_symbolic_cursor_mints_next_sweep() {
                 "orbit.search",
                 "orbit.task.add",
                 "orbit.task.show",
-                "orbit.task.artifact.get",
-                "orbit.task.artifact.put",
+                "orbit.task.artifact:get",
+                "orbit.task.artifact:put",
             ]
         ),
         "area chores declare the tools their progress and findings use: {area}"
@@ -219,8 +210,8 @@ fn qa_full_sweep_tool_contracts_and_symbolic_cursor_mints_next_sweep() {
             rollup,
             &[
                 "orbit.task.show",
-                "orbit.task.artifact.get",
-                "orbit.task.artifact.put"
+                "orbit.task.artifact:get",
+                "orbit.task.artifact:put"
             ]
         ),
         "the roll-up declares the tools it reads areas and records its decision with: {rollup}"
@@ -672,11 +663,11 @@ fn shipped_template_task_add_payloads_use_only_declared_keys() {
     );
 }
 
-/// The escalation triage lane that replaced the blocked-task-triage
-/// auto-task requeues only through `orbit.task.block_triage`, whose shared
-/// bound and refusals it cannot bypass: its activity withholds every agent
-/// tool that would edit, requeue or resume a task another way, and lets
-/// it file the friction an Orbit-defect block needs.
+/// The escalation triage lane records pilot-warning dispositions only through
+/// `orbit.task.block_triage`, whose shared refusals it cannot bypass: its
+/// activity withholds every agent tool that would edit, requeue or resume a
+/// task another way, and lets it file the friction an Orbit-defect finding
+/// needs.
 #[test]
 fn escalation_triage_holds_no_operator_only_tool() {
     let activity: serde_yaml::Value =
@@ -689,8 +680,8 @@ fn escalation_triage_holds_no_operator_only_tool() {
         .collect();
     for forbidden in [
         "orbit.task.update",
-        "orbit.task.requeue",
-        "orbit.workflow.run.resume",
+        "orbit.task.recover:requeue",
+        "orbit.run:resume",
     ] {
         assert!(
             disallowed.contains(&forbidden),
@@ -699,13 +690,8 @@ fn escalation_triage_holds_no_operator_only_tool() {
     }
     assert!(
         !disallowed.contains(&"orbit.task.block_triage")
-            && !disallowed.contains(&"orbit.friction.add"),
-        "the triager records block dispositions and Orbit-defect frictions: {disallowed:?}"
-    );
-    let routine: serde_yaml::Value =
-        serde_yaml::from_str(include_str!("../assets/routines/blocked_task_triage.yaml")).unwrap();
-    assert_eq!(
-        routine["enabled"], false,
-        "[ORB-10549] the replacing routine ships inert"
+            && !disallowed.contains(&"orbit.friction:add")
+            && !disallowed.contains(&"orbit.friction"),
+        "the triager records pilot-warning dispositions and Orbit-defect frictions: {disallowed:?}"
     );
 }

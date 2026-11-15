@@ -204,35 +204,6 @@
 .why-stuck-check[data-state="passed"] .why-stuck-state { color: var(--state-success); }
 .why-stuck-check[data-state="pending"] .why-stuck-state { color: var(--warn-fg); }
 
-/* Implemented → Handed off → Approved → Landing → Done, from the claim. */
-.delivery-progress {
-  list-style: none;
-  margin: 2px 0 0;
-  padding: 0;
-  display: flex;
-  gap: 4px;
-}
-/* Equal segments, except that a failed or current stage keeps its whole
-   label ("Landing stopped") and the others give way. */
-.delivery-step { flex: 1 1 0; display: flex; flex-direction: column; gap: 7px; min-width: 0; }
-.delivery-step.failed,
-.delivery-step.active { min-width: max-content; }
-.delivery-step-bar { height: 4px; border-radius: 2px; background: var(--border-strong); }
-.delivery-step.done .delivery-step-bar { background: var(--state-success); }
-.delivery-step.failed .delivery-step-bar { background: var(--state-failed); }
-.delivery-step.active .delivery-step-bar { background: var(--state-running); }
-.delivery-step-label {
-  font-size: 12px;
-  color: var(--fg-mute);
-  /* Keeps a widened label ("Landing stopped") clear of the next one. */
-  padding-right: 8px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.delivery-step.done .delivery-step-label { color: var(--fg-soft); }
-.delivery-step.active .delivery-step-label { color: var(--fg); }
-.delivery-step.failed .delivery-step-label { color: var(--danger-fg); font-weight: 600; }
 .row-detail > .action-error {
   grid-column: 1 / -1;
 }
@@ -256,7 +227,7 @@
   display: flex;
   align-items: flex-end;
   gap: 2px;
-  margin: 2px -20px 0;
+  margin: 0 -20px;
   /* The 1px bottom padding is the band's edge: it is drawn here, inside the
      strip's overflow clip, so the active tab can overlap it. */
   padding: 0 12px 1px;
@@ -315,8 +286,9 @@
   margin: 0;
   padding: 0;
   list-style: none;
-  border: 1px solid var(--hair);
-  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--bg-control);
 }
 .task-run { display: grid; gap: 4px; padding: 10px 12px; }
 .task-run + .task-run { border-top: 1px solid var(--hair); }
@@ -390,6 +362,28 @@
   color: var(--fg-dim);
   font-size: 11px;
 }
+/* An operator's skip of a pilot-held task, under the hold it lifts, and the
+   host-operational remedy that skip cannot release. */
+.readiness-skip-pilot,
+.readiness-host-operational {
+  --attention-fg: var(--warn-fg);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 4px;
+}
+.readiness-host-operational {
+  flex-direction: column;
+  align-items: stretch;
+}
+.readiness-host-operational-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.readiness-host-operational .readiness-fix { margin: 0; }
 /* The pool leads the card, followed by linked blockers or a concise cause. */
 .readiness-drain {
   display: flex;
@@ -426,18 +420,12 @@
   gap: 4px 6px;
 }
 
-.property-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
 /* The detail's head: the levers as one row of chips, the lifecycle strip,
    then the delivery card. */
 .task-meta-block {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 16px;
 }
 .task-levers {
   position: relative;
@@ -596,68 +584,6 @@
 .task-levers .detail-tag-row .chip.os-chip { color: var(--accent); border-color: var(--accent-line); }
 .task-levers .field-empty { font-style: normal; }
 
-/* Where the status sits on the way to done. */
-.task-lifecycle,
-.task-stage {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-.task-lifecycle { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-.task-lifecycle-step { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
-.task-lifecycle-bar { height: 3px; border-radius: 2px; background: var(--border); }
-.task-lifecycle-step.past .task-lifecycle-bar { background: var(--state-success); }
-.task-lifecycle-step.current .task-lifecycle-bar { background: var(--dot); }
-.task-lifecycle-label {
-  font-size: 11px;
-  color: var(--fg-mute);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.task-lifecycle-step.current .task-lifecycle-label { color: var(--fg-strong); font-weight: 600; }
-
-/* The delivery stage closes the detail band above the tabs, using the same
-   past/current/future language and spacing as the lifecycle strip, but thinner. */
-.task-stage {
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(0, 1fr);
-}
-.task-stage-step { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
-.task-stage-bar { height: 2px; border-radius: 2px; background: var(--border); }
-.task-stage-step.past .task-stage-bar { background: var(--state-success); }
-.task-stage-step.current .task-stage-bar { background: var(--state-running); }
-.task-stage-label {
-  font-size: 11px;
-  color: var(--fg-mute);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.task-stage-step.current .task-stage-label {
-  color: var(--fg-strong);
-  font-weight: 600;
-  /* The current stage wraps instead of ellipsizing, so it stays readable
-     at 375px where every other segment is cut. The word itself must break
-     inside its equal-width cell, otherwise its painted range overflows the
-     4px gap into the next segment. */
-  white-space: normal;
-  overflow: hidden;
-  text-overflow: clip;
-  overflow-wrap: anywhere;
-}
-.task-stage.ended .task-stage-step.current .task-stage-bar { background: var(--state-failed); }
-.task-stage.ended[data-run-state="cancelled"] .task-stage-step.current .task-stage-bar { background: var(--state-cancelled); }
-.task-stage.ended .task-stage-step.current .task-stage-label { color: var(--state-failed); }
-.task-stage.ended[data-run-state="cancelled"] .task-stage-step.current .task-stage-label { color: var(--state-cancelled); }
-.task-stage-link { text-decoration: none; }
-.task-stage-link:hover { text-decoration: underline; }
-.task-stage.awaiting .task-stage-step.current .task-stage-bar { background: var(--warn-fg); }
-.task-stage.awaiting .task-stage-step.current .task-stage-label { color: var(--warn-fg); }
-
 /* The pull request, the run, who carried the task and its readiness. */
 .task-delivery-card {
   display: flex;
@@ -713,35 +639,33 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
-/* A classified Regression from row stacks one entry per target, so each id
-   keeps its own nature and escape labels and its own sites below it. */
-.task-delivery-relations.regression {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  width: 100%;
-}
-.regression-entry { min-width: 0; }
-.regression-head {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  color: var(--fg);
-  font-size: 13px;
-  line-height: 20px;
-}
-.regression-label { color: var(--fg-soft); font-size: 12.5px; }
-.regression-label.regression-unclassified { color: var(--fg-mute); font-style: italic; }
-/* Each target discloses its full defect sites, wrapping even long symbols. */
-.regression-sites { margin-top: 4px; }
-.regression-sites > summary { cursor: pointer; color: var(--fg-dim); font-size: 12px; }
-.regression-sites > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.regression-site-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
-.regression-site {
-  min-width: 0;
+/* Keep each task and its hint together while allowing the list to wrap. */
+.task-delivery-relations.regression { display: block; width: 100%; }
+.regression-list { display: block; }
+.regression-entry { display: inline-flex; align-items: center; vertical-align: top; min-height: 44px; max-width: 100%; }
+.regression-entry:not(:last-of-type)::after { content: ",\00a0"; }
+.regression-entry[hidden] { display: none; }
+.regression-entry:has(+ .regression-entry[hidden])::after { content: ""; }
+.regression-entry .info-hint.info-hint-pinned { margin: 0; }
+.regression-entry .info-hint-text .mono { overflow-wrap: anywhere; }
+/* Other relation rows retain their count-based disclosure. */
+.relation-overflow { display: contents; }
+.relation-overflow[hidden] { display: none; }
+.relation-more {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg-dim);
+  font: inherit;
   font-size: 12px;
-  white-space: normal;
-  overflow-wrap: anywhere;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  white-space: nowrap;
 }
+.relation-more:hover { color: var(--fg-strong); text-decoration: underline; }
+.relation-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.task-delivery-relations.regression > .relation-more { display: block; margin-top: 4px; }
+.task-delivery-relations.regression > .relation-more[hidden] { display: none; }
 .task-delivery-card .property-row.relation .label::first-letter { text-transform: uppercase; }
 .task-hands { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .task-hand {
@@ -849,6 +773,58 @@
   border-color: var(--accent);
   background: rgba(110, 159, 255, 0.08);
 }
+.artifact-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* The Artifacts container holds the rows directly up to one page, and the
+   toolbar, paged list and pagination beyond it, so the card wraps all of them. */
+.artifacts {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--bg-control);
+}
+.artifacts-list { display: grid; gap: 0; min-width: 0; }
+.artifacts-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.artifacts-filter-label { font-size: 12.5px; font-weight: 500; color: var(--fg-soft); }
+.artifacts-filter {
+  flex: 1 1 180px;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-control);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+}
+.artifacts-filter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+.artifacts-status { margin-bottom: 8px; font-size: 12px; color: var(--fg-mute); font-variant-numeric: tabular-nums; }
+.artifacts-empty { margin: 8px 0; }
+.artifacts-pagination {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+.artifacts-pagination[hidden] { display: none; }
+.artifacts-page-label { font-size: 12px; color: var(--fg-mute); font-variant-numeric: tabular-nums; }
+.artifacts-page-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .artifact-preview {
   margin: 8px 0 12px;
   overflow-x: auto;
@@ -984,6 +960,7 @@
   border-radius: var(--radius-panel);
   overflow: hidden;
 }
+.detail-disclosures > .field-block { background: var(--bg-control); }
 .detail-disclosures > .field-block + .field-block { border-top: 1px solid var(--hair); }
 .detail-disclosures > .field-block > h4 {
   margin: 0;
@@ -1187,30 +1164,35 @@ input.field-editor-input {
   border: 1px solid var(--border);
   border-radius: var(--radius-panel);
 }
-.detail-disclosures > .field-block > .task-markdown-panel {
-  margin: 0 14px 14px;
-  padding: 16px;
-}
-.task-markdown-panel .markdown-body {
+/* A disclosure's Markdown is its whole body: it takes the description's
+   typography but no card of its own, so the disclosure card is the only
+   container. Code blocks, quoted logs and tables keep their own styling. */
+.task-markdown-panel .markdown-body,
+.task-markdown-disclosure > .markdown-body {
   width: 100%;
   min-width: 0;
   color: var(--fg-soft);
   line-height: 1.7;
   overflow-x: auto;
 }
-.task-markdown-panel .markdown-body :is(h1, h2, h3, h4, h5, h6) {
+.task-markdown-panel .markdown-body :is(h1, h2, h3, h4, h5, h6),
+.task-markdown-disclosure > .markdown-body :is(h1, h2, h3, h4, h5, h6) {
   display: block;
   font-size: 12.5px;
   line-height: 1.5;
   color: var(--fg-soft);
   cursor: auto;
 }
-.task-markdown-panel .markdown-body > :first-child { margin-top: 0; }
-.task-markdown-panel .markdown-body h4::after { content: none; }
-.task-detail .task-markdown-panel .markdown-body :not(pre) > code {
+.task-markdown-panel .markdown-body > :first-child,
+.task-markdown-disclosure > .markdown-body > :first-child { margin-top: 0; }
+.task-markdown-panel .markdown-body h4::after,
+.task-markdown-disclosure > .markdown-body h4::after { content: none; }
+.task-detail .task-markdown-panel .markdown-body :not(pre) > code,
+.task-detail .task-markdown-disclosure > .markdown-body :not(pre) > code {
   background: var(--bg-well);
 }
-.task-markdown-panel .markdown-body th { background: var(--bg-well); }
+.task-markdown-panel .markdown-body th,
+.task-markdown-disclosure > .markdown-body th { background: var(--bg-well); }
 
 /* Long description or acceptance criteria open clamped behind a fade, with a toggle below. */
 .task-detail .markdown-body :not(pre) > code,
@@ -1540,9 +1522,9 @@ input.field-editor-input {
 
 .comment-card {
   container-type: inline-size;
-  border: 1px solid var(--hair);
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.015);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--bg-control);
   padding: 10px 12px 8px 12px;
 }
 .comment-head {
@@ -1562,7 +1544,7 @@ input.field-editor-input {
   position: sticky;
   top: 0;
   z-index: 2;
-  background: var(--bg-elev);
+  background: var(--bg-control);
   margin: -10px -12px 10px -12px;
   padding: 10px 12px 8px 12px;
 }
@@ -1675,7 +1657,7 @@ input.field-editor-input {
   bottom: 0;
   height: 72px;
   pointer-events: none;
-  background: linear-gradient(to bottom, rgba(5, 5, 5, 0), var(--bg-elev));
+  background: linear-gradient(to bottom, rgba(5, 5, 5, 0), var(--bg-control));
 }
 .comment-outline {
   display: flex;
@@ -1865,9 +1847,12 @@ input.field-editor-input {
   overflow-wrap: anywhere;
 }
 
+/* Findings start at the panel's text edge, like the paragraph above them;
+   each opens with its bold kind, so they need no bullet. */
 .pilot-warning-findings {
   margin: 10px 0 0;
-  padding-left: 18px;
+  padding-left: 0;
+  list-style: none;
   line-height: 1.5;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -1884,10 +1869,59 @@ input.field-editor-input {
   background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 2px;
   padding: 4px 8px; font-size: 12px; width: 100%; box-sizing: border-box;
 }
+.decision-note::placeholder { color: var(--fg-mute); opacity: 1; }
+.decision-card .decision-note { max-width: 640px; }
 .decision-answers { display: grid; gap: 8px; }
-.decision-option { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
 .decision-consequence { flex: 1 1 200px; min-width: 0; color: var(--fg-dim); font-size: 12px; overflow-wrap: anywhere; }
 .decision-pending { color: var(--fg-mute); font-size: 12px; }
+.decision-card { display: grid; gap: 10px; margin-top: 6px; min-width: 0; }
+.decision-summary { margin: 0; font-size: 13px; line-height: 1.5; color: var(--fg-strong); overflow-wrap: anywhere; }
+.decision-human-action { margin: 6px 0 0; font-size: 13px; line-height: 1.5; color: var(--fg-soft); overflow-wrap: anywhere; white-space: pre-line; }
+.decision-human-action strong { color: var(--attention-fg, var(--fg-strong)); }
+.decision-card .decision-human-action { margin: 0; }
+.decision-option {
+  display: grid;
+  /* The answer column sizes to its label up to a cap, so a sentence-length
+     label wraps instead of taking the pane's width from its consequence. */
+  grid-template-columns: fit-content(min(45%, 22rem)) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 2px 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.decision-option.recommended { border-color: var(--warn-line); }
+/* `.action` pins a one-line, fixed-height button; a wrapped label needs the
+   height to follow its text. */
+.decision-option .decision-answer {
+  grid-row: 1 / span 2; align-self: start; justify-self: start;
+  height: auto; min-height: 30px; padding-block: 5px;
+  white-space: normal; overflow-wrap: anywhere; text-align: left; line-height: 1.35;
+}
+.decision-recommended { color: var(--attention-fg, var(--warn-fg)); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.decision-option .decision-consequence { flex: none; grid-column: 2; }
+.task-block-details { margin-top: 12px; font-size: 12px; color: var(--fg-mute); }
+.task-block-details > summary { cursor: pointer; color: var(--fg-dim); }
+.task-block-diagnosis { margin: 6px 0 0; color: var(--fg-soft); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16em; overflow: auto; }
+.task-block-details .task-attention-actions { margin-top: 8px; }
+.human-task-panel { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid var(--warn-line, var(--border)); border-radius: var(--radius); background: var(--bg-elev); }
+.human-task-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.human-task-badge { font-size: 12px; font-weight: 600; color: var(--warn-fg, var(--fg-strong)); }
+.human-task-summary { margin: 0; font-size: 13px; line-height: 1.5; color: var(--fg-soft); overflow-wrap: anywhere; }
+.human-task-steps { margin: 0; padding-left: 20px; display: grid; gap: 4px; font-size: 13px; line-height: 1.45; }
+.human-command { display: flex; align-items: flex-start; gap: 8px; }
+.human-command-code { flex: 1 1 auto; min-width: 0; margin: 0; padding: 8px 10px; overflow: auto; font-family: var(--font-mono); font-size: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+.human-copy-cmd, .human-copy-all { flex: none; }
+.decision-answered-list { display: grid; gap: 6px; }
+.decision-answered { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; }
+.decision-answered-option { font-weight: 600; color: var(--fg-strong); }
+.decision-answered-meta, .decision-answered-note { color: var(--fg-dim); }
+@media (max-width: 480px) {
+  .decision-option { grid-template-columns: minmax(0, 1fr); }
+  .decision-option .decision-answer { grid-row: auto; justify-self: start; }
+  .decision-option .decision-consequence { grid-column: 1; }
+}
 
 /* The Risk pill describes itself with the complete estimate. The tooltip
    spans the lever row so it fits a narrow pane regardless of the pill's position. */
@@ -1923,4 +1957,21 @@ input.field-editor-input {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
   color: var(--fg-soft);
   font: 400 12px/1.45 var(--font-sans);
+}
+
+/* The review watch's recorded check state beside Fix PR. */
+.fix-pr-checks {
+  min-width: 0;
+  max-width: 100%;
+  padding: 6px 12px;
+  border-left: 3px solid var(--state-success);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.fix-pr-checks-failed {
+  border-left-color: var(--state-error);
+  color: var(--state-error);
 }

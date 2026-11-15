@@ -4,7 +4,7 @@
 //! [`PullDrain`](crate::application::pull_drain::drain::PullDrain) was proven
 //! against injected doubles when the foundation landed; these are the
 //! production implementations of its seams, which the drain obtains through
-//! [`OrbitRuntime::routed_pull_peer`] and [`OrbitRuntime::leaf_pull_launcher`].
+//! [`PullTransportPort`] [ORB-22004].
 //!
 //! - **Owner-local** (`OwnerPullPeer`, test-only): owner and executor are the
 //!   same machine and workspace, so admission runs on this owner's commit
@@ -37,13 +37,11 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::application::job::pipeline::WorkerLaunchError;
 use crate::application::pull_drain::drain::{
-    PullLauncher, PullPeer, leaf_attribution, recorded_base_no_longer_red,
+    PullLauncher, PullPeer, PullTransportPort, leaf_attribution, recorded_base_no_longer_red,
 };
 
-impl OrbitRuntime {
-    /// The follower's peer for a pull drain: every owner call goes over
-    /// `transport` to the owner's registered tools.
-    pub(crate) fn routed_pull_peer(
+impl PullTransportPort for OrbitRuntime {
+    fn follower_pull_peer(
         &self,
         transport: Arc<dyn DrainOwnerTransport>,
     ) -> Box<dyn PullPeer + '_> {
@@ -53,8 +51,7 @@ impl OrbitRuntime {
         })
     }
 
-    /// The launcher for the leaf runs a pull drain's claims are bound to.
-    pub(crate) fn leaf_pull_launcher(&self) -> Box<dyn PullLauncher + '_> {
+    fn bound_leaf_launcher(&self) -> Box<dyn PullLauncher + '_> {
         Box::new(LeafPullLauncher { runtime: self })
     }
 }
@@ -170,9 +167,13 @@ impl PullPeer for RoutedPullPeer<'_> {
         // The leaf's crew and model ride beside the settlement, since a typed
         // handoff carries no evidence to hold them, and so do the branch and
         // worktree path its `worktree` step recorded, which the owner shows
-        // for inspecting the run here. An owner that predates the fields
-        // warns and ignores them. Attribution only: an unreadable leaf run
-        // sends none rather than failing the delivery.
+        // for inspecting the run here, and the effort its main implementing
+        // invocation ran at, which the owner's scorecards count the attempt
+        // under (`provider_default` for the provider's default, omitted when
+        // unknown). An
+        // owner that predates the fields warns and ignores them. Attribution
+        // only: an unreadable leaf run sends none rather than failing the
+        // delivery.
         let leaf = admission
             .leaf_run_id
             .as_deref()
@@ -181,6 +182,14 @@ impl PullPeer for RoutedPullPeer<'_> {
         if let (Some(leaf), Some(object)) = (leaf, input.as_object_mut()) {
             let attribution = leaf_attribution(&leaf);
             let worktree = self.runtime.recorded_run_worktree(&leaf.run_id);
+            if let Some(effort) = self.runtime.leaf_reported_effort(&leaf) {
+                object.insert(
+                    "reasoning_effort".into(),
+                    Value::String(effort.unwrap_or_else(|| {
+                        orbit_store::contracts::PROVIDER_DEFAULT_REPORTED_EFFORT.to_string()
+                    })),
+                );
+            }
             for (key, value) in [
                 ("crew", attribution.crew),
                 ("crew_model", attribution.crew_model),
@@ -251,7 +260,7 @@ impl LeafPullLauncher<'_> {
             .as_ref()
             .and_then(|receipt| receipt.claim.clone())
             .ok_or_else(|| refused("launching requires an admitted claim"))?;
-        crate::application::experiment::validate_experiment_capture(
+        crate::application::experiment::validate_claimed_experiment_capture(
             admission
                 .receipt
                 .as_ref()

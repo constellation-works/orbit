@@ -79,6 +79,8 @@ enum McpState {
 /// child confined to workspace A [ORB-12820].
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct SessionKey {
+    /// Never share a backend across application consents or exact scopes.
+    application: Option<String>,
     /// The child's working directory: the caller's workspace root when it
     /// has one, else its cwd.
     cwd: String,
@@ -167,6 +169,13 @@ impl McpBackend {
         allowed_tools.sort();
         allowed_tools.dedup();
         Ok(SessionKey {
+            application: ctx
+                .session_context
+                .application
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|_| OrbitError::Execution("serialize application session key".into()))?,
             cwd: child_cwd(ctx, tool_name)?,
             workspace_root: ctx
                 .workspace_root
@@ -369,7 +378,7 @@ impl McpBackend {
     /// session key resolved for this caller's context.
     fn spawn(&self, ctx: &ToolContext, cwd: &str) -> Result<McpSession, OrbitError> {
         let cwd = cwd.to_string();
-        let mut environment = self.spec.child_environment(ctx, &cwd, None);
+        let mut environment = self.spec.child_environment(ctx, &cwd, None)?;
         // The same intersection the session key carries, recorded as the
         // child's callback ceiling: a session is shared only by callers who
         // agree on it, so one ceiling describes every caller it serves
@@ -380,6 +389,7 @@ impl McpBackend {
             &self.spec.allowed_tools(ctx),
         )?;
         callback.stamp_env(&mut environment);
+        callback.bind_application(ctx.session_context.application.as_deref())?;
         // The decision-channel callbacks read a store no plugin child may
         // read, so the child reaches them through the spawning host for as
         // long as the session lives.
@@ -398,6 +408,7 @@ impl McpBackend {
             Some(caller) => self.spec.brokered_sandbox_profile(caller)?,
             None => self.spec.sandbox_profile(ctx.workspace_root.as_deref())?,
         };
+        callback.bind_workspace_root(ctx.workspace_root.as_deref(), profile.unsandboxed)?;
         let sandbox = profile.with_callback_session(&callback);
         sandbox.validate(&request)?;
         let child = OwnedChild::from_spawned(sandbox.spawn(&request)?);

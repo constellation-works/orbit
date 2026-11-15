@@ -52,7 +52,9 @@ naming the crew: correct the name or deliberately enable it, then recheck.
 2. Inspect `orbit config get execution.env.pass`. Preserve existing needed names
    when adding the credential or custom-home names below; `pass` replaces the
    array. It lists names, never secret values. Credentials are not inherited
-   automatically; a workspace policy must restate this allowlist.
+   automatically; a workspace policy must restate this allowlist. For Claude
+   and Codex credential names and per-crew mappings, see
+   [Provider credentials](#provider-credentials).
 3. Run `orbit doctor providers --format table` and read the selected row:
    executor/type identifies the lane, CLI names its binary, FOUND reports
    installation, SANDBOX names the configured boundary, READY reports sandbox
@@ -84,6 +86,63 @@ naming the crew: correct the name or deliberately enable it, then recheck.
    `orbit tool run orbit.task.show --input '{"id":"<existing-task>"}'` with the
    inherited agent identity. Verify the returned workspace/task and audit record.
    Use a disposable fixture for any execution check; dispatch real work only when authorized.
+
+### Provider credentials
+
+Provider credentials are opt-in. Neither the shipped config nor the built-in
+`execution.env.pass` default includes `CLAUDE_CODE_OAUTH_TOKEN`,
+`ANTHROPIC_API_KEY` or `CODEX_API_KEY`. Configure only the authentication route
+the user chose; do not add all three to every installation.
+
+| Authentication route | Agent variable |
+|---|---|
+| Claude dedicated worker token from `claude setup-token` | `CLAUDE_CODE_OAUTH_TOKEN` |
+| Claude API key | `ANTHROPIC_API_KEY` |
+| Codex noninteractive API-key override (`codex exec`) | `CODEX_API_KEY` |
+
+For Codex's per-run override, use `CODEX_API_KEY`; an exported
+`OPENAI_API_KEY` alone is not the documented override for `codex exec`.
+See [OpenAI's noninteractive authentication guidance](https://developers.openai.com/codex/noninteractive#use-api-key-auth).
+
+Choose the intended scope:
+
+- **Shared:** add the chosen name to the workspace's effective
+  `execution.env.pass`, preserving existing names. The array replaces the
+  default and is shared by every crew. A workspace config that omits this
+  security key takes the built-in default, not the global list.
+- **Per crew:** keep the source under a separate name and map it through
+  global crew `env`. This does not require either name in `pass`:
+
+  ```toml
+  # ~/.orbit/config.toml; add to the existing sol crew
+  [crews.sol]
+  env = ["CODEX_API_KEY=CODEX_CREDITS_API_KEY_1"]
+  ```
+
+  Orbit reads the value of `CODEX_CREDITS_API_KEY_1` from the launching
+  environment and gives that crew `CODEX_API_KEY`; the right-hand side is
+  a source variable name, never a literal key. For Claude API credits, use
+  `ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1`. A
+  [`file:` source](configuration.md#crews) avoids depending on shell or
+  service exports.
+
+A shared `pass` name that is unset or empty produces a warning, but does
+not itself refuse the run; the provider may use its saved login. A missing
+per-crew source instead excludes that crew from drains and refuses its
+activities, so it cannot silently use another account.
+
+Verify the actual launcher, not just an SSH login shell. Run
+`orbit config get execution.env.pass`, `orbit config get crews.sol.env`
+(substitute the intended crew) and `orbit doctor --check env-pass --json`.
+Dashboard runs inherit the web service; clock runs can read admitted names
+and crew sources from owner-only `~/.orbit/clock.env`, which does not supply
+the web service. A service started with `bash -lc` reads login exports at
+startup, but an already running process does not receive later profile edits.
+Inspect its effective unit and start time, then restart the affected service
+when authorized before starting a new drain. Check credential presence by
+name only in the live launcher or worker; never print environment values.
+Codex's `login status` describes the stored login and alone does not establish
+which credential an environment-overridden worker uses.
 
 ### Copilot
 

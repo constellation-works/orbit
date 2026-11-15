@@ -35,3 +35,36 @@ pub trait CodebaseFactsStoreBackend: Send + Sync {
         removed: &[String],
     ) -> Result<(), OrbitError>;
 }
+
+/// One task's stored agent-scorecard facts. The store keeps the bytes and the
+/// labels; what they mean, and whether they are still current, is the caller's
+/// to decide.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentTaskFactsRow {
+    pub task_id: String,
+    /// The fact format the row was written in. A reader skips a row in any
+    /// other format and replaces it.
+    pub format_version: u32,
+    /// What the facts were computed from: the task's history stamp and per-task
+    /// input digest.
+    pub source: String,
+    pub facts_json: String,
+}
+
+/// A derived, rebuildable cache of per-task agent-scorecard facts: never
+/// authority. Dropping its table, or any of its rows, loses nothing but the
+/// work of computing them again.
+pub trait AgentFactsStoreBackend: Send + Sync {
+    /// Every stored row for `workspace_id`; empty when none was written or
+    /// the table does not exist.
+    fn agent_task_facts(&self, workspace_id: &str) -> Result<Vec<AgentTaskFactsRow>, OrbitError>;
+
+    /// Upsert `rows` and delete the rows of `removed` tasks, in one
+    /// transaction, creating the table when it is missing.
+    fn write_agent_task_facts(
+        &self,
+        workspace_id: &str,
+        rows: &[AgentTaskFactsRow],
+        removed: &[String],
+    ) -> Result<(), OrbitError>;
+}

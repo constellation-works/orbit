@@ -3,8 +3,9 @@
 //!
 //! Only the exact previous published head can lag. PR metadata (`headRefOid`)
 //! may report it [ORB-14315]. The remote PR head ref (`refs/pull/<N>/head`)
-//! may too, but only while the task branch ref on origin already names the
-//! candidate, which proves the push landed [ORB-14663]. Both share one budget
+//! may too, or briefly report no ref at all, but only while the task branch
+//! ref on origin already names the candidate, which proves the push landed
+//! [ORB-14663, ORB-23811]. Both share one budget
 //! of re-reads and waiting. Completion then applies its unchanged delivery and
 //! review checks, so waiting never authorizes another head.
 
@@ -70,8 +71,9 @@ impl HeadLag {
             return Ok(None);
         }
 
-        // Verify each stale read and the read that catches up. A changed or
-        // absent ref cannot authorize waiting on the provider's metadata.
+        // Verify each stale read and the read that catches up. A ref that
+        // names a third commit, or an absent ref without independent branch
+        // evidence, cannot authorize waiting on the provider's metadata.
         let reference = format!("refs/pull/{pr_number}/head");
         let error_code = if pin.candidate_sha().is_some() {
             "delivery_evidence_stale"
@@ -80,17 +82,24 @@ impl HeadLag {
         };
         let remote_sha = remote_ref_sha(workspace_path, &reference, pr_number, error_code)?;
         let ref_lags = remote_sha.as_deref() != Some(candidate);
+        let lag_description = if remote_sha.is_none() {
+            format!("pull ref '{reference}' is absent")
+        } else {
+            "remote head still names the previous head".to_string()
+        };
         if !ref_lags {
             self.pull_ref_settled_at = Some(candidate.to_string());
         }
         if ref_lags {
-            // Only the known previous head may lag, and only once the task
+            // Only the known previous head, or an absent ref read straight
+            // after the replacement push, may lag, and only once the task
             // branch independently shows the replacement push landed.
-            let replaced = previous.is_some_and(|previous| {
-                !previous.is_empty()
-                    && previous != candidate
-                    && remote_sha.as_deref() == Some(previous)
-            });
+            let known_previous =
+                previous.is_some_and(|previous| !previous.is_empty() && previous != candidate);
+            let replaced = match remote_sha.as_deref() {
+                Some(sha) => known_previous && previous == Some(sha),
+                None => known_previous,
+            };
             if !replaced || self.pull_ref_settled_at.as_deref() == Some(candidate) {
                 return Err(head_lag_error(
                     error_code,
@@ -109,8 +118,8 @@ impl HeadLag {
                     head_lag_error(
                         error_code,
                         format!(
-                            "{error_code}: pull request #{pr_number} remote head still names the \
-                         previous head and the task branch is unknown; the task stays in review"
+                            "{error_code}: pull request #{pr_number} {lag_description} and the task \
+                         branch is unknown; the task stays in review"
                         ),
                     )
                 })?;
@@ -120,9 +129,9 @@ impl HeadLag {
                 return Err(head_lag_error(
                     error_code,
                     format!(
-                        "{error_code}: pull request #{pr_number} remote head still names the previous \
-                     head and branch '{branch}' {branch_sha:?} is not the pinned candidate \
-                     '{candidate}'; the task stays in review"
+                        "{error_code}: pull request #{pr_number} {lag_description} and branch \
+                     '{branch}' {branch_sha:?} is not the pinned candidate '{candidate}'; the task \
+                     stays in review"
                     ),
                 ));
             }
@@ -140,8 +149,8 @@ impl HeadLag {
                 return Err(head_lag_error(
                     error_code,
                     format!(
-                        "{error_code}: pull request #{pr_number} remote head still names the previous \
-                     head after the bounded wait; the task stays in review"
+                        "{error_code}: pull request #{pr_number} {lag_description} after the bounded \
+                     wait; the task stays in review"
                     ),
                 ));
             }

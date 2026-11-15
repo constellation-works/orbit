@@ -140,8 +140,7 @@ fn a_post_deploy_finding_is_recorded_without_holding_admission() {
     let applied = apply(&workspace, &task, latency_after_deploy());
     assert_eq!(applied["status"], "succeeded", "{applied}");
     let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
-    let audit: Value =
-        serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
+    let audit: Value = super::pilot_audit(&workspace.runtime, &task.id, comments.last().unwrap());
     assert_eq!(
         audit["post_deploy"]["requirements"],
         json!([{"criterion": 2, "host": HOST, "command": COMMAND}]),

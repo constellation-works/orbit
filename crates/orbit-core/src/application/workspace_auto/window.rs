@@ -1,11 +1,12 @@
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use orbit_engine::DispatchError;
+use orbit_types::workflow::PipelineState;
+use serde::Deserialize;
+use serde::de::Deserializer;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::workflow::MAX_DRAIN_WINDOW_SECONDS;
-
-use super::drains::live_drain_state;
 
 /// Open or re-read a drain window [ORB-10819].
 ///
@@ -35,21 +36,20 @@ pub(crate) fn drain_window(
     input: &Value,
 ) -> Result<Value, DispatchError> {
     let now = Utc::now();
-    let state = live_drain_state(runtime, input);
-    let deadline = match optional_deadline(action, input)? {
-        Some(echoed) => state
+    let request = decode_drain_window_request(action, input)?;
+    let state = read_drain_state(runtime, request.run_id());
+    let deadline = match request {
+        DrainWindowRequest::Echoed { deadline, .. } => state
             .as_ref()
-            .map_or(echoed, |state| state.effective_drain_deadline(echoed)),
-        None => {
-            let for_seconds = window_seconds(action, input)?;
-            now.checked_add_signed(seconds_to_delta(action, for_seconds)?)
-                .ok_or_else(|| {
-                    DispatchError::action_failed(
-                        action,
-                        format!("`for_seconds` {for_seconds} overflows the drain deadline"),
-                    )
-                })?
-        }
+            .map_or(deadline, |state| state.effective_drain_deadline(deadline)),
+        DrainWindowRequest::Open { seconds, .. } => now
+            .checked_add_signed(seconds_to_delta(action, seconds)?)
+            .ok_or_else(|| {
+                DispatchError::action_failed(
+                    action,
+                    format!("`for_seconds` {seconds} overflows the drain deadline"),
+                )
+            })?,
     };
 
     let remaining_seconds = (deadline - now).num_milliseconds() as f64 / 1000.0;
@@ -70,64 +70,225 @@ pub(crate) fn drain_window(
     }))
 }
 
-fn optional_deadline(action: &str, input: &Value) -> Result<Option<DateTime<Utc>>, DispatchError> {
-    let Some(raw) = input
-        .get("deadline")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return Ok(None);
-    };
-    DateTime::parse_from_rfc3339(raw)
-        .map(|parsed| Some(parsed.with_timezone(&Utc)))
-        .map_err(|err| {
-            DispatchError::action_failed(
-                action,
-                format!("`deadline` '{raw}' is not RFC3339: {err}"),
-            )
-        })
+/// Decoded drain-window input. Callers past `decode_drain_window_request`
+/// see only this value: an echoed stamp, or a duration still to be stamped.
+///
+/// A parsed deadline never consults `for_seconds`, so an invalid duration
+/// beside a valid echo stays ignored.
+enum DrainWindowRequest {
+    Echoed {
+        deadline: DateTime<Utc>,
+        run_id: Option<String>,
+    },
+    Open {
+        seconds: f64,
+        run_id: Option<String>,
+    },
 }
 
-/// Read `for_seconds`, tolerating the string a template renders when the
-/// caller supplied no window at all (`"{{ input.for_seconds }}"` over an
-/// absent key resolves to an empty string, not to JSON `null`).
-fn window_seconds(action: &str, input: &Value) -> Result<f64, DispatchError> {
-    let Some(raw) = input.get("for_seconds") else {
-        return Ok(0.0);
-    };
-    let seconds = match raw {
-        Value::Null => 0.0,
-        Value::Number(number) => number.as_f64().ok_or_else(|| {
-            DispatchError::action_failed(action, "`for_seconds` is not a finite number")
-        })?,
-        Value::String(text) => {
-            let text = text.trim();
-            if text.is_empty() {
-                0.0
-            } else {
-                text.parse::<f64>().map_err(|err| {
-                    DispatchError::action_failed(
-                        action,
-                        format!("`for_seconds` '{text}' is not a number: {err}"),
-                    )
-                })?
-            }
+impl DrainWindowRequest {
+    fn run_id(&self) -> Option<&str> {
+        match self {
+            Self::Echoed { run_id, .. } | Self::Open { run_id, .. } => run_id.as_deref(),
         }
-        other => {
+    }
+}
+
+/// The activity's `deadline`, `for_seconds` and `run_id`, read once.
+///
+/// A non-object has no fields. That is the same silent zero window `.get`
+/// produced, so serde's type error falls back to the defaults instead of
+/// becoming a new failure.
+fn decode_drain_window_request(
+    action: &str,
+    input: &Value,
+) -> Result<DrainWindowRequest, DispatchError> {
+    let fields = match DrainWindowFields::deserialize(input) {
+        Ok(fields) => fields,
+        Err(_) if !input.is_object() => DrainWindowFields::default(),
+        Err(error) => {
             return Err(DispatchError::action_failed(
                 action,
-                format!("`for_seconds` must be a number, got {other}"),
+                format!("drain window input could not be read: {error}"),
             ));
         }
     };
-    if !seconds.is_finite() || !(0.0..=MAX_DRAIN_WINDOW_SECONDS as f64).contains(&seconds) {
-        return Err(DispatchError::action_failed(
-            action,
-            format!("`for_seconds` must be between 0 and {MAX_DRAIN_WINDOW_SECONDS}"),
-        ));
+    fields.into_request(action)
+}
+
+/// Wire fields before deadline-versus-duration precedence. Unknown keys,
+/// including the engine's `step_id` and `job_run_id`, are ignored.
+#[derive(Default, Deserialize)]
+struct DrainWindowFields {
+    #[serde(default)]
+    deadline: CoercedDrainDeadline,
+    #[serde(default)]
+    for_seconds: CoercedWindowSeconds,
+    #[serde(default)]
+    run_id: CoercedDrainRunId,
+}
+
+impl DrainWindowFields {
+    fn into_request(self, action: &str) -> Result<DrainWindowRequest, DispatchError> {
+        let run_id = self.run_id.into_inner();
+        match self.deadline {
+            CoercedDrainDeadline::Malformed { raw, error } => Err(DispatchError::action_failed(
+                action,
+                format!("`deadline` '{raw}' is not RFC3339: {error}"),
+            )),
+            // Valid echo wins before `for_seconds` is judged.
+            CoercedDrainDeadline::Parsed(deadline) => {
+                Ok(DrainWindowRequest::Echoed { deadline, run_id })
+            }
+            CoercedDrainDeadline::Absent => Ok(DrainWindowRequest::Open {
+                seconds: self.for_seconds.validated(action)?,
+                run_id,
+            }),
+        }
     }
-    Ok(seconds)
+}
+
+/// `deadline` counts only as a nonblank string. Anything else is absent and
+/// the duration path runs. A nonblank string that is not RFC3339 is an error.
+#[derive(Default)]
+enum CoercedDrainDeadline {
+    #[default]
+    Absent,
+    Parsed(DateTime<Utc>),
+    Malformed {
+        raw: String,
+        error: chrono::format::ParseError,
+    },
+}
+
+impl<'de> Deserialize<'de> for CoercedDrainDeadline {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        let Some(raw) = value
+            .as_str()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+        else {
+            return Ok(Self::Absent);
+        };
+        Ok(match DateTime::parse_from_rfc3339(raw) {
+            Ok(parsed) => Self::Parsed(parsed.with_timezone(&Utc)),
+            Err(error) => Self::Malformed {
+                raw: raw.to_string(),
+                error,
+            },
+        })
+    }
+}
+
+/// `for_seconds` before the range check. Missing, null and blank stay zero
+/// so a valid echoed deadline can ignore them without failing.
+#[derive(Default)]
+enum CoercedWindowSeconds {
+    #[default]
+    Zero,
+    Seconds(f64),
+    /// JSON number that `Number::as_f64` refuses.
+    NotAnF64,
+    NotANumber {
+        text: String,
+        error: std::num::ParseFloatError,
+    },
+    WrongType {
+        rendered: String,
+    },
+}
+
+impl CoercedWindowSeconds {
+    fn validated(self, action: &str) -> Result<f64, DispatchError> {
+        let seconds = match self {
+            Self::Zero => 0.0,
+            Self::Seconds(seconds) => seconds,
+            Self::NotAnF64 => {
+                return Err(DispatchError::action_failed(
+                    action,
+                    "`for_seconds` is not a finite number",
+                ));
+            }
+            Self::NotANumber { text, error } => {
+                return Err(DispatchError::action_failed(
+                    action,
+                    format!("`for_seconds` '{text}' is not a number: {error}"),
+                ));
+            }
+            Self::WrongType { rendered } => {
+                return Err(DispatchError::action_failed(
+                    action,
+                    format!("`for_seconds` must be a number, got {rendered}"),
+                ));
+            }
+        };
+        if !seconds.is_finite() || !(0.0..=MAX_DRAIN_WINDOW_SECONDS as f64).contains(&seconds) {
+            return Err(DispatchError::action_failed(
+                action,
+                format!("`for_seconds` must be between 0 and {MAX_DRAIN_WINDOW_SECONDS}"),
+            ));
+        }
+        Ok(seconds)
+    }
+}
+
+impl<'de> Deserialize<'de> for CoercedWindowSeconds {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        Ok(match value {
+            Value::Null => Self::Zero,
+            Value::Number(number) => match number.as_f64() {
+                Some(seconds) => Self::Seconds(seconds),
+                None => Self::NotAnF64,
+            },
+            Value::String(text) => {
+                let text = text.trim();
+                if text.is_empty() {
+                    Self::Zero
+                } else {
+                    match text.parse::<f64>() {
+                        Ok(seconds) => Self::Seconds(seconds),
+                        Err(error) => Self::NotANumber {
+                            text: text.to_string(),
+                            error,
+                        },
+                    }
+                }
+            }
+            other => Self::WrongType {
+                rendered: other.to_string(),
+            },
+        })
+    }
+}
+
+/// Engine-injected drain run id: a trimmed nonblank string, or no state.
+#[derive(Default)]
+struct CoercedDrainRunId(Option<String>);
+
+impl CoercedDrainRunId {
+    fn into_inner(self) -> Option<String> {
+        self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for CoercedDrainRunId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        Ok(Self(
+            value
+                .as_str()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(str::to_string),
+        ))
+    }
+}
+
+fn read_drain_state(runtime: &OrbitRuntime, run_id: Option<&str>) -> Option<PipelineState> {
+    let run_id = run_id?;
+    runtime.read_run_state(run_id).ok().flatten()
 }
 
 fn seconds_to_delta(action: &str, seconds: f64) -> Result<TimeDelta, DispatchError> {

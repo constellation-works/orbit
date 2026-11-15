@@ -3,8 +3,8 @@ use std::{path::Path, time::Duration};
 
 use chrono::{DateTime, Utc};
 use orbit_common::{
-    OrbitError, security::redaction::redact_all, security::release::sha256_hex,
-    text::floor_char_boundary,
+    OrbitError, SourceRepairAuthorityRefusal, security::redaction::redact_all,
+    security::release::sha256_hex, text::floor_char_boundary,
 };
 use orbit_types::{
     task::{
@@ -177,8 +177,8 @@ pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
         let authority = (|| {
             let input = json!({"job_run_id":context.batch_id});
             if publication_admission(host, &input)?.as_ref() != Some(binding) {
-                return Err(OrbitError::Execution(
-                    "publication admission changed".into(),
+                return Err(OrbitError::SourceRepairAuthorityRefused(
+                    SourceRepairAuthorityRefusal::PublicationAdmissionChanged,
                 ));
             }
             if host.source_repair_admission(&context.batch_id)?.is_some() {
@@ -186,7 +186,8 @@ pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
             }
             Ok::<_, OrbitError>(())
         })();
-        if authority.is_err() {
+        let authority_refusal = authority.as_ref().err().map(authority_refusal_reason);
+        if authority_refusal.is_some() {
             differences.push(json!({"field":"authority", "expected":"current owner task/scope/admission", "observed":{"presence":"unconfirmed"}}));
         }
         if budget
@@ -277,7 +278,7 @@ pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
             "read":{"operation":operations::PR_STATUS, "selector":safe_text(&binding.pull_request), "started_at":started_at, "finished_at":finished_at,
                 "outcome":if read.is_ok() { "readable" } else { "unreadable" },
                 "failure_kind":read.as_ref().err().map(|error| if error.is_timeout() { "timeout" } else { "provider_read_failed" })},
-            "mismatches":differences,
+            "mismatches":differences, "authority_refusal":authority_refusal,
             "settling":{"max_rereads":MAX_REREADS, "max_wait_seconds":MAX_REREADS * POLL_SECONDS,
                 "refusal_reason":if settled || can_wait { None } else if stale && head_only && differences.len() == 1 {
                     Some(if budget.settled_heads.iter().any(|head| head == published_head) { "head_regressed" } else { "budget_exhausted" })
@@ -303,10 +304,23 @@ pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
             .filter_map(|m| m["field"].as_str())
             .collect::<Vec<_>>()
             .join(", ");
+        let cause = authority_refusal
+            .map(|reason| format!("; authority refusal: {reason}"))
+            .unwrap_or_default();
         return Err(OrbitError::Execution(format!(
-            "source repair PR identity changed ({fields}); creating or replacing a pull request is not authorized; expected/observed evidence retained in source_repair_publication_refused history"
+            "source repair PR identity changed ({fields}){cause}; creating or replacing a pull request is not authorized; expected/observed evidence retained in source_repair_publication_refused history"
         )));
     }
+}
+
+// Only named static refusal reasons may cross this boundary. Other errors
+// can contain task input, credentials or arbitrarily large provider data.
+fn authority_refusal_reason(error: &OrbitError) -> &'static str {
+    error
+        .source_repair_authority_refusal()
+        .map_or("authority validation failed (details withheld)", |code| {
+            code.reason()
+        })
 }
 
 fn replacement_previous<'a>(push: &'a PublicationPushProof, head: &str) -> Option<&'a str> {
@@ -329,21 +343,19 @@ fn record_observation<H: RuntimeHost + ?Sized>(
     host.apply_task_automation_update(
         &binding.task_id,
         TaskAutomationUpdate {
-            append_history: vec![TaskHistoryEntry {
-                at,
-                by: "system".into(),
-                event: if observation.decision == PublicationSettlingDecision::Refused {
-                    REFUSED
-                } else {
-                    OBSERVED
-                }
-                .into(),
-                note: Some(evidence.to_string()),
-                from_status: None,
-                to_status: None,
-                operation_id: None,
-                decision: Some(TaskDecision::SourceRepairPublication(observation)),
-            }],
+            append_history: vec![
+                TaskHistoryEntry::new(
+                    at,
+                    "system",
+                    if observation.decision == PublicationSettlingDecision::Refused {
+                        REFUSED
+                    } else {
+                        OBSERVED
+                    },
+                )
+                .with_note(Some(evidence.to_string()))
+                .with_decision(Some(TaskDecision::SourceRepairPublication(observation))),
+            ],
             ..Default::default()
         },
     )
@@ -401,7 +413,7 @@ fn successful_push<H: RuntimeHost + ?Sized>(
     let Ok(Some(state)) = host.read_run_state(run_id) else {
         return Ok(None);
     };
-    if state.run_id != run_id || state.job_id != "task_pr_pipeline" {
+    if state.run_id != run_id || state.job_id != orbit_types::workflow::TASK_PR_PIPELINE_JOB {
         return Ok(None);
     }
     let Some(push) = state.pipeline.get("push") else {

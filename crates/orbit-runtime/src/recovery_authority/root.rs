@@ -83,35 +83,32 @@ pub(super) fn validated_authority_global_root(global_root: &Path) -> Result<Path
 /// parent this walk has already confirmed is a real directory, and is then
 /// re-inspected without following links before it becomes the next parent.
 fn create_authority_root_under(trusted: &Path) -> Result<PathBuf, OrbitError> {
-    let mut root = trusted.to_path_buf();
-    for component in Path::new(AUTHORITY_DIR).components() {
-        root.push(component);
-        match orbit_common::fs::io::create_private_dir(&root) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => {
-                return Err(path_error("create recovery authority root", &root, error));
-            }
-        }
+    use orbit_common::fs::io::PrivateDirError;
 
-        let Some(metadata) = unfollowed_metadata(&root)? else {
-            return Err(path_error(
-                "inspect recovery authority path",
-                &root,
-                std::io::Error::from(std::io::ErrorKind::NotFound),
-            ));
-        };
-        if metadata.file_type().is_symlink() {
-            return Err(refuse_symlinked(&root));
-        }
-        if !metadata.is_dir() {
-            return Err(OrbitError::PolicyDenied(format!(
+    orbit_common::fs::io::create_private_dir_chain(trusted, Path::new(AUTHORITY_DIR)).map_err(
+        |error| match error {
+            PrivateDirError::Symlink { path } => refuse_symlinked(&path),
+            PrivateDirError::NotDirectory { path } => OrbitError::PolicyDenied(format!(
                 "recovery authority refuses non-directory path `{}`",
-                root.display()
-            )));
-        }
-    }
-    Ok(root)
+                path.display()
+            )),
+            PrivateDirError::ForeignOwner { path, uid } => {
+                // SAFETY: `geteuid` only reads the calling process's credentials.
+                #[cfg(unix)]
+                let euid = unsafe { libc::geteuid() };
+                #[cfg(not(unix))]
+                let euid = uid;
+                OrbitError::PolicyDenied(format!(
+                    "recovery authority refuses directory `{}` owned by uid {uid}, not this host \
+                     (uid {euid})",
+                    path.display()
+                ))
+            }
+            PrivateDirError::Io { path, source } => {
+                path_error("create recovery authority root", &path, source)
+            }
+        },
+    )
 }
 
 /// Refuse the authority database and its sidecars when any of them is a link.

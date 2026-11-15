@@ -1,0 +1,67 @@
+name: MSRV
+
+# [ORB-24733] The MSRV check was neither a required check nor awaited by
+# "Check / Clippy / Test", so on pull requests it held a runner without
+# gating the merge. It runs on agent-main pushes instead; `make ci-fast` runs
+# the same check locally before a pull request.
+on:
+  push:
+    branches: [agent-main]
+
+# Push runs share one group and are never cancelled: one runs, one waits, and
+# a newer push replaces the waiting run, as in ci-macos.yml.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Same ephemeral-runner profile as ci.yml: incremental artifacts and
+  # debuginfo are never reused and only enlarge the build.
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_DEV_STRIP: "symbols"
+  # Keep in sync with [workspace.package] rust-version in Cargo.toml and MSRV
+  # in the Makefile.
+  MSRV: "1.89"
+
+jobs:
+  # [ORB-10010] MSRV floor: `rust-version` in [workspace.package] (Cargo.toml).
+  # Evidence for 1.89: edition 2024 requires >= 1.85, the highest
+  # `rust-version` declared by any dependency in the locked graph is 1.88
+  # (time, cookie_store, ort), and workspace code uses the file-locking API
+  # (`File::unlock`, stabilized 1.89). This job pins that floor so a future
+  # dep bump or new language-feature use that raises the true MSRV fails
+  # loudly here instead of silently breaking builds on older toolchains.
+  msrv:
+    name: MSRV (cargo check on pinned minimum)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15 # Observed ~1 minute; allows cold cache and runner variance.
+    steps:
+      # A push run checks the commit that triggered it, not whatever the
+      # branch points to once a queued run starts.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # MSRV 1.89
+        with:
+          toolchain: "1.89"
+
+      # [DANI-10428] rust-cache keys on the rustc version, so this 1.89 check
+      # cache can never collide with the pinned-toolchain jobs; it prunes stale
+      # registry/target entries before saving instead of growing to the cap.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: v1-rust-${{ hashFiles('Cargo.toml') }}
+          save-if: ${{ github.event_name == 'push' }}
+
+      - name: Check workspace on MSRV toolchain
+        run: |
+          set -euo pipefail
+          rustc +${MSRV} --version | grep -F "${MSRV}"
+          cargo +${MSRV} check --workspace --locked

@@ -1,8 +1,11 @@
 //! The host side of a run's plugin broker: execute one authenticated request
 //! — a plugin tool, one of the read-only `github.*` built-ins that need the
-//! host's `gh` credentials, or one of a claimed worker's owner calls that need
-//! the claim's owner route — through the audited dispatch,
-//! under the run's authority (`docs/design/plugins/2_agent_call_broker.md` §3, §4.3–§4.4, §5).
+//! host's `gh` credentials, one of a claimed worker's owner calls that need
+//! the claim's owner route, a resident cycle's ship whose
+//! leaf worker must not start inside the cycle's sandbox, a resident cycle's
+//! decision raise whose lock that sandbox mounts read-only, or a resident
+//! cycle's landing or move to `done` that reads the forge — through the audited
+//! dispatch, under the run's authority (`docs/design/plugins/2_agent_call_broker.md` §3, §4.3–§4.4, §5).
 //!
 //! Everything that decides authority — task, job run, activity policy, agent
 //! identity, filesystem profile and program policy — comes from the
@@ -15,21 +18,38 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::governance::decision::DecisionVerb;
+use orbit_common::governance::task::TaskVerb;
+use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_engine::PluginBrokerRun;
-use orbit_tools::{ActivityBinding, ToolContext};
-use orbit_types::policy::Role;
+use orbit_tools::{ActivityBinding, OrbitBuiltinAction, ToolContext};
 use orbit_types::tool::{McpCapability, ToolSessionContext, is_claimed_owner_tool};
 use orbit_types::workflow::tool_allowed;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::runtime::plugin::broker::{
-    BrokerDispatch, BrokerRequest, EntryPoint, is_host_credentialed_read,
+    BROKERED_RESIDENT_LAND_TOOL, BROKERED_RESIDENT_RAISE_TOOL, BROKERED_RESIDENT_SHIP_TOOL,
+    BrokerDispatch, BrokerRequest, EntryPoint, is_brokered_resident_completion,
+    is_host_credentialed_read,
 };
 use crate::runtime::tool_exec::CapabilityEnforcement;
 
 use super::audit::{AuditContext, brokered_agent_identity, brokered_role_label};
 use super::execute::{BrokeredAudit, ToolEntryPoint};
+
+/// The action a resident cycle's brokered built-in runs on the tool host.
+fn brokered_resident_action(tool: &str, input: &Value) -> Option<OrbitBuiltinAction> {
+    match tool {
+        BROKERED_RESIDENT_SHIP_TOOL => Some(OrbitBuiltinAction::Workflow(WorkflowVerb::Ship)),
+        BROKERED_RESIDENT_RAISE_TOOL => Some(OrbitBuiltinAction::Decision(DecisionVerb::Raise)),
+        BROKERED_RESIDENT_LAND_TOOL => Some(OrbitBuiltinAction::Workflow(WorkflowVerb::Land)),
+        _ if is_brokered_resident_completion(tool, input) => {
+            Some(OrbitBuiltinAction::Task(TaskVerb::Update))
+        }
+        _ => None,
+    }
+}
 
 /// Executes a broker's requests for the one run it serves.
 pub(crate) struct RunDispatch {
@@ -91,13 +111,69 @@ impl RunDispatch {
                 ))
             })?;
         if let Some(workspace) = workspace
-            && self.run.workspace.as_deref() != Some(workspace)
+            && !self.names_run_workspace(workspace)
         {
             return Err(OrbitError::PolicyDenied(format!(
                 "the plugin broker serves only this run's workspace, not `{workspace}`"
             )));
         }
         Ok(resolved)
+    }
+
+    /// Whether `selector` is a spelling of this run's own workspace.
+    ///
+    /// The run records the logical catalog id, while a nested `orbit` forwards
+    /// the store identity it resolved the caller's selector to (the task
+    /// partition id), and a caller may spell the workspace by its registered
+    /// name. All of them name one workspace, so the comparison is between the
+    /// workspace's spellings, not between two strings. Fail-closed: a run with
+    /// no recorded workspace, an unreadable registry or a selector that is not
+    /// one of the run's spellings is refused, never admitted by default.
+    fn names_run_workspace(&self, selector: &str) -> bool {
+        let Some(recorded) = self.run.workspace.as_deref() else {
+            return false;
+        };
+        if recorded == selector {
+            return true;
+        }
+        let mut spellings = BTreeSet::from([recorded.to_string()]);
+        let registry = orbit_registry::workspace_registry::load_registry_from_read_only(
+            &orbit_registry::workspace_registry::registry_path_for(&self.runtime.global_root()),
+        )
+        .ok()
+        .map(|load| load.registry);
+        if let Some(registry) = &registry
+            && let Ok(workspace) =
+                orbit_registry::workspace_registry::resolve_logical_workspace(registry, recorded)
+        {
+            spellings.insert(workspace.id.clone());
+            // A name another workspace shares does not identify this one.
+            if orbit_registry::workspace_registry::resolve_logical_workspace(
+                registry,
+                &workspace.name,
+            )
+            .is_ok_and(|named| named.id == workspace.id)
+            {
+                spellings.insert(workspace.name.clone());
+            }
+        }
+        // The host runtime serves this run, so its own identities are the
+        // run's too, but only once the run's recorded workspace is one of them.
+        let mut runtime_identities = Vec::new();
+        if let Ok(id) = self.runtime.workspace_id() {
+            runtime_identities.push(id);
+        }
+        if let Some(binding) = self.runtime.workspace_runtime_binding() {
+            runtime_identities.push(binding.logical_workspace_id.clone());
+            runtime_identities.push(binding.task_partition_id.clone());
+        }
+        if runtime_identities
+            .iter()
+            .any(|identity| spellings.contains(identity))
+        {
+            spellings.extend(runtime_identities);
+        }
+        spellings.contains(selector)
     }
 
     /// The run's own activity policy, applied fail-closed: an allowlist
@@ -173,6 +249,12 @@ impl BrokerDispatch for RunDispatch {
                 step_index: None,
             },
             working_directory: cwd.to_string_lossy().into_owned(),
+            session_model: run
+                .model_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+                .map(ToOwned::to_owned),
         };
         let entry_point = match entry_point {
             EntryPoint::Cli => ToolEntryPoint::Cli,
@@ -206,6 +288,46 @@ impl BrokerDispatch for RunDispatch {
                             session_context,
                         );
                     }
+                    // A resident cycle's leaf run starts on the host, its
+                    // decision raise locks and writes there, and its landing
+                    // and move to `done` read the forge there. Only a run the
+                    // host dispatched as a cycle gets here; the tool host's
+                    // cycle guard then decides its live grant, any right the
+                    // call needs and the workspace, for that run and never one
+                    // the request names. The filer is the run's identity too.
+                    if let Some(action) = brokered_resident_action(&tool, &input) {
+                        self.runtime.check_tool_enabled(&tool)?;
+                        self.runtime.ensure_tool_agent_facing(&tool)?;
+                        self.refuse_outside_activity_policy(&tool)?;
+                        if let Some(policy) = &run.tool_deny_policy
+                            && policy.denies(&tool)
+                        {
+                            return Err(OrbitError::PolicyDenied(policy.denial_message(&tool)));
+                        }
+                        let run_id = run
+                            .job_run_id
+                            .as_deref()
+                            .filter(|run_id| self.runtime.is_resident_cycle_run(run_id))
+                            .ok_or_else(|| {
+                                OrbitError::CapabilityDenied(format!(
+                                    "only a resident cycle's run may call '{tool}' through \
+                                         its broker"
+                                ))
+                            })?;
+                        return crate::adapter::tool_host::build_orbit_tool_host(
+                            &self.runtime,
+                            run.task_id.clone(),
+                            Some(run_id.to_string()),
+                            session_context,
+                        )
+                        .execute(
+                            action,
+                            input,
+                            run.agent_name.clone(),
+                            run.model_name.clone(),
+                            None,
+                        );
+                    }
                     // A built-in tool is answered by the nested `orbit`
                     // itself; the broker exists to run plugin backends and
                     // the closed set of reads that need the host's `gh`
@@ -214,16 +336,17 @@ impl BrokerDispatch for RunDispatch {
                         && !is_host_credentialed_read(&tool)
                     {
                         return Err(OrbitError::PolicyDenied(format!(
-                            "the plugin broker runs plugin tools, the read-only github.* tools \
-                             and a claimed worker's owner calls only; '{tool}' is none of these"
+                            "the plugin broker runs plugin tools, the read-only github.* tools, \
+                             a claimed worker's owner calls and a \
+                             resident cycle's ship, decision raise, landing and move to done \
+                             only; '{tool}' is none of these"
                         )));
                     }
                     self.runtime.ensure_tool_agent_facing(&tool)?;
                     self.refuse_outside_activity_policy(&tool)?;
-                    self.runtime.run_tool_with_context_and_role_and_capability(
+                    self.runtime.run_tool_with_context_and_capability(
                         &tool,
                         input,
-                        Role::Admin,
                         {
                             let mut ctx = self.tool_context(&cwd, session_context);
                             ctx.broker_call = Some(orbit_tools::plugin::BrokerCall {

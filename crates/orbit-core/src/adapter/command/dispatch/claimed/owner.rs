@@ -26,6 +26,9 @@
 //!   relation only as `regression_from`: the owner, which holds the claimed
 //!   task's tags, allows that only for a review task's findings;
 //! - `orbit.friction.add` is recorded during the claimed task.
+//! - `orbit.notice.post`, `orbit.notice.show` and `orbit.notice.close` are
+//!   stored only on the owner; the binding supplies the poster's task and
+//!   run, so a request's `orchestrator` attribution never reaches the owner.
 //!
 //! The before-PR gate's own artifacts keep the reviewer's attempt scope
 //! ([`super::review`]), except the named ones a claimed leaf's final
@@ -60,8 +63,9 @@ use orbit_common::{OrbitError, RemoteToolCode};
 use orbit_types::task::{MAX_TASK_ARTIFACT_CONTENT_BYTES, media_type_for_artifact_path};
 use orbit_types::tool::{
     CLAIMED_OWNER_TOOLS, ToolSessionContext, WorkerInvocation, is_claimed_owner_tool,
+    tool_call_name, tool_family, tool_family_operation_call,
 };
-use orbit_types::workflow::{OWNER_ROUTE_UNAVAILABLE_ERROR_CODE, OWNER_ROUTE_UNAVAILABLE_MARKER};
+use orbit_types::workflow::OWNER_ROUTE_UNAVAILABLE_ERROR_CODE;
 use serde_json::{Map, Value, json};
 
 use super::super::execute::ToolEntryPoint;
@@ -72,6 +76,9 @@ pub(super) const PUT: &str = "orbit.task.artifact.put";
 pub(super) const TASK_SHOW: &str = "orbit.task.show";
 const TASK_ADD: &str = "orbit.task.add";
 const FRICTION_ADD: &str = "orbit.friction.add";
+const NOTICE_POST: &str = "orbit.notice.post";
+const NOTICE_SHOW: &str = "orbit.notice.show";
+const NOTICE_CLOSE: &str = "orbit.notice.close";
 
 /// Whether this process is a claimed worker whose owner is another machine:
 /// the only caller whose coordination calls need the bridge. A worker on its
@@ -117,13 +124,27 @@ pub fn bridge_claimed_owner_call(
     entry_point: ToolEntryPoint,
 ) -> Option<ClaimedOwnerRoute> {
     let socket = std::env::var_os("ORBIT_PLUGIN_BROKER").map(std::path::PathBuf::from);
+    // The bridge and the broker behind it key on the operation a family
+    // call reaches; the owner's dispatch receives the family call again.
+    let (name, input) = if tool_family(name).is_some() {
+        let (operation, input) = tool_family_operation_call(name, input.clone());
+        (
+            std::borrow::Cow::Owned(operation),
+            std::borrow::Cow::Owned(input),
+        )
+    } else {
+        (
+            std::borrow::Cow::Borrowed(name),
+            std::borrow::Cow::Borrowed(input),
+        )
+    };
     bridge_through(
         socket.as_deref(),
         global_root,
         binding,
         process_machine_id,
-        name,
-        input,
+        &name,
+        &input,
         cwd,
         workspace_root,
         entry_point,
@@ -204,8 +225,9 @@ pub(super) fn bridge_through(
 /// carry the call. The agent ends its step on it; the run skips recovery and
 /// releases the claim, since nothing inside this sandbox can open the route.
 pub fn owner_route_unavailable(name: &str, cause: &str) -> OrbitError {
+    let name = tool_call_name(name);
     let message = format!(
-        "{OWNER_ROUTE_UNAVAILABLE_MARKER} '{name}' for a claimed task reaches the owner only \
+        "'{name}' for a claimed task reaches the owner only \
          through this run's coordinator, and {cause}. The agent sandbox masks ~/.ssh, so there \
          is no other route: do not read SSH credentials or loosen the sandbox. End the step as \
          failed with error.code `{OWNER_ROUTE_UNAVAILABLE_ERROR_CODE}`; the run then releases \
@@ -246,11 +268,17 @@ fn coordinator_unavailable(name: &str, error: OrbitError) -> OrbitError {
 /// Refuse a coordination tool the broker does not carry, from inside a
 /// masked sandbox: the SSH route to the owner could only fail there.
 fn outside_allowlist(name: &str) -> OrbitError {
+    let name = tool_call_name(name);
+    let owner_calls = CLAIMED_OWNER_TOOLS
+        .iter()
+        .map(|tool| tool_call_name(tool))
+        .collect::<Vec<_>>()
+        .join(", ");
     OrbitError::CapabilityDenied(format!(
         "claimed_owner_bridge_refused: '{name}' is not among the owner calls a claimed worker's \
          sandbox can make ({}). The sandbox masks ~/.ssh, and this run's coordinator carries \
          only those; return the work through the step's output fields instead",
-        CLAIMED_OWNER_TOOLS.join(", ")
+        owner_calls
     ))
 }
 
@@ -276,6 +304,12 @@ fn local_owner_scope(
     cwd: &Path,
     workspace_root: &Path,
 ) -> Result<bool, OrbitError> {
+    if matches!(name, NOTICE_POST | NOTICE_SHOW | NOTICE_CLOSE) {
+        // Notices keep the in-process owner route on the owner's machine;
+        // only the workspace the binding confirms may be named.
+        without_confirmed_workspace(binding, input, cwd, workspace_root)?;
+        return Ok(false);
+    }
     if !matches!(name, TASK_SHOW | GET | PUT) {
         return Ok(false);
     }
@@ -457,6 +491,29 @@ const TASK_SHOW_PAGE_FIELDS: [&str; 4] = [
 
 /// The fields a claimed worker's `orbit.task.artifact.get` may carry.
 const GET_FIELDS: [&str; 3] = ["id", "path", "model"];
+
+/// The fields a claimed worker's `orbit.notice.post` may carry.
+const NOTICE_POST_FIELDS: [&str; 13] = [
+    "kind",
+    "title",
+    "body",
+    "scope",
+    "dedupe_key",
+    "linked_task",
+    "close_on_linked_done",
+    "evidence",
+    "hosts",
+    "expires_in_hours",
+    "expires_at",
+    "model",
+    "orchestrator",
+];
+
+/// The fields a claimed worker's `orbit.notice.show` may carry.
+const NOTICE_SHOW_FIELDS: [&str; 3] = ["id", "model", "orchestrator"];
+
+/// The fields a claimed worker's `orbit.notice.close` may carry.
+const NOTICE_CLOSE_FIELDS: [&str; 5] = ["id", "dedupe_key", "reason", "model", "orchestrator"];
 
 /// Check a claimed worker's `orbit.task.show` request, of any task in the
 /// claimed workspace, and say whether it asks for a bounded page.
@@ -663,6 +720,21 @@ pub(in crate::adapter::command::dispatch) fn execute_brokered(
                 }
             }
             input.clone()
+        }
+        NOTICE_POST | NOTICE_SHOW | NOTICE_CLOSE => {
+            let allowed: &[&str] = match tool {
+                NOTICE_POST => &NOTICE_POST_FIELDS,
+                NOTICE_SHOW => &NOTICE_SHOW_FIELDS,
+                _ => &NOTICE_CLOSE_FIELDS,
+            };
+            accept_fields(object, allowed)?;
+            let mut input = input.clone();
+            if let Some(object) = input.as_object_mut() {
+                // Poster attribution comes from the claim binding the owner
+                // route supplies, never from a caller-named orchestrator.
+                object.remove("orchestrator");
+            }
+            input
         }
         other => {
             return Err(denied(&format!(

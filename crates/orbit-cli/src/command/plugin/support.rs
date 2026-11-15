@@ -88,6 +88,7 @@ pub(super) fn plugin_record(summary: &PluginSummary) -> Value {
                 "path": program.path.as_ref().map(|path| path.to_string_lossy()),
                 "granted": program.granted(),
                 "problem": program.problem,
+                "resolves_to": program.resolves_to.as_ref().map(|path| path.to_string_lossy()),
             }))
             .collect::<Vec<_>>(),
         "certified_orbit_version": summary.certified_orbit_version,

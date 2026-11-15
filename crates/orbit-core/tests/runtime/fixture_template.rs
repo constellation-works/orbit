@@ -5,9 +5,10 @@
 //! shares a file or handle with the template or another row. The store
 //! template is a migrated global `orbit.db`: a fixture seeds each fresh global
 //! root with it and skips the schema migrations that dominate a first open,
-//! while the runtime still bootstraps that root itself. The control table
-//! below proves one fixture's writes reach neither another fixture nor a
-//! later row.
+//! preserving each file's permissions before the runtime bootstraps that root.
+//! Git snapshots likewise retain executable and read-only file modes. The
+//! control table below proves one fixture's writes reach neither another
+//! fixture nor a later row.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -20,7 +21,7 @@ const STORE: &str = "orbit.db";
 /// Every directory and file under a root, by path relative to that root.
 pub(crate) struct TreeTemplate {
     dirs: Vec<PathBuf>,
-    files: Vec<(PathBuf, Vec<u8>)>,
+    files: Vec<(PathBuf, Vec<u8>, std::fs::Permissions)>,
 }
 
 impl TreeTemplate {
@@ -58,7 +59,11 @@ impl TreeTemplate {
                 );
                 let bytes = std::fs::read(entry.path())
                     .unwrap_or_else(|error| panic!("template file {path:?}: {error}"));
-                self.files.push((path, bytes));
+                let permissions = entry
+                    .metadata()
+                    .expect("template file metadata")
+                    .permissions();
+                self.files.push((path, bytes, permissions));
             }
         }
     }
@@ -69,8 +74,13 @@ impl TreeTemplate {
         for dir in &self.dirs {
             std::fs::create_dir_all(root.join(dir)).expect("template copy dir");
         }
-        for (path, bytes) in &self.files {
-            std::fs::write(root.join(path), bytes).expect("template copy file");
+        for (path, bytes, permissions) in &self.files {
+            let copy = root.join(path);
+            std::fs::write(&copy, bytes).expect("template copy file");
+            // Each root is a fresh fixture with no live readers. Apply the
+            // captured mode before callers open SQLite or use the Git tree;
+            // neither online repair nor the ambient umask defines this copy.
+            std::fs::set_permissions(copy, permissions.clone()).expect("template copy permissions");
         }
     }
 }
@@ -92,7 +102,7 @@ fn store() -> &'static TreeTemplate {
                 && template
                     .files
                     .iter()
-                    .map(|(path, _)| path.as_path())
+                    .map(|(path, _, _)| path.as_path())
                     .eq([Path::new(STORE)]),
             "a closed template store must leave only its database file to copy"
         );
@@ -134,7 +144,24 @@ fn add_task(runtime: &OrbitRuntime, title: &str) -> String {
 fn a_templated_store_is_a_private_fresh_store() {
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let fresh = open(&root.path().join("fresh"), false);
-    let writer = open(&root.path().join("writer"), true);
+    let writer_root = root.path().join("writer");
+    let writer_global = writer_root.join("global");
+    seed_store(&writer_global);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        assert_eq!(
+            std::fs::metadata(writer_global.join(STORE))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o600,
+            "a seeded database must be private before runtime open can repair it"
+        );
+    }
+    let writer = open(&writer_root, true);
     let sibling = open(&root.path().join("sibling"), true);
     assert_eq!(
         add_task(&writer, "Written by one fixture"),

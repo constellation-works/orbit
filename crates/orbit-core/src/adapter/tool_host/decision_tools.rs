@@ -1,11 +1,13 @@
 use crate::OrbitRuntime;
 use crate::application::task::decision_request_json;
-use crate::application::task::{DecisionSubmitCaller, DecisionSubmitParams};
+use crate::application::task::{
+    AgentDecisionRaise, DecisionListProfile, DecisionSubmitCaller, DecisionSubmitParams,
+};
 use crate::runtime::authorization::resolved_caller_capabilities;
 use orbit_common::governance::decision::DecisionVerb;
 use orbit_common::governance::operation::OperationVerb;
 use orbit_common::{DecisionRefusalCode, OrbitError};
-use orbit_types::task::DecisionGate;
+use orbit_types::task::AgentDecisionOptionInput;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::{Value, json};
 
@@ -20,37 +22,51 @@ pub(super) fn dispatch(
     let input = verb.spec().parse_input(input)?;
     match verb {
         DecisionVerb::List => {
-            let gate = input
-                .optional_string("gate")?
-                .map(|name| {
-                    DecisionGate::from_name(&name).ok_or_else(|| {
-                        OrbitError::InvalidInput(format!(
-                            "unknown decision gate `{name}`; expected block_triage, pilot_admission, proposed_approval or review_approval"
-                        ))
-                    })
-                })
-                .transpose()?;
+            let gate = input.optional_string("gate")?;
             let task_id = input.optional_string("task_id")?;
+            let topic = input.optional_string("topic")?;
             let include_closed = input.optional_bool("include_closed")?.unwrap_or(false);
-            let listing = runtime.list_decision_requests_with_warnings(gate, task_id.as_deref(), include_closed)?;
-            let mut value = json!({
-                "requests": listing.requests.iter().map(decision_request_json).collect::<Vec<_>>(),
-                "count": listing.requests.len(),
-            });
-            if !listing.warnings.is_empty() {
-                value["warnings"] = json!(listing.warnings);
-            }
-            Ok(value)
+            runtime.list_decision_requests_projected(
+                gate.as_deref(),
+                task_id.as_deref(),
+                topic.as_deref(),
+                include_closed,
+                DecisionListProfile::Tool,
+            )
         }
         DecisionVerb::Show => {
             let id = input.required_string("id")?;
             let request = runtime.get_decision_request(&id)?.ok_or_else(|| {
                 OrbitError::decision_refused(
                     DecisionRefusalCode::RequestNotFound,
-                    format!("no decision request `{id}` in this workspace"),
+                    format!("no decision request `{id}` in this workspace; see `orbit decision list --all` or `orbit.decision` with action `list` and `include_closed: true` for valid request IDs"),
                 )
             })?;
             Ok(decision_request_json(&request))
+        }
+        DecisionVerb::Raise => {
+            let options = input
+                .as_value()
+                .get("options")
+                .cloned()
+                .ok_or_else(|| OrbitError::InvalidInput("`options` is required".into()))?;
+            let options: Vec<AgentDecisionOptionInput> =
+                serde_json::from_value(options).map_err(|error| {
+                    OrbitError::InvalidInput(format!(
+                        "`options` must be an array of {{label, consequence, recommended}} objects: {error}"
+                    ))
+                })?;
+            let filer = runtime.actor().resolve_write_label(agent, model)?;
+            let raised = runtime.raise_agent_decision_request(AgentDecisionRaise {
+                task_id: input.required_string("task_id")?,
+                question: input.required_string("question")?,
+                options,
+                topic: input.optional_string("topic")?,
+                filer,
+            })?;
+            let mut value = decision_request_json(&raised.request);
+            value["deduplicated"] = json!(raised.deduplicated);
+            Ok(value)
         }
         DecisionVerb::Digest => {
             let caller = submit_caller(runtime, session_context, agent, model)?;
@@ -86,6 +102,15 @@ pub(super) fn dispatch(
         // them inactive; refusing here too keeps the invariant in core.
         DecisionVerb::Answer => Err(OrbitError::PolicyDenied(
             "answering a decision request is the operator's: use `orbit decision answer` or the dashboard".into(),
+        )),
+        DecisionVerb::Reverse => Err(OrbitError::PolicyDenied(
+            "reversing a precedent or model answer is the operator's: use `orbit decision reverse`".into(),
+        )),
+        DecisionVerb::RuleAuto => Err(OrbitError::PolicyDenied(
+            "setting auto on a decision rule is the operator's: use `orbit decision rule-auto`".into(),
+        )),
+        DecisionVerb::Consolidate => Err(OrbitError::PolicyDenied(
+            "a consolidation proposal is a CLI read: use `orbit decision consolidate`".into(),
         )),
         DecisionVerb::ChannelRegister
         | DecisionVerb::ChannelList

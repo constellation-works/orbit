@@ -8,6 +8,12 @@
 //! Off a terminal (width 0, the piped/golden path) every row stays on one line.
 //! The column is computed from the real names, not hand-typed spaces, so a
 //! longer name widens the column instead of drifting [ORB-19912].
+//!
+//! Everything else Clap renders (flag descriptions, about text, its command
+//! lists) is wrapped by Clap itself once `wrap_help` is on and the command
+//! carries the sink width. Footer text is the exception: Clap re-flows a long
+//! footer line from column 0, which strands a continuation of an indented
+//! example away from its command, so [`hang_wrap_footers`] wraps footers first.
 
 use clap::{Command, Id};
 
@@ -47,6 +53,335 @@ pub(crate) fn compact_globals(mut command: Command, global_ids: &[Id]) -> Comman
     command
 }
 
+/// Wrap every footer in `command`'s tree to `width` columns with a hanging
+/// indent: a continuation of an indented line sits two columns deeper than the
+/// line it continues, so it stays with its example. Width `0` (piped) leaves
+/// the footers untouched.
+pub(crate) fn hang_wrap_footers(mut command: Command, width: usize) -> Command {
+    if width == 0 {
+        return command;
+    }
+    if let Some(footer) = command.get_after_help().map(ToString::to_string) {
+        command = command.after_help(hang_wrap_text(&footer, width));
+    }
+    if let Some(footer) = command.get_after_long_help().map(ToString::to_string) {
+        command = command.after_long_help(hang_wrap_text(&footer, width));
+    }
+    let names: Vec<String> = command
+        .get_subcommands()
+        .map(|sub| sub.get_name().to_string())
+        .collect();
+    for name in names {
+        command = command.mut_subcommand(name, |sub| hang_wrap_footers(sub, width));
+    }
+    command
+}
+
+/// Extra columns a continuation sits under the line it continues, when that
+/// line is itself indented.
+const HANG_INDENT: usize = 2;
+
+/// Fewest columns an aligned explanation needs to wrap into readable phrases.
+/// A shared description column that leaves less than this stacks the block's
+/// explanations under their commands instead of wrapping them a word per line.
+const MIN_EXPLANATION_WIDTH: usize = 24;
+
+/// Wrap the lines of `text` that are wider than `width` at word boundaries.
+/// Lines that fit are left exactly as written, so aligned columns survive. A
+/// prose paragraph hard-wrapped in the source (unindented lines, each ending
+/// mid-sentence) is re-flowed as one when any of its lines is too wide, so the
+/// narrow wrap does not leave a ragged stub after every source line break.
+///
+/// Contiguous indented lines form a block. When such a block holds an aligned
+/// two-column layout (two or more rows starting their description at the same
+/// column) and any row is too wide, the overflowing aligned rows keep that
+/// shared column: their explanation wraps with continuation lines indented to
+/// the column. When the column leaves under `MIN_EXPLANATION_WIDTH` columns,
+/// every aligned row of the block stacks onto its own indented lines instead,
+/// so the block keeps one layout. Single-column rows in the same block keep the
+/// plain hanging indent.
+fn hang_wrap_text(text: &str, width: usize) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut paragraph: Vec<&str> = Vec::new();
+    let mut block: Vec<&str> = Vec::new();
+    let flush_paragraph = |paragraph: &mut Vec<&str>, out: &mut Vec<String>| {
+        if paragraph.iter().any(|line| line.chars().count() > width) {
+            out.push(hang_wrap_line(&paragraph.join(" "), width));
+        } else {
+            out.extend(paragraph.iter().map(|line| line.to_string()));
+        }
+        paragraph.clear();
+    };
+    let flush_block = |block: &mut Vec<&str>, out: &mut Vec<String>| {
+        if !block.is_empty() {
+            hang_wrap_block(block, width, out);
+            block.clear();
+        }
+    };
+    for line in text.split('\n') {
+        let prose = !line.is_empty() && !line.starts_with(' ');
+        if prose {
+            flush_block(&mut block, &mut out);
+            paragraph.push(line);
+            // A line that ends a sentence or introduces a list closes its paragraph.
+            if line.ends_with(['.', ':', ';']) {
+                flush_paragraph(&mut paragraph, &mut out);
+            }
+            continue;
+        }
+        flush_paragraph(&mut paragraph, &mut out);
+        if line.is_empty() {
+            flush_block(&mut block, &mut out);
+            out.push(String::new());
+            continue;
+        }
+        block.push(line);
+    }
+    flush_paragraph(&mut paragraph, &mut out);
+    flush_block(&mut block, &mut out);
+    out.join("\n")
+}
+
+/// Char-index where an indented two-column row starts its description, if the
+/// line holds a command, a run of two or more spaces, then an explanation.
+fn aligned_description_column(line: &str) -> Option<usize> {
+    let chars: Vec<char> = line.chars().collect();
+    let lead = chars.iter().take_while(|c| **c == ' ').count();
+    if lead == 0 || lead >= chars.len() {
+        return None;
+    }
+    if !chars[lead..].iter().any(|c| *c != ' ') {
+        return None;
+    }
+    let mut index = lead;
+    while index < chars.len() {
+        if chars[index] != ' ' {
+            index += 1;
+            continue;
+        }
+        let run_start = index;
+        while index < chars.len() && chars[index] == ' ' {
+            index += 1;
+        }
+        let run_len = index - run_start;
+        if run_len >= 2 && chars[lead..run_start].iter().any(|c| *c != ' ') && index < chars.len() {
+            return Some(index);
+        }
+    }
+    None
+}
+
+/// Wrap one block of contiguous indented lines. Blocks without a shared
+/// description column, or where every row fits, keep the previous per-line
+/// behavior so piped and wide output stays byte-identical.
+fn hang_wrap_block(block: &[&str], width: usize, out: &mut Vec<String>) {
+    if block.iter().all(|line| line.chars().count() <= width) {
+        out.extend(block.iter().map(|line| line.to_string()));
+        return;
+    }
+    let mut counts = std::collections::BTreeMap::new();
+    for line in block {
+        if let Some(column) = aligned_description_column(line) {
+            *counts.entry(column).or_insert(0usize) += 1;
+        }
+    }
+    let Some((&column, _)) = counts.iter().max_by_key(|(_, count)| **count) else {
+        for line in block {
+            out.push(hang_wrap_line(line, width));
+        }
+        return;
+    };
+    if counts.get(&column).is_none_or(|count| *count < 2) {
+        for line in block {
+            out.push(hang_wrap_line(line, width));
+        }
+        return;
+    }
+    // Too little room beside the shared column would wrap the explanations a
+    // word per line, so the block stacks all of them: one layout per block.
+    let stack_block = width.saturating_sub(column) < MIN_EXPLANATION_WIDTH;
+    for line in block {
+        let aligned = aligned_description_column(line) == Some(column);
+        if aligned && stack_block {
+            out.push(hang_stack_aligned_row(line, column, width));
+        } else if line.chars().count() <= width {
+            out.push(line.to_string());
+        } else if aligned {
+            out.push(hang_wrap_aligned_row(line, column, width));
+        } else {
+            out.push(hang_wrap_line(line, width));
+        }
+    }
+}
+
+/// Split an aligned row at its shared description `column` into the command
+/// text, padding included, and the trimmed explanation. `None` when the row has
+/// no explanation at that column.
+fn split_aligned_row(line: &str, column: usize) -> Option<(String, String)> {
+    let chars: Vec<char> = line.chars().collect();
+    if column == 0 || column >= chars.len() {
+        return None;
+    }
+    let prefix: String = chars[..column].iter().collect();
+    let explanation: String = chars[column..].iter().collect();
+    let explanation = explanation.trim();
+    if explanation.is_empty() {
+        return None;
+    }
+    Some((prefix, explanation.to_string()))
+}
+
+/// Stack one aligned row at any width: the command on its own line and its
+/// explanation wrapped beneath it. Used when the shared column leaves too little
+/// room to read the explanation beside the command.
+fn hang_stack_aligned_row(line: &str, column: usize, width: usize) -> String {
+    let Some((prefix, explanation)) = split_aligned_row(line, column) else {
+        return hang_wrap_line(line, width);
+    };
+    let lead = line.chars().take_while(|c| *c == ' ').count();
+    stack_aligned_row(&prefix, &explanation, lead, width)
+}
+
+/// The command on its own line (wrapped itself when it alone overflows), then
+/// the explanation stacked beneath it.
+fn stack_aligned_row(prefix: &str, explanation: &str, lead: usize, width: usize) -> String {
+    let command = prefix.trim_end();
+    let mut stacked = if command.chars().count() > width {
+        hang_wrap_line(command, width)
+    } else {
+        command.to_string()
+    };
+    stacked.push('\n');
+    stacked.push_str(&hang_wrap_stacked_explanation(explanation, lead, width));
+    stacked
+}
+
+/// Wrap one over-wide aligned row keeping its shared description `column`.
+/// The explanation wraps with continuations indented to the column; when the
+/// column leaves no room, or the first word cannot fit beside it, the explanation
+/// stacks onto its own indented lines.
+fn hang_wrap_aligned_row(line: &str, column: usize, width: usize) -> String {
+    let Some((prefix, explanation)) = split_aligned_row(line, column) else {
+        return hang_wrap_line(line, width);
+    };
+    let explanation = explanation.as_str();
+    let lead = line.chars().take_while(|c| *c == ' ').count();
+    if width <= column
+        || explanation
+            .split_whitespace()
+            .next()
+            .is_none_or(|word| word.chars().count() > width - column)
+    {
+        return stack_aligned_row(&prefix, explanation, lead, width);
+    }
+    let available = width - column;
+    let mut chunks: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_len = 0usize;
+    for word in explanation.split_whitespace() {
+        let word_len = word.chars().count();
+        if current.is_empty() {
+            current.push_str(word);
+            current_len = word_len;
+        } else if current_len + 1 + word_len <= available {
+            current.push(' ');
+            current.push_str(word);
+            current_len += 1 + word_len;
+        } else {
+            chunks.push(std::mem::take(&mut current));
+            current.push_str(word);
+            current_len = word_len;
+        }
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    if chunks.is_empty() {
+        return prefix.trim_end().to_string();
+    }
+    let mut wrapped = String::from(&prefix);
+    wrapped.push_str(&chunks[0]);
+    for chunk in chunks.iter().skip(1) {
+        wrapped.push('\n');
+        wrapped.push_str(&" ".repeat(column));
+        wrapped.push_str(chunk);
+    }
+    wrapped
+}
+
+/// Wrap a stacked explanation onto its own lines indented past `lead`.
+fn hang_wrap_stacked_explanation(explanation: &str, lead: usize, width: usize) -> String {
+    let indent = lead + HANG_INDENT;
+    let indent = if indent + 1 >= width {
+        lead.min(width.saturating_sub(1))
+    } else {
+        indent
+    };
+    let available = width.saturating_sub(indent);
+    if available == 0 {
+        return format!("{}{}", " ".repeat(indent), explanation.trim());
+    }
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_len = 0usize;
+    for word in explanation.split_whitespace() {
+        let word_len = word.chars().count();
+        if current.is_empty() {
+            current.push_str(word);
+            current_len = word_len;
+        } else if current_len + 1 + word_len <= available {
+            current.push(' ');
+            current.push_str(word);
+            current_len += 1 + word_len;
+        } else {
+            lines.push(format!("{}{}", " ".repeat(indent), current));
+            current = word.to_string();
+            current_len = word_len;
+        }
+    }
+    if !current.is_empty() {
+        lines.push(format!("{}{}", " ".repeat(indent), current));
+    }
+    if lines.is_empty() {
+        lines.push(" ".repeat(indent));
+    }
+    lines.join("\n")
+}
+
+fn hang_wrap_line(line: &str, width: usize) -> String {
+    if line.chars().count() <= width {
+        return line.to_string();
+    }
+    let lead = line.chars().take_while(|c| *c == ' ').count();
+    let continuation = if lead > 0 { lead + HANG_INDENT } else { 0 };
+    // A hang so deep it leaves no room would never make progress; fall back to
+    // the line's own indent.
+    let continuation = if continuation + 1 >= width {
+        lead.min(width.saturating_sub(1))
+    } else {
+        continuation
+    };
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = " ".repeat(lead.min(width.saturating_sub(1)));
+    let mut has_word = false;
+    for word in line.split_whitespace() {
+        let word_len = word.chars().count();
+        let current_len = current.chars().count();
+        if !has_word {
+            current.push_str(word);
+            has_word = true;
+        } else if current_len + 1 + word_len <= width {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            lines.push(std::mem::replace(&mut current, " ".repeat(continuation)));
+            current.push_str(word);
+        }
+    }
+    lines.push(current);
+    lines.join("\n")
+}
+
 /// Spaces before a grouped row.
 const GROUP_INDENT: usize = 2;
 /// Minimum spaces between the longest name and its description.
@@ -69,10 +404,6 @@ const RUN_WORKFLOWS: &[GroupedRow] = &[
         "Preflight proposed/backlog tasks and persist validated selectors",
     ),
     ("job", "Run an arbitrary job by ID"),
-    (
-        "agent",
-        "Invoke an agent on the host for exploration or debugging (operator only)",
-    ),
 ];
 
 const RUN_AUDITS: &[GroupedRow] = &[
@@ -90,6 +421,10 @@ const RUN_AUDITS: &[GroupedRow] = &[
     (
         "settlements",
         "Show failure and release settlements claimed leaves sent this owner",
+    ),
+    (
+        "settlements-hydrate",
+        "Keep settled leaf run evidence from its follower (operator)",
     ),
 ];
 
@@ -116,6 +451,7 @@ const TASK_TASKS: &[GroupedRow] = &[
         "update",
         "Update task fields; `--approve` takes the next approval step",
     ),
+    ("repilot", "Explicitly request one new pilot assessment"),
     ("archive", "Archive a task"),
     ("list", "List tasks with optional filters"),
     (
@@ -156,7 +492,7 @@ const TASK_HEALTH: &[GroupedRow] = &[
     ),
     (
         "recover-claim",
-        "Recover a live claim to blocked or backlog with an audited reason",
+        "Recover a live claim to a lifecycle-valid status with an audited reason",
     ),
     (
         "revoke-handoff",
@@ -192,18 +528,11 @@ const TASK_BUNDLES: &[GroupedRow] = &[
     ),
 ];
 
-const ROOT_ENVIRONMENT: &[GroupedRow] = &[
+const ROOT_SETUP: &[GroupedRow] = &[
     ("init", "Initialize the global Orbit root (~/.orbit)"),
     ("workspace", "Manage workspaces"),
     ("config", "Show or update Orbit configuration"),
-    (
-        "host",
-        "Register and inspect the remote Orbit hosts this machine reaches over SSH",
-    ),
-    (
-        "browser-kit",
-        "Install, verify and remove the headless browser kit workers check UIs with",
-    ),
+    ("host", "Register and inspect remote Orbit hosts"),
     ("plugin", "Install and manage Orbit plugins"),
     (
         "migrate",
@@ -215,16 +544,8 @@ const ROOT_ENVIRONMENT: &[GroupedRow] = &[
     ),
 ];
 
-const ROOT_KNOWLEDGE: &[GroupedRow] = &[
+const ROOT_WORK: &[GroupedRow] = &[
     ("task", "Create, update, and manage tasks"),
-    (
-        "visual",
-        "Capture the working tree beside a task's mocks for comparison",
-    ),
-    (
-        "decision",
-        "List, show and answer human decision requests on held work",
-    ),
     ("friction", "Report, list, and triage friction records"),
     ("search", "Search tasks and frictions"),
 ];
@@ -236,11 +557,7 @@ const ROOT_OPERATE: &[GroupedRow] = &[
         "script",
         "Grant and inspect workspace scripts a job step may run",
     ),
-    (
-        "experiment",
-        "Define, run and conclude experiments over agent treatments",
-    ),
-    ("lease", "Coordinate path leases with the workspace owner"),
+    ("notice", "Post, close and list fleet notices"),
     (
         "tool",
         "Manage and run Orbit tools, including external MCP plugins",
@@ -249,23 +566,20 @@ const ROOT_OPERATE: &[GroupedRow] = &[
 ];
 
 const ROOT_OBSERVE: &[GroupedRow] = &[
+    ("attention", "List what waits on an operator"),
     ("audit", "Query the audit event log"),
-    (
-        "codebase",
-        "Rank the repository paths that are risky for agents to change",
-    ),
-    (
-        "agents",
-        "Score orchestrators, implementers, reviewers and pilots by crew and model",
-    ),
-    (
-        "crew",
-        "Show how crews are laddered across complexity tiers",
-    ),
     ("log", "Tail the unified Orbit log feed"),
     (
         "doctor",
         "Diagnose workspace health, provider CLIs, and filesystem access",
+    ),
+];
+
+const ROOT_ANALYTICS: &[GroupedRow] = &[
+    ("agents", "Score agents by model and recorded effort"),
+    (
+        "codebase",
+        "Rank the repository paths that are risky for agents to change",
     ),
 ];
 
@@ -274,15 +588,11 @@ const ROOT_SCHEDULER: &[GroupedRow] = &[
         "clock",
         "Inspect, control, and manually tick the machine scheduler",
     ),
-    ("sweep", "Compatibility alias for `orbit clock tick`"),
     (
         "routine",
         "Inspect and control scheduled routines on this machine",
     ),
-    (
-        "auto-task",
-        "Define recurring auto-task templates (the scheduler primitive)",
-    ),
+    ("auto-task", "Define recurring auto-task templates"),
     (
         "automation",
         "Explain what condition-triggered routines and auto-tasks would match",
@@ -297,6 +607,33 @@ const ROOT_SERVICES: &[GroupedRow] = &[
     ("web", "Run the Orbit dashboard"),
 ];
 
+const ROOT_ADVANCED: &[GroupedRow] = &[
+    (
+        "application",
+        "Consent to scoped application calls and manage credentials",
+    ),
+    (
+        "decision",
+        "List, show and answer human decision requests on held work",
+    ),
+    (
+        "evolution",
+        "Record and inspect capability gaps and their measured costs",
+    ),
+    (
+        "experiment",
+        "Define, run and conclude experiments over agent treatments",
+    ),
+    (
+        "memory",
+        "Inspect, export and reset crew memory (experimental)",
+    ),
+    (
+        "resident",
+        "Grant, narrow and inspect resident orchestrator mandates",
+    ),
+];
+
 /// Display width of a row name in terminal columns (character count is the
 /// portable approximation; names are ASCII and descriptions use single-column
 /// glyphs).
@@ -307,10 +644,11 @@ fn name_width(name: &str) -> usize {
 /// Description column for a template: indent plus the longest name in the
 /// template plus the gap. One column per template keeps every section aligned
 /// even when sections have different longest names.
-fn template_column(sections: &[&[GroupedRow]]) -> usize {
+fn template_column(sections: &[&[GroupedRow]], extra_rows: &[(&str, &str)]) -> usize {
     let longest = sections
         .iter()
         .flat_map(|rows| rows.iter().map(|(name, _)| name_width(name)))
+        .chain(extra_rows.iter().map(|(name, _)| name_width(name)))
         .max()
         .unwrap_or(0);
     GROUP_INDENT + longest + GROUP_GAP
@@ -352,15 +690,15 @@ fn wrap_description(description: &str, available: usize) -> Vec<String> {
 /// sink width: `0` (piped) keeps every row on one line; otherwise a row that
 /// would exceed the width wraps with continuation lines indented to the
 /// column so the command/description association stays readable.
-fn render_grouped_rows(
-    rows: &[GroupedRow],
+fn render_grouped_rows<'a>(
+    rows: impl IntoIterator<Item = (&'a str, &'a str)>,
     column: usize,
     term_width: Option<usize>,
 ) -> Vec<String> {
     let global_longest = column
         .saturating_sub(GROUP_INDENT)
         .saturating_sub(GROUP_GAP);
-    rows.iter()
+    rows.into_iter()
         .flat_map(|(name, about)| {
             let mut prefix = String::from("  ");
             prefix.push_str(name);
@@ -411,13 +749,13 @@ fn render_grouped_rows(
 
 fn render_section(
     heading: &str,
-    rows: &[GroupedRow],
+    rows: &[(&str, &str)],
     column: usize,
     term_width: Option<usize>,
 ) -> String {
     let mut out = String::from(heading);
     out.push_str(":\n");
-    out.push_str(&render_grouped_rows(rows, column, term_width).join("\n"));
+    out.push_str(&render_grouped_rows(rows.iter().copied(), column, term_width).join("\n"));
     out
 }
 
@@ -432,7 +770,7 @@ fn width_option(term_width: u16) -> Option<usize> {
 
 /// Grouped `orbit run` help with a uniform column and width-aware wrapping.
 pub(crate) fn run_help_template(term_width: u16) -> String {
-    let column = template_column(&[RUN_WORKFLOWS, RUN_AUDITS, RUN_MAINTENANCE]);
+    let column = template_column(&[RUN_WORKFLOWS, RUN_AUDITS, RUN_MAINTENANCE], &[]);
     let width = width_option(term_width);
     format!(
         "{{about}}\n\n{{usage-heading}} {{usage}}\n\n{}\n\n{}\n\n{}\n\nOptions:\n{{options}}\n{{after-help}}",
@@ -444,7 +782,7 @@ pub(crate) fn run_help_template(term_width: u16) -> String {
 
 /// Grouped `orbit task` help with a uniform column and width-aware wrapping.
 pub(crate) fn task_help_template(term_width: u16) -> String {
-    let column = template_column(&[TASK_TASKS, TASK_HEALTH, TASK_BUNDLES]);
+    let column = template_column(&[TASK_TASKS, TASK_HEALTH, TASK_BUNDLES], &[]);
     let width = width_option(term_width);
     format!(
         "{{about}}\n\n{{usage-heading}} {{usage}}\n\n{}\n\n{}\n\n{}\n\nOptions:\n{{options}}\n{{after-help}}",
@@ -455,23 +793,40 @@ pub(crate) fn task_help_template(term_width: u16) -> String {
 }
 
 /// Grouped root help with a uniform column and width-aware wrapping.
-pub(crate) fn root_help_template(term_width: u16) -> String {
-    let column = template_column(&[
-        ROOT_ENVIRONMENT,
-        ROOT_KNOWLEDGE,
-        ROOT_OPERATE,
-        ROOT_OBSERVE,
-        ROOT_SCHEDULER,
-        ROOT_SERVICES,
-    ]);
+pub(crate) fn root_help_template(term_width: u16, plugin_rows: &[(String, String)]) -> String {
+    let plugin_rows: Vec<(&str, &str)> = plugin_rows
+        .iter()
+        .map(|(name, about)| (name.as_str(), about.as_str()))
+        .collect();
+    let column = template_column(
+        &[
+            ROOT_SETUP,
+            ROOT_WORK,
+            ROOT_OPERATE,
+            ROOT_OBSERVE,
+            ROOT_ANALYTICS,
+            ROOT_SCHEDULER,
+            ROOT_SERVICES,
+            ROOT_ADVANCED,
+        ],
+        &plugin_rows,
+    );
     let width = width_option(term_width);
-    format!(
-        "{{name}} {{version}}\n\n{{usage-heading}} {{usage}}\n\n{}\n\n{}\n\n{}\n\n{}\n\n{}\n\n{}\n\nOptions:\n{{options}}",
-        render_section("Environment", ROOT_ENVIRONMENT, column, width),
-        render_section("Knowledge", ROOT_KNOWLEDGE, column, width),
+    let mut sections = vec![
+        render_section("Setup", ROOT_SETUP, column, width),
+        render_section("Work", ROOT_WORK, column, width),
         render_section("Operate", ROOT_OPERATE, column, width),
         render_section("Observe", ROOT_OBSERVE, column, width),
+        render_section("Analytics", ROOT_ANALYTICS, column, width),
         render_section("Scheduler", ROOT_SCHEDULER, column, width),
         render_section("Services", ROOT_SERVICES, column, width),
+        render_section("Advanced", ROOT_ADVANCED, column, width),
+    ];
+    if !plugin_rows.is_empty() {
+        sections.push(render_section("Plugins", &plugin_rows, column, width));
+    }
+    format!(
+        "{{name}} {{version}}\n\n{{usage-heading}} {{usage}}\n\n{}\n\nOptions:\n{{options}}",
+        sections.join("\n\n"),
     )
 }

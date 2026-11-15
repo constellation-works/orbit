@@ -217,9 +217,13 @@ def detect_help_removals(git, parent, commit, changed):
 def schema_facts(schema, path, facts):
     """Flatten the structural facts of a JSON schema; descriptions are skipped."""
     if isinstance(schema, bool):
-        # Only `true` is an existing location: it accepts everything, so
-        # requiring a child there rejects previously valid input. `false`
-        # accepts nothing, so relaxing it to an object only admits input.
+        # Record both booleans so tightening to `false` (rejects everything
+        # previously accepted there) and relaxing `false` inside oneOf are
+        # visible to detect_mcp_changes. Only `true` is a schema node: it
+        # accepts everything, so requiring a child there rejects previously
+        # valid input, while `false` accepts nothing, so relaxing it to an
+        # object outside oneOf only admits input.
+        facts.setdefault("boolean", {})[path] = schema
         if schema:
             facts.setdefault("schema_nodes", set()).add(path)
         return
@@ -233,7 +237,7 @@ def schema_facts(schema, path, facts):
     if "const" in schema:
         facts.setdefault("const", {})[path] = _json_value_key(schema["const"])
     if "enum" in schema:
-        facts.setdefault("enum", {})[path] = {json.dumps(v, sort_keys=True) for v in schema["enum"]}
+        facts.setdefault("enum", {})[path] = {_json_value_key(v) for v in schema["enum"]}
     if "required" in schema and isinstance(schema["required"], list):
         facts.setdefault("required", {})[path] = set(schema["required"])
     properties = schema.get("properties")
@@ -297,11 +301,37 @@ def schema_property_names(schema):
     return set(properties) if isinstance(properties, dict) else set()
 
 
+def schema_same_except_enums(before, after):
+    """Whether two branches are structurally identical apart from enum values.
+
+    Dict keys must match exactly and every non-enum value must be equal;
+    enum lists may differ in either direction. Pairing such branches lets
+    the enum comparison in detect_mcp_changes classify the direction:
+    widening is additive (outside oneOf), narrowing reports removed values.
+    """
+    if isinstance(before, dict) and isinstance(after, dict):
+        if set(before) != set(after):
+            return False
+        for key, old_value in before.items():
+            new_value = after[key]
+            if key == "enum":
+                if not isinstance(old_value, list) or not isinstance(new_value, list):
+                    return False
+            elif not schema_same_except_enums(old_value, new_value):
+                return False
+        return True
+    if isinstance(before, list) and isinstance(after, list):
+        return (len(before) == len(after)
+                and all(schema_same_except_enums(old, new)
+                        for old, new in zip(before, after)))
+    return _json_value_key(before) == _json_value_key(after)
+
+
 def match_schema_alternatives(before, after):
     """Map unchanged, tightened or edited old alternatives to their new positions."""
     matches, old_left, new_left = {}, set(range(len(before))), set(range(len(after)))
-    before_json = [json.dumps(branch, sort_keys=True) for branch in before]
-    after_json = [json.dumps(branch, sort_keys=True) for branch in after]
+    before_json = [_json_value_key(branch) for branch in before]
+    after_json = [_json_value_key(branch) for branch in after]
 
     # Exact branch content is the strongest identity and handles insertions or
     # reorderings without relying on array positions.
@@ -313,14 +343,28 @@ def match_schema_alternatives(before, after):
             old_left.remove(old_index)
             new_left.remove(new_index)
 
+    # A branch whose enum gained or lost values differs in whole-value
+    # identity but is the same branch structurally. Pair those next so the
+    # enum diff, not alternative removal, decides the classification.
+    candidates = []
+    for old_index in old_left:
+        for new_index in new_left:
+            if schema_same_except_enums(before[old_index], after[new_index]):
+                candidates.append((-abs(old_index - new_index), old_index, new_index))
+    for _, old_index, new_index in sorted(candidates, reverse=True):
+        if old_index in old_left and new_index in new_left:
+            matches[new_index] = old_index
+            old_left.remove(old_index)
+            new_left.remove(new_index)
+
     # A tightening changes `required` but keeps at least one required property
     # from the original branch. Pair those remaining branches by shared
     # constraints, preferring the same non-required schema shape.
     before_required = [schema_required_names(branch) for branch in before]
     after_required = [schema_required_names(branch) for branch in after]
-    before_shapes = [json.dumps(schema_without_required(branch), sort_keys=True)
+    before_shapes = [_json_value_key(schema_without_required(branch))
                      for branch in before]
-    after_shapes = [json.dumps(schema_without_required(branch), sort_keys=True)
+    after_shapes = [_json_value_key(schema_without_required(branch))
                     for branch in after]
     candidates = []
     for old_index in old_left:
@@ -414,7 +458,7 @@ def alternative_path_map(before, after):
     for baseline in matched_baseline:
         if baseline in branch_content:
             parent, keyword, branch = branch_content[baseline]
-            surviving_content.add((parent, keyword, json.dumps(branch, sort_keys=True)))
+            surviving_content.add((parent, keyword, _json_value_key(branch)))
     surviving_applicators = {
         (remap_alternative_path(parent, path_map), keyword)
         for parent, keyword in alternatives
@@ -460,7 +504,7 @@ def alternative_path_map(before, after):
                 continue
         # Deduping identical branches changes nothing for anyOf and only
         # admits input for oneOf, so an identical survivor keeps it additive.
-        if (parent, keyword, json.dumps(branch, sort_keys=True)) in surviving_content:
+        if (parent, keyword, _json_value_key(branch)) in surviving_content:
             continue
         removed.append((baseline, keyword))
     return path_map, unmatched, removed
@@ -495,6 +539,26 @@ def _json_value_key(value):
         return ("object", tuple(sorted((key, _json_value_key(item))
                                         for key, item in value.items())))
     return (type(value).__name__, value)
+
+
+def _json_key_display(key):
+    """Render a `_json_value_key` back as JSON for report details."""
+    kind = key[0]
+    if kind == "boolean":
+        return "true" if key[1] else "false"
+    if kind == "null":
+        return "null"
+    if kind == "number":
+        number = key[1]
+        return str(int(number)) if number == number.to_integral_value() else str(float(number))
+    if kind == "string":
+        return json.dumps(key[1])
+    if kind == "array":
+        return "[" + ", ".join(_json_key_display(item) for item in key[1]) + "]"
+    if kind == "object":
+        return "{" + ", ".join(
+            f"{json.dumps(name)}: {_json_key_display(item)}" for name, item in key[1]) + "}"
+    return json.dumps(str(key[1]))
 
 
 def _json_type_name(value):
@@ -670,6 +734,31 @@ def detect_mcp_changes(git, parent, commit, changed):
             {path: True for path in after.get("schema_nodes", set())}, path_map, unmatched)
         after_closed = translated_facts(
             {path: True for path in after.get("closed_objects", set())}, path_map, unmatched)
+        after_boolean = translated_facts(after.get("boolean", {}), path_map, unmatched)
+        before_boolean = before.get("boolean", {})
+        # Tightening an existing location to `false` rejects every instance
+        # it accepted before (witness: any previously valid value there).
+        # `additionalProperties: false` is the parent's closed-object fact,
+        # already reported below, so its child path is not reported again.
+        for path, value in sorted(after_boolean.items()):
+            if value is not False or path.endswith("[additionalProperties]"):
+                continue
+            if before_boolean.get(path) is False:
+                continue
+            if path in before.get("schema_nodes", set()) or path in before_boolean:
+                report(f"`{name}` `{path}` schema tightened to false")
+        # Relaxing `false` only admits input, except inside oneOf where a
+        # widened branch can steal the single match a valid input had.
+        for path, value in sorted(before_boolean.items()):
+            if value is not False or path.endswith("[additionalProperties]"):
+                continue
+            if not inside_oneof(path):
+                continue
+            if after_boolean.get(path) is False:
+                continue
+            if path in after_nodes or path in after_boolean:
+                report(f"`{name}` `{path}` boolean schema relaxed "
+                       "inside oneOf alternative")
         for path in sorted(after_closed):
             if (path in before.get("schema_nodes", set())
                     and path not in before.get("closed_objects", set())):
@@ -703,6 +792,12 @@ def detect_mcp_changes(git, parent, commit, changed):
                 report(f"`{name}` `{path}` additionalProperties relaxed inside oneOf alternative")
         for path, names in sorted(before.get("properties", {}).items()):
             if path not in after_properties:
+                # Replacing a schema with `true` drops its properties fact
+                # but keeps a node; inside oneOf that relaxation can steal
+                # the single match, like removing the keyword itself.
+                if names and path in after_nodes and inside_oneof(path):
+                    report(f"`{name}` `{path}` properties constraint removed "
+                           "inside oneOf alternative")
                 continue
             if path not in after_properties_keywords:
                 if names and inside_oneof(path):
@@ -727,13 +822,13 @@ def detect_mcp_changes(git, parent, commit, changed):
                     report(f"`{name}` `{path}` enum constraint removed "
                            "inside oneOf alternative")
                 continue
-            for value in sorted(values - after_enums[path]):
-                report(f"`{name}` `{path}` enum value {value} removed")
+            for value in sorted(values - after_enums[path], key=repr):
+                report(f"`{name}` `{path}` enum value {_json_key_display(value)} removed")
             # A widened enum usually only admits more input. Inside oneOf,
             # that input can start matching another branch as well.
             if inside_oneof(path):
-                for value in sorted(after_enums[path] - values):
-                    report(f"`{name}` `{path}` enum value {value} added "
+                for value in sorted(after_enums[path] - values, key=repr):
+                    report(f"`{name}` `{path}` enum value {_json_key_display(value)} added "
                            "inside oneOf alternative")
         # allOf branches all apply, so their required sets union at their
         # instance location (branch renumbering is not a new constraint).

@@ -17,11 +17,15 @@ evidence, `force`, unknown fields) and aborts the run on off-the-rails calls
 such as an invented ID. Keep the world and the fixed mocks consistent when you
 edit either. `_tools.json` is the saved `tools/list` from
 the real server so the mocked tools carry real schemas; refresh it after a
-tool-surface change:
+tool-surface change. The explicit `--role operator --operator` pins the operator
+profile so host `machine.mcp.role` config cannot narrow it, and supplies the
+operator authority the operator-gated cases require; the profile already
+includes the dispatch, runs, and plugins tools the cases use
+(`orbit_workflow` action `ship`, `orbit_run` action `show`, `orbit_agent_invoke`):
 
 ```bash
 (printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"evals","version":"0"}}}' '{"jsonrpc":"2.0","method":"notifications/initialized"}' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'; sleep 3) \
-  | orbit mcp serve 2>/dev/null | grep '"id":2' \
+  | orbit mcp serve --role operator --operator 2>/dev/null | grep '"id":2' \
   | python3 -c 'import json,sys; json.dump({"tools": json.load(sys.stdin)["result"]["tools"]}, open("evals/mocks/orbit/_tools.json","w"), indent=2)'
 ```
 

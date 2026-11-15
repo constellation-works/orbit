@@ -194,9 +194,11 @@ impl Fixture {
 /// through its row of `orbit.workflow.run.list`.
 fn mcp_views(runtime: &OrbitRuntime, run_id: &str) -> [(&'static str, Value); 2] {
     let call = |tool: &str, input: Value| {
+        // MCP names a family action through its family.
+        let (tool, input) = orbit_types::tool::tool_family_call(tool, input);
         runtime
             .execute_tool_command_with_session_context(
-                tool,
+                &tool,
                 input,
                 None,
                 None,
@@ -309,13 +311,8 @@ fn a_cancelled_leaf_cancels_the_gate_and_auto_parents_that_wait_on_it() {
 
     let gate = fixture.guard(None, json!([{ "status": "cancelled", "run_id": leaf }]));
     assert_eq!(gate.state, JobRunState::Cancelled, "{:?}", gate.steps);
-    assert!(
-        step_codes(&gate)
-            .iter()
-            .any(|code| code == "child_cancelled"),
-        "{:?}",
-        gate.steps
-    );
+    assert!(step_codes(&gate).is_empty(), "{:?}", gate.steps);
+    assert!(!failure_text(&gate).is_empty(), "{:?}", gate.steps);
     assert_eq!(fixture.state(&gate.run_id).root_cause, None);
 
     let auto = fixture.guard(
@@ -323,6 +320,15 @@ fn a_cancelled_leaf_cancels_the_gate_and_auto_parents_that_wait_on_it() {
         json!([{ "status": "cancelled", "run_id": gate.run_id }]),
     );
     assert_eq!(auto.state, JobRunState::Cancelled, "{:?}", auto.steps);
+    assert!(step_codes(&auto).is_empty(), "{:?}", auto.steps);
+    for run in [&gate, &auto] {
+        let row = job_run_to_json(run, Some(&fixture.state(&run.run_id)));
+        assert!(row["error_code"].is_null(), "{row}");
+        assert!(!row["error_message"].is_null(), "{row}");
+        let counts_as_failure = matches!(row["state"].as_str(), Some("failed" | "interrupted"))
+            || (row["state"] == "cancelled" && !row["error_code"].is_null());
+        assert!(!counts_as_failure, "{row}");
+    }
 
     // A failure beside the cancellation is still a failure.
     let mixed = fixture.guard(
@@ -508,10 +514,198 @@ fn mcp_shows_a_finished_runs_recorded_steps_with_their_provenance() {
     }
 }
 
+// The control transaction lands after the old root-cause reader took its
+// snapshot, or just before the transactional writer acquires its snapshot.
+fn root_cause_preserves_interleaved_control_and_backlog_policy() {
+    use orbit_store::contracts::TaskReservationReleaseReason;
+    use orbit_tools::ToolContext;
+    use orbit_types::workflow::{ChildDispatch, TaskCancellationPolicy};
+
+    let fixture = Fixture::new();
+    let task = fixture.task();
+    let leaf = fixture.failed_leaf(&task, Some("validation_failed"), "validation failed");
+    let parent = fixture.queued(json!({"task_ids": [task]}));
+    fixture.couple(&task, &parent);
+    let jobs = fixture.jobs.clone();
+    let controlled_parent = parent.clone();
+    let result = orbit_core::test_support::with_run_root_cause_write_hook(
+        move || {
+            jobs.update_run_state(&controlled_parent, &mut |_, state| {
+                state.task_cancellation_policy = Some(TaskCancellationPolicy {
+                    block: false,
+                    note: "operator returned the task to backlog".into(),
+                    provenance: None,
+                });
+                state.record_pipeline_output("control_checkpoint", json!({"saved": true}));
+                state.record_child_dispatch(ChildDispatch::submitted(
+                    "control-child".into(),
+                    "child".into(),
+                    "invoke_detached".into(),
+                    false,
+                    false,
+                    Utc::now(),
+                ));
+                Ok(())
+            })
+            .unwrap();
+        },
+        || {
+            fixture.runtime.run_deterministic(
+            "pipeline_success_guard", &json!({}),
+            &json!({"run_id": parent, "results": [{"status": "failed", "run_id": leaf.run_id}]}),
+            ToolContext::default(),
+        )
+        },
+    );
+    assert!(result.is_err(), "the child failure remains authoritative");
+    let state = fixture.state(&parent);
+    assert_eq!(state.root_cause.as_ref().unwrap().leaf_run_id, leaf.run_id);
+    assert_eq!(state.pipeline["control_checkpoint"]["saved"], true);
+    assert_eq!(state.child_dispatches.len(), 1);
+    assert!(!state.task_cancellation_policy.as_ref().unwrap().block);
+
+    fixture
+        .runtime
+        .finalize_job_run_with_reservation_cleanup(
+            &parent,
+            JobRunState::Cancelled,
+            Utc::now(),
+            None,
+            TaskReservationReleaseReason::RunTerminal,
+        )
+        .unwrap();
+    assert_eq!(
+        fixture.runtime.get_task(&task).unwrap().status,
+        TaskStatus::Backlog
+    );
+
+    // Missing parent state must not replace the child's failure with a
+    // persistence error: root-cause propagation is deliberately best effort.
+    let result = fixture.runtime.run_deterministic(
+        "pipeline_success_guard", &json!({}),
+        &json!({"run_id": "missing-parent", "results": [{"status": "failed", "run_id": leaf.run_id}]}),
+        ToolContext::default(),
+    );
+    assert!(result.unwrap_err().to_string().contains(&leaf.run_id));
+
+    let corrupt = fixture.queued(json!({}));
+    let conn = rusqlite::Connection::open(fixture.runtime.global_root().join("orbit.db")).unwrap();
+    conn.execute(
+        "UPDATE job_run_states SET pipeline_state_json = 'invalid-json' WHERE workspace_id = ?1 AND run_id = ?2",
+        rusqlite::params![fixture.runtime.workspace_id().unwrap(), corrupt],
+    ).unwrap();
+    let result = fixture.runtime.run_deterministic(
+        "pipeline_success_guard",
+        &json!({}),
+        &json!({"run_id": corrupt, "results": [{"status": "failed", "run_id": leaf.run_id}]}),
+        ToolContext::default(),
+    );
+    assert!(
+        result.unwrap_err().to_string().contains(&leaf.run_id),
+        "a refused root-cause write must not replace the child failure"
+    );
+}
+
+/// [ORB-23967] A run held on `owner_signoff_required` blocks its task under the
+/// held note, and the blocked-task recovery backstop does not own that block:
+/// no recovery agent is spent on a wait only the operator can clear. A real
+/// failed run's block is still recovered.
+fn an_owner_signoff_hold_blocks_its_task_outside_the_recovery_backstop() {
+    use orbit_core::application::task::EpisodeDisposition;
+    use orbit_engine::blocked_workflow_failure_update;
+    use orbit_store::contracts::TaskReservationReleaseReason;
+
+    let fixture = Fixture::new();
+    let held_task = fixture.task();
+    let held_run = fixture.queued(json!({"task_ids": [held_task]}));
+    fixture.couple(&held_task, &held_run);
+    fixture
+        .jobs
+        .mark_job_run_running(&held_run, Utc::now(), std::process::id())
+        .unwrap();
+    let now = Utc::now();
+    fixture
+        .jobs
+        .complete_job_run_step(
+            &held_run,
+            &JobRunStepParams {
+                lock_wait_ms: None,
+                step_index: 0,
+                target_type: JobTargetType::Activity,
+                target_id: "implement".to_string(),
+                started_at: now,
+                finished_at: now,
+                duration_ms: Some(1),
+                exit_code: Some(1),
+                agent_response_json: None,
+                state: JobRunState::Failed,
+                error_code: Some("owner_signoff_required".to_string()),
+                error_message: Some(
+                    "owner approval is not recorded yet; error.code=owner_signoff_required;"
+                        .to_string(),
+                ),
+            },
+        )
+        .unwrap();
+    fixture
+        .runtime
+        .finalize_job_run_with_reservation_cleanup(
+            &held_run,
+            JobRunState::Held,
+            Utc::now(),
+            Some(1),
+            TaskReservationReleaseReason::RunTerminal,
+        )
+        .unwrap();
+
+    assert_eq!(
+        fixture.runtime.get_task(&held_task).unwrap().status,
+        TaskStatus::Blocked
+    );
+    let note = fixture
+        .runtime
+        .get_task_history(&held_task)
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|entry| entry.to_status == Some(TaskStatus::Blocked))
+        .and_then(|entry| entry.note)
+        .unwrap_or_default();
+    assert!(note.starts_with("workflow run held:"), "{note}");
+    assert!(note.contains("error_code=owner_signoff_required"), "{note}");
+
+    let failed_task = fixture.task();
+    fixture
+        .runtime
+        .apply_task_automation_update(
+            &failed_task,
+            blocked_workflow_failure_update(
+                "task_pr_pipeline",
+                "jrun-failed-control",
+                Some("STEP_FAILED"),
+                Some("implementation failed its tests"),
+            ),
+        )
+        .unwrap();
+
+    let views = fixture.runtime.blocked_recovery_view(Utc::now()).unwrap();
+    assert!(
+        views.iter().all(|view| view.episode.task_id != held_task),
+        "an owner sign-off hold is not a recovery episode: {views:?}"
+    );
+    assert!(
+        views.iter().any(|view| view.episode.task_id == failed_task
+            && view.disposition == EpisodeDisposition::Eligible),
+        "a failed run is still recovered: {views:?}"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_red_base_and_a_pending_landing_decision_end_held_and_other_failures_fail_scenarios,
+    root_cause_preserves_interleaved_control_and_backlog_policy,
     a_red_base_and_a_pending_landing_decision_end_held_and_other_failures_fail,
+    an_owner_signoff_hold_blocks_its_task_outside_the_recovery_backstop,
     a_leaf_held_on_a_red_base_still_holds_its_task_in_the_backlog,
     a_cancelled_leaf_cancels_the_gate_and_auto_parents_that_wait_on_it,
     cascaded_parents_name_their_leaf_and_fold_into_one_incident,

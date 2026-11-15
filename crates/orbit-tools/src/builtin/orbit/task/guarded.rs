@@ -1,56 +1,43 @@
 //! Optional guarded modes of existing task verbs, sharing the transactional write path.
 use crate::{OrbitBuiltinAction, ToolContext};
+use orbit_common::governance::operation::{OperationVerb, ParamType};
+use orbit_common::governance::task::TaskVerb;
 use orbit_common::{
     OrbitError,
     protocol::tool_input::{reject_unknown_tool_fields, required_string},
 };
-use orbit_types::tool::ToolParam;
 use serde_json::{Value, json};
 
-pub(crate) fn param(name: &str, ty: &str, description: &str) -> ToolParam {
-    ToolParam {
-        name: name.into(),
-        param_type: ty.into(),
-        description: description.into(),
-        required: false,
-    }
-}
-pub(super) fn is_guarded(input: &Value) -> bool {
-    ["request_id", "expected_revision", "verdict", "complete"]
+pub(crate) fn is_guarded(input: &Value) -> bool {
+    GUARDED_SELECTOR_KEYS
         .iter()
         .any(|key| input.get(*key).is_some())
 }
-pub(super) fn write(ctx: &ToolContext, input: Value, create: bool) -> Result<Value, OrbitError> {
-    let workspace = required_string(&input, &["workspace"], "workspace")?;
-    let request_id = required_string(&input, &["request_id"], "request_id")?;
-    let mut operation = serde_json::Map::new();
-    let allowed: &[&str] = if create {
-        operation.insert("kind".into(), json!("create"));
-        &[
-            "title",
-            "description",
-            "acceptance_criteria",
-            "priority",
-            "crew",
-        ]
+
+/// The guarded mode a write selects and the fields its handler accepts.
+///
+/// For creation the mode is always creation; for updates a present `verdict`
+/// selects review, else a present `comment` selects comment, else the write is
+/// an edit. The returned slice is the mode's accepted fields, without the
+/// envelope.
+fn guarded_mode(create: bool, input: &Value) -> (&'static [&'static str], &'static str) {
+    if create {
+        (
+            &[
+                "title",
+                "description",
+                "acceptance_criteria",
+                "priority",
+                "crew",
+            ],
+            "creation",
+        )
+    } else if input.get("verdict").is_some() {
+        (&["verdict", "complete"], "review")
+    } else if input.get("comment").is_some() {
+        (&["comment"], "comment")
     } else {
-        operation.insert("id".into(), json!(required_string(&input, &["id"], "id")?));
-        operation.insert(
-            "expected_revision".into(),
-            json!(required_string(
-                &input,
-                &["expected_revision"],
-                "expected_revision"
-            )?),
-        );
-        if input.get("verdict").is_some() {
-            operation.insert("kind".into(), json!("review"));
-            &["verdict", "complete"]
-        } else if input.get("comment").is_some() {
-            operation.insert("kind".into(), json!("comment"));
-            &["comment"]
-        } else {
-            operation.insert("kind".into(), json!("edit"));
+        (
             &[
                 "status",
                 "title",
@@ -58,15 +45,266 @@ pub(super) fn write(ctx: &ToolContext, input: Value, create: bool) -> Result<Val
                 "acceptance_criteria",
                 "priority",
                 "crew",
-            ]
+            ],
+            "edit",
+        )
+    }
+}
+
+/// Check only this guarded mode's accepted fields against their declared
+/// types. The original values reach the desktop host unchanged, so string
+/// lists must already be arrays and boolean strings are never normalized.
+fn validate_guarded_write_fields(
+    input: &Value,
+    create: bool,
+    allowed: &[&str],
+) -> Result<(), OrbitError> {
+    let spec = if create {
+        TaskVerb::Add
+    } else {
+        TaskVerb::Update
+    }
+    .spec();
+    let envelope = if create {
+        CREATE_ENVELOPE_KEYS
+    } else {
+        UPDATE_ENVELOPE_KEYS
+    };
+    let mut fields = serde_json::Map::new();
+    for param in spec
+        .wire_params()
+        .filter(|param| allowed.contains(&param.name) || envelope.contains(&param.name))
+    {
+        let Some(value) = input.get(param.name) else {
+            continue;
+        };
+        if value.is_null() {
+            if param.required {
+                return Err(OrbitError::InvalidInput(format!(
+                    "missing `{}`",
+                    param.name
+                )));
+            }
+            continue;
         }
+        if matches!(
+            param.param_type,
+            ParamType::StringList | ParamType::EnumList(_)
+        ) && !value.is_array()
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "`{}` must be an array of strings",
+                param.name
+            )));
+        }
+        fields.insert(param.name.to_string(), value.clone());
+    }
+    spec.parse_input_fields(Value::Object(fields))?;
+    Ok(())
+}
+
+pub(crate) const GUARDED_SELECTOR_KEYS: &[&str] =
+    &["request_id", "expected_revision", "verdict", "complete"];
+
+const CREATE_ENVELOPE_KEYS: &[&str] = &["workspace", "request_id", "model"];
+const UPDATE_ENVELOPE_KEYS: &[&str] = &[
+    "workspace",
+    "request_id",
+    "id",
+    "expected_revision",
+    "model",
+];
+
+fn guarded_selectors_present(input: &Value) -> Vec<&str> {
+    GUARDED_SELECTOR_KEYS
+        .iter()
+        .copied()
+        .filter(|key| input.get(*key).is_some())
+        .collect()
+}
+
+fn quote_list(names: &[&str]) -> String {
+    names
+        .iter()
+        .map(|name| format!("'{name}'"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Refusal for a guarded write carrying fields outside its allowed set.
+///
+/// The message keeps the `unknown field(s)` prefix (and any `did you mean`
+/// hint) from [`reject_unknown_tool_fields`], then names the guarded key(s)
+/// that selected the guarded mode, lists the fields that mode accepts, and
+/// says to drop the guarded keys for an ordinary write.
+fn reject_guarded_unknown_fields(
+    input: &Value,
+    keys: &[&str],
+    create: bool,
+    mode: &str,
+    accepted: &[&str],
+) -> Result<(), OrbitError> {
+    if let Err(previous) = reject_unknown_tool_fields(input, keys) {
+        let suggestions = previous
+            .did_you_mean()
+            .map(|names| names.to_vec())
+            .unwrap_or_default();
+        let unknown = input
+            .as_object()
+            .map(|object| {
+                object
+                    .keys()
+                    .filter(|key| {
+                        let key = key.as_str();
+                        !orbit_common::protocol::tool_input::TOOL_INPUT_TRANSPORT_WRAPPER_KEYS
+                            .contains(&key)
+                            && !keys.contains(&key)
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let hint = suggestions
+            .first()
+            .map(|name| format!(" (did you mean '{name}'?)"))
+            .unwrap_or_default();
+        let unknown_part = if unknown.len() == 1 {
+            format!("unknown field '{}'{hint}", unknown[0])
+        } else {
+            format!("unknown fields '{}'{hint}", unknown.join("', '"))
+        };
+        let present = guarded_selectors_present(input);
+        let selectors = if present.is_empty() {
+            "'request_id'".to_string()
+        } else {
+            quote_list(&present)
+        };
+        let verb = if present.len() == 1 {
+            "selects"
+        } else {
+            "select"
+        };
+        let noun = if create {
+            "guarded creation".to_string()
+        } else {
+            format!("guarded update ({mode})")
+        };
+        let accepted_list = quote_list(accepted);
+        let envelope = if create {
+            quote_list(CREATE_ENVELOPE_KEYS)
+        } else {
+            quote_list(UPDATE_ENVELOPE_KEYS)
+        };
+        let remedy = if create {
+            "drop 'request_id' for an ordinary create".to_string()
+        } else {
+            format!(
+                "drop {} for an ordinary update",
+                quote_list(GUARDED_SELECTOR_KEYS)
+            )
+        };
+        let message = format!(
+            "{unknown_part}; {selectors} {verb} {noun}, which accepts only {accepted_list} (plus {envelope}); {remedy}"
+        );
+        return Err(OrbitError::invalid_input_with_suggestions(
+            message,
+            suggestions,
+        ));
+    }
+    Ok(())
+}
+fn guarded_required_string(input: &Value, field: &str, create: bool) -> Result<String, OrbitError> {
+    if input.get(field).is_some() {
+        return required_string(input, &[field], field);
+    }
+    let required: &[&str] = if create {
+        &[
+            "workspace",
+            "request_id",
+            "title",
+            "description",
+            "acceptance_criteria",
+        ]
+    } else {
+        &["workspace", "request_id", "id", "expected_revision"]
+    };
+    let missing: Vec<_> = required
+        .iter()
+        .copied()
+        .filter(|key| input.get(*key).is_none())
+        .collect();
+    let selectors = guarded_selectors_present(input);
+    let verb = if selectors.len() == 1 {
+        "selects"
+    } else {
+        "select"
+    };
+    let mode = if create {
+        "guarded creation"
+    } else {
+        "guarded update"
+    };
+    let remedy = if create {
+        format!("drop {} for an ordinary create", quote_list(&selectors))
+    } else {
+        "read 'expected_revision' from orbit.task.show with snapshot: true; drop 'request_id', 'expected_revision', 'verdict', 'complete' for an ordinary update".to_string()
+    };
+    let previous = orbit_common::protocol::tool_input::missing_tool_field(input, field);
+    let suggestions = previous
+        .did_you_mean()
+        .map(|names| names.to_vec())
+        .unwrap_or_default();
+    let prefix = match previous {
+        OrbitError::InvalidInput(message) | OrbitError::InvalidInputDiagnostic { message, .. } => {
+            message
+        }
+        other => other.to_string(),
+    };
+    let message = format!(
+        "{prefix}; {} {verb} {mode}, which requires {}; missing {}; {remedy}",
+        quote_list(&selectors),
+        quote_list(required),
+        quote_list(&missing)
+    );
+    Err(OrbitError::invalid_input_with_suggestions(
+        message,
+        suggestions,
+    ))
+}
+pub(super) fn write(ctx: &ToolContext, input: Value, create: bool) -> Result<Value, OrbitError> {
+    let (allowed, mode) = guarded_mode(create, &input);
+    validate_guarded_write_fields(&input, create, allowed)?;
+    let workspace = guarded_required_string(&input, "workspace", create)?;
+    let request_id = guarded_required_string(&input, "request_id", create)?;
+    let mut operation = serde_json::Map::new();
+    if create {
+        operation.insert("kind".into(), json!("create"));
+    } else {
+        operation.insert(
+            "id".into(),
+            json!(guarded_required_string(&input, "id", create)?),
+        );
+        operation.insert(
+            "expected_revision".into(),
+            json!(guarded_required_string(
+                &input,
+                "expected_revision",
+                create
+            )?),
+        );
+        let kind = match mode {
+            "review" => "review",
+            "comment" => "comment",
+            _ => "edit",
+        };
+        operation.insert("kind".into(), json!(kind));
     };
     let mut keys = vec!["workspace", "request_id", "model"];
     if !create {
         keys.extend(["id", "expected_revision"]);
     }
     keys.extend(allowed);
-    reject_unknown_tool_fields(&input, &keys)?;
+    reject_guarded_unknown_fields(&input, &keys, create, mode, allowed)?;
     let values = allowed
         .iter()
         .filter_map(|key| input.get(*key).map(|value| ((*key).into(), value.clone())))
@@ -86,33 +324,35 @@ pub(super) fn write(ctx: &ToolContext, input: Value, create: bool) -> Result<Val
 
 /// `orbit.task.add`'s schema extension: guarded creation's conditionals,
 /// without weakening ordinary creation's requirements.
+///
+/// Relation types and `regression_from` attribution are not repeated on the
+/// wire schema; they live in the installed Orbit skill `references/task-fields.md`.
 pub(super) fn extend_create_schema(value: &mut Value) {
     value["allOf"] = json!([{
         "if":{"required":["request_id"]},
-        "then":{"required":["workspace","acceptance_criteria"],"propertyNames":{"enum":["workspace","request_id","model","title","description","acceptance_criteria","priority","crew"]},"properties":{"acceptance_criteria":{"type":"array","items":{"type":"string"}},"crew":{"type":["string","null"]}}},
-        "else":{"required":["complexity"]}
+        "then":{"required":["workspace","description","acceptance_criteria"],"propertyNames":{"enum":["workspace","request_id","title","description","acceptance_criteria","priority","crew"]},"properties":{"acceptance_criteria":{"type":"array","items":{"type":"string"}},"crew":{"type":["string","null"]}}},
+        "else":{"required":["description","complexity"]}
     }]);
     // Nullable crew is used only by guarded creation; ordinary creation still
     // parses and validates its existing field semantics at the host boundary.
     value["properties"]["crew"]["type"] = json!(["string", "null"]);
 }
 
-/// `orbit.task.update`'s schema extension: the review verdict's shape and
-/// the guarded write's conditionals.
+/// `orbit.task.update`'s schema extension: a review verdict is an object, and
+/// guarded writes keep their conditionals. The verdict's fields are documented
+/// in the installed Orbit skill `references/task-fields.md`; the host still
+/// validates the object.
 pub(super) fn extend_update_schema(value: &mut Value) {
-    let string = json!({"type":"string"});
-    let strings = json!({"type":"array","items":{"type":"string"}});
-    value["properties"]["verdict"] = json!({"type":"object","additionalProperties":false,"required":["decision","rationale","criteria","evidence"],"properties":{
-        "decision":{"enum":["accept","changes_requested"]},"rationale":string,"evidence":strings,
-        "expected_run_id":{"type":["string","null"]},"expected_head":{"type":["string","null"]},
-        "criteria":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["criterion","met","evidence"],"properties":{"criterion":string,"met":{"type":"boolean"},"evidence":strings}}}
-    }});
+    value["properties"]["verdict"] = json!({
+        "type": "object",
+        "description": "Review verdict object."
+    });
     value["allOf"] = json!([{
         "if":{"anyOf":[{"required":["request_id"]},{"required":["expected_revision"]},{"required":["verdict"]},{"required":["complete"]}]},
         "then":{"required":["workspace","request_id","expected_revision"],"oneOf":[
-            {"required":["verdict"],"propertyNames":{"enum":["workspace","request_id","model","id","expected_revision","verdict","complete"]}},
-            {"required":["comment"],"propertyNames":{"enum":["workspace","request_id","model","id","expected_revision","comment"]}},
-            {"propertyNames":{"enum":["workspace","request_id","model","id","expected_revision","status","title","description","acceptance_criteria","priority","crew"]},"properties":{"acceptance_criteria":{"type":"array","items":{"type":"string"}}}}
+            {"required":["verdict"],"propertyNames":{"enum":["workspace","request_id","id","expected_revision","verdict","complete"]}},
+            {"required":["comment"],"propertyNames":{"enum":["workspace","request_id","id","expected_revision","comment"]}},
+            {"propertyNames":{"enum":["workspace","request_id","id","expected_revision","status","title","description","acceptance_criteria","priority","crew"]},"properties":{"acceptance_criteria":{"type":"array","items":{"type":"string"}}}}
         ]}
     }]);
 }

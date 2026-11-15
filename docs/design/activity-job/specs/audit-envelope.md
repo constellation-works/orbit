@@ -2,16 +2,16 @@
 type: design
 summary: "Spec: V2 Audit Envelope"
 tags: ["activity-job"]
-last_validated: 2026-10-30
+last_validated: 2026-11-04
 ---
 
 # Spec: V2 Audit Envelope
 
-Activity / Job runs emit a structured v2 audit tree that describes run, step, activity, and control-flow structure. This tree is stored as append-only SQLite audit rows and coexists with the lower-level loop-event/blob sink rather than replacing it.
+Activity / Job runs emit a structured v2 audit tree that describes run, step, activity, and control-flow structure. This tree is stored as append-only SQLite audit rows with payload bodies in redacted content-addressed blobs.
 
 ## Why This Exists
 
-The lower-level loop audit is rich, but it does not describe job structure on its own. Reviewers need to answer questions like:
+Payload bodies alone do not describe job structure. Reviewers need to answer questions like:
 
 - which job run emitted this activity?
 - which step retried?
@@ -43,13 +43,13 @@ Common event families are:
 
 `cli.invocation.started` includes redacted argv, stdin blob ref, optional model, wall-clock timeout, and optional `cwd`. When present, `cwd` is the subprocess working directory selected by Activity/Job's workspace resolver.
 
-Loop-engine HTTP and tool-call events remain in the lower-level sink and can be correlated with the envelope rows by shared run identity. They are not v2-envelope descendants: the SQLite loop-event rows do not carry an envelope `parent_event_id`.
+Historical HTTP agent-loop rows can be correlated with envelope rows by shared run identity. They are not v2-envelope descendants: those SQLite loop-event rows do not carry an envelope `parent_event_id`. Current provider invocations emit CLI envelope events.
 
 ## Persistence Layout
 
 In production, envelope events append to the SQLite `v2_audit_events` table with `source: v2_envelope`.
 
-Loop-engine events use the same table with `source: loop_event`. Content-addressed blobs remain under:
+Historical `source: loop_event` rows remain opaque payloads in the same table; current sinks do not emit them. Content-addressed blobs remain under:
 
 ```text
 .orbit/state/audit/blobs/<hh>/<hash>
@@ -77,11 +77,11 @@ The writer's `events_snapshot()` reads events back from its configured persisten
 
 - Audit writer mutex poisoning surfaces as a structured audit failure.
 - SQLite persistence can fail even when event emission returns an event ID. Inspect the audit-failure count or degraded-audit flag rather than treating successful emission as proof of persistence.
-- Reviewers may need both the envelope and loop-event rows, plus the blob store, to reconstruct a full run.
+- Reviewers need envelope rows and the blob store to reconstruct a run; older HTTP agent-loop runs may also have historical loop-event rows.
 
 ## Migration Notes
 
-- The envelope is additive. It does not retire or rewrite the existing loop-level audit sink.
+- Retiring the HTTP agent-loop writer does not rewrite historical loop-event rows or their referenced blobs.
 - CLI agent events are first-class envelope events, so every agent run is visible in the envelope stream.
 - File-backed runtime traces moved from `.orbit/audit/` to `.orbit/state/audit/` in [T20260426-0519]. Existing `.orbit/audit/` files are legacy local artifacts rather than the current write target.
 

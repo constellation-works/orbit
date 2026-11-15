@@ -61,6 +61,14 @@ fn published_lists_cover_initialized_defaults_and_owner_pinned_routines() {
     )
     .expect("initialize workspace defaults");
 
+    // Regression: an activity naming inactive tools once broke loading of
+    // every activity catalog.
+    let runtime = orbit_core::OrbitRuntime::from_roots(&global, &workspace)
+        .expect("initialized public runtime");
+    runtime
+        .v2_activity_catalog()
+        .expect("the shipped activity catalog must load");
+
     let defaults = collect_auto_tasks(&workspace);
     assert!(defaults.errors.is_empty(), "{:?}", defaults.errors);
     let auto_tasks: BTreeSet<_> = defaults

@@ -5,9 +5,9 @@ use orbit_engine::{WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT};
 use orbit_types::task::{
     ArtifactManifestFileV2, Task, TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus,
 };
+use orbit_types::workflow::RecoveryFault;
 
 use super::super::helpers::{SYSTEM_ACTOR_LABEL, is_automation_actor};
-use super::super::legacy_decisions;
 use super::backstop::note_field;
 use super::{ATTRIBUTION_SLACK_MS, MAX_EPISODE_AGE_HOURS};
 
@@ -35,7 +35,7 @@ impl BlockSource {
         }
     }
 
-    fn of(entry: &TaskHistoryEntry) -> Option<Self> {
+    pub(in crate::application::task) fn of(entry: &TaskHistoryEntry) -> Option<Self> {
         match entry.event.as_str() {
             WORKFLOW_RUN_FAILED_EVENT => {
                 let job = entry
@@ -54,7 +54,7 @@ impl BlockSource {
     }
 }
 
-/// The task's current block, when one of [`BlockSource`] wrote it.
+/// The task's current block, when one of `BlockSource` wrote it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockEpisode {
     /// The blocked task.
@@ -96,8 +96,22 @@ impl BlockEpisode {
                     None,
                     Some(&task.execution_summary),
                 ));
+        let operator_prerequisite = orbit_store::contracts::ClaimFailedNote::parse(&note)
+            .and_then(|note| note.failure_class)
+            .is_some_and(orbit_types::workflow::ClaimFailureClass::requires_operator_decision);
+        // [ORB-23967] A run held on owner sign-off blocks under its
+        // `workflow_run_failed` event, but it waits for the operator's approval,
+        // which no recovery agent can record. Its note carries the typed code,
+        // or the diagnostic token in the message when the code is missing,
+        // mirroring the writer's `HeldFailure::of_local` check.
+        let owner_signoff = orbit_types::workflow::is_owner_signoff_required(
+            note_field(&note, "error_code="),
+            Some(&note),
+        );
         if orbit_types::workflow::is_validation_environment_failure(None, Some(&note))
+            || operator_prerequisite
             || agent_blocker
+            || owner_signoff
         {
             return None;
         }
@@ -134,30 +148,26 @@ pub struct FinalRecoveryRecord {
     pub decision: String,
     /// What the applier did with it.
     pub outcome: String,
+    /// Whose fault the failure was; `unknown` on an older decision.
+    pub fault: RecoveryFault,
+    /// The one line of evidence the fault rests on; empty on an older
+    /// decision.
+    pub fault_evidence: String,
+    /// The model or provider that judged the fault, when Orbit observed one.
+    pub fault_judged_by: Option<String>,
 }
 
 impl FinalRecoveryRecord {
-    /// The newest decision recorded on a task with `history` and `comments`.
-    pub fn last(history: &[TaskHistoryEntry], comments: &[TaskComment]) -> Option<Self> {
-        Self::newest_since(history, comments, DateTime::<Utc>::MIN_UTC)
+    /// The newest decision recorded in a task's `history`.
+    pub fn last(history: &[TaskHistoryEntry]) -> Option<Self> {
+        Self::newest_since(history, DateTime::<Utc>::MIN_UTC)
     }
 
-    /// The newest decision recorded at or after `since`: the applier's typed
-    /// decisions, and a legacy decision comment for a run none of them names.
-    pub(super) fn newest_since(
-        history: &[TaskHistoryEntry],
-        comments: &[TaskComment],
-        since: DateTime<Utc>,
-    ) -> Option<Self> {
-        let typed = history.iter().filter_map(Self::typed).collect::<Vec<_>>();
-        let legacy = comments
+    /// The newest typed decision the applier recorded at or after `since`.
+    pub(super) fn newest_since(history: &[TaskHistoryEntry], since: DateTime<Utc>) -> Option<Self> {
+        history
             .iter()
-            .filter_map(legacy_decisions::final_recovery_comment)
-            .filter(|legacy| !typed.iter().any(|typed| typed.run_id == legacy.run_id))
-            .collect::<Vec<_>>();
-        typed
-            .into_iter()
-            .chain(legacy)
+            .filter_map(Self::typed)
             .filter(|record| record.at >= since)
             .max_by_key(|record| record.at)
     }
@@ -167,6 +177,9 @@ impl FinalRecoveryRecord {
             run_id,
             decision,
             outcome,
+            fault,
+            fault_evidence,
+            fault_judged_by,
         }) = &entry.decision
         else {
             return None;
@@ -176,6 +189,9 @@ impl FinalRecoveryRecord {
             run_id: run_id.clone(),
             decision: decision.clone(),
             outcome: outcome.as_str().to_string(),
+            fault: *fault,
+            fault_evidence: fault_evidence.clone(),
+            fault_judged_by: fault_judged_by.clone(),
         })
     }
 }
@@ -198,7 +214,7 @@ pub enum EpisodeDisposition {
         /// The unattributed write.
         changed_at: DateTime<Utc>,
     },
-    /// Blocked longer than [`MAX_EPISODE_AGE_HOURS`].
+    /// Blocked longer than `MAX_EPISODE_AGE_HOURS`.
     TooOld,
 }
 
@@ -212,7 +228,7 @@ pub fn episode_disposition(
     artifacts: &[ArtifactManifestFileV2],
     now: DateTime<Utc>,
 ) -> EpisodeDisposition {
-    if let Some(record) = FinalRecoveryRecord::newest_since(history, comments, episode.blocked_at) {
+    if let Some(record) = FinalRecoveryRecord::newest_since(history, episode.blocked_at) {
         return EpisodeDisposition::Decided(record);
     }
     match later_touch(episode.blocked_at, updated_at, history, comments, artifacts) {

@@ -1,18 +1,16 @@
 ---
 title: Connect your agent
-description: "Connect Claude Code, Codex, Cursor, and other agent clients to Orbit over MCP: let the orbit-setup skill do it, or run one command."
-sidebar:
-  order: 5
+description: "Connect Claude Code, Codex, Cursor, and other agent clients to Orbit over MCP, and choose which tools each session gets."
 ---
 
-Your agent reaches Orbit through an MCP server. Once connected, it can file
-tasks, ship them, and run drains.
+Connect your agent to Orbit over MCP so it can file tasks, ship them, and run
+drains. The second half of this page is reference: tool families, toolsets,
+roles, operator tools, and response shapes.
 
-:::tip[Recommended]
+:::tip
 Ask your agent to **set up Orbit for this repo**. The `orbit-setup` skill
-registers Orbit with the clients you use, and it also handles the setups
-further down this page: other machines, remote dashboards, and a second
-repository.
+registers Orbit with the clients you use. It also handles other machines,
+remote dashboards, and a second repository.
 :::
 
 ## Connect
@@ -21,18 +19,16 @@ repository.
 orbit workspace init --mcp
 ```
 
-This registers Orbit with every agent client it finds, with **operator**
-authority, so your agent can ship tasks and run drains as well as file them.
-Start a fresh agent session afterwards so the tools load.
+This registers Orbit with every agent client it finds. Start a fresh agent
+session afterwards so the tools load.
 
-The registration launches `orbit mcp serve --operator`. Operator sessions can
-dispatch workflows, resume runs, and run governed commands; agents launched by
-Orbit get agent-only authority. Each session's capabilities filter the tools
-advertised by `tools/list`; authorization is also checked when a tool is called.
+The registration carries **operator** authority. To limit an agent, or to
+pick clients, use `orbit mcp init`:
 
-`orbit mcp init` registers Orbit with the narrower **agent-only** authority:
-the agent can file and update tasks but cannot dispatch runs. Use it to pick
-clients or to limit an agent:
+| Command | Authority | The agent can |
+|---|---|---|
+| `orbit workspace init --mcp`, or `orbit mcp init --operator` | Operator | File and update tasks, ship them, run drains, resume runs, and run governed commands. |
+| `orbit mcp init` | Agent-only | File and update tasks. It cannot dispatch runs. |
 
 ```bash
 orbit mcp init --auto                   # every detected client
@@ -44,8 +40,12 @@ Supported clients: `claude`, `codex`, `gemini`, `antigravity`, `grok`,
 `cursor`, `vscode`, and `windsurf`. `--scope workspace`, the default, writes
 config into the repository; `--scope home` writes it for your user.
 
-Grok Build reads the shared `.mcp.json` (or `~/.claude.json` with
-`--scope home`); when its shared reader is off, Orbit writes
+An existing operator entry keeps its authority when you run `orbit mcp init`
+again. To make it agent-only, [remove](#remove) it first. Agents that Orbit
+launches for a run always get agent-only authority.
+
+Grok Build reads the shared `.mcp.json` (`~/.claude.json` with
+`--scope home`). When its shared reader is off, Orbit writes
 `.grok/config.toml` instead.
 
 If the workspace's Orbit data lives outside the repository, pass
@@ -55,7 +55,7 @@ If the workspace's Orbit data lives outside the repository, pass
 ## Register the federated mux
 
 A federated server puts this machine's workspaces and those on SSH remotes
-under one namespace. Register each remote host once, by its SSH alias or
+under one MCP server. Register each remote host once, by its SSH alias or
 `user@host`:
 
 ```bash
@@ -63,13 +63,10 @@ orbit host add orbit-owner
 orbit host list
 ```
 
-`orbit host add` reads the host's machine ID, name and task prefix from the
-host itself and records them in `~/.orbit/hosts.toml`. `orbit host list` shows
-every host with its live reachability, Orbit version, pull protocol and
-workspaces, and flags a version or protocol that differs from this machine's.
-`orbit host rename` and `orbit host remove` manage the entries. An older
-`~/.orbit/mcp-destinations.toml` is still read until the first
-`orbit host add`, `orbit host rename` or `orbit host remove` migrates it.
+`orbit host add` records the host in `~/.orbit/hosts.toml`. `orbit host list`
+shows each host's reachability, Orbit version, and workspaces, and flags a
+version that differs from this machine's. `orbit host rename` and
+`orbit host remove` manage the entries.
 
 Then register the federated server with a client:
 
@@ -77,21 +74,32 @@ Then register the federated server with a client:
 orbit mcp init --federated --client codex --scope home
 ```
 
-This adds a separate `orbit-federated` entry beside any existing `orbit` one.
-In that session, `orbit_workspace_list` returns host-qualified selectors such
-as `hm_alpha/ws_orbit`; pass one unchanged as the `workspace` of a call. Task
-reads go to the owner's selector. A call that addresses one task by ID, such
-as `orbit_task_show` or `orbit_task_update`, can omit `workspace`: it goes to
-the host the ID's prefix names. There is no automatic failover: a call reaches
-only the machine you select or the one its task ID names. A plain
-`orbit mcp serve` session does not relay. Given another host's task ID without
-`workspace`, it answers `task_prefix_remote` and names that host.
+This adds an `orbit-federated` entry beside any existing `orbit` one. In that
+session:
 
-Operator authority travels over SSH. A client started with `--operator` serves
-operator on every destination it opens, because an SSH login to a machine is
-ownership of it. Without `--operator`, and always for a client running inside
-a managed run, remote sessions get agent-only authority. To shut a caller out,
-remove its key from that machine's `~/.ssh/authorized_keys`.
+- `orbit_workspace_list` returns host-qualified selectors such as
+  `hm_alpha/ws_orbit`. Pass one unchanged as the `workspace` of a call.
+- A call that addresses one task by ID, such as `orbit_task_show` or
+  `orbit_task_update`, can omit `workspace`. It goes to the host that the ID's
+  prefix names.
+- There is no failover. A call reaches only the machine you select or the one
+  its task ID names.
+
+A plain `orbit mcp serve` session does not relay. Given another host's task ID
+without `workspace`, it answers `task_prefix_remote` and names that host.
+
+### Authority on remote hosts
+
+A client started with `--operator` has operator authority on every host it
+reaches, because an SSH login to a machine is ownership of it. Without
+`--operator`, and always for a client inside a managed run, remote sessions
+get agent-only authority. To shut a caller out, remove its key from that
+machine's `~/.ssh/authorized_keys`.
+
+### If a command reports `host_file_conflict`
+
+An older `~/.orbit/mcp-destinations.toml` is still present. Move it aside, run
+`orbit host add <ssh-target>` for each of its `ssh` rows, then delete it.
 
 ## Attribute tasks to an orchestrator
 
@@ -101,38 +109,8 @@ orbit mcp serve --workspace <selector> --orchestrator <crew>
 
 Tasks the session creates are recorded as filed by that crew, unless a call
 passes its own `orchestrator`. This is attribution only: it grants no
-authority and does not choose the crew that executes a task. The same flag
+authority and does not choose the crew that executes a task. The flag also
 works with `--mode remote <ssh-host>` and `--mode federated`.
-
-## Toolsets
-
-Every tool schema a server lists costs context in each agent session, so
-`orbit mcp serve` lists a default toolset and keeps occasional groups opt-in:
-
-| Toolset | Tools |
-|---|---|
-| `default` (always on) | Tasks, workflows and runs, `orbit.pipeline.invoke`, `orbit.agent.invoke`, routines and auto-tasks, `orbit.automation.explain`, `orbit.decision.list` and `orbit.decision.show`, codebase, friction, search, the UI and visual tools, `orbit.command.exec` and workspace discovery. |
-| `leases` | `orbit.lease.*` |
-| `experiments` | `orbit.experiment.*` |
-| `analytics` | `orbit.agents.*`, `orbit.orchestrator.show`, `orbit.orchestrator.scorecard` and `orbit.crew.ladder` |
-| `decision-channel` | `orbit.decision.submit` and `orbit.decision.digest`, which only the bound channel plugin or the operator may call |
-
-Enable groups per server with `--toolset`, or for every server on the host
-with the global `machine.mcp.toolsets` config key; the flag replaces the
-config. `all` enables every toolset.
-
-```bash
-orbit mcp serve --toolset leases,analytics
-orbit config set --global machine.mcp.toolsets '["experiments"]'
-```
-
-A toolset changes only what that server lists and dispatches. Calling a tool
-outside it returns a `toolset_not_enabled` error naming the toolset and the
-flag to enable it, so a long-lived client learns how to reach it. The tools
-stay registered: `orbit tool run`, activities that require them, and a
-decision channel plugin's callback session reach every tool. `--mode remote`
-asks the destination for the same toolsets, and `--mode federated` applies
-them to every destination.
 
 ## Serve on a socket
 
@@ -141,50 +119,166 @@ orbit mcp listen              # 127.0.0.1:7879
 ```
 
 The listener serves the same tools over TCP, one session per connection, for
-setups such as a server-side Orbit reached through an SSH tunnel. It does not
-authenticate clients, so it binds loopback unless you pass
-`--allow-non-loopback`.
+setups such as a server-side Orbit reached through an SSH tunnel.
 
-The listener allows 64 concurrent sessions. Each accepted connection has five
-seconds to send a complete initialization request and receive its response;
-silent peers and incomplete messages are closed and release their slots.
-Established sessions remain connected while idle, until the client disconnects.
+It accepts a connection only from the user that runs the server, so a remote
+TCP client is refused: reach the listener through an SSH tunnel as that user.
+It binds loopback unless you pass `--allow-non-loopback`, and that flag does
+not admit other users.
+
+## Remove
+
+```bash
+orbit mcp remove --all
+orbit mcp remove --federated --all   # only the federated entry
+```
+
+## Tool families
+
+`orbit tool list` shows the available tools; `--all` adds inactive ones.
+`orbit tool run` names a tool with dots (`orbit.command.exec`). MCP advertises
+the same tool with underscores (`orbit_command_exec`).
+
+Related operations share one tool, and its required `action` field picks the
+operation:
+
+| Family | Actions |
+|---|---|
+| `orbit.run` | `list`, `show`, `observe`, `resume` |
+| `orbit.workflow` | `ship`, `land`, `auto` (its sub-command goes in `mode`) |
+| `orbit.task.recover` | `requeue`, `review_reset`, `retry_handoff`, `revoke_handoff`, `recover_claim`, `repilot`, `reconcile_review` (its sub-command goes in `mode`) |
+| `orbit.task.artifact` | `get`, `put` |
+| `orbit.friction` | `add`, `update` |
+| `orbit.decision` | `list`, `show`, `raise` |
+| `orbit.auto_task` | `list`, `add`, `update`, `mint` |
+| `orbit.codebase` | `show`, `related`, `analytics` |
+| `orbit.ui` | `open`, `inspect` |
+
+The `action` description in each schema lists the fields every action
+requires. A call that omits one is refused with `invalid_input`. The CLI calls
+a family the same way:
+
+```bash
+orbit tool run orbit.run --input '{"action":"show","id":"<run-id>"}'
+```
+
+Grants, `required_tools`, and activity allow and deny lists name a whole
+family (`orbit.run`) or one action as `family:action` (`orbit.run:show`).
+
+Every tool advertises MCP annotations (`readOnlyHint`, `destructiveHint`, and
+so on) so a client can decide what to auto-approve. Orbit still checks
+authority on every call, whatever the session lists.
+
+## Toolsets
+
+Every tool schema a server lists costs context in each agent session. Each
+tool belongs to one toolset, and a server lists only the toolsets it enables.
+`orbit tool show <tool>` names a tool's toolset, and `orbit tool list --json`
+reports it as `mcp_toolset`.
+
+| Toolset | Tools |
+|---|---|
+| `core` (always on) | `orbit.workspace.list` |
+| `tasks-read` | `orbit.task.show`, `orbit.task.list`, `orbit.task.eligible`, `orbit.task.artifact` action `get`, `orbit.attention` |
+| `tasks-write` | `orbit.task.add`, `orbit.task.update`, `orbit.task.artifact` action `put`, `orbit.friction` |
+| `task-repair` | `orbit.task.block_triage`, `orbit.task.recover` |
+| `decisions` | `orbit.decision` |
+| `runs` | `orbit.run` actions `list`, `show`, `observe` |
+| `dispatch` | `orbit.workflow`, `orbit.run` action `resume`, `orbit.pipeline.invoke` |
+| `automation` | `orbit.auto_task`, `orbit.routine.control`, `orbit.automation.explain` |
+| `codebase` | `orbit.codebase` |
+| `search` | `orbit.search` |
+| `exec` | `orbit.command.exec` |
+| `plugins` | Plugin tools |
+| `experiments` | `orbit.experiment.*`, and `orbit.memory.show`, `history`, `write`, `propose` |
+| `analytics` | `orbit.agents.*` |
+| `decision-channel` | `orbit.decision.submit`, `orbit.decision.digest`. Only the bound channel plugin or the operator may call them. |
+| `notice` | `orbit.notice.post`, `close`, `list`, `show`: fleet notices |
+| `resident` | `orbit.resident.*`, and `orbit.evolution.add`, `list`, `show`: resident orchestrator mandates and the evolution ledger |
+| `ui`, `leases` | None. Their tools were removed; the names still load in a selection. |
+| `local` | Tools no MCP server lists, such as `proc.spawn`, `github.*`, and the drain tools. `orbit tool run` and activities reach them. |
+
+A family whose actions span toolsets, such as `orbit.run`, is listed when any
+of its actions is enabled.
+
+### Choose toolsets
+
+Without a role, a server lists `core`, `tasks-read`, `tasks-write`, and
+`search`. The name `default` stands for that set, and `all` enables every
+toolset. Add toolsets for one server with `--toolset`, or for every server on
+the host with the global `machine.mcp.toolsets` key. The flag replaces the
+key.
+
+```bash
+orbit mcp serve --toolset experiments,analytics
+orbit config set --global machine.mcp.toolsets '["experiments"]'
+```
+
+`--mode remote` asks the destination for the same role and toolsets, and
+`--mode federated` applies them to every destination.
+
+### If a call returns `toolset_not_enabled`
+
+The tool or action is outside the server's toolsets. The error names the
+toolset, the roles that include it, and the flag that enables it.
+`orbit tool run`, activities, and a decision channel plugin's callback session
+reach every tool regardless.
+
+## Roles
+
+A role is a named set of toolsets for one kind of session:
+
+| Role | Toolsets (beside `core`) |
+|---|---|
+| `operator` | `tasks-read`, `tasks-write`, `task-repair`, `decisions`, `runs`, `dispatch`, `automation`, `codebase`, `search`, `ui`, `exec`, `plugins` |
+| `manager` | `tasks-read`, `runs`, `decisions`, `notice`, `resident`, `search` |
+| `resident` | `tasks-read`, `tasks-write`, `runs`, `dispatch`, `decisions`, `notice`, `resident`, `search` |
+| `agent` | `tasks-read`, `tasks-write`, `decisions`, `codebase`, `search`, `ui`, `leases`, `notice` |
+| `reader` | `tasks-read`, `runs`, `codebase`, `search` |
+
+```bash
+orbit mcp serve --role reader
+orbit mcp serve --role manager --toolset analytics   # the role plus analytics
+orbit config set --global machine.mcp.role resident
+orbit tool list --role agent                         # the role's tools and size
+```
+
+`--role` replaces the global `machine.mcp.role` for one server, and
+`--toolset` adds to the role. `orbit tool list --role <role>` prints the
+role's tool count and the approximate token size of its schemas.
+
+A role grants no authority. It limits only what MCP lists and dispatches.
+Operator-only tools still need `--operator` under every role, including
+`operator`.
 
 ## Operator tools
 
-Tool names such as `orbit.command.exec` use dots in `orbit tool run`; MCP
-advertises them with underscores, such as `orbit_command_exec`. Read the
-session's `tools/list` for the registered input schemas. A listed tool still
-requires the caller's authority and workspace policy to admit the call.
-
-Use the existing guides for the other public families:
+Command execution and job submission need an operator session, such as
+`orbit mcp serve --operator`. For the other tools, use these guides:
 
 | Tools | Guide |
 |---|---|
-| `orbit.task.*`, `orbit.search`, `orbit.friction.*` | [Tasks and lifecycle](../../concepts/tasks/) and [your first task](../../getting-started/first-task/). |
-| `orbit.agent.invoke`, `orbit.agents.*` | [Agents and crews](../../concepts/agents/). |
-| `orbit.workflow.ship`, `orbit.workflow.auto`, `orbit.workflow.run.*` | [Delivery workflows](../../getting-started/workflows/) and [delivery windows](../continuous-delivery/). |
-| `orbit.pipeline.invoke` | [Activities and jobs](../../concepts/activities-jobs/), [write an activity](../write-activity/), and [Activity and Job YAML](../../reference/activity-job-yaml/). |
-| `orbit.routine.control`, `orbit.auto_task.*` | [Routines and Auto-Tasks](../../concepts/scheduling/) and [schedule recurring work](../recurring-work/). |
-| `orbit.decision.list`, `orbit.decision.show`, `orbit.decision.digest`, `orbit.decision.submit` | [Decision channels](../decision-channels/) covers read-only inspection, operator registration and authenticated plugin callbacks. Agents cannot answer requests. |
-| `orbit.codebase.*` | [Dashboard views](../dashboard/). |
-| `orbit.ui.open`, `orbit.ui.inspect` | [Open the MCP Apps control center](../mcp-apps/). |
-| Plugin tools marked `agent_callable`, once the plugin is granted `agent_tools` | [Install and grant plugins](../plugins/). |
+| `orbit.task.*`, `orbit.search`, `orbit.friction` | [Tasks and lifecycle](/concepts/tasks/) and [First task](/getting-started/first-task/) |
+| `orbit.agents.*` | [Agents and crews](/concepts/agents/) |
+| `orbit.workflow`, `orbit.run` | [Delivery workflows](/getting-started/workflows/) and [Run a delivery window](/how-to/continuous-delivery/) |
+| `orbit.pipeline.invoke` | [Activities and jobs](/concepts/activities-jobs/), [Write an activity](/how-to/write-activity/), and [Activity and Job YAML](/reference/activity-job-yaml/) |
+| `orbit.routine.control`, `orbit.auto_task` | [Routines and auto-tasks](/concepts/scheduling/) and [Schedule recurring work](/how-to/recurring-work/) |
+| `orbit.decision`, `orbit.decision.digest`, `orbit.decision.submit` | [Decision channels](/how-to/decision-channels/). Agents cannot answer requests. |
+| `orbit.codebase` | [Use the dashboard](/how-to/dashboard/) |
+| `orbit.ui` | [Open the MCP Apps control center](/how-to/mcp-apps/) |
+| Plugin tools marked `agent_callable`, once the plugin is granted `agent_tools` | [Install and grant plugins](/how-to/plugins/) |
 
-The requests below are illustrative MCP `tools/call` bodies, not setup steps.
-Replace `ws_example` with an unchanged selector from `orbit_workspace_list`
-(host-qualified in a federated session), and replace paths, job names and run
-IDs with values from that workspace. Public command execution and job
-submission require an operator session, such as `orbit mcp serve --operator`.
-The `model` field records provenance; it grants no authority.
+The requests below are MCP `tools/call` bodies. Replace `ws_example` with a
+selector from `orbit_workspace_list`, and the paths, job names, and run IDs
+with your own. Requests take no `model` or `agent` argument: attribution comes
+from the session.
 
 ### Execute a bounded command
 
-`orbit.command.exec` runs a non-empty `argv` array, program first, in the
-explicit `working_directory`. Each argument is a separate string. No shell
-interprets it: pipes, redirection, variable expansion and `&&` are not shell
-syntax here. Do not put a whole command line in one string or add shell
-quoting around an argument containing spaces.
+`orbit.command.exec` runs an `argv` array, program first, in an explicit
+`working_directory`. No shell interprets it: pipes, redirection, variable
+expansion, and `&&` are not available. Pass each argument as its own string,
+without shell quoting.
 
 ```json
 {
@@ -193,41 +287,29 @@ quoting around an argument containing spaces.
     "workspace": "ws_example",
     "argv": ["git", "status", "--short"],
     "working_directory": "/home/operator/example",
-    "timeout_ms": 30000,
-    "model": "codex"
+    "timeout_ms": 30000
   }
 }
 ```
 
-The directory must exist and be absolute, inside the selected workspace's
-checkout or a linked worktree under `.orbit/state/worktrees/`. Orbit never
-infers it from the caller's current directory.
+| Aspect | Rule |
+|---|---|
+| Working directory | Absolute and existing, inside the workspace's checkout or a linked worktree under `.orbit/state/worktrees/`. Orbit never infers it. |
+| Environment | An allowlist, not the server's environment: `HOME`, `PATH`, `USER` and similar, git author and committer identity, and Orbit's execution variables. `SSH_AUTH_SOCK` and other names are absent. |
+| Deadline | `timeout_ms` defaults to 120000 and is capped at 600000. On timeout, Orbit kills the command and its process group and returns `timed_out: true` with no exit code and no captured output. |
+| Output | `success`, `stdout`, `stderr`, `exit_code`, `duration_ms`, and `timed_out`. Each stream is capped at 4 MiB. |
+| Workspace claim | If another operator holds the workspace claim, pass its `claim_token`, or set `ORBIT_WORKSPACE_CLAIM_TOKEN` in the server's environment. Otherwise the call is refused and names the holder and expiry. |
+| Managed runs | Cannot call this tool, even when it appears in their tool list. |
 
-The workspace claim is an optional exclusive coordination hold, separate
-from operator authority. An unclaimed workspace admits the command. If a
-claim is held, supply its matching `claim_token` argument or set
-`ORBIT_WORKSPACE_CLAIM_TOKEN` in the executing Orbit server's environment.
-A mismatched or missing token refuses the command and identifies the holder
-and expiry. Claim management is not exposed over MCP; coordinate with the
-operator holding the claim. A token does not grant operator authority.
-
-The default deadline is 120000 ms; requested values are clamped to
-1–600000 ms. Orbit caps each of stdout and stderr at 4 MiB. The result
-includes `success`, `stdout`, `stderr`, `exit_code`, `duration_ms` and
-`timed_out`. On timeout, Orbit kills the command and its process group,
-returns `timed_out: true` with no exit code, and discards captured command
-output. Inspect the result rather than treating a completed tool call as a
-successful command.
-
-Managed runs cannot call this tool, even if it appears in their tool list:
-a leaf agent cannot use general command execution to bypass its tool policy.
+A completed tool call is not a successful command: read `success` and
+`exit_code`.
 
 ### Submit a durable job
 
-`orbit.pipeline.invoke` submits a registered v2 job and returns immediately
-with a durable `run_id`; acceptance is not completion. With ordinary input,
-pass a JSON object matching the job's input contract. For example, after
-registering a job named `example_check` that accepts `directory`:
+`orbit.pipeline.invoke` submits a registered job and returns at once with a
+durable `run_id`. The job has been accepted, not finished. Pass `input` as a
+JSON object that matches the job's input contract, even when it is `{}`. This
+example assumes a job named `example_check` that accepts `directory`:
 
 ```json
 {
@@ -236,40 +318,20 @@ registering a job named `example_check` that accepts `directory`:
     "workspace": "ws_example",
     "job_name": "example_check",
     "input": { "directory": "src" },
-    "priority": "low",
-    "model": "codex"
+    "priority": "low"
   }
 }
 ```
 
-`priority` is optional: `low`, `medium`, `high` or `critical`. Ordinary
-submission requires `input`, even when it is `{}`. This schema does not
-advertise `claim_token`; do not copy command-execution arguments into it.
-
-Managed runs may invoke only a host-authorized child pipeline admission.
-That admission comes from trusted host context, not caller-supplied JSON;
-ordinary leaf submissions are refused.
+`priority` is optional: `low`, `medium`, `high`, or `critical`. Managed runs
+may submit only a child pipeline that the host has authorized; other
+submissions from them are refused.
 
 ### Submit with catalog defaults
 
-To run an enabled job that the catalog permits for no-input submission,
-use `default_input: true` and an explicit `workspace`. First inspect the
-no-input job catalog alongside recent runs:
-
-```json
-{
-  "name": "orbit_workflow_run_list",
-  "arguments": {
-    "workspace": "ws_example",
-    "view": "bounded",
-    "include_catalog": true,
-    "limit": 10
-  }
-}
-```
-
-After selecting an eligible job, submit it with its defaults. Here
-`example_check` stands for that catalog job:
+Some enabled jobs can run with no input. To list them, call `orbit.run`
+action `list` with `view: "bounded"` and `include_catalog: true`. Then submit
+one with its defaults:
 
 ```json
 {
@@ -277,27 +339,25 @@ After selecting an eligible job, submit it with its defaults. Here
   "arguments": {
     "workspace": "ws_example",
     "job_name": "example_check",
-    "default_input": true,
-    "model": "codex"
+    "default_input": true
   }
 }
 ```
 
-This variant accepts only `workspace`, `job_name`, `default_input` and the
-optional `model`. Omit both `input` and `priority`. It requires trusted
-operator authority and always refuses managed runs, including child
-admissions. Not every registered job is eligible: subroutines, disabled jobs
-and task-delivery jobs do not belong on this route. Use the delivery tools
-for task shipping.
+This form takes exactly `workspace`, `job_name`, and `default_input`; omit
+`input` and `priority`. It always refuses managed runs. Subroutines, disabled
+jobs, and task-delivery jobs are not eligible: ship tasks with the delivery
+tools.
 
 ### Observe the run
 
-Keep the returned `run_id` and fetch it with `orbit.workflow.run.show`:
+Keep the returned `run_id` and fetch it with `orbit.run` action `show`:
 
 ```json
 {
-  "name": "orbit_workflow_run_show",
+  "name": "orbit_run",
   "arguments": {
+    "action": "show",
     "workspace": "ws_example",
     "id": "<returned-run-id>",
     "view": "bounded",
@@ -306,55 +366,31 @@ Keep the returned `run_id` and fetch it with `orbit.workflow.run.show`:
 }
 ```
 
-Run listing and detail require operator capability; agent-only sessions are
-refused. The bounded detail includes the run and a bounded log page; use
-`log_offset` and `limit` to page through logs. Continue observing until the
-run is terminal, then inspect its outcome and failure details. An unfinished
-run is still durable after the submission call returns.
+The bounded detail holds the run and one page of its log; page through the
+log with `log_offset` and `limit`. Keep observing until the run is terminal,
+then read its outcome. Listing and showing runs need operator capability.
 
-If a submission reply is lost, inspect recent runs and their details before
-submitting again. Never automatically replay a default-input submission:
-the first call may already have created a run.
+:::caution
+If a submission reply is lost, inspect recent runs before you submit again.
+The first call may already have created a run.
+:::
 
 ## Response shapes
 
-`orbit tool list` shows available tools; `--all` also includes inactive tools.
-Each one advertises MCP annotations
-(`readOnlyHint`, `destructiveHint`, and so on) so a client can decide what to
-auto-approve; Orbit still enforces authority on every call.
+| Tool | Returns |
+|---|---|
+| `orbit_task_list` | `{ tasks, total, truncated }` with compact rows: `id`, `title`, `status`, `priority`, `type`, `dependencies`, `resolved_dependencies`, `implemented_by`, `not_before`, `created_at`, `updated_at`, `workspace`. Pass `fields` to choose fields, including long text such as `description` or `plan`. |
+| `orbit_task_eligible` | `{ tasks, total, truncated }`: the `backlog` and `proposed` tasks whose files overlap no running or in-review task. Rows hold `id`, `title`, `type`, `status`, `priority`, and `complexity`; there is no `fields` option. With `explain: true`, `conflicting` lists each held-back task, the overlapping file, and the task holding it. |
+| `orbit_task_show` | The full record, or the fields named in `fields`. It includes `not_before`, `started_at` (the first entry into `in-progress`), and `scheduled_hold` (whether a backlog task is still held by a future schedule). |
+| `orbit_task_add`, `orbit_task_update` | The task without `comments` and `history`, unless you name them in `fields`. |
 
-- `orbit_task_list` and `orbit_task_eligible` return
-  `{ tasks, total, truncated }`. `orbit_task_list` returns compact task rows by
-  default (id, title, status, priority, type, dependencies,
-  resolved_dependencies, implemented_by, not_before, created_at, updated_at, and workspace).
-  `not_before` is null when unset. Pass `fields` to select only named fields,
-  including long-text fields such as `description` or `plan`.
-- `orbit_task_list` accepts `not_before_from` and `not_before_until` as RFC 3339
-  instants with offsets, individually or together. Both endpoints are inclusive;
-  tasks without a schedule do not match. Malformed bounds name the input in the
-  error. `scheduled: true` lists future schedules soonest first, including
-  proposed tasks; other filters and the limit still apply.
-- `orbit_task_show` exposes `not_before` and derived `started_at` (the first
-  recorded entry into in-progress), also available through `fields`.
-  `scheduled_hold` reports whether a backlog task is still held by its future
-  schedule, accounting for operator overrides. A task's
-  schedule does not guarantee an exact execution time. Set `not_before` through
-  `orbit_task_add` or `orbit_task_update`; an empty string clears it on update,
-  while null leaves it unchanged.
-- `orbit_task_eligible` rows are minimal: id, title, type, status, priority and
-  complexity. The tool takes no `fields` projection. To read a full record, use
-  `orbit_task_show`; to add long-text fields to a listing, use `orbit_task_list`
-  with `fields`.
-- `orbit_task_eligible` lists, in dispatch order, the `backlog` and `proposed`
-  tasks whose files overlap no running or in-review task. With
-  `explain: true`, `conflicting` also lists the held-back tasks, each with the
-  overlapping file and the task holding it.
-- The task-write tools leave out `comments` and `history` unless you name them
-  in `fields`.
+Schedule filters on `orbit_task_list`:
 
-## Remove
+| Field | Effect |
+|---|---|
+| `not_before_from`, `not_before_until` | Inclusive bounds, as RFC 3339 instants with offsets. Use one or both. Tasks without a schedule do not match. |
+| `scheduled: true` | Lists future schedules, soonest first, including `proposed` tasks. Other filters and `limit` still apply. |
 
-```bash
-orbit mcp remove --all
-orbit mcp remove --federated --all   # only the federated entry
-```
+Set a schedule with `not_before` on `orbit_task_add` or `orbit_task_update`.
+On update, an empty string clears it and null leaves it unchanged. A schedule
+is the earliest start, not an exact time.

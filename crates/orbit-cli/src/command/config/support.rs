@@ -48,7 +48,7 @@ fn resolve_scope(runtime: &OrbitRuntime, scope: ConfigScopeArg) -> (ConfigScope,
         ConfigScopeArg::Effective => {
             let workspace_path = workspace_config_path(runtime);
             let global_path = global_config_path(runtime);
-            if workspace_path.exists() && runtime.shared_root() != runtime.global_root() {
+            if workspace_path.exists() && runtime_config_roots(runtime).has_workspace_layer() {
                 (ConfigScope::Workspace, workspace_path)
             } else {
                 (ConfigScope::Global, global_path)

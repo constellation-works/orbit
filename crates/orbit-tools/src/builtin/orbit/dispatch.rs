@@ -13,7 +13,7 @@ pub(super) fn reject_agent_field(input: &Value, tool_name: &str) -> Result<(), O
         .is_some_and(|object| object.contains_key("agent"))
     {
         return Err(OrbitError::InvalidInput(format!(
-            "{tool_name} no longer accepts `agent`; use `model` with the agent family for attribution"
+            "{tool_name} no longer accepts `agent`; attribution comes from the session, not an `agent` input"
         )));
     }
     Ok(())

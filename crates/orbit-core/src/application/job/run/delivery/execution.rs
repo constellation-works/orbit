@@ -109,6 +109,7 @@ impl OrbitRuntime {
                         agent_response_json: None,
                         state: JobRunState::Running,
                         error_code: None,
+                        failure_code: None,
                         error_message: None,
                     },
                 );

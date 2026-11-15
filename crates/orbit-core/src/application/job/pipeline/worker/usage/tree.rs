@@ -18,6 +18,9 @@
 //! The tree a worker samples is a `SessionTree`: the worker leads its own
 //! session, so a descendant orphaned to launchd is still walked, and so is
 //! one in a session a member started.
+//!
+//! Per-process levels (`latest`) are tracked on Linux too, so the watchdog
+//! that reads them compiles and is analyzed there, though only macOS runs it.
 
 #[cfg(target_os = "macos")]
 use orbit_common::process::ancestry::SessionTree;
@@ -29,11 +32,11 @@ use super::super::scope::ScopeUsage;
 /// already records for a cgroup scope.
 pub(in crate::application::job::pipeline::worker) struct TreeSampler {
     cpu: TreeCpuAccount,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) latest: Vec<orbit_store::contracts::WorkerProcessResources>,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     previous: std::collections::HashMap<ProcessStartKey, u64>,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     last_read: Option<std::time::Instant>,
     read: Box<dyn FnMut() -> Option<Vec<ProcessTreeProcess>> + Send>,
     locate: Box<dyn FnMut(u32) -> Option<(ProcessStartKey, u32)> + Send>,
@@ -47,11 +50,11 @@ impl TreeSampler {
     ) -> Self {
         Self {
             cpu: TreeCpuAccount::new(),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             latest: Vec::new(),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             previous: std::collections::HashMap::new(),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             last_read: None,
             read: Box::new(read),
             locate: Box::new(locate),
@@ -62,7 +65,7 @@ impl TreeSampler {
     /// cannot be read. A miss does not move the baseline.
     pub(in crate::application::job::pipeline::worker) fn usage(&mut self) -> Option<ScopeUsage> {
         let current = (self.read)()?;
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         self.track_process_levels(&current);
         self.cpu.observe(&current, &mut self.locate);
         let memory_bytes = current.iter().fold(0u64, |total, process| {
@@ -75,7 +78,7 @@ impl TreeSampler {
         })
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn track_process_levels(&mut self, current: &[ProcessTreeProcess]) {
         let now = std::time::Instant::now();
         let wall = self

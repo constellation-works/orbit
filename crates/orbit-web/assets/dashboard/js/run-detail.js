@@ -9,10 +9,10 @@
 // cross-domain shell. Gantt retry data is independent of the Events table page.
 //
 // Receives one-time context via initRunDetail(runDetailContext()) with state accessors
-// (re-exported by app's routerContext), formatters, run-action builders (from runs.js),
+// (re-exported by app's routerContext), run-action builders (from runs.js),
 // and setRunDetailSubtab (from router.js) for the Gantt click-to-steps behavior.
 
-import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, formatDate, formatClock, elapsedDurationInfo, bindTaskLink, reviewLayerText } from './common.js';
+import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, fmtDuration, formatDate, formatDateTime, formatClock, elapsedDurationInfo, bindRunLink, bindTaskLink, reviewLayerText, infoHint } from './common.js';
 import { buildExecutionProvenance } from './distributed.js';
 import { drainWaitBadge } from './drain-waits.js';
 import { runTaskLinks } from './runs.js';
@@ -22,7 +22,7 @@ const $ = (id) => document.getElementById(id);
 const RUN_EVENTS_LIMIT = positiveIntParam("events", 100);  // re-export for app orchestrators
 const RUN_RETRIES_LIMIT = 100;
 const LIVE_RUN_STATES = new Set(["pending", "running", "retrying"]);
-const TERMINAL_RUN_STATES = new Set(["success", "failed", "timeout", "cancelled", "interrupted", "held"]);
+const TERMINAL_RUN_STATES = new Set(["success", "failed", "timeout", "cancelled", "interrupted", "held", "skipped"]);
 
 // Run detail module-scoped state (was in app.js)
 let activeRunId = null;
@@ -55,28 +55,12 @@ function hasCtx(key) {
   return !!(c && typeof c[key] === "function");
 }
 
-// --- wrappers for ctx-provided values (formatters, callbacks, builders) ---
-
-function fmtTimestamp(v) {
-  return hasCtx("fmtTimestamp") ? _runDetailCtx.fmtTimestamp(v) : (v || "-");
-}
-
-function fmtDuration(v) {
-  return hasCtx("fmtDuration") ? _runDetailCtx.fmtDuration(v) : (v == null ? "-" : String(v));
-}
+// --- wrappers for ctx-provided callbacks and builders ---
 
 function recordDurationText(record) {
   const { durationMs, isLive } = elapsedDurationInfo(record);
   const text = fmtDuration(durationMs);
   return isLive && text !== "-" ? `${text} ↻` : text;
-}
-
-function fmtAbsTime(v) {
-  return hasCtx("fmtAbsTime") ? _runDetailCtx.fmtAbsTime(v) : (v || "-");
-}
-
-function fmtRelative(v) {
-  return hasCtx("fmtRelative") ? _runDetailCtx.fmtRelative(v) : (v || "-");
 }
 
 function setRunDetailSubtab(name) {
@@ -85,11 +69,6 @@ function setRunDetailSubtab(name) {
   }
 }
 
-function navigateToRun(runId) {
-  if (hasCtx("navigateToRun")) {
-    try { _runDetailCtx.navigateToRun(runId); } catch (_) {}
-  }
-}
 
 function setActiveTab(tab) {
   if (hasCtx("setActiveTab")) {
@@ -122,6 +101,9 @@ function buildReplayRunButton(run, host) {
 // to the same run (A → B → A) and a workspace change that keeps the run id
 // both miss that check.
 const runDetailFetchGeneration = { detail: 0, events: 0, retries: 0, logs: 0 };
+// Supplementary reads started before the parent and its provider processes
+// finish may precede final audit writes. Each channel needs one settled read.
+const terminalRunReads = new Set();
 
 function bumpRunDetailFetches() {
   runDetailFetchGeneration.detail += 1;
@@ -131,12 +113,19 @@ function bumpRunDetailFetches() {
 }
 
 export function beginRunDetailFetch(channel) {
+  terminalRunReads.delete(channel);
   return {
     runId: activeRunId,
     workspace: getWorkspace(),
     revision: getWorkspaceRevision(),
     generation: ++runDetailFetchGeneration[channel],
+    terminalAudit: loadedRunDetailIsTerminal(activeRunId)
+      && !(activeRunDetail.provider_processes || []).some(process => !process.finished),
   };
+}
+
+export function completeRunDetailFetch(channel, token) {
+  if (runDetailFetchCurrent(channel, token) && token.terminalAudit && !activeRunDetailError) terminalRunReads.add(channel);
 }
 
 export function runDetailFetchCurrent(channel, token) {
@@ -152,6 +141,7 @@ export function runDetailFetchCurrent(channel, token) {
 // mounted under the new run or workspace.
 function retireRunDetailView() {
   bumpRunDetailFetches();
+  terminalRunReads.clear();
   activeRunDetail = null;
   activeRunDetailError = null;
   activeRunEvents = [];
@@ -184,9 +174,33 @@ export function setActiveRunId(v) {
 onWorkspaceChange(retireRunDetailView);
 
 export function getActiveRunDetail() { return activeRunDetail; }
-export function setActiveRunDetail(v) { activeRunDetail = v; activeRunDetailError = null; }
+
+/// Whether the loaded detail is the terminal record of the given run.
+/// Joined child state and provider liveness can still change after this.
+export function loadedRunDetailIsTerminal(runId) {
+  const run = activeRunDetail?.run;
+  return Boolean(runId) && run?.run_id === runId && TERMINAL_RUN_STATES.has(run.state);
+}
+
+// Audit channels settle independently of the parent detail's live joins.
+// Unknown child state remains retryable rather than freezing an unreadable run.
+export function runDetailPollNeeded(channel, runId) {
+  if (!loadedRunDetailIsTerminal(runId)) return true;
+  const unfinishedProviders = (activeRunDetail.provider_processes || []).some(process => !process.finished);
+  if (channel !== "detail") return unfinishedProviders || !terminalRunReads.has(channel);
+  return Boolean(activeRunDetailError)
+    || (activeRunDetail.run.child_dispatches || []).some(child => !TERMINAL_RUN_STATES.has(child.state))
+    || unfinishedProviders;
+}
+
+export function setActiveRunDetail(v) {
+  activeRunDetail = v;
+  activeRunDetailError = null;
+  if (!loadedRunDetailIsTerminal(activeRunId)) terminalRunReads.clear();
+}
 export function setActiveRunDetailError(v) {
   activeRunDetailError = v;
+  if (v) terminalRunReads.clear();
 }
 
 export function getActiveRunEvents() { return activeRunEvents; }
@@ -305,8 +319,8 @@ export function renderRunDetailMeta() {
   const launches = Array.isArray(run.agent_executions) ? run.agent_executions : [];
   addCell("reasoning effort", launches.length ? [...new Set(launches.map(launch =>
     `${launch.crew || launch.provider || "agent"} · ${launch.model || "unknown model"} · ${launch.reasoning_effort === null ? "provider default" : launch.reasoning_effort || "unknown"}`))].join("; ") : "unknown");
-  addCell("started", run.started_at ? fmtAbsTime(run.started_at) : "-");
-  addCell("finished", run.finished_at ? fmtAbsTime(run.finished_at) : "-");
+  addCell("started", run.started_at ? formatDateTime(run.started_at) : "-");
+  addCell("finished", run.finished_at ? formatDateTime(run.finished_at) : "-");
   addCell("duration", recordDurationText(run));
   // ORB-16572: a delivery run's captured review layer and whether workspace
   // policy or the run's own `--review` decided it.
@@ -323,6 +337,17 @@ export function renderRunDetailMeta() {
     cell.appendChild(value);
     grid.appendChild(cell);
   }
+  // The server found the run's records under a workspace that is no longer
+  // registered on this host (a removed follower workspace), so the workspace
+  // selector cannot name it. Say where the records are.
+  if (detail.recorded_workspace) {
+    const cell = el("div");
+    cell.appendChild(el("div", { class: "label", text: "workspace" }));
+    const value = el("div", { class: "value mono", text: detail.recorded_workspace.workspace_id });
+    value.appendChild(infoHint("Recorded under a workspace that is no longer registered on this host. The run is shown read-only from this host's store."));
+    cell.appendChild(value);
+    grid.appendChild(cell);
+  }
 
   // Actions retain this host even while their response refreshes the header.
   // Reuse the mounted node when wiring new buttons: a fresh keyed node would
@@ -332,36 +357,27 @@ export function renderRunDetailMeta() {
     || el("div");
   feedback.dataset.key = "run-detail-feedback";
   const wrap = el("div");
-  const back = el("button", { class: "back-action", text: "← Jobs › History" });
-  back.addEventListener("click", () => setActiveTab("jobs/history"));
+  const back = el("button", { class: "back-action", text: _runDetailCtx.runDetailBackLabel() });
+  back.addEventListener("click", () => _runDetailCtx.returnFromRunDetail());
   const actions = el("div", { class: "run-detail-actions" }, [back]);
   if (run.retry_source_run_id) {
     const sourceId = run.retry_source_run_id;
-    const lineage = el("button", {
+    const lineage = el("a", {
       class: "back-action replay-source",
       text: `Replayed from ${sourceId}`,
       title: `Open ${sourceId}`,
     });
-    lineage.addEventListener("click", () => navigateToRun(sourceId));
+    bindRunLink(lineage, sourceId, { workspace: run.workspace_id || getWorkspace() });
     actions.appendChild(lineage);
   }
-  // A read-only explorer names the implement or review-repair run that
-  // delegated it.
-  const parentRunId = run.job_id === "agent_explore_pipeline" ? run.input?.parent_run_id : null;
-  if (parentRunId) {
-    const parent = el("button", {
-      class: "back-action explore-parent",
-      text: `Delegated by ${parentRunId}`,
-      title: `Open ${parentRunId}`,
-    });
-    parent.addEventListener("click", () => navigateToRun(parentRunId));
-    actions.appendChild(parent);
-  }
-  const replay = run.run_id ? buildReplayRunButton(run, feedback) : null;
+  // A run recorded under a workspace this host no longer registers is
+  // read-only history: no runtime there could replay or cancel it.
+  const recorded = detail.recorded_workspace || null;
+  const replay = run.run_id && !recorded ? buildReplayRunButton(run, feedback) : null;
   if (replay) actions.appendChild(replay);
   // The claim rides beside the run in the detail payload; the cancel
   // confirmation reads it off the run it is handed.
-  if (runIsCancellable(run)) actions.appendChild(buildCancelRunButton({ ...run, pull_claim: detail.pull_claim }, feedback));
+  if (!recorded && runIsCancellable(run)) actions.appendChild(buildCancelRunButton({ ...run, pull_claim: detail.pull_claim }, feedback));
   wrap.appendChild(actions);
   const failure = buildRunFailure(run, Array.isArray(detail.steps) ? detail.steps : []);
   if (failure) wrap.appendChild(failure);
@@ -387,8 +403,6 @@ export function renderRunDetailMeta() {
   if (waiting) wrap.appendChild(waiting);
   const children = buildChildDispatches(run);
   if (children) wrap.appendChild(children);
-  const explorers = buildExploreInvocations(detail.explore_invocations);
-  if (explorers) wrap.appendChild(explorers);
   const processes = buildProviderProcesses(detail.provider_processes);
   if (processes) wrap.appendChild(processes);
   syncNodes(meta, [wrap, feedback]);
@@ -407,18 +421,18 @@ function buildRequestsHeld(detail) {
     class: `child-dispatch-notice ${className}`,
   }, [el("strong", { text: `${label}: ` }), el("span", { text })]));
   line("Requests held", refusal
-    ? `${refusal}${pass.recorded_at ? ` (last pass ${fmtAbsTime(pass.recorded_at)})` : ""}`
+    ? `${refusal}${pass.recorded_at ? ` (last pass ${formatDateTime(pass.recorded_at)})` : ""}`
     : "See the breaker or refused settlements below.");
   if (breaker) {
     const remaining = Math.max(0, Math.ceil((Date.parse(breaker.half_open_at) - Date.now()) / 1000));
     const classes = breaker.failure_classes?.length ? ` (${breaker.failure_classes.join(", ")})` : "";
     const next = remaining > 0
-      ? `half-opens at ${fmtAbsTime(breaker.half_open_at)} (in ${Math.floor(remaining / 60)}m ${remaining % 60}s) to admit one probe claim`
-      : `half-open since ${fmtAbsTime(breaker.half_open_at)}: admits one probe claim once nothing this drain claimed is unsettled`;
-    line("Breaker", `open after ${breaker.failures} consecutive failed claims${classes} since ${fmtAbsTime(breaker.opened_at)}; ${next}`, "pull-breaker");
+      ? `half-opens at ${formatDateTime(breaker.half_open_at)} (in ${Math.floor(remaining / 60)}m ${remaining % 60}s) to admit one probe claim`
+      : `half-open since ${formatDateTime(breaker.half_open_at)}: admits one probe claim once nothing this drain claimed is unsettled`;
+    line("Breaker", `open after ${breaker.failures} consecutive failed claims${classes} since ${formatDateTime(breaker.opened_at)}; ${next}`, "pull-breaker");
   }
   for (const settlement of settlements) {
-    line("Settlement refused", `leaf ${settlement.leaf_run_id || "-"} owner ${settlement.owner} refused it ${settlement.refusals} time(s) since ${fmtAbsTime(settlement.first_refused_at)}: ${settlement.reason}; next attempt after ${fmtAbsTime(settlement.retry_after)}`, "refused-settlement");
+    line("Settlement refused", `leaf ${settlement.leaf_run_id || "-"} owner ${settlement.owner} refused it ${settlement.refusals} time(s) since ${formatDateTime(settlement.first_refused_at)}: ${settlement.reason}; next attempt after ${formatDateTime(settlement.retry_after)}`, "refused-settlement");
     panel.appendChild(el("p", { class: "settlement-remedy", text: settlement.remedy }));
   }
   return panel;
@@ -441,7 +455,7 @@ function buildProviderProcesses(processes) {
     ];
     if (blocked) parts.push("blocked=stopped-descendant");
     if (process.finished) parts.push("finished");
-    if (process.last_activity_at) parts.push(`last activity ${fmtAbsTime(process.last_activity_at)}`);
+    if (process.last_activity_at) parts.push(`last activity ${formatDateTime(process.last_activity_at)}`);
     panel.appendChild(el("div", { class: "child-dispatch-row provider-process" }, [
       el("span", { class: "child-dispatch-meta", text: parts.join(" · ") }),
     ]));
@@ -524,12 +538,12 @@ function buildClaimedLeaves(run, leaves) {
       if (leaf.leaf_state) parts.push(`state ${leaf.leaf_state}`);
       if (leaf.stage) parts.push(leaf.stage);
       if (leaf.settlement_phase) parts.push(`claim ${leaf.settlement_phase}`);
-      const link = el("button", {
+      const link = el("a", {
         class: "back-action",
         text: leaf.leaf_run_id,
         title: `Open ${leaf.leaf_run_id}`,
       });
-      link.addEventListener("click", () => navigateToRun(leaf.leaf_run_id));
+      bindRunLink(link, leaf.leaf_run_id, { workspace: run.workspace_id || getWorkspace() });
       panel.appendChild(el("div", { class: "child-dispatch-row" }, [
         link,
         el("span", { class: "child-dispatch-meta", text: parts.join(" · ") }),
@@ -562,7 +576,7 @@ function buildCrewWindow(window) {
   panel.appendChild(el("div", { class: "label", text: summary }));
   for (const exclusion of excluded) {
     const source = CREW_EXCLUSION_SOURCES[exclusion.source] || "preflight";
-    const until = exclusion.until ? ` until ${fmtAbsTime(exclusion.until)}` : "";
+    const until = exclusion.until ? ` until ${formatDateTime(exclusion.until)}` : "";
     panel.appendChild(el("div", { class: "child-dispatch-row crew-exclusion" }, [
       el("span", { class: "child-dispatch-meta", text: `excluded ${exclusion.crew} (${source})${until}: ${exclusion.reason}` }),
     ]));
@@ -642,8 +656,8 @@ function buildStillWaiting(pass, run = {}) {
   // A local drain dates its lists only when it deferred a pass on a busy
   // lock, which keeps the last completed pass's lists.
   const answered = !pass.waiting_recorded_at ? ""
-    : pullDrain ? ` (the owner answered ${fmtAbsTime(pass.waiting_recorded_at)})`
-    : ` (as of the last completed pass at ${fmtAbsTime(pass.waiting_recorded_at)})`;
+    : pullDrain ? ` (the owner answered ${formatDateTime(pass.waiting_recorded_at)})`
+    : ` (as of the last completed pass at ${formatDateTime(pass.waiting_recorded_at)})`;
   const reasonTaskTotal = deferredTotal + excludedTotal;
   const additionalAdmissible = pullDrain ? queued : Math.max(0, queued - deferredTotal);
   const additionalSummary = additionalAdmissible === 1
@@ -702,7 +716,7 @@ function buildPassWarning(run) {
   const panel = el("div", { class: "child-dispatch-panel pass-warning" });
   panel.appendChild(el("div", { class: "child-dispatch-notice" }, [
     el("strong", { text: what }),
-    el("span", { text: `${count} (last pass ${fmtAbsTime(pass.recorded_at)})` }),
+    el("span", { text: `${count} (last pass ${formatDateTime(pass.recorded_at)})` }),
   ]));
   const message = el("pre", { class: "run-failure-message mono" });
   appendLinkified(message, pass.last_pass_error, run.workspace_id || getWorkspace());
@@ -737,14 +751,13 @@ function navigableTaskId(token) {
   return Boolean(match) && !NON_TASK_PREFIX.has(match[1]);
 }
 
-function failureRunLink(runId) {
-  const link = el("button", {
+function failureRunLink(runId, workspaceId) {
+  const link = el("a", {
     class: "failure-id-link",
-    type: "button",
     text: runId,
     title: `Open ${runId}`,
   });
-  link.addEventListener("click", () => navigateToRun(runId));
+  bindRunLink(link, runId, { workspace: workspaceId || getWorkspace() });
   return link;
 }
 
@@ -766,7 +779,7 @@ function linkifyFailureText(text, workspaceId) {
     const token = match[0];
     const start = match.index;
     if (start > cursor) nodes.push(source.slice(cursor, start));
-    if (token.startsWith("jrun-")) nodes.push(failureRunLink(token));
+    if (token.startsWith("jrun-")) nodes.push(failureRunLink(token, workspaceId));
     else if (navigableTaskId(token)) nodes.push(failureTaskLink(token, workspaceId));
     else nodes.push(token);
     cursor = start + token.length;
@@ -784,7 +797,7 @@ function buildFailureRoot(root, workspaceId) {
   if (!root || typeof root.run_id !== "string" || root.run_id === "") return null;
   const line = el("p", { class: "run-failure-root" });
   line.append(el("strong", { text: "Root cause: " }));
-  line.append(failureRunLink(root.run_id));
+  line.append(failureRunLink(root.run_id, workspaceId));
   if (root.state) line.append(` ${root.state}`);
   if (root.step) line.append(` at ${root.step}`);
   if (root.message) {
@@ -838,7 +851,7 @@ function buildRunCancellation(run) {
   const head = el("div", { class: "run-failure-head" }, [
     el("strong", { text: "Cancelled" }),
     actor ? el("span", { class: "run-failure-where", text: ` by ${actor}` }) : null,
-    at ? el("span", { class: "run-cancelled-when", text: ` at ${fmtAbsTime(at)}` }) : null,
+    at ? el("span", { class: "run-cancelled-when", text: ` at ${formatDateTime(at)}` }) : null,
   ]);
   const box = el("section", { class: "run-failure run-cancelled" }, [head]);
   box.setAttribute("aria-label", "Why this run was cancelled");
@@ -903,12 +916,12 @@ function buildChildDispatches(run) {
     if (d.child_status) parts.push(`checkpoint status ${d.child_status}`);
     if (d.cancellation) parts.push(`cancel ${d.cancellation.policy}/${d.cancellation.outcome}`);
 
-    const link = el("button", {
+    const link = el("a", {
       class: "back-action",
       text: d.child_run_id,
       title: `Open ${d.child_run_id}`,
     });
-    link.addEventListener("click", () => navigateToRun(d.child_run_id));
+    bindRunLink(link, d.child_run_id, { workspace: run.workspace_id || getWorkspace() });
 
     const row = el("div", { class: "child-dispatch-row" }, [
       stateCell(state),
@@ -931,50 +944,6 @@ function buildChildDispatches(run) {
   ]);
 }
 
-// The read-only explorers this run's implement or review-repair agent
-// delegated to, oldest first: crew, outcome, duration, tokens and cost. They
-// ran on this run's slot, so their spend is part of this delivery's.
-function buildExploreInvocations(invocations) {
-  if (!Array.isArray(invocations) || invocations.length === 0) return null;
-  const tokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
-  const known = invocations.filter((i) => typeof i.cost_usd === "number");
-  const totalCost = known.reduce((sum, i) => sum + i.cost_usd, 0);
-  const totalTokens = invocations.reduce((sum, i) => sum + (i.total_tokens || 0), 0);
-  const costText = known.length === 0
-    ? "cost unknown"
-    : `$${totalCost.toFixed(4)}${known.length < invocations.length ? ` (${known.length} of ${invocations.length} priced)` : ""}`;
-  const rows = invocations.map((invocation) => {
-    const state = invocation.state || "unknown";
-    const link = el("button", {
-      class: "back-action",
-      text: invocation.run_id,
-      title: `Open ${invocation.run_id}`,
-    });
-    link.addEventListener("click", () => navigateToRun(invocation.run_id));
-    const parts = [`crew ${invocation.crew || "-"}`];
-    if (invocation.parent_activity) parts.push(`from ${invocation.parent_activity}`);
-    parts.push(`${tokens(invocation.input_tokens || 0)} in / ${tokens(invocation.output_tokens || 0)} out`);
-    parts.push(typeof invocation.cost_usd === "number" ? `$${invocation.cost_usd.toFixed(4)}` : "cost unknown");
-    if (invocation.paths_read != null) parts.push(`${invocation.paths_read} paths read`);
-    const row = el("div", { class: "child-dispatch-row explore-invocation" }, [
-      stateCell(state),
-      link,
-      el("span", { class: "duration", text: recordDurationText(invocation) }),
-      el("span", { class: "child-dispatch-meta", text: parts.join(" · ") }),
-    ]);
-    row.dataset.state = state;
-    return row;
-  });
-  return el("section", { class: "child-dispatch-panel explore-invocations", "aria-label": "Explorer invocations" }, [
-    el("div", { class: "label", text: `explorer invocations (${invocations.length})` }),
-    el("div", {
-      class: "child-dispatch-summary",
-      text: `${invocations.length} read-only ${invocations.length === 1 ? "call" : "calls"} · ${tokens(totalTokens)} tokens · ${costText}`,
-    }),
-    ...rows,
-  ]);
-}
-
 export function renderRunSteps() {
   const body = $("run-steps-body");
   if (!body) return;
@@ -991,7 +960,7 @@ export function renderRunSteps() {
   const notices = activeRunLogsError ? [el("div", {
     class: "action-error",
     role: "alert",
-    text: `Unable to load agent logs: ${activeRunLogsError}. Use Refresh to retry.`,
+    text: `Unable to load agent logs: ${activeRunLogsError}. Reload the page to retry.`,
   })] : [];
   const steps = (activeRunDetail && activeRunDetail.steps) || [];
   if (steps.length === 0) {
@@ -1224,6 +1193,7 @@ export function renderRunGantt() {
         expandedStepIndices.add(step.step_index);
       }
       setRunDetailSubtab("steps");
+      if (activeRunId) setActiveTab(`runs/${encodeURIComponent(activeRunId)}`);
       renderRunSteps();
       const target = document.querySelector(`[data-key="step-${step.step_index}"]`);
       if (target && target.scrollIntoView) {
@@ -1271,7 +1241,7 @@ export function renderRunGantt() {
   }
   panel.appendChild(legend);
   const retryNotice = activeRunRetriesError
-    ? `Retry markers unavailable: ${activeRunRetriesError}. Use Refresh to retry.`
+    ? `Retry markers unavailable: ${activeRunRetriesError}. Reload the page to retry.`
     : activeRunRetriesTruncated
       ? `Showing the first ${RUN_RETRIES_LIMIT} retries; later retry markers are omitted.`
       : !activeRunRetriesLoaded ? "Loading retry markers…" : null;
@@ -1401,7 +1371,7 @@ function buildStepDetail(step) {
     for (const block of blocks) section.appendChild(block);
     wrap.appendChild(section);
   } else {
-    wrap.appendChild(el("div", { class: "step-logs-empty", text: activeRunLogsError ? "Logs unavailable. Use Refresh to retry." : "No logs recorded for this step" }));
+    wrap.appendChild(el("div", { class: "step-logs-empty", text: activeRunLogsError ? "Logs unavailable. Reload the page to retry." : "No logs recorded for this step" }));
   }
   const km = knowledgeMetricsForStep(step);
   if (km) addBlock("knowledge_metrics (run)", km);
@@ -1473,7 +1443,7 @@ export function renderRunEvents() {
     syncNodes(body, [el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "!" }),
       el("div", { class: "text", text: activeRunEventsError }),
-      el("div", { class: "text", text: "Use Refresh to retry loading events." }),
+      el("div", { class: "text", text: "Reload the page to retry loading events." }),
     ])]);
     return;
   }

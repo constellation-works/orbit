@@ -4,8 +4,7 @@ use orbit_registry::workspace_registry::{
     find_workspace_by_path, load_registry_from, remove_workspace,
 };
 use orbit_types::workspace::{
-    WORKSPACE_REGISTRY_SCHEMA_VERSION, Workspace, WorkspaceCheckout, WorkspaceCheckoutRole,
-    WorkspaceRegistry, WorkspaceStatus,
+    Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceRegistry, WorkspaceStatus,
 };
 use serde_json::{Value, json};
 use std::fs;
@@ -50,69 +49,6 @@ fn write_json(path: &Path, value: &Value) -> Vec<u8> {
     let bytes = serde_json::to_vec_pretty(value).expect("serialize fixture");
     fs::write(path, &bytes).expect("write fixture");
     bytes
-}
-
-#[test]
-fn legacy_registry_migrates_to_path_free_catalog_and_is_byte_stable() {
-    let root = tempdir().expect("tempdir");
-    let path = root.path().join("workspaces.json");
-    let repo_root = root.path().join("repo");
-    let orbit_dir = repo_root.join(".orbit");
-    let override_path = root.path().join("linked-worktree");
-    write_json(
-        &path,
-        &json!({
-            "workspaces": [{
-                "id": "ws_orbit",
-                "name": "orbit",
-                "root": repo_root,
-                "orbit_dir": orbit_dir,
-                "git_remote": "git@example.test:orbit/orbit.git",
-                "ship_mode": "pr",
-                "base_branch": "agent-main",
-                "status": "active",
-                "created_at": "2026-07-18T01:02:03Z",
-                "updated_at": "2026-07-18T01:02:03Z"
-            }],
-            "path_overrides": {
-                (override_path.to_string_lossy().to_string()): "ws_orbit",
-                (root.path().join("dangling").to_string_lossy().to_string()): "ws_missing"
-            }
-        }),
-    );
-
-    let migrated = load_registry_from(&path).expect("migrate registry");
-    assert_eq!(migrated.schema_version, WORKSPACE_REGISTRY_SCHEMA_VERSION);
-    assert_eq!(migrated.workspaces.len(), 1);
-    assert_eq!(migrated.checkouts.len(), 1);
-    let workspace = &migrated.workspaces[0];
-    assert_eq!(workspace.id, "ws_orbit");
-    assert_eq!(workspace.name, "orbit");
-    assert_eq!(
-        workspace.git_remote.as_deref(),
-        Some("git@example.test:orbit/orbit.git")
-    );
-    assert_eq!(workspace.ship_mode.as_deref(), Some("pr"));
-    assert_eq!(workspace.base_branch, "agent-main");
-    assert_eq!(workspace.created_at, timestamp());
-    assert_eq!(workspace.updated_at, timestamp());
-    let checkout = &migrated.checkouts[0];
-    assert_eq!(checkout.workspace_id, "ws_orbit");
-    assert_eq!(checkout.role, Some(WorkspaceCheckoutRole::Owner));
-    assert_eq!(checkout.path_overrides, vec![override_path]);
-
-    let persisted: Value =
-        serde_json::from_slice(&fs::read(&path).expect("read migrated registry"))
-            .expect("parse migrated registry");
-    assert!(persisted["workspaces"][0].get("root").is_none());
-    assert!(persisted["workspaces"][0].get("orbit_dir").is_none());
-    assert!(persisted.get("path_overrides").is_none());
-    assert_eq!(persisted["checkouts"][0]["role"], "owner");
-
-    let first_bytes = fs::read(&path).expect("read first migration");
-    let second = load_registry_from(&path).expect("load migrated registry again");
-    assert_eq!(second, migrated);
-    assert_eq!(fs::read(&path).expect("read second migration"), first_bytes);
 }
 
 #[test]

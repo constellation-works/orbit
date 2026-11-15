@@ -2,13 +2,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
-    ArtifactManifestFileV2, DecisionRequest, ExternalRef, Task, TaskArtifact, TaskComment,
-    TaskHistoryEntry, TaskStatus,
+    ArtifactManifestFileV2, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
+    TaskStatus,
 };
 
 use orbit_store::RegisteredTaskResolution;
 
-use super::listing::{list_task_metadata_in, metadata_task};
+use super::listing::{
+    TaskListFilter, list_task_metadata_in, list_task_metadata_matching, metadata_task,
+};
 
 use crate::OrbitRuntime;
 use crate::application::task::TaskJobPort;
@@ -22,29 +24,6 @@ impl OrbitRuntime {
             .tasks()
             .get_task(id)?
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, id.to_string()))
-    }
-
-    /// Read effective human-decision requests, rechecking the current task,
-    /// block episode and pilot admission hold without writing any records.
-    pub fn get_task_decision_requests(&self, id: &str) -> Result<Vec<DecisionRequest>, OrbitError> {
-        let task = self.get_task(id)?;
-        let history = self.get_task_history(id)?;
-        let comments = self.get_task_comments(id)?;
-        let pilot_operation = if task.status == TaskStatus::Backlog
-            && self
-                .pilot_admission_hold_in(&task, &comments, &|| Ok(history.clone()))?
-                .is_some()
-        {
-            super::pilot::latest_pilot_operation_id(&comments)
-        } else {
-            None
-        };
-        Ok(orbit_types::task::decision_requests_from_history(
-            &task,
-            &history,
-            pilot_operation,
-            chrono::Utc::now(),
-        ))
     }
 
     /// Resolve a dependency target through this machine's registered owner.
@@ -82,6 +61,18 @@ impl OrbitRuntime {
         self.stores().tasks().registered_task(id)
     }
 
+    /// Whether a prerequisite named in pilot-warning prose is `done`,
+    /// resolved registry-aware like admission: this workspace's store
+    /// first, then the registered owner of a foreign task. Missing and
+    /// unfinished targets are not done.
+    pub fn warning_prerequisite_is_done(&self, id: &str) -> bool {
+        matches!(self.get_task(id), Ok(found) if found.status == TaskStatus::Done)
+            || matches!(
+                self.get_dependency_task(id),
+                Ok(Some(found)) if found.status == TaskStatus::Done
+            )
+    }
+
     /// A dependency's body through its registered owner, or `None` when no
     /// workspace registered on this machine owns it.
     pub fn get_dependency_task(&self, id: &str) -> Result<Option<Task>, OrbitError> {
@@ -89,6 +80,25 @@ impl OrbitRuntime {
             RegisteredTaskResolution::Resolved(task) => Some(*task),
             RegisteredTaskResolution::Missing | RegisteredTaskResolution::ForeignAuthority => None,
         })
+    }
+
+    /// The workspace partition holding `id` on this machine, when a
+    /// workspace registered here owns it.
+    pub fn registered_task_workspace(&self, id: &str) -> Result<Option<String>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            let task: Option<Task> = match self.read_owner(id, "dependency") {
+                Ok(task) => task,
+                Err(error) if is_legacy_dependency_unavailable(&error) => None,
+                Err(error) => return Err(error),
+            };
+            // The owner read carries no partition; the binding's workspace
+            // is the workspace the owner route serves this call for.
+            return Ok(task.and_then(|_| {
+                self.worker_invocation()
+                    .map(|binding| binding.owner_workspace_id.clone())
+            }));
+        }
+        self.stores().tasks().registered_task_workspace(id)
     }
 
     /// A dependency's history through its registered owner, or `None` when
@@ -167,8 +177,15 @@ impl OrbitRuntime {
     }
 
     pub fn get_task_comments(&self, id: &str) -> Result<Vec<TaskComment>, OrbitError> {
-        if self.worker_invocation().is_some() {
-            return self.read_owner(id, "comments");
+        if let Some(binding) = self.worker_invocation() {
+            return self.read_owner_request(serde_json::json!({
+                "id": id,
+                "_worker_read": "comments",
+                // Older owners ignore this hint and return inline audits.
+                // Other tasks' artifacts are outside a worker's claim, so
+                // keep their audits expanded at the owner.
+                "pilot_artifacts": id == binding.task_id,
+            }));
         }
         self.stores()
             .task_history()
@@ -202,6 +219,39 @@ impl OrbitRuntime {
             })
     }
 
+    /// [`Self::task_history_stamp`] for each listed task, in one pass; a
+    /// task is absent when nothing can vouch for its logs. A worker reads
+    /// through its owner, so it has none.
+    pub(crate) fn task_history_stamps(&self, ids: &[String]) -> BTreeMap<String, String> {
+        if self.worker_invocation().is_some() {
+            return BTreeMap::new();
+        }
+        self.stores()
+            .task_history()
+            .task_history_stamps(ids)
+            .unwrap_or_else(|error| {
+                tracing::debug!(%error, "task history stamps unavailable");
+                BTreeMap::new()
+            })
+    }
+
+    /// Evidence that each listed task's whole bundle is unchanged since an
+    /// earlier stamp, taken without reading it; a task is absent when
+    /// nothing can vouch for it. A worker reads through its owner, so it has
+    /// none.
+    pub(crate) fn task_bundle_stamps(&self, ids: &[String]) -> BTreeMap<String, String> {
+        if self.worker_invocation().is_some() {
+            return BTreeMap::new();
+        }
+        self.stores()
+            .task_history()
+            .task_bundle_stamps(ids)
+            .unwrap_or_else(|error| {
+                tracing::debug!(%error, "task bundle stamps unavailable");
+                BTreeMap::new()
+            })
+    }
+
     pub fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
         if self.worker_invocation().is_some() {
             return self.read_owner("", "tasks");
@@ -232,6 +282,39 @@ impl OrbitRuntime {
             return Ok(Vec::new());
         }
         list_task_metadata_in(self.stores().tasks())
+    }
+
+    /// [`Self::list_task_metadata`] narrowed to the tasks carrying at least
+    /// one of `tags` (matched case-insensitively, as tag filters are), in the
+    /// same newest-first order. The store selects them from its index after
+    /// the same single freshness pass, so the cost follows the tagged tasks,
+    /// not the workspace. An empty `tags` selects nothing.
+    pub fn list_task_metadata_with_any_tag(
+        &self,
+        tags: &BTreeSet<String>,
+    ) -> Result<Vec<Task>, OrbitError> {
+        if tags.is_empty() {
+            return Ok(Vec::new());
+        }
+        let filter = TaskListFilter {
+            any_tags: tags.iter().cloned().collect(),
+            ..TaskListFilter::default()
+        };
+        if self.worker_invocation().is_some() {
+            let mut tasks = super::metadata::collect_owner_metadata(self, None)?;
+            let normalized = orbit_types::task::normalize_task_tags(filter.any_tags);
+            tasks.retain(|task| {
+                task.tags
+                    .iter()
+                    .any(|tag| normalized.contains(&tag.trim().to_lowercase()))
+            });
+            return Ok(tasks);
+        }
+
+        if !self.coordination_task_reads_visible() {
+            return Ok(Vec::new());
+        }
+        list_task_metadata_matching(self.stores().tasks(), &filter)
     }
 
     /// [`Self::list_task_metadata`] for the listed `ids` only: one keyed read
@@ -271,7 +354,7 @@ impl OrbitRuntime {
             if task.status != orbit_types::task::TaskStatus::Backlog {
                 continue;
             }
-            let wait = self.task_host_os_wait(&task, &pools, &limits);
+            let wait = self.host_os_wait_for_task(&task, &pools, &limits);
             if let Some(wait) = wait {
                 waits.push(format!("{} {wait}", task.id));
             }
@@ -320,7 +403,7 @@ impl OrbitRuntime {
         let pools = self.crew_pools_for_input(&serde_json::Value::Null)?;
         Ok(candidates
             .into_iter()
-            .filter(|task| self.task_host_os_wait(task, &pools, &limits).is_none())
+            .filter(|task| self.host_os_wait_for_task(task, &pools, &limits).is_none())
             .map(|task| task.id)
             .collect())
     }
@@ -600,6 +683,51 @@ impl OrbitRuntime {
             .ok_or_else(|| OrbitError::Store("task read section did not run its operation".into()))
     }
 
+    /// Run `op` while holding this task's write lock, returning its value.
+    ///
+    /// The store lock takes `&mut dyn FnMut() -> Result<(), OrbitError>` so
+    /// it stays object-safe; this wrapper adapts a value-returning `FnOnce`
+    /// to it, so callers need no captured `Option` plumbing or unreachable
+    /// "did not run" branch of their own. `op` consumes its inputs, so
+    /// values used only inside the lock are moved rather than cloned.
+    pub(crate) fn with_task_write_locked<T>(
+        &self,
+        id: &str,
+        op: impl FnOnce() -> Result<T, OrbitError>,
+    ) -> Result<T, OrbitError> {
+        self.with_task_locked_via(id, run_under_task_write_lock, op)
+    }
+
+    /// [`Self::with_task_write_locked`] under the comment write lock, for
+    /// an operator's comment-only update admitted under an execution claim.
+    pub(crate) fn with_task_comment_write_locked<T>(
+        &self,
+        id: &str,
+        op: impl FnOnce() -> Result<T, OrbitError>,
+    ) -> Result<T, OrbitError> {
+        self.with_task_locked_via(id, run_under_task_comment_write_lock, op)
+    }
+
+    /// Run `op` under the task lock `lock` selects, returning its value.
+    fn with_task_locked_via<T>(
+        &self,
+        id: &str,
+        lock: TaskLockFn,
+        op: impl FnOnce() -> Result<T, OrbitError>,
+    ) -> Result<T, OrbitError> {
+        let mut op = Some(op);
+        let mut output = None;
+        lock(self.stores().tasks(), id, &mut || {
+            if let Some(op) = op.take() {
+                output = Some(op()?);
+            }
+            Ok(())
+        })?;
+        output.ok_or_else(|| {
+            OrbitError::Execution("task write lock did not run its operation".into())
+        })
+    }
+
     pub fn search_tasks_filtered(
         &self,
         query: &str,
@@ -615,6 +743,28 @@ impl OrbitRuntime {
         }
         self.stores().tasks().search_tasks_filtered(query, tags)
     }
+}
+
+type TaskLockFn = fn(
+    &dyn orbit_store::TaskStoreBackend,
+    &str,
+    &mut dyn FnMut() -> Result<(), OrbitError>,
+) -> Result<(), OrbitError>;
+
+fn run_under_task_write_lock(
+    tasks: &dyn orbit_store::TaskStoreBackend,
+    id: &str,
+    op: &mut dyn FnMut() -> Result<(), OrbitError>,
+) -> Result<(), OrbitError> {
+    tasks.with_task_write_lock(id, op)
+}
+
+fn run_under_task_comment_write_lock(
+    tasks: &dyn orbit_store::TaskStoreBackend,
+    id: &str,
+    op: &mut dyn FnMut() -> Result<(), OrbitError>,
+) -> Result<(), OrbitError> {
+    tasks.with_task_comment_write_lock(id, op)
 }
 
 /// Whether `error` is an older owner's refusal of an unavailable dependency

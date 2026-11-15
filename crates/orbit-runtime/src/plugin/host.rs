@@ -255,13 +255,16 @@ impl ActiveDefinitionOwners {
 /// rules of §4.5 and its own `[plugins.<ns>]` schema.
 ///
 /// One message, naming the file or key at fault, because the caller reports it
-/// as this plugin's single diagnostic.
+/// as this plugin's single diagnostic. The parsed set is returned so the host
+/// collision check does not read the files again.
 pub(crate) fn validate_plugin_contributions(
+    installed: &InstalledPlugin,
     plugin: &LoadedPlugin,
     plugin_config: &BTreeMap<String, Value>,
-) -> Result<(), String> {
-    super::definitions::load_plugin_definitions(plugin, &super::definitions::shipped_job_names())?;
-    super::config::validate_plugin_config(plugin, plugin_config)
+) -> Result<Arc<super::definitions::PluginDefinitionSet>, String> {
+    let definitions = super::cache::cached_plugin_definitions(installed, plugin)?;
+    super::config::validate_plugin_config(plugin, plugin_config)?;
+    Ok(definitions)
 }
 
 /// Register every enabled installed plugin, plus one diagnostic per plugin
@@ -604,38 +607,30 @@ fn register_installed_plugin(
             );
         }
     };
-    let projection = projected_status(installed, &plugin, global_root, plugin_config);
-    if projection.status == PluginStatus::Inactive {
-        let message = projection
-            .diagnostic
-            .unwrap_or_else(|| format!("plugin '{}' is inactive", installed.name));
-        if projection.register_inactive_tools {
-            let mut registered =
-                register_inactive_tools(global_root, installed, &plugin, registry, message);
-            registered.loaded = Some(plugin);
-            return registered;
-        }
-        return refused(PluginStatus::Inactive, message, Some(plugin));
-    }
-
-    // Per-plugin validation above establishes that every definition parses
-    // and follows §4.5. This host-level pass enforces the part no plugin can
-    // decide alone: two active plugins may not contribute the same catalog
-    // name. The store is ordered by namespace, so the first valid owner keeps
-    // serving and only the later plugin is refused.
-    let definitions = match super::definitions::load_plugin_definitions(
-        &plugin,
-        &super::definitions::shipped_job_names(),
-    ) {
+    // Admission parses the definition files once. The set it returns is what
+    // the collision check below uses, so this pass does not parse them again.
+    let definitions = match admit_loaded_plugin(installed, &plugin, global_root, plugin_config) {
         Ok(definitions) => definitions,
-        Err(message) => {
-            return refused(
-                PluginStatus::Inactive,
-                format!("plugin '{}' is refused: {message}", installed.name),
-                Some(Arc::clone(&plugin)),
-            );
+        Err(projection) => {
+            let message = projection
+                .diagnostic
+                .unwrap_or_else(|| format!("plugin '{}' is inactive", installed.name));
+            if projection.register_inactive_tools {
+                let mut registered =
+                    register_inactive_tools(global_root, installed, &plugin, registry, message);
+                registered.loaded = Some(plugin);
+                return registered;
+            }
+            return refused(projection.status, message, Some(plugin));
         }
     };
+
+    // Per-plugin validation above established that every definition parses
+    // and follows §4.5. This host-level pass enforces the part no plugin can
+    // decide alone: two active plugins may not contribute the same catalog
+    // name. It runs on every pass, including when the parsed set was reused.
+    // The store is ordered by namespace, so the first valid owner keeps
+    // serving and only the later plugin is refused.
     if let Err(message) =
         active_definition_owners.refuse_collision(plugin.namespace(), &definitions)
     {
@@ -716,14 +711,31 @@ pub fn projected_status(
     global_root: &Path,
     plugin_config: &BTreeMap<String, Value>,
 ) -> ProjectedPluginStatus {
+    match admit_loaded_plugin(installed, plugin, global_root, plugin_config) {
+        Ok(_) => ProjectedPluginStatus::active(),
+        Err(status) => status,
+    }
+}
+
+/// The eligibility decision [`projected_status`] reports, plus the parsed
+/// definitions when the plugin may go active.
+///
+/// Definition files are parsed once. Callers that only need the status drop
+/// the set; registration keeps it for the cross-plugin collision check.
+fn admit_loaded_plugin(
+    installed: &InstalledPlugin,
+    plugin: &LoadedPlugin,
+    global_root: &Path,
+    plugin_config: &BTreeMap<String, Value>,
+) -> Result<Arc<super::definitions::PluginDefinitionSet>, ProjectedPluginStatus> {
     if let Some(message) = first_party_row_mismatch(installed, plugin) {
-        return ProjectedPluginStatus::inactive(message, false);
+        return Err(ProjectedPluginStatus::inactive(message, false));
     }
     // Runs before anything below reads `installed.grants` through
     // `plugin_backend`'s own parse: a name it does not recognize must refuse
     // the row here, not fall silently out of a `filter_map` there.
     if let Some(message) = unknown_grant_diagnostic(installed) {
-        return ProjectedPluginStatus::inactive(message, true);
+        return Err(ProjectedPluginStatus::inactive(message, true));
     }
     // Validate the manifest actually on disk before deciding what a digest
     // mismatch means: an on-disk edit that also breaks the namespace rules
@@ -731,41 +743,41 @@ pub fn projected_status(
     let policy =
         PluginValidationPolicy::host_default().with_first_party_verified(installed.first_party);
     if let Err(error) = validate_loaded_plugin(plugin, &policy) {
-        return ProjectedPluginStatus::inactive(
+        return Err(ProjectedPluginStatus::inactive(
             format!("plugin '{}' is refused: {error}", installed.name),
             false,
-        );
+        ));
     }
     if plugin.manifest_digest != installed.manifest_digest {
-        return ProjectedPluginStatus::inactive(
+        return Err(ProjectedPluginStatus::inactive(
             digest_mismatch_diagnostic(installed, plugin),
             true,
-        );
+        ));
     }
     let backend = plugin_backend(global_root, installed, plugin, plugin_config);
     if let Err(error) = refuse_covering_fs_write_roots(backend.spec(), None) {
-        return ProjectedPluginStatus::inactive(
+        return Err(ProjectedPluginStatus::inactive(
             format!("plugin '{}' is refused: {error}", installed.name),
             true,
-        );
+        ));
     }
     if let Some(message) = unmet_requirement(plugin) {
-        return ProjectedPluginStatus::inactive(message, true);
+        return Err(ProjectedPluginStatus::inactive(message, true));
     }
     if let Some(message) = missing_grant_diagnostic(installed, plugin) {
-        return ProjectedPluginStatus::inactive(message, true);
+        return Err(ProjectedPluginStatus::inactive(message, true));
     }
     // A plugin whose shipped definitions break the §4.5 rules, or whose
     // `[plugins.<ns>]` section its own schema rejects, contributes nothing:
     // registering its tools while its catalog layer is unusable would leave
     // half a plugin on the surface.
-    if let Err(message) = validate_plugin_contributions(plugin, plugin_config) {
-        return ProjectedPluginStatus::inactive(
+    match validate_plugin_contributions(installed, plugin, plugin_config) {
+        Ok(definitions) => Ok(definitions),
+        Err(message) => Err(ProjectedPluginStatus::inactive(
             format!("plugin '{}' is refused: {message}", installed.name),
             false,
-        );
+        )),
     }
-    ProjectedPluginStatus::active()
 }
 
 /// An enabled plugin whose `requires` no longer hold keeps its tool names on

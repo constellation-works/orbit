@@ -259,10 +259,49 @@ PY
   exit 2
 }
 OWNED_WORKDIR=1
+ARM_PGID=""
+ARM_SPAWNING=0
+PENDING_CANCEL=""
+
+# Stop this invocation's isolated arm (its own session/process group, led by the
+# pid measure() recorded) and join it, so nothing still runs in the trees,
+# targets or locks that cleanup is about to remove.
+stop_arm() {
+  local pgid="$ARM_PGID" waited
+  [[ -n "$pgid" ]] || return 0
+  ARM_PGID=""
+  kill -TERM -- "-$pgid" 2>/dev/null || true
+  for waited in $(seq 1 100); do
+    kill -0 -- "-$pgid" 2>/dev/null || break
+    sleep 0.05
+  done
+  kill -KILL -- "-$pgid" 2>/dev/null || true
+  wait "$pgid" 2>/dev/null || true
+  for waited in $(seq 1 100); do
+    kill -0 -- "-$pgid" 2>/dev/null || break
+    sleep 0.05
+  done
+}
+
+cancel() {
+  if [[ "${ARM_SPAWNING:-0}" == 1 ]]; then
+    if [[ -z "${PENDING_CANCEL:-}" ]]; then
+      PENDING_CANCEL="$1"
+    fi
+    return 0
+  fi
+  trap '' HUP INT TERM
+  exit "$1"
+}
+trap 'cancel 129' HUP
+trap 'cancel 130' INT
+trap 'cancel 143' TERM
 
 cleanup() {
   local status=$?
   trap - EXIT
+  trap '' HUP INT TERM
+  stop_arm
   if [[ "$OWNED_WORKDIR" == 1 ]] && validate_owned_path "" root; then
     for path in trees targets locks; do
       if validate_owned_path "$path" dir; then
@@ -273,7 +312,7 @@ cleanup() {
       fi
     done
   fi
-  return "$status"
+  exit "$status"
 }
 trap cleanup EXIT
 
@@ -305,6 +344,7 @@ measure() {
   validate_owned_path "$arm.log" absent
   validate_owned_path "$(basename "$RESULT")" file
   start="$(date +%s.%N)"
+  PENDING_CANCEL="" ARM_SPAWNING=1
   setsid /usr/bin/time -f '%U\t%S' -o "$timing" \
     env ORBIT_BUILD_BUDGET_BENCH_PACKAGE="$PACKAGE" \
     ORBIT_BUILD_BUDGET_BENCH_PROCESSES="$PROCESSES" \
@@ -315,13 +355,21 @@ measure() {
     ORBIT_BUILD_BUDGET_BENCH_OWNER="$OWNER_TOKEN" \
     "$SELF" __arm "$arm" >"$output" 2>&1 &
   local group_pid=$!
+  ARM_PGID="$group_pid"
+  ARM_SPAWNING=0
+  if [[ -n "$PENDING_CANCEL" ]]; then
+    cancel "$PENDING_CANCEL"
+  fi
   peak=0
   while kill -0 "$group_pid" 2>/dev/null; do
     current="$(ps -eo pgid=,rss= | awk -v pgid="$group_pid" '$1 == pgid { total += $2 } END { print total + 0 }')"
     (( current > peak )) && peak="$current"
     sleep 0.05
   done
-  wait "$group_pid"
+  local arm_status=0
+  wait "$group_pid" || arm_status=$?
+  ARM_PGID=""
+  (( arm_status == 0 )) || return "$arm_status"
   end="$(date +%s.%N)"
   wall="$(awk -v start="$start" -v end="$end" 'BEGIN { printf "%.3f", end - start }')"
   read -r user system <"$timing"

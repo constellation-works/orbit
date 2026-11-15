@@ -78,9 +78,79 @@ fn labelled_claims_go_only_to_a_follower_that_carries_every_label() {
     );
 }
 
+/// A follower carrying only one of two required labels is a partial carrier:
+/// the pull it sends names that one label, yet the owner withholds the task and
+/// the idle pass names the label it lacks. Only a follower carrying both is
+/// handed the task, so admission needs every label, never any one of them.
+fn a_follower_carrying_one_of_two_required_labels_is_not_handed_the_task() {
+    let mut pair = Pair::with_owner(2, |owner| {
+        owner.with_machine_labels(vec!["gpu".to_string(), "xcode".to_string()])
+    });
+    let (labelled, plain) = (pair.tasks[0].clone(), pair.tasks[1].clone());
+    pair.wire
+        .owner
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": labelled, "requires_labels": ["gpu", "xcode"], "model": "codex"}),
+        )
+        .expect("label owner task");
+    pair.follower = pair
+        .follower
+        .clone()
+        .with_host_os(Some(HostOs::Linux))
+        .with_machine_labels(vec!["gpu".to_string()]);
+
+    let drain = pair.start_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&leaf), plain);
+    pair.leaf_fails_with(&leaf, "candidate validation failed");
+    let idle = pair.pass(&drain);
+    assert_eq!(idle["admitted"], 0, "{idle}");
+    assert_eq!(pair.owner_status(&labelled), "backlog");
+    assert!(
+        !pair.owner_has_claim_for_task(&labelled),
+        "{:#?}",
+        pair.owner_claims()
+    );
+    assert_eq!(
+        pair.wire.calls("orbit.task.pull").last().unwrap()["labels"],
+        json!(["gpu"]),
+        "the partial carrier declares only the label it has"
+    );
+    let recorded = pair
+        .follower
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .pull_drain
+        .drain_last_pass
+        .expect("the idle pass is recorded");
+    let wait = recorded
+        .excluded
+        .iter()
+        .find(|entry| entry.task_id == labelled)
+        .unwrap_or_else(|| panic!("{labelled} is excluded: {recorded:#?}"));
+    assert_eq!(wait.reason.as_deref(), Some("host_labels_missing"));
+    assert!(
+        wait.detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("`xcode`")),
+        "the idle pass names the label the follower lacks: {wait:?}"
+    );
+
+    pair.follower = pair
+        .follower
+        .clone()
+        .with_machine_labels(vec!["gpu".to_string(), "xcode".to_string()]);
+    let full_drain = pair.start_drain();
+    let full_leaf = pair.running_leaf(&full_drain, 1);
+    assert_eq!(pair.claimed_task(&full_leaf), labelled);
+}
+
 crate::scenario_table!(
     labelled_claims_go_only_to_a_follower_that_carries_every_label_scenarios,
-    labelled_claims_go_only_to_a_follower_that_carries_every_label
+    labelled_claims_go_only_to_a_follower_that_carries_every_label,
+    a_follower_carrying_one_of_two_required_labels_is_not_handed_the_task
 );
 
 /// Grants used to reach claimed implementers despite their closed owner
@@ -90,7 +160,7 @@ fn granted_tasks_stay_on_the_owner_before_any_claim_or_leaf() {
     let owner = &pair.wire.owner;
     let grants = [
         vec![
-            "orbit.auto_task.update".to_string(),
+            "orbit.auto_task:update".to_string(),
             "proc.spawn".to_string(),
         ],
         vec!["proc.spawn".to_string()],
@@ -181,7 +251,7 @@ fn grants_and_labels_require_the_owner_to_carry_every_label() {
         .update_task_as_human(
             &task,
             TaskUpdateParams {
-                granted_tools: Some(vec!["orbit.auto_task.update".to_string()]),
+                granted_tools: Some(vec!["orbit.auto_task:update".to_string()]),
                 ..Default::default()
             },
             "human:fixture".to_string(),
@@ -196,7 +266,7 @@ fn grants_and_labels_require_the_owner_to_carry_every_label() {
         .expect("the owner cannot satisfy both constraints");
     for detail in [
         "owner host",
-        "orbit.auto_task.update",
+        "orbit.auto_task:update",
         "gpu",
         "requires_labels",
     ] {
@@ -308,4 +378,216 @@ crate::scenario_table!(
     granted_tasks_stay_on_the_owner_before_any_claim_or_leaf,
     grants_and_labels_require_the_owner_to_carry_every_label,
     a_grant_added_during_admission_is_rechecked_before_claim
+);
+
+/// A verified browser alone does not make a worker able to run a workspace's
+/// fixture backend. The owner's mapping also governs existing tasks without
+/// persisting derived labels on those tasks.
+fn configured_fixture_labels_gate_ui_claims_and_local_admission() {
+    let mut pair = Pair::with_owner_host(
+        "[workflow.tag_requires_labels]\n\" UI \" = [\" FIXTURE-BACKEND \", \"fixture-backend\"]\n",
+        "",
+        &[None],
+        |owner| owner.with_machine_labels(vec!["fixture-backend".into(), "image-export".into()]),
+    );
+    let ui = pair.tasks[0].clone();
+    pair.wire.owner.run_tool(
+        "orbit.task.update",
+        json!({"id": ui, "tags": ["UI"], "requires_labels": ["image-export"], "model": "codex"}),
+    ).unwrap();
+    let kit_home = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    super::super::host_ui_routing::write_kit(kit_home.path(), true);
+    pair.follower = pair
+        .follower
+        .clone()
+        .with_host_os(Some(HostOs::Macos))
+        .with_browser_kit_home(kit_home.path())
+        .with_machine_labels(vec!["image-export".into()]);
+    let drain = pair.start_drain();
+    let idle = pair.pass(&drain);
+    assert_eq!(
+        idle["admitted"], 0,
+        "a browser cannot run the fixture: {idle}"
+    );
+    assert!(!pair.owner_has_claim_for_task(&ui));
+    let recorded = pair
+        .follower
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .pull_drain
+        .drain_last_pass
+        .unwrap();
+    let wait = recorded
+        .excluded
+        .iter()
+        .find(|row| row.task_id == ui)
+        .unwrap();
+    assert_eq!(wait.reason.as_deref(), Some("host_labels_missing"));
+    assert!(wait.detail.as_deref().unwrap().contains("fixture-backend"));
+
+    let plain_owner = pair
+        .wire
+        .owner
+        .clone()
+        .with_browser_kit_home(kit_home.path())
+        .with_machine_labels(vec!["image-export".into()]);
+    let discovered = plain_owner
+        .run_deterministic(
+            "list_backlog_tasks",
+            &json!({}),
+            &json!({}),
+            ToolContext::default(),
+        )
+        .unwrap();
+    assert!(
+        discovered["task_ids"].as_array().unwrap().is_empty(),
+        "{discovered}"
+    );
+    assert_eq!(discovered["excluded"][0]["reason"], "host_labels_missing");
+    let shown = plain_owner
+        .run_tool("orbit.task.show", json!({"id": ui}))
+        .unwrap();
+    assert!(
+        shown["placement_wait"]
+            .as_str()
+            .unwrap()
+            .contains("fixture-backend")
+    );
+    assert_eq!(shown["requires_labels"], json!(["image-export"]));
+
+    // The tag rule adds requirements; it cannot erase the task's own label.
+    pair.follower = pair
+        .follower
+        .clone()
+        .with_machine_labels(vec!["fixture-backend".into()]);
+    let still_waiting = pair.pass(&drain);
+    assert_eq!(still_waiting["admitted"], 0, "{still_waiting}");
+    assert!(!pair.owner_has_claim_for_task(&ui));
+
+    // Capability, not OS, decides: the same Mac worker may claim it after
+    // the operator verifies its fixture runtime and declares the label.
+    pair.follower = pair
+        .follower
+        .clone()
+        .with_machine_labels(vec!["fixture-backend".into(), "image-export".into()]);
+    let ready_drain = pair.start_drain();
+    let leaf = pair.running_leaf(&ready_drain, 1);
+    assert_eq!(pair.claimed_task(&leaf), ui);
+}
+
+crate::scenario_table!(
+    configured_fixture_labels_gate_ui_scenarios,
+    configured_fixture_labels_gate_ui_claims_and_local_admission
+);
+
+/// Follower readiness evidence judges a follower's labels under the owner's
+/// `workflow.tag_requires_labels`, as pull admission does. The owner is on
+/// another OS, so the `ui` tasks are excluded there by `os:macos`, and
+/// readiness asks the macOS follower whether it could run them. The follower
+/// carries the tasks' explicit label and a browser kit, so only the tag-derived
+/// `visual-fixture` decides: until it declares that label the follower is not
+/// compatible, and once it does readiness names it as the pending follower.
+fn tag_derived_labels_judge_follower_readiness_evidence() {
+    let mut pair = Pair::with_owner_host(
+        "[workflow.tag_requires_labels]\nui = [\"visual-fixture\"]\n",
+        "",
+        &[None, None],
+        |owner| {
+            owner
+                .with_host_os(Some(HostOs::Macos))
+                .with_machine_labels(vec!["image-export".into(), "visual-fixture".into()])
+        },
+    );
+    for ui in pair.tasks.clone() {
+        pair.wire
+            .owner
+            .run_tool(
+                "orbit.task.update",
+                json!({
+                    "id": ui,
+                    "tags": ["ui", "os:macos"],
+                    "requires_labels": ["image-export"],
+                    "model": "codex",
+                }),
+            )
+            .expect("the macOS owner carries every label the task requires");
+    }
+    // The owner reads readiness as a Linux host, so its OS excludes the tasks.
+    let linux_owner = pair
+        .wire
+        .owner
+        .clone()
+        .with_host_os(Some(HostOs::Linux))
+        .with_machine_labels(vec!["image-export".into()]);
+    let kit_home = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    super::super::host_ui_routing::write_kit(kit_home.path(), true);
+    pair.follower = pair
+        .follower
+        .clone()
+        .with_host_os(Some(HostOs::Macos))
+        .with_browser_kit_home(kit_home.path())
+        .with_machine_labels(vec!["image-export".into()]);
+    let readiness_row = |task: &str| -> Value {
+        let ready = linux_owner
+            .workspace_auto_readiness(&[], None, 50, &[])
+            .unwrap();
+        ready["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["task_id"] == task)
+            .unwrap_or_else(|| panic!("{task} is listed: {ready}"))
+            .clone()
+    };
+
+    let drain = pair.start_drain();
+    let idle = pair.pass(&drain);
+    assert_eq!(idle["admitted"], 0, "{idle}");
+    for task in pair.tasks.clone() {
+        let row = readiness_row(&task);
+        assert_eq!(
+            row["executor_evidence"]["status"], "no_compatible_recent",
+            "{row}"
+        );
+        let executors = row["executor_evidence"]["executors"].as_array().unwrap();
+        assert!(
+            executors
+                .iter()
+                .any(|executor| executor["compatible"] == false
+                    && executor["refusal"]
+                        .as_str()
+                        .is_some_and(|refusal| refusal.contains("visual-fixture"))),
+            "the follower lacks the tag-derived label: {row}"
+        );
+        assert_ne!(row["reason"], "follower_admission_pending", "{row}");
+    }
+
+    // Declaring the tag-derived label claims one task; the other stays in
+    // backlog for readiness to read against the now-compatible follower.
+    pair.follower = pair
+        .follower
+        .clone()
+        .with_machine_labels(vec!["image-export".into(), "visual-fixture".into()]);
+    let claiming = pair.start_drain();
+    let leaf = pair.running_leaf(&claiming, 1);
+    let claimed = pair.claimed_task(&leaf);
+    let remaining = pair
+        .tasks
+        .iter()
+        .find(|task| **task != claimed)
+        .expect("one task stays in backlog")
+        .clone();
+    assert_eq!(pair.owner_status(&remaining), "backlog");
+    let row = readiness_row(&remaining);
+    assert_eq!(
+        row["executor_evidence"]["status"], "compatible_recent",
+        "{row}"
+    );
+    assert_eq!(row["reason"], "follower_admission_pending", "{row}");
+}
+
+crate::scenario_table!(
+    tag_derived_labels_judge_follower_readiness_evidence_scenarios,
+    tag_derived_labels_judge_follower_readiness_evidence
 );

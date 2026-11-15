@@ -18,7 +18,8 @@ use orbit_types::workflow::handoff::{
 use crate::OrbitRuntime;
 use crate::application::contracts::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED;
 use crate::application::job::JobDrainPort;
-use crate::application::landing::dispatch_recorded_authority;
+use crate::application::operator_input;
+use crate::application::review::ReviewLandingDispatchPort;
 use crate::application::task;
 
 impl OrbitRuntime {
@@ -65,8 +66,6 @@ impl OrbitRuntime {
         let claim_id = handoff.claim_id.clone();
         // A worker cannot owe a criterion its pilot finding did not type.
         self.check_owed_criteria(&self.get_task(&handoff.task_id)?, &handoff.owed_criteria)?;
-        // A `verify-mock-ui` claim's capture must be the contract's (§6.2).
-        self.check_handoff_visual_capture(&handoff)?;
         let context = context.clone().with_handoff_observation(observation);
         let outcome = self.mutate_execution_claim_outcome(
             Some(&context),
@@ -94,7 +93,7 @@ impl OrbitRuntime {
                 super::flaky::record_frictions(self, &accepted.handoff.task_id, flaky)?;
             }
         }
-        dispatch_recorded_authority(self);
+        self.dispatch_recorded_landing_authority();
         Ok(outcome)
     }
 
@@ -112,7 +111,7 @@ impl OrbitRuntime {
     }
 
     /// Explicit review-state approval. Does not reuse the backlog grant validator.
-    pub fn approve_task_handoff(
+    pub(crate) fn approve_task_handoff(
         &self,
         context: &ClaimInvocation,
         request_id: &str,
@@ -129,11 +128,11 @@ impl OrbitRuntime {
                 candidate,
             },
         )?;
-        dispatch_recorded_authority(self);
+        self.dispatch_recorded_landing_authority();
         Ok(result)
     }
 
-    pub fn revoke_task_handoff(
+    pub(crate) fn revoke_task_handoff(
         &self,
         context: &ClaimInvocation,
         request_id: &str,
@@ -148,8 +147,7 @@ impl OrbitRuntime {
     }
 
     /// The durable outbox, readable without a live drain. Dispatch and external
-    /// merge reconciliation belong to
-    /// [`crate::application::landing`].
+    /// merge reconciliation belong to the owner landing consumer.
     pub fn landing_start_requests(&self) -> Result<Vec<LandingStartRequest>, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         self.stores().tasks().landing_start_requests()
@@ -174,7 +172,7 @@ impl OrbitRuntime {
 // transaction the landing consumer uses, and every refusal is the store's.
 
 /// Response shape version of [`OrbitRuntime::distributed_claim_console`].
-pub const HANDOFF_CONSOLE_SCHEMA: u32 = 1;
+pub(crate) const HANDOFF_CONSOLE_SCHEMA: u32 = 1;
 
 /// Claim lifecycle states selected by the owner's read-only console.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -302,7 +300,18 @@ impl OrbitRuntime {
                 "claims": Vec::<serde_json::Value>::new(),
             }));
         }
-        let inspected_claims = self.stores().tasks().inspect_execution_claims()?;
+        let inspected_claims = match (task_id, state) {
+            (Some(task_id), _) => self
+                .stores()
+                .tasks()
+                .inspect_task_execution_claims(task_id)?,
+            (None, DistributedClaimState::Active) => {
+                self.stores().tasks().inspect_live_execution_claims()?
+            }
+            (None, DistributedClaimState::Settled | DistributedClaimState::All) => {
+                self.stores().tasks().inspect_execution_claims()?
+            }
+        };
         let claims = inspected_claims
             .iter()
             .filter(|claim| {
@@ -376,7 +385,11 @@ impl OrbitRuntime {
                         claim.unresolved_merge_intent.as_deref(),
                     )
                 });
-            rows.push(claim_json(claim, handoff, local_machine.as_deref(), now));
+            let mut row = claim_json(claim, handoff, local_machine.as_deref(), now);
+            let current = self.claim_is_current_on_task(claim);
+            row["current"] = serde_json::json!(current);
+            row["recover_targets"] = self.claim_recover_targets_json(claim, current)?;
+            rows.push(row);
         }
 
         Ok(serde_json::json!({
@@ -444,13 +457,16 @@ impl OrbitRuntime {
         expected: &ExpectedCandidate,
         actor: &str,
         reason: &str,
-        request_id: &str,
+        replay_scope: &str,
+        request_key: &str,
     ) -> Result<serde_json::Value, OrbitError> {
-        if reason.trim().is_empty() {
-            return Err(OrbitError::InvalidInput(
-                "revoking completion authority requires a reason".to_string(),
-            ));
-        }
+        let reason = operator_input::reason(reason, "revoking completion authority")?;
+        let request_key = operator_input::replay_key(request_key)?;
+        let request_id = operator_input::scoped_replay_key(replay_scope, handoff_id, &request_key);
+        let expected = ExpectedCandidate {
+            candidate_commit: expected.candidate_commit.trim().to_string(),
+            base_commit: expected.base_commit.trim().to_string(),
+        };
         let (claim, accepted) = self.console_handoff(handoff_id)?;
         expected.check(&accepted.handoff.candidate)?;
         let context = ClaimInvocation::trusted_operator(
@@ -458,17 +474,15 @@ impl OrbitRuntime {
             claim.claim.claim_id.clone(),
             actor.to_string(),
         );
-        let result = self.revoke_task_handoff(
-            &context,
-            request_id,
-            accepted.handoff_id.clone(),
-            reason.to_string(),
-        )?;
+        let result =
+            self.revoke_task_handoff(&context, &request_id, accepted.handoff_id.clone(), reason)?;
         Ok(mutation_json(&accepted.handoff_id, &result))
     }
 
     /// Deliberate recovery of one claim: fence the attempt and choose the task
-    /// transition. Never automatic — there is no heartbeat and no inferred
+    /// transition — any status the lifecycle allows from the task's current
+    /// one except `in-progress`, with `done` held to the ordinary completion
+    /// gates. Never automatic — there is no heartbeat and no inferred
     /// death, so this exists precisely because an operator has to decide.
     ///
     /// `expected_phase` is the phase the operator saw. A claim that moved on
@@ -476,6 +490,10 @@ impl OrbitRuntime {
     /// this request is an identical replay of the recovery that moved it:
     /// the phase precondition is enforced inside the store transaction,
     /// after the recorded receipt has had its chance to replay.
+    ///
+    /// `replay` is `(replay_scope, request_key)`: the surface's replay
+    /// namespace (`"operator-recover"` or `"dashboard-recover"`) and the
+    /// caller's key for this one decision.
     pub fn recover_claim_as_operator(
         &self,
         claim_id: &str,
@@ -483,18 +501,13 @@ impl OrbitRuntime {
         status: TaskStatus,
         actor: &str,
         reason: &str,
-        request_id: &str,
+        replay: (&str, &str),
     ) -> Result<serde_json::Value, OrbitError> {
-        if reason.trim().is_empty() {
-            return Err(OrbitError::InvalidInput(
-                "claim recovery requires a reason".to_string(),
-            ));
-        }
-        if !matches!(status, TaskStatus::Blocked | TaskStatus::Backlog) {
-            return Err(OrbitError::InvalidInput(format!(
-                "claim recovery moves a task to blocked or backlog, not '{status}'"
-            )));
-        }
+        let (replay_scope, request_key) = replay;
+        let reason = operator_input::reason(reason, "claim recovery")?;
+        let request_key = operator_input::replay_key(request_key)?;
+        let request_id = operator_input::scoped_replay_key(replay_scope, claim_id, &request_key);
+        let expected_phase = expected_phase.trim();
         self.ensure_coordination_task_write_permitted()?;
         let claim = self
             .stores()
@@ -506,6 +519,19 @@ impl OrbitRuntime {
                 kind: ClaimRefusalKind::StaleClaim,
                 message: format!("no claim '{claim_id}' is current on this owner (stale_claim)"),
             })?;
+        // The target obeys the task lifecycle from the status the claim holds
+        // the task in, and `done` passes the ordinary completion gates. The
+        // store transaction pins that status, so a task that moved since this
+        // check is refused there as a stale claim. A claim this recovery
+        // already revoked skips the check, so an identical request replays
+        // its receipt even after the task moved on.
+        if claim.claim.phase != ExecutionClaimPhase::Revoked {
+            task::ensure_claim_recovery_target(
+                self,
+                &self.get_task(&claim.claim.task_id)?,
+                status,
+            )?;
+        }
         let observed = task::execution_claim_phase_label(claim.claim.phase);
         let Some(expected_phase) = phase_from_label(expected_phase) else {
             return Err(OrbitError::ClaimRefused {
@@ -523,7 +549,7 @@ impl OrbitRuntime {
         );
         let result = self.mutate_execution_claim(
             Some(&context),
-            request_id,
+            &request_id,
             &ClaimMutation::Recover {
                 status,
                 reason: reason.to_string(),
@@ -535,6 +561,47 @@ impl OrbitRuntime {
             "phase": task::execution_claim_phase_label(result.phase),
             "task_status": result.status.to_string(),
         }))
+    }
+
+    /// Use the same latest `pulled_by` identity as the store's claim authority,
+    /// rather than a claim's phase or creation time. A failed claim can remain
+    /// in history after a newer pull; unreadable provenance proves no currency.
+    fn claim_is_current_on_task(&self, claim: &ClaimInspection) -> bool {
+        let Ok(history) = self.get_task_history(&claim.claim.task_id) else {
+            return false;
+        };
+        history
+            .iter()
+            .rev()
+            .find(|entry| entry.event == "pulled_by")
+            .and_then(|entry| {
+                serde_json::from_str::<serde_json::Value>(entry.note.as_deref()?).ok()
+            })
+            .is_some_and(|note| note["claim_id"].as_str() == Some(claim.claim.claim_id.as_str()))
+    }
+
+    /// The statuses an operator may recover the current `claim` to, for the console's
+    /// picker; empty when the claim cannot be recovered. Advisory: the
+    /// guarded recovery rechecks every target.
+    fn claim_recover_targets_json(
+        &self,
+        claim: &ClaimInspection,
+        current: bool,
+    ) -> Result<serde_json::Value, OrbitError> {
+        let recoverable =
+            claim.claim.phase.is_unsettled() || claim.claim.phase == ExecutionClaimPhase::Failed;
+        if !current || !recoverable {
+            return Ok(serde_json::json!([]));
+        }
+        // A task this owner cannot read offers no target rather than failing
+        // the whole console; the recovery itself reports why.
+        let Ok(task) = self.get_task(&claim.claim.task_id) else {
+            return Ok(serde_json::json!([]));
+        };
+        let targets = task::claim_recovery_targets(self, &task);
+        Ok(serde_json::json!(
+            targets.iter().map(ToString::to_string).collect::<Vec<_>>()
+        ))
     }
 
     /// Resolve a handoff id to the claim that currently owns it.
@@ -778,10 +845,10 @@ fn handoff_json(
                 Some(command) => format!(
                     "completion authority was withdrawn; the task stays in review. If its pull \
                      request merged outside Orbit, `{command}` completes the task; otherwise \
-                     recover the claim to blocked or backlog"
+                     recover the claim to another status"
                 ),
                 None => "completion authority was withdrawn; the task stays in review. Recover \
-                         the claim to blocked or backlog"
+                         the claim to another status"
                     .to_string(),
             },
         ),
@@ -889,13 +956,8 @@ fn review_summary(review: &orbit_types::workflow::handoff::HandoffReview) -> Str
             evidence.attempt_id,
             evidence.reviewed_head_sha
         ),
-        None => match &review.selective_receipt {
-            Some(receipt) => format!(
-                "no reviewer ran — {} (selection evidence only, never a passed review)",
-                receipt.summary()
-            ),
-            None => "review not required (policy none) — no reviewer ran and no verdict exists"
-                .to_string(),
-        },
+        None => {
+            "review not required (policy none) — no reviewer ran and no verdict exists".to_string()
+        }
     }
 }

@@ -222,6 +222,7 @@ pub(super) async fn remove_host(
 pub(crate) fn host_error_code(error: &OrbitError) -> &str {
     match error {
         OrbitError::HostRegistry { code, .. } => code.as_str(),
+        OrbitError::HostConfiguration { .. } => "host_configuration",
         OrbitError::InvalidInput(_)
         | OrbitError::InvalidInputDiagnostic { .. }
         | OrbitError::ClaimRefused { .. } => "invalid_input",
@@ -232,6 +233,8 @@ pub(crate) fn host_error_code(error: &OrbitError) -> &str {
         OrbitError::ProcessTimeout { .. } => "process_timeout",
         OrbitError::Execution(_)
         | OrbitError::PrivateVcs(_)
+        | OrbitError::ForgeUnavailable(_)
+        | OrbitError::WorkflowEvidenceUnavailable(_)
         | OrbitError::ExecutionTimeout { .. } => "execution_failed",
         OrbitError::WorkspaceError(_) => "workspace_error",
         OrbitError::Io(_)
@@ -260,10 +263,9 @@ pub(super) fn status_for(code: &str) -> StatusCode {
         | "host_identity_mismatch"
         | "host_too_old"
         | "ambiguous_destination" => StatusCode::CONFLICT,
-        "unreachable_destination"
-        | "legacy_host_unreachable"
-        | "outcome_unknown"
-        | "process_timeout" => StatusCode::BAD_GATEWAY,
+        "unreachable_destination" | "outcome_unknown" | "process_timeout" => {
+            StatusCode::BAD_GATEWAY
+        }
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }

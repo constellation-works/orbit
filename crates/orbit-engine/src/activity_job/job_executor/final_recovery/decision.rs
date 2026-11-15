@@ -5,14 +5,23 @@ use crate::executor::automation::vcs::git::git_output;
 use super::super::*;
 use super::types;
 
-/// Dispatch the activity under its configured crew, returning its output and
-/// the dispatched spec's resolved model [ORB-16768].
+/// What a dispatched final recovery answered.
+pub(super) struct RecoveryDispatch {
+    /// The agent's own answer ([`decision_payload`]).
+    pub(super) payload: Value,
+    /// The dispatched spec's resolved model [ORB-16768].
+    pub(super) model: Option<String>,
+    /// The provider observed running the judge, never the agent's claim.
+    pub(super) judge: Option<String>,
+}
+
+/// Dispatch the activity under its configured crew.
 pub(super) fn dispatch_final_recovery(
     ctx: &ExecCtx<'_>,
     step: &JobV2Step,
     activity: &ResolvedRecoveryActivity,
     input: &Value,
-) -> Result<(Value, Option<String>), String> {
+) -> Result<RecoveryDispatch, String> {
     let mut spec = crew_overridden_recovery_spec(activity, ctx, input)
         .map_err(|error| format!("crew: {error}"))?
         .unwrap_or_else(|| activity.spec.clone());
@@ -39,7 +48,43 @@ pub(super) fn dispatch_final_recovery(
     .map_err(|error| error.to_string())?;
     persist_dispatch_invocation(ctx, &activity.name, input, &dispatch);
     if dispatch.success {
-        Ok((dispatch.output, recovery_model))
+        let mut payload = decision_payload(&dispatch.output);
+        if let Some(evidence) = payload
+            .as_object_mut()
+            .and_then(|object| object.remove("repair_evidence"))
+        {
+            // Evidence has no task selector. Only a well-formed decision reaches
+            // the host's writer, using the engine's admitted task and worktree.
+            // The decision's fault fields ride beside it; parsing them is
+            // the caller's.
+            let decision = FinalRecoveryDecision::parse(&payload)
+                .map_err(|error| format!("invalid final recovery decision: {error}"))?;
+            if !matches!(decision, FinalRecoveryDecision::Resume { .. }) {
+                return Err("evidence handoff requires a repair resume decision".into());
+            }
+            let task = input["task_id"].as_str().ok_or("missing recovery task")?;
+            let workspace = input["workspace_path"]
+                .as_str()
+                .ok_or("missing recovery worktree")?;
+            ctx.host
+                .persist_final_recovery_evidence(
+                    &ctx.run_id,
+                    task,
+                    std::path::Path::new(workspace),
+                    &evidence,
+                )
+                .map_err(|error| format!("persist final recovery evidence: {error}"))?;
+        }
+        let judge = dispatch
+            .output
+            .get("provider")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        Ok(RecoveryDispatch {
+            payload,
+            model: recovery_model,
+            judge,
+        })
     } else {
         Err(dispatch
             .message
@@ -123,6 +168,7 @@ pub(super) fn admit_resume_step(
                         "Repair the worktree and resume the run from `{failed}` or an earlier \
                          step after the first, or move the task by hand."
                     ),
+                    summary: None,
                 },
                 None,
                 None,

@@ -1,8 +1,10 @@
-/* Observe › Agents: role tabs, the attribution strip, the ranking with its
-   detail column, "How the score works" and the role panel. The body is one
-   grid: the detail column sits right of the ranking on a wide screen and
-   under it on a phone. The panel row is reserved only while a role panel is
-   rendered, so a role without one leaves no empty track and no gap for it. */
+/* Observe › Agents: role tabs, the ranking with its detail column, the "How
+   the score works" and attribution disclosures and the role panel. The body is
+   one grid: the detail column sits right of the ranking on a wide screen and
+   under it below 1800px, where the widest ranking (eleven columns) cannot sit
+   beside it without clipping its last columns. The panel row is reserved only
+   while a role panel is rendered, so a role without one leaves no empty track
+   and no gap for it. */
 .agents-role-count {
   margin-left: 6px;
   font-size: 12px;
@@ -12,22 +14,19 @@
 }
 #agents-roles .subtab { min-height: 44px; }
 #agents-panel { overflow: clip; }
-.agents-purpose {
-  flex: 1 1 100%;
-  margin: 0;
-  max-width: 820px;
-  color: var(--fg-dim);
-  font-size: 13px;
-  line-height: 1.5;
-}
+/* The figures share the panel header, between the title and the row count. */
+#agents-panel > header .agents-meta { flex: 1 1 320px; min-width: 0; font-weight: 400; }
+/* `.panel > .body` (components.css) zeroes the horizontal inset unless this
+   rule matches its specificity; the grid stays at class specificity so the
+   narrow-width template overrides below still win. */
+.panel > .body.agents-body { padding: 14px 16px 18px; }
 .agents-body {
-  padding: 14px 16px 18px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
   grid-template-areas:
-    "strip strip"
     "ranking detail"
     "how detail"
+    "strip detail"
     ". detail";
   grid-template-rows: auto auto auto 1fr;
   gap: 16px;
@@ -40,42 +39,51 @@
 .agents-detail { grid-area: detail; }
 .agents-how { grid-area: how; }
 /* Without rows there is no detail column for the disclosure to sit beside. */
-.agents-state ~ .agents-how { grid-column: 1 / -1; }
+.agents-state ~ .agents-how,
+.agents-state ~ .agents-strip { grid-column: 1 / -1; }
 .agents-role-panel { grid-area: panel; }
+/* Interactive work spans the body under everything else. */
+.agents-execution { grid-column: 1 / -1; min-width: 0; }
+.agents-execution h3 { margin: 0 0 8px; font-size: 13px; }
+.agents-execution-none { margin: 0 0 8px; color: var(--fg-dim); font-size: 12px; line-height: 1.5; max-width: 820px; }
 /* The panel row exists only with a panel, or its empty track keeps a gap. */
 .agents-body:has(> .agents-role-panel) {
   grid-template-areas:
-    "strip strip"
     "ranking detail"
-    "how detail"
     "panel detail"
+    "how detail"
+    "strip detail"
     ". detail";
   grid-template-rows: auto auto auto auto 1fr;
 }
-/* A role's banner sits under the strip; the row exists only with a banner. */
+/* A role's banner sits above the ranking; the row exists only with a banner. */
 .agents-body:has(> .agents-banner) {
   grid-template-areas:
-    "strip strip"
     "banner banner"
     "ranking detail"
     "how detail"
+    "strip detail"
     ". detail";
   grid-template-rows: auto auto auto auto 1fr;
 }
 .agents-body:has(> .agents-banner):has(> .agents-role-panel) {
   grid-template-areas:
-    "strip strip"
     "banner banner"
     "ranking detail"
-    "how detail"
     "panel detail"
+    "how detail"
+    "strip detail"
     ". detail";
-  grid-template-rows: auto auto auto auto auto 1fr;
+  grid-template-rows: auto auto auto auto auto auto 1fr;
 }
 .agents-body:has(> .agents-banner) > .agents-banner { grid-area: banner; }
 .agents-body h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--fg); }
 .agents-muted { margin: 4px 0 0; color: var(--fg-mute); font-size: 12px; line-height: 1.45; }
 .agents-error { margin: 4px 0 0; color: var(--status-blocked); font-size: 12px; }
+/* The scan behind the ranking, in the header beside its window. A stale scan is
+   also named in its text, so the warning colour is never the only signal. */
+.agents-scan { color: var(--fg-mute); }
+.agents-scan-stale { color: var(--warn-fg); font-weight: 600; }
 
 /* Owners share one palette across the strip, its legend and the panels. */
 .agents-owner-orchestrators { --owner: var(--status-proposed); }
@@ -85,10 +93,10 @@
 .agents-owner-not_scored { --owner: var(--fg-disabled); }
 .agents-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: var(--owner, var(--fg-mute)); flex: 0 0 auto; }
 
-.agents-strip { border: 1px solid var(--border); border-radius: 3px; background: var(--bg-elev); padding: 10px 12px; }
-.agents-strip-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
+.agents-strip-head { flex-wrap: wrap; gap: 4px 12px; }
+.agents-strip-head h3 { margin-right: auto; }
 .agents-strip-total { color: var(--fg-mute); font-family: var(--font-mono); font-size: 11.5px; }
-.agents-strip-bar { display: flex; height: 12px; margin-top: 10px; border-radius: 2px; overflow: hidden; background: var(--hair); }
+.agents-strip-bar { display: flex; height: 12px; margin-top: 4px; border-radius: 2px; overflow: hidden; background: var(--hair); }
 .agents-strip-seg { display: block; height: 100%; background: var(--owner); opacity: 0.45; }
 .agents-strip-seg + .agents-strip-seg { border-left: 1px solid var(--bg-elev); }
 .agents-strip-seg.is-current { opacity: 1; }
@@ -109,14 +117,19 @@ a.agents-strip-entry:hover { color: var(--fg); background: var(--bg-hover); }
 a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .agents-strip-legend li.is-current .agents-strip-entry { color: var(--fg); font-weight: 600; background: var(--bg-selected); }
 .agents-strip-count { font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-mute); }
-.agents-strip-reasons { margin: 2px 0 0; color: var(--fg-mute); font-size: 11.5px; line-height: 1.45; }
-
 .agents-state { border: 1px dashed var(--border); border-radius: 3px; padding: 18px 16px; }
 .agents-state p { margin: 6px 0 0; color: var(--fg-dim); font-size: 13px; line-height: 1.5; max-width: 720px; }
 
 /* Columns past the score scroll sideways; the edge fades show which side has
    more. The local fades cover the scroll shadows once that edge is reached. */
 .agents-table-wrap {
+  /* ORB-24279: the wrapper is the containing block for the hint text hidden
+     in scrolled ranking-table headers, so the 1px text scrolls with the table
+     instead of escaping to the tab pane and widening it sideways (STD-07 R4).
+     Pinned bubbles are position:fixed and escape the wrapper. A plain
+     (non-pinned) info hint bubble inside this wrapper is clipped by it, so
+     table headers use pinnedInfoHint(). */
+  position: relative;
   overflow-x: auto;
   border: 1px solid var(--border);
   border-radius: 3px;
@@ -127,6 +140,7 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
     radial-gradient(farthest-side at 100% 50%, rgba(255, 255, 255, 0.18), transparent) right center / 12px 100% no-repeat scroll,
     var(--bg);
 }
+.agents-ranking-note { margin: 0 0 8px; color: var(--fg-dim); font-size: 12.5px; line-height: 1.4; }
 .agents-table-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .agents-table { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
 .agents-table th,
@@ -182,6 +196,7 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-score-col { min-width: 8rem; }
 .agents-score-col > .agents-bar { width: 88px; vertical-align: middle; }
 .agents-score-value { display: inline-block; min-width: 3.25rem; margin-left: 8px; text-align: right; font-variant-numeric: tabular-nums; color: var(--fg); font-weight: 600; }
+.agents-score-interval { display: block; white-space: nowrap; margin-top: 2px; text-align: right; font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-mute); font-variant-numeric: tabular-nums; }
 .agents-score-note { display: block; white-space: normal; margin-top: 2px; text-align: right; font-family: var(--font-mono); font-size: 10.5px; color: var(--warn-fg); }
 
 .agents-bar { position: relative; display: inline-block; height: 8px; border-radius: 2px; background: var(--hair); }
@@ -233,12 +248,13 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-term-weight { color: var(--fg-mute); font-family: var(--font-mono); font-size: 11px; }
 .agents-bar-centered { width: 100%; }
 .agents-term-value { text-align: right; font-variant-numeric: tabular-nums; color: var(--fg); }
-.agents-stats { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; font-size: 12px; }
-.agents-stats dt { color: var(--fg-dim); }
-.agents-stats dd { margin: 0; text-align: right; color: var(--fg); font-variant-numeric: tabular-nums; }
+.agents-stats { margin: 0; display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 4px 12px; font-size: 12px; }
+.agents-stats dt { min-width: 0; color: var(--fg-dim); overflow-wrap: anywhere; }
+.agents-stats dd { min-width: 0; margin: 0; text-align: right; color: var(--fg); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 
-.agents-how { border: 1px solid var(--border); border-radius: 3px; background: var(--bg-elev); padding: 0 12px; }
-.agents-how > summary {
+/* A collapsed section under the ranking; its summary keeps a 44px target. */
+.agents-disclosure { border: 1px solid var(--border); border-radius: 3px; background: var(--bg-elev); padding: 0 12px; min-width: 0; }
+.agents-disclosure > summary {
   display: flex;
   align-items: center;
   min-height: 44px;
@@ -247,8 +263,10 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
   font-size: 13px;
   font-weight: 600;
 }
-.agents-how > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.agents-how[open] { padding-bottom: 12px; }
+.agents-disclosure > summary::before { content: "▸"; margin-right: 6px; color: var(--fg-mute); font-weight: 400; }
+.agents-disclosure[open] > summary::before { content: "▾"; }
+.agents-disclosure > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.agents-disclosure[open] { padding-bottom: 12px; }
 .agents-how p { margin: 8px 0 0; color: var(--fg-dim); font-size: 12px; line-height: 1.5; max-width: 820px; }
 .agents-formula { font-family: var(--font-mono); color: var(--fg) !important; }
 .agents-how-terms { margin: 0; display: grid; gap: 2px; font-size: 12px; line-height: 1.45; }
@@ -258,20 +276,19 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-weight.negative { color: var(--status-blocked); }
 
 .agents-role-panel { border: 1px solid var(--border); border-radius: 3px; background: var(--bg-elev); padding: 10px 12px; min-width: 0; }
+.agents-role-panel-head { display: flex; align-items: center; }
 .agents-cause-rework_spec { background: var(--status-proposed); }
 .agents-cause-rework_crew { background: var(--status-in-progress); }
 .agents-cause-rework_infrastructure { background: var(--fg-disabled); }
 .agents-cause-rework_no_cause { background: var(--hair); border: 1px solid var(--fg-disabled); box-sizing: border-box; }
 .agents-cause-legend { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--fg-dim); }
 .agents-cause-legend li { display: inline-flex; align-items: center; gap: 6px; }
-.agents-cause-note { color: var(--fg-mute); }
-a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44px; color: var(--accent); }
 .agents-cause-rows { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
 .agents-cause-row { display: grid; grid-template-columns: minmax(6rem, 10rem) minmax(0, 1fr) 6.5rem; align-items: center; gap: 10px; font-size: 12.5px; }
 .agents-cause-name { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agents-cause-bar { display: flex; height: 10px; border-radius: 2px; overflow: hidden; background: var(--hair); }
 .agents-cause-seg { display: block; height: 100%; }
-.agents-banner { border: 1px solid var(--warn-line); border-radius: 3px; background: var(--warn-wash); padding: 8px 12px; }
+.agents-banner { border: 1px solid var(--warn-line); border-radius: 3px; background: var(--warn-wash); padding: 4px 12px; }
 .agents-banner p { margin: 0; color: var(--warn-fg); font-size: 12.5px; line-height: 1.5; }
 .agents-banner strong { font-weight: 600; }
 .agents-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
@@ -296,28 +313,36 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
 .agents-outcome-outcome_unresolved { background: var(--hair); border: 1px solid var(--fg-disabled); box-sizing: border-box; }
 .agents-cause-total { text-align: right; color: var(--fg-mute); font-family: var(--font-mono); font-size: 11.5px; }
 
-@media (max-width: 900px) {
+/* The detail column stacks under the ranking below 1800px. The widest ranking
+   (eleven columns) is about 1050px wide; beside the 360px detail column it fits
+   from a viewport of about 1700px, and 1800px leaves room for longer crew and
+   model names. At 1440px the side-by-side ranking showed about 790px and clipped
+   its last columns. Stacked, the ranking takes the full body width, so every
+   column fits without scrolling down to about 1325px; narrower, it scrolls
+   within its own box. */
+@media (max-width: 1800px) {
   .agents-body {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "strip" "ranking" "detail" "how";
+    grid-template-areas: "ranking" "detail" "how" "strip";
     grid-template-rows: none;
   }
   .agents-body:has(> .agents-role-panel) {
-    grid-template-areas: "strip" "ranking" "detail" "how" "panel";
+    grid-template-areas: "ranking" "detail" "panel" "how" "strip";
     grid-template-rows: none;
   }
   .agents-body:has(> .agents-banner) {
-    grid-template-areas: "strip" "banner" "ranking" "detail" "how";
+    grid-template-areas: "banner" "ranking" "detail" "how" "strip";
     grid-template-rows: none;
   }
   .agents-body:has(> .agents-banner):has(> .agents-role-panel) {
-    grid-template-areas: "strip" "banner" "ranking" "detail" "how" "panel";
+    grid-template-areas: "banner" "ranking" "detail" "panel" "how" "strip";
     grid-template-rows: none;
   }
 }
 
 @media (max-width: 640px) {
-  .agents-body { padding: 10px; gap: 12px; }
+  .panel > .body.agents-body { padding: 10px; }
+  .agents-body { gap: 12px; }
   .agents-cause-row { grid-template-columns: minmax(0, 1fr) 5.5rem; }
   .agents-cause-row .agents-cause-bar { grid-column: 1 / -1; grid-row: 2; }
   /* Rank, crew and score fit the phone-width box together. */
@@ -327,8 +352,13 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
   .agents-score-col > .agents-bar { width: 40px; }
   .agents-score-value { min-width: 0; margin-left: 6px; }
   #agents-roles { overflow-x: auto; scrollbar-width: none; }
-  /* Count and calendar windows together outgrow a phone: wrap them. */
-  #agents-window-selector { flex-wrap: wrap; max-width: 100%; }
+  /* Count and calendar windows together outgrow a phone: wrap them. Rank
+     adds its own window, the settled/live board and the execution selector. */
+  #agents-window-selector,
+  #agents-rank-window-selector,
+  #agents-settle-selector,
+  #agents-execution-selector { flex-wrap: wrap; max-width: 100%; }
+  #agents-tier { height: 44px; }
 }
 
 /* Pilots: one assessed-by-observed tier matrix per row. */
@@ -351,8 +381,384 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
   .agents-tier-matrix td { padding: 6px; }
 }
 
-.agents-tier-control { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; }
-.agents-tier-control select { min-height: 44px; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font: inherit; }
+/* A role's own controls: `hidden` must beat the group's inline-flex. */
+#agents-controls [hidden] { display: none; }
+#agents-tier { height: 28px; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 3px; padding: 0 6px; font-size: 12px; }
+#agents-tier-unavailable { margin: 0; }
 
-/* Recorded effort populations wrap inside the existing crew identity column. */
-.agents-effort { display: block; white-space: normal; max-width: 30ch; overflow-wrap: anywhere; }
+/* Rank is one column: its sections are not the scorecard's ranking/detail grid. */
+.agents-body.agents-body-rank {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: none;
+}
+.agents-body.agents-body-rank > * {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+.agents-provisional {
+  margin-left: 8px;
+  color: var(--warn-fg);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.agents-rank-banner {
+  margin: 0;
+  color: var(--fg-dim);
+  font-size: 13px;
+  line-height: 1.45;
+  max-width: 70ch;
+}
+.agents-rank-banner-provisional { color: var(--warn-fg); font-weight: 600; }
+/* The noise-scale notice is a compact inline notice, not a full banner. */
+.agents-rank-banner-scales {
+  padding: 10px 14px;
+  border: 1px solid var(--warn-line);
+  border-radius: var(--radius-panel);
+  background: var(--warn-wash);
+  color: var(--warn-fg);
+  font-size: 12.5px;
+  max-width: none;
+}
+/* Rank summary strip: four stats divided by hairlines, wrapping on a phone. */
+.agents-rank-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius-panel); overflow: hidden; }
+.agents-rank-stat { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 14px 16px; background: var(--bg-elev); }
+.agents-rank-stat-label { color: var(--fg-mute); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+.agents-rank-stat-value { color: var(--fg); font-size: 22px; font-weight: 500; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.agents-rank-stat-rest { color: var(--fg-mute); font-size: 13px; font-weight: 400; }
+
+/* The refined rank table: one tbody per band, every whisker on one score
+   axis. The table keeps its columns and scrolls in its own box on a narrow
+   screen, so the page itself never scrolls sideways (STD-07 §R4). */
+.agents-rank-board { display: flex; flex-direction: column; gap: 0; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--bg-elev); overflow: hidden; }
+.agents-rank-board > .agents-rank-note { padding: 14px 16px; margin: 0; }
+.agents-rank-ladder-wrap { border: 0; border-radius: 0; }
+.agents-rank-ladder { width: 100%; min-width: 1040px; }
+.agents-rank-ladder thead th { vertical-align: bottom; padding-top: 12px; }
+.agents-rank-ladder td { padding-top: 7px; padding-bottom: 7px; border-bottom: 1px solid var(--hair); }
+.agents-rank-ladder .agents-num { min-width: 3.5rem; }
+.agents-rank-chev-col { width: 36px; text-align: center; }
+.agents-rank-interval-col { min-width: 220px; width: 34%; }
+.agents-rank-ladder thead .agents-rank-interval-col { white-space: normal; }
+.agents-rank-axis-head { position: relative; height: 14px; margin-top: 6px; font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0; text-transform: none; color: var(--fg-mute); }
+.agents-rank-axis-head span { position: absolute; transform: translateX(-50%); }
+.agents-rank-axis-head span.is-100 { color: var(--fg); font-weight: 600; }
+/* A band boundary is a stronger rule than the hairline between rows. */
+.agents-rank-band .agents-rank-row.is-band-start > td { border-top: 2px solid var(--border-strong, var(--border)); }
+.agents-rank-band:first-of-type .agents-rank-row.is-band-start > td { border-top: 0; }
+.agents-rank-label { font-family: var(--font-mono); font-size: 13px; font-weight: 500; color: var(--fg); }
+.agents-rank-score { color: var(--fg); font-size: 13px; font-weight: 600; }
+.agents-rank-model { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.agents-rank-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+/* In the rank table the dot sits beside the model name's first line, not the middle of the two-line cell. */
+.agents-rank-model-cell .agents-rank-model { align-items: flex-start; }
+.agents-rank-model-cell .agents-rank-dot { margin-top: 5px; }
+.agents-rank-model-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.agents-rank-model-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; line-height: 18px; }
+.agents-rank-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-height: 44px;
+  padding: 0;
+  color: var(--fg-mute);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  cursor: pointer;
+}
+.agents-rank-toggle:hover { background: var(--bg-hover); color: var(--fg); }
+.agents-rank-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.agents-rank-model-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.agents-rank-crew { color: var(--fg-mute); font-family: var(--font-mono); font-size: 11px; white-space: normal; overflow-wrap: anywhere; line-height: 1.35; }
+.agents-rank-single-tier { flex: none; color: var(--fg-mute); font-family: var(--font-mono); font-size: 11px; white-space: nowrap; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1px 5px; }
+.agents-rank-chevron { color: var(--fg-mute); font-size: 10px; transition: transform 120ms ease; }
+.agents-rank-toggle[aria-expanded="true"] .agents-rank-chevron { transform: rotate(90deg); color: var(--fg); }
+.agents-rank-row { cursor: pointer; }
+.agents-rank-row:hover > td { background: var(--bg-hover); }
+.agents-rank-row > td { vertical-align: middle; }
+.agents-rank-detail > td { background: var(--bg-well); border-bottom: 1px solid var(--hair); white-space: normal; }
+
+/* The whisker: the p10–p90 interval as a bar and the score as a tick, both
+   in the provider colour, on the header's shared axis. */
+.agents-rank-whisker { position: relative; height: 22px; --provider-line: color-mix(in srgb, var(--provider, var(--fg-mute)) 55%, transparent); }
+.agents-rank-grid { position: absolute; top: 2px; bottom: 2px; width: 1px; background: var(--hair); }
+.agents-rank-grid.is-100 { background: var(--border-strong, var(--border)); top: 0; bottom: 0; }
+.agents-rank-whisker-line { position: absolute; top: 7px; height: 7px; background: color-mix(in srgb, var(--provider, var(--fg-mute)) 20%, transparent); box-shadow: inset 0 0 0 1px var(--provider-line); border-radius: 4px; }
+.agents-rank-whisker-tick { position: absolute; top: 5px; width: 3px; height: 11px; margin-left: -1.5px; border-radius: 1px; background: var(--provider, var(--fg-mute)); }
+
+/* Contribution values in the breakdown: blue helps, amber hurts. */
+.agents-rank-contrib { color: var(--fg-mute); font-variant-numeric: tabular-nums; }
+.agents-rank-contrib.is-up { color: var(--accent); }
+.agents-rank-contrib.is-down { color: var(--status-proposed); }
+
+/* Cost per task with its ratio to the fleet. Below 1× is the accent in a
+   lighter tint; above 1× is warm and darker, so the two never rely on hue
+   alone. */
+.agents-rank-cost { display: inline-flex; align-items: baseline; justify-content: flex-end; gap: 8px; font-variant-numeric: tabular-nums; }
+.agents-rank-per-task { color: var(--fg); font-size: 13px; }
+.agents-rank-ratio { font-size: 11.5px; min-width: 44px; text-align: right; }
+.agents-rank-ratio.is-cheaper { color: var(--accent); font-weight: 500; }
+.agents-rank-ratio.is-dearer { color: var(--status-proposed); font-weight: 600; }
+.agents-rank-cost.is-unknown { color: var(--fg-mute); font-weight: 400; }
+
+/* Tier mix: the task count beside one small stacked bar, low to xhard
+   getting lighter. */
+.agents-rank-mixcell { display: inline-flex; align-items: center; gap: 10px; min-width: 168px; }
+.agents-rank-units { font-variant-numeric: tabular-nums; font-size: 13px; min-width: 32px; text-align: right; }
+.agents-rank-mix { display: flex; flex: 1; height: 6px; overflow: hidden; border-radius: 3px; background: var(--bg-well); gap: 1px; }
+.agents-rank-landed { color: var(--fg-dim); }
+.agents-rank-mix-low { background: #3d4552; }
+.agents-rank-mix-medium { background: #6b7686; }
+.agents-rank-mix-hard { background: #b4bcc8; }
+.agents-rank-mix-xhard { background: var(--fg-strong); }
+.agents-rank-mix-unassessed { background: repeating-linear-gradient(135deg, var(--fg-disabled) 0 2px, transparent 2px 4px); }
+.agents-rank-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; padding: 10px 16px; border-top: 1px solid var(--border); color: var(--fg-mute); font-size: 11.5px; }
+.agents-rank-legend-tiers { display: inline-flex; align-items: center; gap: 12px; margin-left: auto; }
+.agents-rank-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.agents-rank-legend-swatch { width: 10px; height: 8px; border-radius: 2px; flex: none; }
+
+/* Rank disclosures keep their controls below the table and keyboard reachable. */
+.agents-rank-disclosure { min-height: 44px; padding: 0 12px; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; font: inherit; cursor: pointer; }
+.agents-rank-disclosure:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.agents-rank-board > .agents-rank-disclosure { margin: 8px 16px; }
+.agents-rank-box { min-width: 0; padding: 16px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-panel); }
+.agents-rank-box-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; margin-bottom: 10px; }
+.agents-rank-box-head h3,
+.agents-rank-box-head h4 { margin: 0; font-size: 14px; font-weight: 600; }
+.agents-rank-box-count { color: var(--fg-mute); font-weight: 400; font-family: var(--font-mono); font-size: 12px; }
+.agents-rank-box-meta { color: var(--fg-mute); font-size: 12px; }
+.agents-rank-pending-list { margin: 0; padding: 0; list-style: none; }
+/* Two lines at pair width: name, preview score and tasks on the first, the
+   gate progress underneath, so no label or count is squeezed or truncated. */
+.agents-rank-pending-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 2px 12px; align-items: center; min-height: 38px; padding: 4px 0; font-variant-numeric: tabular-nums; color: var(--fg-dim); }
+.agents-rank-pending-gatecell { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; min-width: 0; }
+.agents-rank-progress { display: block; width: 96px; flex: none; height: 4px; overflow: hidden; border-radius: 2px; background: var(--bg-well); }
+.agents-rank-progress > span { display: block; height: 100%; border-radius: 2px; background: var(--fg-disabled); }
+.agents-rank-pending-gate { color: var(--fg-mute); font-size: 12px; }
+.agents-rank-pending-score { color: var(--fg-dim); }
+.agents-rank-reasons { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.agents-rank-reasons li { display: grid; grid-template-columns: minmax(110px, 140px) 1fr 40px; gap: 10px; align-items: center; font-size: 12px; font-variant-numeric: tabular-nums; }
+.agents-rank-reason-key { color: var(--fg-dim); font-family: var(--font-mono); font-size: 11px; overflow-wrap: anywhere; }
+.agents-rank-reason-bar { display: block; height: 6px; overflow: hidden; border-radius: 3px; background: var(--bg-well); }
+.agents-rank-reason-bar > span { display: block; height: 100%; background: #6b7686; }
+.agents-rank-reasons .agents-num { color: var(--fg-mute); text-align: right; }
+.agents-rank-pending-gate { min-width: 0; overflow-wrap: anywhere; }
+
+/* Not ranked beside Not scored: two top-aligned columns on a wide screen,
+   stacked (Not ranked first) below 900px, the breakpoint the breakdown
+   columns already stack at. Each column then holds about 430px or more,
+   which the two-line pending rows and the reason bars fit without sideways
+   scroll (STD-07 §R4, §R23). Collapsed, Not ranked is only its toggle, so
+   the pair goes single-column and Not scored takes the full width. */
+.agents-rank-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.agents-rank-pair:has(> .agents-rank-notranked > [hidden]) { grid-template-columns: minmax(0, 1fr); }
+.agents-rank-pair .agents-rank-reasons li { grid-template-columns: minmax(96px, 128px) minmax(0, 1fr) 40px; }
+@media (max-width: 900px) {
+  .agents-rank-pair { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Score against cost: one chart with a tier switch, and its table beside it. */
+.agents-rank-frontier { display: flex; flex-direction: column; gap: 12px; }
+.agents-rank-frontier-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px 16px; }
+.agents-rank-frontier-title { display: flex; align-items: center; gap: 8px; }
+.agents-rank-frontier-title h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.agents-rank-tiers { display: flex; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--font-mono); font-size: 12px; }
+.agents-rank-tier { min-height: 44px; padding: 0 18px; color: var(--fg-dim); background: transparent; border: 0; font: inherit; cursor: pointer; }
+.agents-rank-tier + .agents-rank-tier { border-left: 1px solid var(--border); }
+.agents-rank-tier.on { color: var(--fg); background: var(--bg-selected); font-weight: 500; }
+.agents-rank-tier:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.agents-rank-tier-count { color: var(--fg-mute); }
+.agents-rank-frontier-body { display: flex; flex-wrap: wrap; gap: 16px; align-items: stretch; }
+/* min-width 0: the plot is drawn at this box's width, so it must not hold the box open. */
+.agents-rank-chart { flex: 999 1 600px; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.agents-rank-chart .agents-rank-legend { padding: 0; }
+.agents-rank-plot-wrap { min-width: 0; overflow-x: auto; }
+.agents-rank-plot-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Drawn 1:1 in CSS px (width and height attributes), never scaled: chart text matches the table. */
+.agents-rank-plot { display: block; max-width: none; }
+.agents-rank-gridline { stroke: var(--hair); stroke-width: 1; }
+.agents-rank-axisline { stroke: var(--border); stroke-width: 1; }
+.agents-rank-tick { fill: var(--fg-mute); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.agents-rank-axis-title { fill: var(--fg-mute); font-size: 12px; }
+.agents-rank-corner { fill: var(--fg-mute); font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.04em; }
+.agents-rank-fleet { stroke: var(--fg-disabled); stroke-width: 1; stroke-dasharray: 5 4; }
+.agents-rank-front { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 5; }
+.agents-rank-mark { fill: var(--bg-elev); stroke: var(--fg-disabled); stroke-width: 2; }
+.agents-rank-point.is-frontier .agents-rank-mark { fill: var(--accent); stroke: var(--accent); }
+.agents-rank-point.is-underpriced .agents-rank-mark { stroke: var(--fg-mute); stroke-dasharray: 3 2; }
+.agents-rank-leader { stroke: var(--border-strong); stroke-width: 1; }
+.agents-rank-point-name { fill: var(--fg-dim); font-size: 12.5px; font-weight: 500; }
+.agents-rank-point.is-frontier .agents-rank-point-name { fill: var(--fg); }
+/* A point is hoverable and focusable as a whole: mark, leader and name. Its figures show in the tooltip. */
+.agents-rank-point { cursor: default; outline: none; }
+.agents-rank-point:hover .agents-rank-mark,
+.agents-rank-point:focus-visible .agents-rank-mark { stroke: var(--fg); }
+.agents-rank-point:hover .agents-rank-point-name,
+.agents-rank-point:focus-visible .agents-rank-point-name { fill: var(--fg); }
+.agents-rank-point:focus-visible .agents-rank-mark { stroke-width: 3; }
+.agents-rank-tip-box { fill: var(--bg-elev); stroke: var(--border-strong); stroke-width: 1; }
+.agents-rank-tip-text { fill: var(--fg); font-size: 12px; font-variant-numeric: tabular-nums; }
+.agents-rank-tip-text.is-name { font-weight: 500; }
+.agents-rank-key { display: inline-block; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--fg-disabled); box-sizing: border-box; }
+.agents-rank-key.is-frontier { background: var(--accent); border-color: var(--accent); }
+.agents-rank-key.is-underpriced { border-style: dashed; border-color: var(--fg-mute); }
+.agents-rank-tier-table { flex: 1 1 380px; display: flex; flex-direction: column; gap: 10px; }
+.agents-rank-tier-table h4 { margin: 0; font-size: 14px; font-weight: 600; }
+.agents-rank-tier-table .agents-table-wrap { border: 0; background: transparent; }
+/* Fixed columns: the model name takes what is left and truncates. */
+.agents-rank-tier-table .agents-table { width: 100%; min-width: 0; table-layout: fixed; }
+.agents-rank-tier-table th:nth-child(2) { width: 56px; }
+.agents-rank-tier-table th:nth-child(3) { width: 64px; }
+.agents-rank-tier-table th:nth-child(4) { width: 52px; }
+.agents-rank-tier-table thead th.agents-num { min-width: 0; }
+.agents-rank-tier-table td:first-child { overflow: hidden; }
+/* The badge wraps under the name rather than squeezing it. */
+.agents-rank-tier-table .agents-rank-model { flex-wrap: wrap; row-gap: 2px; }
+.agents-rank-tier-table .agents-rank-model-name { max-width: calc(100% - 16px); }
+.agents-rank-tier-table tr.is-underpriced .agents-rank-model-name { color: var(--fg-dim); }
+.agents-rank-badge { flex: none; padding: 2px 6px; color: var(--accent-hi); background: var(--accent-wash); border-radius: 4px; font-family: var(--font-mono); font-size: 10px; }
+.agents-rank-skipped { padding-top: 10px; border-top: 1px solid var(--border); color: var(--fg-mute); font-size: 12px; }
+.agents-rank-skipped h5 { margin: 0 0 6px; color: var(--fg-dim); font-size: 12px; font-weight: 500; }
+.agents-rank-skipped ul { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+
+/* The breakdown: contributions, by-tier and delivery in three columns that
+   stack on a narrow screen. No second border inside the detail row. */
+.agents-rank-breakdown { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 0.8fr); gap: 28px; padding: 6px 16px 22px 84px; }
+.agents-rank-breakdown-col { display: flex; flex-direction: column; gap: 8px; padding-top: 14px; min-width: 0; }
+.agents-rank-breakdown-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.agents-rank-breakdown-title { font-size: 12px; font-weight: 600; color: var(--fg); }
+.agents-rank-breakdown-sub { font-size: 11px; color: var(--fg-mute); font-family: var(--font-mono); }
+.agents-rank-contrib-row { display: grid; grid-template-columns: minmax(0, 1fr) 28px 140px 52px; align-items: center; gap: 10px; font-size: 12.5px; min-height: 22px; }
+.agents-rank-contrib-label { color: var(--fg-dim); overflow-wrap: anywhere; }
+.agents-rank-contrib-label.is-unmeasured { color: var(--fg-mute); }
+.agents-rank-contrib-weight { font-family: var(--font-mono); font-size: 11px; color: var(--fg-mute); text-align: right; }
+.agents-rank-contrib-track { position: relative; height: 8px; display: block; }
+.agents-rank-contrib-zero { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: var(--border); }
+.agents-rank-contrib-fill { position: absolute; top: 0; height: 8px; border-radius: 2px; }
+.agents-rank-contrib-fill.is-up { background: var(--accent); }
+.agents-rank-contrib-fill.is-down { background: var(--status-proposed); }
+.agents-rank-contrib-value { text-align: right; font-family: var(--font-mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+.agents-rank-contrib-value.is-up { color: var(--accent-hi, var(--accent)); }
+.agents-rank-contrib-value.is-down { color: var(--status-proposed); }
+.agents-rank-contrib-value.is-unmeasured { color: var(--fg-mute); font-family: var(--font-sans); }
+.agents-rank-tier-grid { display: grid; grid-template-columns: 1fr 52px 60px 64px; gap: 0 10px; align-items: center; font-size: 12.5px; font-variant-numeric: tabular-nums; min-height: 24px; border-top: 1px solid var(--hair); }
+.agents-rank-tier-grid .agents-num { text-align: right; }
+.agents-rank-tier-head { border-top: 0; min-height: 0; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-mute); padding-bottom: 4px; }
+.agents-rank-tier-grid.is-thin { opacity: 0.45; }
+.agents-rank-tier-name { display: flex; align-items: center; gap: 8px; }
+.agents-rank-delivery { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--fg-dim); }
+.agents-rank-delivery-row { display: flex; justify-content: space-between; gap: 12px; }
+.agents-rank-delivery-value { font-family: var(--font-mono); color: var(--fg); text-align: right; overflow-wrap: anywhere; }
+.agents-rank-note { margin: 4px 0 0; color: var(--fg-dim); font-size: 12.5px; line-height: 1.45; max-width: 78ch; }
+.agents-rank-how-list { margin: 8px 0 0; padding-left: 18px; color: var(--fg-dim); font-size: 12.5px; line-height: 1.45; }
+
+@media (max-width: 900px) {
+  .agents-rank-breakdown { grid-template-columns: minmax(0, 1fr); gap: 4px; padding-left: 16px; }
+}
+
+@media (max-width: 640px) {
+  .agents-rank-tiers { width: 100%; }
+  .agents-rank-tier { flex: 1; padding: 0 8px; }
+  .agents-rank-tier-table .agents-table-wrap { overflow-x: auto; }
+  .agents-rank-tier-table th:nth-child(2) { width: 48px; }
+  .agents-rank-tier-table th:nth-child(3) { width: 56px; }
+  .agents-rank-tier-table th:nth-child(4) { width: 44px; }
+}
+
+/* Completed-invocation usage sits on its own line under the row label and
+   spans the detail column. The label is prose; the crew/effort counts are mono. */
+.agents-effort {
+  flex: 1 0 100%;
+  margin: 2px 0 0;
+  color: var(--fg-mute);
+  font: 12px/1.45 var(--font-sans);
+  overflow-wrap: anywhere;
+}
+.agents-effort-values { font-family: var(--font-mono); font-size: 11px; }
+
+/* Implementers: regression rate by change size. Twenty categorical series
+   colours, assigned by a series' place in the window's list so toggling one
+   crew never recolours another; each set uses `currentColor`. */
+.agents-curve-s0 { color: #7aa7ff; }
+.agents-curve-s1 { color: #f2b24c; }
+.agents-curve-s2 { color: #5cd6b0; }
+.agents-curve-s3 { color: #e08ad8; }
+.agents-curve-s4 { color: #c6d65c; }
+.agents-curve-s5 { color: #ff8f80; }
+.agents-curve-s6 { color: #a99bff; }
+.agents-curve-s7 { color: #6fcbee; }
+.agents-curve-s8 { color: #ff7f0e; }
+.agents-curve-s9 { color: #2ca02c; }
+.agents-curve-s10 { color: #d62728; }
+.agents-curve-s11 { color: #9467bd; }
+.agents-curve-s12 { color: #c49a6c; }
+.agents-curve-s13 { color: #f032e6; }
+.agents-curve-s14 { color: #bcbd22; }
+.agents-curve-s15 { color: #17becf; }
+.agents-curve-s16 { color: #aec7e8; }
+.agents-curve-s17 { color: #98df8a; }
+.agents-curve-s18 { color: #ff9896; }
+.agents-curve-s19 { color: #e5d8bd; }
+.agents-curves-control { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; }
+.agents-curves-control select { min-height: 44px; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font: inherit; }
+.agents-curves-cohort { margin-top: 8px; }
+.agents-curves-picker { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.agents-curves-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: 12.5px;
+  color: var(--fg);
+  cursor: pointer;
+}
+.agents-curves-pick:has(input:checked) { border-color: var(--accent-line); background: var(--accent-wash); }
+.agents-curves-pick:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.agents-curves-pick.is-undrawn .agents-curves-crew { color: var(--fg-mute); }
+.agents-curves-pick input { margin: 0; accent-color: var(--accent); }
+.agents-curves-swatch { width: 12px; height: 3px; border-radius: 1px; background: currentColor; }
+.agents-curves-crew { font-family: var(--font-mono); overflow-wrap: anywhere; }
+.agents-curves-n { color: var(--fg-mute); font-family: var(--font-mono); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.agents-curves-picker-note { margin: 8px 0 0; color: var(--fg-mute); font-size: 11.5px; line-height: 1.4; }
+.agents-curves-chart { margin-top: 10px; min-width: 0; overflow-x: auto; }
+.agents-curves-chart:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Drawn 1:1 in CSS px (width/height attributes), never scaled: chart text matches the panel text (STD-07 §R35). */
+.agents-curves-plot { display: block; max-width: none; }
+.agents-curves-grid { stroke: var(--hair); stroke-width: 1; }
+.agents-curves-tick { fill: var(--fg-mute); font-family: var(--font-mono); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.agents-curves-axis { fill: var(--fg-dim); font-size: 12px; }
+/* Bands only for the hovered/focused series, so many series stay legible. */
+/* Pointer-transparent: a hidden band must not catch the hover meant for a marker drawn beneath it. */
+.agents-curves-band { fill: currentColor; fill-opacity: 0; stroke: none; pointer-events: none; transition: fill-opacity 120ms ease; }
+.agents-curves-series.is-active .agents-curves-band { fill-opacity: 0.14; }
+.agents-curves-line { fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; }
+.agents-curves-whisker { stroke: currentColor; stroke-width: 2; stroke-opacity: 0.65; stroke-linecap: round; }
+.agents-curves-marker { fill: currentColor; stroke: var(--bg-elev); stroke-width: 1.5; outline: none; }
+.agents-curves-marker.is-sparse { fill: var(--bg-elev); stroke: currentColor; stroke-width: 2; }
+.agents-curves-marker:focus-visible { stroke: var(--fg); stroke-width: 2.5; }
+.agents-curves-tip-box { fill: var(--bg-elev); stroke: var(--border-strong); stroke-width: 1; }
+.agents-curves-tip-text { fill: var(--fg); font-size: 12px; font-variant-numeric: tabular-nums; }
+.agents-curves-empty { margin: 10px 0 0; color: var(--fg-dim); font-size: 12.5px; }
+.agents-curves-data { margin-top: 8px; font-size: 12.5px; }
+.agents-curves-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 3px; }
+.agents-curves-table-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.agents-curves-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.agents-curves-table th,
+.agents-curves-table td { padding: 6px 8px; border-bottom: 1px solid var(--hair); text-align: left; white-space: nowrap; }
+.agents-curves-table thead th { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-dim); font-weight: 500; }
+.agents-curves-table tbody th { color: var(--fg); font-family: var(--font-mono); font-weight: 400; }
+.agents-curves-table .agents-num { text-align: right; font-variant-numeric: tabular-nums; }
+.agents-curves-table .agents-row-below td { color: var(--fg-mute); }
+.agents-curves-data summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--fg-dim); }

@@ -5,7 +5,6 @@ use crate::providers::codex::codex_cli::CodexCliTransport;
 use crate::runtime::{AgentRuntime, AgentRuntimeFactory};
 use crate::types::{AgentInvocationSpec, AgentRequest};
 use orbit_common::OrbitError;
-use orbit_types::telemetry::InvocationTrace;
 
 const RUNTIME_KEY: &str = "codex";
 /// `CODEX_HOME` is non-secret state-root context: the sandbox grants exactly
@@ -16,7 +15,6 @@ const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH", "CODEX_HOME"];
 pub(crate) struct CodexRuntime {
     command: String,
     cli: CodexCliTransport,
-    runtime_key: &'static str,
     required_env_vars: &'static [&'static str],
 }
 
@@ -26,13 +24,11 @@ impl CodexRuntime {
     pub(crate) fn new(
         command: String,
         cli: CodexCliTransport,
-        runtime_key: &'static str,
         required_env_vars: &'static [&'static str],
     ) -> Self {
         Self {
             command,
             cli,
-            runtime_key,
             required_env_vars,
         }
     }
@@ -102,7 +98,6 @@ impl AgentRuntimeFactory for CodexFactory {
                     writable_dirs.clone(),
                     *allow_login_shell,
                 ),
-                self.key(),
                 self.required_env_vars(),
             ))),
             _ => Err(OrbitError::InvalidInput(format!(
@@ -114,27 +109,80 @@ impl AgentRuntimeFactory for CodexFactory {
 }
 
 impl AgentRuntime for CodexRuntime {
-    fn invoke(
-        &self,
-        req: AgentRequest,
-    ) -> Result<(AgentInvocationSpec, InvocationTrace), OrbitError> {
-        // Note: stdout_schema_json is intentionally None — Codex rejects Orbit's
-        // generic envelope schema because open-ended object branches must be closed
-        // with additionalProperties=false. Orbit validates the returned envelope
-        // after execution instead.
-        Ok((
-            crate::providers::build_invocation_spec(
-                self.runtime_key,
-                self.required_env_vars,
-                self.command.clone(),
-                self.cli.args(),
-                self.cli.stdin(&req.envelope_json),
-            ),
-            InvocationTrace::default(),
+    fn invoke(&self, req: AgentRequest) -> Result<AgentInvocationSpec, OrbitError> {
+        Ok(crate::providers::build_invocation_spec(
+            self.required_env_vars,
+            self.command.clone(),
+            self.cli.args(req.conversation_ref.as_deref()),
+            self.cli.stdin(&req.envelope_json),
         ))
     }
 
     fn model_name(&self) -> Option<&str> {
         self.cli.model_name()
     }
+
+    fn supports_continuity(&self) -> bool {
+        true
+    }
+
+    /// A resume failed only when Codex could not use the stored session: the
+    /// run did not complete, and its diagnostics name a missing, unknown or
+    /// expired session. A `type:error` frame alone is a transient notice (for
+    /// example `Reconnecting...`) that a turn survives, and a failure for any
+    /// other reason (auth, network, model) must surface rather than re-run the
+    /// brief.
+    fn resume_failed(&self, exit_code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> bool {
+        let mut turn_failed = false;
+        let mut turn_completed = false;
+        let mut diagnostics = String::from_utf8_lossy(stderr).into_owned();
+        for (_, frame) in crate::providers::usage_window::top_level_frames(stdout) {
+            match frame.get("type").and_then(serde_json::Value::as_str) {
+                Some("turn.completed") => {
+                    turn_completed = true;
+                    turn_failed = false;
+                }
+                Some("turn.failed") => {
+                    turn_failed = true;
+                    turn_completed = false;
+                    push_frame_message(&mut diagnostics, &frame);
+                }
+                Some("error") => push_frame_message(&mut diagnostics, &frame),
+                _ => {}
+            }
+        }
+        let run_succeeded = exit_code == Some(0) && !turn_failed || turn_completed;
+        !run_succeeded && names_unusable_session(&diagnostics)
+    }
+}
+
+fn push_frame_message(diagnostics: &mut String, frame: &serde_json::Value) {
+    for pointer in ["/message", "/error/message"] {
+        if let Some(message) = frame.pointer(pointer).and_then(serde_json::Value::as_str) {
+            diagnostics.push('\n');
+            diagnostics.push_str(message);
+        }
+    }
+}
+
+/// Whether diagnostics say the resumed session is missing, unknown or expired.
+fn names_unusable_session(diagnostics: &str) -> bool {
+    const MARKERS: &[&str] = &[
+        "no saved session",
+        "no rollout found",
+        "session not found",
+        "conversation not found",
+        "thread not found",
+        "unknown session",
+        "invalid session",
+    ];
+    const AUTH_WORDS: &[&str] = &["token", "auth", "login", "log in", "credential", "api key"];
+    let lower = diagnostics.to_ascii_lowercase();
+    if MARKERS.iter().any(|marker| lower.contains(marker)) {
+        return true;
+    }
+    // An expired session, unless it is the account login that expired.
+    lower.contains("session")
+        && lower.contains("expired")
+        && !AUTH_WORDS.iter().any(|word| lower.contains(word))
 }

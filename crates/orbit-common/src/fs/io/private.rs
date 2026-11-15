@@ -1,6 +1,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 #[cfg(unix)]
 const PRIVATE_FILE_MODE: u32 = 0o600;
@@ -51,6 +51,155 @@ pub fn create_private_dir(path: &Path) -> io::Result<()> {
     {
         fs::create_dir(path)
     }
+}
+
+/// Why [`create_private_dir_chain`] refused a directory chain.
+#[derive(Debug)]
+pub enum PrivateDirError {
+    /// A component is a symlink; its target was never followed.
+    Symlink {
+        /// The offending path.
+        path: PathBuf,
+    },
+    /// A component exists but is not a directory.
+    NotDirectory {
+        /// The offending path.
+        path: PathBuf,
+    },
+    /// A component is owned by another user (Unix only).
+    ForeignOwner {
+        /// The offending path.
+        path: PathBuf,
+        /// The uid that owns `path`.
+        uid: u32,
+    },
+    /// Creating or inspecting a component failed.
+    Io {
+        /// The offending path.
+        path: PathBuf,
+        /// The underlying I/O error.
+        source: io::Error,
+    },
+}
+
+impl PrivateDirError {
+    /// The offending path.
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Symlink { path }
+            | Self::NotDirectory { path }
+            | Self::ForeignOwner { path, .. }
+            | Self::Io { path, .. } => path,
+        }
+    }
+}
+
+impl std::fmt::Display for PrivateDirError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Symlink { path } => {
+                write!(
+                    formatter,
+                    "private directory path `{}` is a symlink",
+                    path.display()
+                )
+            }
+            Self::NotDirectory { path } => {
+                write!(
+                    formatter,
+                    "private directory path `{}` is not a directory",
+                    path.display()
+                )
+            }
+            Self::ForeignOwner { path, uid } => {
+                write!(
+                    formatter,
+                    "private directory `{}` is owned by uid {uid}, not this host",
+                    path.display()
+                )
+            }
+            Self::Io { path, source } => {
+                write!(
+                    formatter,
+                    "private directory `{}`: {source}",
+                    path.display()
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for PrivateDirError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
+
+/// Create `root/relative` one component at a time, refusing unsafe components.
+///
+/// Each component of `relative` is created with [`create_private_dir`]
+/// (an existing entry is tolerated), then re-inspected without following
+/// links. A symlink, a non-directory, or — on Unix — a directory owned by
+/// another uid is refused with the offending path. The non-Unix fallback
+/// creates and checks directory-ness only, as [`create_private_dir`] does.
+pub fn create_private_dir_chain(root: &Path, relative: &Path) -> Result<PathBuf, PrivateDirError> {
+    #[cfg(unix)]
+    // SAFETY: `geteuid` only reads the calling process's credentials.
+    let euid = unsafe { libc::geteuid() };
+    let mut dir = root.to_path_buf();
+    for component in relative.components() {
+        match component {
+            Component::Normal(name) => dir.push(name),
+            Component::CurDir => continue,
+            _ => {
+                return Err(PrivateDirError::Io {
+                    path: root.join(relative),
+                    source: io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!(
+                            "private directory path `{}` must not contain traversal components",
+                            relative.display()
+                        ),
+                    ),
+                });
+            }
+        }
+        match create_private_dir(&dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(PrivateDirError::Io {
+                    path: dir.clone(),
+                    source: error,
+                });
+            }
+        }
+        let metadata = fs::symlink_metadata(&dir).map_err(|error| PrivateDirError::Io {
+            path: dir.clone(),
+            source: error,
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(PrivateDirError::Symlink { path: dir });
+        }
+        if !metadata.is_dir() {
+            return Err(PrivateDirError::NotDirectory { path: dir });
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+
+            let uid = metadata.uid();
+            if uid != euid {
+                return Err(PrivateDirError::ForeignOwner { path: dir, uid });
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = &metadata;
+    }
+    Ok(dir)
 }
 
 /// Create a new secret-bearing file for writing.
@@ -261,38 +410,141 @@ fn apply_private_file_mode(_options: &mut OpenOptions) {}
 /// a symlink at its final component.
 ///
 /// A symlink or other irregular file is refused and its target left untouched.
-/// The permission change goes through a descriptor opened with `O_NOFOLLOW`
-/// and type-checked after the open, so a final component swapped after the
-/// check cannot redirect it to another file. A file already at the private
-/// mode is not opened at all: closing any descriptor to a file releases this
-/// process's POSIX record locks on it, which SQLite connections already open
-/// on the same database hold.
+/// Existing SQLite files require path-only handles, not ordinary data
+/// descriptors: closing the latter could cancel another SQLite connection's
+/// POSIX locks. Linux x86-64 uses O_PATH and fchmodat2(AT_EMPTY_PATH); other Unix
+/// systems refuse repairs before opening a data descriptor. Already-private
+/// files never need a handle. Generic lock/secret-file hardening stays separate.
 #[cfg(feature = "sqlite")]
 pub(crate) fn set_private_file_permissions(path: &Path) -> io::Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
-    ensure_regular_private_file(path, &metadata)?;
-    if has_private_file_mode(&metadata) {
-        return Ok(());
-    }
-    let file = super::open_regular_file_no_follow(path)?;
-    super::set_private_file_permissions_for_open_file(&file)
+    set_sqlite_file_permissions(path, false)
 }
 
-/// Open an existing file for reading without following its final component,
-/// and refuse the descriptor unless it is a regular file.
-///
-/// Unlike [`open_read_only_no_follow`] this performs no pathname check first:
-/// the open itself refuses a final-component symlink, and the type check runs
-/// on the opened descriptor, so the result is safe against a swap between any
-/// earlier check and this open.
+/// Remove group/other access without adding owner write permission to a
+/// read-only SQLite database or sidecar.
+#[cfg(all(unix, feature = "sqlite"))]
+pub(crate) fn set_read_only_private_file_permissions(path: &Path) -> io::Result<()> {
+    set_sqlite_file_permissions(path, true)
+}
+
 #[cfg(feature = "sqlite")]
-pub(crate) fn open_regular_file_no_follow(path: &Path) -> io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    apply_read_only_no_follow(&mut options);
-    let file = options.open(path)?;
-    ensure_regular_private_file(path, &file.metadata()?)?;
-    Ok(file)
+fn set_sqlite_file_permissions(path: &Path, preserve_owner_mode: bool) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    ensure_regular_private_file(path, &metadata)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode = sqlite_private_mode(&metadata, preserve_owner_mode);
+        if metadata.permissions().mode() & 0o7777 == mode {
+            return Ok(());
+        }
+        let file = super::open_sqlite_permission_handle_no_follow(path)?;
+        super::set_private_permissions_for_sqlite_handle(&file, preserve_owner_mode)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = preserve_owner_mode;
+        Ok(())
+    }
+}
+
+#[cfg(all(unix, feature = "sqlite"))]
+fn sqlite_private_mode(metadata: &fs::Metadata, preserve_owner_mode: bool) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+
+    if preserve_owner_mode {
+        metadata.permissions().mode() & 0o700
+    } else {
+        PRIVATE_FILE_MODE
+    }
+}
+
+/// Pin an existing SQLite inode without acquiring a data descriptor.
+///
+/// The fstat/type check rejects an O_PATH handle to a symlink itself; it never
+/// follows it. Closing an O_PATH handle does not invoke Linux's POSIX-lock
+/// removal for an ordinary data-file close.
+#[cfg(all(unix, feature = "sqlite"))]
+pub(crate) fn open_sqlite_permission_handle_no_follow(path: &Path) -> io::Result<File> {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(path)?;
+        let metadata = file.metadata()?;
+        if metadata.file_type().is_symlink() {
+            return Err(io::Error::from_raw_os_error(libc::ELOOP));
+        }
+        ensure_regular_private_file(path, &metadata)?;
+        Ok(file)
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    {
+        let _ = path;
+        Err(unsupported_sqlite_permission_repair())
+    }
+}
+
+/// Apply the mode to the verified pinned inode, never a newly resolved path.
+#[cfg(all(unix, feature = "sqlite"))]
+pub(crate) fn set_private_permissions_for_sqlite_handle(
+    file: &File,
+    preserve_owner_mode: bool,
+) -> io::Result<()> {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::PermissionsExt;
+
+        let metadata = file.metadata()?;
+        let mode = sqlite_private_mode(&metadata, preserve_owner_mode);
+        if metadata.permissions().mode() & 0o7777 == mode {
+            return Ok(());
+        }
+        // SAFETY: this O_PATH descriptor pins a type-checked regular inode.
+        // AT_EMPTY_PATH applies only to it; the empty string is NUL-terminated.
+        // Use the syscall directly, never a libc /proc fallback that might
+        // open/close an ordinary descriptor to this database inode.
+        let status = unsafe {
+            libc::syscall(
+                libc::SYS_fchmodat2,
+                file.as_raw_fd(),
+                c"".as_ptr(),
+                mode as libc::mode_t,
+                libc::AT_EMPTY_PATH,
+            )
+        };
+        if status == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if matches!(
+            error.raw_os_error(),
+            Some(libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP)
+        ) {
+            return Err(unsupported_sqlite_permission_repair());
+        }
+        Err(error)
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    {
+        let _ = (file, preserve_owner_mode);
+        Err(unsupported_sqlite_permission_repair())
+    }
+}
+
+#[cfg(all(unix, feature = "sqlite"))]
+fn unsupported_sqlite_permission_repair() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        "safe SQLite permission repair is unavailable on this platform or kernel; stop every \
+         process using the database, restrict the database and its existing sidecars to \
+         owner-only permissions offline, then retry (retain owner read-only mode when applicable)",
+    )
 }
 
 #[cfg(feature = "sqlite")]
@@ -323,11 +575,6 @@ fn has_private_file_mode(metadata: &fs::Metadata) -> bool {
     use std::os::unix::fs::PermissionsExt;
 
     metadata.permissions().mode() & 0o7777 == PRIVATE_FILE_MODE
-}
-
-#[cfg(all(not(unix), feature = "sqlite"))]
-fn has_private_file_mode(_metadata: &fs::Metadata) -> bool {
-    true
 }
 
 /// Attributable write-access failure, or `None` when `err` is some other I/O.

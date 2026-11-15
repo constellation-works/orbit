@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit Data Handling — what stays on your machine, what leaves it, and to whom"
-last_validated: 2026-10-29
+last_validated: 2026-11-01
 ---
 
 # Orbit Data Handling
@@ -44,7 +44,7 @@ data-handling review:
 | Process logs | `~/.orbit/state/logs/orbit.jsonl`, `orbit-agent.jsonl` beside it | JSONL, rotated locally; secret-looking values are redacted before reaching the sink. See [logging](./runbooks/logging.md). |
 | Lexical task index | `<repo>/.orbit/state/semantic.db` | Local SQLite FTS5 index; regenerable with `orbit search reindex`. No model or network request. |
 | Lease tokens (lease listener user only) | `~orbit-lease/.orbit/lease-tokens.db` (SQLite) | Exists only where root provisioned it for the listener user. Holds each token's SHA-256, never the secret, with its scope and an audit of mints, revocations, refused verifications and other lease listener refusals; listener rows carry the client address and request method and path. |
-| Worktrees | `<repo>/.orbit/state/worktrees/` | Scratch; regenerable. |
+| Worktrees | `<repo>/.orbit/state/worktrees/` | Active and failed runs can retain uncommitted candidates; preserve them until the worktree GC safety checks permit removal. |
 | Machine identity (`machine.id`, `machine.name`, `machine.task_prefix`) | `~/.orbit/config.toml` `[machine]` | A locally generated stable identifier. It is never transmitted to the Orbit project. |
 | Workspace registry, runtime config, resource overrides | `~/.orbit/config.toml`, `workspaces.json`, `resources/` | Host-global configuration only. |
 | Workspace config, routines, auto-tasks, resources | `<repo>/.orbit/config.toml`, `routines/`, `auto_tasks/`, `resources/` | Per-user checkout settings. Seeded by `orbit workspace init`; not committed. Operator settings for shipped auto-tasks live in `auto_tasks/.orbit-auto-task-settings.json`. |
@@ -64,16 +64,14 @@ choose, or through federated MCP over SSH to hosts you configure.
 | Plugin archive fetch | When `orbit plugin add` or `orbit plugin upgrade` uses an HTTPS archive source | The configured archive URL | The archive is fetched with `curl`; Orbit requires and checks a pinned SHA-256 digest before unpacking it. |
 | Git plugin source | When `orbit plugin add` or `orbit plugin upgrade` uses a `git+` source | The configured Git remote | Orbit runs Git to clone or fetch the requested source and ref. |
 | Task publication | When you explicitly publish tasks to a bound Git repository | The repository you chose | The selected task bundles and history are pushed through Git. |
-| Optional decision assistance | Only when a host-owned `[assistance]` policy enables it (off by default: `policies = []`) | `https://api.openai.com/v1/decisions` (fixed; no configurable endpoint, proxy, or crew route) | The policy's allowed evidence fields and question text, sent with the model fixed in the policy. Ungranted fields and references are omitted; secrets are redacted before transmission. No agent crew makes these calls. |
 
 Every Orbit crew dispatches through a provider CLI. Selecting an HTTP-only
 provider such as `openai_compat` fails structurally before making a request.
-The only Orbit-initiated model call is the optional decision assistance
-listed in the table above.
+Orbit itself initiates no model call.
 
 Orbit has no update check on startup, no crash reporter, no usage analytics,
 and no "phone home" of any kind. There is no network call you cannot trace to a
-command you ran, a crew you configured, or an assistance policy you enabled.
+command you ran or a crew you configured.
 
 ### Initiated by tools Orbit runs for you
 
@@ -89,7 +87,7 @@ configured, using the GitHub identity you already have.
 
 If your organisation's compliance posture depends on where model traffic goes,
 that decision is made when you choose which agent CLIs and providers to install,
-which crews to enable, and which assistance policies to add — not by Orbit.
+and which crews to enable — not by Orbit.
 
 One specific worth knowing:
 
@@ -103,8 +101,8 @@ One specific worth knowing:
 | --- | --- | --- |
 | Dashboard (`orbit web serve`) | Binds `127.0.0.1` | Reach a remote workspace with `orbit web connect`, which tunnels over SSH. |
 | MCP server (`orbit mcp serve`) | Local stdio | Remote access (`--mode remote`) is a byte-transparent SSH stdio proxy; authorization is by the SSH identity you configure. |
-| MCP TCP listener (`orbit mcp listen`) | Loopback-bound TCP socket | A wider bind must be requested explicitly with `--allow-non-loopback`. |
-| Lease listener (`orbit lease listen`) | Off | Runs as a dedicated listener user at the address in its own `lease.listener.bind`. Serves only the lease routes and `/healthz`, each lease request authenticated by a bearer lease token, and forwards operations to Orbit Web over a local Unix socket. Refuses `0.0.0.0` or `::` unless a proxy is declared. |
+| MCP TCP listener (`orbit mcp listen`) | Loopback-bound TCP socket | A wider bind must be requested explicitly with `--allow-non-loopback`. A connection is accepted only when the peer's user id is the server's; a different user, or a remote TCP client with no local user id, is refused before any message is read. |
+| Lease listener | Off, not configurable | Path leases are not configurable [ORB-22808]: no command starts the listener and Orbit Web serves no lease intake socket. The retained code would run as a dedicated listener user, serve only the lease routes and `/healthz`, each lease request authenticated by a bearer lease token, and forward operations to Orbit Web over a local Unix socket, refusing `0.0.0.0` or `::` without TLS or a declared proxy. |
 | Federated MCP | Off | Presents one MCP namespace over this host plus the hosts you register with `orbit host add`. Only hosts you name; there is no discovery. |
 | Task publication | Off | Pushes task bundles to a Git repository you bind. |
 
@@ -189,10 +187,11 @@ project security reporting.
   [state-and-backup](./runbooks/state-and-backup.md) runbook covers WAL-safe
   backups and what is regenerable.
 - **Retention is yours.** Logs rotate locally ([logging](./runbooks/logging.md));
-  audit history in `orbit.db` is kept until you delete it. Nothing ages out to
-  a remote.
+  audit history in `orbit.db` can be removed by `orbit gc audit --confirm` or the
+  opt-in `store-gc` routine according to `retention.audit_days` (60 days by
+  default). Nothing ages out to a remote.
 - **Air-gapped use works** apart from explicit update downloads,
-  whatever your agent CLIs need, and any assistance policy you enable. Install the binary
+  and whatever your agent CLIs need. Install the binary
   by hand and Orbit initiates no further connections.
 
 ## Related

@@ -722,6 +722,13 @@ stage = ("server-side-shared-tcp" if env.get("SCCACHE_CLIENT_SIDE") == "0"
          else "warm-identical-source" if participant == "E" else "isolated-daemon")
 with open(os.environ["NS_DIAGNOSTIC_EVENTS"], "a") as events:
     events.write(f"{os.getpid()} {root}\n")
+if env.get("SCCACHE_ERROR_LOG"):
+    server_log = Path(env["SCCACHE_ERROR_LOG"])
+    server_log.parent.mkdir(parents=True, exist_ok=True)
+    with open(server_log, "a") as log:
+        log.write(f"sccache-server-{stage}-begin participant={participant}\n"
+                  + "s" * 12000
+                  + f"\nsccache-server-{stage}-end participant={participant}\n")
 scenario = os.environ.get("NS_SCENARIO", "")
 if scenario == stage or (stage == "server-side-shared-tcp" and
                          ((scenario in ("owner-timeout", "failure-cleanup") and participant == "C")
@@ -797,7 +804,8 @@ stage = sys.argv[2]
 statuses = dict(zip("CDE", map(int, sys.argv[3:])))
 participants = "E" if stage == "warm-identical-source" else "CD"
 output = (fixture / "err").read_text()
-assert len(output.encode()) < 18000, "failure diagnostics must stay bounded"
+bound = 23000 if stage == "client-side-shared-tcp" else 18000
+assert len(output.encode()) < bound, "failure diagnostics must stay bounded"
 for participant in participants:
     header = (f"stage={stage} participant={participant} "
               f"exit_status={statuses[participant]}\n")
@@ -809,6 +817,15 @@ for participant in participants:
         assert f"{stream}-{participant}-end\n" in block, "log tail lost"
     assert block.count("[truncated: ") == 2, "both oversized streams must name truncation"
     assert "__SCCACHE_STATS__" in block, "retain stdout statistics even for successful peer"
+if stage == "client-side-shared-tcp":
+    assert f"stage={stage} sccache_server_log=" in output, "missing server log header"
+    assert "sccache-server-log bytes=" in output, "missing server log stream report"
+    assert f"sccache-server-{stage}-begin" in output, "server log head lost"
+    assert f"sccache-server-{stage}-end" in output, "server log tail lost"
+    server_block = output.split(f"stage={stage} sccache_server_log=", 1)[1]
+    assert "[truncated: " in server_block, "oversized server log must name truncation"
+else:
+    assert "sccache-server-log" not in output, "non-shared stage must not report a server log"
 # The script must report before removing logs, and leave neither fixture roots
 # nor live/zombie transport children behind after its exit trap completes.
 assert not list((fixture / "scratch").iterdir()), "namespace scratch leaked"
@@ -875,13 +892,23 @@ assert_ns_skip "namespaces refused with Python 3.10"
 # Model immediate PID/PGID reuse after reaping, without creating/signaling any
 # process. Execute both embedded owners, including the independent watchdog.
 # Failed anchor forks and preexec startup also exercise cleanup while the
-# transport leader alone reserves its process group.
-python3 - "$ROOT" <<'PYIDENTITY'
+# transport leader alone reserves its process group. The same entrypoint
+# runs the port allocator's release and EXIT cleanup against an exited PID
+# that has been reused: the model intercepts every signal.
+python3 - "$ROOT" "$ns_fixture_root" "$ns_home" "$ns_diagnostic_bin" "$ns_sccache" <<'PYIDENTITY'
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
-from compiler_cache_process_regression import group_lifetime_regression
-group_lifetime_regression(Path(sys.argv[1]))
+from compiler_cache_process_regression import (
+    allocator_identity_regression,
+    group_lifetime_regression,
+    participant_identity_regression,
+)
+root = Path(sys.argv[1])
+group_lifetime_regression(root)
+participant_identity_regression(root, Path(sys.argv[2]), Path(sys.argv[3]),
+                                Path(sys.argv[4]), Path(sys.argv[5]))
+allocator_identity_regression(root)
 PYIDENTITY
 
 # Exercise the benchmark's actual namespace caller with checkout-local WORKDIR.
@@ -969,6 +996,10 @@ for scenario, stage, participants in [
                     expected = 143 if scenario == "failure-cleanup" else 124
                     assert (f"stage={stage} participant={participant} exit_status={expected}") in output, output
                 assert "stubborn transport ready" in output, output
+                if stage in ("client-side-shared-tcp", "server-side-shared-tcp"):
+                    assert f"stage={stage} sccache_server_log=" in output, output
+                    assert "sccache-server-log bytes=" in output, output
+                    assert f"sccache-server-{stage}-end" in output, output
             assert not list((fixture / "scratch").iterdir()), "namespace scratch leaked"
             events = (fixture / "events").read_text().splitlines()
             for line in events:

@@ -25,8 +25,14 @@ spec:
         task_id: "{{ input.task_id }}"
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
 
-    # Assessment and fixes share one loop. Each iteration feeds the previous
-    # verdict forward through the loop input.
+    # Assessment and fixes share one loop. Each iteration assesses, then fixes
+    # the findings that verdict raised. The loop ends on approval or at
+    # max_iterations.
+    # Assess judges only the original implementation diff: its diff input is
+    # the frozen `implement` output, and the fix step commits to the branch
+    # without emitting an updated diff, so later iterations never assess the
+    # post-fix code. Approval means "no blocking issues in the original diff";
+    # the fix commits still land on the branch for the PR.
     - id: assess_fix
       loop:
         max_iterations: 5

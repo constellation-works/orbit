@@ -41,9 +41,13 @@ const MACOS_RUNTIME_LITERALS: &[&str] = &[
     "/dev/dtracehelper",
 ];
 
-/// The SBPL profile for an offline phase. `spec.network` is not rendered:
-/// `command` refuses a networked phase before compiling.
-pub fn compile_macos_build_profile(spec: &BuildSandboxSpec<'_>) -> String {
+/// The writes every process makes to its terminal and the null device.
+pub(super) const DEV_WRITE_ALLOW: &str =
+    "(allow file-write-data (literal \"/dev/null\") (literal \"/dev/tty\"))\n";
+
+/// The start of a deny-default profile: what any process needs to start
+/// and run, and no file content or network.
+pub(super) fn deny_default_preamble() -> String {
     let mut profile = String::from("(version 1)\n(deny default)\n");
     // `stat` on any path: path resolution walks every ancestor of the build
     // directory and the toolchain roots. Metadata is not content; listing a
@@ -70,9 +74,13 @@ pub fn compile_macos_build_profile(spec: &BuildSandboxSpec<'_>) -> String {
     profile.push_str(
         "(allow mach-lookup (global-name \"com.apple.system.opendirectoryd.libinfo\"))\n",
     );
+    profile
+}
 
-    // The runtime tables are already macOS physical paths, so they render the
-    // same on every host that compiles the profile.
+/// The system runtime as read filters. The tables are already macOS
+/// physical paths, so they render the same on every host that compiles the
+/// profile.
+pub(super) fn runtime_read_filters() -> Vec<String> {
     let mut readable: Vec<String> = MACOS_RUNTIME_SUBPATHS
         .iter()
         .map(|path| format!("(subpath \"{}\")", sbpl_escape(path)))
@@ -82,6 +90,14 @@ pub fn compile_macos_build_profile(spec: &BuildSandboxSpec<'_>) -> String {
             .iter()
             .map(|path| format!("(literal \"{}\")", sbpl_escape(path))),
     );
+    readable
+}
+
+/// The SBPL profile for an offline phase. `spec.network` is not rendered:
+/// `command` refuses a networked phase before compiling.
+pub fn compile_macos_build_profile(spec: &BuildSandboxSpec<'_>) -> String {
+    let mut profile = deny_default_preamble();
+    let mut readable = runtime_read_filters();
     readable.extend(spec.readable.iter().map(|path| subpath(path)));
     let build_dir = subpath(spec.build_dir);
     readable.push(build_dir.clone());
@@ -89,10 +105,19 @@ pub fn compile_macos_build_profile(spec: &BuildSandboxSpec<'_>) -> String {
     profile.push_str(&format!("(allow file-read* {readable})\n"));
     profile.push_str(&format!("(allow process-exec {readable})\n"));
     profile.push_str(&format!("(allow file-write* {build_dir})\n"));
-    profile.push_str("(allow file-write-data (literal \"/dev/null\") (literal \"/dev/tty\"))\n");
+    profile.push_str(DEV_WRITE_ALLOW);
 
     // Last-match-wins: the credential denies sit after every allow.
-    for (path, file) in super::credential_denies(spec.home) {
+    push_credential_denies(&mut profile, spec.home);
+
+    profile.push_str("(deny network*)\n");
+    profile
+}
+
+/// The credential denies, read and write. They must follow every allow:
+/// SBPL's last match wins.
+pub(super) fn push_credential_denies(profile: &mut String, home: Option<&std::ffi::OsStr>) {
+    for (path, file) in super::credential_denies(home) {
         let filter = if file {
             format!("(literal \"{}\")", sbpl_escape(&physical(&path)))
         } else {
@@ -100,17 +125,14 @@ pub fn compile_macos_build_profile(spec: &BuildSandboxSpec<'_>) -> String {
         };
         profile.push_str(&format!("(deny file-read* file-write* {filter})\n"));
     }
-
-    profile.push_str("(deny network*)\n");
-    profile
 }
 
-fn subpath(path: &Path) -> String {
+pub(super) fn subpath(path: &Path) -> String {
     format!("(subpath \"{}\")", sbpl_escape(&physical(path)))
 }
 
 /// Seatbelt matches the kernel's physical path (`/private/var`, not `/var`).
-fn physical(path: &Path) -> String {
+pub(super) fn physical(path: &Path) -> String {
     crate::physical_with_missing_tail(path)
         .display()
         .to_string()

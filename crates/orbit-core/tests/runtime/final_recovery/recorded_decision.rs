@@ -8,6 +8,7 @@ use orbit_core::application::task::{
 };
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::{RecordedFinalRecovery, TaskComment, TaskDecision};
+use orbit_types::workflow::RecoveryFault;
 use serde_json::{Value, json};
 
 use super::{Fixture, fixture};
@@ -114,30 +115,6 @@ fn a_replay_reads_the_typed_decision_not_a_decision_comment() {
     assert_eq!(typed_decisions(&fixture, &task).len(), 1);
 }
 
-fn a_decision_comment_from_before_typed_decisions_still_answers_for_its_run() {
-    let fixture = fixture("[\"sol\"]");
-    let task = fixture.task();
-    // An older applier settled this run and recorded only its comment.
-    system_comment(
-        &fixture,
-        &task,
-        format!("final_recovery run_id={RUN} decision=reject outcome=rejected"),
-    );
-
-    assert_eq!(
-        apply(&fixture, &task, requeue()),
-        FinalRecoveryOutcome::Rejected,
-        "the legacy comment is the run's recorded outcome"
-    );
-    assert_eq!(
-        fixture.status(&task),
-        "in-progress",
-        "an already-applied decision is not applied again"
-    );
-    assert!(typed_decisions(&fixture, &task).is_empty());
-    assert_eq!(fixture.decision_comments(&task), 1);
-}
-
 fn untrusted_legacy_outcomes_do_not_suppress_a_fresh_decision() {
     let fixture = fixture("[\"sol\"]");
     for author in ["codex", "human:operator"] {
@@ -180,10 +157,67 @@ fn untrusted_legacy_outcomes_do_not_suppress_a_fresh_decision() {
     }
 }
 
+/// The `final_recovery` projection `orbit.task.show` and `orbit.task.list` answer.
+fn shown_final_recovery(fixture: &Fixture, task: &str) -> Value {
+    fixture
+        .runtime
+        .run_tool(
+            "orbit.task.show",
+            json!({"id": task, "fields": ["id", "final_recovery"]}),
+        )
+        .unwrap()["final_recovery"]
+        .clone()
+}
+
+fn a_decision_records_its_fault_and_shows_it() {
+    let fixture = fixture("[\"sol\"]");
+    let task = fixture.task();
+    let mut decision = reject();
+    decision["fault"] = json!("specification");
+    decision["fault_evidence"] = json!("criterion 2 asks for an API removed upstream");
+    decision["fault_judged_by"] = json!("gpt-5.5");
+
+    assert_eq!(
+        apply(&fixture, &task, decision),
+        FinalRecoveryOutcome::Rejected
+    );
+    let recorded = fixture
+        .runtime
+        .get_task_history(&task)
+        .unwrap()
+        .into_iter()
+        .find_map(|entry| match entry.decision {
+            Some(TaskDecision::FinalRecovery {
+                fault,
+                fault_evidence,
+                fault_judged_by,
+                ..
+            }) => Some((fault, fault_evidence, fault_judged_by)),
+            _ => None,
+        })
+        .expect("the typed decision is recorded");
+    assert_eq!(
+        recorded,
+        (
+            RecoveryFault::Specification,
+            "criterion 2 asks for an API removed upstream".to_string(),
+            Some("gpt-5.5".to_string()),
+        )
+    );
+    let shown = shown_final_recovery(&fixture, &task);
+    assert_eq!(shown["run_id"], RUN);
+    assert_eq!(shown["fault"], "specification", "{shown}");
+    assert_eq!(
+        shown["fault_evidence"],
+        "criterion 2 asks for an API removed upstream"
+    );
+    assert_eq!(shown["fault_judged_by"], "gpt-5.5");
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_replay_reads_the_typed_decision_not_a_decision_comment_scenarios,
     a_replay_reads_the_typed_decision_not_a_decision_comment,
-    a_decision_comment_from_before_typed_decisions_still_answers_for_its_run,
-    untrusted_legacy_outcomes_do_not_suppress_a_fresh_decision
+    untrusted_legacy_outcomes_do_not_suppress_a_fresh_decision,
+    a_decision_records_its_fault_and_shows_it
 );

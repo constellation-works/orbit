@@ -1,23 +1,48 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::identity::{normalize_attribution_label, normalize_optional_attribution_label};
-use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{
+    CREW_ASSIGNED_EVENT, CrewAssignmentState, RecordedCrewAssignment, RecordedFinalRecovery, Task,
+    TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus,
+};
 
 use crate::application::contracts::CreationCrewAssignment;
-use crate::context::resolve_write_actor_label;
+use crate::runtime::context::resolve_write_actor_label;
 
 pub(crate) const SYSTEM_ACTOR_LABEL: &str = "system";
 
 pub(crate) use orbit_types::identity::is_automation_actor;
 
+/// Latest typed final-recovery outcome in vector order recorded by Orbit for `run_id`.
+pub(super) fn authoritative_recovery_outcome<'a>(
+    history: &'a [TaskHistoryEntry],
+    run_id: &str,
+) -> Option<&'a RecordedFinalRecovery> {
+    history
+        .iter()
+        .rev()
+        .find_map(|entry| match &entry.decision {
+            Some(TaskDecision::FinalRecovery {
+                run_id: recorded,
+                outcome,
+                ..
+            }) if entry.by == SYSTEM_ACTOR_LABEL && recorded == run_id => Some(outcome),
+            _ => None,
+        })
+}
+
 /// Provenance for the crew a task was assigned when it was created, or when an
 /// operator cleared the field and the pools chose again [ORB-12717]. Updates
-/// that change the stored crew append their own history entry.
-pub(crate) fn crew_assigned_history(assignment: &CreationCrewAssignment) -> TaskHistoryEntry {
+/// that change the stored crew append their own history entry. `before` is
+/// the crew and provenance the write replaces, read under its write lock.
+pub(crate) fn crew_assigned_history(
+    before: CrewAssignmentState,
+    assignment: &CreationCrewAssignment,
+) -> TaskHistoryEntry {
     TaskHistoryEntry {
         at: Utc::now(),
         by: SYSTEM_ACTOR_LABEL.to_string(),
-        event: "crew_assigned".to_string(),
+        event: CREW_ASSIGNED_EVENT.to_string(),
         note: Some(format!(
             "assigned crew `{}` from {}",
             assignment.crew, assignment.source
@@ -25,7 +50,13 @@ pub(crate) fn crew_assigned_history(assignment: &CreationCrewAssignment) -> Task
         from_status: None,
         to_status: None,
         operation_id: None,
-        decision: None,
+        decision: Some(TaskDecision::CrewAssignment(RecordedCrewAssignment::new(
+            before,
+            CrewAssignmentState::new(
+                Some(assignment.crew.clone()),
+                Some(assignment.source.clone()),
+            ),
+        ))),
     }
 }
 

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -15,12 +16,14 @@ import signal
 import shlex
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import urllib.request
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,43 +31,1076 @@ validate_npm_evidence = runpy.run_path(
     str(Path(__file__).with_name("check_npm_package.py")))["validate_evidence"]
 
 
+# Process table for hosts with no /proc (macOS). libproc reports pid, parent,
+# group, start time and working directory without a subprocess, so it works
+# where `ps` is denied. The same source runs in the supervisor and in this
+# module (see _DARWIN_PROC), so both read one identity.
+_DARWIN_PROC_TABLE = r"""import ctypes, ctypes.util, errno, os, struct
+_libproc = None
+# Reasons a read was refused rather than finding the process gone. A caller
+# clears it before a read and treats any entry as an unknown observation.
+DARWIN_DENIED = []
+
+def _darwin_refused(what, pid):
+    code = ctypes.get_errno()
+    if code != errno.ESRCH:
+        DARWIN_DENIED.append(f"{what} for process {pid} failed: {os.strerror(code) if code else 'short read'}")
+
+def _libproc_handle():
+    global _libproc
+    if _libproc is None:
+        try:
+            lib = ctypes.CDLL(ctypes.util.find_library("proc") or "/usr/lib/libproc.dylib", use_errno=True)
+            lib.proc_listpids.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_int]
+            lib.proc_listpids.restype = ctypes.c_int
+            lib.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+            lib.proc_pidinfo.restype = ctypes.c_int
+        except (OSError, AttributeError):
+            return None
+        _libproc = lib
+    return _libproc
+
+def _darwin_short_info(pid):
+    # PROC_PIDT_SHORTBSDINFO stays readable for other users' and protected
+    # processes whose full BSD info is refused: it proves parent and owner.
+    # A dict on success, None when the process is gone, False when refused.
+    lib = _libproc_handle()
+    if lib is None:
+        return False
+    info = ctypes.create_string_buffer(64)
+    ctypes.set_errno(0)
+    if lib.proc_pidinfo(pid, 13, 0, info, 64) != 64:
+        return None if ctypes.get_errno() == errno.ESRCH else False
+    found_pid, ppid, pgrp, status = struct.unpack_from("=IIII", info, 0)
+    uid, = struct.unpack_from("=I", info, 36)
+    if found_pid != pid:
+        return False
+    return {"pid": pid, "ppid": ppid, "pgrp": pgrp, "uid": uid,
+            "state": "Z" if status == 5 else "R"}
+
+def darwin_is_descendant(pid, ancestor=None):
+    # True, False only when the short-info parent chain provably ends
+    # without ancestor, or None when a link in that chain is refused.
+    if ancestor is None:
+        ancestor = os.getpid()
+    if pid == ancestor:
+        return True
+    seen = set()
+    current = pid
+    for _ in range(1024):
+        if current == ancestor:
+            return True
+        if current <= 1 or current in seen:
+            return False
+        seen.add(current)
+        info = _darwin_short_info(current)
+        if info is None:
+            return False
+        if info is False:
+            return None
+        parent = info["ppid"]
+        if parent == current:
+            return False
+        current = parent
+    return None
+
+def darwin_cmdline(pid):
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        mib = (ctypes.c_int * 3)(1, 49, pid)
+        size = ctypes.c_size_t(0)
+        if libc.sysctl(mib, 3, None, ctypes.byref(size), None, 0) != 0 or size.value < 4:
+            return ""
+        buf = ctypes.create_string_buffer(size.value)
+        if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) != 0:
+            return ""
+        raw = buf.raw[:size.value]
+        argc = struct.unpack_from("=i", raw, 0)[0]
+        rest = raw[4:]
+        rest = rest[rest.find(b"\0"):].lstrip(b"\0")
+        return b" ".join(rest.split(b"\0")[:max(argc, 0)]).decode(errors="replace").strip()[:240]
+    except (OSError, AttributeError, struct.error):
+        return ""
+
+def darwin_identity(pid, with_cmdline=True):
+    lib = _libproc_handle()
+    if lib is None:
+        return None
+    bsd = ctypes.create_string_buffer(136)
+    ctypes.set_errno(0)
+    if lib.proc_pidinfo(pid, 3, 0, bsd, 136) != 136:
+        _darwin_refused("process info", pid)
+        return None
+    status, = struct.unpack_from("=I", bsd, 4)
+    ppid, = struct.unpack_from("=I", bsd, 16)
+    uid, = struct.unpack_from("=I", bsd, 20)
+    pgrp, = struct.unpack_from("=I", bsd, 100)
+    sec, usec = struct.unpack_from("=QQ", bsd, 120)
+    try:
+        sid = os.getsid(pid)
+    except OSError:
+        sid = 0
+    cwd = None
+    path = ctypes.create_string_buffer(2352)
+    ctypes.set_errno(0)
+    if lib.proc_pidinfo(pid, 9, 0, path, 2352) == 2352:
+        text = path.raw[152:152 + 1024].split(b"\0", 1)[0].decode(errors="replace")
+        cwd = text or None
+    elif uid == os.geteuid() and status != 5:
+        # Another user's process cannot be a worker here; an unreadable
+        # working directory of this user's own live process is unknown.
+        _darwin_refused("working directory", pid)
+    return {"pid": pid, "ppid": ppid, "pgrp": pgrp, "sid": sid, "starttime": sec * 1_000_000 + usec,
+            "state": "Z" if status == 5 else "R", "cwd": cwd,
+            "cmdline": darwin_cmdline(pid) if with_cmdline else ""}
+
+def darwin_snapshot(with_cmdline=True):
+    lib = _libproc_handle()
+    if lib is None:
+        return None
+    count = lib.proc_listpids(1, 0, None, 0)
+    if count <= 0:
+        DARWIN_DENIED.append("process listing failed")
+        return None
+    pids = (ctypes.c_int * (count // 4 + 64))()
+    got = lib.proc_listpids(1, 0, pids, ctypes.sizeof(pids))
+    if got <= 0:
+        DARWIN_DENIED.append("process listing failed")
+        return None
+    found = {}
+    for pid in pids[:got // 4]:
+        if pid > 0:
+            denied_before = len(DARWIN_DENIED)
+            info = darwin_identity(pid, with_cmdline)
+            if len(DARWIN_DENIED) > denied_before and info is None:
+                # Full BSD info was refused. Another user's process that
+                # provably does not descend from here cannot be a worker
+                # of this command, so its refusal is irrelevant. A
+                # descendant, an indeterminate chain, or this user's own
+                # process (which may be a detached worker under an owned
+                # root, findable only by its unreadable identity) keeps
+                # the denial: unknown stays unknown.
+                short = _darwin_short_info(pid)
+                if (darwin_is_descendant(pid) is False
+                        and isinstance(short, dict)
+                        and short["uid"] != os.geteuid()):
+                    del DARWIN_DENIED[denied_before:]
+                    continue
+            if info is not None:
+                found[pid] = info
+    return found
+"""
+
 # The supervisor retains process-group ownership after the command exits. We
 # sweep its group before reaping it, avoiding a PID/group reuse window (STD-03 R14).
-_PROCESS_SUPERVISOR = """import os, signal, subprocess, sys, threading
-fd = int(sys.argv[1])
+# Descendants that call setsid leave that group. On Linux the supervisor is a
+# child subreaper so those workers stay in its tree, and it records each one and
+# waits for the process identity to disappear before publishing the command
+# result. Hosts without subreaper support (macOS) reparent such a worker to
+# PID 1 instead, so the supervisor cannot see it; run() and main() then find it
+# by working directory under the root they own (settle_detached_workers_under).
+_SUPERVISOR_TERM_SECONDS = 10
+_SUPERVISOR_KILL_GRACE_SECONDS = 5
+_SUPERVISOR_COMMAND_KILL_SECONDS = 1
+# Include the command's final wait and time to publish the settled record.
+_SUPERVISOR_RESULT_SECONDS = (_SUPERVISOR_COMMAND_KILL_SECONDS + _SUPERVISOR_TERM_SECONDS
+                              + _SUPERVISOR_KILL_GRACE_SECONDS + 1)
+_PROCESS_SUPERVISOR = r"""import errno, json, os, signal, subprocess, sys, threading, time
+result_fd = int(sys.argv[1])
 owner_fd = int(sys.argv[2])
-signal.signal(signal.SIGTERM, lambda *_: None)
+# Roots whose working-directory occupants the supervisor also owns when it is
+# not a subreaper: a detached worker is then reparented to PID 1 and only its
+# working directory still ties it to this command.
+roots = [root for root in json.loads(sys.argv[3]) if isinstance(root, str) and root]
+# SIGTERM stays at the default until the command is spawned. An ignored
+# signal would be inherited across exec, and the command's children would
+# then survive the group sweep. Only this supervisor ignores SIGTERM.
+signal.signal(signal.SIGUSR1, lambda *_: None)
+stop = threading.Event()
+
+def enable_subreaper():
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        import ctypes
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+        libc.prctl.restype = ctypes.c_int
+        return libc.prctl(36, 1, 0, 0, 0) == 0
+    except (OSError, AttributeError):
+        return False
+
+subreaper = enable_subreaper()
+# Process reads that were refused or failed, rather than finding a process
+# gone. Any entry makes this record's descendant facts unknown: an unreadable
+# table is not an empty one, and an unreadable worker has not exited.
+unobserved = []
+
+class Unreadable(Exception):
+    pass
+
+def refused(error, what):
+    if isinstance(error, (FileNotFoundError, ProcessLookupError)) or error.errno in (errno.ENOENT, errno.ESRCH):
+        return None
+    raise Unreadable(f"{what}: {error}")
+
+def read_stat(pid):
+    try:
+        data = open(f"/proc/{pid}/stat", "rb").read()
+    except OSError as error:
+        return refused(error, f"process {pid} status is unreadable")
+    end = data.rfind(b")")
+    fields = data[end + 2:].split() if end >= 0 else []
+    try:
+        return {"state": fields[0].decode(), "ppid": int(fields[1]), "pgrp": int(fields[2]),
+                "sid": int(fields[3]), "starttime": int(fields[19])}
+    except (IndexError, ValueError, UnicodeError):
+        raise Unreadable(f"process {pid} status is malformed")
+
+def is_descendant(pid, ancestor=None):
+    if ancestor is None:
+        ancestor = os.getpid()
+    if pid == ancestor:
+        return True
+    seen = set()
+    current = pid
+    for _ in range(1024):
+        if current == ancestor:
+            return True
+        if current <= 1 or current in seen:
+            return False
+        seen.add(current)
+        try:
+            stat = read_stat(current)
+        except Unreadable:
+            return None
+        if stat is None:
+            return False
+        try:
+            parent = int(stat.get("ppid", 0))
+        except (TypeError, ValueError):
+            return None
+        if parent == current:
+            return False
+        current = parent
+    return None
+
+# @DARWIN_PROC_TABLE@
+def identity(pid):
+    # None only when the process is gone; Unreadable when the read failed.
+    if sys.platform == "darwin" and not os.path.isdir("/proc"):
+        DARWIN_DENIED.clear()
+        info = darwin_identity(pid)
+        if DARWIN_DENIED:
+            raise Unreadable(DARWIN_DENIED[0])
+        return info
+    if os.path.isdir("/proc"):
+        stat = read_stat(pid)
+        if stat is None:
+            return None
+        try:
+            cwd = os.readlink(f"/proc/{pid}/cwd")
+        except OSError as error:
+            if isinstance(error, (FileNotFoundError, ProcessLookupError)) or error.errno in (errno.ENOENT, errno.ESRCH):
+                return None
+            try:
+                owner = os.stat(f"/proc/{pid}").st_uid
+            except OSError as owner_error:
+                return refused(owner_error, f"process {pid} owner is unreadable")
+            # Another user's process cannot be a worker of this command.
+            if owner == os.geteuid():
+                raise Unreadable(f"process {pid} working directory is unreadable: {error}")
+            cwd = None
+        try:
+            raw = open(f"/proc/{pid}/cmdline", "rb").read()
+            cmdline = raw.replace(b"\0", b" ").decode(errors="replace").strip()[:240]
+        except OSError:
+            cmdline = ""
+        stat.update(pid=pid, cwd=cwd, cmdline=cmdline)
+        return stat
+    return None
+
+def snapshot():
+    # Raises Unreadable unless every relevant visible process was read.
+    # Same-user siblings provably not descending from this supervisor are
+    # skipped; descendants and indeterminate ancestry still raise.
+    found = {}
+    if os.path.isdir("/proc"):
+        try:
+            entries = os.listdir("/proc")
+        except OSError as error:
+            raise Unreadable(f"process table is unreadable: {error}")
+        for entry in entries:
+            if entry.isdigit():
+                pid = int(entry)
+                try:
+                    info = identity(pid)
+                except Unreadable:
+                    try:
+                        descendant = is_descendant(pid)
+                    except OSError:
+                        descendant = None
+                    if descendant is False:
+                        continue
+                    raise
+                if info is not None:
+                    found[info["pid"]] = info
+        return found
+    if sys.platform == "darwin":
+        DARWIN_DENIED.clear()
+        table = darwin_snapshot()
+        if DARWIN_DENIED:
+            raise Unreadable(DARWIN_DENIED[0])
+        if table is not None:
+            return table
+    try:
+        out = subprocess.check_output(["ps", "-axo", "pid=,ppid=,pgid=,sess="], text=True)
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise Unreadable(f"process table is unreadable: {error}")
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        pid, ppid, pgrp, sid = (int(part) for part in parts[:4])
+        found[pid] = {"pid": pid, "ppid": ppid, "pgrp": pgrp, "sid": sid, "starttime": 0,
+                      "state": "?", "cwd": None, "cmdline": ""}
+    return found
+
+def state(pid, starttime):
+    # "alive", "gone", or "unknown" when the identity could not be read.
+    direct = os.path.isdir("/proc") or sys.platform == "darwin"
+    try:
+        info = identity(pid) if direct else snapshot().get(pid)
+    except Unreadable as error:
+        if str(error) not in unobserved:
+            unobserved.append(str(error))
+        return "unknown"
+    if info is None or info.get("state") == "Z" or info.get("starttime") != starttime:
+        return "gone"
+    return "alive"
+
+def alive(pid, starttime):
+    return state(pid, starttime) == "alive"
+
+def observed_snapshot():
+    try:
+        return snapshot()
+    except Unreadable as error:
+        if str(error) not in unobserved:
+            unobserved.append(str(error))
+        return {}
+
+def descendants(root, procs=None):
+    procs = observed_snapshot() if procs is None else procs
+    children = {}
+    for pid, info in procs.items():
+        children.setdefault(info["ppid"], []).append(pid)
+    owned = []
+    stack = [root]
+    seen = {root}
+    while stack:
+        current = stack.pop()
+        for child in children.get(current, ()):
+            if child not in seen and child in procs:
+                seen.add(child)
+                stack.append(child)
+                owned.append(procs[child])
+    return owned
+
+def cwd_under(cwd):
+    if not isinstance(cwd, str) or not cwd:
+        return False
+    if cwd.endswith(" (deleted)"):
+        cwd = cwd[:-len(" (deleted)")]
+    for candidate in {cwd, os.path.realpath(cwd)}:
+        for base in roots:
+            if candidate == base or candidate.startswith(base.rstrip(os.sep) + os.sep):
+                return True
+    return False
+
+def owned(root):
+    procs = observed_snapshot()
+    found = descendants(root, procs)
+    if subreaper or not roots:
+        return found
+    seen = {info["pid"] for info in found}
+    for pid, info in procs.items():
+        if pid > 1 and pid != os.getpid() and pid not in seen and cwd_under(info.get("cwd")):
+            found.append(info)
+    return found
+
+def signal_confirmed(info, sig):
+    # Signal only through a pidfd bound to the observed incarnation. A
+    # starttime check followed by kill(pid) races with PID reuse: the
+    # process can exit and be replaced between the two operations.
+    if not alive(info["pid"], info["starttime"]):
+        return False
+    if not sys.platform.startswith("linux"):
+        return False
+    pidfd_open = getattr(os, "pidfd_open", None)
+    pidfd_send = getattr(signal, "pidfd_send_signal", None)
+    if pidfd_open is None or pidfd_send is None:
+        return False
+    try:
+        pidfd = pidfd_open(info["pid"], 0)
+    except OSError:
+        return False
+    try:
+        if not alive(info["pid"], info["starttime"]):
+            return False
+        try:
+            pidfd_send(pidfd, sig)
+        except OSError:
+            return False
+        return True
+    finally:
+        try:
+            os.close(pidfd)
+        except OSError:
+            pass
+
+def reap(root, deadline_s=REAP_TERM_SECONDS, kill_grace_s=REAP_KILL_GRACE_SECONDS):
+    records = {}
+    signaled = set()
+    deadline = time.monotonic() + deadline_s
+    kill_deadline = deadline + kill_grace_s
+    own_sid = os.getsid(0)
+    own_pgrp = os.getpgrp()
+    while True:
+        now = time.monotonic()
+        # Same-group grandchildren stay reachable after reparenting. This
+        # process ignores SIGTERM, so the signal does not abandon the reap.
+        try:
+            os.killpg(own_pgrp, signal.SIGTERM)
+        except OSError:
+            pass
+        live = [info for info in owned(root) if info.get("state") != "Z"]
+        for info in live:
+            pid = info["pid"]
+            current = records.get(pid)
+            if current is None or current["starttime"] != info["starttime"]:
+                records[pid] = {"pid": pid, "pgid": info["pgrp"], "sid": info["sid"],
+                                "ppid": info["ppid"], "cwd": info["cwd"], "cmdline": info["cmdline"],
+                                "starttime": info["starttime"], "exited": False,
+                                "detached": info["sid"] != own_sid or info["pgrp"] != own_pgrp}
+                signaled.discard(pid)
+            records[pid]["detached"] = records[pid]["detached"] or info["sid"] != own_sid or info["pgrp"] != own_pgrp
+            sig = signal.SIGKILL if now >= deadline else signal.SIGTERM
+            if sig == signal.SIGKILL or pid not in signaled:
+                if signal_confirmed(info, sig):
+                    signaled.add(pid)
+        for record in records.values():
+            if state(record["pid"], record["starttime"]) == "gone":
+                record["exited"] = True
+        while True:
+            try:
+                waited, _status = os.waitpid(-1, os.WNOHANG)
+            except (ChildProcessError, OSError):
+                break
+            if waited == 0:
+                break
+        if records and all(record["exited"] for record in records.values()) and not [
+                info for info in owned(root) if info.get("state") != "Z"]:
+            break
+        if not records and not live:
+            break
+        if now >= kill_deadline:
+            break
+        # Scheduling yield. Exit is the process identity disappearing, not this delay.
+        try:
+            time.sleep(0.05)
+        except InterruptedError:
+            pass
+    detached = []
+    open_descendants = 0
+    for record in records.values():
+        record["exited"] = state(record["pid"], record["starttime"]) == "gone"
+        if not record["exited"]:
+            open_descendants += 1
+        if record["detached"]:
+            detached.append({key: record[key] for key in
+                             ("pid", "pgid", "sid", "ppid", "cwd", "cmdline", "starttime", "exited")})
+    return detached, open_descendants
+
 def watch_owner():
-    os.read(owner_fd, 1)
-    os.killpg(os.getpgrp(), signal.SIGKILL)
+    try:
+        os.read(owner_fd, 1)
+    except OSError:
+        pass
+    stop.set()
+    try:
+        os.kill(os.getpid(), signal.SIGUSR1)
+    except OSError:
+        pass
+
 threading.Thread(target=watch_owner, daemon=True).start()
+command = None
 try:
-    code = subprocess.call(sys.argv[3:])
+    command = subprocess.Popen(sys.argv[4:])
 except OSError as error:
     print(str(error), file=sys.stderr, flush=True)
-    code = 127
-os.write(fd, str(code).encode())
-os.close(fd)
-while True:
+    payload = {"exit_code": 127, "detached_workers": [], "open_descendants": 0, "subreaper": subreaper,
+               "observation_complete": True, "observation_errors": []}
+else:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    while command.poll() is None and not stop.is_set():
+        try:
+            command.wait(timeout=0.05)
+        except subprocess.TimeoutExpired:
+            pass
+        except InterruptedError:
+            pass
+    if command.poll() is None:
+        try:
+            os.kill(command.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            command.wait(timeout=COMMAND_KILL_SECONDS)
+        except subprocess.TimeoutExpired:
+            pass
+    detached, open_descendants = reap(os.getpid())
+    payload = {"exit_code": command.returncode, "detached_workers": detached,
+               "open_descendants": open_descendants, "subreaper": subreaper,
+               "observation_complete": not unobserved, "observation_errors": unobserved[:20]}
+try:
+    os.write(result_fd, json.dumps(payload).encode() + b"\n")
+    os.close(result_fd)
+except OSError:
+    os._exit(0)
+if stop.is_set():
+    os._exit(0)
+while not stop.is_set():
     signal.pause()
+os._exit(0)
 """
+_PROCESS_SUPERVISOR = (
+    f"REAP_TERM_SECONDS = {_SUPERVISOR_TERM_SECONDS}\n"
+    f"REAP_KILL_GRACE_SECONDS = {_SUPERVISOR_KILL_GRACE_SECONDS}\n"
+    f"COMMAND_KILL_SECONDS = {_SUPERVISOR_COMMAND_KILL_SECONDS}\n"
+    + _PROCESS_SUPERVISOR.replace("# @DARWIN_PROC_TABLE@\n", _DARWIN_PROC_TABLE))
+# Same source, loaded here so the outer settlement and the supervisor agree.
+_DARWIN_PROC = {}
+if sys.platform == "darwin":
+    exec(_DARWIN_PROC_TABLE, _DARWIN_PROC)  # noqa: S102 - constant source defined above
 _OUTPUT_LIMIT = 1_048_576
+# Controlled worker the sweep supervisor must own. The command exits only after
+# the child has called setsid, which is the shape of a detached pipeline worker.
+_HELD_WORKER = r"""# qa-held-worker
+import os, signal, sys, time
+from pathlib import Path
+root, release, ready, mode = sys.argv[1:5]
+root = Path(root)
+release = Path(release)
+ready = Path(ready)
+
+def child():
+    os.setsid()
+    os.chdir(root)
+    me = os.getpid()
+    if mode == "complete":
+        ready.write_text(
+            f"fixture=qa-held-worker\npid={me}\nroot_held={int(root.exists())}\n"
+            f"cwd={os.getcwd()}\nmode=complete\n")
+        os._exit(0)
+    if mode == "ignore-term":
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        ready.write_text(f"fixture=qa-held-worker\npid={me}\nwaiting=1\nmode={mode}\n")
+        while True:
+            signal.pause()
+    def finish(_signum, _frame):
+        ready.write_text(
+            f"fixture=qa-held-worker\npid={me}\nroot_held={int(root.exists())}\n"
+            f"cwd={os.getcwd()}\nmode={mode}\n")
+        if mode == "cancel-hold":
+            fd = os.open(release, os.O_RDONLY)
+            os.read(fd, 1)
+            os.close(fd)
+        os._exit(0)
+    signal.signal(signal.SIGTERM, finish)
+    ready.write_text(f"fixture=qa-held-worker\npid={me}\nwaiting=1\nmode={mode}\n")
+    while True:
+        signal.pause()
+
+pid = os.fork()
+if pid == 0:
+    try:
+        child()
+    except Exception:
+        os._exit(1)
+deadline = time.monotonic() + 5
+while not ready.exists():
+    if time.monotonic() >= deadline:
+        os._exit(2)
+    time.sleep(0.01)
+if mode == "cancel-parent-live":
+    # Keep this launcher alive while the worker waits. Once the launcher exits,
+    # the supervisor reaps the worker, and its SIGTERM handler overwrites the
+    # waiting marker within about 20 ms, the fixture's poll interval, so the
+    # poll could miss it.
+    os.waitpid(pid, 0)
+os._exit(0)
+"""
+
+
+class ProcessObservationUnavailable(OSError):
+    """A process-table read failed for a reason other than the process being gone.
+
+    What that read would have shown is unknown: never an empty table, a
+    missing worker or an exited one (STD-02 §R29, STD-03 §R29)."""
+
+
+def _process_gone_error(error):
+    """Whether a failed process read means the process no longer exists."""
+    return isinstance(error, (FileNotFoundError, ProcessLookupError)) or error.errno in (errno.ENOENT, errno.ESRCH)
+
+
+def _proc_stat(pid):
+    """Status fields from /proc, None when the process is gone.
+
+    Raises ProcessObservationUnavailable when the read is refused or the
+    record is unreadable."""
+    try:
+        data = open(f"/proc/{pid}/stat", "rb").read()
+    except OSError as error:
+        if _process_gone_error(error):
+            return None
+        raise ProcessObservationUnavailable(error.errno, f"process {pid} status is unreadable: {error}") from error
+    end = data.rfind(b")")
+    fields = data[end + 2:].split() if end >= 0 else []
+    try:
+        if len(fields) < 20:
+            raise ValueError(f"{len(fields)} fields")
+        return {"state": fields[0].decode(), "ppid": int(fields[1]), "pgrp": int(fields[2]),
+                "sid": int(fields[3]), "starttime": int(fields[19])}
+    except (ValueError, UnicodeError) as error:
+        raise ProcessObservationUnavailable(f"process {pid} status is malformed: {error}") from error
+
+
+def _is_descendant(pid, ancestor=None):
+    """Whether pid descends from ancestor (default: this process).
+
+    Walks the /proc parent chain with stat reads only. Returns False only
+    when the chain provably ends without the ancestor; None when a link in
+    the chain is unreadable for a reason other than the process being gone.
+    """
+    if ancestor is None:
+        ancestor = os.getpid()
+    if pid == ancestor:
+        return True
+    seen = set()
+    current = pid
+    for _ in range(1024):
+        if current == ancestor:
+            return True
+        if current <= 1 or current in seen:
+            return False
+        seen.add(current)
+        try:
+            stat = _proc_stat(current)
+        except ProcessObservationUnavailable:
+            return None
+        if stat is None:
+            return False
+        try:
+            parent = int(stat.get("ppid", 0))
+        except (TypeError, ValueError):
+            return None
+        if parent == current:
+            return False
+        current = parent
+    return None
+
+
+def _proc_table_native():
+    """Whether identities come from /proc or libproc, with working directories."""
+    if os.path.isdir("/proc"):
+        return True
+    return bool(_DARWIN_PROC) and _DARWIN_PROC["_libproc_handle"]() is not None
+
+
+def _proc_identity(pid):
+    """Process identity from /proc or libproc. None only when the pid is gone.
+
+    A refused or failed read raises ProcessObservationUnavailable. A working
+    directory this user cannot read is unknown only for its own processes:
+    another user's process could not be one of this sweep's workers."""
+    if not os.path.isdir("/proc"):
+        if _DARWIN_PROC and _DARWIN_PROC["_libproc_handle"]() is not None:
+            denied = _DARWIN_PROC["DARWIN_DENIED"]
+            denied.clear()
+            info = _DARWIN_PROC["darwin_identity"](pid)
+            if denied:
+                raise ProcessObservationUnavailable(f"process {pid} is unreadable: {denied[0]}")
+            return info
+        return None
+    stat = _proc_stat(pid)
+    if stat is None:
+        return None
+    try:
+        cwd = os.readlink(f"/proc/{pid}/cwd")
+    except OSError as error:
+        if _process_gone_error(error):
+            return None
+        try:
+            owner = os.stat(f"/proc/{pid}").st_uid
+        except OSError as owner_error:
+            if _process_gone_error(owner_error):
+                return None
+            raise ProcessObservationUnavailable(
+                owner_error.errno, f"process {pid} owner is unreadable: {owner_error}") from owner_error
+        if owner == os.geteuid():
+            raise ProcessObservationUnavailable(
+                error.errno, f"process {pid} working directory is unreadable: {error}") from error
+        cwd = None
+    try:
+        raw = open(f"/proc/{pid}/cmdline", "rb").read()
+        cmdline = raw.replace(b"\0", b" ").decode(errors="replace").strip()[:240]
+    except OSError:
+        cmdline = ""
+    stat.update(pid=pid, cwd=cwd, cmdline=cmdline)
+    return stat
+
+
+def _proc_snapshot():
+    """Every visible process identity.
+
+    Raises ProcessObservationUnavailable when the table or any relevant
+    entry in it could not be read: a partial table is not a complete one.
+    A same-user entry that is provably not a descendant of this process is
+    skipped without poisoning the table; descendants and indeterminate
+    ancestry still raise so unknown stays unknown."""
+    found = {}
+    if os.path.isdir("/proc"):
+        try:
+            entries = os.listdir("/proc")
+        except OSError as error:
+            raise ProcessObservationUnavailable(error.errno, f"process table is unreadable: {error}") from error
+        for entry in entries:
+            if entry.isdigit():
+                pid = int(entry)
+                try:
+                    info = _proc_identity(pid)
+                except ProcessObservationUnavailable:
+                    # A same-user sibling that is provably not a descendant
+                    # (for example a Yama ptrace_scope=1 denial for an
+                    # unrelated runner agent) cannot be one of this sweep's
+                    # workers. Skip it without poisoning the table; a
+                    # descendant or an indeterminate ancestry still aborts
+                    # so unknown stays unknown.
+                    try:
+                        descendant = _is_descendant(pid)
+                    except OSError:
+                        descendant = None
+                    if descendant is False:
+                        continue
+                    raise
+                if info is not None:
+                    found[info["pid"]] = info
+        return found
+    if _DARWIN_PROC and _DARWIN_PROC["_libproc_handle"]() is not None:
+        denied = _DARWIN_PROC["DARWIN_DENIED"]
+        denied.clear()
+        table = _DARWIN_PROC["darwin_snapshot"]()
+        if denied or table is None:
+            raise ProcessObservationUnavailable(
+                f"process table is unreadable: {denied[0] if denied else 'libproc listing failed'}")
+        return table
+    try:
+        output = subprocess.check_output(["ps", "-axo", "pid=,ppid=,pgid=,sess="], text=True)
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise ProcessObservationUnavailable(f"process table is unreadable: {error}") from error
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        try:
+            pid, ppid, pgrp, sid = (int(part) for part in parts[:4])
+        except ValueError:
+            continue
+        found[pid] = {"pid": pid, "ppid": ppid, "pgrp": pgrp, "sid": sid, "starttime": 0,
+                      "state": "?", "cwd": None, "cmdline": ""}
+    return found
+
+
+def _proc_state(pid, starttime):
+    """"alive" for the same running incarnation, "gone" once it has exited or
+    been replaced, and "unknown" when its identity cannot be read."""
+    try:
+        if _proc_table_native():
+            info = _proc_identity(pid)
+        else:
+            info = _proc_snapshot().get(pid)
+    except ProcessObservationUnavailable:
+        return "unknown"
+    if info is None or info.get("state") == "Z" or info.get("starttime") != starttime:
+        return "gone"
+    return "alive"
+
+
+def _proc_alive(pid, starttime):
+    """True only while the same process identity is observed running."""
+    return _proc_state(pid, starttime) == "alive"
+
+
+def _cwd_under(cwd, root: Path) -> bool:
+    """Whether a process cwd, including a deleted suffix, is inside root."""
+    if not isinstance(cwd, str) or not cwd:
+        return False
+    text = cwd[:-len(" (deleted)")] if cwd.endswith(" (deleted)") else cwd
+    if not text:
+        return False
+    root_text = os.path.abspath(root)
+    candidates = [os.path.abspath(text)]
+    try:
+        candidates.append(os.path.realpath(text))
+    except OSError:
+        pass
+    try:
+        root_real = os.path.realpath(root_text)
+    except OSError:
+        root_real = root_text
+    for candidate in candidates:
+        for base in {root_text, root_real}:
+            if candidate == base or candidate.startswith(base.rstrip(os.sep) + os.sep):
+                return True
+    return False
+
+
+def _pidfd_supported():
+    return (sys.platform.startswith("linux")
+            and getattr(os, "pidfd_open", None) is not None
+            and getattr(signal, "pidfd_send_signal", None) is not None)
+
+
+def _signal_confirmed(info, sig):
+    # Signal only through a pidfd bound to the observed incarnation. A
+    # starttime check followed by kill(pid) races with PID reuse: the
+    # process can exit and be replaced between the two operations. With
+    # no identity-bound handle (non-Linux or no pidfd) fail closed: send
+    # nothing, so the worker stays recorded as not exited.
+    if not _proc_alive(info["pid"], info["starttime"]):
+        return False
+    if not _pidfd_supported():
+        return False
+    try:
+        pidfd = os.pidfd_open(info["pid"], 0)
+    except OSError:
+        return False
+    try:
+        if not _proc_alive(info["pid"], info["starttime"]):
+            return False
+        try:
+            signal.pidfd_send_signal(pidfd, sig)
+        except OSError:
+            return False
+        return True
+    finally:
+        try:
+            os.close(pidfd)
+        except OSError:
+            pass
+
+
+def settle_detached_workers_under(root, deadline_s=10, kill_grace_s=5):
+    """Stop processes whose cwd is still under root and wait until they exit.
+
+    Signals only through a pidfd bound to the incarnation whose starttime
+    was observed (Linux). After the SIGTERM deadline, SIGKILL is sent the
+    same way and the same identity is polled for up to ``kill_grace_s``;
+    return happens only when the identity is gone or the bounded grace
+    expires. A refused signal, a platform with no identity-bound handle,
+    or an identity that survives the grace (for example in uninterruptible
+    sleep), stays recorded as not exited so cleanup cannot be reported as
+    verified.
+
+    A process-table scan or identity read that is refused or fails leaves
+    ``observation_complete`` False with its reason in ``observation_errors``:
+    an unreadable table is not an empty root, and a known worker that became
+    unreadable has not exited. Such a worker is neither signalled nor
+    recorded as exited.
+    """
+    root = Path(root)
+    records = {}
+    signaled = set()
+    errors = []
+    deadline = time.monotonic() + deadline_s
+    kill_deadline = deadline + kill_grace_s
+    me = os.getpid()
+
+    def unobserved(error):
+        if str(error) not in errors:
+            errors.append(str(error))
+
+    while True:
+        now = time.monotonic()
+        matched = []
+        try:
+            table = _proc_snapshot()
+        except ProcessObservationUnavailable as error:
+            unobserved(error)
+            table = {}
+        for info in table.values():
+            pid = info["pid"]
+            if pid <= 1 or pid == me or info.get("state") == "Z":
+                continue
+            if not _cwd_under(info.get("cwd"), root):
+                continue
+            matched.append(info)
+            current = records.get(pid)
+            if current is None or current["starttime"] != info["starttime"]:
+                records[pid] = {"pid": pid, "pgid": info["pgrp"], "sid": info["sid"],
+                                "ppid": info["ppid"], "cwd": info["cwd"], "cmdline": info["cmdline"],
+                                "starttime": info["starttime"], "exited": False}
+                signaled.discard(pid)
+        for info in matched:
+            record = records.get(info["pid"])
+            if record is None or record["starttime"] != info["starttime"]:
+                continue
+            sig = signal.SIGKILL if now >= deadline else signal.SIGTERM
+            if sig == signal.SIGKILL or info["pid"] not in signaled:
+                if _signal_confirmed(info, sig):
+                    signaled.add(info["pid"])
+        for record in records.values():
+            state = _proc_state(record["pid"], record["starttime"])
+            if state == "gone":
+                record["exited"] = True
+            elif state == "unknown":
+                unobserved(f"process {record['pid']} became unreadable after it was observed")
+        pending = [info for info in matched if not records[info["pid"]]["exited"]]
+        if records and all(record["exited"] for record in records.values()) and not pending:
+            break
+        if not records and not matched:
+            break
+        if now >= kill_deadline:
+            break
+        time.sleep(0.05)
+    workers = []
+    for record in records.values():
+        state = _proc_state(record["pid"], record["starttime"])
+        if state == "unknown":
+            unobserved(f"process {record['pid']} became unreadable after it was observed")
+        record["exited"] = state == "gone"
+        workers.append({key: record[key] for key in
+                        ("pid", "pgid", "sid", "ppid", "cwd", "cmdline", "starttime", "exited")})
+    # cwd_visible is False on a host whose process table has no working
+    # directories (the ps fallback): a worker under root could not have been
+    # found, so an empty list there is not evidence of a clean root.
+    # identity_signal_available is False where no pidfd can bind the
+    # observed incarnation (non-Linux): such a worker is never signalled
+    # by number, so it stays not exited above.
+    return {"workers": workers, "cwd_visible": _proc_table_native(),
+            "identity_signal_available": _pidfd_supported(),
+            "observation_complete": not errors, "observation_errors": errors}
+
+
+def settlement_unverified_reason(settlement):
+    """Why a settlement does not prove a clean root, or None when it does."""
+    if settlement.get("error"):
+        return f"detached worker settlement failed: {settlement['error']}"
+    if settlement.get("cwd_visible") is not True:
+        return ("detached worker cleanup NOT_RUN: this host has no process "
+                "working-directory source")
+    if settlement.get("observation_complete") is not True:
+        reasons = "; ".join(settlement.get("observation_errors") or []) or "no observation record"
+        return f"detached worker observation incomplete: {reasons}"
+    if any(not isinstance(worker, dict) or worker.get("exited") is not True
+           for worker in settlement.get("workers") or []):
+        return "detached worker still alive after fixture cleanup"
+    return None
+
+
+def _fixture_ownership_roots(cwd, env):
+    """Private temp roots this command may settle. Never the workspace itself."""
+    if not env or not env.get("TMPDIR"):
+        return []
+    try:
+        cwd_path = Path(cwd).resolve()
+        tmp_path = Path(env["TMPDIR"]).resolve()
+    except OSError:
+        return []
+    try:
+        tmp_inside_cwd = tmp_path.is_relative_to(cwd_path)
+        cwd_inside_tmp = cwd_path.is_relative_to(tmp_path)
+    except ValueError:
+        return []
+    if tmp_inside_cwd and tmp_path != cwd_path:
+        return [tmp_path]
+    if cwd_inside_tmp:
+        return [cwd_path]
+    return []
+
+
+def _ownership_root_texts(cwd, env):
+    """Both spellings (as given, and symlinks resolved) of each ownership root."""
+    texts = set()
+    for root in _fixture_ownership_roots(cwd, env):
+        texts.add(os.path.abspath(root))
+        texts.add(os.path.realpath(root))
+    return sorted(texts)
+
+
+def _merge_worker_records(existing, extra):
+    merged = {}
+    for record in list(existing) + list(extra):
+        if not isinstance(record, dict) or not isinstance(record.get("pid"), int):
+            continue
+        current = merged.get(record["pid"])
+        if current is None or current.get("starttime") != record.get("starttime"):
+            merged[record["pid"]] = dict(record)
+        elif record.get("exited") is True:
+            current["exited"] = True
+    return list(merged.values())
+
+
+def _workers_clear(evidence):
+    # An incomplete process observation leaves the counts below unproven.
+    if evidence.get("observation_complete") is not True:
+        return False
+    if type(evidence.get("open_descendants")) is not int or evidence["open_descendants"] != 0:
+        return False
+    workers = evidence.get("detached_workers")
+    return isinstance(workers, list) and all(
+        isinstance(worker, dict) and worker.get("exited") is True for worker in workers)
+
+
+# Cleanup facts for every local command this sweep ran. Scratch retention reads
+# this aggregate, not the displayed rows: a command whose evidence is projected
+# away (browser probe, candidate version, website preparation, builtin setup)
+# still keeps the root when its cleanup is not proven.
+_LOCAL_COMMAND_CLEANUP = []
+
+
+def observe_local_command(evidence):
+    """Keep a reference to one command's record, then return the record unchanged."""
+    _LOCAL_COMMAND_CLEANUP.append(evidence)
+    return evidence
+
+
+def unverified_local_commands():
+    """Diagnostics for each local command whose cleanup is not proven."""
+    return [{"command": item.get("command", []), "exit_code": item.get("exit_code"),
+             "stderr": item.get("stderr", "")}
+            for item in _LOCAL_COMMAND_CLEANUP if item.get("cleanup_verified") is not True]
 
 
 def run(argv, *, cwd, env, timeout=180, input_text=None):
     started = datetime.now(timezone.utc).isoformat()
     evidence = {"command": argv, "started_at": started, "exit_code": None,
                 "stdout": "", "stderr": "", "outcome": "FAIL", "output_truncated": False,
-                "cleanup_verified": False}
+                "cleanup_verified": False, "detached_workers": None, "open_descendants": None,
+                "subreaper": False, "observation_complete": None}
     if os.name != "posix":
         evidence["stderr"] = "QA process-group supervision requires a POSIX host"
         return evidence
     read_fd, write_fd = os.pipe()
+    os.set_blocking(read_fd, False)
     owner_read_fd, owner_write_fd = os.pipe()
     process = None
     threads = []
     tails = {"stdout": bytearray(), "stderr": bytearray()}
     truncated = {"stdout": False, "stderr": False}
+    result_consumed = False
 
     def terminate_group():
         try:
@@ -97,9 +1133,90 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
             except BrokenPipeError:
                 pass
 
+    def consume_result(adopt_exit_code):
+        nonlocal result_consumed
+        if result_consumed:
+            return
+        result_consumed = True
+        chunks = []
+        remaining = _OUTPUT_LIMIT
+        deadline = time.monotonic() + _SUPERVISOR_RESULT_SECONDS
+        complete = False
+        while remaining > 0:
+            try:
+                ready, _, _ = select.select([read_fd], [], [], max(0, deadline - time.monotonic()))
+                if not ready:
+                    break
+                chunk = os.read(read_fd, min(65_536, remaining))
+            except (OSError, ValueError):
+                chunk = b""
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+            if b"\n" in chunk:
+                complete = True
+                break
+        raw = b"".join(chunks).split(b"\n", 1)[0].strip()
+        if not complete or not raw:
+            evidence["stderr"] += "\nQA supervisor cleanup record unavailable or unfinished"
+            if adopt_exit_code:
+                evidence["stderr"] += "\nQA supervisor exited without a command result"
+            return
+        try:
+            payload = json.loads(raw.decode())
+        except (json.JSONDecodeError, UnicodeError, TypeError):
+            payload = None
+        if not isinstance(payload, dict):
+            evidence["stderr"] += "\nQA supervisor cleanup record unreadable"
+            if adopt_exit_code:
+                evidence["stderr"] += "\nQA supervisor exited without a command result"
+            return
+        workers = payload.get("detached_workers")
+        open_descendants = payload.get("open_descendants")
+        if (isinstance(workers, list)
+                and all(isinstance(worker, dict) and type(worker.get("exited")) is bool for worker in workers)
+                and type(open_descendants) is int and open_descendants >= 0
+                and type(payload.get("subreaper")) is bool
+                and type(payload.get("observation_complete")) is bool):
+            evidence["detached_workers"] = workers
+            evidence["open_descendants"] = open_descendants
+            evidence["subreaper"] = payload["subreaper"]
+            evidence["observation_complete"] = payload["observation_complete"]
+            if not payload["observation_complete"]:
+                reasons = payload.get("observation_errors")
+                reasons = "; ".join(str(item) for item in reasons) if isinstance(reasons, list) else ""
+                evidence["stderr"] += ("\nQA supervisor process observation incomplete; descendant cleanup "
+                                       f"is unverified: {reasons or 'no reason recorded'}")
+        else:
+            evidence["stderr"] += "\nQA supervisor cleanup record incomplete"
+        if not adopt_exit_code:
+            return
+        code = payload.get("exit_code")
+        if type(code) is int:
+            evidence["exit_code"] = code
+        elif not evidence["stderr"]:
+            evidence["stderr"] = "QA supervisor exited without a command result"
+
+    def await_supervisor_result():
+        """Ask the supervisor to reap, then read its record without a status."""
+        nonlocal owner_write_fd
+        if result_consumed or process is None:
+            return
+        if owner_write_fd is not None:
+            try:
+                os.close(owner_write_fd)
+            except OSError:
+                pass
+            owner_write_fd = None
+        # The bounded reader includes the supervisor's TERM and KILL settlement
+        # windows. An expired or partial record leaves descendant facts unknown.
+        consume_result(False)
+
     try:
         process = subprocess.Popen(
-            [sys.executable, "-c", _PROCESS_SUPERVISOR, str(write_fd), str(owner_read_fd), *argv],
+            [sys.executable, "-c", _PROCESS_SUPERVISOR, str(write_fd), str(owner_read_fd),
+             json.dumps(_ownership_root_texts(cwd, env)), *argv],
             cwd=cwd, env=env, start_new_session=True, pass_fds=(write_fd, owner_read_fd),
             stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -117,16 +1234,15 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
             threads.append(thread)
         ready, _, _ = select.select([read_fd], [], [], timeout)
         if ready:
-            code = os.read(read_fd, 64)
-            if code:
-                evidence["exit_code"] = int(code)
-            else:
-                evidence["stderr"] = "QA supervisor exited without a command result"
+            consume_result(True)
         else:
             evidence["stderr"] = f"timeout after {timeout}s"
             # Do not wait/reap before signalling: the live or zombie supervisor
             # reserves its own process-group identity throughout cleanup.
             terminate_group()
+            # The supervisor reaps other-session descendants before it publishes
+            # the record. A timeout must not adopt that command status.
+            await_supervisor_result()
     except (OSError, ValueError) as error:
         evidence["stderr"] = str(error)
         if process is not None:
@@ -140,6 +1256,8 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
             os.close(write_fd)
         if owner_read_fd is not None:
             os.close(owner_read_fd)
+        if not result_consumed:
+            await_supervisor_result()
         os.close(read_fd)
         if process is not None:
             swept = False
@@ -153,13 +1271,27 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
                 evidence["stderr"] += f"\nprocess-group cleanup failed: {error}"
                 # Closing the owner pipe also asks the supervisor to sweep its
                 # own group, if the host refuses the outer process's signal.
-                os.close(owner_write_fd)
-                owner_write_fd = None
+                if owner_write_fd is not None:
+                    os.close(owner_write_fd)
+                    owner_write_fd = None
+            workers_clear = _workers_clear(evidence)
+            supervisor_reaped = False
             try:
                 process.wait(timeout=5)
-                evidence["cleanup_verified"] = swept
+                supervisor_reaped = True
+                # Assign only after this first wait. An expired reap stays unverified
+                # even when the supervisor has already exited.
+                evidence["cleanup_verified"] = bool(swept and workers_clear)
+                if not workers_clear:
+                    if evidence["observation_complete"] is False:
+                        pass
+                    elif evidence["open_descendants"] is None:
+                        evidence["stderr"] += "\ndescendant cleanup is unverified without a supervisor cleanup record"
+                    else:
+                        evidence["stderr"] += "\ndetached worker still alive after fixture cleanup"
             except subprocess.TimeoutExpired:
                 evidence["exit_code"] = None
+                evidence["cleanup_verified"] = False
                 evidence["stderr"] += "\nsupervisor reap deadline expired; descendant cleanup is unverified"
                 # Reap the known supervisor only as a final bounded fallback.
                 # A refused group sweep remains an unknown cleanup outcome.
@@ -169,8 +1301,37 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
                     evidence["stderr"] += f"\nsupervisor direct kill failed: {error}"
                 try:
                     process.wait(timeout=5)
+                    supervisor_reaped = True
                 except subprocess.TimeoutExpired:
                     evidence["stderr"] += "\nsupervisor still could not be reaped"
+            if supervisor_reaped:
+                if not evidence["subreaper"] and not _proc_table_native():
+                    # No subreaper to keep a detached worker in the supervisor's
+                    # tree and no working-directory source to find it by: an empty
+                    # worker list proves nothing, so cleanup stays unverified.
+                    evidence["cleanup_verified"] = False
+                    evidence["stderr"] += ("\ndetached worker cleanup NOT_RUN: this host has no child "
+                                          "subreaper and no process working-directory source")
+                try:
+                    extra = []
+                    for root in _fixture_ownership_roots(cwd, env):
+                        settlement = settle_detached_workers_under(root)
+                        extra.extend(settlement.get("workers") or [])
+                        if settlement.get("observation_complete") is not True:
+                            # An unreadable scan proves nothing about this root.
+                            evidence["cleanup_verified"] = False
+                            evidence["stderr"] += "\n" + settlement_unverified_reason(settlement)
+                    if extra:
+                        evidence["detached_workers"] = _merge_worker_records(
+                            evidence.get("detached_workers") or [], extra)
+                        if any(not (isinstance(worker, dict) and worker.get("exited") is True)
+                               for worker in extra):
+                            evidence["cleanup_verified"] = False
+                            if "detached worker still alive after fixture cleanup" not in evidence["stderr"]:
+                                evidence["stderr"] += "\ndetached worker still alive after fixture cleanup"
+                except OSError as error:
+                    evidence["cleanup_verified"] = False
+                    evidence["stderr"] += f"\ndetached worker settlement failed: {error}"
         if owner_write_fd is not None:
             os.close(owner_write_fd)
         for thread in threads:
@@ -183,7 +1344,10 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
         captured_stderr = tails["stderr"].decode(errors="replace")
         evidence["stderr"] = captured_stderr + ("\n" if captured_stderr and evidence["stderr"] else "") + evidence["stderr"]
         evidence["output_truncated"] = any(truncated.values())
-    evidence["outcome"] = "PASS" if evidence["exit_code"] == 0 else "FAIL"
+    # A zero exit is not a completed cleanup. The record keeps that exit code;
+    # callers that certify the run share native_execution_refused.
+    refused = evidence["exit_code"] != 0 or native_execution_refused(evidence)
+    evidence["outcome"] = "FAIL" if refused else "PASS"
     return evidence
 
 
@@ -272,9 +1436,18 @@ def validate_inventory(repo: Path, inventory: dict):
                 errors.append(f"scenario {scenario['id']} has invalid required behavioral cases")
         if "required_rows" in scenario:
             rows = scenario["required_rows"]
-            if (not isinstance(rows, list) or not rows or len(rows) != len(set(rows))
-                    or any(not isinstance(row, str) or not row.strip() for row in rows)):
+            if (not isinstance(rows, list) or not rows
+                    or any(not isinstance(row, str) or not row.strip() for row in rows)
+                    or len(rows) != len(set(rows))):
                 errors.append(f"scenario {scenario['id']} has invalid required behavioral rows")
+        if is_node_test(scenario.get("command", [])) and "required_cases" not in scenario:
+            errors.append(f"scenario {scenario['id']} has no required browser cases")
+        if "required_cases" in scenario:
+            cases = scenario["required_cases"]
+            if (not isinstance(cases, list) or not cases
+                    or any(not isinstance(name, str) or not name.strip() for name in cases)
+                    or len(cases) != len(set(cases))):
+                errors.append(f"scenario {scenario['id']} has invalid required browser cases")
         for case, reason in scenario.get("coverage_gaps", {}).items():
             if not case or not isinstance(reason, str) or not reason.strip():
                 errors.append(f"scenario {scenario['id']} has an unexplained boundary coverage gap")
@@ -431,9 +1604,10 @@ def cargo_inventory_errors(repo, inventory, *, list_cases=False, offline=False):
     errors = []
     with tempfile.TemporaryDirectory(prefix="orbit-qa-cargo-inventory-") as tmp:
         env = isolated_environment(Path(tmp))
-        metadata = run(["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked",
-                        *(["--offline"] if offline else [])],
-                       cwd=repo, env=env)
+        metadata = observe_local_command(run(
+            ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked",
+             *(["--offline"] if offline else [])],
+            cwd=repo, env=env))
         try:
             if metadata.get("output_truncated"):
                 raise ValueError("Cargo inventory metadata output was truncated")
@@ -461,7 +1635,7 @@ def cargo_inventory_errors(repo, inventory, *, list_cases=False, offline=False):
                     if "--" not in listed:
                         listed.append("--")
                     listed.append("--list")
-                    evidence = run(listed, cwd=repo, env=env, timeout=1800)
+                    evidence = observe_local_command(run(listed, cwd=repo, env=env, timeout=1800))
                     selected = validate_cargo_case_listing(evidence, required_tests)
                     body = {"scenario": scenario["id"], "command": listed,
                             "selected_tests": selected, "behavioral_coverage": False}
@@ -518,6 +1692,23 @@ def cli_command_paths(orbit_bin, top_level, cwd, env):
     return sorted(paths)
 
 
+def untracked_entry_identity(entry: Path):
+    """Return `(git_mode, digest)` for one untracked entry, as Git would record it.
+
+    The entry is never followed: a symlink is its own deliverable whose
+    identity is the link text (dangling or not), a regular file is its bytes
+    plus Git's single executable bit, and any other kind (such as a nested
+    repository directory) is bound by kind so it cannot vanish from the ID.
+    """
+    status = os.lstat(entry)
+    if stat.S_ISLNK(status.st_mode):
+        return "120000", hashlib.sha256(os.readlink(os.fsencode(entry))).hexdigest()
+    if stat.S_ISREG(status.st_mode):
+        mode = "100755" if status.st_mode & stat.S_IXUSR else "100644"
+        return mode, hashlib.sha256(entry.read_bytes()).hexdigest()
+    return f"other-{stat.S_IFMT(status.st_mode):o}", ""
+
+
 def candidate_source(repo: Path, excluded_paths=()):
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
     diff = subprocess.check_output(["git", "diff", "--binary", "HEAD"], cwd=repo)
@@ -536,10 +1727,13 @@ def candidate_source(repo: Path, excluded_paths=()):
     for raw_path in untracked_output.split(b"\0"):
         if not raw_path:
             continue
-        path = raw_path.decode()
-        candidate = repo / path
-        if not is_excluded(path) and candidate.is_file():
-            untracked.append((path, hashlib.sha256(candidate.read_bytes()).hexdigest()))
+        path = os.fsdecode(raw_path)
+        if is_excluded(path):
+            continue
+        try:
+            untracked.append((path, *untracked_entry_identity(repo / path)))
+        except FileNotFoundError:
+            continue  # removed since listing: no longer part of the candidate
     material = json.dumps({"head": head, "diff": hashlib.sha256(diff).hexdigest(),
                            "untracked": untracked}, sort_keys=True).encode()
     return {"head": head, "diff_sha256": hashlib.sha256(diff).hexdigest(),
@@ -560,7 +1754,7 @@ def execute_retired_case_commands(scenario, *, repo, env, candidate_id, excluded
         command = case.get("command") if isinstance(case, dict) else None
         if not command:
             continue
-        evidence = run(list(command), cwd=repo, env=env, timeout=1800)
+        evidence = observe_local_command(run(list(command), cwd=repo, env=env, timeout=1800))
         unchanged = candidate_source(repo, excluded_paths)["candidate_id"] == candidate_id
         failure = None if unchanged else "source candidate changed while the scenario ran"
         try:
@@ -595,7 +1789,7 @@ def finalize_result(evidence, assertions, candidate_id, failure=None, accept_non
         failure = (failure + "; " if failure else "") + "command output was truncated; execution evidence is incomplete"
     failed = (type(evidence["exit_code"]) is not int
               or (evidence["exit_code"] != 0 and not accept_nonzero)
-              or evidence.get("cleanup_verified") is False or bool(failure))
+              or evidence.get("cleanup_verified") is not True or bool(failure))
     if notices:
         evidence["missing_capabilities"] = notices
     if notices and not failed:
@@ -667,6 +1861,31 @@ def validate_npm_result(repo, command, evidence):
         "directory": str(archive.parent),
         "files": [{"path": archive.name, "sha256": body["archive"]["sha256"]}]}
     return body["assertions"]
+
+
+def validate_plugin_result(repo, command, evidence):
+    if command != ["./scripts/smoke-plugin-install.sh"]:
+        raise ValueError("plugin assertions require the plugin-install smoke command")
+    if evidence.get("exit_code") != 0:
+        raise ValueError(f"plugin-install smoke exited {evidence.get('exit_code')}")
+    stdout = evidence.get("stdout", "")
+    required = (
+        "plugin-installs-from-candidate-assets",
+        "plugin-invalid-install-is-refused",
+    )
+    # The smoke prints each assertion label only after exercising it: the
+    # valid-install label after the scratch installs are checked, and the
+    # refusal label only after both validators reject an invalid candidate.
+    markers = {
+        "plugin-installs-from-candidate-assets":
+            "Claude Code and Codex scratch installs expose Orbit MCP and skill assets",
+        "plugin-invalid-install-is-refused":
+            "plugin-invalid-install-is-refused: invalid plugin candidate refused",
+    }
+    missing = [label for label in required if markers[label] not in stdout]
+    if missing:
+        raise ValueError(f"plugin-install smoke did not exercise: {', '.join(missing)}")
+    return list(required)
 
 
 def cargo_outer_suites(command, evidence):
@@ -833,6 +2052,72 @@ def validate_cargo_test_evidence(command, evidence, required_tests=(), required_
         raise ValueError(f"cargo test did not complete required behavioral rows: {sorted(missing_rows)}")
 
 
+def is_node_test(command):
+    return (len(command) >= 2 and Path(command[0]).name == "node"
+            and "--test" in command)
+
+
+class NodeTestSkipped(ValueError):
+    """Node evidence is otherwise valid but includes unavailable cases."""
+
+
+def validate_node_test_evidence(command, evidence, required_cases=()):
+    """Require named Node TAP cases to have actually executed and passed.
+
+    A successful Node exit alone cannot establish that a browser measurement
+    ran: a required case may be skipped (kit unavailable / launch failure
+    converted to a skip) or absent (renamed/filtered). Mock cases in the same
+    files execute either way, so only the named cases are measurement evidence.
+    Populates executed/skipped/failed case lists on ``evidence`` before raising.
+    """
+    if not is_node_test(command):
+        return
+    output = evidence.get("stdout", "") + "\n" + evidence.get("stderr", "")
+    executed, skipped, failed = [], [], []
+    for raw in output.splitlines():
+        match = re.match(r"^(ok|not ok) \d+ - (.+)$", raw.strip())
+        if not match:
+            continue
+        name = match.group(2).strip()
+        directive = None
+        if " # " in name:
+            name, directive = (part.strip() for part in name.split(" # ", 1))
+        if match.group(1) == "not ok":
+            failed.append(name)
+        elif directive and directive.upper().startswith(("SKIP", "TODO")):
+            skipped.append(name)
+        else:
+            executed.append(name)
+    # Suite rows (e.g. a describe block) are not cases; required names are
+    # leaf cases, so suite pass/fail is covered by its leaf rows and exit code.
+    evidence["executed_cases"] = sorted(set(executed))
+    evidence["skipped_cases"] = sorted(set(skipped))
+    evidence["failed_cases"] = sorted(set(failed))
+    summary = {}
+    for key in ("tests", "pass", "fail", "skipped"):
+        found = re.search(rf"^# {key} (\d+)$", output, re.MULTILINE)
+        if found:
+            summary[key] = int(found.group(1))
+    if summary:
+        evidence["node_test_counts"] = summary
+    if evidence.get("exit_code") != 0:
+        raise ValueError("node test command did not exit successfully")
+    if evidence.get("output_truncated"):
+        raise ValueError("node test output was truncated; behavioral evidence is incomplete")
+    if failed or summary.get("fail"):
+        raise ValueError(f"node test reported failing cases: {sorted(set(failed))}")
+    missing = sorted(set(required_cases) - set(executed) - set(skipped))
+    if missing:
+        raise ValueError(f"node test did not execute the required browser cases: {missing}")
+    skipped_required = sorted(set(required_cases) & set(skipped))
+    if skipped_required:
+        raise NodeTestSkipped(f"required browser case skipped: {skipped_required}")
+    if skipped:
+        raise NodeTestSkipped(f"node test skipped cases: {sorted(set(skipped))}")
+    if not executed:
+        raise ValueError("node test executed zero passing cases; check the selection")
+
+
 def scenario_decision(inventory, results, candidate_id):
     verify_retained_evidence(results)
     failures = []
@@ -887,9 +2172,12 @@ def isolated_environment(temp: Path, host_env=None):
 
 def browser_environment(base: dict, playwright_browsers_path: Path | None,
                         browser_ld_library_path: str | None,
-                        browser_fontconfig_file: Path | None = None):
+                        browser_fontconfig_file: Path | None = None,
+                        playwright_module: Path | None = None):
     """Add only declared browser capability paths to the disposable child env."""
     env = dict(base)
+    if playwright_module:
+        env["PLAYWRIGHT_MODULE"] = str(playwright_module)
     if playwright_browsers_path:
         env["PLAYWRIGHT_BROWSERS_PATH"] = str(playwright_browsers_path)
     if browser_ld_library_path:
@@ -909,10 +2197,10 @@ def website_build_evidence(repo: Path, temp: Path, env: dict, command):
     shutil.copyfile(repo / "CHANGELOG.md", root / "CHANGELOG.md")
     website_env = {**env, "npm_config_cache": str(root / "npm-cache"),
                    "ASTRO_TELEMETRY_DISABLED": "1"}
-    preparation = run(["npm", "--prefix", "website", "ci"],
-                      cwd=root, env=website_env, timeout=1800)
+    preparation = observe_local_command(run(["npm", "--prefix", "website", "ci"],
+                                            cwd=root, env=website_env, timeout=1800))
     if preparation["outcome"] == "PASS":
-        evidence = run(command, cwd=root, env=website_env, timeout=1800)
+        evidence = observe_local_command(run(command, cwd=root, env=website_env, timeout=1800))
     else:
         evidence = {"command": command, "exit_code": preparation["exit_code"],
                     "stdout": "", "stderr": "website dependency preparation failed; build not run",
@@ -923,16 +2211,87 @@ def website_build_evidence(repo: Path, temp: Path, env: dict, command):
 
 
 def inspect_browser_capability(playwright_module: Path, env: dict, repo: Path):
-    probe = run([
+    probe = observe_local_command(run([
         "node", "--input-type=module", "-e",
         "import { pathToFileURL } from 'node:url'; "
         "const { chromium } = await import(pathToFileURL(process.argv[1]).href); "
         "const browser = await chromium.launch({ headless: true }); "
         "console.log(browser.version()); await browser.close();",
         str(playwright_module),
-    ], cwd=repo, env=env, timeout=180)
+    ], cwd=repo, env=env, timeout=180))
     version = probe["stdout"].strip() if probe["exit_code"] == 0 else None
     return probe, version
+
+
+def inspect_nested_sandbox_capability(capability, env, repo):
+    """Probe the fixture operation itself, never infer availability from scenario errors."""
+    if capability == "sandbox-apply":
+        command = ["/usr/bin/sandbox-exec", "-p", "(version 1) (allow default)", "/usr/bin/true"]
+    else:
+        # Use the same TMPDIR and protected spellings as the Cargo fixtures.
+        # All bytes are synthetic and stay under the disposable sweep root.
+        command = [sys.executable, "-c", """
+import errno, json, sys, tempfile
+from pathlib import Path
+denied = []
+with tempfile.TemporaryDirectory(prefix="qa-protected-write-", dir=sys.argv[1]) as directory:
+    for name in [".env", ".ENV.local", ".Orbit/state.json", ".orbit/private.json", ".Env.local", ".ENVRC"]:
+        path = Path(directory) / name
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("synthetic capability probe\\n")
+        except OSError as error:
+            if error.errno not in (errno.EPERM, errno.EACCES):
+                raise
+            denied.append({"path": name, "errno": error.errno, "error": str(error)})
+print(json.dumps({"denied": denied}))
+sys.exit(77 if denied else 0)
+""", env["TMPDIR"]]
+    evidence = observe_local_command(run(command, cwd=repo, env=env))
+    unavailable = False
+    if capability == "sandbox-apply":
+        unavailable = (evidence["exit_code"] == 71 and
+                       "sandbox_apply: Operation not permitted" in evidence.get("stderr", ""))
+    elif evidence["exit_code"] == 77:
+        try:
+            denied = json.loads(evidence["stdout"])["denied"]
+            unavailable = bool(denied) and all(item["errno"] in (errno.EPERM, errno.EACCES)
+                                               for item in denied)
+        except (ValueError, KeyError, TypeError):
+            pass
+    # A timeout, truncated log or unverified cleanup is a probe failure, not
+    # permission to conceal a harness defect as an unavailable capability.
+    if (unavailable and not evidence.get("output_truncated")
+            and evidence.get("cleanup_verified") is True):
+        evidence["outcome"] = "NOT_RUN"
+    else:
+        finalize_result(evidence, [], "capability-probe")
+    return {"capability": capability, **evidence}
+
+
+def scenario_sandbox_probe(scenario, temp, env, repo, probes):
+    capability = {
+        "definition-policy-boundary": "sandbox-apply",
+        "distributed-drain-owner-roundtrip": "protected-fixture-write",
+        "workflow-process-boundary": "protected-fixture-write",
+    }.get(scenario)
+    if platform.system() != "Darwin" or capability is None:
+        return None
+    if capability not in probes:
+        probes[capability] = inspect_nested_sandbox_capability(capability, env, repo)
+    return probes[capability]
+
+
+def sandbox_capability_gate(scenario, command, candidate_id, probe):
+    if probe is None or probe["outcome"] == "PASS":
+        return None
+    reason = f"{probe['capability']}: preflight {probe['outcome']}; scenario was not executed"
+    result = {"scenario": scenario, "command": command, "exit_code": None,
+              "stdout": "", "stderr": reason, "outcome": probe["outcome"],
+              "assertions": [], "candidate_id": candidate_id, "capability_probe": probe}
+    if probe["outcome"] == "NOT_RUN":
+        result["missing_capabilities"] = [reason]
+    return result
 
 
 def add_result(results, scenario, evidence):
@@ -947,6 +2306,7 @@ def run_builtins(repo: Path, orbit_bin: str, temp: Path, env: dict, candidate_id
     records on every scenario that was not reached.
     """
     results = []
+    sandbox_probes = {}
     root = temp / "home/.orbit"
     work = temp / "workspace"
     other = temp / "other-workspace"
@@ -955,16 +2315,24 @@ def run_builtins(repo: Path, orbit_bin: str, temp: Path, env: dict, candidate_id
         for argv in (["git", "init", "-q", "-b", "main"], ["git", "add", "README.md"]):
             if argv[1] == "add":
                 (path / "README.md").write_text("fixture\n")
-            evidence = run(argv, cwd=path, env=env)
+            evidence = observe_local_command(run(argv, cwd=path, env=env))
             if evidence["exit_code"] != 0:
                 raise RuntimeError(f"fixture setup failed: {evidence}")
-        evidence = run(["git", "-c", "user.name=Orbit QA", "-c", "user.email=qa@example.invalid",
-                        "commit", "-qm", "fixture"], cwd=path, env=env)
+        evidence = observe_local_command(run(
+            ["git", "-c", "user.name=Orbit QA", "-c", "user.email=qa@example.invalid",
+             "commit", "-qm", "fixture"], cwd=path, env=env))
         if evidence["exit_code"] != 0:
             raise RuntimeError(f"fixture commit failed: {evidence}")
 
     def checked(scenario, argv, cwd, assertions, validator, *, accept_nonzero=False):
-        evidence = run(argv, cwd=cwd, env=env)
+        probe = scenario_sandbox_probe(scenario, temp, env, repo, sandbox_probes)
+        gated = sandbox_capability_gate(scenario, argv, candidate_id, probe)
+        if gated is not None:
+            results.append(gated)
+            return None
+        evidence = observe_local_command(run(argv, cwd=cwd, env=env))
+        if probe is not None:
+            evidence["capability_probe"] = probe
         failure = None
         try:
             validator(evidence)
@@ -1239,6 +2607,29 @@ updated_at: 2026-01-01T00:00:00Z
             temp, ["legacy-dry-run-reports-pending-without-mutation"], pending_migration,
             accept_nonzero=True)
 
+    def adopted_isolated_authority(evidence):
+        # An explicit-root data directory records no authority on init. Adoption
+        # is the supported way to name the isolated root; it must not migrate.
+        body = parse_json(evidence, "authority adoption")
+        record = body.get("workspace_authority")
+        if not isinstance(record, dict):
+            raise ValueError("authority adoption returned no workspace_authority record")
+        if record.get("recorded") is not True or record.get("evidence") != "explicit_root":
+            raise ValueError("migration fixture did not record its isolated explicit-root authority")
+        authority = record.get("authority")
+        orbit_dir = record.get("orbit_dir")
+        isolated = migration_root.resolve()
+        if (not isinstance(authority, str) or not isinstance(orbit_dir, str)
+                or Path(authority).resolve() != isolated or Path(orbit_dir).resolve() != isolated):
+            raise ValueError("adoption recorded a workspace or authority other than the isolated root")
+        if record.get("layout_version") != 1 or migration_marker.read_bytes() != migration_before:
+            raise ValueError("authority adoption migrated or changed the legacy marker")
+
+    checked("migration-lifecycle",
+            [orbit_bin, "--root", str(migration_root), "migrate", "--adopt-authority",
+             str(migration_root), "--json"],
+            temp, ["isolated-explicit-root-authority-adopted"], adopted_isolated_authority)
+
     def applied_migration(evidence):
         body = parse_json(evidence, "confirmed migration")
         layout = body.get("layout", {})
@@ -1414,11 +2805,16 @@ spec:
     if enabled:
         plugin_input = {"query": "leakage", "max_depth": 3, "tags": ["rust", "cli"]}
         operator_env = {**env, "ORBIT_OPERATOR": "1"}
-        group = run([*plugin_base, "qashapes", "recommend", "leakage", "--max-depth", "3",
-                     "--tags", "rust", "--tags", "cli", "--format", "json"],
-                    cwd=work, env=operator_env)
-        tool = run([*plugin_base, "tool", "run", "qashapes.recommend", "--input",
-                    json.dumps(plugin_input), "--format", "json"], cwd=work, env=operator_env)
+        group = observe_local_command(run(
+            [*plugin_base, "qashapes", "recommend", "leakage", "--max-depth", "3",
+             "--tags", "rust", "--tags", "cli", "--format", "json"],
+            cwd=work, env=operator_env))
+        tool = observe_local_command(run(
+            [*plugin_base, "tool", "run", "qashapes.recommend", "--input",
+             json.dumps(plugin_input), "--format", "json"], cwd=work, env=operator_env))
+        probe = scenario_sandbox_probe("definition-policy-boundary", temp, env, repo, sandbox_probes)
+        if probe is not None:
+            group["capability_probe"] = tool["capability_probe"] = probe
         failure = None
         try:
             group_body = parse_json(group, "plugin command group")
@@ -1458,9 +2854,10 @@ spec:
         {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"orbit_workspace_list","arguments":{}}},
         {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"orbit_task_show","arguments":{"id":task_id,"workspace":str(work),"model":"codex"}}},
         {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"orbit_task_show","arguments":{"id":task_id,"workspace":str(other),"model":"codex"}}}]
-    mcp_evidence = run([orbit_bin, "mcp", "serve", "--workspace", str(work)], cwd=work,
-                       env=env, input_text="".join(json.dumps(item)+"\n" for item in requests),
-                       timeout=30)
+    mcp_evidence = observe_local_command(run(
+        [orbit_bin, "mcp", "serve", "--workspace", str(work)], cwd=work,
+        env=env, input_text="".join(json.dumps(item)+"\n" for item in requests),
+        timeout=30))
     failure = None
     try:
         responses = {}
@@ -1518,57 +2915,92 @@ spec:
         ["initialize-negotiates-jsonrpc", "tools-list-is-structured", "workspace-list-returns-bound-checkout",
          "task-show-round-trips-over-mcp", "cross-workspace-mcp-read-refused"], candidate_id, failure))
 
-    web_assertions = ["healthz-is-ready", "workspace-api-identifies-bound-checkout",
-                      "task-api-reads-persisted-task"]
-    try:
-        with socket.socket() as sock:
-            sock.bind(("127.0.0.1", 0))
-            port = sock.getsockname()[1]
-    except OSError as error:
-        evidence = {"command": ["bind", "127.0.0.1"], "exit_code": None,
-                    "stdout": "", "stderr": str(error)}
-        add_result(results, "dashboard-api-boundary",
-                   finalize_result(evidence, web_assertions, candidate_id,
-                                   "loopback listener unavailable"))
-        return results, None
-    web = subprocess.Popen([orbit_bin, "--root", str(root), "web", "serve", "--host", "127.0.0.1", "--port", str(port), "--no-open"],
-                           cwd=work, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    web_evidence = {"command":["GET","/healthz","GET","/api/workspaces","GET","/api/tasks"],
-                    "exit_code":1,"stdout":"","stderr":"dashboard did not become ready","outcome":"FAIL"}
-    failure = "dashboard did not become ready"
-    try:
-        for _ in range(80):
-            if web.poll() is not None:
-                break
-            try:
-                health = urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=1).read().decode()
-                workspaces = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/workspaces", timeout=1).read())
-                tasks = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/tasks", timeout=1).read())
-                combined = json.dumps({"health":health,"workspaces":workspaces,"tasks":tasks})
-                if str(work.resolve()) not in combined or task_id not in combined:
-                    raise ValueError("API responses do not identify the fixture workspace and task")
-                web_evidence.update({"exit_code":0,"stdout":combined,"stderr":""})
-                failure = None
-                break
-            except (OSError, json.JSONDecodeError, ValueError):
-                time.sleep(.1)
-    finally:
-        web.terminate()
-        try:
-            web.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            web.kill()
-        captured_stdout, captured_stderr = web.communicate()
-        if failure:
-            web_evidence["stdout"] = captured_stdout
-            web_evidence["stderr"] = captured_stderr or web_evidence["stderr"]
-    add_result(results, "dashboard-api-boundary", finalize_result(web_evidence,
-        web_assertions,
-        candidate_id, failure))
+    add_result(results, "dashboard-api-boundary",
+               dashboard_api_boundary(orbit_bin, root, work, env, task_id, candidate_id))
     return results, None
 
 
-def validate_hosted_macos_evidence(body, scenario, candidate, repo):
+# The dashboard builtin's client. It runs as one supervised command, so the
+# server, any descendant and both output pipes get the same bounded wait,
+# group sweep and descendant settlement as every other command (run()). The
+# server inherits the command's output; the responses come back on one
+# marked line.
+_DASHBOARD_PROBE = r"""import json, subprocess, sys, time, urllib.request
+orbit, root, port, ready_seconds = sys.argv[1:5]
+base = f"http://127.0.0.1:{port}"
+web = subprocess.Popen([orbit, "--root", root, "web", "serve", "--host", "127.0.0.1",
+                        "--port", port, "--no-open"], stdin=subprocess.DEVNULL)
+answer = None
+try:
+    deadline = time.monotonic() + float(ready_seconds)
+    while answer is None and web.poll() is None and time.monotonic() < deadline:
+        try:
+            health = urllib.request.urlopen(base + "/healthz", timeout=1).read().decode()
+            workspaces = json.loads(urllib.request.urlopen(base + "/api/workspaces", timeout=1).read())
+            tasks = json.loads(urllib.request.urlopen(base + "/api/tasks", timeout=1).read())
+            answer = {"health": health, "workspaces": workspaces, "tasks": tasks}
+        except (OSError, ValueError):
+            time.sleep(.1)
+finally:
+    web.terminate()
+    try:
+        web.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        web.kill()
+        web.wait(timeout=5)
+print("qa-dashboard-responses: " + json.dumps(answer), flush=True)
+raise SystemExit(0 if answer is not None else 1)
+"""
+_DASHBOARD_READY_SECONDS = 20
+
+
+def dashboard_api_boundary(orbit_bin, root, work, env, task_id, candidate_id, *, port=None):
+    """Serve the candidate dashboard and read its health, workspace and task APIs.
+
+    Returns the dashboard-api-boundary row. Teardown is the shared bounded
+    supervision: a server or descendant that keeps an output pipe, survives
+    the group sweep or cannot be observed leaves cleanup unverified, and the
+    row cannot pass."""
+    web_assertions = ["healthz-is-ready", "workspace-api-identifies-bound-checkout",
+                      "task-api-reads-persisted-task"]
+    if port is None:
+        try:
+            with socket.socket() as sock:
+                sock.bind(("127.0.0.1", 0))
+                port = sock.getsockname()[1]
+        except OSError as error:
+            evidence = {"command": ["bind", "127.0.0.1"], "exit_code": None,
+                        "stdout": "", "stderr": str(error), "cleanup_verified": True}
+            return finalize_result(evidence, web_assertions, candidate_id, "loopback listener unavailable")
+    evidence = observe_local_command(run(
+        [sys.executable, "-c", _DASHBOARD_PROBE, orbit_bin, str(root), str(port),
+         str(_DASHBOARD_READY_SECONDS)],
+        cwd=work, env=env, timeout=_DASHBOARD_READY_SECONDS + 40))
+    evidence["requests"] = ["GET", "/healthz", "GET", "/api/workspaces", "GET", "/api/tasks"]
+    failure = None
+    try:
+        marked = [line for line in evidence["stdout"].splitlines()
+                  if line.startswith("qa-dashboard-responses: ")]
+        answer = json.loads(marked[-1].split(": ", 1)[1]) if marked else None
+        if not isinstance(answer, dict):
+            raise ValueError("dashboard did not become ready")
+        combined = json.dumps(answer)
+        if str(Path(work).resolve()) not in combined or task_id not in combined:
+            raise ValueError("API responses do not identify the fixture workspace and task")
+    except (ValueError, json.JSONDecodeError) as error:
+        failure = str(error)
+    return finalize_result(evidence, web_assertions, candidate_id, failure)
+
+
+def validate_hosted_macos_evidence(body, scenario, candidate, repo, *, source_files=None):
+    """Check a native certificate's content against candidate files.
+
+    Reads a checkout or an explicit repository-path mount map. This checks
+    what the certificate says, never where it came from: producer fields,
+    transcripts and source hashes are all writable by whoever wrote the file,
+    and a source hash proves content, not execution origin. A certificate
+    earns credit only through owner-recorded artifact authority for its exact
+    digest (see native_certificate_claim and the readiness adapter)."""
     if body.get("evidence_type") != "orbit-macos-platform" or body.get("platform") != "macos":
         raise ValueError("hosted evidence has the wrong type or platform")
     if candidate.get("status"):
@@ -1585,7 +3017,7 @@ def validate_hosted_macos_evidence(body, scenario, candidate, repo):
     producer = body.get("producer", {})
     required_producer = ["repository", "run_id", "run_attempt", "workflow_ref", "workflow_sha"]
     if producer.get("system") != "github-actions" or any(not producer.get(key) for key in required_producer):
-        raise ValueError("hosted evidence lacks authenticated GitHub Actions provenance")
+        raise ValueError("hosted evidence lacks its GitHub Actions producer fields")
     if not str(producer["run_id"]).isdigit() or not str(producer["run_attempt"]).isdigit():
         raise ValueError("hosted evidence has invalid GitHub Actions run identity")
     if ".github/workflows/ci-macos.yml@" not in str(producer["workflow_ref"]):
@@ -1594,7 +3026,9 @@ def validate_hosted_macos_evidence(body, scenario, candidate, repo):
         raise ValueError("hosted evidence has an invalid workflow revision")
 
     expected_identity = {
-        path: hashlib.sha256((repo / path).read_bytes()).hexdigest()
+        path: hashlib.sha256(
+            (source_files[path] if source_files is not None else repo / path).read_bytes()
+        ).hexdigest()
         for path in [
             "scripts/check-ci-macos.sh", "scripts/qa-full-sweep-inventory.json",
             "scripts/test-qa-full-sweep.py", ".github/workflows/ci-macos.yml",
@@ -1602,12 +3036,15 @@ def validate_hosted_macos_evidence(body, scenario, candidate, repo):
     }
     if body.get("source_identity") != expected_identity:
         raise ValueError("hosted evidence source identity does not match the checkout")
-    validate_native_execution(body.get("execution", []), repo, candidate["head"])
+    workflow_path = source_files[".github/workflows/ci-macos.yml"] if source_files is not None else None
+    validate_native_execution(body.get("execution", []), repo, candidate["head"],
+                              workflow_path=workflow_path)
 
 
-def native_required_commands(repo):
+def native_required_commands(repo, *, workflow_path=None):
     commands = []
-    for line in (repo / ".github/workflows/ci-macos.yml").read_text().splitlines():
+    workflow = workflow_path if workflow_path is not None else repo / ".github/workflows/ci-macos.yml"
+    for line in workflow.read_text().splitlines():
         if line.lstrip().startswith("#") or "--record-native-command " not in line:
             continue
         tokens = shlex.split(line.split("# check-ci-macos:")[0])
@@ -1617,13 +3054,37 @@ def native_required_commands(repo):
     return commands
 
 
-def validate_native_execution(records, repo, head):
-    expected = native_required_commands(repo)
+def native_execution_refused(evidence):
+    """A native certificate needs verified cleanup.
+
+    Exit 0 stays on the record and is not acceptance by itself. A missing
+    cleanup flag is the same refusal as an explicit false.
+    """
+    return not isinstance(evidence, dict) or evidence.get("cleanup_verified") is not True
+
+
+def native_shell_status(evidence):
+    """Status a native workflow step returns for one retained record.
+
+    Unknown status and unverified cleanup fail the step. A nonzero command
+    status is returned unchanged. The record keeps the original exit code
+    and output either way.
+    """
+    code = evidence.get("exit_code")
+    if type(code) is not int or (code == 0 and native_execution_refused(evidence)):
+        return 1
+    return code
+
+
+def validate_native_execution(records, repo, head, *, workflow_path=None):
+    expected = native_required_commands(repo, workflow_path=workflow_path)
     if sorted(json.dumps(row.get("command")) for row in records) != sorted(json.dumps(cmd) for cmd in expected):
         raise ValueError("macOS evidence does not record every exact required execution command")
     for row in records:
         if row.get("source_revision") != head or row.get("exit_code") != 0:
             raise ValueError("macOS execution failed or names a different revision")
+        if native_execution_refused(row):
+            raise ValueError("macOS execution cleanup was not verified")
         if row.get("source_status") != [] or row.get("source_stable") is not True:
             raise ValueError("macOS execution requires a clean source candidate stable through each command")
         if execution_notices(row):
@@ -1671,9 +3132,10 @@ def record_native_execution(command, repo, directory):
         json.dump(evidence, stream, indent=2)
     print(evidence.get("stdout", ""), end="")
     print(evidence.get("stderr", ""), end="", file=sys.stderr)
-    # SystemExit(None) means shell success; retain unknown status in the raw
-    # evidence while making supervision/cleanup failures fail the workflow step.
-    return evidence["exit_code"] if evidence["exit_code"] is not None else 1
+    # SystemExit(None) means shell success. Retain the command's own status in
+    # the record, and fail the workflow step when supervision cannot verify
+    # cleanup, including when that status is 0.
+    return native_shell_status(evidence)
 
 
 def process_self_test():
@@ -1771,6 +3233,630 @@ def process_self_test():
             if owner.poll() is None:
                 owner.kill()
                 owner.wait(timeout=5)
+
+        # The submitting fixture is this held setsid worker. Exit is the process
+        # identity disappearing; the short sleeps below only yield the scheduler.
+        ownership_cases = []
+
+        def marker_values(path):
+            values = {}
+            if path.exists():
+                for line in path.read_text().splitlines():
+                    if "=" in line:
+                        key, value = line.split("=", 1)
+                        values[key] = value
+            return values
+
+        def release_fifo(path):
+            deadline = time.monotonic() + 5
+            while True:
+                try:
+                    descriptor = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
+                except OSError as error:
+                    if error.errno == errno.ENXIO and time.monotonic() < deadline:
+                        time.sleep(0.02)
+                        continue
+                    raise
+                try:
+                    os.write(descriptor, b"x")
+                finally:
+                    os.close(descriptor)
+                return
+
+        def wait_until(predicate, limit_s, failure):
+            deadline = time.monotonic() + limit_s
+            while time.monotonic() < deadline:
+                if predicate():
+                    return
+                time.sleep(0.02)
+            raise AssertionError(failure)
+
+        try:
+            # Deterministic PID-reuse regression: the incarnation changes
+            # between identity observation and signaling. No numeric signal
+            # may reach the replacement. An unchanged Linux identity is
+            # signalled only through the pidfd bound to that incarnation.
+            # Non-Linux has no identity-bound handle: the same fixture sends
+            # nothing and reports the signal unsupported, even if pidfd APIs
+            # are patched onto the process.
+            host_signal = _pidfd_supported()
+            fake_pid = 424242
+            original_info = {"pid": fake_pid, "ppid": 1, "pgrp": fake_pid, "sid": fake_pid,
+                             "starttime": 11, "state": "S", "cwd": str(temp), "cmdline": "worker"}
+            replacement_info = {**original_info, "starttime": 22, "cwd": "/unrelated"}
+
+            def sequenced_identity(infos):
+                calls = {"count": 0}
+
+                def fake_identity(_pid):
+                    index = min(calls["count"], len(infos) - 1)
+                    calls["count"] += 1
+                    return infos[index]
+
+                return fake_identity
+
+            def assert_direct_identity(label, infos, platform_override, expected, expected_sends):
+                sent = []
+                killed = []
+                patches = [
+                    mock.patch.dict(globals(), {"_proc_identity": sequenced_identity(infos)}),
+                    mock.patch.object(os, "pidfd_open", return_value=9999, create=True),
+                    mock.patch.object(signal, "pidfd_send_signal",
+                                      side_effect=lambda fd, sig: sent.append((fd, sig)), create=True),
+                    mock.patch.object(os, "kill", side_effect=lambda pid, sig: killed.append((pid, sig))),
+                ]
+                if platform_override is not None:
+                    patches.append(mock.patch("sys.platform", platform_override))
+                started = []
+                try:
+                    for patch in patches:
+                        patch.start()
+                        started.append(patch)
+                    confirmed = _signal_confirmed(original_info, signal.SIGTERM)
+                finally:
+                    for patch in reversed(started):
+                        patch.stop()
+                if confirmed is not expected or killed or len(sent) != expected_sends:
+                    raise AssertionError(
+                        f"{label} identity signal: confirmed={confirmed} killed={killed} sent={sent}")
+                ownership_cases.append({"name": f"signal-identity-{label}", "pid": fake_pid,
+                                        "starttime": 11, "signaled": expected})
+
+            assert_direct_identity("replacement", [original_info, replacement_info], None, False, 0)
+            assert_direct_identity(
+                "unchanged", [original_info, original_info], None, host_signal, 1 if host_signal else 0)
+            # Patched pidfd APIs must not make a non-Linux host signal.
+            assert_direct_identity(
+                "unchanged-unsupported", [original_info, original_info], "darwin", False, 0)
+
+            # Run the embedded supervisor head in a child so its subreaper
+            # prctl and signal handlers stay out of this process.
+            supervisor_driver = (
+                "import json, os, signal, sys\n"
+                "mode = sys.argv[1]\n"
+                "head = sys.argv[2]\n"
+                "sys.argv = ['supervisor', '-1', '-1', '[]']\n"
+                "ns = {'__name__': 'qa-supervisor-fixture'}\n"
+                "exec(head, ns)\n"
+                "original = {'pid': 424242, 'ppid': 1, 'pgrp': 424242, 'sid': 424242,"
+                " 'starttime': 11, 'state': 'S', 'cwd': '/root', 'cmdline': 'worker'}\n"
+                "replacement = {**original, 'starttime': 22, 'cwd': '/unrelated'}\n"
+                "infos = [original, replacement] if mode == 'replacement' else [original, original]\n"
+                "calls = {'count': 0}\n"
+                "def fake_identity(_pid):\n"
+                "    index = min(calls['count'], len(infos) - 1)\n"
+                "    calls['count'] += 1\n"
+                "    return infos[index]\n"
+                "ns['identity'] = fake_identity\n"
+                "sent = []\n"
+                "killed = []\n"
+                "os.pidfd_open = lambda pid, flags: 9999\n"
+                "signal.pidfd_send_signal = lambda fd, sig: sent.append((fd, sig))\n"
+                "os.kill = lambda pid, sig: killed.append((pid, sig))\n"
+                "if mode == 'unchanged-darwin':\n"
+                "    sys.platform = 'darwin'\n"
+                "confirmed = ns['signal_confirmed'](original, signal.SIGTERM)\n"
+                "print(json.dumps({'confirmed': confirmed, 'killed': killed, 'sent': sent}))\n")
+            supervisor_head = _PROCESS_SUPERVISOR.split("def reap(", 1)[0]
+            for label, mode, expected, expected_sends in (
+                    ("replacement", "replacement", False, 0),
+                    ("unchanged", "unchanged", host_signal, 1 if host_signal else 0),
+                    ("unchanged-unsupported", "unchanged-darwin", False, 0)):
+                completed = subprocess.run(
+                    [sys.executable, "-c", supervisor_driver, mode, supervisor_head],
+                    capture_output=True, text=True, timeout=10)
+                if completed.returncode != 0:
+                    raise AssertionError(f"supervisor {label} driver failed: {completed.stderr}")
+                observed = json.loads(completed.stdout.strip().splitlines()[-1])
+                if (observed.get("confirmed") is not expected or observed.get("killed")
+                        or len(observed.get("sent") or []) != expected_sends):
+                    raise AssertionError(f"supervisor {label} identity signal: {observed}")
+                ownership_cases.append({"name": f"supervisor-signal-identity-{label}", "pid": fake_pid,
+                                        "starttime": 11, "signaled": expected})
+
+            settle_killed = []
+            settle_sent = []
+            with (mock.patch.dict(globals(), {
+                    "_proc_identity": sequenced_identity([original_info, replacement_info]),
+                    "_proc_snapshot": lambda: {fake_pid: original_info}}),
+                  mock.patch.object(os, "pidfd_open", return_value=9999, create=True),
+                  mock.patch.object(signal, "pidfd_send_signal",
+                                    side_effect=lambda fd, sig: settle_sent.append((fd, sig)), create=True),
+                  mock.patch.object(os, "kill", side_effect=lambda pid, sig: settle_killed.append((pid, sig)))):
+                identity_settlement = settle_detached_workers_under(temp, deadline_s=0.2, kill_grace_s=0.2)
+            identity_workers = identity_settlement.get("workers") or []
+            if (settle_killed or settle_sent or len(identity_workers) != 1
+                    or identity_workers[0].get("starttime") != 11
+                    or identity_workers[0].get("exited") is not True):
+                raise AssertionError(
+                    f"replacement incarnation was signalled or misrecorded: "
+                    f"killed={settle_killed} sent={settle_sent} settlement={identity_settlement}")
+            ownership_cases.append({"name": "settle-signal-identity-replacement", "pid": fake_pid,
+                                    "starttime": 11, "signaled": False,
+                                    "record": identity_workers[0]})
+
+            def assert_unchanged_settlement(case_name, platform_override, supported):
+                sent = []
+                killed = []
+                patches = [
+                    mock.patch.dict(globals(), {
+                        "_proc_identity": sequenced_identity([original_info, original_info]),
+                        "_proc_snapshot": lambda: {fake_pid: original_info},
+                    }),
+                    mock.patch.object(os, "pidfd_open", return_value=9999, create=True),
+                    mock.patch.object(signal, "pidfd_send_signal",
+                                      side_effect=lambda fd, sig: sent.append((fd, sig)), create=True),
+                    mock.patch.object(os, "kill",
+                                      side_effect=lambda pid, sig: killed.append((pid, sig))),
+                ]
+                if platform_override is not None:
+                    patches.append(mock.patch("sys.platform", platform_override))
+                started = []
+                try:
+                    for patch in patches:
+                        patch.start()
+                        started.append(patch)
+                    settlement = settle_detached_workers_under(
+                        temp, deadline_s=0.2, kill_grace_s=0.2)
+                finally:
+                    for patch in reversed(started):
+                        patch.stop()
+                workers = settlement.get("workers") or []
+                available = settlement.get("identity_signal_available")
+                exited = bool(workers) and workers[0].get("exited") is True
+                if supported:
+                    honest = (
+                        available is True and sent and not killed and not exited
+                        and len(workers) == 1 and workers[0].get("starttime") == 11
+                        and all(item[0] == 9999 for item in sent))
+                else:
+                    honest = (
+                        available is False and not sent and not killed and not exited
+                        and len(workers) == 1 and workers[0].get("starttime") == 11)
+                if not honest:
+                    raise AssertionError(
+                        f"{case_name} identity settlement: available={available} "
+                        f"killed={killed} sent={sent} workers={workers}")
+                ownership_cases.append({
+                    "name": case_name, "pid": fake_pid, "starttime": 11,
+                    "signaled": bool(supported), "record": workers[0]})
+
+            assert_unchanged_settlement(
+                "settle-signal-identity-unchanged", None, host_signal)
+            assert_unchanged_settlement(
+                "settle-signal-identity-unchanged-unsupported", "darwin", False)
+
+            complete_root = Path(env["TMPDIR"]) / "complete-root"
+            complete_root.mkdir()
+            complete_ready = Path(env["TMPDIR"]) / "complete-ready"
+            complete = run([sys.executable, "-c", _HELD_WORKER, str(complete_root),
+                            str(Path(env["TMPDIR"]) / "complete-release"), str(complete_ready),
+                            "complete"], cwd=temp, env=env, timeout=15)
+            complete_marker = marker_values(complete_ready)
+            complete_pid = int(complete_marker["pid"])
+            complete_info = _proc_identity(complete_pid)
+            complete_workers = [worker for worker in complete.get("detached_workers") or []
+                                if worker.get("pid") == complete_pid]
+            if (complete["exit_code"] != 0 or not complete["cleanup_verified"]
+                    or complete_marker.get("fixture") != "qa-held-worker"
+                    or complete_marker.get("root_held") != "1"
+                    or complete_marker.get("mode") != "complete"
+                    or (complete_info is not None and "qa-held-worker" in complete_info.get("cmdline", ""))
+                    or len(complete_workers) > 1
+                    or any(worker.get("exited") is not True for worker in complete_workers)):
+                raise AssertionError(
+                    f"completion did not keep the root through worker exit: {complete_marker} {complete}")
+            if sys.platform.startswith("linux") and complete.get("subreaper") is not True:
+                raise AssertionError(f"Linux supervisor did not become a subreaper: {complete}")
+            ownership_cases.append({"name": "completion", "pid": complete_pid,
+                                    "cwd": complete_marker.get("cwd"), "root": str(complete_root),
+                                    "root_held": True, "exited": True,
+                                    "cleanup_verified": complete["cleanup_verified"],
+                                    "subreaper": complete.get("subreaper"),
+                                    "detached_workers": complete_workers})
+
+            ignore_script = (
+                "import os, signal, sys\n"
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                "open(sys.argv[2], 'w').write("
+                "'fixture=qa-held-worker\\npid=%s\\nwaiting=1\\nmode=ignore-term\\n' % os.getpid())\n"
+                "while True:\n"
+                "    signal.pause()\n")
+
+            if _pidfd_supported():
+                hold_root = Path(env["TMPDIR"]) / "cancel-hold-root"
+                hold_root.mkdir()
+                hold_ready = Path(env["TMPDIR"]) / "cancel-hold-ready"
+                hold_release = Path(env["TMPDIR"]) / "cancel-hold-release"
+                os.mkfifo(hold_release)
+                hold_box = {}
+
+                def run_hold():
+                    hold_box["evidence"] = run(
+                        [sys.executable, "-c", _HELD_WORKER, str(hold_root), str(hold_release),
+                         str(hold_ready), "cancel-hold"], cwd=temp, env=env, timeout=15)
+
+                hold_thread = threading.Thread(target=run_hold)
+                hold_thread.start()
+                try:
+                    wait_until(lambda: marker_values(hold_ready).get("root_held") == "1", 8,
+                               "cancellation did not retain the worker and root")
+                    hold_marker = marker_values(hold_ready)
+                    hold_pid = int(hold_marker["pid"])
+                    hold_info = _proc_identity(hold_pid)
+                    if (not hold_thread.is_alive() or hold_info is None or hold_info.get("state") == "Z"
+                            or not hold_root.exists() or hold_info.get("pgrp") != hold_pid
+                            or "qa-held-worker" not in hold_info.get("cmdline", "")
+                            or not _cwd_under(hold_info.get("cwd"), hold_root)):
+                        raise AssertionError(
+                            f"held worker was not alive inside the root: {hold_marker} {hold_info}")
+                    observed_hold = {"pid": hold_pid, "pgid": hold_info.get("pgrp"),
+                                     "sid": hold_info.get("sid"), "ppid": hold_info.get("ppid"),
+                                     "cwd": hold_info.get("cwd"), "cmdline": hold_info.get("cmdline"),
+                                     "starttime": hold_info.get("starttime"),
+                                     "root_held_while_alive": True, "root": str(hold_root)}
+                    release_fifo(hold_release)
+                    hold_thread.join(timeout=12)
+                    if hold_thread.is_alive():
+                        raise AssertionError("cancellation did not finish after the worker was released")
+                    hold_evidence = hold_box.get("evidence") or {}
+                    matched = [worker for worker in hold_evidence.get("detached_workers") or []
+                               if worker.get("pid") == hold_pid
+                               and worker.get("starttime") == hold_info["starttime"]]
+                    if (hold_evidence.get("exit_code") != 0 or not hold_evidence.get("cleanup_verified")
+                            or _proc_alive(hold_pid, hold_info["starttime"]) or len(matched) != 1
+                            or matched[0].get("exited") is not True or matched[0].get("pgid") != hold_pid
+                            or "qa-held-worker" not in matched[0].get("cmdline", "")):
+                        raise AssertionError(
+                            f"cancellation did not record the worker exit: {hold_evidence}")
+                    if sys.platform.startswith("linux") and hold_evidence.get("subreaper") is not True:
+                        raise AssertionError("cancellation supervisor was not a subreaper")
+                    ownership_cases.append({"name": "cancellation", "observed_alive": observed_hold,
+                                            "exited": True, "cleanup_verified": True,
+                                            "record": matched[0], "root": str(hold_root)})
+                finally:
+                    if hold_thread.is_alive():
+                        try:
+                            release_fifo(hold_release)
+                        except OSError:
+                            pass
+                        hold_thread.join(timeout=12)
+
+                unwind_root = Path(env["TMPDIR"]) / "unwind-root"
+                unwind_root.mkdir()
+                unwind_ready = Path(env["TMPDIR"]) / "unwind-ready"
+                unwind_observed = {}
+                real_select = select.select
+                raised = {"done": False}
+
+                def mocked_select(read_fds, write_fds, except_fds, timeout=None):
+                    if not raised["done"]:
+                        def ready_waiting():
+                            values = marker_values(unwind_ready)
+                            if values.get("waiting") == "1" and values.get("pid"):
+                                unwind_observed["marker"] = values
+                                return True
+                            return False
+                        # The predicate returns as soon as the worker reports ready. The
+                        # launcher stays alive in "cancel-parent-live" mode, so the
+                        # waiting marker remains until this interrupt instead of being
+                        # overwritten by the supervisor's reap within the poll interval.
+                        wait_until(ready_waiting, 60, "unwind worker did not become ready")
+                        unwind_observed["info"] = _proc_identity(int(unwind_observed["marker"]["pid"]))
+                        raised["done"] = True
+                        raise KeyboardInterrupt
+                    return real_select(read_fds, write_fds, except_fds, timeout)
+
+                unwind_raised = False
+                try:
+                    with mock.patch("select.select", side_effect=mocked_select):
+                        run([sys.executable, "-c", _HELD_WORKER, str(unwind_root),
+                             str(Path(env["TMPDIR"]) / "unwind-release"), str(unwind_ready),
+                             "cancel-parent-live"],
+                            cwd=temp, env=env, timeout=15)
+                except KeyboardInterrupt:
+                    unwind_raised = True
+                unwind_marker = marker_values(unwind_ready)
+                unwind_info = unwind_observed.get("info")
+                if (not unwind_raised or unwind_marker.get("root_held") != "1" or not unwind_root.exists()
+                        or unwind_info is None
+                        or _proc_alive(int(unwind_marker["pid"]), unwind_info["starttime"])):
+                    raise AssertionError(
+                        f"unwind left the worker or dropped the root: {unwind_marker} {unwind_info}")
+                ownership_cases.append({"name": "unwind", "pid": int(unwind_marker["pid"]),
+                                        "pgid": unwind_info.get("pgrp"), "sid": unwind_info.get("sid"),
+                                        "cwd": unwind_info.get("cwd"), "cmdline": unwind_info.get("cmdline"),
+                                        "starttime": unwind_info.get("starttime"), "root": str(unwind_root),
+                                        "root_held": True, "exited": True})
+
+                death_root = Path(env["TMPDIR"]) / "owner-death-root"
+                death_root.mkdir()
+                death_ready = Path(env["TMPDIR"]) / "owner-death-ready"
+                death_release = Path(env["TMPDIR"]) / "owner-death-release"
+                launcher = ("import importlib.util; from pathlib import Path; "
+                            "s=importlib.util.spec_from_file_location('qa',"
+                            + repr(str(Path(__file__).resolve())) + "); "
+                            "q=importlib.util.module_from_spec(s); s.loader.exec_module(q); "
+                            "q.run([" + repr(sys.executable) + ",'-c',q._HELD_WORKER,"
+                            + repr(str(death_root)) + "," + repr(str(death_release)) + ","
+                            + repr(str(death_ready)) + ",'cancel-parent-live'],cwd=Path(" + repr(str(temp))
+                            + "),env=q.isolated_environment(Path(" + repr(str(temp)) + ")),timeout=20)")
+                death_owner = subprocess.Popen([sys.executable, "-c", launcher], env=env,
+                                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                death_info = {}
+                try:
+                    def death_started():
+                        if death_owner.poll() is not None:
+                            return False
+                        values = marker_values(death_ready)
+                        if values.get("waiting") != "1":
+                            return False
+                        info = _proc_identity(int(values["pid"]))
+                        if info is None or info.get("state") == "Z":
+                            return False
+                        death_info["info"] = info
+                        return True
+                    try:
+                        wait_until(death_started, 8, "owner-death worker did not start")
+                    except AssertionError:
+                        output, errors = death_owner.communicate(timeout=2)
+                        raise AssertionError(
+                            f"owner-death worker did not start: {output!r} {errors!r}") from None
+                    death_owner.kill()
+                    death_owner.wait(timeout=5)
+                    wait_until(lambda: marker_values(death_ready).get("root_held") == "1"
+                               and not _proc_alive(death_info["info"]["pid"], death_info["info"]["starttime"]),
+                               8, "owner death left the detached worker running")
+                    if not death_root.exists():
+                        raise AssertionError("owner death removed the worker root before exit was observed")
+                    ownership_cases.append({"name": "owner-death", "pid": death_info["info"]["pid"],
+                                            "pgid": death_info["info"].get("pgrp"),
+                                            "sid": death_info["info"].get("sid"),
+                                            "cwd": death_info["info"].get("cwd"),
+                                            "cmdline": death_info["info"].get("cmdline"),
+                                            "starttime": death_info["info"].get("starttime"),
+                                            "root": str(death_root), "root_held": True, "exited": True})
+                finally:
+                    if death_owner.poll() is None:
+                        death_owner.kill()
+                        death_owner.wait(timeout=5)
+
+                settle_root = Path(env["TMPDIR"]) / "settle-root"
+                settle_root.mkdir()
+                settle_ready = Path(env["TMPDIR"]) / "settle-ready"
+                settle_release = Path(env["TMPDIR"]) / "settle-release"
+                os.mkfifo(settle_release)
+                settle_script = r"""# qa-held-worker
+import os, signal, sys
+root, release, ready = sys.argv[1:4]
+def finish(_signum, _frame):
+    open(ready, "w").write(
+        "fixture=qa-held-worker\npid=%s\nroot_held=%s\ncwd=%s\nmode=settle\n"
+        % (os.getpid(), int(os.path.isdir(root)), os.getcwd()))
+    fd = os.open(release, os.O_RDONLY)
+    os.read(fd, 1)
+    os.close(fd)
+    raise SystemExit(0)
+signal.signal(signal.SIGTERM, finish)
+open(ready, "w").write("fixture=qa-held-worker\npid=%s\nwaiting=1\nmode=settle\n" % os.getpid())
+while True:
+    signal.pause()
+"""
+                settle_proc = subprocess.Popen(
+                    [sys.executable, "-c", settle_script, str(settle_root), str(settle_release),
+                     str(settle_ready)],
+                    cwd=settle_root, start_new_session=True, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                settle_box = {}
+                try:
+                    wait_until(lambda: marker_values(settle_ready).get("waiting") == "1", 5,
+                               "direct settle worker did not start")
+
+                    def run_settle():
+                        settle_box["settlement"] = settle_detached_workers_under(settle_root)
+
+                    settle_thread = threading.Thread(target=run_settle)
+                    settle_thread.start()
+                    try:
+                        wait_until(lambda: marker_values(settle_ready).get("root_held") == "1", 8,
+                                   "direct settlement did not signal the worker while the root existed")
+                        settle_info = _proc_identity(settle_proc.pid)
+                        if (not settle_thread.is_alive() or settle_proc.poll() is not None
+                                or not settle_root.exists() or settle_info is None
+                                or settle_info.get("state") == "Z" or settle_info.get("pgrp") != settle_proc.pid
+                                or "qa-held-worker" not in settle_info.get("cmdline", "")):
+                            raise AssertionError(
+                                f"direct settle worker was not held alive: {settle_info}")
+                        release_fifo(settle_release)
+                        settle_thread.join(timeout=8)
+                        if settle_thread.is_alive():
+                            raise AssertionError("direct settlement did not observe worker exit")
+                        settle_workers = (settle_box.get("settlement") or {}).get("workers") or []
+                        if (len(settle_workers) != 1 or settle_workers[0].get("pid") != settle_proc.pid
+                                or settle_workers[0].get("exited") is not True):
+                            raise AssertionError(f"direct settlement record: {settle_workers}")
+                        settle_proc.wait(timeout=5)
+                        if _proc_alive(settle_proc.pid, settle_info["starttime"]):
+                            raise AssertionError("direct settle worker still alive")
+                        ownership_cases.append({"name": "scratch-root-settlement",
+                                                "pid": settle_proc.pid, "pgid": settle_info.get("pgrp"),
+                                                "sid": settle_info.get("sid"), "cwd": settle_info.get("cwd"),
+                                                "cmdline": settle_info.get("cmdline"),
+                                                "starttime": settle_info.get("starttime"),
+                                                "root": str(settle_root), "root_held_while_alive": True,
+                                                "exited": True, "record": settle_workers[0]})
+                    finally:
+                        if settle_thread.is_alive():
+                            try:
+                                release_fifo(settle_release)
+                            except OSError:
+                                pass
+                            settle_thread.join(timeout=8)
+                finally:
+                    if settle_proc.poll() is None:
+                        try:
+                            os.kill(settle_proc.pid, signal.SIGKILL)
+                        except OSError:
+                            pass
+                        settle_proc.wait(timeout=5)
+
+                # A SIGTERM-ignoring setsid worker must be observed actually
+                # exited (identity gone at return, with no intervening sleep)
+                # before settle returns, on both the direct settlement path
+                # and the supervisor reap path.
+                ignore_root = Path(env["TMPDIR"]) / "settle-ignore-term-root"
+                ignore_root.mkdir()
+                ignore_ready = Path(env["TMPDIR"]) / "settle-ignore-term-ready"
+                ignore_proc = subprocess.Popen(
+                    [sys.executable, "-c", ignore_script, str(ignore_root), str(ignore_ready)],
+                    cwd=ignore_root, start_new_session=True, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                try:
+                    wait_until(lambda: marker_values(ignore_ready).get("waiting") == "1", 5,
+                               "SIGTERM-ignoring settle worker did not start")
+                    ignore_info = _proc_identity(ignore_proc.pid)
+                    if ignore_info is None or ignore_info.get("pgrp") != ignore_proc.pid:
+                        raise AssertionError(f"SIGTERM-ignoring settle worker not setsid: {ignore_info}")
+                    ignore_settlement = settle_detached_workers_under(
+                        ignore_root, deadline_s=1, kill_grace_s=5)
+                    if _proc_alive(ignore_proc.pid, ignore_info["starttime"]):
+                        raise AssertionError("settle returned before SIGKILLed worker exited")
+                    ignore_workers = ignore_settlement.get("workers") or []
+                    if (len(ignore_workers) != 1 or ignore_workers[0].get("pid") != ignore_proc.pid
+                            or ignore_workers[0].get("exited") is not True):
+                        raise AssertionError(f"SIGTERM-ignoring settle record: {ignore_workers}")
+                    ignore_proc.wait(timeout=5)
+                    ownership_cases.append({"name": "settle-ignore-term",
+                                            "pid": ignore_proc.pid, "pgid": ignore_info.get("pgrp"),
+                                            "sid": ignore_info.get("sid"), "cwd": ignore_info.get("cwd"),
+                                            "cmdline": ignore_info.get("cmdline"),
+                                            "starttime": ignore_info.get("starttime"),
+                                            "root": str(ignore_root), "exited": True,
+                                            "record": ignore_workers[0]})
+                finally:
+                    if ignore_proc.poll() is None:
+                        try:
+                            os.kill(ignore_proc.pid, signal.SIGKILL)
+                        except OSError:
+                            pass
+                        ignore_proc.wait(timeout=5)
+
+            else:
+                # Production refuses identity-bound signals on this host. A live
+                # setsid worker is discovered, not signalled, and stays not exited.
+                unsupported_root = Path(env["TMPDIR"]) / "unsupported-signal-root"
+                unsupported_root.mkdir()
+                unsupported_ready = Path(env["TMPDIR"]) / "unsupported-signal-ready"
+                unsupported_proc = subprocess.Popen(
+                    [sys.executable, "-c", ignore_script, str(unsupported_root), str(unsupported_ready)],
+                    cwd=unsupported_root, start_new_session=True, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                try:
+                    wait_until(lambda: marker_values(unsupported_ready).get("waiting") == "1", 5,
+                               "unsupported-signal worker did not start")
+                    unsupported_info = _proc_identity(unsupported_proc.pid)
+                    if (unsupported_info is None
+                            or unsupported_info.get("pgrp") != unsupported_proc.pid
+                            or "qa-held-worker" not in unsupported_info.get("cmdline", "")):
+                        raise AssertionError(
+                            f"non-Linux discovery did not see the held worker: {unsupported_info}")
+                    unsupported_settlement = settle_detached_workers_under(
+                        unsupported_root, deadline_s=0.3, kill_grace_s=0.3)
+                    unsupported_workers = unsupported_settlement.get("workers") or []
+                    if (unsupported_settlement.get("identity_signal_available") is not False
+                            or unsupported_proc.poll() is not None
+                            or len(unsupported_workers) != 1
+                            or unsupported_workers[0].get("pid") != unsupported_proc.pid
+                            or unsupported_workers[0].get("exited") is not False):
+                        raise AssertionError(
+                            "unsupported identity signaling was not honest: "
+                            f"poll={unsupported_proc.poll()} settlement={unsupported_settlement}")
+                    ownership_cases.append({
+                        "name": "unsupported-identity-settlement",
+                        "pid": unsupported_proc.pid, "signaled": False, "exited": False,
+                        "identity_signal_available": False,
+                        "record": unsupported_workers[0]})
+                finally:
+                    if unsupported_proc.poll() is None:
+                        try:
+                            os.kill(unsupported_proc.pid, signal.SIGKILL)
+                        except OSError:
+                            pass
+                        unsupported_proc.wait(timeout=5)
+
+            # An identity that survives the bounded grace stays exited=False.
+            stuck_root = Path(env["TMPDIR"]) / "settle-stuck-root"
+            stuck_root.mkdir()
+            stuck_ready = Path(env["TMPDIR"]) / "settle-stuck-ready"
+            stuck_proc = subprocess.Popen(
+                [sys.executable, "-c", ignore_script, str(stuck_root), str(stuck_ready)],
+                cwd=stuck_root, start_new_session=True, stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                wait_until(lambda: marker_values(stuck_ready).get("waiting") == "1", 5,
+                           "stuck settle worker did not start")
+                with mock.patch.dict(globals(), {"_proc_state": lambda _pid, _starttime: "alive"}):
+                    stuck_settlement = settle_detached_workers_under(
+                        stuck_root, deadline_s=0.2, kill_grace_s=0.3)
+                stuck_workers = stuck_settlement.get("workers") or []
+                if (len(stuck_workers) != 1 or stuck_workers[0].get("pid") != stuck_proc.pid
+                        or stuck_workers[0].get("exited") is not False):
+                    raise AssertionError(f"surviving worker was not fail-closed: {stuck_workers}")
+            finally:
+                if stuck_proc.poll() is None:
+                    try:
+                        os.kill(stuck_proc.pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+                stuck_proc.wait(timeout=5)
+
+            if _pidfd_supported():
+                reap_root = Path(env["TMPDIR"]) / "reap-ignore-term-root"
+                reap_root.mkdir()
+                reap_ready = Path(env["TMPDIR"]) / "reap-ignore-term-ready"
+                reap_evidence = run(
+                    [sys.executable, "-c", _HELD_WORKER, str(reap_root),
+                     str(Path(env["TMPDIR"]) / "reap-ignore-term-release"), str(reap_ready),
+                     "ignore-term"], cwd=temp, env=env, timeout=30)
+                reap_marker = marker_values(reap_ready)
+                reap_pid = int(reap_marker["pid"]) if reap_marker.get("pid") else None
+                reap_workers = [worker for worker in reap_evidence.get("detached_workers") or []
+                                if worker.get("pid") == reap_pid]
+                if (reap_evidence.get("exit_code") != 0 or not reap_evidence.get("cleanup_verified")
+                        or reap_marker.get("mode") != "ignore-term" or len(reap_workers) != 1
+                        or reap_workers[0].get("exited") is not True
+                        or _proc_alive(reap_pid, reap_workers[0].get("starttime"))):
+                    raise AssertionError(
+                        f"supervisor reap did not observe SIGTERM-ignoring worker exit: {reap_evidence}")
+                ownership_cases.append({"name": "reap-ignore-term", "pid": reap_pid,
+                                        "root": str(reap_root), "exited": True,
+                                        "cleanup_verified": reap_evidence["cleanup_verified"],
+                                        "record": reap_workers[0]})
+        finally:
+            scratch = Path(__file__).resolve().parent.parent / ".orbit" / "tmp"
+            scratch.mkdir(parents=True, exist_ok=True)
+            (scratch / "detached-worker-ownership.json").write_text(
+                json.dumps({"fixture": "qa-held-worker", "cases": ownership_cases}, indent=2) + "\n")
 
 
 def builtin_init_self_test():
@@ -1915,6 +4001,59 @@ def npm_package_self_test():
             raise AssertionError("exit-zero predicate output substituted for candidate evidence")
 
 
+def plugin_install_self_test():
+    """The plugin refusal assertion is earned only by exercising a refusal."""
+    repo = Path(__file__).resolve().parent.parent
+    scratch = repo / ".orbit/tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    command = ["./scripts/smoke-plugin-install.sh"]
+    env = isolated_environment(scratch / "plugin-self-test-env")
+    evidence = run(command, cwd=repo, env=env)
+    assertions = validate_plugin_result(repo, command, evidence)
+    result = finalize_result(evidence, assertions, "fixture")
+    if result["outcome"] != "PASS" or assertions != [
+            "plugin-installs-from-candidate-assets", "plugin-invalid-install-is-refused"]:
+        raise AssertionError(f"valid plugin candidate failed: {result}")
+    # Exit-zero output without the refusal exercise earns nothing.
+    synthetic = {"exit_code": 0, "stderr": "",
+                 "stdout": "Claude Code and Codex scratch installs expose Orbit MCP and skill assets\n"}
+    try:
+        validate_plugin_result(repo, command, synthetic)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("plugin refusal assertion was earned without a refusal")
+    # Refusal-disabled mutation: validators that always succeed must make
+    # the copied smoke fail, so it cannot earn the assertion.
+    with tempfile.TemporaryDirectory(prefix="plugin-controls-", dir=scratch) as directory:
+        candidate = Path(directory) / "candidate"
+        (candidate / "scripts").mkdir(parents=True)
+        shutil.copytree(repo / "plugin", candidate / "plugin")
+        shutil.copytree(repo / "npm", candidate / "npm")
+        (candidate / ".claude-plugin").mkdir()
+        (candidate / ".agents/plugins").mkdir(parents=True)
+        shutil.copy2(repo / ".claude-plugin/marketplace.json",
+                     candidate / ".claude-plugin/marketplace.json")
+        shutil.copy2(repo / ".agents/plugins/marketplace.json",
+                     candidate / ".agents/plugins/marketplace.json")
+        shutil.copy2(repo / "scripts/smoke-plugin-install.sh",
+                     candidate / "scripts/smoke-plugin-install.sh")
+        for name in ("validate-codex-plugin.sh", "validate-agent-plugin.sh",
+                     "sync-plugin-skills.sh"):
+            stub = candidate / "scripts" / name
+            stub.write_text("#!/usr/bin/env bash\nexit 0\n")
+            stub.chmod(0o755)
+        mutated = run(command, cwd=candidate, env=env)
+        if mutated["exit_code"] == 0:
+            raise AssertionError("refusal-disabled plugin smoke still succeeded")
+        try:
+            validate_plugin_result(candidate, command, mutated)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("refusal-disabled plugin smoke earned assertions")
+
+
 def retired_case_self_test():
     """The three reconciled identities stay executable dispositions, and a bad one cannot validate."""
     repo = Path(__file__).resolve().parents[1]
@@ -2020,6 +4159,7 @@ def self_test():
     process_self_test()
     builtin_init_self_test()
     npm_package_self_test()
+    plugin_install_self_test()
     grouped = "Usage: orbit task <COMMAND>\n\nTasks:\n  add  Create task\nHealth:\n  recheck-blocked\n               Requeue\nOptions:\n  --json\nExamples:\n  orbit task add\n"
     if cli_help_children(grouped) != ["add", "recheck-blocked"]:
         raise AssertionError("grouped CLI help omitted commands or admitted examples")
@@ -2032,11 +4172,21 @@ def self_test():
     if cli_help_children("Usage: orbit task show <ID>\nArguments:\n  id  Task ID\n"):
         raise AssertionError("leaf CLI arguments were mistaken for commands")
     command = ["cargo", "test", "--lib", "renamed_filter"]
-    for output in ("", "running 0 tests\n",
-                   "test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s 9 filtered out;",
-                   "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"):
+    # Each fixture carries a valid target announcement and a complete outer
+    # suite, so it reaches the guard it names instead of failing on the
+    # missing-announcement precondition: removing the zero-passing,
+    # FAILED-summary or malformed-summary guard lets its fixture pass.
+    cargo_stderr = "     Running unittests src/lib.rs (target/debug/deps/fixture)\n"
+    for output in ("",
+                   "running 0 tests\n"
+                   "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+                   "running 1 test\ntest first ... ok\n"
+                   "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
+                   "test result: truncated",
+                   "running 2 tests\ntest first ... ok\ntest second ... FAILED\n"
+                   "test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"):
         try:
-            validate_cargo_test_evidence(command, {"stdout": output, "stderr": "", "exit_code": 0})
+            validate_cargo_test_evidence(command, {"stdout": output, "stderr": cargo_stderr, "exit_code": 0})
         except ValueError:
             continue
         raise AssertionError(f"vacuous or failed cargo evidence passed: {output!r}")
@@ -2058,6 +4208,23 @@ def self_test():
     validate_cargo_test_evidence(command, named, ["required_behavior"])
     if named["passing_tests"] != ["required_behavior"]:
         raise AssertionError("named behavioral evidence was not retained")
+    node_command = ["node", "--test", "--test-reporter=tap", "fixture.test.mjs"]
+    executed_tap = ("TAP version 13\nok 1 - mock case\nok 2 - browser case executes\n"
+                    "1..2\n# tests 2\n# pass 2\n# fail 0\n# skipped 0\n")
+    node_evidence = {"stdout": executed_tap, "stderr": "", "exit_code": 0}
+    validate_node_test_evidence(node_command, node_evidence, ["browser case executes"])
+    if node_evidence["executed_cases"] != ["browser case executes", "mock case"]:
+        raise AssertionError("executed Node cases were not retained")
+    for tap, label in (
+            (executed_tap.replace("ok 2 - browser case executes", "ok 2 - browser case executes # SKIP"), "skipped"),
+            (executed_tap.replace("browser case executes", "renamed case"), "missing"),
+            (executed_tap.replace("ok 2 - browser case executes", "not ok 2 - browser case executes"), "failed")):
+        try:
+            validate_node_test_evidence(node_command, {"stdout": tap, "stderr": "", "exit_code": 0},
+                                        ["browser case executes"])
+        except ValueError:
+            continue
+        raise AssertionError(f"{label} Node case earned measurement evidence")
     packages = {"fixture": [{"name": "boundary", "kind": ["test"]},
                             {"name": "fixture", "kind": ["lib"], "test": True}]}
     for selector in (["--test", "boundary"], ["--lib"]):
@@ -2134,20 +4301,6 @@ def self_test():
     retired_case_self_test()
     if scenario_decision(inventory, [], candidate)[0]:
         raise AssertionError("missing required scenario passed")
-    before = {"workspace":"qa-primary", "artifacts":[]}
-    wrong_workspace = {"workspace":"qa-other", "artifacts":[]}
-    unchanged = {"workspace":"qa-primary", "artifacts":[]}
-    if wrong_workspace["workspace"] == before["workspace"]:
-        raise AssertionError("wrong-workspace self-test fixture is invalid")
-    if unchanged["artifacts"] != before["artifacts"]:
-        raise AssertionError("unchanged-persistence self-test fixture is invalid")
-    for body, message in ((wrong_workspace, "wrong workspace"), (unchanged, "unchanged artifact")):
-        try:
-            if body["workspace"] != "qa-primary" or body["artifacts"] == before["artifacts"]:
-                raise ValueError(message)
-        except ValueError:
-            continue
-        raise AssertionError(f"{message} evidence passed")
     for stdout in ("", "{}", '{"wrong":true}'):
         evidence = {"exit_code":0, "stdout":stdout, "stderr":""}
         try:
@@ -2171,7 +4324,11 @@ def self_test():
             "LD_LIBRARY_PATH": "/host/browser-libraries",
             "FONTCONFIG_FILE": "/host/fonts.conf",
         })
-        browser = browser_environment(isolated, browser_cache, browser_libs, fontconfig)
+        playwright_module = temp / "playwright/index.mjs"
+        browser = browser_environment(isolated, browser_cache, browser_libs, fontconfig,
+                                      playwright_module)
+        if browser.get("PLAYWRIGHT_MODULE") != str(playwright_module):
+            raise AssertionError("declared Playwright module was dropped")
         if browser.get("PLAYWRIGHT_BROWSERS_PATH") != str(browser_cache):
             raise AssertionError("declared Playwright browser cache was dropped")
         if browser.get("LD_LIBRARY_PATH") != str(browser_libs):
@@ -2179,10 +4336,11 @@ def self_test():
         if any(key in isolated for key in ("ORBIT_ROOT", "PLAYWRIGHT_BROWSERS_PATH",
                                           "LD_LIBRARY_PATH", "FONTCONFIG_FILE")):
             raise AssertionError("isolated environment inherited host configuration")
-        observed = run(["python3", "-c", "import json, os; print(json.dumps({key: os.getenv(key) for key in ['PLAYWRIGHT_BROWSERS_PATH', 'LD_LIBRARY_PATH', 'FONTCONFIG_FILE', 'ORBIT_ROOT']}))"],
+        observed = run(["python3", "-c", "import json, os; print(json.dumps({key: os.getenv(key) for key in ['PLAYWRIGHT_MODULE', 'PLAYWRIGHT_BROWSERS_PATH', 'LD_LIBRARY_PATH', 'FONTCONFIG_FILE', 'ORBIT_ROOT']}))"],
                        cwd=temp, env=browser)
         child = parse_json(observed, "browser environment regression")
-        if child != {"PLAYWRIGHT_BROWSERS_PATH": str(browser_cache),
+        if child != {"PLAYWRIGHT_MODULE": str(playwright_module),
+                     "PLAYWRIGHT_BROWSERS_PATH": str(browser_cache),
                      "LD_LIBRARY_PATH": browser_libs, "FONTCONFIG_FILE": str(fontconfig),
                      "ORBIT_ROOT": None}:
             raise AssertionError(f"browser child environment is not bounded: {child!r}")
@@ -2192,9 +4350,31 @@ def self_test():
         evidence = temp / "retained-evidence"
         evidence.mkdir()
         (evidence / "failure.png").write_bytes(b"failure evidence")
-        excluded = [str(evidence.relative_to(temp))]
-        if not any(str(evidence.relative_to(temp)).startswith(path) for path in excluded):
+        # Exercise candidate_source itself in a scratch repo: the retained
+        # evidence is an untracked candidate input until excluded the way
+        # main() excludes it, so dropping the exclusion fails this check.
+        candidate_repo = temp / "candidate-repo"
+        candidate_repo.mkdir()
+        retained = candidate_repo / "retained-evidence"
+        retained.mkdir()
+        (retained / "failure.png").write_bytes(b"failure evidence")
+        (candidate_repo / "keep.txt").write_text("candidate input\n")
+        for git_args in (["init", "-q"],
+                         ["-c", "user.name=qa-full-sweep", "-c", "user.email=qa@example.invalid",
+                          "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "fixture"]):
+            subprocess.run(["git", "-C", str(candidate_repo), *git_args],
+                           check=True, capture_output=True, text=True)
+        included_paths = [path for path, *_ in candidate_source(candidate_repo)["untracked"]]
+        if "retained-evidence/failure.png" not in included_paths:
+            raise AssertionError("candidate fixture did not list retained evidence as an input")
+        excluded_source = candidate_source(candidate_repo, [retained.relative_to(candidate_repo)])
+        excluded_paths = [path for path, *_ in excluded_source["untracked"]]
+        if "retained-evidence/failure.png" in excluded_paths:
             raise AssertionError("retained browser evidence is not excluded from candidate inputs")
+        if "keep.txt" not in excluded_paths:
+            raise AssertionError("candidate exclusion dropped an unrelated candidate input")
+        if any("retained-evidence" in line for line in excluded_source["status"]):
+            raise AssertionError("retained browser evidence leaked into candidate status")
 
         # Exercise the shell boundary too: python3 is a capture fixture, so no
         # full sweep or candidate build is launched by this regression check.
@@ -2284,6 +4464,7 @@ def self_test():
             "execution": [{"command": ["cargo", "test", "-p", "native", "--lib"],
                            "executed_command": ["cargo", "test", "-p", "native", "--lib", "--", "--show-output"],
                            "source_revision": "a" * 40, "source_status": [], "source_stable": True, "exit_code": 0,
+                           "cleanup_verified": True,
                            "stdout": "running 1 test\ntest native_boundary ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s", "stderr": "     Running unittests src/lib.rs (target/debug/deps/native)\n"}],
             "source_identity": {
                 path: hashlib.sha256((repo / path).read_bytes()).hexdigest()
@@ -2303,6 +4484,8 @@ def self_test():
             {**hosted, "execution": []},
             {**hosted, "execution": [{**hosted["execution"][0], "stdout": "native_boundary: test\n1 test, 0 benchmarks"}]},
             {**hosted, "execution": [{**hosted["execution"][0], "stderr": "SKIP: sandbox-exec cannot apply a profile: Operation not permitted"}]},
+            {**hosted, "execution": [{**hosted["execution"][0], "cleanup_verified": False,
+                                      "stderr": hosted["execution"][0]["stderr"] + "detached worker settlement failed: fixture settlement refusal"}]},
         ]
         for mutation in mutations:
             try:
@@ -2325,6 +4508,33 @@ def expand_scenario_command(command, playwright_module, evidence_dir):
             .replace("{evidence_dir}", str(evidence_dir)) for part in command]
 
 
+NATIVE_CERTIFICATE_CLAIM = "native-certificate-claim"
+NATIVE_AUTHORITY_GAP = ("owner-authenticated macOS run/artifact authority: the readiness task needs this exact "
+                        "certificate (native_certificate_sha256) attached from an operator surface")
+
+
+def native_certificate_claim(body, scenario, candidate_id, certificate_sha256, imported_from, evidence_sha256):
+    """The row an imported native certificate earns here: a validated claim, never a PASS.
+
+    The sweep cannot authenticate where a certificate came from, so the row
+    keeps the certificate and its exact digest, and stays NOT_RUN without
+    assertions. Only the readiness adapter credits it, and only when the owner
+    records a trusted writer for an artifact with that digest."""
+    if not re.fullmatch(r"[0-9a-f]{64}", str(certificate_sha256)):
+        raise ValueError("native certificate has no exact sha256 digest")
+    return {
+        "scenario": scenario["id"], "command": body["command"], "exit_code": None,
+        "stdout": json.dumps({"producer": body["producer"],
+                              "source_revision": body["source_revision"]}, sort_keys=True),
+        "stderr": NATIVE_AUTHORITY_GAP, "outcome": "NOT_RUN", "assertions": [],
+        "evidence_type": NATIVE_CERTIFICATE_CLAIM, "certificate_assertions": body["assertions"],
+        "missing_capabilities": [NATIVE_AUTHORITY_GAP],
+        "cleanup_verified": True, "candidate_id": candidate_id,
+        "imported_from": imported_from, "evidence_sha256": evidence_sha256,
+        "native_certificate_sha256": certificate_sha256, "native_evidence": body,
+    }
+
+
 def import_platform_evidence(paths, inventory, candidate, repo):
     imported = []
     candidate_id = candidate["candidate_id"]
@@ -2336,15 +4546,8 @@ def import_platform_evidence(paths, inventory, candidate, repo):
             if scenario is None:
                 raise ValueError(f"{path}: macos-platform is absent from the inventory")
             validate_hosted_macos_evidence(body, scenario, candidate, repo)
-            imported.append({
-                "scenario": "macos-platform", "command": body["command"], "exit_code": 0,
-                "stdout": json.dumps({"producer": body["producer"],
-                                      "source_revision": body["source_revision"]}, sort_keys=True),
-                "stderr": "", "outcome": "PASS", "assertions": body["assertions"],
-                "candidate_id": candidate_id, "imported_from": str(path),
-                "evidence_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                "native_evidence": body,
-            })
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            imported.append(native_certificate_claim(body, scenario, candidate_id, digest, str(path), digest))
             continue
         if body.get("schema_version") != 2 or body.get("candidate", {}).get("id") != candidate_id:
             raise ValueError(f"{path}: evidence is for a different or unsupported candidate")
@@ -2355,6 +4558,19 @@ def import_platform_evidence(paths, inventory, candidate, repo):
             scenario = scenarios.get(result.get("scenario"))
             if not scenario:
                 raise ValueError(f"{path}: imported scenario is not declared")
+            if scenario.get("capability") == "macos" and "native_evidence" in result:
+                # A re-imported certificate stays a claim bound to its
+                # original digest; a report row cannot promote it to PASS.
+                if result.get("command") != scenario.get("command"):
+                    raise ValueError(f"{path}: imported command does not match the required check")
+                if result.get("candidate_id") != candidate_id:
+                    raise ValueError(f"{path}: result candidate does not match report candidate")
+                validate_hosted_macos_evidence(result["native_evidence"], scenario, candidate, repo)
+                imported.append(native_certificate_claim(
+                    result["native_evidence"], scenario, candidate_id,
+                    result.get("native_certificate_sha256"), str(path),
+                    hashlib.sha256(path.read_bytes()).hexdigest()))
+                continue
             if scenario.get("capability") == "local" or result.get("outcome") != "PASS":
                 continue
             expected_command = scenario.get("command")
@@ -2372,11 +4588,12 @@ def import_platform_evidence(paths, inventory, candidate, repo):
             if set(result.get("assertions", [])) != set(scenario["assertions"]):
                 raise ValueError(f"{path}: imported assertions do not match the required guarantees")
             if scenario.get("capability") == "macos":
-                validate_hosted_macos_evidence(result.get("native_evidence", {}), scenario, candidate, repo)
+                raise ValueError(f"{path}: a macOS PASS row without its native certificate earns nothing")
             if scenario.get("capability") == "linux" and body.get("environment", {}).get("os") != "Linux":
                 raise ValueError(f"{path}: Linux cases require Linux execution evidence")
             validate_cargo_test_evidence(result["command"], result, scenario.get("required_tests", []),
                                          scenario.get("required_rows", []))
+            validate_node_test_evidence(result["command"], result, scenario.get("required_cases", []))
             result = finalize_result(dict(result), result["assertions"], candidate_id)
             imported.append({**result, "imported_from":str(path),
                              "evidence_sha256":hashlib.sha256(path.read_bytes()).hexdigest()})
@@ -2384,6 +4601,7 @@ def import_platform_evidence(paths, inventory, candidate, repo):
 
 
 def main():
+    _LOCAL_COMMAND_CLEANUP.clear()
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--orbit-bin", default=shutil.which("orbit"))
@@ -2453,7 +4671,7 @@ def main():
             self_test()
         print("qa-full-sweep inventory: ok")
         return
-    output = (args.output or repo / "qa-full-sweep-report.json").resolve()
+    output = (args.output or repo / ".orbit/tmp/qa-full-sweep/qa-full-sweep-report.json").resolve()
     browser_evidence_dir = (args.browser_evidence_dir or
                             output.parent / f"{output.stem}.browser-evidence").resolve()
     excluded_paths = []
@@ -2496,28 +4714,31 @@ def main():
     }
     scratch = repo / ".orbit/tmp"
     scratch.mkdir(parents=True, exist_ok=True)
-    # A fixture child that outlives its test can write into this tree while it
-    # is removed (observed OSError 66 from host-resource-pressure.json). That
-    # cleanup failure must never take the report with it, so ignore it here
-    # and record anything left behind as a warning below instead.
-    with tempfile.TemporaryDirectory(prefix="orbit-qa-full-", dir=scratch,
-                                     ignore_cleanup_errors=True) as tmp:
+    # Retain roots on unknown cleanup, including an exception before settlement.
+    # Register removal only after every command and the final cwd scan establish
+    # cleanup. Ordinary removal errors must still never take the report with them.
+    detached_worker_settlement = {"workers": []}
+    with ExitStack() as scratch_cleanup:
+        tmp = tempfile.mkdtemp(prefix="orbit-qa-full-", dir=scratch)
         temp = Path(tmp)
         env = isolated_environment(temp)
         browser_env = browser_environment(env, args.playwright_browsers_path,
-                                          args.browser_ld_library_path, args.browser_fontconfig_file)
+                                          args.browser_ld_library_path, args.browser_fontconfig_file,
+                                          args.playwright_module)
         if browser_inputs_valid:
             probe, browser_record["version"] = inspect_browser_capability(
                 args.playwright_module, browser_env, repo)
             browser_record["capability_probe"] = {
                 "command": probe["command"], "exit_code": probe["exit_code"],
                 "stdout": probe["stdout"], "stderr": probe["stderr"],
+                "cleanup_verified": probe.get("cleanup_verified"),
             }
             capabilities["browser"] = probe["exit_code"] == 0
         provenance = None
         if args.build_candidate and not errors:
-            build = run(["cargo", "build", "--locked", "-p", "orbit-cli", "--bin", "orbit",
-                         "--target-dir", str(temp / "candidate-target")], cwd=repo, env=env, timeout=1800)
+            build = observe_local_command(run(
+                ["cargo", "build", "--locked", "-p", "orbit-cli", "--bin", "orbit",
+                 "--target-dir", str(temp / "candidate-target")], cwd=repo, env=env, timeout=1800))
             binary = temp / "candidate-target/debug/orbit"
             binary_record["path"] = "<disposable-candidate-build>"
             unchanged = candidate_source(repo, excluded_paths)["candidate_id"] == candidate_id
@@ -2536,7 +4757,7 @@ def main():
             provenance["scenario"] = "source-binary-provenance"
             results.append(provenance)
         elif binary:
-            evidence = run([str(binary), "--version"], cwd=repo, env=env)
+            evidence = observe_local_command(run([str(binary), "--version"], cwd=repo, env=env))
             binary_record["version"] = evidence["stdout"].strip() if evidence["exit_code"] == 0 else None
             failure = "external binary has no build attestation; use --build-candidate"
             try:
@@ -2547,10 +4768,12 @@ def main():
             results.append({"scenario":"source-binary-provenance",
                 **finalize_result(evidence, [], candidate_id, failure)})
         if provenance and provenance["outcome"] == "PASS" and not errors:
-            binary_record["version"] = run([str(binary), "--version"], cwd=repo, env=env)["stdout"].strip()
+            binary_record["version"] = observe_local_command(
+                run([str(binary), "--version"], cwd=repo, env=env))["stdout"].strip()
             builtin_results, builtin_halt = run_builtins(repo, str(binary), temp, env, candidate_id)
             results.extend(builtin_results)
         browser_run_dir = None
+        sandbox_probes = {}
         if args.run_commands and capabilities["browser"]:
             browser_evidence_dir.mkdir(parents=True, exist_ok=True)
             browser_run_dir = Path(tempfile.mkdtemp(prefix=f"{candidate_id[:12]}-", dir=browser_evidence_dir))
@@ -2567,10 +4790,15 @@ def main():
                 command = expand_scenario_command(scenario["command"], args.playwright_module,
                                                   scenario_evidence_dir)
                 scenario_env = browser_env if scenario["capability"] == "browser" else env
+                probe = scenario_sandbox_probe(scenario["id"], temp, scenario_env, repo, sandbox_probes)
+                gated = sandbox_capability_gate(scenario["id"], command, candidate_id, probe)
+                if gated is not None:
+                    results.append(gated)
+                    continue
                 if scenario["id"] == "website-build":
                     evidence = website_build_evidence(repo, temp, env, command)
                 else:
-                    evidence = run(command, cwd=repo, env=scenario_env, timeout=1800)
+                    evidence = observe_local_command(run(command, cwd=repo, env=scenario_env, timeout=1800))
                 if scenario["capability"] == "browser":
                     scenario_evidence_dir.mkdir(parents=True, exist_ok=True)
                     (scenario_evidence_dir / "harness-result.json").write_text(
@@ -2584,15 +4812,27 @@ def main():
                 try:
                     validate_cargo_test_evidence(command, evidence, scenario.get("required_tests", []),
                                                  scenario.get("required_rows", []))
+                    validate_node_test_evidence(command, evidence, scenario.get("required_cases", []))
                     if scenario["id"] == "npm-package":
                         assertions = []
                         assertions = validate_npm_result(repo, command, evidence)
+                    if scenario["id"] == "plugin-install":
+                        assertions = []
+                        assertions = validate_plugin_result(repo, command, evidence)
                 except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
-                    failure = str(error) if failure is None else failure + "; " + str(error)
-                if scenario["id"] == "npm-package" and failure:
+                    # An exit-zero Node run whose only defect is a skipped case
+                    # is an unavailable capability, not a failure: surface it
+                    # as a SKIP notice so finalize_result keeps NOT_RUN.
+                    if failure is None and isinstance(error, NodeTestSkipped):
+                        evidence["stderr"] = (evidence.get("stderr") or "") + f"\nSKIP: {error}"
+                    else:
+                        failure = str(error) if failure is None else failure + "; " + str(error)
+                if scenario["id"] in ("npm-package", "plugin-install") and failure:
                     assertions = []
                 result = {"scenario":scenario["id"],
                           **finalize_result(evidence, assertions, candidate_id, failure)}
+                if probe is not None:
+                    result["capability_probe"] = probe
                 if scenario["capability"] == "macos" and result["outcome"] == "PASS":
                     result.update(outcome="NOT_RUN", assertions=[], evidence_type="inventory-listing",
                                   inventory_assertions=["macos-required-workflow-is-current"],
@@ -2629,7 +4869,22 @@ def main():
                             "stdout":"", "stderr":str(error), "outcome":"FAIL",
                             "assertions":[], "candidate_id":candidate_id})
 
-    # The scratch TemporaryDirectory above ignores cleanup errors, so a late
+        try:
+            detached_worker_settlement = settle_detached_workers_under(temp)
+        except OSError as error:
+            detached_worker_settlement = {"workers": [], "error": str(error)}
+        # The aggregate covers commands whose rows are never displayed. Rows and
+        # settlement remain part of the decision; an empty cwd scan never clears
+        # an unproven command.
+        unverified_commands = unverified_local_commands()
+        scratch_retained = (
+            bool(unverified_commands)
+            or any(result.get("cleanup_verified") is False for result in results)
+            or settlement_unverified_reason(detached_worker_settlement) is not None)
+        if not scratch_retained:
+            scratch_cleanup.callback(shutil.rmtree, tmp, ignore_errors=True)
+
+    # Scratch removal above ignores cleanup errors, so a late
     # fixture write can leave paths behind. They are evidence of the race,
     # not of a scenario outcome, so record them as a warning on the report.
     scratch_leftovers = []
@@ -2641,12 +4896,21 @@ def main():
         except OSError as error:
             scratch_leftover_error = str(error)
     scratch_cleanup_warning = None
-    if scratch_leftover_error:
+    if scratch_retained:
+        scratch_cleanup_warning = "harness scratch retained because command or descendant cleanup is unverified"
+    elif scratch_leftover_error:
         scratch_cleanup_warning = ("harness scratch cleanup did not finish; leftover walk failed: "
                                    f"{scratch_leftover_error}")
     elif scratch_leftovers:
         scratch_cleanup_warning = (f"harness scratch cleanup did not finish; {len(scratch_leftovers)} "
                                    "leftover path(s) remain under the scratch temp dir")
+    detached_workers = detached_worker_settlement.get("workers") or []
+    settlement_reason = settlement_unverified_reason(detached_worker_settlement)
+    settlement_warning = (f"harness scratch cleanup did not finish; {settlement_reason}"
+                          if settlement_reason else None)
+    if settlement_warning:
+        scratch_cleanup_warning = (f"{scratch_cleanup_warning}; {settlement_warning}"
+                                   if scratch_cleanup_warning else settlement_warning)
 
     covered = {result["scenario"] for result in results}
     for scenario in inventory["scenarios"]:
@@ -2672,13 +4936,24 @@ def main():
         "environment": {"os":platform.system(), "release":platform.release(), "architecture":platform.machine(),
                         "capabilities":capabilities},
         "inventory_sha256": hashlib.sha256(inventory_path.read_bytes()).hexdigest(),
-        "scratch_cleanup": {"leftover_paths": scratch_leftovers,
-                            "warning": scratch_cleanup_warning},
+        "scratch_cleanup": {"root": str(temp), "retained": scratch_retained,
+                            "leftover_paths": scratch_leftovers,
+                            "warning": scratch_cleanup_warning,
+                            "detached_workers": detached_workers,
+                            "observation_complete": detached_worker_settlement.get("observation_complete") is True,
+                            "observation_errors": detached_worker_settlement.get("observation_errors") or [],
+                            "unverified_commands": unverified_commands},
         "results": results, "findings": decision_failures,
+        "capability_gaps": [{"scenario": row["scenario"],
+                             "missing_capabilities": row["missing_capabilities"],
+                             **({"capability_probe": row["capability_probe"]}
+                                if row.get("capability_probe") else {})}
+                            for row in results if row.get("missing_capabilities")],
         "post_publish_handoff": {"npm_freshness":"PENDING", "website_freshness":"PENDING",
                                   "part_of_pre_release_decision":False},
         "decision":"PASS" if full_pass else "INCOMPLETE"
     }
+    output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     print(f"qa-full-sweep: {report['decision']} ({output})")
     if errors:

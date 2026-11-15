@@ -3,7 +3,7 @@ summary: "Auditability — Decisions"
 type: design
 title: "Auditability — Decisions"
 owner: codex
-last_updated: 2026-10-29
+last_updated: 2026-11-14
 last_validated: 2026-10-15
 status: Draft
 feature: auditability
@@ -15,7 +15,7 @@ tags: ["auditability"]
 
 This is the decision log for Auditability. Entries stay in historical order and use title-based links. New entries should use the template in [../CONVENTIONS.md](../CONVENTIONS.md) and cite the task that made the decision real.
 
-Entries preserve the storage layouts and behavior at the time of each decision. The [current implementation](./2_design.md) stores v2 envelopes and retained loop events in SQLite, keeps payload blobs under workspace audit state, and rotates the global process JSONL feeds. Earlier references here to run JSONL files or an unrotated process feed describe historical behavior.
+Entries preserve the storage layouts and behavior at the time of each decision. The [current implementation](./2_design.md) writes v2 envelopes to SQLite, retains historical loop-event rows as opaque payloads, keeps payload blobs under workspace audit state, and rotates the global process JSONL feeds. Earlier references here to loop-event writers, run JSONL files or an unrotated process feed describe historical behavior.
 
 ---
 
@@ -469,7 +469,7 @@ The full reasoning is preserved in [Workflow alone creates shipment commits whil
 ## Provider subprocess liveness is a separate audit event probed at read time
 
 **Recorded:** 2026-07-27 02:57:13.483354Z · [ORB-10496]
-**Paths:** `crates/orbit-engine/src/activity_job/cli_runner/**`, `crates/orbit-core/src/runtime/audit/run.rs`, `crates/orbit-common/src/process/identity.rs`, `crates/orbit-web/src/api/runs/detail.rs`
+**Paths:** `crates/orbit-engine/src/activity_job/cli_runner/**`, `crates/orbit-runtime/src/audit/run/detail.rs`, `crates/orbit-common/src/process/identity.rs`, `crates/orbit-web/src/api/runs/detail.rs`
 
 ### Context
 
@@ -501,7 +501,7 @@ Liveness is computed at read time, not stored. `orbit_common::process::identity:
 ## Provider completions correlate by invocation ancestry
 
 **Recorded:** 2026-09-05 · [ORB-11284]
-**Paths:** `crates/orbit-core/src/runtime/audit/run.rs`, `crates/orbit-web/src/api/tests/runs/`
+**Paths:** `crates/orbit-runtime/src/audit/run/detail.rs`, `crates/orbit-web/tests/http_api/runs.rs`
 
 ### Context
 
@@ -613,15 +613,15 @@ Deprecate `agent` as a normal tool-call input, prefer exact `model`, infer the a
 
 **Context.** Claude Haiku 5.5, the OpenAI GPT-6/GPT-5.6 rows and Grok 4.5–4.7 bill one request at higher rates for the whole request once that request's own prompt crosses a threshold (over 100,000 tokens, over 272,000 input tokens, and 200,000 or more prompt tokens). The price table had no tier dimension, so every invocation was derived at short-context rates; Haiku 5.5's derived total was 36% of its provider-reported cost. An invocation sums many requests, so its totals cannot say which requests crossed: about 74% of fleet invocations had totals over their model's threshold, while their individual requests mostly did not. Two alternatives were real: key the tier on invocation totals, which bills a run of many short requests as long context, or capture per-request prompt sizes and key on them.
 
-**Decision.** The tier key is one request's prompt: every input-side token after the base row's `input_token_basis` (uncached input, cache reads and both cache writes), compared inclusively against a tier's `min_prompt_tokens`. Tiers are a separate `prompt_tiers` list of `PromptTierRow`s with their own model and effective period, so base `prices` rows stay short-context and none is rewritten. `InvocationTrace.long_prompt_requests` captures the usage of each request whose prompt may reach the 100,000-token floor (`LONG_PROMPT_CAPTURE_FLOOR_TOKENS`, the lowest published threshold; the table refuses a tier below it). Codex's session rollout yields one per `token_count` `last_token_usage` whose running total moved. Claude's message stream carries each request's final input-side buckets but only its starting `output_tokens`, so it records an empty list when no request may reach the floor and `None` otherwise. Other providers, including Grok's single JSON wrapper, record `None`. The list persists in the nullable `invocations.long_prompt_requests_json` column (store migration v71). `cost_from_rows` prices the totals at the base row and adds each tiered request's tier-minus-base cost. Without captured requests, the totals bound every request: below the threshold the base cost is exact, and at or above it the derived cost is `None`.
+**Decision.** The tier key is one request's prompt: every input-side token after the base row's `input_token_basis` (uncached input, cache reads and both cache writes), compared inclusively against a tier's `min_prompt_tokens`. Tiers are a separate `prompt_tiers` list of `PromptTierRow`s with their own model and effective period, so base `prices` rows stay short-context and none is rewritten. `InvocationTrace.long_prompt_requests` captures the usage of each request whose prompt may reach the 100,000-token floor (`LONG_PROMPT_CAPTURE_FLOOR_TOKENS`, the lowest published threshold; the table refuses a tier below it). Codex's session rollout yields one per `token_count` `last_token_usage` whose running total moved. Claude's `--include-partial-messages` stream pairs final input-side buckets from `message_start` with final output from `message_delta` by `api_message_id`, requiring `message_stop` and the terminal `result`. Assistant content blocks repeat starting usage and are deduplicated by request ID. A complete stream records an empty list when no request may reach the floor; incomplete evidence remains `None`. A possibly-long request with a nonzero cache-creation total must include its 5m/1h TTL split; aggregate-only usage is incomplete. Other providers, including Grok's single JSON wrapper, record `None`. The list persists in the nullable `invocations.long_prompt_requests_json` column (store migration v71). `cost_from_rows` prices the totals at the base row and adds each tiered request's tier-minus-base cost. Without captured requests, the totals bound every request: below the threshold the base cost is exact, and at or above it the derived cost is `None`.
 
 **Consequences.**
 - Codex runs with a readable rollout price long requests at their tier, and standard requests keep their short-context rates. A Claude run whose stream shows every request under 100,000 prompt tokens keeps its exact short-context cost even when its totals are larger.
 - Tier periods start at the first verified observation (2026-10-29T04:23:10Z). Earlier invocations hold no per-request usage and keep their shipped pricing, so history is not repriced.
 - An older binary writes `NULL` to the new column, and its rows read as not captured.
-- Cost: from the tier boundary, an invocation without per-request usage whose totals reach its model's threshold has an unknown derived cost. This covers Grok runs over 200,000 prompt tokens, Claude runs with any request at or over 100,000 prompt tokens (most Haiku 5.5 work: 21 of 30 requests in one measured run), Claude `--output-format json` or truncated captures, Codex runs whose rollout is missing, and worker-posted invocations. Their spend is reported as unknown rather than underpriced.
+- Cost: from the tier boundary, an invocation without per-request usage whose totals reach its model's threshold has an unknown derived cost. This covers Grok runs over 200,000 prompt tokens, Claude runs missing final output or TTL buckets for a possibly-long request, Claude `--output-format json` or truncated captures, Codex runs whose rollout is missing, and worker-posted invocations. Their spend is reported as unknown rather than underpriced.
 - Cost: requests under 100,000 prompt tokens are not retained. A future tier below that floor would need a lower capture floor first, and invocations recorded before the change could not use the new tier.
-- Cost: Claude's stream repeats each request's starting usage on every content-block message (a measured run streamed 232 output tokens against 73,963 billed), so a long Haiku request's output, and with it the tier premium, is not on the stream. Pricing the long requests from it would have derived $0.309 against a provider-reported $0.421. Capturing it needs each request's final usage, such as the `message_delta` events of `--include-partial-messages`.
+- Cost: Claude's partial content events materially grow stdout. The runner discards only complete recognized `content_block_start/delta/stop` stream events before bounded capture, while retaining complete assistant blocks, message usage events, and the terminal result. Observed-byte accounting still sees every byte, but the `agent_output` raw-output relay drops the same complete recognized `content_block_*` events [ORB-24019] only when they form a complete physical line within its 64 KiB line limit: each is repeated in full by its `assistant` frame, and relaying them flooded the budgeted `orbit-agent.jsonl` feed and its run-log readers with token fragments. The relay still keeps `assistant`, `user`, `result`, `rate_limit_event` and `message_start/delta/stop` frames. Malformed lines and every fragment of oversized lines pass through the relay; after a line is split, its final fragment is not classified independently. Capture also preserves malformed and oversized lines, while actual capture truncation still refuses per-request pricing. This avoids increasing the capture limit or estimating final output from the assistant messages' starting counts. A recorded Claude Code 2.1.322 run emitted 1,107,851 bytes and reported 3 starting versus 14,159 final/billed output tokens.
 - Cost: the tier-minus-base sum assumes each captured request is part of the invocation totals. A Claude subagent request on another model is excluded, and the Haiku whole-request rule is applied as published.
 
 ## Task References
@@ -661,5 +661,18 @@ Deprecate `agent` as a normal tool-call input, prefer exact `model`, infer the a
 - [ORB-10680] — moved hub friction records into the host-global SQLite store to bound scan memory.
 - [ORB-10890] — record an explicitly-untrusted self-reported actor beside the trusted `role` so unauthenticated MCP traffic is attributable-but-labelled.
 - [ORB-19680] — price prompt-size tiers per request from captured per-request usage, never from invocation totals.
+- [ORB-00067] — Preserved driving-agent attribution on workflow task transitions.
+- [ORB-00089] — Wired runtime identity into activity-job tool contexts.
+- [ORB-00091] — Removed system attribution from agent-driven automation transitions.
+- [ORB-00191] — Added dashboard parity before retiring the metrics CLI.
+- [ORB-10257] — Added workspace ownership, presence and execution-profile projections.
+- [ORB-10348] — Expanded deprecation review to stale codebase artifact references.
+- [ORB-10365] — Preserved learning scope tags on updates and retired obsolete records.
+- [ORB-10458] — Carried per-task implementer identity into workflow commit authorship.
+- [ORB-10598] — Retitled the four non-identifying friction records after deployment.
+- [ORB-10888] — Added the canonical actor projection beside the unchanged raw role.
+- [ORB-11284] — Correlated provider completions by invocation ancestry.
+- [ORB-23935] — Capture final Claude request usage from partial message events without exhausting bounded stdout capture.
+- [ORB-24019] — Drop redundant Claude `content_block_*` stream events from the `agent_output` relay, keeping the relay consistent with the bounded capture.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

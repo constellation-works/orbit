@@ -12,6 +12,27 @@ use serde_json::Value;
 /// satisfies their typed contract; a secret-bearing identifier must not become
 /// a new accepted identifier after redaction.
 pub fn redact_secret_values_json(mut value: Value, secrets: &[String]) -> Value {
+    let variants = secret_variants(secrets);
+    let redactor = PatternRedactor::http_default();
+    redact_values_recursive(&mut value, &variants, &redactor);
+    value
+}
+
+/// Text form of [`redact_secret_values_json`]: every supplied secret value,
+/// and its JSON-string and Debug encodings, becomes `[REDACTED]`, then
+/// credential shapes are scrubbed. For captured process output (a log, a
+/// stdout document) that may echo values the caller handed the process.
+pub fn redact_secret_values_text(text: &str, secrets: &[String]) -> String {
+    redact_values_text(
+        text,
+        &secret_variants(secrets),
+        &PatternRedactor::http_default(),
+    )
+}
+
+/// Each non-empty secret with its JSON-string and Debug encodings, longest
+/// first so a longer variant is replaced before a prefix of it.
+fn secret_variants(secrets: &[String]) -> Vec<String> {
     let mut variants = Vec::new();
     for secret in secrets.iter().filter(|s| !s.is_empty()) {
         variants.push(secret.clone());
@@ -23,9 +44,7 @@ pub fn redact_secret_values_json(mut value: Value, secrets: &[String]) -> Value 
     }
     variants.sort_unstable_by_key(|s| std::cmp::Reverse(s.len()));
     variants.dedup();
-    let redactor = PatternRedactor::http_default();
-    redact_values_recursive(&mut value, &variants, &redactor);
-    value
+    variants
 }
 
 fn redact_values_text(text: &str, variants: &[String], redactor: &PatternRedactor) -> String {

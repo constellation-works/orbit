@@ -3,9 +3,10 @@
 
 A unit test is a `#[test]` (including `#[r#test]`) or `#[<path>::test]`
 attribute (such as `#[tokio::test]`) under `crates/<crate>/src/**`, whether it
-sits inline or in a sibling `tests/` directory. This is the measure the
-boundary-first retirement used (see docs/design-patterns/test_strategy.md),
-so the numbers stay comparable.
+sits inline or in a sibling `tests/` directory. Other attributes on the same
+line, such as `#[cfg(test)]` or `#[allow(dead_code)]`, do not hide it. This is
+the measure the boundary-first retirement used (see
+docs/design-patterns/test_strategy.md), so the numbers stay comparable.
 
   unit-test-inventory.py                          print the inventory as JSON
   unit-test-inventory.py --check BASELINE         fail when a test is not admitted
@@ -20,8 +21,17 @@ from collections import Counter
 from pathlib import Path
 
 SCHEMA_VERSION = 2
-TEST_ATTRIBUTE = re.compile(r"^\s*#\[(?:(?:r#)?[A-Za-z_][A-Za-z0-9_]*::)*(?:r#)?test\b")
-FUNCTION = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(r#)?([A-Za-z_][A-Za-z0-9_]*)\b")
+# Not anchored at the start of the line: `#[cfg(test)] #[test]` is still a test.
+TEST_ATTRIBUTE = re.compile(r"#\[(?:(?:r#)?[A-Za-z_][A-Za-z0-9_]*::)*(?:r#)?test\b")
+FUNCTION = re.compile(
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?"
+    # The header is matched against `rust_code_only` output, where every
+    # string literal (including an `extern \"ABI\"`) is blanked to spaces,
+    # so the quoted ABI can never be present. Accept a bare `extern` (the
+    # masked form) as well as `extern \"ABI\"` (the unmasked form).
+    r"(?:(?:const|async|unsafe)\s+|extern(?:\s+\"[^\"]*\")?\s+)*"
+    r"fn\s+(r#)?([A-Za-z_][A-Za-z0-9_]*)\b"
+)
 RUST_TOKEN = re.compile(
     r'''(?P<comment>//[^\n]*|/\*)|(?P<raw>(?:br|cr|r)(?P<hashes>\#*)")|'''
     r'''(?P<literal>(?:b|c)?"(?:\\.|[^"\\])*"|'''
@@ -71,16 +81,26 @@ def test_function_paths(text, relative_path):
     """Associate test attributes with function names, across intervening attributes/comments.
 
     Like the retirement inventory, this scans source rather than expanding Rust
-    macros or evaluating cfg. Keep repeated identities: two inline modules in
-    one file may have the same function name, and both consume an admission.
+    macros or evaluating cfg. A test attribute counts wherever it appears on a
+    masked line, so an earlier attribute on that line cannot hide it. Keep
+    repeated identities: two inline modules in one file may have the same
+    function name, and both consume an admission.
     """
     paths = []
     pending = None
+    pending_has_code = False
     for number, line in enumerate(rust_code_only(text).splitlines(), 1):
-        if TEST_ATTRIBUTE.match(line):
+        if TEST_ATTRIBUTE.search(line):
+            # Duplicate test attributes on one function are accepted by
+            # rustc (warning only); they still name a single test.
             if pending is not None:
-                raise ValueError(f"{relative_path}:{pending}: test attribute has no function name")
-            pending = number
+                if pending_has_code:
+                    raise ValueError(f"{relative_path}:{pending}: test attribute has no function name")
+                # Otherwise this is another attribute on the same function;
+                # keep the first pending line and fall through to the header
+                # check below (a same-line `#[test] fn` still names the test).
+            else:
+                pending = number
         if pending is not None:
             # Also accept attributes and the function header on the same line.
             header = line
@@ -93,6 +113,16 @@ def test_function_paths(text, relative_path):
             if function:
                 paths.append(f"{relative_path}::{function.group(1) or ''}{function.group(2)}")
                 pending = None
+                pending_has_code = False
+            elif header.strip():
+                # A non-empty remainder that is not a function header is an
+                # unnameable item (macro call, const/static, `extern crate`,
+                # ...) or a split-header fragment. Remember it so a later
+                # test attribute fails with the first location instead of
+                # silently dropping the first test. Pure attribute, comment
+                # (masked to spaces) and blank lines leave this unset, so
+                # stacked attributes on one function still count once.
+                pending_has_code = True
     if pending is not None:
         raise ValueError(f"{relative_path}:{pending}: test attribute has no function name")
     return paths

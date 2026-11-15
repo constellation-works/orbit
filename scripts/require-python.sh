@@ -12,6 +12,10 @@
 # Kept to macOS Bash 3.2 syntax like the other guardrail scripts.
 set -euo pipefail
 
+if [[ $# -gt 1 ]]; then
+  echo "usage: require-python.sh [--yaml]" >&2
+  exit 2
+fi
 case "${1:-}" in
   "" | --yaml) ;;
   *) echo "usage: require-python.sh [--yaml]" >&2; exit 2 ;;

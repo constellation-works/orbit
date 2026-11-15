@@ -3,8 +3,8 @@ summary: "Agent Families — Overview"
 type: design
 title: "Agent Families — Overview"
 owner: grok
-last_updated: 2026-08-09
-last_validated: 2026-10-30
+last_updated: 2026-11-05
+last_validated: 2026-11-07
 status: Draft
 stage: shipped
 next: "—"
@@ -26,7 +26,7 @@ Family defaults were originally also used to pick activity role models, but that
 ## 2. Core Concepts
 
 - **Agent Family:** A stable identifier such as `claude`, `codex`, `gemini`, or `grok` used for routing, attribution, and legacy model inference.
-- **Model Inference:** `agent_from_model()` and `provider_from_model()` in `crates/orbit-types/src/identity/actor.rs`, together with `infer_agent_family_from_model()` in `crates/orbit-types/src/identity/agent_pair.rs`, map concrete model strings to families and providers. `infer_agent_family_from_model()` remains for legacy artifact recovery.
+- **Model Inference:** `agent_from_model()` in `crates/orbit-types/src/identity/actor.rs`, together with `infer_agent_family_from_model()` in `crates/orbit-types/src/identity/agent_pair.rs`, map concrete model strings to families. `infer_agent_family_from_model()` remains for legacy artifact recovery.
 - **Crew:** A named provider-model assignment loaded from `.orbit/config.toml` under `[crews.<name>]`; agent dispatch resolves an explicit override, then `task.crew`, then the layered default.
 - **Default Crew:** `[workflow].default_crew` supplies the workspace default tier when no explicit override or task crew is set. The resolved default can fall through to environment and system configuration.
 - **Executor:** A YAML definition in `crates/orbit-core/assets/executors/<name>.yaml` describing how to invoke an agent CLI. The file is named for the execution lane (`antigravity.yaml` for `agy`), which may differ from the model family (`gemini`).
@@ -40,9 +40,9 @@ Family defaults were originally also used to pick activity role models, but that
 | Task-level crew field | `crates/orbit-types/src/task/model/task.rs` | [ORB-00058] |
 | Runtime config loading | `crates/orbit-config/src/resolved/config.rs` | [ORB-00058] |
 | Default config template | `crates/orbit-config/assets/default-config.toml` | [ORB-00058] |
-| Run-time crew resolution | `crates/orbit-runtime/src/engine/crew.rs` | [ORB-00058] |
+| Run-time crew resolution | `crates/orbit-runtime/src/engine/crew/resolution.rs` | [ORB-00058] |
 | Tool and CLI crew surfaces | `crates/orbit-tools/src/builtin/orbit/task/` | [ORB-00058] |
-| Grok family onboarding | `crates/orbit-types/src/identity/actor.rs`, `crates/orbit-types/src/identity/agent_pair.rs` | [ORB-00042] |
+| Grok family onboarding | `crates/orbit-types/src/identity/actor.rs`, `crates/orbit-types/src/identity/agent_pair.rs` | [ORB-00042], [ORB-00043] |
 
 ## Task References
 

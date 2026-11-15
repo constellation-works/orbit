@@ -1,4 +1,4 @@
-Show a task by ID. Runs on reports OS tags intersected with the stored crew executor host_os, naming the source or an unresolved/conflicting constraint. This readout is derived and never stored. An unset crew leaves automatic routing undecided.
+Show a task by ID. The `Runs on` readout summarizes the task's effective OS requirement by intersecting its OS tags with the stored crew executor's `host_os`. It identifies the source of the requirement or any unresolved or conflicting constraint. This readout is derived and never stored. Without a crew, automatic routing remains undecided.
 
 Usage: orbit task show [OPTIONS] <ID>
 
@@ -8,10 +8,10 @@ Arguments:
 
 Options:
       --host <HOST>
-          Host that `--workspace` names, by registered host name or `machine_id` (see `orbit host list`). Orbit reads that host's live workspace list and uses the selector it lists for the workspace. Without it, a task id goes to the host its prefix names
+          Host that `--workspace` names (`orbit host list` name or `machine_id`); without it a task id routes by its prefix
 
       --fields <FIELDS>...
-          Print only the specified field projection(s), for example `--fields title,status`. Repeat the flag or use a comma-separated list. Valid names and JSON output shapes: installed Orbit skill `references/task-fields.md`.
+          Print only the specified field projection(s), for example `--fields title,status`. Repeat the flag or use a comma-separated list. Valid names and JSON output shapes: installed Orbit skill `references/task-fields.md`. No pagination with a projection on a claimed read: drop the projection to page the full task, or drop pagination for a projection.
 
   -h, --help
           Print help (see a summary with '-h')

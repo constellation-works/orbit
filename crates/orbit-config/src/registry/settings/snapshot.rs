@@ -2,16 +2,18 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_common::observability::log_rotation::LogRotationConfig;
 use orbit_types::identity::Crew;
 use orbit_types::workflow::automation::members::PreparationFreshness;
 use orbit_types::workflow::{
-    ConventionTemplate, CrewPurpose, DeliveryConventions, MissingSectionPolicy,
-    PrBodyTemplateSource, ScreenshotSection, TemplateSurface,
+    COMMIT_ORCHESTRATED_BY_TRAILER, COMMIT_REGRESSION_TRAILERS, ConventionTemplate, CrewPurpose,
+    DeliveryConventions, MissingSectionPolicy, PR_DRAFT, PR_FRESHNESS_SECTION,
+    PR_ORCHESTRATION_TRAILER, PR_SCREENSHOT_SECTION, PR_SIGNATURE, PrBodyTemplateSource,
+    TemplateSurface,
 };
 
 use super::machine::{
-    AutoConcurrencySettings, MachineSettings, ResourceThrottleSettings, WorkerContainmentSettings,
+    AUTO_CONCURRENCY_PROFILE_WINDOW, AutoConcurrencySettings, MachineSettings,
+    ResourceThrottleSettings, WorkerContainmentSettings,
 };
 use super::resolve::{DEFAULT_FINAL_RECOVERY_CREWS, resolve_default_crew};
 use super::table::ConfigSnapshot;
@@ -26,72 +28,14 @@ pub struct MidRunSteeringSettings {
     pub max_rounds: u8,
 }
 
-/// Admitted `workflow.regression_risk.*`: settings for prompt marks on
-/// regression-prone context files and task riskiness scores. `enabled` gates
-/// marks only; `window_days` and `min_support` size both, while
-/// `threshold_percent` and `max_files` govern marks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RegressionRiskSettings {
-    /// `workflow.regression_risk.enabled` (default `true`).
-    pub enabled: bool,
-    /// `workflow.regression_risk.window_days` (default 30).
-    pub window_days: u32,
-    /// `workflow.regression_risk.min_support` (default 5).
-    pub min_support: u32,
-    /// `workflow.regression_risk.threshold_percent` (default 40).
-    pub threshold_percent: u8,
-    /// `workflow.regression_risk.max_files` (default 3).
-    pub max_files: u32,
-}
-
 /// Admitted `experiments.*`: the workspace's experiment policy. Experiment
 /// definitions are store records, not configuration.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ExperimentSettings {
     /// `experiments.enabled` (default `false`).
     pub enabled: bool,
-    /// `experiments.max_running` (default 3).
-    pub max_running: u32,
     /// `experiments.config_keys` (default empty).
     pub config_keys: Vec<String>,
-}
-
-/// Admitted `workflow.explore.*`: whether implement and review-repair runs
-/// may delegate read-only exploration through `orbit.agent.invoke`, and the
-/// budgets each run's delegation is held to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExploreSettings {
-    /// `workflow.explore.enabled` (default `false`).
-    pub enabled: bool,
-    /// `workflow.explore.max_calls_per_run` (default 6).
-    pub max_calls_per_run: u32,
-    /// `workflow.explore.max_concurrent_per_run` (default 2).
-    pub max_concurrent_per_run: u32,
-    /// `workflow.explore.timeout_seconds` (default 600).
-    pub timeout_seconds: u32,
-    /// `workflow.explore.max_answer_bytes` (default 16384).
-    pub max_answer_bytes: u32,
-}
-
-/// Admitted `workflow.explore_brief.*`: whether the task pilot is asked for
-/// explore briefs, which tasks request one, and whether a stored brief
-/// reaches the implementer.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExploreBriefSettings {
-    /// `workflow.explore_brief.enabled` (default `false`).
-    pub enabled: bool,
-    /// `workflow.explore_brief.tags` (default empty: every piloted task).
-    pub tags: Vec<String>,
-    /// `workflow.explore_brief.deliver` (default `true`).
-    pub deliver: bool,
-}
-
-impl ExploreBriefSettings {
-    /// Whether a task carrying `task_tags` requests a brief.
-    pub fn requested_for(&self, task_tags: &[String]) -> bool {
-        self.enabled
-            && (self.tags.is_empty() || self.tags.iter().any(|tag| task_tags.contains(tag)))
-    }
 }
 
 /// Which document an admission sees: a layered load (both files merged, or
@@ -102,7 +46,7 @@ pub(crate) enum AdmissionScope {
     /// The merged or effective document.
     Layered,
     /// One file alone: `workflow.type_complexity_crews` may name a type the
-    /// other layer's `workflow.crew_performance_types` defines.
+    /// other layer's `workflow.task_types` defines.
     File,
 }
 
@@ -114,36 +58,44 @@ impl ConfigSnapshot {
         require_default_crew: bool,
         scope: AdmissionScope,
     ) -> Result<(), OrbitError> {
-        LogRotationConfig::from_parts(
-            Some(self.runtime_log_retention_days),
-            Some(self.runtime_log_max_total_mb),
-            Some(self.runtime_log_max_file_mb),
-        )?;
-        admit_crew_pool(
-            &mut self.workflow_low_complexity_crews,
-            crews,
-            "workflow.low_complexity_crews",
-        )?;
-        admit_crew_pool(
-            &mut self.workflow_medium_complexity_crews,
-            crews,
-            "workflow.medium_complexity_crews",
-        )?;
-        admit_crew_pool(
-            &mut self.workflow_hard_complexity_crews,
-            crews,
-            "workflow.hard_complexity_crews",
-        )?;
-        admit_crew_pool(
-            &mut self.workflow_xhard_complexity_crews,
-            crews,
-            "workflow.xhard_complexity_crews",
-        )?;
+        crate::crew_auto_effort::admit_auto_effort_bands(&self.workflow_auto_effort_bands, crews)?;
+        // `<crew>@auto` needs bands for its crew. A single-file view may
+        // take them from the other layer, so it checks only where the entry
+        // may appear; the layered load checks the bands.
+        let auto_bands = self.workflow_auto_effort_bands.clone();
+        let auto = AutoEntries::Admitted((scope == AdmissionScope::Layered).then_some(&auto_bands));
+        for (pool, setting) in [
+            (
+                &mut self.workflow_low_complexity_crews,
+                "workflow.low_complexity_crews",
+            ),
+            (
+                &mut self.workflow_medium_complexity_crews,
+                "workflow.medium_complexity_crews",
+            ),
+            (
+                &mut self.workflow_hard_complexity_crews,
+                "workflow.hard_complexity_crews",
+            ),
+            (
+                &mut self.workflow_xhard_complexity_crews,
+                "workflow.xhard_complexity_crews",
+            ),
+            (
+                &mut self.workflow_purpose_crews_task_pilot,
+                "workflow.purpose_crews.task_pilot",
+            ),
+        ] {
+            admit_crew_pool(pool, crews, setting, auto)?;
+        }
         crate::crew_pools::admit_type_complexity_crews(
             &mut self.workflow_type_complexity_crews,
-            (scope == AdmissionScope::Layered)
-                .then_some(self.workflow_crew_performance_types.as_slice()),
+            (scope == AdmissionScope::Layered).then_some(self.workflow_task_types.as_slice()),
             crews,
+            match auto {
+                AutoEntries::Admitted(bands) => bands,
+                AutoEntries::Refused => None,
+            },
         )?;
         for (pool, setting) in [
             (
@@ -155,33 +107,30 @@ impl ConfigSnapshot {
                 "workflow.purpose_crews.baseline_red_repair",
             ),
             (
-                &mut self.workflow_purpose_crews_explorer,
-                "workflow.purpose_crews.explorer",
-            ),
-            (
                 &mut self.workflow_purpose_crews_failure_recovery,
                 "workflow.purpose_crews.failure_recovery",
+            ),
+            (
+                &mut self.workflow_purpose_crews_pilot_warning_triage,
+                "workflow.purpose_crews.pilot_warning_triage",
             ),
             (
                 &mut self.workflow_purpose_crews_sweep_tasks,
                 "workflow.purpose_crews.sweep_tasks",
             ),
-            (
-                &mut self.workflow_purpose_crews_task_pilot,
-                "workflow.purpose_crews.task_pilot",
-            ),
-            (
-                &mut self.workflow_purpose_crews_visual_review,
-                "workflow.purpose_crews.visual_review",
-            ),
         ] {
-            admit_crew_pool(pool, crews, setting)?;
+            admit_crew_pool(pool, crews, setting, AutoEntries::Refused)?;
         }
         if let Some(pool) = self.workflow_purpose_crews_review.as_mut() {
-            admit_crew_pool(pool, crews, crate::operation::REVIEW_CREW_KEY)?;
+            admit_crew_pool(pool, crews, crate::operation::REVIEW_CREW_KEY, auto)?;
         }
         if let Some(pool) = self.workflow_purpose_crews_pre_landing_review.as_mut() {
-            admit_crew_pool(pool, crews, crate::operation::PRE_LANDING_REVIEW_CREW_KEY)?;
+            admit_crew_pool(
+                pool,
+                crews,
+                crate::operation::PRE_LANDING_REVIEW_CREW_KEY,
+                auto,
+            )?;
         }
         self.workflow_purpose_crews_final_recovery = Some(admit_final_recovery_crews(
             self.workflow_purpose_crews_final_recovery.take(),
@@ -193,11 +142,6 @@ impl ConfigSnapshot {
             env_default,
             require_default_crew,
         )?;
-        crate::crew_ladder::admit_crew_ladder_rungs(&mut self.workflow_crew_ladder_rungs, crews)?;
-        crate::crew_ladder::check_crew_ladder_sample(
-            self.workflow_crew_ladder_look_every,
-            self.workflow_crew_ladder_max_sample,
-        )?;
         crate::provider_limit::validate_budget_crews(&self.workflow_provider_limit_budgets, crews)?;
         crate::provider_limit::validate_override_crews(
             &self.workflow_provider_limit_overrides,
@@ -205,11 +149,11 @@ impl ConfigSnapshot {
         )?;
         let resources = self.resource_throttle();
         let auto_concurrency = self.auto_concurrency();
-        if auto_concurrency.profile_window < auto_concurrency.min_profile_deliveries {
-            return Err(OrbitError::InvalidInput(
-                "machine.auto_concurrency.profile_window must be at least machine.auto_concurrency.min_profile_deliveries"
-                    .to_string(),
-            ));
+        if AUTO_CONCURRENCY_PROFILE_WINDOW < auto_concurrency.min_profile_deliveries {
+            return Err(OrbitError::InvalidInput(format!(
+                "machine.auto_concurrency.min_profile_deliveries must be at most the \
+                 {AUTO_CONCURRENCY_PROFILE_WINDOW}-delivery profile window"
+            )));
         }
         for (resource, high, resume) in [
             (
@@ -226,11 +170,6 @@ impl ConfigSnapshot {
                 "disk",
                 resources.disk_high_percent,
                 resources.disk_resume_percent,
-            ),
-            (
-                "io_full",
-                resources.io_full_high_percent,
-                resources.io_full_resume_percent,
             ),
         ] {
             if resume >= high {
@@ -258,44 +197,6 @@ impl ConfigSnapshot {
             .unwrap_or(crate::operation::ReviewTimingSetting::Off)
     }
 
-    /// The admitted selective before-landing policy, or `None` while its
-    /// mode is `off`. Provenance and timing-conflict validation live in
-    /// the layered [`crate::OperationPolicy`] an admission captures; this
-    /// snapshot view carries the same predicates without layer labels.
-    pub fn selective_before_landing_policy(
-        &self,
-    ) -> Option<orbit_types::workflow::SelectiveBeforeLandingPolicy> {
-        let mode =
-            crate::operation::selective_mode_parse(&self.review_selective_before_landing_mode)
-                .unwrap_or(orbit_types::workflow::SelectiveBeforeLandingMode::Off);
-        if !mode.is_active() {
-            return None;
-        }
-        let unknown_risk = crate::operation::selective_unknown_risk_parse(
-            &self.review_selective_before_landing_unknown_risk,
-        )
-        .unwrap_or_default();
-        Some(orbit_types::workflow::SelectiveBeforeLandingPolicy::new(
-            mode,
-            self.review_selective_before_landing_risk_threshold.clone(),
-            self.review_selective_before_landing_paths.clone(),
-            unknown_risk,
-            std::collections::BTreeMap::new(),
-        ))
-    }
-
-    /// The admitted `workflow.validation_env.shell_probe`.
-    pub fn shell_probe(&self) -> crate::aliases::ShellProbeMode {
-        crate::aliases::ShellProbeMode::parse(&self.workflow_validation_env_shell_probe)
-            .unwrap_or(crate::aliases::ShellProbeMode::Interactive)
-    }
-
-    /// The admitted `workflow.admission_affinity`.
-    pub fn admission_affinity(&self) -> orbit_types::task::AdmissionAffinityReach {
-        orbit_types::task::AdmissionAffinityReach::parse(&self.workflow_admission_affinity)
-            .unwrap_or_default()
-    }
-
     /// The admitted `workflow.purpose_crews.<purpose>` pools.
     pub fn purpose_crews(&self) -> crate::PurposeCrewPools {
         crate::PurposeCrewPools::new([
@@ -320,14 +221,20 @@ impl ConfigSnapshot {
                 self.workflow_purpose_crews_sweep_tasks.clone(),
             ),
             (
-                CrewPurpose::Explorer,
-                self.workflow_purpose_crews_explorer.clone(),
-            ),
-            (
-                CrewPurpose::VisualReview,
-                self.workflow_purpose_crews_visual_review.clone(),
+                CrewPurpose::PilotWarningTriage,
+                self.workflow_purpose_crews_pilot_warning_triage.clone(),
             ),
         ])
+    }
+
+    /// The admitted `workflow.auto_effort.bands` policy that resolves
+    /// `<crew>@auto` pool entries, at the fixed
+    /// [`crate::AUTO_EFFORT_EXPLORE_SHARE`].
+    pub fn auto_effort(&self) -> crate::AutoEffortPolicy {
+        crate::AutoEffortPolicy::new(
+            self.workflow_auto_effort_bands.clone(),
+            crate::AUTO_EFFORT_EXPLORE_SHARE,
+        )
     }
 
     /// The admitted `workflow.type_complexity_crews.<type>.<tier>` pools.
@@ -389,7 +296,15 @@ impl Default for ConfigSnapshot {
 /// The built-in crew registry a config without `[crews]` resolves to, so the
 /// built-in snapshot admits the same defaults such a config does.
 fn default_admission_crews() -> BTreeMap<String, Crew> {
-    crate::resolved::default_crews()
+    crate::crew_defaults::builtin_default_crews()
+}
+
+/// Whether a pool's key admits `<crew>@auto` entries, and the bands they
+/// need (`None`: a single-file view, whose bands the layered load checks).
+#[derive(Clone, Copy)]
+enum AutoEntries<'a> {
+    Admitted(Option<&'a BTreeMap<String, Vec<crate::AutoEffortBand>>>),
+    Refused,
 }
 
 /// Admit one `workflow.*_complexity_crews` or `workflow.purpose_crews.*` value
@@ -398,9 +313,18 @@ fn admit_crew_pool(
     pool: &mut Vec<String>,
     crews: &BTreeMap<String, Crew>,
     setting: &str,
+    auto: AutoEntries<'_>,
 ) -> Result<(), OrbitError> {
     *pool = crate::canonical_crew_pool(pool, crews, setting)?.to_setting_value();
-    Ok(())
+    match auto {
+        AutoEntries::Refused => {
+            crate::crew_auto_effort::check_auto_effort_entries(pool, setting, None)
+        }
+        AutoEntries::Admitted(Some(bands)) => {
+            crate::crew_auto_effort::check_auto_effort_entries(pool, setting, Some(bands))
+        }
+        AutoEntries::Admitted(None) => Ok(()),
+    }
 }
 
 /// Admit `workflow.purpose_crews.final_recovery`.
@@ -427,10 +351,14 @@ fn admit_final_recovery_crews(
             .map(ToString::to_string)
             .collect(),
     };
-    Ok(
-        crate::canonical_crew_pool(&pool, crews, "workflow.purpose_crews.final_recovery")?
-            .to_setting_value(),
-    )
+    let pool = crate::canonical_crew_pool(&pool, crews, "workflow.purpose_crews.final_recovery")?
+        .to_setting_value();
+    crate::crew_auto_effort::check_auto_effort_entries(
+        &pool,
+        "workflow.purpose_crews.final_recovery",
+        None,
+    )?;
+    Ok(pool)
 }
 
 impl ConfigSnapshot {
@@ -439,18 +367,8 @@ impl ConfigSnapshot {
         AutoConcurrencySettings {
             mode: self.machine_auto_concurrency_mode.clone(),
             admit_cpu_percent: self.machine_auto_concurrency_admit_cpu_percent,
-            admit_memory_percent: self.machine_auto_concurrency_admit_memory_percent,
-            profile_window: self.machine_auto_concurrency_profile_window,
             min_profile_deliveries: self.machine_auto_concurrency_min_profile_deliveries,
-            horizon_cap_minutes: self.machine_auto_concurrency_horizon_cap_minutes,
-            head_max_wait_minutes: self.machine_auto_concurrency_head_max_wait_minutes,
-            head_stuck_passes: self.machine_auto_concurrency_head_stuck_passes,
         }
-    }
-
-    /// Admitted `machine.host_shutdown_hold_minutes`.
-    pub fn host_shutdown_hold_minutes(&self) -> u32 {
-        self.machine_host_shutdown_hold_minutes
     }
 
     /// The admitted `workflow.lock_modes` entries, compiled. Admission has
@@ -476,40 +394,14 @@ impl ConfigSnapshot {
     pub fn experiments(&self) -> ExperimentSettings {
         ExperimentSettings {
             enabled: self.experiments_enabled,
-            max_running: self.experiments_max_running,
             config_keys: self.experiments_config_keys.clone(),
         }
     }
 
-    /// The admitted `workflow.explore.*` settings.
-    pub fn explore(&self) -> ExploreSettings {
-        ExploreSettings {
-            enabled: self.workflow_explore_enabled,
-            max_calls_per_run: self.workflow_explore_max_calls_per_run,
-            max_concurrent_per_run: self.workflow_explore_max_concurrent_per_run,
-            timeout_seconds: self.workflow_explore_timeout_seconds,
-            max_answer_bytes: self.workflow_explore_max_answer_bytes,
-        }
-    }
-
-    /// The admitted `workflow.explore_brief.*` settings.
-    pub fn explore_brief(&self) -> ExploreBriefSettings {
-        ExploreBriefSettings {
-            enabled: self.workflow_explore_brief_enabled,
-            tags: self.workflow_explore_brief_tags.clone(),
-            deliver: self.workflow_explore_brief_deliver,
-        }
-    }
-
-    /// The admitted `workflow.regression_risk.*` settings.
-    pub fn regression_risk(&self) -> RegressionRiskSettings {
-        RegressionRiskSettings {
-            enabled: self.workflow_regression_risk_enabled,
-            window_days: self.workflow_regression_risk_window_days,
-            min_support: self.workflow_regression_risk_min_support,
-            threshold_percent: self.workflow_regression_risk_threshold_percent,
-            max_files: self.workflow_regression_risk_max_files,
-        }
+    /// `crew_memory.enabled` (default `false`): whether crew memory writes
+    /// are admitted in this workspace.
+    pub fn crew_memory_enabled(&self) -> bool {
+        self.crew_memory_enabled
     }
 
     /// Admitted host resource thresholds, shared by dashboard and admission consumers.
@@ -519,20 +411,18 @@ impl ConfigSnapshot {
             cpu_source: self.workflow_resource_throttle_cpu_source.clone(),
             cpu_high_percent: self.workflow_resource_throttle_cpu_high_percent,
             cpu_resume_percent: self.workflow_resource_throttle_cpu_resume_percent,
-            cpu_light_leaves: self.workflow_resource_throttle_cpu_light_leaves,
             memory_high_percent: self.workflow_resource_throttle_memory_high_percent,
             memory_resume_percent: self.workflow_resource_throttle_memory_resume_percent,
             disk_high_percent: self.workflow_resource_throttle_disk_high_percent,
             disk_resume_percent: self.workflow_resource_throttle_disk_resume_percent,
-            io_full_high_percent: self.workflow_resource_throttle_io_full_high_percent,
-            io_full_resume_percent: self.workflow_resource_throttle_io_full_resume_percent,
         }
     }
 }
 
 impl ConfigSnapshot {
-    /// The admitted `pr.*`, `commit.*` and `branch.*` delivery conventions.
-    /// Admission already parsed every template, so each parses again here.
+    /// The admitted `pr.*`, `commit.*` and `branch.*` delivery conventions,
+    /// with the fixed section and trailer switches [ORB-22808]. Admission
+    /// already parsed every template, so each parses again here.
     pub fn delivery_conventions(&self) -> DeliveryConventions {
         let text = |key: &str, raw: &Option<String>| {
             raw.as_deref()
@@ -549,23 +439,21 @@ impl ConfigSnapshot {
             required_sections: self.pr_required_sections.clone(),
             missing_section: MissingSectionPolicy::parse(&self.pr_missing_required_section)
                 .unwrap_or_default(),
-            screenshot_section: ScreenshotSection::parse(&self.pr_screenshot_section)
-                .unwrap_or_default(),
-            freshness_section: self.pr_freshness_section,
-            signature: self.pr_signature,
-            pr_orchestration_trailer: self.pr_orchestration_trailer,
+            screenshot_section: PR_SCREENSHOT_SECTION,
+            freshness_section: PR_FRESHNESS_SECTION,
+            signature: PR_SIGNATURE,
+            pr_orchestration_trailer: PR_ORCHESTRATION_TRAILER,
             labels: self.pr_labels.clone(),
             task_tag_labels: self.pr_task_tag_labels.clone(),
             task_type_labels: self.pr_task_type_labels.clone(),
             reviewers: self.pr_reviewers.clone(),
-            draft: self.pr_draft,
+            draft: PR_DRAFT,
             commit_subject: self.commit_subject_template.as_deref().and_then(|raw| {
                 ConventionTemplate::parse_commit_subject("commit.subject_template", raw).ok()
             }),
             commit_body: text("commit.body_template", &self.commit_body_template),
-            planned_by_trailer: self.commit_planned_by_trailer,
-            implemented_by_trailer: self.commit_implemented_by_trailer,
-            orchestrated_by_trailer: self.commit_orchestrated_by_trailer,
+            orchestrated_by_trailer: COMMIT_ORCHESTRATED_BY_TRAILER,
+            regression_trailers: COMMIT_REGRESSION_TRAILERS,
             branch_name: self
                 .branch_name_template
                 .as_deref()

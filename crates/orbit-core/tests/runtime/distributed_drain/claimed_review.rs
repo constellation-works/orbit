@@ -217,7 +217,6 @@ impl ReviewedLeaf {
             .unwrap();
         }
         let report = ReviewReport {
-            visual_resolutions: Vec::new(),
             external_evidence: Vec::new(),
             schema_version: REVIEW_CONTRACT_VERSION,
             attempt_id: attempt_id.into(),
@@ -343,7 +342,6 @@ impl ReviewedLeaf {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     fn reviewer_holds_for(&self, attempt_id: &str, command: &str) {
         let report = ReviewReport {
-            visual_resolutions: Vec::new(),
             external_evidence: vec![ReviewEvidenceRequirement {
                 kind: ReviewEvidenceKind::CodeQl,
                 name: "Rust CodeQL (Linux)".into(),
@@ -650,6 +648,30 @@ fn a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence() {
         comments_of(&leaf.pair.owner_task(&leaf.task)).contains(&attempt_id),
         "the verdict comment is on the owner's task"
     );
+    let typed: orbit_types::workflow::ReviewCertificate =
+        serde_json::from_slice(&certificate).unwrap();
+    let history_rows = owner.get_task_history(&leaf.task).unwrap();
+    let comments = owner.get_task_comments(&leaf.task).unwrap();
+    let records = orbit_types::task::recorded_review_settlements(&history_rows, &comments);
+    assert_eq!(records.len(), 1, "typed and display records count once");
+    assert_eq!(
+        records[0].1,
+        orbit_types::task::RecordedReviewSettlement::from_certificate(
+            &typed,
+            orbit_types::task::ReviewSettlementGate::BeforePr,
+        )
+    );
+    assert!(history_rows.iter().any(|entry| matches!(
+        entry.decision,
+        Some(orbit_types::task::TaskDecision::ReviewSettlement(_))
+    )));
+    assert_eq!(
+        leaf.settle().unwrap(),
+        settled,
+        "claimed publication replays"
+    );
+    assert_eq!(owner.get_task_history(&leaf.task).unwrap(), history_rows);
+    assert_eq!(owner.get_task_comments(&leaf.task).unwrap(), comments);
     let history = leaf
         .owner_artifact(REVIEW_REPORT_HISTORY_ARTIFACT)
         .expect("the report history is on the owner's task");
@@ -703,6 +725,12 @@ fn a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence() {
 /// no task row; accepting and replaying the handoff records the decision once.
 #[test]
 fn claimed_baseline_known_red_is_recorded_only_on_the_owner() {
+    if !isolated(
+        module_path!(),
+        "claimed_baseline_known_red_is_recorded_only_on_the_owner",
+    ) {
+        return;
+    }
     use orbit_types::task::TaskDecision;
     use orbit_types::workflow::{
         KNOWN_RED_VALIDATION_EVENT, ReviewBaselineClaim, ReviewCertificate,
@@ -790,6 +818,15 @@ fn a_rejected_claimed_review_blocks_the_task_on_the_owner() {
         leaf.pair.owner_claim_for_leaf(&leaf.leaf)["claim"]["phase"],
         "failed"
     );
+    // [ORB-21840] A rejected candidate is no designed wait: it still counts.
+    let listed =
+        serde_json::to_value(leaf.pair.wire.owner.leaf_settlements(None, false).unwrap()).unwrap();
+    assert_eq!(listed[0]["review_decision_pending"], false, "{listed}");
+    assert_eq!(listed[0]["accounting"]["outcome"], "failure", "{listed}");
+    assert_eq!(
+        listed[0]["accounting"]["counts_as_failure"], true,
+        "{listed}"
+    );
 }
 
 /// A before-landing refusal awaits a recorded decision. Its settlement must
@@ -870,6 +907,17 @@ fn a_claimed_landing_review_refusal_records_its_pending_decision() {
         assert_eq!(json[0]["kind"], "fail", "{json}");
         assert_eq!(json[0]["failure_class"], "candidate", "{json}");
         assert_eq!(json[0]["review_decision_pending"], true, "{json}");
+        // [ORB-21840] Failure accounting reads the designed wait as a hold,
+        // while the claim above still fails and the task stays blocked.
+        assert_eq!(
+            json[0]["accounting"],
+            json!({
+                "outcome": "review_decision_hold",
+                "counts_as_failure": false,
+                "reason": "before_landing_review_awaits_decision",
+            }),
+            "{json}"
+        );
         assert!(
             !json[0]["reason"]
                 .as_str()
@@ -975,6 +1023,13 @@ fn a_claimed_review_held_for_linux_codeql_is_fulfilled_by_the_owner() {
         .find(|entry| entry.to_status.is_some() || entry.event.starts_with("review_"))
         .unwrap();
     assert_eq!(latest.event, "review_awaiting_evidence");
+    // [ORB-21840] The named evidence hold keeps its own accounting outcome.
+    let listed = serde_json::to_value(owner.leaf_settlements(None, false).unwrap()).unwrap();
+    assert_eq!(
+        listed[0]["accounting"],
+        json!({"outcome": "evidence_hold", "counts_as_failure": false, "reason": "evidence_hold"}),
+        "{listed}"
+    );
 
     // The owner: a Linux checkout whose `origin` is the one the leaf pushed to.
     let owner_repo = leaf.pair.owner_repo.clone();
@@ -1146,7 +1201,7 @@ fn a_claimed_reviewers_manifest_read_needs_the_owners_active_claim() {
                 TaskStatus::Backlog,
                 "operator",
                 "The operator took the claim back.",
-                "recover",
+                ("operator-recover", "recover"),
             )
             .expect("the operator revokes the claim");
     };
@@ -1161,7 +1216,7 @@ fn a_claimed_reviewers_manifest_read_needs_the_owners_active_claim() {
                 TaskStatus::Backlog,
                 "operator",
                 "The claim outlived its reservation.",
-                "recover",
+                ("operator-recover", "recover"),
             )
             .expect("the operator recovers the expired claim");
     };
@@ -1318,7 +1373,7 @@ fn a_recovered_claim_replays_the_same_recovery_request() {
             status,
             "operator",
             reason,
-            request_id,
+            ("operator-recover", request_id),
         )
     };
     let first = recover(

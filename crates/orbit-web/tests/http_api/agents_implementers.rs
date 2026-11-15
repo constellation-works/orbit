@@ -1,17 +1,18 @@
 //! Tier-normalised implementer scores through the public runtime and HTTP API.
 
 use chrono::{Duration, Utc};
-use orbit_core::CrewPerformanceType;
 use orbit_core::TaskStatus;
+use orbit_core::TaskTypeDefinition;
 use orbit_core::application::agents::{
     AgentQuery, AgentRole, agent_by_type_scorecard, agent_detail, agent_scorecard,
 };
 use orbit_core::application::task::TaskAddParams;
-use orbit_types::task::{RegressionEscape, RegressionNature, TaskComplexity};
+use orbit_types::task::{DefectSeverity, RegressionEscape, RegressionNature, TaskComplexity};
 use serde_json::{Value, json};
 
 use super::agents::{
     Owned, WS, add, append, as_f64, comment, implementation_run, regression, retag,
+    sited_regression,
 };
 use super::support::{Fixture, isolated, json_ok};
 
@@ -46,11 +47,12 @@ fn implementers_compare_actual_outcomes_with_the_same_tier_mix() {
             let mut low_ids = Vec::new();
             for (crew, complexity) in [
                 ("hard", TaskComplexity::Hard),
+                ("hard-peer", TaskComplexity::Hard),
                 ("low", TaskComplexity::Low),
                 ("low-peer", TaskComplexity::Low),
             ] {
                 for index in 0..40 {
-                    let landed = if crew == "hard" { 30 } else { 36 };
+                    let landed = if crew.starts_with("hard") { 30 } else { 36 };
                     let status = if index < landed {
                         TaskStatus::Done
                     } else {
@@ -84,7 +86,7 @@ fn implementers_compare_actual_outcomes_with_the_same_tier_mix() {
                         None,
                         Some(TaskStatus::InProgress),
                     );
-                    if index < if crew == "hard" { 2 } else { 1 } {
+                    if index < if crew.starts_with("hard") { 2 } else { 1 } {
                         append(
                             &fixture,
                             &id,
@@ -127,7 +129,7 @@ fn implementers_compare_actual_outcomes_with_the_same_tier_mix() {
                         None,
                         Some(status),
                     );
-                    if index < if crew == "hard" { 2 } else { 1 } {
+                    if index < if crew.starts_with("hard") { 2 } else { 1 } {
                         regression(
                             &fixture,
                             &id,
@@ -135,7 +137,7 @@ fn implementers_compare_actual_outcomes_with_the_same_tier_mix() {
                             RegressionEscape::NoTest,
                         );
                     }
-                    let rejects = if crew == "hard" { 20 } else { 0 };
+                    let rejects = if crew.starts_with("hard") { 20 } else { 0 };
                     let verdict = if index < rejects {
                         "reject"
                     } else if index < rejects + 4 {
@@ -167,11 +169,11 @@ fn implementers_compare_actual_outcomes_with_the_same_tier_mix() {
                 as_f64(&row(&card, "low")["raw"]),
                 "matching each tier's fleet rates must erase tier-mix bias"
             );
-            for crew in ["hard", "low", "low-peer"] {
+            for crew in ["hard", "hard-peer", "low", "low-peer"] {
                 let r = row(&card, crew);
                 assert_eq!(
                     as_f64(&r["counts"]["weighted_landed"]),
-                    if crew == "hard" { 30.0 } else { 36.0 },
+                    if crew.starts_with("hard") { 30.0 } else { 36.0 },
                     "landings count one per task at every complexity"
                 );
                 assert_eq!(
@@ -180,13 +182,13 @@ fn implementers_compare_actual_outcomes_with_the_same_tier_mix() {
                     "a fleet-average row starts at 100"
                 );
                 assert!(as_f64(&r["counts"]["crew_rework"]) > 0.0);
-                assert!(as_f64(&stat_value(r, "escaped_regressions")) > 0.0);
+                assert!(as_f64(&r["counts"]["escaped_regressions"]) > 0.0);
                 for term in card["terms"].as_array().unwrap() {
                     let key = term["key"].as_str().unwrap();
                     assert_eq!(
                         as_f64(&r["expected"][key]),
                         as_f64(&r["counts"][key]),
-                        "all terms use the same tier-task denominator"
+                        "all terms use the same tier population when every task was reviewed"
                     );
                 }
             }
@@ -216,7 +218,7 @@ fn implementers_compare_actual_outcomes_with_the_same_tier_mix() {
                 AgentRole::Implementers,
                 &query,
                 "low",
-                Some("model"),
+                Some("low-model"),
                 std::time::Duration::ZERO,
             )
             .unwrap();
@@ -232,16 +234,12 @@ fn implementers_compare_actual_outcomes_with_the_same_tier_mix() {
             );
             let server = fixture.server(false);
             let http = json_ok(server.get(&format!(
-                "/api/agents/implementers/detail?{WS}&crew=low&model=model&min_support=1"
+                "/api/agents/implementers/detail?{WS}&crew=low&model=low-model&min_support=1"
             )));
             assert_eq!(http["row"], detail["row"]);
             assert_eq!(as_f64(&http["row"]["expected"]["review_rejects"]), 10.0);
             // Extra implementer verdicts cannot change the owners' score formula.
-            for role in [
-                AgentRole::Orchestrators,
-                AgentRole::Reviewers,
-                AgentRole::Pilots,
-            ] {
+            for role in [AgentRole::Reviewers, AgentRole::Pilots] {
                 let other = agent_scorecard(&next, role, &query, std::time::Duration::ZERO);
                 for r in other["rows"].as_array().unwrap() {
                     let raw: f64 = other["terms"]
@@ -319,7 +317,17 @@ fn implementers_pool_sparse_tiers_without_amplifying_single_task_outliers() {
                         None,
                         Some(TaskStatus::Done),
                     );
-                    if crew != "dense" {
+                    if crew == "dense" {
+                        // The reference must contain measured clean reviews;
+                        // unreviewed work is outside the review population.
+                        comment(
+                            &fixture,
+                            &id,
+                            &format!(
+                                "before-PR review settled attempt `rv-{crew}-{index}`: verdict **accept**\n- Reviewer: crew `reviewer` (codex / review-model)"
+                            ),
+                        );
+                    } else {
                         for review in 0..5 {
                             comment(
                                 &fixture,
@@ -349,10 +357,20 @@ fn implementers_pool_sparse_tiers_without_amplifying_single_task_outliers() {
                 assert_eq!(r["rank"], Value::Null);
             }
             assert_eq!(row(&card, "unknown")["model"], "model unknown");
-            assert_eq!(
-                as_f64(&card["fleet_average"]),
-                100.0,
-                "pooling conserves the fleet's total expected outcomes"
+            // One reviewed delivery is below the review terms' minimum
+            // support: the rejects are counted and rated, but score nothing,
+            // so the dense row's clean reviews are no longer offset.
+            for crew in ["sparse", "unknown"] {
+                assert_eq!(
+                    row(&card, crew)["provisional_terms"],
+                    json!(["first_pass_accepts", "review_rejects", "reviewer_repairs"])
+                );
+            }
+            assert!(
+                row(&card, "dense")["provisional_terms"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
             );
         },
     );
@@ -404,7 +422,7 @@ fn by_type_cells_classify_n_and_shrink_empty_cells_to_the_crew_mean() {
                     );
                 }
             }
-            let types = vec![CrewPerformanceType {
+            let types = vec![TaskTypeDefinition {
                 name: "review".into(),
                 tags: vec!["audit-work".into()],
                 paths: Vec::new(),
@@ -589,7 +607,7 @@ fn implementers_leave_no_diff_expected_work_out_but_count_untagged_no_diff_outco
             // The by-type cells share the exclusion: a type that matches
             // only on no-diff-expected has no counted task, and the
             // late-tagged task keeps the type its attempt was admitted with.
-            let types = vec![CrewPerformanceType {
+            let types = vec![TaskTypeDefinition {
                 name: "review".into(),
                 tags: vec!["no-diff-expected".into()],
                 paths: Vec::new(),
@@ -609,78 +627,355 @@ fn implementers_leave_no_diff_expected_work_out_but_count_untagged_no_diff_outco
 }
 
 #[test]
-fn implementers_report_zero_reviewed_units_without_making_review_terms_provisional() {
+fn implementers_review_terms_ignore_review_coverage() {
     isolated(
-        "agents_implementers::implementers_report_zero_reviewed_units_without_making_review_terms_provisional",
+        "agents_implementers::implementers_review_terms_ignore_review_coverage",
         || {
             let fixture = Fixture::new();
-            let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
-            for crew in ["reviewed", "unreviewed"] {
-                for index in 0..4 {
+            // Review terms score from 30 reviewed deliveries up, so the
+            // reviewed crews are sized to clear that minimum support.
+            for (crew, tasks, reviewed) in [
+                ("dense", 64, 64),
+                ("sparse", 64, 32),
+                ("unreviewed", 8, 0),
+                ("reference", 64, 64),
+            ] {
+                for index in 0..tasks {
                     let id = landed_with_tags(
                         &fixture,
                         &format!("jrun-{crew}-{index}"),
                         crew,
                         Vec::new(),
                     );
-                    if crew == "reviewed" {
+                    if index < reviewed {
+                        let verdict = if crew == "reference" || index % 4 < 2 {
+                            "accept"
+                        } else if index % 4 == 2 {
+                            "reject"
+                        } else {
+                            "accept_with_fixes"
+                        };
                         comment(
                             &fixture,
                             &id,
                             &format!(
-                                "before-PR review settled attempt `rv-{crew}-{index}`: verdict **accept**\n- Reviewer: crew `reviewer` (codex / review-model)"
+                                "before-PR review settled attempt `rv-{crew}-{index}`: verdict **{verdict}**\n- Reviewer: crew `reviewer` (codex / review-model)"
                             ),
                         );
                     }
                 }
             }
-            let facts = fixture.runtime.agent_scan().unwrap();
-            let card = agent_scorecard(
-                &facts,
-                AgentRole::Implementers,
-                &query,
-                std::time::Duration::ZERO,
-            );
-            assert_eq!(row(&card, "reviewed")["reviewed_units"], 4, "{card}");
-            let unreviewed = row(&card, "unreviewed");
-            assert_eq!(unreviewed["reviewed_units"], 0, "{card}");
-            assert_eq!(unreviewed["counts"]["first_pass_accepts"], 0, "{card}");
-            assert!(
-                unreviewed.get("term_units").is_none()
-                    && unreviewed.get("provisional_terms").is_none(),
-                "reviewed_units is display-only and never a scoring denominator: {unreviewed}"
-            );
-            // The unreviewed row's first-pass term still contributes its
-            // actual-minus-expected amount: making it provisional would
-            // zero the contribution and change the score.
-            let detail = agent_detail(
-                &facts,
-                AgentRole::Implementers,
-                &query,
-                "unreviewed",
-                Some("model"),
-                std::time::Duration::ZERO,
-            )
-            .unwrap();
-            let first_pass = detail["terms"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|term| term["key"] == "first_pass_accepts")
+            let export = fixture
+                .runtime
+                .agent_per_task_export(&AgentQuery::parse(Some("30d"), Some(1)).unwrap())
                 .unwrap();
-            assert!(
-                as_f64(&first_pass["contribution"]) < 0.0,
-                "an unreviewed row keeps its scored first-pass contribution: {first_pass}"
+            for (crew, reviewed) in [("dense", 64), ("sparse", 32), ("unreviewed", 0)] {
+                let count: u64 = export["tasks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|task| task["crew"] == crew)
+                    .map(|task| task["reviewed_units"].as_u64().unwrap())
+                    .sum();
+                assert_eq!(
+                    count, reviewed,
+                    "the per-task export preserves the scored review population"
+                );
+            }
+            let server = fixture.server(false);
+            let card = json_ok(server.get(&format!(
+                "/api/agents/implementers/scorecard?{WS}&window=30d&min_support=1"
+            )));
+            let detail = |crew| {
+                json_ok(server.get(&format!("/api/agents/implementers/detail?{WS}&window=30d&min_support=1&crew={crew}&model={crew}-model")))
+            };
+            let dense = detail("dense");
+            let sparse = detail("sparse");
+            let unreviewed = detail("unreviewed");
+            for key in ["first_pass_accepts", "review_rejects", "reviewer_repairs"] {
+                let term = |detail: &Value| {
+                    detail["terms"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|term| term["key"] == key)
+                        .unwrap()
+                        .clone()
+                };
+                assert_eq!(
+                    term(&dense)["contribution"],
+                    term(&sparse)["contribution"],
+                    "equal reviewed outcomes must have equal contributions: {key}"
+                );
+                assert_ne!(
+                    as_f64(&term(&dense)["contribution"]),
+                    0.0,
+                    "the reference crew makes the coverage comparison non-neutral"
+                );
+                for (crew, units) in [("dense", 64), ("sparse", 32), ("unreviewed", 0)] {
+                    assert_eq!(row(&card, crew)["term_units"][key], units);
+                    assert_eq!(
+                        card["terms"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .find(|term| term["key"] == key)
+                            .unwrap()["unit"],
+                        "reviewed deliveries"
+                    );
+                }
+                assert_eq!(
+                    row(&card, "dense")["per_100"][key],
+                    row(&card, "sparse")["per_100"][key]
+                );
+                assert_eq!(
+                    as_f64(&row(&card, "dense")["expected"][key]),
+                    2.0 * as_f64(&row(&card, "sparse")["expected"][key])
+                );
+                assert_eq!(row(&card, "unreviewed")["reviewed_units"], 0);
+                assert!(
+                    row(&card, "unreviewed")["per_100"][key].is_null(),
+                    "no reviewed deliveries is not a measured zero"
+                );
+                assert!(term(&unreviewed)["per_100"].is_null());
+                assert_eq!(term(&unreviewed)["units"], 0);
+                assert_eq!(term(&unreviewed)["contribution"], 0);
+                assert_eq!(row(&card, "unreviewed")["expected"][key], 0);
+            }
+            assert_eq!(row(&card, "dense")["raw"], row(&card, "sparse")["raw"]);
+            assert_eq!(row(&card, "unreviewed")["raw"], 100);
+            let matrix = json_ok(server.get(&format!(
+                "/api/agents/implementers/by-type?{WS}&window=30d&min_support=1"
+            )));
+            let cell = |crew| {
+                matrix["cells"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|cell| cell["crew"] == crew && cell["n"].as_u64() > Some(0))
+                    .unwrap()
+                    .clone()
+            };
+            assert_eq!(
+                cell("dense")["raw"],
+                cell("sparse")["raw"],
+                "tier scores must also ignore review coverage"
             );
-            assert_eq!(detail["row"], *unreviewed, "{detail}");
+            assert_eq!(cell("unreviewed")["raw"], 100);
+        },
+    );
+}
+
+/// Regression: a handful of reviewed deliveries rated per 100 reviews once
+/// outweighed hundreds of tasks. Below the review minimum support the three
+/// review terms are provisional: counted and rated, but left out of the raw.
+#[test]
+fn two_reviewed_deliveries_do_not_move_the_raw_score() {
+    isolated(
+        "agents_implementers::two_reviewed_deliveries_do_not_move_the_raw_score",
+        || {
+            let fixture = Fixture::new();
+            for (crew, verdicts) in [
+                ("reviewed", vec![Some("reject"), Some("accept_with_fixes")]),
+                ("plain", vec![None, None]),
+            ] {
+                for (index, verdict) in verdicts.into_iter().enumerate() {
+                    let id = landed_with_tags(
+                        &fixture,
+                        &format!("jrun-{crew}-{index}"),
+                        crew,
+                        Vec::new(),
+                    );
+                    if let Some(verdict) = verdict {
+                        comment(
+                            &fixture,
+                            &id,
+                            &format!(
+                                "before-PR review settled attempt `rv-{crew}-{index}`: verdict **{verdict}**\n- Reviewer: crew `reviewer` (codex / review-model)"
+                            ),
+                        );
+                    }
+                }
+            }
+            let card = fixture
+                .runtime
+                .agent_role_scorecard(
+                    AgentRole::Implementers,
+                    &AgentQuery::parse(Some("30d"), Some(1)).unwrap(),
+                )
+                .unwrap();
+            assert_eq!(card["review_min_support"], 30);
+            let reviewed = row(&card, "reviewed");
+            assert_eq!(reviewed["reviewed_units"], 2);
+            assert_eq!(
+                reviewed["provisional_terms"],
+                json!(["first_pass_accepts", "review_rejects", "reviewer_repairs"])
+            );
+            assert_eq!(reviewed["counts"]["review_rejects"], 1);
+            assert_eq!(reviewed["counts"]["reviewer_repairs"], 1);
+            assert_eq!(reviewed["per_100"]["review_rejects"], 50);
+            assert_eq!(
+                reviewed["raw"],
+                row(&card, "plain")["raw"],
+                "two reviewed deliveries leave the raw score where unreviewed work puts it"
+            );
         },
     );
 }
 
 #[test]
-fn implementer_regressions_do_not_rank_comparable_work() {
+fn a_defect_both_review_layers_report_counts_once() {
     isolated(
-        "agents_implementers::implementer_regressions_do_not_rank_comparable_work",
+        "agents_implementers::a_defect_both_review_layers_report_counts_once",
+        || {
+            let fixture = Fixture::new();
+            let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
+            let both = landed_with_tags(&fixture, "jrun-both", "both", Vec::new());
+            let solo = landed_with_tags(&fixture, "jrun-solo", "solo", Vec::new());
+            // The pre-landing review rejected `both`'s candidate for a
+            // defect in src/a.rs, recording both its range and symbol identity.
+            comment(
+                &fixture,
+                &both,
+                "before-landing review settled attempt `rv-both`: verdict **reject**\n- Reviewer: crew `reviewer` (codex / review-model)\n- `F1` [high, open] the parser drops a field\n  - Cited: src/a.rs:10-20, symbol:src/a.rs#parse:fn",
+            );
+            // Delivery review then files that same defect, and a second
+            // one in src/b.rs, against `both`; and the same src/a.rs defect
+            // against `solo`, which had no pre-landing review.
+            for (culprit, site) in [
+                (&both, "symbol:src/a.rs#parse:fn"),
+                (&both, "file:src/b.rs"),
+                (&solo, "symbol:src/a.rs#parse:fn"),
+            ] {
+                sited_regression(
+                    &fixture,
+                    culprit,
+                    RegressionNature::DefectInNew,
+                    RegressionEscape::NoTest,
+                    DefectSeverity::Medium,
+                    &[site],
+                );
+            }
+            let card = fixture
+                .runtime
+                .agent_role_scorecard(AgentRole::Implementers, &query)
+                .unwrap();
+            let both = row(&card, "both");
+            assert_eq!(both["counts"]["review_rejects"], 1, "{both}");
+            assert_eq!(
+                both["counts"]["escaped_regressions"], 2,
+                "the src/a.rs defect counts once, as the pre-landing reject; only the src/b.rs finding adds its medium weight: {both}"
+            );
+            let solo = row(&card, "solo");
+            assert_eq!(solo["counts"]["review_rejects"], 0, "{solo}");
+            assert_eq!(
+                solo["counts"]["escaped_regressions"], 2,
+                "with no pre-landing review the delivery-review finding counts: {solo}"
+            );
+        },
+    );
+}
+
+#[test]
+fn same_file_regressions_require_defect_overlap_across_scorecard_consumers() {
+    isolated(
+        "agents_implementers::same_file_regressions_require_defect_overlap_across_scorecard_consumers",
+        || {
+            let fixture = Fixture::new();
+            let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
+            // A line citation cannot identify an opaque symbol without source
+            // mapping. Neither that uncertainty nor another symbol is overlap.
+            let cases: &[(&str, &str, &[&str], i64)] = &[
+                (
+                    "mixed",
+                    "src/a.rs:10-20",
+                    &["symbol:src/a.rs#unrelated_serializer:fn"],
+                    2,
+                ),
+                (
+                    "distinct",
+                    "symbol:src/a.rs#parse:fn",
+                    &["symbol:src/a.rs#unrelated_serializer:fn"],
+                    2,
+                ),
+                (
+                    "same",
+                    "symbol:src/a.rs#parse:fn",
+                    &["symbol:src/a.rs#parse:fn"],
+                    0,
+                ),
+                ("disjoint", "src/a.rs:10-20", &["file:src/a.rs:30-40"], 2),
+                ("overlap", "src/a.rs:10-20", &["file:src/a.rs:20-30"], 0),
+                ("single-line", "src/a.rs:15", &["file:src/a.rs:10-20"], 0),
+                ("imprecise", "src/a.rs", &["symbol:src/a.rs#parse:fn"], 2),
+                ("file", "src/a.rs:10-20", &["file:src/a.rs"], 0),
+                ("directory", "src/a.rs:10-20", &["dir:src"], 0),
+                ("sibling", "src/a.rs:10-20", &["dir:sr"], 2),
+                ("other-file", "src/a.rs:10-20", &["file:src/b.rs"], 2),
+                ("unsited", "src/a.rs:10-20", &[], 2),
+            ];
+            for (crew, cited, sites, _) in cases {
+                let id = landed_with_tags(&fixture, &format!("jrun-{crew}"), crew, Vec::new());
+                comment(
+                    &fixture,
+                    &id,
+                    &format!(
+                        "before-landing review settled attempt `rv-{crew}`: verdict **reject**\n- Reviewer: crew `reviewer` (codex / review-model)\n- `F1` [medium, open] the parser drops a field\n  - Cited: {cited}"
+                    ),
+                );
+                sited_regression(
+                    &fixture,
+                    &id,
+                    RegressionNature::DefectInNew,
+                    RegressionEscape::NoTest,
+                    DefectSeverity::Medium,
+                    sites,
+                );
+            }
+            let server = fixture.server(false);
+            let card = json_ok(server.get(&format!(
+                "/api/agents/implementers/scorecard?{WS}&window=30d&min_support=1"
+            )));
+            let matrix = json_ok(server.get(&format!(
+                "/api/agents/implementers/by-type?{WS}&window=30d&min_support=1"
+            )));
+            let export = fixture.runtime.agent_per_task_export(&query).unwrap();
+            let mean = cases.iter().map(|case| case.3 as f64).sum::<f64>() / cases.len() as f64;
+            for (crew, _, _, expected) in cases {
+                let headline = row(&card, crew);
+                assert_eq!(headline["counts"]["review_rejects"], 1, "{crew}");
+                assert_eq!(
+                    headline["counts"]["escaped_regressions"], *expected,
+                    "{crew}: {headline}"
+                );
+                let task = export["tasks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|task| task["crew"] == *crew)
+                    .unwrap();
+                assert_eq!(task["counts"], headline["counts"], "{crew}: {task}");
+                let cell = matrix["cells"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|cell| cell["crew"] == *crew && cell["type"] == "other")
+                    .unwrap();
+                // All other terms and task mixes are identical: only the
+                // severity-weighted escaped-regression residual changes raw.
+                let expected_raw = 100.0 - 0.5 * (*expected as f64 - mean) * 100.0;
+                // The public payload rounds scores to two decimal places.
+                let expected_raw = (expected_raw * 100.0).round() / 100.0;
+                assert_eq!(as_f64(&cell["raw"]), expected_raw, "{crew}: {cell}");
+            }
+        },
+    );
+}
+
+#[test]
+fn delivery_review_regressions_rank_crews_without_pre_landing_review() {
+    isolated(
+        "agents_implementers::delivery_review_regressions_rank_crews_without_pre_landing_review",
         || {
             let fixture = Fixture::new();
             let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
@@ -726,6 +1021,7 @@ fn implementer_regressions_do_not_rank_comparable_work() {
                             added: 25,
                             ..Default::default()
                         },
+                        reviewable: None,
                     })
                     .unwrap();
             }
@@ -735,29 +1031,41 @@ fn implementer_regressions_do_not_rank_comparable_work() {
                 RegressionNature::DefectInNew,
                 RegressionEscape::NoTest,
             );
+            // No task has a pre-landing review: the delivery-review finding
+            // is the only review evidence, and it must reach the score.
             let card = fixture
                 .runtime
                 .agent_role_scorecard(AgentRole::Implementers, &query)
                 .unwrap();
-            assert_eq!(
-                row(&card, "large")["score"],
-                row(&card, "peer-a")["score"],
-                "regression linking must not rank otherwise identical implementer outcomes"
+            assert!(
+                card["terms"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|term| term["key"] == "escaped_regressions"),
+                "escaped regressions are a scored implementer term: {card}"
             );
-            assert_eq!(stat_value(row(&card, "large"), "escaped_regressions"), 1);
-            assert_eq!(stat_value(row(&card, "peer-a"), "escaped_regressions"), 0);
+            assert!(
+                as_f64(&row(&card, "large")["score"]) < as_f64(&row(&card, "peer-a")["score"]),
+                "a delivery-review finding must rank an unreviewed crew below its clean peer: {card}"
+            );
+            assert_eq!(row(&card, "large")["counts"]["escaped_regressions"], 1);
+            assert_eq!(row(&card, "peer-a")["counts"]["escaped_regressions"], 0);
             assert_eq!(stat_value(row(&card, "large"), "diff_economy"), 2);
             assert_eq!(
                 stat_value(row(&card, "missing"), "diff_economy"),
                 Value::Null
             );
-            // Missing own size still uses the known fleet cell median, so the
-            // expected count is identical for all four comparable tasks.
-            assert_eq!(stat_value(row(&card, "large"), "regression_residual"), 0.75);
-            assert_eq!(
-                stat_value(row(&card, "missing"), "regression_residual"),
-                -0.25
-            );
+            // Missing own size uses the known cell median; each rate excludes
+            // the row being scored.
+            for crew in ["peer-a", "peer-b", "large", "missing"] {
+                assert_eq!(
+                    as_f64(&row(&card, crew)["expected"]["escaped_regressions"]),
+                    if crew == "large" { 0.0 } else { 0.33 },
+                    "{crew} expects the other rows’ rate of its expected-size bucket"
+                );
+                assert_eq!(row(&card, crew)["escaped_regressions_fallback"], false);
+            }
             for id in [&ids[0], &ids[1], &ids[3]] {
                 regression(
                     &fixture,
@@ -775,9 +1083,14 @@ fn implementer_regressions_do_not_rank_comparable_work() {
             );
             for crew in ["peer-a", "peer-b", "large", "missing"] {
                 assert_eq!(
-                    stat_value(row(&card, crew), "regression_residual"),
-                    0,
+                    as_f64(&row(&card, crew)["counts"]["escaped_regressions"]),
+                    as_f64(&row(&card, crew)["expected"]["escaped_regressions"]),
                     "fleet-matched expected-size buckets have no residual"
+                );
+                assert_eq!(
+                    row(&card, crew)["score"],
+                    row(&card, "peer-a")["score"],
+                    "matching regression rates rank alike"
                 );
             }
             let matrix = agent_by_type_scorecard(&facts, &query, &[], std::time::Duration::ZERO);
@@ -795,6 +1108,79 @@ fn implementer_regressions_do_not_rank_comparable_work() {
                     .status(),
                 400
             );
+        },
+    );
+}
+
+#[test]
+fn escape_expectation_uses_other_rows_when_a_bucket_has_no_peer() {
+    isolated(
+        "agents_implementers::escape_expectation_uses_other_rows_when_a_bucket_has_no_peer",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let id = add(
+                &fixture,
+                Owned {
+                    title: "isolated tier",
+                    orchestrator: None,
+                    origin: None,
+                    complexity: TaskComplexity::Hard,
+                    status: TaskStatus::Done,
+                    relations: vec![],
+                },
+            );
+            let start = now - Duration::hours(3);
+            implementation_run(
+                &fixture,
+                "jrun-isolated",
+                &id,
+                "isolated",
+                Some("model"),
+                start,
+                now - Duration::hours(1),
+            );
+            append(
+                &fixture,
+                &id,
+                start,
+                "started",
+                None,
+                Some(TaskStatus::InProgress),
+            );
+            append(
+                &fixture,
+                &id,
+                now - Duration::hours(1),
+                "status_changed",
+                None,
+                Some(TaskStatus::Done),
+            );
+            regression(
+                &fixture,
+                &id,
+                RegressionNature::DefectInNew,
+                RegressionEscape::NoTest,
+            );
+            landed_with_tags(&fixture, "jrun-clean", "clean", Vec::new());
+            let server = fixture.server(false);
+            let card = json_ok(server.get(&format!(
+                "/api/agents/implementers/scorecard?{WS}&min_support=1"
+            )));
+            let isolated = row(&card, "isolated");
+            assert_eq!(isolated["counts"]["escaped_regressions"], 1);
+            assert_eq!(isolated["expected"]["escaped_regressions"], 0);
+            assert_eq!(isolated["escaped_regressions_fallback"], true);
+            let detail = json_ok(server.get(&format!(
+                "/api/agents/implementers/detail?{WS}&crew=isolated&model=isolated-model&min_support=1"
+            )));
+            let term = detail["terms"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|term| term["key"] == "escaped_regressions")
+                .unwrap();
+            assert_eq!(term["contribution"], -50);
         },
     );
 }

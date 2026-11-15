@@ -55,7 +55,7 @@ pub struct DecisionSubmitParams {
     /// `dkim_verification_failed` when that contradicts the forwarded
     /// verdicts; when the channel requires core-side verification, a
     /// submission without one is refused `dkim_verification_required`.
-    /// At most [`MAX_DECISION_RAW_MESSAGE_BYTES`] bytes.
+    /// At most `MAX_DECISION_RAW_MESSAGE_BYTES` bytes.
     pub raw_message: Option<String>,
     /// Who is presenting the submission (see [`DecisionSubmitCaller`]).
     pub caller: DecisionSubmitCaller,
@@ -72,7 +72,9 @@ pub struct DecisionDigest {
     pub requests: Vec<DecisionRequest>,
     /// Requests this call raised.
     pub raised: Vec<DecisionRequest>,
-    /// Still-open requests expiring within the digest window.
+    /// Still-open requests expiring within the digest window, besides a
+    /// `model_answer_review` request recorded before decision assistance
+    /// was removed [ORB-22808].
     pub expiring: Vec<DecisionRequest>,
     /// Corrupt task bundles omitted from the digest.
     pub warnings: Vec<String>,

@@ -6,20 +6,24 @@ use chrono::{Duration, Utc};
 use orbit_common::test_env::FixtureProgress;
 use orbit_core::application::auto_tasks::{SchedulerOptions, run_auto_task_scheduler_at};
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{AutoTaskAddParams, Task};
+use orbit_core::{AuditEventStatus, AutoTaskAddParams, Task};
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, auto_task_tag};
 use serde_json::{Value, json};
 
-use super::support::{Fixture, isolated, json_ok, write_json};
+use super::support::{Fixture, error_code, isolated, json_ok, write_json};
 
 const URL: &str = "/api/auto-tasks?workspace=ws_http_fixture";
 
 fn definition(fixture: &Fixture, name: &str) {
-    definition_with_schedule(fixture, name, AutoTaskSchedule::every_minutes(60));
+    seed_auto_task_with_schedule(fixture, name, AutoTaskSchedule::every_minutes(60));
 }
 
-fn definition_with_schedule(fixture: &Fixture, name: &str, schedule: AutoTaskSchedule) {
+pub(super) fn seed_auto_task_with_schedule(
+    fixture: &Fixture,
+    name: &str,
+    schedule: AutoTaskSchedule,
+) {
     fixture
         .runtime
         .auto_task_add(AutoTaskAddParams {
@@ -70,6 +74,7 @@ fn instance(fixture: &Fixture, tags: Vec<String>, status: TaskStatus) -> Task {
 fn seed(
     fixture: &Fixture,
     total: usize,
+    per_definition: usize,
     progress: &mut FixtureProgress,
 ) -> BTreeMap<String, Vec<Task>> {
     progress.phase("seed tasks", total);
@@ -85,8 +90,8 @@ fn seed(
             }}))
             .unwrap()
         };
-        definition_with_schedule(fixture, &name, schedule);
-        let tasks = (0..20)
+        seed_auto_task_with_schedule(fixture, &name, schedule);
+        let tasks = (0..per_definition)
             .map(|_| {
                 let task = instance(fixture, vec![auto_task_tag(&name)], TaskStatus::Backlog);
                 progress.advance();
@@ -95,7 +100,7 @@ fn seed(
             .collect();
         instances.insert(name, tasks);
     }
-    for _ in 320..total {
+    for _ in 16 * per_definition..total {
         instance(fixture, vec!["unrelated".into()], TaskStatus::Done);
         progress.advance();
     }
@@ -111,7 +116,8 @@ fn list_uses_one_freshness_pass_and_selects_each_instance_once() {
             // guard on a saturated host; name the phase that was running.
             let mut progress = FixtureProgress::start("auto-task list freshness");
             let fixture = Fixture::new();
-            let instances = seed(&fixture, 320, &mut progress);
+            // 4 tasks no definition minted: the listing must not read them.
+            let instances = seed(&fixture, 36, 2, &mut progress);
             progress.phase("start server", 1);
             let server = fixture.counted_task_server();
             progress.advance();
@@ -148,7 +154,12 @@ fn list_uses_one_freshness_pass_and_selects_each_instance_once() {
                     bundles, 0,
                     "metadata projection must not hydrate task bodies"
                 );
-                assert_eq!(selections.len(), 320);
+                assert_eq!(
+                    selections.len(),
+                    32,
+                    "only auto-task instances are read; selecting every workspace task \
+                     made the listing scale with the workspace [ORB-21824]"
+                );
                 for task in instances.values().flatten() {
                     assert_eq!(selections[&task.id], request, "each instance selected once");
                 }
@@ -260,6 +271,20 @@ fn instance_projection_preserves_status_order_cursor_and_scheduler_dedupe() {
             let outcome =
                 run_auto_task_scheduler_at(&fixture.runtime, now, SchedulerOptions::default())
                     .unwrap();
+            assert_eq!(
+                outcome
+                    .reports
+                    .iter()
+                    .map(|report| report.name.as_str())
+                    .collect::<std::collections::BTreeSet<_>>(),
+                expected.keys().map(String::as_str).collect(),
+                "scheduler must report every expected definition"
+            );
+            assert_eq!(
+                outcome.reports.len(),
+                expected.len(),
+                "one report per definition"
+            );
             for report in outcome.reports {
                 let open = expected[&report.name].2;
                 assert_eq!(
@@ -275,8 +300,8 @@ fn instance_projection_preserves_status_order_cursor_and_scheduler_dedupe() {
 }
 
 /// The panel reads the listing every surface shares: the effective enabled
-/// state, which a legacy-enabled consumer no longer shows as disabled, and the
-/// ownership skip, which no longer looks like a live delivery trigger.
+/// state, and the ownership skip, which no longer looks like a live delivery
+/// trigger.
 #[test]
 fn list_reports_effective_enabled_and_the_ownership_skip() {
     isolated(
@@ -293,24 +318,13 @@ fn list_reports_effective_enabled_and_the_ownership_skip() {
                     "max_items": 50, "retries": 0,
                 }}))
                 .unwrap();
-                definition_with_schedule(&fixture, name, schedule);
+                seed_auto_task_with_schedule(&fixture, name, schedule);
             }
             fixture.runtime.auto_task_toggle("elsewhere", true).unwrap();
-            // Leave the consumer as the seed does: added disabled and written
-            // by no operator, so the deprecated policy still enables it.
-            let consumer = fixture.work.join("auto_tasks/delivery-code-review.yaml");
-            let body = fs::read_to_string(&consumer).unwrap();
-            let seeded = body
-                .lines()
-                .filter(|line| !line.starts_with("updated_by:"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            assert_ne!(seeded, body.trim_end(), "{body}");
-            fs::write(&consumer, seeded).unwrap();
-            let config = fixture.global.join("config.toml");
-            let mut global = fs::read_to_string(&config).unwrap_or_default();
-            global.push_str("\n[operation]\nreview_policy = \"after-landing\"\n");
-            fs::write(&config, global).unwrap();
+            fixture
+                .runtime
+                .auto_task_toggle("delivery-code-review", true)
+                .unwrap();
 
             let server = fixture.server(false);
             let listed = json_ok(server.get(URL));
@@ -318,7 +332,7 @@ fn list_reports_effective_enabled_and_the_ownership_skip() {
             let row = |name: &str| rows.iter().find(|row| row["name"] == name).unwrap();
 
             let consumer = row("delivery-code-review");
-            assert_eq!(consumer["enabled"], false, "{consumer}");
+            assert_eq!(consumer["enabled"], true, "{consumer}");
             assert_eq!(consumer["effective_enabled"], true, "{consumer}");
             assert_ne!(
                 consumer["next_evaluation"]["state"], "disabled",
@@ -367,11 +381,11 @@ fn list_keeps_delivery_schedules_independent_of_corrupt_time_cursors() {
                 ("disabled", Some("hm_elsewhere"), false),
                 ("inactive", Some("hm_elsewhere"), true),
             ] {
-                definition_with_schedule(&fixture, name, deliveries(owner));
+                seed_auto_task_with_schedule(&fixture, name, deliveries(owner));
                 fixture.runtime.auto_task_toggle(name, enabled).unwrap();
             }
             definition(&fixture, "interval");
-            definition_with_schedule(&fixture, "cron", AutoTaskSchedule::cron("* * * * *"));
+            seed_auto_task_with_schedule(&fixture, "cron", AutoTaskSchedule::cron("* * * * *"));
             // The missing seeding plugin makes the enabled definition inactive.
             let inactive = fixture.work.join("auto_tasks/inactive.yaml");
             let body = fs::read_to_string(&inactive).unwrap();
@@ -476,36 +490,18 @@ fn list_keeps_delivery_schedules_independent_of_corrupt_time_cursors() {
     );
 }
 
-fn strip_operator_stamp(fixture: &Fixture, name: &str) {
-    let path = fixture.work.join(format!("auto_tasks/{name}.yaml"));
-    let body = fs::read_to_string(&path).unwrap();
-    let seeded = body
-        .lines()
-        .filter(|line| !line.starts_with("updated_by:"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_ne!(seeded, body.trim_end(), "{body}");
-    fs::write(&path, seeded).unwrap();
-}
-
-/// Disable on a legacy-enabled consumer must stamp the operator. The raw flag
-/// is already false, so compare-and-set still sends `expected_enabled: false`,
-/// and the write is what makes the next read effectively disabled. An ordinary
+/// Disable on an already-disabled consumer is a no-op: the raw flag is
+/// already false, so the effective switch already matches. An ordinary
 /// raw-off definition stays a no-op, and a stale raw token is still a conflict.
 #[test]
-fn disable_legacy_enabled_consumer_stamps_the_operator_and_keeps_raw_cas() {
+fn disable_disabled_consumer_is_a_no_op_and_keeps_raw_cas() {
     isolated(
-        "auto_tasks::disable_legacy_enabled_consumer_stamps_the_operator_and_keeps_raw_cas",
+        "auto_tasks::disable_disabled_consumer_is_a_no_op_and_keeps_raw_cas",
         || {
             let fixture = Fixture::new();
-            definition_with_schedule(&fixture, "delivery-code-review", deliveries(None));
-            definition_with_schedule(&fixture, "parked", deliveries(None));
+            seed_auto_task_with_schedule(&fixture, "delivery-code-review", deliveries(None));
+            seed_auto_task_with_schedule(&fixture, "parked", deliveries(None));
             definition(&fixture, "nightly");
-            strip_operator_stamp(&fixture, "delivery-code-review");
-            let config = fixture.global.join("config.toml");
-            let mut global = fs::read_to_string(&config).unwrap_or_default();
-            global.push_str("\n[operation]\nreview_policy = \"after-landing\"\n");
-            fs::write(&config, global).unwrap();
 
             let server = fixture.server(true);
             let toggle = "/api/auto-tasks/toggle?workspace=ws_http_fixture";
@@ -521,7 +517,7 @@ fn disable_legacy_enabled_consumer_stamps_the_operator_and_keeps_raw_cas() {
             let listed = json_ok(server.get(URL));
             let consumer = row(&listed, "delivery-code-review");
             assert_eq!(consumer["enabled"], false, "{consumer}");
-            assert_eq!(consumer["effective_enabled"], true, "{consumer}");
+            assert_eq!(consumer["effective_enabled"], false, "{consumer}");
             let parked = row(&listed, "parked");
             assert_eq!(parked["enabled"], false, "{parked}");
             assert_eq!(parked["effective_enabled"], false, "{parked}");
@@ -555,7 +551,7 @@ fn disable_legacy_enabled_consumer_stamps_the_operator_and_keeps_raw_cas() {
                 toggle,
                 json!({"name":"delivery-code-review","expected_enabled":false,"enabled":false}),
             ));
-            assert_eq!(disabled["changed"], true, "{disabled}");
+            assert_eq!(disabled["changed"], false, "{disabled}");
             assert_eq!(disabled["enabled"], false, "{disabled}");
             let listed = json_ok(server.get(URL));
             let consumer = row(&listed, "delivery-code-review");
@@ -587,6 +583,188 @@ fn newest_cursor_id(fixture: &Fixture) -> String {
     instance(fixture, vec!["cursor-reference".into()], TaskStatus::Done).id
 }
 
+const DELETE_URL: &str = "/api/auto-tasks/delete?workspace=ws_http_fixture";
+
+fn listed_names(server: &super::support::Server) -> Vec<String> {
+    json_ok(server.get(URL))["definitions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["name"].as_str().unwrap().to_string())
+        .collect()
+}
+
+fn delete_audits(fixture: &Fixture, status: AuditEventStatus) -> Vec<orbit_core::AuditEvent> {
+    fixture
+        .runtime
+        .list_audit_events_with_kind(
+            None,
+            None,
+            Some("auto_task.delete".into()),
+            Some(status),
+            None,
+            20,
+        )
+        .unwrap()
+}
+
+/// Authorized delete, the open minted-task refusal, and an operator denial,
+/// each with its dashboard audit record.
+#[test]
+fn delete_audits_authorized_removal_open_task_refusal_and_operator_denial() {
+    isolated(
+        "auto_tasks::delete_audits_authorized_removal_open_task_refusal_and_operator_denial",
+        || {
+            let fixture = Fixture::new();
+            definition(&fixture, "retire-me");
+            definition(&fixture, "held-open");
+            let open = instance(
+                &fixture,
+                vec![auto_task_tag("held-open")],
+                TaskStatus::Backlog,
+            );
+
+            {
+                let agent = fixture.server(false);
+                let denied = error_code(
+                    agent.send(
+                        "POST",
+                        DELETE_URL,
+                        json!({"name":"retire-me","reason":"nope"}),
+                    ),
+                    403,
+                    "authorization_denied",
+                );
+                assert_eq!(denied["operation"], json!("auto_task.delete"), "{denied}");
+                assert!(
+                    fixture
+                        .runtime
+                        .auto_task_show("retire-me")
+                        .unwrap()
+                        .is_some(),
+                    "a denied delete must leave the definition"
+                );
+                assert!(listed_names(&agent).iter().any(|name| name == "retire-me"));
+            }
+            let denied = delete_audits(&fixture, AuditEventStatus::Denied);
+            assert_eq!(denied.len(), 1, "{denied:?}");
+            assert_eq!(denied[0].target_id.as_deref(), Some("retire-me"));
+            assert_eq!(denied[0].command, "dashboard.operations");
+            assert!(denied[0].error_message.is_some(), "{denied:?}");
+
+            let operator = fixture.server(true);
+            let refused = error_code(
+                operator.send(
+                    "POST",
+                    DELETE_URL,
+                    json!({"name":"held-open","reason":"cleanup"}),
+                ),
+                409,
+                "open_minted_tasks",
+            );
+            assert!(
+                refused["open_tasks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|id| id.as_str() == Some(open.id.as_str())),
+                "{refused}"
+            );
+            assert!(
+                refused["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains(open.id.as_str()),
+                "{refused}"
+            );
+            assert!(
+                fixture
+                    .runtime
+                    .auto_task_show("held-open")
+                    .unwrap()
+                    .is_some()
+            );
+            assert!(
+                listed_names(&operator)
+                    .iter()
+                    .any(|name| name == "held-open")
+            );
+            let failures = delete_audits(&fixture, AuditEventStatus::Failure);
+            assert_eq!(failures.len(), 1, "{failures:?}");
+            assert_eq!(failures[0].target_id.as_deref(), Some("held-open"));
+            assert!(
+                failures[0]
+                    .error_message
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains(open.id.as_str()),
+                "{failures:?}"
+            );
+
+            let forced = json_ok(operator.send(
+                "POST",
+                DELETE_URL,
+                json!({"name":"held-open","reason":"cleanup","force":true}),
+            ));
+            assert_eq!(forced["deleted"], json!(true), "{forced}");
+            assert_eq!(forced["name"], json!("held-open"), "{forced}");
+            assert!(forced.get("path").is_none(), "{forced}");
+            assert!(
+                forced["open_tasks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|id| id.as_str() == Some(open.id.as_str())),
+                "{forced}"
+            );
+            assert!(
+                fixture
+                    .runtime
+                    .auto_task_show("held-open")
+                    .unwrap()
+                    .is_none()
+            );
+
+            let deleted = json_ok(operator.send(
+                "POST",
+                DELETE_URL,
+                json!({"name":"retire-me","reason":"retired"}),
+            ));
+            assert_eq!(deleted["deleted"], json!(true), "{deleted}");
+            assert_eq!(deleted["opted_out"], json!(false), "{deleted}");
+            assert_eq!(deleted["reason"], json!("retired"), "{deleted}");
+            assert!(deleted.get("path").is_none(), "{deleted}");
+            assert!(
+                deleted["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Deleted auto-task retire-me"),
+                "{deleted}"
+            );
+            assert!(
+                fixture
+                    .runtime
+                    .auto_task_show("retire-me")
+                    .unwrap()
+                    .is_none()
+            );
+            let names = listed_names(&operator);
+            assert!(!names.iter().any(|name| name == "retire-me"), "{names:?}");
+            assert!(!names.iter().any(|name| name == "held-open"), "{names:?}");
+
+            let successes = delete_audits(&fixture, AuditEventStatus::Success);
+            assert_eq!(successes.len(), 2, "{successes:?}");
+            let retired = successes
+                .iter()
+                .find(|event| event.target_id.as_deref() == Some("retire-me"))
+                .expect("success audit for retire-me");
+            let arguments = retired.arguments_json.as_deref().unwrap_or("");
+            assert!(arguments.contains("retired"), "{arguments}");
+            assert_eq!(retired.command, "dashboard.operations");
+        },
+    );
+}
+
 /// Run the same HTTP fixture on the baseline and candidate; timings are evidence,
 /// not a load-sensitive CI assertion. Seed/setup time is outside the measurement.
 #[test]
@@ -595,7 +773,7 @@ fn list_latency_4000_tasks() {
     isolated("auto_tasks::list_latency_4000_tasks", || {
         let mut progress = FixtureProgress::start("auto-task list latency");
         let fixture = Fixture::new();
-        seed(&fixture, 4000, &mut progress);
+        seed(&fixture, 4000, 20, &mut progress);
         progress.finish();
         let server = fixture.server(false);
         let mut samples = Vec::new();
@@ -626,4 +804,135 @@ fn list_latency_4000_tasks() {
             );
         }
     });
+}
+
+/// ORB-21174 preserves the HTTP row contract while moving its projection to Core.
+#[test]
+fn listing_profile_preserves_http_fields_and_condition_presence() {
+    isolated(
+        "auto_tasks::listing_profile_preserves_http_fields_and_condition_presence",
+        || {
+            let fixture = Fixture::new();
+            let secret = format!("ghp_{}", "a".repeat(36));
+            let raw = format!("  {secret} {}  ", "π".repeat(2200));
+            let mut definitions = Vec::new();
+            for (name, schedule, dedupe) in [
+                (
+                    "profile-interval",
+                    AutoTaskSchedule::every_minutes(60),
+                    DedupePolicy::Always,
+                ),
+                (
+                    "profile-condition",
+                    serde_json::from_value(json!({"condition":{"scope":"task","when":"'profile-fixture' in task.tags"}}))
+                        .unwrap(),
+                    DedupePolicy::SkipIfOpen,
+                ),
+            ] {
+                definitions.push(
+                    fixture
+                        .runtime
+                        .auto_task_add(AutoTaskAddParams {
+                            name: name.into(),
+                            description: raw.clone(),
+                            schedule,
+                            template: AutoTaskTemplate {
+                                title: raw.clone(),
+                                description: "Omitted HTTP body".into(),
+                                acceptance_criteria: vec!["Profile preserved".into()],
+                                task_type: TaskType::Chore,
+                                tags: vec!["profile".into()],
+                                required_tools: vec![],
+                                context_files: vec![],
+                                priority: TaskPriority::High,
+                                complexity: Some(orbit_types::task::TaskComplexity::Low),
+                                crew: None,
+                                status: TaskStatus::Proposed,
+                            },
+                            dedupe,
+                        })
+                        .unwrap(),
+                );
+            }
+            let server = fixture.server(true);
+            let page = json_ok(server.get(URL));
+            for definition in definitions {
+                let row = page["definitions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["name"] == definition.name)
+                    .unwrap();
+                let mut keys = row
+                    .as_object()
+                    .unwrap()
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>();
+                keys.sort_unstable();
+                assert_eq!(
+                    keys,
+                    vec![
+                        "automation",
+                        "condition",
+                        "dedupe",
+                        "description",
+                        "effective_enabled",
+                        "enabled",
+                        "inactive_plugin",
+                        "last_evaluation",
+                        "last_minted_task_id",
+                        "last_minted_task_status",
+                        "may_create_open_duplicate",
+                        "name",
+                        "next_evaluation",
+                        "open_duplicate",
+                        "plugin_inactive",
+                        "schedule",
+                        "schedule_summary",
+                        "skipped_reason",
+                        "template",
+                        "template_summary"
+                    ]
+                );
+                assert_eq!(row["description"], raw);
+                assert_eq!(row["enabled"], definition.enabled);
+                assert_eq!(row["effective_enabled"], definition.enabled);
+                assert_eq!(row["schedule"], json!(definition.schedule));
+                assert_eq!(
+                    row["template"],
+                    json!({"title":raw,"crew":null,"status":"proposed","priority":"high","complexity":"low","required_tools":[]})
+                );
+                assert_eq!(
+                    row["template_summary"],
+                    format!("[auto-task] {raw} · status proposed · priority high · complexity low")
+                );
+                assert_eq!(row["plugin_inactive"], false);
+                assert_eq!(row["open_duplicate"], false);
+                assert_eq!(row["may_create_open_duplicate"], false);
+                for field in [
+                    "automation",
+                    "inactive_plugin",
+                    "skipped_reason",
+                    "last_evaluation",
+                    "last_minted_task_id",
+                    "last_minted_task_status",
+                ] {
+                    assert!(row[field].is_null(), "{row}");
+                }
+                if definition.name == "profile-condition" {
+                    assert!(row["condition"].is_object(), "{row}");
+                    assert_eq!(row["dedupe"], "skip_if_open");
+                    assert_eq!(
+                        row["schedule_summary"],
+                        "task condition: 'profile-fixture' in task.tags"
+                    );
+                } else {
+                    assert!(row["condition"].is_null(), "{row}");
+                    assert_eq!(row["dedupe"], "always");
+                    assert_eq!(row["schedule_summary"], "every 60 minutes");
+                }
+            }
+        },
+    );
 }

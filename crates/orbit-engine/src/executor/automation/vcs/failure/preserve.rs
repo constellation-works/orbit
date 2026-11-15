@@ -3,7 +3,7 @@ use std::path::Path;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::{TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus};
-use orbit_types::workflow::{CANDIDATE_HELD_EVENT, HeldCandidate};
+use orbit_types::workflow::{CANDIDATE_HELD_EVENT, FailureHandoffDecision, HeldCandidate};
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -88,16 +88,9 @@ fn carry_held_candidate<H: RuntimeHost + ?Sized>(
 /// The history entry admission reads to offer `held` to the task's next
 /// claim, on whichever host.
 fn held_history(held: &HeldCandidate) -> TaskHistoryEntry {
-    TaskHistoryEntry {
-        at: Utc::now(),
-        by: "system".to_string(),
-        event: CANDIDATE_HELD_EVENT.to_string(),
-        note: Some(held.text()),
-        from_status: None,
-        to_status: None,
-        operation_id: None,
-        decision: Some(TaskDecision::CandidateHeld(held.clone())),
-    }
+    TaskHistoryEntry::new(Utc::now(), "system", CANDIDATE_HELD_EVENT)
+        .with_note(Some(held.text()))
+        .with_decision(Some(TaskDecision::CandidateHeld(held.clone())))
 }
 
 /// Where `held` is, for the hold's comment: on `origin`, or only on this
@@ -158,8 +151,17 @@ pub(super) fn preserve_agent_blocked_candidate<H: RuntimeHost + ?Sized>(
     workspace_path: &Path,
 ) -> Result<Value, OrbitError> {
     let (branch, head_sha) = candidate_head(workspace_path)?;
-    let kind = orbit_types::workflow::task_blocked_by_agent_kind(error_message)
-        .unwrap_or("unspecified")
+    // The step failure carries the blocker as text; parse it once here and
+    // record it typed beside the note, which keeps its kind for older readers.
+    let blocker = orbit_types::workflow::AgentBlocker::from_step_failure_message(error_message)
+        .map(|mut blocker| {
+            // Redacted like the status note beside it.
+            blocker.evidence = orbit_common::security::redaction::redact_all(&blocker.evidence);
+            blocker
+        });
+    let kind = blocker
+        .as_ref()
+        .map_or("unspecified", |blocker| blocker.kind.as_str())
         .to_string();
     let diagnostic = bounded_diagnostic(error_message);
     let note = format!(
@@ -182,6 +184,8 @@ pub(super) fn preserve_agent_blocked_candidate<H: RuntimeHost + ?Sized>(
             status: Some(TaskStatus::Blocked),
             status_event: Some(orbit_types::workflow::TASK_BLOCKED_BY_AGENT_EVENT.to_string()),
             status_note: Some(note.clone()),
+            status_decision: blocker
+                .map(|blocker| orbit_types::task::TaskDecision::AgentBlocked { blocker }),
             append_comments: vec![TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),
@@ -194,7 +198,7 @@ pub(super) fn preserve_agent_blocked_candidate<H: RuntimeHost + ?Sized>(
 
     Ok(json!({
         "phase": "failure_handoff",
-        "decision": "blocked_by_agent",
+        "decision": FailureHandoffDecision::BlockedByAgent.as_str(),
         "task_id": task.id,
         "handoff_run_id": run_id,
         "failed_step_id": failed_step_id,
@@ -206,6 +210,83 @@ pub(super) fn preserve_agent_blocked_candidate<H: RuntimeHost + ?Sized>(
         "task_status": "blocked",
         "task_spec_digest": recorded_spec_digest(host, &task.id)?,
     }))
+}
+
+/// Keep a candidate whose implementer is waiting on recorded owner
+/// approval [ORB-23956].
+///
+/// [ORB-23966] The validated candidate must not strand in the run's
+/// worktree: whatever the agent left is committed on the run's branch,
+/// carried to its durable ref and recorded in the task's history, as a
+/// provider failure keeps its candidate, and no PR is opened. Nothing is
+/// published to the branch. This handoff does not change task status: run
+/// finalization holds the run and blocks the coupled task with the
+/// declared message. Once the approval is recorded, the operator returns
+/// the task to the backlog (or `in-progress`) and a new run resumes this
+/// candidate (`candidate_resume` treats `held_owner_signoff` as
+/// preserving); the held run itself is not resumed.
+pub(super) fn preserve_owner_signoff_candidate<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &orbit_types::task::Task,
+    run_id: &str,
+    failed_step_id: &str,
+    error_message: &str,
+    workspace_path: &Path,
+) -> Result<Value, OrbitError> {
+    let (head_sha, committed_files) = commit_failure_candidate(host, run_id, workspace_path, task)?;
+    let branch = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?
+        .trim()
+        .to_string();
+    let held = carry_held_candidate(
+        host,
+        task,
+        run_id,
+        failed_step_id,
+        &branch,
+        &head_sha,
+        workspace_path,
+    )?;
+    let diagnostic = bounded_diagnostic(error_message);
+    host.apply_task_automation_update(
+        &task.id,
+        TaskAutomationUpdate {
+            append_history: vec![held_history(&held)],
+            append_comments: vec![TaskComment {
+                at: Utc::now(),
+                by: "system".to_string(),
+                message: format!(
+                    "## Owner sign-off\n\nRun `{run_id}` stopped at `{failed_step_id}`: the \
+                     implementer declared `owner_signoff_required` because recorded owner \
+                     approval is still missing. Nothing was judged or published, and no PR \
+                     was opened. The candidate `{head_sha}` is committed on branch \
+                     `{branch}`. Its location below says whether another host can fetch it.\n\n{}\n\nOnce the \
+                     approval is recorded on the task, move the task back to `backlog` (or \
+                     `in-progress`) and start a new delivery run. If the candidate is host-local, \
+                     recover or push the named head before routing that run to another host. Do \
+                     not resume the held run (`orbit job resume` refuses held runs of this \
+                     kind).\n\n## Failure\n\n```text\n{diagnostic}\n```",
+                    held_place(&held)
+                ),
+                operation_id: None,
+            }],
+            ..TaskAutomationUpdate::default()
+        },
+    )?;
+    let mut output = json!({
+        "phase": "failure_handoff",
+        "decision": FailureHandoffDecision::HeldOwnerSignoff.as_str(),
+        "task_id": task.id,
+        "handoff_run_id": run_id,
+        "failed_step_id": failed_step_id,
+        "branch": branch,
+        "head_sha": head_sha,
+        "committed_files": committed_files,
+        "candidate_preserved": true,
+        "pr_created": false,
+        "task_spec_digest": recorded_spec_digest(host, &task.id)?,
+    });
+    insert_carry(&mut output, &held);
+    Ok(output)
 }
 
 /// Keep a candidate whose required validation could not run because a tool
@@ -263,6 +344,9 @@ pub(super) fn preserve_validation_environment_candidate<H: RuntimeHost + ?Sized>
             status: Some(TaskStatus::Blocked),
             status_event: Some(VALIDATION_ENVIRONMENT_EVENT.to_string()),
             status_note: Some(note.clone()),
+            status_decision: Some(TaskDecision::RunTransition {
+                run_id: run_id.to_string(),
+            }),
             append_comments: vec![TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),
@@ -276,7 +360,7 @@ pub(super) fn preserve_validation_environment_candidate<H: RuntimeHost + ?Sized>
 
     let mut output = json!({
         "phase": "failure_handoff",
-        "decision": "blocked_validation_environment",
+        "decision": FailureHandoffDecision::BlockedValidationEnvironment.as_str(),
         "task_id": task.id,
         "handoff_run_id": run_id,
         "failed_step_id": failed_step_id,
@@ -352,7 +436,7 @@ pub(super) fn hold_provider_failure_candidate<H: RuntimeHost + ?Sized>(
     )?;
     let mut output = json!({
         "phase": "failure_handoff",
-        "decision": "held_provider_failure",
+        "decision": FailureHandoffDecision::HeldProviderFailure.as_str(),
         "provider_failure": class,
         "task_id": task.id,
         "handoff_run_id": run_id,
@@ -425,7 +509,7 @@ pub(super) fn hold_upgrade_pending_candidate<H: RuntimeHost + ?Sized>(
     )?;
     let mut output = json!({
         "phase": "failure_handoff",
-        "decision": "held_upgrade_pending",
+        "decision": FailureHandoffDecision::HeldUpgradePending.as_str(),
         "blocker_kind": kind,
         "task_id": task.id,
         "handoff_run_id": run_id,
@@ -501,7 +585,7 @@ pub(super) fn hold_child_timeout_candidate<H: RuntimeHost + ?Sized>(
     )?;
     let mut output = json!({
         "phase": "failure_handoff",
-        "decision": "held_child_timeout",
+        "decision": FailureHandoffDecision::HeldChildTimeout.as_str(),
         "task_id": task.id,
         "handoff_run_id": run_id,
         "failed_step_id": failed_step_id,
@@ -621,6 +705,7 @@ pub(super) fn hold_baseline_red_candidate<H: RuntimeHost + ?Sized>(
             status: Some(TaskStatus::Backlog),
             status_event: Some(orbit_types::workflow::BASELINE_RED_HOLD_EVENT.to_string()),
             status_note: Some(note),
+            status_decision: Some(TaskDecision::BaselineRedHold(hold.clone())),
             append_comments: vec![TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),
@@ -634,7 +719,7 @@ pub(super) fn hold_baseline_red_candidate<H: RuntimeHost + ?Sized>(
 
     let mut output = json!({
         "phase": "failure_handoff",
-        "decision": "held_baseline_red",
+        "decision": FailureHandoffDecision::HeldBaselineRed.as_str(),
         "task_id": task.id,
         "handoff_run_id": run_id,
         "failed_step_id": failed_step_id,

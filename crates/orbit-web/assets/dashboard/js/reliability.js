@@ -8,7 +8,7 @@
 // Two display rules are load-bearing and apply to every rate on this view:
 //
 //   1. A percentage is never shown without its denominator and its window.
-//      `fmtRate` renders "12.5% (n=48)" and the panel header states the
+//      `describeRate` renders "12.5% (n=48)" and the panel header states the
 //      window, so a number can't be read out of context.
 //   2. A rate whose denominator is below the server's confidence threshold
 //      (`low_sample`, set in orbit-core) is withheld — the cell shows the raw
@@ -22,7 +22,7 @@
 // failed is already folded into that leaf in `failed`; `cascaded` is the
 // echo rows. The numerator and the denominator both use that folded count.
 
-import { el, syncNodes, fetchJson, requestPanel, getWindow, getWorkspaceRevision, onWorkspaceChange, payloadHonorsWindow, reliabilityWindowFor, wireWindowSelector, syncWindowSelectors, formatUtcDateTime, formatUtcRange } from './common.js';
+import { el, pinnedInfoHint, syncNodes, fetchJson, requestPanel, getWindow, getWorkspaceRevision, onWorkspaceChange, payloadHonorsWindow, reliabilityWindowFor, wireWindowSelector, syncWindowSelectors, formatUtcDateTime, formatUtcRange } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -116,7 +116,12 @@ function renderSummary(payload) {
   const settled = num(counts.succeeded) + num(counts.failed);
   const cascaded = num(counts.cascaded);
   const excluded =
-    num(counts.cancelled) + num(counts.skipped) + num(counts.held) + num(counts.in_flight) + num(counts.unknown);
+    num(counts.upgrade_paused) +
+    num(counts.cancelled) +
+    num(counts.skipped) +
+    num(counts.held) +
+    num(counts.in_flight) +
+    num(counts.unknown);
 
   const tiles = [
     statTile(
@@ -141,9 +146,7 @@ function renderSummary(payload) {
     statTile(
       "Runs in window",
       String(num(counts.total)),
-      cascaded > 0
-        ? `${settled} settled · ${cascaded} rolled up · ${excluded} not counted`
-        : `${settled} settled · ${excluded} not counted`,
+      `${settled} settled · ${cascaded} rolled up · ${excluded} not counted`,
     ),
   ];
 
@@ -154,22 +157,11 @@ function renderSummary(payload) {
   });
   syncNodes(host, nodes);
 
-  const note = $("reliability-denominator-note");
-  if (note) {
-    // The rate's numerator and denominator both count a failed delivery once.
-    // Wrapper echoes are outside that fraction; cancelled, skipped, held,
-    // in-flight, and unrecognized runs are the other exclusion.
-    const rule =
-      "Each failed delivery counts once: a wrapper that failed only because a child failed is rolled into that leaf, so the numerator and the denominator both omit that echo. ";
-    const rolled = cascaded > 0 ? `${cascaded} wrapper echo(s) are rolled up in this window. ` : "";
-    const settledClause =
-      `Failure rate is over settled deliveries (success + one count per failed delivery = ${settled}). `;
-    const excludedClause =
-      excluded > 0
-        ? `${excluded} further run(s) in this window were cancelled, skipped, held, still in flight, ` +
-          "or in an unrecognized state and are excluded from the denominator."
-        : "No cancelled, skipped, held, in-flight, or unrecognized runs in this window.";
-    note.textContent = `${rule}${rolled}${settledClause}${excludedClause}`;
+  const method = $("reliability-method");
+  if (method && !method.firstChild) {
+    method.append(pinnedInfoHint(
+      "Each failed delivery counts once: a wrapper that failed only because a child failed is rolled into that leaf, so both the numerator and denominator omit the echo. Failure rate is over settled deliveries. Runs paused by an Orbit upgrade, cancelled, skipped, held, still in flight, or in an unrecognized state are excluded from the denominator.",
+    ));
   }
 
   const truncNote = $("reliability-truncation-note");
@@ -200,10 +192,12 @@ function toggleRelCard(cardKey) {
   }
 }
 
-/// Shared presentation contract for the three attribution tables: the
-/// initial render shows the first `REL_VISIBLE_ROWS` rows in the caller's
-/// order and a Show-all toggle reveals the rest. Rates and ordering are the
-/// caller's; this helper only bounds the presentation.
+/// Shared presentation contract for the two attribution tables that sit in
+/// cards (failure rate by workspace and by job): the initial render shows the
+/// first `REL_VISIBLE_ROWS` rows in the caller's order and a Show-all toggle
+/// reveals the rest. `flatRelTable` applies the same bounds to Recovery
+/// evidence without the card. Rates and ordering are the caller's; these
+/// helpers only bound the presentation.
 function boundedRelTable({ title, columns, rows, keyFn, cardKey, unit, sortNote }) {
   if (rows.length <= REL_VISIBLE_ROWS) {
     return card(title, tableFrom(columns, rows, keyFn), cardKey);
@@ -225,6 +219,54 @@ function boundedRelTable({ title, columns, rows, keyFn, cardKey, unit, sortNote 
   const footer = el("div", { class: "rel-table-footer" }, [meta, toggle]);
   const wrap = el("div", { class: "rel-table-wrap" }, [table, footer]);
   return card(title, wrap, cardKey);
+}
+
+/// ORB-24282 — Recovery evidence is the panel's only table, so it renders
+/// flat in the panel body instead of inside a second bordered card (STD-07
+/// §R31: an inner container must mark a real distinction, and this one adds
+/// no grouping). The plain caption keeps the table's title meaning without a
+/// second title bar, and the scroll region keeps a wide table inside 375px
+/// with table-local scrolling only. Attribution keeps its cards: two tables,
+/// so the cards group.
+function flatRelTable({ title, columns, rows, keyFn, cardKey, unit, sortNote }) {
+  const captionId = `${cardKey}-caption`;
+  const caption = el("div", { id: captionId, class: "rel-flat-caption section-title", text: title });
+  const buildTable = (visibleRows) => {
+    const table = tableFrom(columns, visibleRows, keyFn);
+    table.setAttribute("aria-labelledby", captionId);
+    return table;
+  };
+  const buildScroll = (visibleRows) => {
+    const scroll = el("div", { class: "rel-flat-scroll", role: "region", "aria-label": title }, [
+      buildTable(visibleRows),
+    ]);
+    scroll.tabIndex = 0;
+    return scroll;
+  };
+  if (rows.length <= REL_VISIBLE_ROWS) {
+    const node = el("div", { class: "rel-flat" }, [caption, buildScroll(rows)]);
+    node.dataset.key = cardKey;
+    node.dataset.hash = node.textContent;
+    return node;
+  }
+  const expanded = expandedRelCards.has(cardKey);
+  const visible = expanded ? rows : rows.slice(0, REL_VISIBLE_ROWS);
+  const metaText = expanded
+    ? `Showing all ${rows.length} ${unit}${sortNote ? ` · ${sortNote}` : ""}`
+    : `Showing top ${visible.length} of ${rows.length} ${unit}${sortNote ? ` · ${sortNote}` : ""}`;
+  const meta = el("span", { class: "rel-table-meta", text: metaText });
+  const toggle = el("button", {
+    class: "mx-link-btn",
+    type: "button",
+    text: expanded ? `Show top ${REL_VISIBLE_ROWS}` : `Show all ${rows.length} ${unit}`,
+    "aria-expanded": String(expanded),
+  });
+  toggle.addEventListener("click", () => toggleRelCard(cardKey));
+  const footer = el("div", { class: "rel-table-footer rel-flat-footer" }, [meta, toggle]);
+  const node = el("div", { class: "rel-flat" }, [caption, buildScroll(visible), footer]);
+  node.dataset.key = cardKey;
+  node.dataset.hash = node.textContent;
+  return node;
 }
 
 function tableFrom(columns, rows, keyFn) {
@@ -429,7 +471,8 @@ function renderOverTime(payload) {
 
 /// Per-activity invocation counts with the role each activity was discovered
 /// to play. This is the audit trail for the recovery rate: the numerator's
-/// membership is visible, not asserted.
+/// membership is visible, not asserted. The single table renders flat in the
+/// panel (see `flatRelTable`); only Attribution keeps grouping cards.
 function renderActivities(payload) {
   const host = $("reliability-activities");
   if (!host) return;
@@ -454,7 +497,7 @@ function renderActivities(payload) {
   }
 
   syncNodes(host, [
-    boundedRelTable({
+    flatRelTable({
       title: "Invocations by activity and discovered role",
       columns: [
         { label: "activity", render: (r) => r.activity_id },
@@ -525,7 +568,6 @@ const RELIABILITY_REPORT = [
   "reliability-activities",
 ];
 const RELIABILITY_TEXT = [
-  "reliability-denominator-note",
   "reliability-truncation-note",
   "reliability-over-time-axis",
 ];

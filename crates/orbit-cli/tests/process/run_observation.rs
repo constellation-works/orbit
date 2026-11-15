@@ -44,6 +44,7 @@ mod queued_drains;
 mod repair_skips;
 mod run_history;
 mod run_show_display;
+mod task_pilot_branch;
 mod wait;
 mod waiting_blockers;
 const STALE_RUNNING: &str = "jrun-20260920-0100";
@@ -118,9 +119,9 @@ fn successful_security_sweep_shows_filing_floor_source_and_excluded_alerts() {
         );
     }
 }
-fn shipped_security_job_uses_config_unless_run_input_overrides_it() {
+fn shipped_security_job_uses_the_fixed_floor_unless_run_input_overrides_it() {
     let fixture = Fixture::init();
-    let case_table = serde_json::json!({"cases": [["", null, "moderate", "built-in"], ["[security_alert_sweep]\nmin_severity = \"high\"\n", "min_severity=critical", "critical", "input"], ["[security_alert_sweep]\nmin_severity = \"high\"\n", null, "high", "workspace"]]});
+    let case_table = serde_json::json!({"cases": [["", null, "moderate", "built-in"], ["", "min_severity=critical", "critical", "input"]]});
     for case in case_table["cases"].as_array().unwrap() {
         let (config, input, floor, source) = (
             case[0].as_str().unwrap(),
@@ -181,7 +182,7 @@ fn shipped_security_job_uses_config_unless_run_input_overrides_it() {
     }
 }
 struct Fixture {
-    _temp: tempfile::TempDir,
+    _temp: Option<tempfile::TempDir>,
     home: PathBuf,
     work: PathBuf,
 }
@@ -200,7 +201,7 @@ impl Fixture {
         fs::create_dir_all(home.join("empty-bin")).expect("empty child PATH");
         git_repo::init(&work);
         let fixture = Self {
-            _temp: temp,
+            _temp: Some(temp),
             home,
             work,
         };
@@ -597,6 +598,17 @@ fn readiness_bootstrap_preserves_stale_runs_and_held_reservations() {
         .failure();
     fixture.assert_snapshot(&before, "invalid readiness must also preserve state");
 }
+/// Make every login profile the fixture home's shell reads record a probe in
+/// `login-probes` and fail, so validation cannot resolve the login shell:
+/// each resolution then probes twice (interactive, then login-only).
+fn fail_login_profiles(home: &Path) {
+    let profile = "printf 'probe\n' >> \"$HOME/login-probes\"\nexit 42\n";
+    for name in [".bash_profile", ".profile", ".zprofile"] {
+        fs::write(home.join(name), profile).unwrap();
+    }
+    fs::create_dir_all(home.join(".config/fish")).unwrap();
+    fs::write(home.join(".config/fish/config.fish"), profile).unwrap();
+}
 #[test]
 fn readiness_snapshot_reports_replica_and_validation_warning() {
     if !isolated_run_observation(
@@ -608,10 +620,11 @@ fn readiness_snapshot_reports_replica_and_validation_warning() {
     let idle = fixture.readiness();
     let expected_json = serde_json::json!({"replica": false, "validation_env_warning": null});
     assert_fields(&idle, expected_json);
-    let config_table = serde_json::json!({"rows": [["workflow.validation_env.shell_probe", "off"], ["workflow.required_validation_commands", "[\"make ci-fast\"]"]]});
-    for row in config_table["rows"].as_array().unwrap() {
-        fixture.config_set(row[0].as_str().unwrap(), row[1].as_str().unwrap());
-    }
+    fail_login_profiles(&fixture.home);
+    fixture.config_set(
+        "workflow.required_validation_commands",
+        "[\"make ci-fast\"]",
+    );
     let warned = fixture.readiness();
     let warning = warned["validation_env_warning"]
         .as_str()
@@ -628,33 +641,43 @@ fn readiness_reuses_validation_warning_across_processes() {
     }
     let fixture = Fixture::terminal();
     let warning_of = || fixture.readiness()["validation_env_warning"].clone();
+    // A fresh probe's shell stderr comes from the host's rc files and can
+    // differ run to run (Ubuntu's command-not-found orders its PATH hint by
+    // hash), so a reprobe is compared without it; `probes()` proves reuse.
+    let stable = |warning: &serde_json::Value| {
+        let text = warning.as_str().expect("login-shell warning");
+        let (head, _) = text
+            .split_once(" (")
+            .expect("warning names its probe error");
+        let (_, tail) = text
+            .rsplit_once("); it runs with")
+            .expect("warning names its PATH");
+        format!("{head} (…); it runs with{tail}")
+    };
     let marker = fixture.home.join("login-probes");
     let probes = || fs::read_to_string(&marker).unwrap().lines().count();
-    let profile = "printf 'probe\n' >> \"$HOME/login-probes\"\nexport PATH=\"$HOME/login-tools:/usr/bin:/bin\"\n";
-    for name in [".bash_profile", ".profile", ".zprofile"] {
-        fs::write(fixture.home.join(name), profile).unwrap();
-    }
-    fs::create_dir_all(fixture.home.join(".config/fish")).unwrap();
-    fs::write(fixture.home.join(".config/fish/config.fish"), "printf 'probe\n' >> \"$HOME/login-probes\"\nset -gx PATH \"$HOME/login-tools\" /usr/bin /bin\n").unwrap();
+    fail_login_profiles(&fixture.home);
     let config = fixture.work.join(".orbit/config.toml");
-    let configure = |mode: &str| {
-        fs::write(&config, format!("[workflow]\nrequired_validation_commands = [\"make check\"]\n[workflow.validation_env]\npath = [\"/usr/bin\", \"/bin\"]\npath_mode = \"{mode}\"\n")).unwrap()
+    // A different validation PATH is a different policy, so a new cache key.
+    let configure = |path: &str| {
+        fs::write(&config, format!("[workflow]\nrequired_validation_commands = [\"make check\"]\n[workflow.validation_env]\npath = {path}\n")).unwrap()
     };
-    configure("replace");
+    let first_path = r#"["/usr/bin", "/bin"]"#;
+    configure(first_path);
     let first_warning = warning_of();
-    let warning = first_warning.as_str().expect("missing PATH warning");
-    contains(warning, fixture.home.join("login-tools").to_str().unwrap());
-    assert_eq!(probes(), 1);
+    let warning = first_warning.as_str().expect("login-shell warning");
+    contains(warning, "could not resolve the login-shell environment");
+    assert_eq!(probes(), 2);
     assert_eq!(warning_of(), first_warning);
     assert_eq!(
         probes(),
-        1,
+        2,
         "a fresh readiness process must not rerun the login shell within the diagnostic TTL"
     );
-    configure("prepend");
+    configure(r#"["/usr/bin"]"#);
     let kept = fixture.readiness();
-    assert!(kept["validation_env_warning"].is_null());
-    assert_eq!(probes(), 2);
+    assert!(kept["validation_env_warning"].is_string(), "{kept}");
+    assert_eq!(probes(), 4, "a changed policy probes again");
     let cache = fixture
         .work
         .join(".orbit/state/validation-env-warning.json");
@@ -667,16 +690,19 @@ fn readiness_reuses_validation_warning_across_processes() {
         .unwrap()
         .set_times(fs::FileTimes::new().set_modified(expired))
         .unwrap();
-    assert_eq!(warning_of(), kept["validation_env_warning"]);
-    assert_eq!(probes(), 3);
-    configure("replace");
+    assert_eq!(
+        stable(&warning_of()),
+        stable(&kept["validation_env_warning"])
+    );
+    assert_eq!(probes(), 6);
+    configure(first_path);
     fs::write(&cache, "incomplete JSON").unwrap();
-    assert_eq!(warning_of(), first_warning);
-    assert_eq!(probes(), 4);
+    assert_eq!(stable(&warning_of()), stable(&first_warning));
+    assert_eq!(probes(), 8);
     fs::rename(&cache, fixture.home.join("saved-warning.json")).unwrap();
     fs::create_dir(&cache).unwrap();
-    for expected in [5, 6] {
-        assert_eq!(warning_of(), first_warning);
+    for expected in [10, 12] {
+        assert_eq!(stable(&warning_of()), stable(&first_warning));
         assert_eq!(probes(), expected);
     }
 }
@@ -1062,7 +1088,7 @@ fn ps_lstart_utc(test: &str, pid: u32) -> Option<String> {
 fn linux_start_identity_without_ps_matches_pre_change_owner_tokens() {
     use orbit_common::process::identity::{
         ProbeOutcome, STABLE_TOKEN_PREFIX, STABLE_TOKEN_PREFIX_V1, current_pid_namespace,
-        legacy_lstart_matches, probe_process_start_identity, stable_tokens_match,
+        probe_process_start_identity, stable_tokens_match,
     };
     const PID: &str = "ORBIT_TEST_LSTART_PID";
     const RAW: &str = "ORBIT_TEST_LSTART_RAW";
@@ -1081,8 +1107,6 @@ fn linux_start_identity_without_ps_matches_pre_change_owner_tokens() {
             &token,
             &format!("{STABLE_TOKEN_PREFIX_V1}{raw}")
         ));
-        assert!(legacy_lstart_matches(pid, &raw));
-        assert!(!legacy_lstart_matches(pid, "different start time"));
         assert_eq!(
             probe_process_start_identity(u32::MAX),
             ProbeOutcome::NoProcess
@@ -1139,7 +1163,7 @@ fn cancelling_owners_with_pre_change_ps_tokens_still_signals_them() {
         STABLE_TOKEN_PREFIX, STABLE_TOKEN_PREFIX_V1, current_pid_namespace, process_is_alive,
     };
     let fixture = Fixture::init();
-    for format in ["v2", "v1", "legacy"] {
+    for format in ["v2", "v1"] {
         let owner = test_env::spawn_unrelated_process();
         let Some(raw) = ps_lstart_utc(
             "run_observation::cancelling_owners_with_pre_change_ps_tokens_still_signals_them",
@@ -1147,13 +1171,13 @@ fn cancelling_owners_with_pre_change_ps_tokens_still_signals_them() {
         ) else {
             return;
         };
-        let token = match format {
-            "v2" => format!(
+        let token = if format == "v2" {
+            format!(
                 "{STABLE_TOKEN_PREFIX}pidns={}:{raw}",
                 current_pid_namespace().unwrap_or("-")
-            ),
-            "v1" => format!("{STABLE_TOKEN_PREFIX_V1}{raw}"),
-            _ => raw,
+            )
+        } else {
+            format!("{STABLE_TOKEN_PREFIX_V1}{raw}")
         };
         let run_id = format!("jrun-pre-change-{format}");
         let now = chrono::Utc::now().to_rfc3339();
@@ -1764,7 +1788,7 @@ fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
     let answered = chrono::DateTime::parse_from_rfc3339("2026-10-07T06:44:53Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
-    let expected_json = serde_json::json!({"recorded_at": now, "queued": 9, "deferred": [waiting("ORB-101", "context_lock_conflict", &["ORB-900"], None), waiting("ORB-102", "owner_hold", &[], Some("held for a red base: make ci-lint"))], "deferred_total": 2, "excluded": [waiting("ORB-103", "dependency_not_done", &["ORB-901"], None), waiting("ORB-104", "host_os_mismatch", &[], Some("waits for a linux host (os:linux); the executor runs macos")), waiting("ORB-105", "crew_unavailable", &[], Some("crew antigravity cannot run on this host")), waiting("ORB-106", "native_os_required", &[], Some("Native OS requirement: criterion 2 needs native macos evidence, and the task's tags lack `os:macos`")), waiting("ORB-107", "browser_kit_missing", &[], Some("waits for a host with the browser kit (ui); run `orbit browser-kit install` on a host that runs workers to give it one; the executor reports no verified kit"))], "excluded_total": 5, "waiting_recorded_at": answered, "waiting_by_reason": {"context_lock_conflict": 4, "owner_hold": 11, "dependency_not_done": 1, "host_os_mismatch": 1, "crew_unavailable": 1, "native_os_required": 1, "browser_kit_missing": 1}, "consecutive_idle_passes": 4});
+    let expected_json = serde_json::json!({"recorded_at": now, "queued": 9, "deferred": [waiting("ORB-101", "context_lock_conflict", &["ORB-900"], None), waiting("ORB-102", "owner_hold", &[], Some("held for a red base: make ci-lint"))], "deferred_total": 2, "excluded": [waiting("ORB-103", "dependency_not_done", &["ORB-901"], None), waiting("ORB-104", "host_os_mismatch", &[], Some("waits for a linux host (os:linux); the executor runs macos")), waiting("ORB-105", "crew_unavailable", &[], Some("crew antigravity cannot run on this host")), waiting("ORB-106", "native_os_required", &[], Some("Native OS requirement: criterion 2 needs native macos evidence, and the task's tags lack `os:macos`")), waiting("ORB-107", "browser_kit_missing", &[], Some("waits for a host with the browser kit (ui); run `orbit config browser-kit install` on a host that runs workers to give it one; the executor reports no verified kit"))], "excluded_total": 5, "waiting_recorded_at": answered, "waiting_by_reason": {"context_lock_conflict": 4, "owner_hold": 11, "dependency_not_done": 1, "host_os_mismatch": 1, "crew_unavailable": 1, "native_os_required": 1, "browser_kit_missing": 1}, "consecutive_idle_passes": 4});
     let pass = pass_from(expected_json);
     let (runtime, mut state) = fixture.seed_pass(id, "workspace_pull_pipeline", pass);
     let shown = fixture.show_json(id);
@@ -1784,7 +1808,7 @@ fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
             "Task ORB-104: host_os_mismatch (waits for a linux host (os:linux); the executor runs macos)",
             "Task ORB-105: crew_unavailable (crew antigravity cannot run on this host)",
             "Task ORB-106: native_os_required (Native OS requirement: criterion 2 needs native macos evidence, and the task's tags lack `os:macos`)",
-            "Task ORB-107: browser_kit_missing (waits for a host with the browser kit (ui); run `orbit browser-kit install` on a host that runs workers to give it one; the executor reports no verified kit)",
+            "Task ORB-107: browser_kit_missing (waits for a host with the browser kit (ui); run `orbit config browser-kit install` on a host that runs workers to give it one; the executor reports no verified kit)",
             "idle: 20 backlog task(s) kept off this host for 4 consecutive passes (11 held on the owner, 4 footprint holds,",
             "1 needing a host with the browser kit",
         ],
@@ -2115,7 +2139,7 @@ fn run_show_marks_an_agent_blocked_on_a_stopped_descendant() {
 contract!(
     run_observation_contracts_0,
     successful_security_sweep_shows_filing_floor_source_and_excluded_alerts,
-    shipped_security_job_uses_config_unless_run_input_overrides_it,
+    shipped_security_job_uses_the_fixed_floor_unless_run_input_overrides_it,
     readiness_bootstrap_preserves_stale_runs_and_held_reservations,
     readiness_reports_total_and_notifies_only_when_backlog_is_truncated
 );

@@ -98,10 +98,13 @@ pub const MANAGED_RUN_ENV: &[&str] = &[
 /// though its home and Orbit authority were isolated (ORB-13940).
 ///
 /// Clearing the whole set — routing, managed-run trust, actor identity,
-/// inherited sandbox grants, and the plugin broker socket — makes a fixture's
-/// authority a property of the fixture rather than of how the suite was
-/// launched. Apply it with [`clear_inherited_authority`] *before* any variable
-/// a test sets on purpose, so the deliberate value wins.
+/// inherited sandbox grants, the managed MCP toolset stamp, and the plugin
+/// broker socket — makes a fixture's authority a property of the fixture
+/// rather than of how the suite was launched. A nested `orbit mcp serve`
+/// unions that stamp into the tools it advertises, so a fixture's default
+/// `tools/list` (and an update of that snapshot) would otherwise follow
+/// whoever launched the suite. Apply it with [`clear_inherited_authority`]
+/// *before* any variable a test sets on purpose, so the deliberate value wins.
 pub const INHERITED_AUTHORITY_ENV: &[&str] = &[
     // Git repository and write destinations override a fixture's cwd.
     "GIT_DIR",
@@ -146,6 +149,10 @@ pub const INHERITED_AUTHORITY_ENV: &[&str] = &[
     "ORBIT_ACTIVITY_NAME",
     "ORBIT_ACTIVITY_FS_PROFILE",
     "ORBIT_ACTIVITY_DEADLINE_UNIX_MS",
+    // Advertised toolsets for the enclosing activity. Inherited, this changes
+    // a fixture's default `tools/list`. A fixture that wants the stamp sets
+    // it after this scrub.
+    crate::security::child_env::ACTIVITY_MCP_TOOLSETS_ENV,
     "ORBIT_PROC_ALLOWED_PROGRAMS",
     "ORBIT_PROC_PROGRAM_POLICY",
     "ORBIT_PROC_DISALLOWED_PROGRAMS",

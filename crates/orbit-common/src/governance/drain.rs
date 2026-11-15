@@ -3,9 +3,11 @@
 //! Names, descriptions, parameter order and registration retain the shipped
 //! tool contract. These operations have no derived CLI or dashboard surface.
 
+use orbit_types::tool::McpIdRouteDeclaration;
+
 use crate::governance::operation::{
     CliHelp, Description, Effect, NounSpec, OperationSpec, ParamSpec, ParamType, Redaction,
-    ToolOnlyRegistration, UnknownFields, operation_registry,
+    ToolOnlyRegistration, UnknownFields, mcp_only, operation_registry, required,
 };
 
 operation_registry! {
@@ -27,6 +29,8 @@ operation_registry! {
         ClaimSettle => CLAIM_SETTLE,
         /// `orbit.drain.claims`.
         Claims => CLAIMS,
+        /// `orbit.drain.claim.effort`.
+        ClaimEffort => CLAIM_EFFORT,
     }
 }
 
@@ -53,28 +57,24 @@ const PROBE: OperationSpec<DrainVerb> = OperationSpec {
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
     params: &[&[
-        param(
+        mcp_only(
             "caller_version",
             ParamType::String,
-            false,
             "Optional. The calling binary's version. When supplied, the response reports whether it matches this owner instead of leaving the caller to compare.",
         ),
-        param(
+        mcp_only(
             "caller_schema",
             ParamType::Integer,
-            false,
             "Optional. The caller's distributed-drain wire-protocol schema version. This is not the MCP protocol revision and not the orchestration schema version.",
         ),
-        param(
+        mcp_only(
             "caller_fingerprint",
             ParamType::String,
-            false,
             "Optional. Type-derived pull request schema fingerprint. Discover the owner's protocol_fingerprint before declaring this field; a mismatch raises protocol_skew before any pull.",
         ),
-        param(
+        mcp_only(
             "caller_before_pr",
             ParamType::Boolean,
-            false,
             "Optional. Whether the executor's `review.timing` is `before_pr`. Diagnostic only: a claimed leaf runs the before-PR review the owner's ship contract captures, never the executor's own. After-landing review never affects admission.",
         ),
         // Revision-4 followers still send this ignored legacy field.
@@ -94,6 +94,7 @@ const PROBE: OperationSpec<DrainVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const RECEIPT_LOOKUP: OperationSpec<DrainVerb> = OperationSpec {
@@ -105,22 +106,19 @@ const RECEIPT_LOOKUP: OperationSpec<DrainVerb> = OperationSpec {
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
     params: &[&[
-        param(
+        required(mcp_only(
             "request_id",
             ParamType::String,
-            true,
             "The durable request ID the original admission was made with. It is read verbatim; the stored receipt is never rewritten to match the caller's current binary.",
-        ),
-        param(
+        )),
+        mcp_only(
             "machine_id",
             ParamType::String,
-            false,
             "Optional receipt namespace: the machine the original request was made from. Defaults to this session's own machine. Naming another machine is cross-attempt inspection and requires operator capability.",
         ),
-        param(
+        mcp_only(
             "lookup_schema",
             ParamType::Integer,
-            false,
             "Optional lookup protocol version; defaults to 1. Versioned independently of admission, so an upgraded client can reconcile an old request. An incompatible version is refused — reconcile through owner claim inspection instead of minting a replacement request.",
         ),
     ]],
@@ -128,6 +126,7 @@ const RECEIPT_LOOKUP: OperationSpec<DrainVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const PULL: OperationSpec<DrainVerb> = OperationSpec {
@@ -139,76 +138,69 @@ const PULL: OperationSpec<DrainVerb> = OperationSpec {
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[
-        param(
+        required(mcp_only(
             "request_id",
             ParamType::String,
-            true,
             "Durable unique ID for one intended admission, persisted by the caller before sending. Reuse it unchanged after any uncertainty: a retry replays the stored receipt and never admits a second task.",
-        ),
-        param(
+        )),
+        required(mcp_only(
             "caller_version",
             ParamType::String,
-            true,
             "The calling binary's version. It must equal the owner's.",
-        ),
-        param(
+        )),
+        required(mcp_only(
             "caller_schema",
             ParamType::Integer,
-            true,
             "The caller's distributed-drain wire-protocol schema version.",
-        ),
-        param(
+        )),
+        required(mcp_only(
             "caller_before_pr",
             ParamType::Boolean,
-            true,
             "Whether the executor's drain captured `review.timing = before_pr` at submission. Diagnostic only: a claimed leaf runs the before-PR review the owner's `ship` contract captures, never the executor's own. After-landing review never affects admission.",
-        ),
-        param(
+        )),
+        mcp_only(
             "caller_fingerprint",
             ParamType::String,
-            false,
             "Type-derived pull request fingerprint negotiated with orbit.drain.probe. A mismatch is refused as protocol_skew before deserialization; optional for historical requests.",
         ),
-        param(
+        mcp_only(
             "review_gate",
             ParamType::Boolean,
-            false,
             "Whether the executor's claimed PR leaf runs the before-PR review the `ship` contract captures. An owner with `review.timing = before_pr` refuses an executor that does not declare it as `before_pr_unsupported`. Omitted: `false`.",
         ),
-        param(
+        mcp_only(
+            "visual_resolution",
+            ParamType::Integer,
+            "Retired with visual review: accepted from an executor on an earlier build and ignored. Omit it.",
+        ),
+        mcp_only(
             "caller_review_policy",
             ParamType::String,
-            false,
             "Deprecated and ignored: the review-policy label distributed-drain protocol revisions before 5 sent. Accepted only so an older caller is refused as `protocol_mismatch` rather than for an unknown field.",
         ),
-        param(
+        required(mcp_only(
             "run_context",
             ParamType::Object,
-            true,
             "The calling drain: `run_id`, `job_name`, and an optional diagnostic `machine_name`.",
-        ),
-        param(
+        )),
+        required(mcp_only(
             "ship",
             ParamType::Object,
-            true,
             "The ship contract this owner resolves, exactly as `orbit.drain.probe` reported it. A new request carrying anything else is refused as `ship_contract_mismatch`, because the receipt freezes it.",
-        ),
-        param(
+        )),
+        mcp_only(
             "crews",
             ParamType::Object,
-            false,
             "The crews the executor can run: `runnable` (its window preflight's crew names), `default_crew` (what a task naming no crew runs as there) and `excluded` (crews it cannot run, with why). A task whose crew it cannot run is skipped and stays in the backlog. Omitted: every crew is admissible.",
         ),
-        param(
+        mcp_only(
             "os",
             ParamType::String,
-            false,
             "The executor's host OS: `linux`, `macos` or `windows`. A task tagged `os:<name>` is admitted only to an executor whose OS it names, and is otherwise skipped and stays in the backlog. Omitted: only tasks without an `os:` tag are admissible.",
         ),
-        param(
+        mcp_only(
             "browser_kit",
             ParamType::Boolean,
-            false,
             "Whether the executor's host has a verified headless browser kit. A task tagged `ui` is admitted only to an executor that declares one, and is otherwise skipped and stays in the backlog. Omitted: `false`.",
         ),
     ]],
@@ -216,6 +208,7 @@ const PULL: OperationSpec<DrainVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const CLAIM_BIND: OperationSpec<DrainVerb> = OperationSpec {
@@ -227,29 +220,27 @@ const CLAIM_BIND: OperationSpec<DrainVerb> = OperationSpec {
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[
-        param(
+        required(mcp_only(
             "claim_id",
             ParamType::String,
-            true,
             "The claim `orbit.task.pull` admitted to this machine.",
-        ),
-        param(
+        )),
+        required(mcp_only(
             "run_id",
             ParamType::String,
-            true,
             "The one local leaf run the executor created for this claim.",
-        ),
-        param(
+        )),
+        required(mcp_only(
             "ship",
             ParamType::Object,
-            true,
             "The ship contract the claim was admitted under, from its receipt.",
-        ),
+        )),
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const CLAIM_SETTLE: OperationSpec<DrainVerb> = OperationSpec {
@@ -272,47 +263,47 @@ const CLAIM_SETTLE: OperationSpec<DrainVerb> = OperationSpec {
             mcp_description: Some(Description::Static("The claim being settled.")),
             cli: None,
         },
-        param(
+        mcp_only(
             "run_id",
             ParamType::String,
-            false,
             "The leaf run bound to this claim, when one was bound.",
         ),
-        param(
+        required(mcp_only(
             "settlement",
             ParamType::Object,
-            true,
             "The executor's durable settlement: `{\"AcceptHandoff\": <typed handoff>}` for a published pull request, `{\"Fail\": <evidence>}`, or `{\"Release\": <evidence>}` to hand an unfinished claim back. Nothing else settles a claim.",
-        ),
-        param(
+        )),
+        mcp_only(
             "crew",
             ParamType::String,
-            false,
             "Optional. The crew the leaf run resolved. Attribution only: the owner records it on the claim's settlement record, after any crew the settlement's own evidence names, and never uses it to validate or decide the settlement.",
         ),
-        param(
+        mcp_only(
             "crew_model",
             ParamType::String,
-            false,
             "Optional. The model the leaf's crew resolved to. Attribution only, like `crew`.",
         ),
-        param(
+        mcp_only(
             "branch",
             ParamType::String,
-            false,
             "Optional. The branch the leaf run's worktree recorded. Attribution only, like `crew`; the owner shows it so an operator can inspect the run.",
         ),
-        param(
+        mcp_only(
             "worktree_path",
             ParamType::String,
-            false,
             "Optional. The absolute path of the leaf run's worktree on the executing machine. Attribution only, like `branch`.",
+        ),
+        mcp_only(
+            "reasoning_effort",
+            ParamType::String,
+            "Optional. The effective reasoning effort of the leaf's main implementing invocation: its name (`low`, `medium`, `high`, `xhigh` or `max`), or `provider_default` when the provider's default applied. Omit it when the effort is unknown. Attribution only, like `crew`: the owner's agent scorecards count the attempt under it.",
         ),
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const CLAIMS: OperationSpec<DrainVerb> = OperationSpec {
@@ -328,24 +319,47 @@ const CLAIMS: OperationSpec<DrainVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
-/// A structural tool parameter, with no CLI binding or input rewriting.
-const fn param(
-    name: &'static str,
-    param_type: ParamType,
-    required: bool,
-    description: &'static str,
-) -> ParamSpec {
-    ParamSpec {
-        name,
-        aliases: &[],
-        param_type,
-        required,
-        preserve_empty: false,
-        default: None,
-        redact: Redaction::None,
-        mcp_description: Some(Description::Static(description)),
-        cli: None,
-    }
-}
+const CLAIM_EFFORT: OperationSpec<DrainVerb> = OperationSpec {
+    verb: DrainVerb::ClaimEffort,
+    cli_path: &[],
+    tool_name: "orbit.drain.claim.effort",
+    tool_description: "Report, after the fact, the reasoning effort and implementing model a claimed leaf ran at when its settlement carried none, so the owner's agent scorecards stop counting the attempt as effort unknown or model unknown. Accepted only from the machine that ran the claim, for the leaf run bound to it, once the claim is settled; a claim that settled before the owner kept settlement records is accepted only when the task's history names it as pulled. Attribution only: it changes no claim, task, run or settlement outcome. A value the claim already holds is never overwritten: the same value replays, and a different one is refused as `effort_conflict` or `model_conflict`, recording neither.",
+    cli_about: "",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[&[
+        required(mcp_only(
+            "claim_id",
+            ParamType::String,
+            "The settled claim whose leaf ran on this machine.",
+        )),
+        required(mcp_only(
+            "run_id",
+            ParamType::String,
+            "The leaf run bound to that claim.",
+        )),
+        required(mcp_only(
+            "reasoning_effort",
+            ParamType::String,
+            "The effective reasoning effort of the leaf's main implementing invocation, read from this machine's own records: its name (`low`, `medium`, `high`, `xhigh` or `max`), or `provider_default` when the provider's default applied. Never sent for an unknown effort.",
+        )),
+        mcp_only(
+            "crew_model",
+            ParamType::String,
+            "The model of that same implementing invocation (else of its latest matching launch record), read from this machine's own records. Omitted when unknown; never derived from a crew name or configuration.",
+        ),
+        mcp_only(
+            "crew",
+            ParamType::String,
+            "The crew the leaf run actually used, read from this machine's own run record. Sent with the same report as `crew_model`, so the owner keys the attempt to this crew and model together when the task was re-crewed between claims. Omitted when unknown; an owner that predates it ignores the field.",
+        ),
+    ]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
+};

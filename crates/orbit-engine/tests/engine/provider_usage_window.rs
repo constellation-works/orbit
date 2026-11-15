@@ -92,7 +92,7 @@ fn dispatch_with_prelude(
     agent_env: &[(&str, &Path)],
     prelude: &str,
 ) -> (DispatchOutcome, Vec<ProviderLimitObservation>) {
-    dispatch_with_prelude_and_launcher(binary, provider, stdout, agent_env, prelude, None, &[])
+    dispatch_with_prelude_and_launcher(binary, provider, stdout, agent_env, prelude, None, None)
 }
 
 fn dispatch_with_prelude_and_launcher(
@@ -101,22 +101,81 @@ fn dispatch_with_prelude_and_launcher(
     stdout: &str,
     agent_env: &[(&str, &Path)],
     prelude: &str,
-    interpreter: Option<&str>,
-    extra_args: &[String],
+    launcher: Option<(&str, &[String])>,
+    conversation_ref: Option<&str>,
 ) -> (DispatchOutcome, Vec<ProviderLimitObservation>) {
-    let fake = FakeProvider::with_usage_command(binary, stdout, "", 0, "", prelude);
+    dispatch_with_options(
+        binary,
+        provider,
+        stdout,
+        agent_env,
+        DispatchOptions {
+            stderr: "",
+            exit_code: 0,
+            prelude,
+            launcher,
+            conversation_ref,
+        },
+    )
+}
+
+struct DispatchOptions<'a> {
+    stderr: &'a str,
+    exit_code: i32,
+    prelude: &'a str,
+    launcher: Option<(&'a str, &'a [String])>,
+    conversation_ref: Option<&'a str>,
+}
+
+fn dispatch_with_streams(
+    binary: &str,
+    provider: Provider,
+    stdout: &str,
+    stderr: &str,
+    agent_env: &[(&str, &Path)],
+) -> (DispatchOutcome, Vec<ProviderLimitObservation>) {
+    dispatch_with_options(
+        binary,
+        provider,
+        stdout,
+        agent_env,
+        DispatchOptions {
+            stderr,
+            exit_code: 0,
+            prelude: "",
+            launcher: None,
+            conversation_ref: None,
+        },
+    )
+}
+
+fn dispatch_with_options(
+    binary: &str,
+    provider: Provider,
+    stdout: &str,
+    agent_env: &[(&str, &Path)],
+    options: DispatchOptions<'_>,
+) -> (DispatchOutcome, Vec<ProviderLimitObservation>) {
+    let fake = FakeProvider::with_usage_command(
+        binary,
+        stdout,
+        options.stderr,
+        options.exit_code,
+        "",
+        options.prelude,
+    );
     let audit = tempfile::tempdir().unwrap();
     let mut host = CapacityHost::new(&fake.path, audit.path());
     host.agent_env = agent_env
         .iter()
         .map(|(key, value)| (key.to_string(), value.display().to_string()))
         .collect();
-    let (cli_command, cli_args) = if let Some(interpreter) = interpreter {
+    let (cli_command, cli_args) = if let Some((interpreter, extra_args)) = options.launcher {
         let mut args = vec![fake.path.display().to_string()];
         args.extend(extra_args.iter().cloned());
         (Some(interpreter.to_string()), args)
     } else {
-        (None, extra_args.to_vec())
+        (None, Vec::new())
     };
     let host = UsageHost {
         provider: host,
@@ -130,7 +189,7 @@ fn dispatch_with_prelude_and_launcher(
         activity_name: "usage_window_fixture",
         spec: &ActivityV2Spec::AgentLoop(spec),
         fs_profile: None,
-        input: json!({ "prompt": "implement", "crew": "fixture-crew" }),
+        input: json!({ "prompt": "implement", "crew": "fixture-crew", "conversation_ref":options.conversation_ref }),
         audit: outcome_writer("usage-run"),
         run_id: "usage-run",
         host: Some(&host),
@@ -147,14 +206,19 @@ fn with_capture_limit<T>(limit: usize, operation: impl FnOnce() -> T) -> T {
     struct RestoreCaptureLimit(Option<OsString>);
     impl Drop for RestoreCaptureLimit {
         fn drop(&mut self) {
-            match self.0.take() {
-                Some(previous) => unsafe { std::env::set_var(CAPTURE_LIMIT_ENV, previous) },
-                None => unsafe { std::env::remove_var(CAPTURE_LIMIT_ENV) },
+            // SAFETY: this test runs alone in its own nextest process (.config/nextest.toml),
+            // so no other thread reads CAPTURE_LIMIT_ENV while it is restored here.
+            unsafe {
+                match self.0.take() {
+                    Some(previous) => std::env::set_var(CAPTURE_LIMIT_ENV, previous),
+                    None => std::env::remove_var(CAPTURE_LIMIT_ENV),
+                }
             }
         }
     }
 
     let previous = std::env::var_os(CAPTURE_LIMIT_ENV);
+    // SAFETY: same single-test process as the Drop above; `_restore` puts the prior value back.
     unsafe { std::env::set_var(CAPTURE_LIMIT_ENV, limit.to_string()) };
     let _restore = RestoreCaptureLimit(previous);
     operation()
@@ -261,13 +325,16 @@ fi
             stdout,
             &env,
             prelude,
-            Some("/bin/sh"),
-            &[
-                "--output-format".to_string(),
-                "stream-json".to_string(),
-                "--print-timeout".to_string(),
-                "10m".to_string(),
-            ],
+            Some((
+                "/bin/sh",
+                &[
+                    "--output-format".to_string(),
+                    "stream-json".to_string(),
+                    "--print-timeout".to_string(),
+                    "10m".to_string(),
+                ],
+            )),
+            None,
         )
     };
     let (outcome, limits) = run(&success);
@@ -389,19 +456,22 @@ fn codex_long_prompt_fixture() -> (String, String, TokenUsage) {
     .map(|frame| frame.to_string())
     .collect::<Vec<_>>()
     .join("\n");
-    let rollout = json!({
-        "timestamp":"2026-10-29T01:18:19.662Z",
-        "ordinal":13,
-        "type":"event_msg",
-        "payload":{
-            "type":"token_count",
-            "info":{
-                "total_token_usage":provider_usage.clone(),
-                "last_token_usage":provider_usage
+    let rollout = format!(
+        "{}\n{}",
+        json!({"type":"event_msg", "payload":{"type":"task_started", "turn_id":"original"}}),
+        json!({
+            "timestamp":"2026-10-29T01:18:19.662Z",
+            "ordinal":13,
+            "type":"event_msg",
+            "payload":{
+                "type":"token_count",
+                "info":{
+                    "total_token_usage":provider_usage.clone(),
+                    "last_token_usage":provider_usage
+                }
             }
-        }
-    })
-    .to_string();
+        })
+    );
     (stdout, rollout, usage)
 }
 
@@ -421,6 +491,102 @@ fn invocation_trace(outcome: &DispatchOutcome) -> &InvocationTrace {
         .as_ref()
         .expect("dispatch records invocation telemetry")
         .trace
+}
+
+fn resumed_codex_prices_only_current_turn_requests() {
+    let (original_stdout, mut rollout, original_usage) = codex_long_prompt_fixture();
+    let home = codex_home(CODEX_THREAD, Some(&rollout));
+    let day = home
+        .path()
+        .join("sessions")
+        .join(Local::now().format("%Y/%m/%d").to_string());
+    let path = day.join(format!("rollout-2026-10-08T18-18-16-{CODEX_THREAD}.jsonl"));
+    let (original, _) = dispatch(
+        "codex",
+        Provider::Codex,
+        &original_stdout,
+        &[("CODEX_HOME", home.path())],
+    );
+    let original_trace = invocation_trace(&original);
+    assert_eq!(
+        original_trace.long_prompt_requests,
+        Some(vec![original_usage.clone()])
+    );
+    let long_cost = codex_prompt_tier_cost(original_trace).unwrap();
+    let mut total_input = original_usage.input;
+    let mut total_output = original_usage.output;
+    for (turn, input, cached) in [
+        ("short", 1_000, 0),
+        ("long", 300_000, 280_000),
+        ("short-again", 1_000, 0),
+    ] {
+        let usage = TokenUsage {
+            input,
+            cache_read: cached,
+            output: 900,
+            ..Default::default()
+        };
+        rollout.push_str(&format!(
+            "\n{}",
+            json!({"type":"event_msg", "payload":{"type":"task_started", "turn_id":turn}})
+        ));
+        // A refresh immediately after resume repeats the previous request.
+        let last_count: Value =
+            serde_json::from_str(rollout.lines().rev().nth(1).unwrap()).unwrap();
+        rollout.push_str(&format!("\n{last_count}"));
+        total_input += input;
+        total_output += usage.output;
+        rollout.push_str(&format!("\n{}", json!({"type":"event_msg", "payload":{"type":"token_count", "info":{
+            "total_token_usage":{"input_tokens":total_input, "output_tokens":total_output},
+            "last_token_usage":{"input_tokens":input, "cached_input_tokens":cached, "output_tokens":usage.output}
+        }}})));
+        fs::write(&path, &rollout).unwrap();
+        let mut frames: Vec<Value> = original_stdout
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        frames.last_mut().unwrap()["usage"] = json!({"input_tokens":input, "cached_input_tokens":cached, "output_tokens":usage.output});
+        let stdout = frames
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (resumed, _) = with_capture_limit(2_048, || {
+            dispatch_with_prelude_and_launcher(
+                "codex",
+                Provider::Codex,
+                &stdout,
+                &[("CODEX_HOME", home.path())],
+                r#"case " $* " in *" resume "*) ;; *) exit 9 ;; esac"#,
+                None,
+                Some(CODEX_THREAD),
+            )
+        });
+        assert!(resumed.success, "resume {turn}: {:?}", resumed.message);
+        let trace = invocation_trace(&resumed);
+        assert_eq!(trace.usage, usage);
+        let expected_requests = if input >= 100_000 {
+            vec![usage.clone()]
+        } else {
+            vec![]
+        };
+        assert_eq!(
+            trace.long_prompt_requests,
+            Some(expected_requests),
+            "resume {turn}"
+        );
+        let cost = codex_prompt_tier_cost(trace).unwrap();
+        if turn == "long" {
+            assert_eq!(cost, long_cost);
+        } else {
+            let at = "2026-10-30T00:00:00Z".parse().unwrap();
+            assert_eq!(
+                Some(cost),
+                derive_cost_usd("gpt-6.1-sol", at, &usage, Some(&[]))
+            );
+            assert!(cost < long_cost);
+        }
+    }
 }
 
 fn codex_long_prompt_telemetry_survives_truncated_stdout() {
@@ -616,6 +782,58 @@ fn projected(outcome: &DispatchOutcome) -> (Value, TokenUsage) {
         .usage
         .clone();
     (response, usage)
+}
+
+// ORB-23935: real partial-message output exceeded the 1 MiB capture limit.
+// Replay its usage frames with redundant content volume at the public dispatch
+// boundary; completion and final per-request output must both survive.
+fn claude_final_usage_survives_partial_content_over_capture_limit() {
+    let recorded = include_str!(
+        "../../../orbit-agent/tests/provider_invocation/fixtures/claude_final_usage.jsonl"
+    );
+    let mut frames: Vec<Value> = recorded
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let result = frames.pop().unwrap();
+    let delta = json!({"type":"stream_event", "event":{"type":"content_block_delta",
+        "index":0, "delta":{"type":"text_delta", "text":"rain ".repeat(1000)}}});
+    let mut stdout = frames[0].to_string();
+    stdout.push('\n');
+    for _ in 0..240 {
+        stdout.push_str(&delta.to_string());
+        stdout.push('\n');
+    }
+    for frame in &frames[1..] {
+        stdout.push_str(&frame.to_string());
+        stdout.push('\n');
+    }
+    stdout.push_str(&result.to_string());
+    stdout.push('\n');
+    assert!(stdout.len() > 1024 * 1024);
+    let (outcome, _) = with_capture_limit(1024 * 1024, || {
+        dispatch("claude", Provider::Claude, &stdout, &[])
+    });
+    assert!(
+        outcome.success,
+        "terminal result survives partial content: {outcome:?}"
+    );
+    let trace = invocation_trace(&outcome);
+    assert_eq!(
+        trace.long_prompt_requests,
+        Some(vec![TokenUsage {
+            input: 2,
+            cache_read: 2438,
+            cache_create: 0,
+            cache_create_1h: 360090,
+            output: 14159,
+        }])
+    );
+    assert_eq!(trace.usage.output, 14159);
+    assert!(
+        !trace.tool_calls_incomplete,
+        "discarding redundant partial content loses no tool calls"
+    );
 }
 
 fn a_claude_stream_records_both_windows_and_projects_as_its_result_alone() {
@@ -842,11 +1060,297 @@ cat '{}'
     assert!(limits.is_empty());
 }
 
+/// [ORB-24019] The `agent_output` relay must drop the same redundant Claude
+/// partial content events the bounded capture drops, while relaying every
+/// other frame and still counting the dropped bytes as observed.
+fn claude_partial_content_events_are_not_relayed_as_agent_output() {
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::{Layer, layer::SubscriberExt};
+
+    #[derive(Default)]
+    struct RelayedLine {
+        line: Option<String>,
+        stream: Option<String>,
+        agent_output: bool,
+    }
+    impl tracing::field::Visit for RelayedLine {
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            if field.name() == "line" {
+                self.line = Some(value.to_string());
+            }
+            if field.name() == "stream" {
+                self.stream = Some(value.to_string());
+            }
+        }
+        fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+            if field.name() == "agent_output" {
+                self.agent_output = value;
+            }
+        }
+        fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+    }
+    struct Capture(Arc<Mutex<Vec<(String, String)>>>);
+    impl<S: tracing::Subscriber> Layer<S> for Capture {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if event.metadata().target() == "orbit_engine::activity_job::cli_runner::supervisor" {
+                let mut line = RelayedLine::default();
+                event.record(&mut line);
+                if line.agent_output
+                    && let (Some(stream), Some(line)) = (line.stream, line.line)
+                {
+                    self.0.lock().unwrap().push((stream, line));
+                }
+            }
+        }
+    }
+
+    let recorded = include_str!(
+        "../../../orbit-agent/tests/provider_invocation/fixtures/claude_final_usage.jsonl"
+    );
+    let recorded_lines: Vec<&str> = recorded.lines().collect();
+    // message_start, assistant, message_delta, message_stop, result.
+    let (message_start, assistant, message_delta, message_stop, result) = (
+        recorded_lines[0],
+        recorded_lines[1],
+        recorded_lines[2],
+        recorded_lines[3],
+        recorded_lines[4],
+    );
+    let rate_limit_event = CLAUDE_STREAM
+        .lines()
+        .find(|line| line.contains("\"rate_limit_event\""))
+        .unwrap();
+    let content_start = json!({"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}}).to_string();
+    let content_delta = json!({"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"fragment"}}}).to_string();
+    let content_stop =
+        json!({"type":"stream_event","event":{"type":"content_block_stop","index":0}}).to_string();
+    let user = json!({"type":"user","message":{"role":"user","content":"next"}}).to_string();
+    let frames: [&str; 10] = [
+        message_start,
+        content_start.as_str(),
+        content_delta.as_str(),
+        content_stop.as_str(),
+        assistant,
+        user.as_str(),
+        message_delta,
+        message_stop,
+        rate_limit_event,
+        result,
+    ];
+    let mut stdout = frames.join("\n");
+    stdout.push('\n');
+
+    let relayed = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(Capture(relayed.clone()));
+    let (outcome, _) = tracing::subscriber::with_default(subscriber, || {
+        dispatch_with_streams(
+            "claude",
+            Provider::Claude,
+            &stdout,
+            content_delta.as_str(),
+            &[],
+        )
+    });
+    assert!(outcome.success, "{:?}", outcome.message);
+
+    let relayed_kinds: Vec<(String, Option<String>)> = relayed
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(stream, line)| stream == "stdout" && !line.is_empty())
+        .map(|(_, line)| {
+            let frame: Value = serde_json::from_str(line).unwrap();
+            (
+                frame["type"].as_str().unwrap().to_string(),
+                frame["event"]["type"].as_str().map(str::to_string),
+            )
+        })
+        .collect();
+    assert_eq!(
+        relayed_kinds,
+        [
+            (
+                "stream_event".to_string(),
+                Some("message_start".to_string())
+            ),
+            ("assistant".to_string(), None),
+            ("user".to_string(), None),
+            (
+                "stream_event".to_string(),
+                Some("message_delta".to_string())
+            ),
+            ("stream_event".to_string(), Some("message_stop".to_string())),
+            ("rate_limit_event".to_string(), None),
+            ("result".to_string(), None),
+        ],
+        "content_block_* stream events must not reach the agent_output relay"
+    );
+    assert!(
+        relayed
+            .lock()
+            .unwrap()
+            .contains(&("stderr".to_string(), content_delta.clone())),
+        "Claude stderr content-shaped output remains relayed"
+    );
+    // Stall/progress accounting counts every raw byte, dropped ones included
+    // (the fake provider's heredoc adds one trailing newline to `stdout`).
+    assert_eq!(
+        outcome.output["stdout_text_original_bytes"],
+        json!(stdout.len() + 1)
+    );
+    // The bounded capture keeps the same frames it kept before the relay fix.
+    let captured = outcome.output["stdout_text"].as_str().unwrap();
+    assert!(!captured.contains("content_block_"), "{captured}");
+    assert!(captured.contains("\"type\":\"assistant\""), "{captured}");
+    assert!(captured.contains("\"type\":\"result\""), "{captured}");
+
+    // The process pump reads at most 8192 bytes at a time. This fixed 64 KiB
+    // prefix therefore crosses the relay's line limit before the valid JSON
+    // suffix arrives, without relying on timing or stress.
+    let oversized_delta = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"fragment"}}}"#;
+    let split_prefix_len = 8 * 8192;
+    for prefix_byte in *b" x" {
+        let prefix = String::from_utf8(vec![prefix_byte; split_prefix_len]).unwrap();
+        let physical_line = format!("{prefix}{oversized_delta}");
+        relayed.lock().unwrap().clear();
+        let subscriber = tracing_subscriber::registry().with(Capture(relayed.clone()));
+        let (outcome, _) = tracing::subscriber::with_default(subscriber, || {
+            with_capture_limit(1024 * 1024, || {
+                dispatch("claude", Provider::Claude, &physical_line, &[])
+            })
+        });
+
+        let relayed_fragments: Vec<String> = relayed
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(stream, _)| stream == "stdout")
+            .map(|(_, line)| line.clone())
+            .collect();
+        assert_eq!(
+            relayed_fragments.len(),
+            2,
+            "the fixed prefix and JSON suffix reach dispatch as separate chunks"
+        );
+        assert_eq!(
+            relayed_fragments[1], oversized_delta,
+            "the final fragment is independently valid content-block JSON"
+        );
+        let suffix: Value = serde_json::from_str(&relayed_fragments[1]).unwrap();
+        assert_eq!(
+            suffix["event"]["type"], "content_block_delta",
+            "the suffix independently matches the Claude event filter"
+        );
+        assert_eq!(
+            relayed_fragments.concat(),
+            physical_line,
+            "oversized and malformed lines retain every relay fragment"
+        );
+        assert_eq!(
+            outcome.output["stdout_text_original_bytes"],
+            json!(physical_line.len() + 1),
+            "observed-byte accounting includes the entire physical line and fixture newline"
+        );
+        assert_eq!(
+            outcome.output["stdout_text_captured_bytes"],
+            json!(physical_line.len() + 1),
+            "bounded capture retains every byte before the separate text preview"
+        );
+        assert_eq!(outcome.output["stdout_capture_truncated"], json!(false));
+    }
+
+    relayed.lock().unwrap().clear();
+    let subscriber = tracing_subscriber::registry().with(Capture(relayed.clone()));
+    let _ = tracing::subscriber::with_default(subscriber, || {
+        dispatch("codex", Provider::Codex, &content_delta, &[])
+    });
+    assert!(
+        relayed
+            .lock()
+            .unwrap()
+            .contains(&("stdout".to_string(), content_delta)),
+        "other providers keep relaying content-shaped output"
+    );
+}
+
+/// One Claude terminal result that carries `envelope` as its `result` text,
+/// the shape a finished turn prints.
+fn claude_result_frame(envelope: &str) -> String {
+    json!({
+        "type": "result",
+        "subtype": "success",
+        "is_error": false,
+        "stop_reason": "end_turn",
+        "terminal_reason": "completed",
+        "total_cost_usd": 0.25,
+        "usage": {
+            "input_tokens": 3,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 100,
+            "output_tokens": 42
+        },
+        "result": envelope
+    })
+    .to_string()
+}
+
+// [ORB-24216] A well-formed `status: failed` envelope that exits 0 fails exit
+// alignment, yet the invocation spent its tokens. The step stays a protocol
+// violation, and the dispatch outcome still carries the reported usage.
+fn a_failed_envelope_that_exits_zero_keeps_its_invocation_usage() {
+    let envelope = r#"{"schemaVersion":1,"status":"failed","result":null,"error":{"code":"TASK_BLOCKED","message":"cannot proceed"}}"#;
+    let (outcome, _) = dispatch(
+        "claude",
+        Provider::Claude,
+        &claude_result_frame(envelope),
+        &[],
+    );
+    assert!(
+        !outcome.success,
+        "exit 0 with a failed envelope stays a protocol violation: {outcome:?}"
+    );
+    let trace = invocation_trace(&outcome);
+    assert_eq!(trace.usage.input, 3);
+    assert_eq!(trace.usage.output, 42);
+}
+
+// [ORB-24216] The telemetry fallback is not a verdict: a success envelope under
+// a non-zero exit stays rejected, and the usage it spent is still recorded.
+fn a_success_envelope_under_a_nonzero_exit_stays_rejected_with_its_usage() {
+    let envelope = r#"{"schemaVersion":1,"status":"success","result":{},"error":null}"#;
+    let (outcome, _) = dispatch_with_options(
+        "claude",
+        Provider::Claude,
+        &claude_result_frame(envelope),
+        &[],
+        DispatchOptions {
+            stderr: "",
+            exit_code: 1,
+            prelude: "",
+            launcher: None,
+            conversation_ref: None,
+        },
+    );
+    assert!(
+        !outcome.success,
+        "a non-zero exit cannot report status=success: {outcome:?}"
+    );
+    assert_eq!(invocation_trace(&outcome).usage.output, 42);
+}
+
 /// Behavior-distinct rows share one bounded family process.
 #[test]
 fn usage_window_contracts_1() {
     crate::git_fixture::isolated(module_path!(), "usage_window_contracts_1", || {
         crate::git_fixture::run_scenarios(&[
+            (
+                "claude_partial_content_events_are_not_relayed_as_agent_output",
+                claude_partial_content_events_are_not_relayed_as_agent_output,
+            ),
             (
                 "antigravity_records_native_quota_and_unavailable_readings_are_advisory",
                 antigravity_records_native_quota_and_unavailable_readings_are_advisory,
@@ -864,8 +1368,16 @@ fn usage_window_contracts_1() {
                 a_codex_run_records_the_window_its_own_rollout_reports,
             ),
             (
+                "resumed_codex_prices_only_current_turn_requests",
+                resumed_codex_prices_only_current_turn_requests,
+            ),
+            (
                 "codex_long_prompt_telemetry_survives_truncated_stdout",
                 codex_long_prompt_telemetry_survives_truncated_stdout,
+            ),
+            (
+                "claude_final_usage_survives_partial_content_over_capture_limit",
+                claude_final_usage_survives_partial_content_over_capture_limit,
             ),
             (
                 "a_claude_stream_records_both_windows_and_projects_as_its_result_alone",
@@ -874,6 +1386,14 @@ fn usage_window_contracts_1() {
             (
                 "a_claude_rate_limit_event_marks_rejected_and_overage_windows",
                 a_claude_rate_limit_event_marks_rejected_and_overage_windows,
+            ),
+            (
+                "a_failed_envelope_that_exits_zero_keeps_its_invocation_usage",
+                a_failed_envelope_that_exits_zero_keeps_its_invocation_usage,
+            ),
+            (
+                "a_success_envelope_under_a_nonzero_exit_stays_rejected_with_its_usage",
+                a_success_envelope_under_a_nonzero_exit_stays_rejected_with_its_usage,
             ),
         ]);
     });

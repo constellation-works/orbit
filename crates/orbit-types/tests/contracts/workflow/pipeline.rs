@@ -3,7 +3,8 @@
 use chrono::Utc;
 
 use orbit_types::workflow::{
-    ChildCancellation, ChildCancellationPolicy, ChildDispatch, PipelineState, PullDrainState,
+    ChildCancellation, ChildCancellationPolicy, ChildDispatch, FinalRecoveryCheckpoint,
+    FinalRecoveryCheckpointOutcome, FinalRecoveryKey, PipelineState, PullDrainState,
 };
 
 fn state() -> PipelineState {
@@ -62,6 +63,83 @@ fn a_late_re_record_cannot_reopen_a_cancelled_child() {
     assert_eq!(
         state.child_dispatches[0], closed,
         "phase, status, error, cancellation, and submitted_at must all survive"
+    );
+}
+
+/// A persisted run state written before the checkpoint outcome was typed
+/// holds it as the string `resume`, `settled: …` or `escalated: …`. Loading
+/// that old shape through `PipelineState` (the persisted run-state boundary)
+/// yields the enum, its display text reproduces the legacy string, new
+/// writes use the tagged form, and an unknown legacy string is refused.
+#[test]
+fn legacy_string_checkpoint_outcomes_load_as_the_typed_enum() {
+    for (legacy, expected) in [
+        ("resume", FinalRecoveryCheckpointOutcome::Resume),
+        (
+            "settled: archived",
+            FinalRecoveryCheckpointOutcome::Settled {
+                detail: "archived".to_string(),
+            },
+        ),
+        (
+            "escalated: blocked for a human: grant access",
+            FinalRecoveryCheckpointOutcome::Escalated {
+                detail: "blocked for a human: grant access".to_string(),
+            },
+        ),
+    ] {
+        let mut state = state();
+        state.final_recovery = Some(FinalRecoveryCheckpoint {
+            key: FinalRecoveryKey {
+                run_id: "jrun-parent".to_string(),
+                attempt: 1,
+            },
+            failed_step_id: "implement".to_string(),
+            task_id: "T-1".to_string(),
+            observed: None,
+            base_ref: Some("main".to_string()),
+            admitted_at: Utc::now(),
+            decision: None,
+            fault: Default::default(),
+            repair_commit: None,
+            resume_context: None,
+            outcome: Some(expected.clone()),
+        });
+        let mut stored = serde_json::to_value(&state).unwrap();
+        assert!(
+            stored["final_recovery"]["outcome"].is_object(),
+            "{legacy}: new writes use the tagged form"
+        );
+        stored["final_recovery"]["outcome"] = serde_json::json!(legacy);
+
+        let loaded: PipelineState = serde_json::from_value(stored).unwrap();
+        let outcome = loaded.final_recovery.unwrap().outcome.unwrap();
+        assert_eq!(outcome, expected, "{legacy}");
+        assert_eq!(outcome.to_string(), legacy, "{legacy}");
+    }
+
+    let mut state = state();
+    state.final_recovery = Some(FinalRecoveryCheckpoint {
+        key: FinalRecoveryKey {
+            run_id: "jrun-parent".to_string(),
+            attempt: 1,
+        },
+        failed_step_id: "implement".to_string(),
+        task_id: "T-1".to_string(),
+        observed: None,
+        base_ref: None,
+        admitted_at: Utc::now(),
+        decision: None,
+        fault: Default::default(),
+        repair_commit: None,
+        resume_context: None,
+        outcome: Some(FinalRecoveryCheckpointOutcome::Resume),
+    });
+    let mut stored = serde_json::to_value(&state).unwrap();
+    stored["final_recovery"]["outcome"] = serde_json::json!("requeued");
+    assert!(
+        serde_json::from_value::<PipelineState>(stored).is_err(),
+        "a legacy outcome in none of the three forms is refused, not defaulted"
     );
 }
 

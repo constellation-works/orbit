@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 use orbit_types::identity::OrbitId;
 use orbit_types::task::{
-    ExternalRef, OrchestratorModelSource, TaskArtifact, TaskComment, TaskComplexity, TaskDecision,
-    TaskHistoryEntry, TaskOrigin, TaskPriority, TaskRelation, TaskStatus, TaskType,
+    CrewSource, ExternalRef, OrchestratorModelSource, TaskArtifact, TaskComment, TaskComplexity,
+    TaskDecision, TaskHistoryEntry, TaskOrigin, TaskPriority, TaskRelation, TaskStatus, TaskType,
 };
 use serde::{Deserialize, Serialize};
 
@@ -50,7 +50,7 @@ pub struct TaskCreateParams {
     pub crew: Option<String>,
     /// Trusted assignment provenance, absent on legacy creation contracts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub crew_source: Option<String>,
+    pub crew_source: Option<CrewSource>,
     pub orchestrator: Option<String>,
     /// The orchestrator's model resolved at creation; never updated later.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -116,7 +116,7 @@ pub struct TaskDocumentUpdateParams {
     pub job_run_machine: Option<Option<orbit_types::task::ExecutionLocation>>,
     pub crew: Option<Option<String>>,
     /// Assignment provenance updated with the selected crew.
-    pub crew_source: Option<Option<String>>,
+    pub crew_source: Option<Option<CrewSource>>,
     pub orchestrator: Option<Option<String>>,
     /// Replacement origin. An origin is set, never cleared.
     pub origin: Option<TaskOrigin>,
@@ -134,6 +134,8 @@ pub struct TaskHistoryUpdateParams {
     pub status: Option<TaskStatus>,
     pub status_event: Option<String>,
     pub status_note: Option<String>,
+    /// Typed decision recorded on the status event this write appends.
+    pub status_decision: Option<TaskDecision>,
     pub append_history: Vec<TaskHistoryEntry>,
     pub append_comments: Vec<TaskComment>,
     /// [ORB-11305] Compare-and-set guard: when `Some`, the write is applied
@@ -149,6 +151,11 @@ pub struct TaskHistoryUpdateParams {
     /// admits such a write only when its sole effect is appending exactly one
     /// comment; every other unscoped write stays refused [ORB-16723].
     pub operator_comment: bool,
+    /// Attribution published in this write's own commit, so a transition that
+    /// also records who did the work costs one durable commit, not two.
+    pub planned_by: Option<Option<String>>,
+    /// See [`Self::planned_by`].
+    pub implemented_by: Option<Option<String>>,
 }
 
 /// One task-bundle mutation whose freshness guard, durable receipt, history
@@ -162,10 +169,10 @@ pub struct AtomicTaskMutationParams {
     pub expected_complexity: Option<TaskComplexity>,
     /// Crew observed under the application task lock, guarded at publication.
     pub expected_crew: Option<String>,
-    pub expected_crew_source: Option<String>,
+    pub expected_crew_source: Option<CrewSource>,
     /// Replacement selection, committed with the complexity and history.
     pub crew: Option<String>,
-    pub crew_source: Option<String>,
+    pub crew_source: Option<CrewSource>,
     /// Identity of the creation grant the caller validated against
     /// (`ContextCreationState::identity`); a different grant at the write
     /// boundary makes the mutation stale.

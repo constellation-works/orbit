@@ -1,6 +1,6 @@
 //! Persistent pipeline state for a job run.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -20,13 +20,18 @@ use super::{
 };
 
 /// A crew whose `[crews.<name>] env` entries read sources the launching
-/// environment does not hold. Names only, never values.
+/// environment does not hold, or `file:` sources that cannot be read. Names
+/// and paths only, never values.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CrewEnvUnset {
     /// The crew name.
     pub crew: String,
     /// Its entries whose source is unset or empty.
     pub env: Vec<CrewEnvVar>,
+    /// For a `file:` source in `env`, why the file supplies no value, keyed by
+    /// the variable the entry feeds.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub file_problems: BTreeMap<String, String>,
 }
 
 impl CrewEnvUnset {
@@ -36,12 +41,10 @@ impl CrewEnvUnset {
         let sources = self
             .env
             .iter()
-            .map(|entry| {
-                if entry.is_mapped() {
-                    format!("{} (for {})", entry.source, entry.name)
-                } else {
-                    entry.source.clone()
-                }
+            .map(|entry| match self.file_problems.get(&entry.name) {
+                Some(problem) => format!("{} (for {}: {problem})", entry.source, entry.name),
+                None if entry.is_mapped() => format!("{} (for {})", entry.source, entry.name),
+                None => entry.source.to_string(),
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -52,6 +55,17 @@ impl CrewEnvUnset {
 /// The PR leaf step that admits the before-landing review of its open pull
 /// request [ORB-14849]; its output's `applies` says whether that review runs.
 const LANDING_REVIEW_ADMIT_STEP: &str = "landing_review_gate_admit";
+
+/// A successful indexed checkpoint checked against its named pipeline entry.
+/// This borrowed read result is not part of the persisted checkpoint format.
+pub enum SuccessfulCheckpoint<'a> {
+    /// Successful indexed output, with an equal or absent named entry.
+    Recorded(&'a Value),
+    /// The step has no successful state or no readable indexed output.
+    Absent,
+    /// Successful indexed output disagrees with the named pipeline entry.
+    Inconsistent,
+}
 
 /// Persistent pipeline state for a job run.
 ///
@@ -88,6 +102,23 @@ pub struct PipelineState {
     /// the step's own output (and a top-level fan-in alias, which equals it).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub compound_outputs: BTreeMap<u32, BTreeMap<String, Value>>,
+    /// Script output sets a completed top-level step exposed, keyed by
+    /// global step index, then by the pipeline key (the script step's id,
+    /// nested ones included) whose `steps.<id>.files` it backs. Resume
+    /// reseeds them with the outputs, after checking each against its
+    /// producer record. Kept after terminal compaction: they are the run's
+    /// durable references to the files.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub script_output_sets:
+        BTreeMap<u32, BTreeMap<String, crate::workflow::activity_job::ScriptOutputSet>>,
+    /// Top-level steps whose `when:` was false, by global step index. Such a
+    /// step checkpoints as `success` with a null output, which every reader
+    /// of `step_states` relies on; this marker tells resume it never ran, so
+    /// later templates see it absent, as the uninterrupted run did, instead
+    /// of an executed step's null output. Absent in checkpoints recorded
+    /// before the marker existed; those restore the null.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub skipped_steps: BTreeSet<u32>,
     /// Per-step pipeline patches keyed by global step index.
     /// Successful steps merge these patches into `pipeline`.
     #[serde(default)]
@@ -203,6 +234,13 @@ pub struct PipelineState {
     /// existed.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub steering_rounds: BTreeMap<String, Vec<SteeringRound>>,
+    /// The versioned checkpoint of a job with `auto-task:` steps: frozen
+    /// definitions, step activations, bindings, receipts, partial parallel
+    /// branches and the parked continuation. Absent for every other job.
+    /// Terminal compaction keeps it: bindings and late evidence outlive the
+    /// run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_task: Option<super::AutoTaskRunCheckpoint>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -217,6 +255,8 @@ impl PipelineState {
             crew_selection: None,
             step_outputs: BTreeMap::new(),
             compound_outputs: BTreeMap::new(),
+            script_output_sets: BTreeMap::new(),
+            skipped_steps: BTreeSet::new(),
             pipeline_patches: BTreeMap::new(),
             step_output_pointers: BTreeMap::new(),
             step_states: BTreeMap::new(),
@@ -239,8 +279,32 @@ impl PipelineState {
             root_cause: None,
             steering_watermarks: BTreeMap::new(),
             steering_rounds: BTreeMap::new(),
+            auto_task: None,
             updated_at: Utc::now(),
         }
+    }
+
+    /// Whether this binary may rewrite the state: an auto-task checkpoint
+    /// a newer binary wrote carries obligations this one cannot represent.
+    pub fn checkpoint_write_supported(&self) -> Result<(), String> {
+        match &self.auto_task {
+            Some(checkpoint) if !checkpoint.is_supported() => Err(format!(
+                "run {} holds auto-task checkpoint version {}, newer than the supported {}; \
+                 this Orbit refuses to rewrite it",
+                self.run_id,
+                checkpoint.version,
+                super::AUTO_TASK_CHECKPOINT_VERSION
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    /// The parked continuation, when this run is deliberately parked rather
+    /// than held by a live worker.
+    pub fn parked_wait(&self) -> Option<&super::ParkedWait> {
+        self.auto_task
+            .as_ref()
+            .and_then(|checkpoint| checkpoint.parked.as_ref())
     }
 
     /// Record that `step_id` of this run built a task-context prompt for
@@ -469,6 +533,27 @@ impl PipelineState {
         })
     }
 
+    /// Read successful indexed output whose named pipeline entry agrees when
+    /// present. Callers bind the index/id to a resolved action and decide
+    /// whether a missing named entry is admissible. This does not authenticate
+    /// inherited checkpoint pointers or parent-run ownership.
+    pub fn successful_checkpoint(
+        &self,
+        step_index: u32,
+        step_id: &str,
+    ) -> SuccessfulCheckpoint<'_> {
+        if self.step_states.get(&step_index) != Some(&JobRunState::Success) {
+            return SuccessfulCheckpoint::Absent;
+        }
+        let Some(output) = self.step_output(step_index) else {
+            return SuccessfulCheckpoint::Absent;
+        };
+        match self.pipeline.get(step_id) {
+            Some(entry) if entry != output => SuccessfulCheckpoint::Inconsistent,
+            _ => SuccessfulCheckpoint::Recorded(output),
+        }
+    }
+
     /// The output the step named `step_id` checkpointed into `pipeline`.
     ///
     /// Unlike [`Self::step_output`] this needs no step index, so a reader that
@@ -514,7 +599,9 @@ impl PipelineState {
         if !matches!(run_state, JobRunState::Success | JobRunState::Cancelled) {
             return false;
         }
-        let mut compacted = !self.pipeline_patches.is_empty() || !self.compound_outputs.is_empty();
+        let mut compacted = !self.pipeline_patches.is_empty()
+            || !self.compound_outputs.is_empty()
+            || !self.skipped_steps.is_empty();
         let pipeline = &self.pipeline;
         let pointers = &mut self.step_output_pointers;
         self.step_outputs.retain(|index, output| {
@@ -527,6 +614,7 @@ impl PipelineState {
         });
         self.pipeline_patches.clear();
         self.compound_outputs.clear();
+        self.skipped_steps.clear();
         compacted
     }
 
@@ -538,6 +626,33 @@ impl PipelineState {
             self.compound_outputs.remove(&step_index);
         } else {
             self.compound_outputs.insert(step_index, outputs);
+        }
+        self.updated_at = Utc::now();
+    }
+
+    /// Mark whether the top-level step at `step_index` was skipped by its
+    /// `when:` (see [`Self::skipped_steps`]); a step re-checkpointed after it
+    /// ran clears an earlier pass's mark.
+    pub fn record_step_skipped(&mut self, step_index: u32, skipped: bool) {
+        if skipped {
+            self.skipped_steps.insert(step_index);
+        } else {
+            self.skipped_steps.remove(&step_index);
+        }
+        self.updated_at = Utc::now();
+    }
+
+    /// Replace the script output sets recorded for `step_index`; an empty
+    /// map clears them, as [`Self::record_compound_outputs`] does.
+    pub fn record_script_output_sets(
+        &mut self,
+        step_index: u32,
+        sets: BTreeMap<String, crate::workflow::activity_job::ScriptOutputSet>,
+    ) {
+        if sets.is_empty() {
+            self.script_output_sets.remove(&step_index);
+        } else {
+            self.script_output_sets.insert(step_index, sets);
         }
         self.updated_at = Utc::now();
     }

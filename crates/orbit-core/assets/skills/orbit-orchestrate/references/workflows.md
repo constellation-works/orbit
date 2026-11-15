@@ -6,9 +6,11 @@ dispatch see [orchestration.md](orchestration.md), and for scheduling it see
 
 ## Concepts
 
-- **Job** — a deterministic, multi-step pipeline (schemaVersion 2 YAML) from the
-  installed catalog. Jobs compose activities. Discover with `orbit job list` /
-  `orbit job show <id>`.
+- **Job** — a deterministic, multi-step pipeline from the installed catalog.
+  Version 2 YAML composes activities; version 3 also admits `auto-task:<name>`
+  steps with durable waits and accepted results (see
+  [auto-task workflows](#version-3-auto-task-workflows)). Discover with
+  `orbit job list` / `orbit job show <id>`.
 - **Activity** — one named step definition referenced by a job's step list
   (`agent_implement`, `task_pilot`, `git_commit`, `git_push`, `pr_open`,
   `worktree_setup`, `reserve_locks`, ...). Activities are never invoked directly
@@ -27,7 +29,10 @@ invalid required names before provider launch, and
 the run envelope, `ORBIT_ACTIVITY_TOOLS`, and audit evidence carry the effective
 list. A deny-list activity instead exposes registered agent-facing tools except
 those covered by `tool_disallow_list`; a task requirement never overrides that
-list and refuses dispatch when covered. The shipped `agent_implement` uses
+list. Filing refuses an unliftable covered requirement (a mutating tool, an
+always-operator-only tool, or a name a wildcard entry still covers), and a
+stored one still refuses dispatch when covered. A read/repeat-safe exact
+denial can still be required, because a grant could lift it. The shipped `agent_implement` uses
 this deny-list mode. Tool inclusion does not bypass later role, capability, policy, sandbox,
 subprocess, or authentication checks.
 
@@ -63,7 +68,7 @@ operator-only). It returns a run ID immediately. Public submissions require
 an operator; a managed run may invoke only a host-authorized child pipeline
 admission. There is no MCP wait. `orbit.pipeline.wait` is registered and
 CLI-only (`orbit tool run orbit.pipeline.wait` with `run_ids`); an operator
-session polls `orbit_workflow_run_show` from MCP (operator authority; denied
+session polls `orbit_run` action `show` from MCP (operator authority; denied
 for agent sessions), while a session with a shell on the owning host polls
 `orbit run show <run_id> --json`.
 
@@ -80,8 +85,7 @@ not a rewrite of failed history.
 | `task_local_pipeline` | Implement in a worktree and merge to the configured local base without a PR; optional push. |
 | `task_auto_pipeline` | Discover ready backlog tasks and ship them. |
 | `task_gate_pipeline` | Gated shipment with windowing. A wait that outlasts its budget defers: the run succeeds without dispatching, the task stays in backlog, and the `gate.starvation` audit names the blocking tasks and any execution claim holding them. Dispatches `task_<mode>_pipeline`, or the plugin delivery job a task selects with a `delivery:<job>` tag (the job must declare `spec.task_delivery.modes`); a selection whose plugin is disabled or uninstalled is refused, never defaulted. |
-| `task_pilot_pipeline` | Read-only agent preflight plus deterministic task-isolated apply. Apply uses the host-prepared context list as the authoritative before snapshot; agents propose only the after list, and legacy before echoes are ignored. Apply normalizes only unambiguous bare file/directory targets from the pinned source, records the normalization, and commits valid siblings. Durable task edits, ownership changes, and source or governing repository-instruction changes settle as typed `superseded` skips in `partition_decisions` and `task_outcomes`; applied and superseded partitions succeed together. The state consumer releases superseded members for fresh observation and preparation without a failure record or retry against the stale snapshot. Invalid assessments and unresolved write failures still fail the run. Replays use durable per-task operation receipts with the prepared before list. Only a selector an operator declared with `allow_missing_context` may be missing at the pinned source; apply keeps any such target the assessment omits (`context_creation_retained`), refuses every undeclared missing anchor, names a dropped undeclared one under `context_reauthorization_required`, and treats a declaration that changed after preparation as stale. The footprint contains only likely substantive creation, modification or deletion targets; read-only evidence and incidental shared-doc updates (such as [the published Orbit configuration reference](https://github.com/constellation-works/orbit/blob/main/docs/CONFIG.md)) stay out of locks, while affected docs still change in the same PR. A task a review filed (tagged `code-review`, `delivery-code-review`, `qa-full-sweep`, `qa-sweep` or `security-review`) keeps omitted, resolving selectors in filed order (`context_evidence_retained`) unless the pilot verifies they require no substantive change and supplies exact selector/reason records in `context_evidence_dropped`. Apply validates and audits those records; they cannot override proposed change targets or creation grants. The pilot keeps targets the finding names for change; read-only evidence references belong in the description. The task's `task_pilot_applied` history entry carries a short summary and operation receipt; the full structured assessment is in a `task-pilot` comment with the same receipt. It defaults to no lifecycle promotion. An omitted optional `base_branch` binds as empty at the prepare activity boundary, then preparation resolves the registered workspace base branch, falling back to `[workflow] base_branch`; pass a non-empty run input to inspect another branch. |
-| `finding_verification_pipeline` | Verify review-filed bug findings (type `bug` tagged `code-review`, `delivery-code-review`, `security-review` or `qa-sweep`) at one pinned revision. Each verifier crew is drawn from the task's complexity-tier pool, passing over the filer's crew. A REJECTED verdict from the low tier, or any low-confidence verdict, is judged again once by the next tier. CONFIRMED is recorded on the task; REJECTED moves it to `rejected` with its `path:line` evidence. When the workspace sets `review.verify_findings = true` (default off), approval, promotion and drain admission refuse the finding until it is CONFIRMED for its current material (`unverified_review_finding`). Claim or evidence-selector edits require verification again; comment-only edits retain confirmation. Legacy verdicts without a finding fingerprint remain held. Run `orbit run job finding_verification_pipeline --input 'task_ids=["<id>"]'`, or enable the seeded `finding_verification.yaml` state routine. |
+| `task_pilot_pipeline` | Read-only agent preflight plus deterministic task-isolated apply. Apply uses the host-prepared context list as the authoritative before snapshot; agents propose only the after list, and legacy before echoes are ignored. Apply normalizes only unambiguous bare file/directory targets from the pinned source, records the normalization, and commits valid siblings. Durable task edits, ownership changes, and source or governing repository-instruction changes settle as typed `superseded` skips in `partition_decisions` and `task_outcomes`; applied and superseded partitions succeed together. The state consumer releases superseded members for fresh observation and preparation without a failure record or retry against the stale snapshot. An apply whose unresolved tasks are all apply-rejected assessments (`invalid` after the targeted repair round) passes the guard as held regardless of its applied count; other invalid outcomes and unresolved write failures still fail the run. Replays use durable per-task operation receipts with the prepared before list. Only a selector an operator declared with `allow_missing_context` may be missing at the pinned source; apply keeps any such target the assessment omits (`context_creation_retained`), refuses every undeclared missing anchor, names a dropped undeclared one under `context_reauthorization_required`, and treats a declaration that changed after preparation as stale. The footprint contains only likely substantive creation, modification or deletion targets; read-only evidence and incidental shared-doc updates (such as [the published Orbit configuration reference](https://github.com/constellation-works/orbit/blob/main/docs/CONFIG.md)) stay out of locks, while affected docs still change in the same PR. A task a review filed (tagged `code-review`, `delivery-code-review`, `qa-full-sweep`, `qa-sweep` or `security-review`) keeps omitted, resolving selectors in filed order (`context_evidence_retained`) unless the pilot verifies they require no substantive change and supplies exact selector/reason records in `context_evidence_dropped`. Apply validates and audits those records; they cannot override proposed change targets or creation grants. The pilot keeps targets the finding names for change; read-only evidence references belong in the description. The task's `task_pilot_applied` history entry carries a short summary and operation receipt; the full structured assessment is in the task artifact `pilot/assessment-<operation-id>.json`. Its single-line `task-pilot` comment carries the selector/crew/complexity summary, `assessment_artifact` path, `assessment_sha256` digest and the same receipt. Fetch the named artifact with `orbit.task.artifact` action `get`; older tasks keep the JSON inline in the comment. It defaults to no lifecycle promotion. An omitted optional `base_branch` binds as empty at the prepare activity boundary, then preparation resolves the registered workspace base branch, falling back to `[workflow] base_branch`; pass a non-empty run input to inspect another branch. |
 | `workspace_auto_pipeline` | Workspace-scoped `orbit run auto` drain wrapper that resolves mode and base branch, then invokes the pipelines above. |
 | `workspace_pull_pipeline` | Follower pull drain. The owner admits each claim through `orbit.task.pull`; the leaf is `task_claimed_pr_pipeline` and ends at a handoff. The follower does not merge. See [distributed-drain.md](../../orbit/references/setup/distributed-drain.md). |
 | `ci_failure_sweep_pipeline` | File GitHub Actions findings as proposed, pilot them, and admit only current warning-free repairs to backlog; never implements them. |
@@ -91,19 +95,107 @@ not a rewrite of failed history.
 | `blocked_task_recovery_pipeline` | Final recovery for one task blocked outside a delivery pipeline (a failed, interrupted or gate run, or a failed claim settlement). The owner's clock sweep dispatches it once per block episode, at most two at a time. It runs `final_recovery` in a detached checkout of the base that is never delivered, offering only `complete_no_diff`, `reject`, `archive`, `requeue` and `escalate`, and applies the decision through the same applier as the delivery pipelines. It never resumes: `resume` escalates, and `requeue` shares the requeue bound. The agent input and every escalation name the failed run's retained candidate: its worktree path and changed paths, or why there is none. Resume or salvage that worktree by hand; the backstop only reads it. Not for direct invocation. |
 | `review_evidence_fulfilment_pipeline` | On a Linux owner, runs the named `scripts/codeql-rust-local.sh` command for a review held only for `codeql` evidence. It runs at the held commit, attaches the result and log, and receipt queues a fresh review. A failed or incomplete run attaches only the log, with a typed reason. The owner's clock sweep dispatches it, one at a time. Not for direct invocation. |
 | `baseline_hold_refresh_pipeline` | Re-checks backlog tasks held for a red base whose base ref moved to a tip with no recorded result: runs the held required command there and records the verdict, which lifts the hold only when it passes. The owner's clock sweep dispatches it, one run per workspace at a time, so the sweep itself never runs the command. Not for direct invocation. |
-| `agent_invoke_pipeline` | One operator-admitted agent invocation for exploration or debugging, run on the host outside the executor sandbox. Submit it with `orbit run agent` / `orbit_agent_invoke`, never `orbit run job`: it needs a per-invocation operator admission — the same test locally and over SSH — changes no task, and is not resumable. See [tool-surface.md](../../orbit/references/tool-surface.md). |
-| `agent_explore_pipeline` | One read-only explorer a managed implement or review-repair agent delegated through `orbit.agent.invoke` when `workflow.explore.enabled` is on. Sandboxed with no writes, starts in the caller's own worktree, carries `parent_run_id`, and changes no task. Never submit it directly. |
 | `task_claimed_pr_pipeline` | Claimed leaf for PR ship mode. Ends at an owner handoff; the follower never merges. See [distributed-drain.md](../../orbit/references/setup/distributed-drain.md). |
 | `task_claimed_local_pipeline` | Claimed leaf for local ship mode, and only when the execution machine is the owner. A remote follower is refused. Ends at a handoff and does not merge or complete. |
 | `task_landing_pipeline` | Lands one authorized handoff on the owner. The handoff outbox submits it; a drain or schedule does not. |
+| `task_pr_watch_pipeline` | Review watch for an owner-local delivery that ends in review with an open pull request and no `--complete` or `--auto-fix` (a dashboard ship, `orbit run ship`, or a drain leaf without either grant). `task_pr_pipeline` submits it detached. It polls the pull request's checks (default one hour) and appends one `landing_checks_observed` history entry, classifying failed checks as owner landing does. It retries authenticated transient failures through the configured bounded infrastructure policy, then resumes observing. It never merges, repairs or changes the task's status. Not for direct invocation. |
 | `task_review_reconciliation_pipeline` | Validates and reviews one already-merged foreign delivery head. Admitted by `orbit task reconcile-review submit`; the job refuses a run that lacks that admission. |
 
+## Task-pilot readiness holds
+
+The task-pilot assessment can find a condition that makes implementation
+premature or an acceptance check that the implementation lane cannot reach.
+These are readiness holds, not work for a leaf to bypass.
+
+### `start_prerequisites`
+
+When the task contract names an explicit, unresolved condition that forbids
+work from starting, task-pilot reports it in the typed `start_prerequisites`
+assessment field, an array of evidence objects. For example, an assessment may
+return:
+
+```json
+{
+  "start_prerequisites": [
+    {"evidence": "Work starts after the package owner provides its signed compatibility statement; source: the release record."}
+  ]
+}
+```
+
+Each entry always holds promotion and has no `holds_promotion` opt-out. A prior
+leaf's refusal is a failure to handle, not a start prerequisite. Use an existing
+`not_before` value for a known earliest start time, or a real dependency edge
+when another task must finish. Do not encode either case as free-text evidence
+or invent a task ID. Keep other explicit start conditions in the typed finding.
+
+An authorized task owner or operator should update the contract or record the
+real prerequisite. Clear a finding only when authoritative evidence establishes
+that it is satisfied, or an authorized rescope removes the condition. Then have
+an authorized operator request a fresh assessment explicitly if the change did
+not already trigger one:
+
+```bash
+orbit task repilot <task-id>
+# Wait for the requested pilot run to finish before reading the new assessment.
+orbit task show <task-id>
+orbit run readiness --json
+```
+
+Read the newest `task-pilot` receipt comment, then fetch its `assessment_artifact`
+with `orbit.task.artifact` action `get` (`id` and `path`). Compare that assessment
+with the readiness hold; older receipts contain the assessment JSON inline. After re-pilot, confirm the new assessment no
+longer reports the unresolved condition and that readiness no longer holds the
+task for it. A standalone pilot does not promote a task. `no-auto-approve`
+continues to prevent automatic promotion, and neither changing a tag nor
+requesting a pilot supplies evidence that a condition is satisfied.
+
+### Owner/operator-only acceptance evidence
+
+Assess evidence reachability from the implementing leaf's granted tools and
+its available owner-workspace bridge. If a criterion requires owner-only or
+operator-only evidence that the leaf cannot obtain through either route, record
+a holding `utility_warnings` finding so admission remains held: name the
+criterion, quote the evidence it requires,
+identify the inaccessible record or authority boundary, and ask for a criterion
+rewrite or separate owner/operator validation. For example:
+
+```json
+{
+  "utility_warnings": [
+    {
+      "text": "Criterion 2 requires an authoritative audit-store rescan; the leaf cannot read that record or use the reserved audit tool. Rewrite the criterion or assign a separate operator validation.",
+      "holds_promotion": true
+    }
+  ]
+}
+```
+
+An authoritative audit-store rescan is not reachable just because the leaf
+happens to run on the owner host; host placement does not grant access or
+operator authority. Do not ask a leaf to invoke a reserved tool, widen its
+permissions, or substitute operational logs or follower data.
+
+Prefer criteria that the implementation lane can verify with repeatable
+candidate checks when those checks meet the intended outcome. Reads of task
+records through the bridge are not automatically infeasible. A separate
+owner/operator check should name the authoritative evidence to inspect and how
+its result will be recorded; once that evidence is available, update or rescope
+the criterion and explicitly re-pilot as needed using the authorized operator
+path. Verify the resulting
+assessment artifact (or legacy inline comment) and `orbit run readiness --json` as above. An owner-side
+assessment still must use its actual granted authority; it does not inherit
+operator authority merely from its host.
+
 Claimed workers reach the owner's `orbit.task.show`, `orbit.search`,
-`orbit.task.list`, `orbit.task.add`, `orbit.friction.add`, and
-`orbit.task.artifact.get` / `orbit.task.artifact.put` through their run's
-coordinator. Search and task listing read only the claimed workspace's owner
+`orbit.task.list`, `orbit.task.add`, `orbit.friction` action `add`,
+`orbit.task.artifact` action `get` / `orbit.task.artifact` action `put`, and `orbit.notice.post` /
+`orbit.notice.show` / `orbit.notice.close` through their run's coordinator.
+Notices are stored only on the owner, and the claim binding supplies the
+posting task and run. Search and task listing read only the claimed workspace's owner
 records; federated search scope (`workspaces`, `all_workspaces` and aliases)
-is refused. Task show and artifacts retain their claimed-task scope, and
+is refused. Task show and artifact get may read any task in the claimed
+workspace; artifact put stays on the claimed task, another task's `review-*`
+artifacts and another run's delivery of the claimed task are refused, and
 finding creation retains its `spawned_from` requirement. Use search/list for
 owner-side deduplication and return dedupe evidence in the output or the new
 finding. `orbit.task.update` stays denied: a task requiring it remains an
@@ -133,6 +225,13 @@ candidate onto the new base as uncommitted changes, then:
 Context selectors are preparation hints, not what the task means: a task
 pilot or operator editing them keeps the candidate, and the resumed review
 reads the current selectors.
+
+A bound source-repair admission is different: tags, plan, selectors and other
+task-digest inputs are frozen. Only the exact system-recorded host selector
+widening and source-preserving system crew redraw exceptions count. Stop and
+review changed metadata; when scope materially changes, obtain a supported
+fresh operator decision before proceeding. Generic candidate resume does not
+reauthorize a bound source repair.
 
 A candidate held for a red base resumes like any candidate from `commit` or
 later. That includes one the before-PR review held because its only failed
@@ -211,19 +310,22 @@ empty selectors, pilot failure, duplicates, already-landed
 work, conflicts, holding warnings and a `no-auto-approve` tag leave that task
 proposed without blocking other pilot children. A `blocked_by` finding, or a
 holding utility or surface finding, holds unless it names prerequisites and every
-one is already done in this workspace or is enforced by a stored dependency edge.
-Free text, missing tasks and
-other-workspace prerequisites still hold. Admission decides from the edges in the atomic pilot
+one is already done — in this workspace or in another registered workspace,
+resolved through its registered owner — or is enforced by a stored dependency edge.
+Free text, missing tasks and unfinished prerequisites still hold, wherever
+they are registered. Admission decides from the edges in the atomic pilot
 write and completion statuses read under the dependency locks; replay uses
 only already stored edges. A drain rechecks named prerequisites under their
-locks before approval. `adr_conflicts` and deterministic
-`validation_tool_warnings` entries always hold. Surface and
-utility findings use `{text, holds_promotion}`: true holds for wrong behavior,
-contract conflicts or an unreachable validation requirement; false preserves an
+locks before approval. `adr_conflicts`, `contract_conflicts` and deterministic
+`validation_tool_warnings` entries always hold; `contract_conflicts` entries carry
+no `holds_promotion` field and have no opt-out. A criterion that contradicts the
+pinned code or contract goes in `contract_conflicts`, never in a surface or utility
+finding. Surface and utility findings use `{text, holds_promotion}`: true holds for
+wrong behavior or an unreachable validation requirement; false preserves an
 advisory observation without holding promotion or showing it as held. Legacy
 plain-string surface and utility warnings still hold unless they name only
 recorded dependencies or done tasks. Advisory findings remain
-in the assessment comment shown by `orbit task show` and the worker's brief. An
+in the assessment artifact named by the one-line receipt in `orbit task show` and the worker's brief; fetch it with `orbit.task.artifact` action `get`. An
 `orbit run auto --approve-proposed` drain hands the same apply boundary a drain-scoped authority instead, verified
 against the drain that dispatched the pilot. A standalone task-pilot run has no
 promotion authority. The
@@ -394,10 +496,10 @@ Otherwise choose the narrow faithful command from repository instructions and
 code, reproduce at the immutable pre-fix revision and validate at the exact landed
 revision in isolated extracts or fixtures with independent build outputs, and
 capture both outputs as explicitly retrospective records. Attach those records and the structured assessment through
-`orbit.task.artifact.put`, staging each file under `.orbit/tmp/`:
+`orbit.task.artifact` action `put`, staging each file under `.orbit/tmp/`:
 
 ```bash
-orbit tool run orbit.task.artifact.put --input '{"id":"<owner-task-id>","source_path":".orbit/tmp/<file>","path":"<artifact name>","model":"<agent-family>"}'
+orbit tool run orbit.task.artifact --input '{"action":"put","id":"<owner-task-id>","source_path":".orbit/tmp/<file>","path":"<artifact name>"}'
 ```
 
 `source_path` is the local file; `path` is the stored artifact name.
@@ -411,7 +513,9 @@ Coverage appears in `repair_assessments` and `skipped_existing` as
 `covered_by_repair`, with the owner, source provenance and evidence references.
 Filing retains an idempotent `ci-repair-observations/<digest>.json` receipt on the
 completed owner without changing its meaning or lifecycle, creating another
-repair task, or sending it to pilot/implementation admission. Unavailable,
+repair task, or sending it to pilot/implementation admission. While an execution
+claim protects the owner, this receipt and an open compiler owner's observation
+are listed in `deferred_attribution` and land when the claim settles. Unavailable,
 contradictory and over-budget assessments instead report `unresolved` with a
 bounded reason and leave ordinary proposed filing and pilot checks available.
 There is no extra incident store, scheduler, automatic revalidation command or
@@ -494,8 +598,8 @@ binary's version alone does not prove which pipeline ran. `orbit workspace sync
 --check` reports managed-resource drift; customized files are preserved for
 deliberate reconciliation.
 
-A job uses `schemaVersion: 2`, `kind: Job`, `metadata.name`, and a `spec` with
-`default_input` and ordered `steps`. A simple step names an `id`, a
+A version 2 activity job uses `schemaVersion: 2`, `kind: Job`, `metadata.name`,
+and a `spec` with `default_input` and ordered `steps`. A simple step names an `id`, a
 `target: activity:<name>`, and `default_input`. Templates can reference
 `input.<name>` and `steps.<step-id>.output.<field>`. The shipped jobs demonstrate
 conditionals, loops, retries, and recovery activities. Copy an installed example
@@ -508,3 +612,164 @@ is insufficient when the step requires structured completion output. Keep
 required tools exact and minimal, and declare read-only filesystem profiles
 explicitly for inspection work. File meaningful failures rather than treating
 an empty/malformed agent response as successful completion.
+
+## Version 3 auto-task workflows
+
+Use `schemaVersion: 3` when a job includes `target: auto-task:<name>`. It binds
+or mints a task from the named workspace definition, then waits for accepted
+completion; minting alone is not success. Children follow normal approval,
+readiness, drain, host and delivery policy. Naming a target grants no promotion,
+dispatch, merge or release authority. Version 2 rejects auto-task targets and
+their wait fields, even when the fields are null.
+
+Keep ordinary sequential lists for ordered prerequisites. Use an explicit
+`parallel` block with `join: { mode: all }` for independent required branches.
+At most 32 auto-task steps are admitted per job; they cannot be inside loops
+or fan-out bodies. `self.prev` is the previous sibling, absent on a first step
+or independent branch. `steps['id']` can read earlier settled steps visible in
+this branch or after a parallel join, never a forward or live sibling branch.
+Guard optional facts with `has()` where their presence is not established.
+
+### Bounded waits and durable parking
+
+| Field | Meaning |
+|---|---|
+| Existing `when` | One-shot guard: false skips successfully. A skipped step supplies no accepted prerequisite evidence. |
+| Step `wait_until` | CEL readiness predicate: false or unknown parks, with missing facts reported. Absent means ready when the job reaches the step. |
+| Step `expire_when` | CEL terminal predicate: true times out the unfinished step without cancelling its child. |
+| Job `spec.expire_when` | Required finite outer bound for any job containing auto-task steps. |
+
+The outer bound must be `now >= job.started_at + duration('<positive duration>')`
+or `now >= timestamp('<RFC3339>')`, no more than seven days after admission.
+A readiness window inside `wait_until` cannot replace expiry: false continues
+waiting. Step expiry can impose a shorter bound, such as
+`now >= self.wait_started_at + duration('8h')`.
+
+`board.empty` means no backlog, in-progress or review tasks. Proposed, blocked
+and someday tasks are excluded. Only this step's bound child is excluded from
+its board view; sibling children and outside work still count. The target's
+own condition/guard also applies and is rechecked at admission. Its cron or
+interval slots do not restrict an explicit job request or get consumed by it.
+
+An enabled version 3 job runs detached and parks durably without retaining a
+provider process, task worktree/context lock or drain leaf slot. The owner clock
+revisits it; a parked run still counts against `max_active_runs`. Checkpoints
+retain frozen definitions, bindings, accepted receipts and activation times,
+including partial parallel progress. Readiness, queue time, pauses and downtime
+all consume the original deadline. Resume/retry restores keyed bindings rather
+than minting another child or rerunning a successful sibling. Expiry admits no
+new children; already running children continue under their own policy, and
+late results do not reopen the parent. Do not edit run state or reset clocks
+to get past a hold.
+
+### Bindings, completion contracts and optional reuse
+
+Once ready, a step may reuse accepted history only if it declares `reuse_when`.
+Otherwise it binds a compatible open instance or performs one keyed mint.
+Compatibility includes workspace, definition/template digest, inputs, result
+contract and source revision. An incompatible open instance holds instead of
+creating a duplicate. Missing or disabled definitions also hold admission.
+
+Without a typed contract on either side, normal structured task completion
+applies. For typed completion, the step's `require_result` and the definition's
+`completion.contract` must both be present and match; omission or mismatch
+holds before minting. `require_result` must name a registered contract;
+currently only `release-readiness/v1` is registered. The definition's
+`completion` block also names an evidence artifact, adapter and maximum age; see
+[completion-contract setup](../../orbit-setup/references/auto-tasks.md#proving-a-job-step-with-a-completion-contract).
+The adapter is a script requiring the owner's grant. Inspect its grant status;
+do not grant it automatically as a repair.
+
+Orbit validates durable evidence against task/run identity, definition digest,
+source revision and completion time. The granted adapter answers `passed`,
+`blocked` or `unavailable`; only `passed` is accepted. Missing evidence or a
+missing/stale grant is unavailable. A task marked `done`, a successful agent
+exit, a final message or a merged PR cannot replace this receipt. An accepted
+audit may have no code diff or merge. Unresolved release-blocking findings hold
+the prerequisite; a busy-board or nothing-to-release preparation probe does not
+count as accepted preparation.
+
+Requiring `release-readiness/v1` pins the configured integration revision at
+admission as `job.source_revision`. Before a later child is admitted, prior
+receipts are revalidated for identity, exact source and age, even after a
+successful checkpoint. A branch advance or ageing evidence holds the run;
+use a fresh bounded run or authorized recovery rather than certifying the new
+candidate with old evidence.
+
+For a step requiring that contract, optional reuse can further restrict a
+compatible accepted result:
+
+```yaml
+reuse_when: >-
+  result.status == 'passed' && result.revision == job.source_revision
+  && now < result.completed_at + duration('2h')
+```
+
+`result` exists only in `reuse_when` and exposes typed receipt fields. Reuse
+does not bypass definition guards, source checks or the contract's maximum age.
+The step's settlement time is new; `result.completed_at` stays the original
+evidence time. Without `reuse_when`, historical completion cannot satisfy it.
+
+Conditions read named accepted history as
+`auto_tasks['<name>'].last_succeeded_at`. Only acceptance by that definition's
+declared completion contract advances it, not mint time, raw task `done` or PR
+merge time. Check `has(auto_tasks['<name>'].last_succeeded_at)` before reading a
+possibly missing timestamp; distinguish missing history from an unreadable
+history store when diagnosing it.
+
+### Author and verify a bounded job
+
+This project-agnostic draft assumes an existing `quality-audit` auto-task with
+the matching completion contract and a granted adapter. Keep it disabled while
+reviewing prerequisites and authorization:
+
+```yaml
+schemaVersion: 3
+kind: Job
+metadata:
+  name: quality-readiness
+spec:
+  state: disabled
+  kind: workflow
+  max_active_runs: 1
+  expire_when: "now >= job.started_at + duration('24h')"
+  steps:
+    - id: quality
+      target: auto-task:quality-audit
+      wait_until: "board.empty"
+      expire_when: "now >= self.wait_started_at + duration('8h')"
+      require_result: release-readiness/v1
+```
+
+The supplied `release-readiness` example is nonseeded and disabled. It composes
+full QA, security review and preparation in sequence using typed results. It
+deliberately omits `reuse_when` to obtain fresh checks on each execution. It is
+an example for deliberate owner configuration, not an installed live release
+workflow or authorization to release. Do not infer historical reuse from it.
+
+Read back the effective installed catalog before enabling or submitting an
+authorized job; workspace overrides can shadow shipped definitions:
+
+```bash
+orbit job list
+orbit job show <job-name>
+orbit auto-task show <auto-task-name>
+orbit automation explain job:<job-name> --json
+orbit run history -j <job-name>
+orbit run show <run-id> --json
+orbit run events <run-id> --json
+```
+
+In `explain`, check schema/state, the finite expiry, pinned revision, each
+target's resolution/enabled state and definition digest, wait expressions,
+completion contract, adapter grant and accepted history (`latest`, `missing`
+or `unreadable`). This is definition inspection: step `not_evaluated` is not
+a successful wait or execution. For an authorized existing run, correlate its
+persisted bindings, original activation/deadline, parked reason, accepted
+receipts and task/run IDs with the child task artifacts and audit events.
+Confirm the accepted receipt's source, age and evidence references, rather
+than treating a child's raw `done` status as proof. Diagnose unknown facts,
+disabled/missing targets, incompatible instances, unavailable adapters, stale
+source/evidence and expiry from those records before retrying. Preserve
+successful bindings and human interventions; child cancellation needs its own
+authorization. See [run debugging](run-debugging.md) for evidence inspection.

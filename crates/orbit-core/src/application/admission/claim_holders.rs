@@ -1,14 +1,18 @@
 //! The live execution claims behind a lock wait [ORB-15514].
 //!
-//! A claimed task is `in-progress` on the owner, so the drain and readiness
-//! already see its footprint as an ordinary held lock. What they could not
-//! say is that a follower holds it: the remedy is that claim settling, on
-//! another machine, not a local run finishing. This names the claim wherever
-//! a wait names its blocking task.
+//! Frozen claim footprints remain authoritative independently of the owner's
+//! task envelopes and local leaf runs. Admission and readiness include those
+//! surfaces, except for known no-diff holders, and name the claim behind each
+//! lock wait. Every claim still fences admission of its own task.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
-use orbit_store::contracts::ExecutionClaim;
+use orbit_common::OrbitError;
+use orbit_common::fs::lock_mode::FootprintLockModes;
+use orbit_common::fs::selector::canonical_selector_in_workspace;
+use orbit_store::contracts::{ExecutionClaim, claim_refusing_work_start};
+use orbit_types::task::{Task, is_no_diff_expected};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -20,24 +24,108 @@ pub(crate) struct ClaimHolders {
 }
 
 impl ClaimHolders {
-    /// The claims that protect a footprint now. Diagnostic only: a journal
-    /// that cannot be read leaves the waits unannotated rather than failing
-    /// the drain pass or the readiness read that would report them.
+    /// Diagnostic claim annotations. An unavailable journal leaves waits
+    /// unannotated; admission uses the strict read below for its lock map.
     pub(crate) fn read(runtime: &OrbitRuntime) -> Self {
-        match runtime.inspect_execution_claims() {
-            Ok(claims) => Self {
-                by_task: claims
-                    .into_iter()
-                    .map(|inspection| inspection.claim)
-                    .filter(|claim| claim.phase.protects_footprint())
-                    .map(|claim| (claim.task_id.clone(), claim))
-                    .collect(),
-            },
+        match Self::read_for_admission(runtime) {
+            Ok(claims) => claims,
             Err(error) => {
                 tracing::warn!("lock waits do not name execution claims: {error}");
                 Self::default()
             }
         }
+    }
+
+    /// Read protecting claims without treating an unavailable ledger as empty.
+    pub(crate) fn read_for_admission(runtime: &OrbitRuntime) -> Result<Self, OrbitError> {
+        Ok(Self {
+            by_task: runtime
+                .inspect_live_execution_claims()?
+                .into_iter()
+                .map(|inspection| (inspection.claim.task_id.clone(), inspection.claim))
+                .collect(),
+        })
+    }
+
+    /// The protecting claims among `claims`, already read.
+    pub(crate) fn from_claims(claims: &[ExecutionClaim]) -> Self {
+        Self {
+            by_task: claims
+                .iter()
+                .filter(|claim| claim.phase.protects_footprint())
+                .map(|claim| (claim.task_id.clone(), claim.clone()))
+                .collect(),
+        }
+    }
+
+    /// Include frozen surfaces even when no active task envelope holds them.
+    /// Known no-diff tasks hold no context lock; an unknown owner still does.
+    pub(crate) fn extend_lock_holders(
+        &self,
+        holders: &mut BTreeMap<String, Vec<String>>,
+        task_lookup: &BTreeMap<String, Task>,
+    ) {
+        for claim in self.by_task.values() {
+            if task_lookup
+                .get(&claim.task_id)
+                .is_some_and(|task| is_no_diff_expected(&task.tags))
+            {
+                continue;
+            }
+            for selector in &claim.footprint {
+                let tasks = holders.entry(selector.clone()).or_default();
+                if let Err(index) = tasks.binary_search(&claim.task_id) {
+                    tasks.insert(index, claim.task_id.clone());
+                }
+            }
+        }
+    }
+
+    /// A protecting claim still fences its own task, including no-diff work.
+    pub(crate) fn protecting_task_claim(&self, task_id: &str) -> Option<&ExecutionClaim> {
+        self.by_task.get(task_id)
+    }
+
+    /// The protecting claim that would refuse `task` starting work, judged
+    /// over its whole canonical context exactly as the work-start guard
+    /// judges it, unlocked paths included [ORB-23894]. Admission defers the
+    /// task on this answer rather than create a run that guard fails.
+    /// A claim `no_diff_holder` names holds no context lock for other tasks,
+    /// as in [`Self::extend_lock_holders`]; it still fences its own task.
+    /// With no such claim the answer is `None` before any selector is
+    /// canonicalized, since canonicalizing reads the workspace on disk; the
+    /// store's work-start guard returns early the same way.
+    pub(crate) fn refusing_work_start(
+        &self,
+        task: &Task,
+        workspace_root: &Path,
+        lock_modes: &FootprintLockModes,
+        no_diff_holder: impl Fn(&str) -> bool,
+    ) -> Option<(&ExecutionClaim, Vec<String>)> {
+        let mut claims = self
+            .by_task
+            .values()
+            .filter(|claim| claim.task_id == task.id || !no_diff_holder(&claim.task_id))
+            .peekable();
+        claims.peek()?;
+        let footprint = task
+            .context_files
+            .iter()
+            .filter_map(|selector| canonical_selector_in_workspace(selector, workspace_root).ok())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let claim = claim_refusing_work_start(claims, &footprint, lock_modes)?;
+        let overlapping = footprint
+            .into_iter()
+            .filter(|selector| {
+                claim
+                    .footprint
+                    .iter()
+                    .any(|held| lock_modes.selectors_block(selector, held))
+            })
+            .collect();
+        Some((claim, overlapping))
     }
 
     /// The claims holding `task_ids`, as readiness reports them.

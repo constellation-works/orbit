@@ -171,16 +171,17 @@ fn running_run(runtime: &OrbitRuntime) -> String {
 
 fn ship(runtime: &OrbitRuntime, task: &str) -> OrbitError {
     runtime
-        .submit_ship_run(
-            ShipMode::Local,
-            Some("main"),
-            &[task.to_string()],
-            CompletionPolicy::Review,
-            &[],
-            Some("test"),
-            None,
-            JobRunTrigger::cli(),
-        )
+        .submit_ship_run(orbit_core::ShipRunRequest {
+            mode: ShipMode::Local,
+            base_branch: Some("main"),
+            task_ids: &[task.to_string()],
+            completion: CompletionPolicy::Review,
+            allowed_crews: &[],
+            actor: Some("test"),
+            claim_token: None,
+            trigger: JobRunTrigger::cli(),
+            ..Default::default()
+        })
         .expect_err("a fixture without job assets never submits a run")
 }
 
@@ -535,7 +536,11 @@ fn a_supported_explicit_run_crew_survives_discovery_and_replay() {
     let recorded = linux.get_task(&task.id).unwrap();
     assert_eq!(recorded.crew.as_deref(), Some("sol"));
     assert_eq!(
-        recorded.crew_source.as_deref(),
+        recorded
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("redraw:run_crew"),
         "run override does not pin the task"
     );
@@ -896,7 +901,11 @@ fn a_linux_owner_with_a_macos_follower_draws_the_macos_only_crew() {
         "a macOS follower serves the workspace, so the draw may pick muse-wonder"
     );
     assert_eq!(
-        drawn.crew_source.as_deref(),
+        drawn
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("pool:medium"),
         "the draw records pool provenance"
     );
@@ -968,7 +977,14 @@ fn a_linux_owner_with_a_macos_follower_draws_the_macos_only_crew() {
         Some("muse-wonder"),
         "the re-rate draw counts the macOS follower as serving"
     );
-    assert_eq!(rerated.crew_source.as_deref(), Some("pool:hard"));
+    assert_eq!(
+        rerated
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("pool:hard")
+    );
 
     let plain = add(&rerate_linux, "rerated-plain", None, &[]).expect("medium draw");
     rerate_linux
@@ -1091,11 +1107,25 @@ fn serving_host_draws_respect_effective_task_os_tags() {
     let fallback = add(&owner, "linux-fallback", None, &[" OS:LiNuX "])
         .expect("a macOS-only pool must fall back for a Linux-only task");
     assert_eq!(fallback.crew.as_deref(), Some("sol"));
-    assert_eq!(fallback.crew_source.as_deref(), Some("default"));
+    assert_eq!(
+        fallback
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("default")
+    );
 
     let untagged = add(&owner, "unrestricted-draw", None, &[]).unwrap();
     assert_eq!(untagged.crew.as_deref(), Some("muse-wonder"));
-    assert_eq!(untagged.crew_source.as_deref(), Some("pool:medium"));
+    assert_eq!(
+        untagged
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("pool:medium")
+    );
     let either = add(&owner, "either-os", None, &["os:linux", "os:macos"]).unwrap();
     assert_eq!(either.crew.as_deref(), Some("muse-wonder"));
 
@@ -1116,7 +1146,14 @@ fn serving_host_draws_respect_effective_task_os_tags() {
             .expect("clearing uses the effective tags and compatible fallback");
         let cleared = owner.get_task(&task.id).unwrap();
         assert_eq!(cleared.crew.as_deref(), Some("sol"));
-        assert_eq!(cleared.crew_source.as_deref(), Some("default"));
+        assert_eq!(
+            cleared
+                .crew_source
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("default")
+        );
         assert_eq!(cleared.tags, vec!["os:linux"]);
     }
 
@@ -1144,15 +1181,27 @@ fn serving_host_draws_respect_effective_task_os_tags() {
         };
         assert_eq!(rerated.complexity, Some(TaskComplexity::Hard));
         assert_eq!(rerated.crew.as_deref(), Some(crew), "{title}");
-        assert_eq!(rerated.crew_source.as_deref(), Some(source), "{title}");
+        assert_eq!(
+            rerated
+                .crew_source
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some(source),
+            "{title}"
+        );
         assert_eq!(rerated.tags.is_empty(), title == "removed-linux", "{title}");
     }
 }
 
 /// Show/list expose admission's constraints without persisting derived data.
 fn effective_os_readouts_follow_configuration_and_filter_before_the_limit() {
-    let config = format!("{POOL}\n[crews.gone]\nmodel = \"gpt-6.1-sol\"\nprovider = \"codex\"\n");
+    let config = format!(
+        "{POOL}\n[crews.gone]\nmodel = \"gpt-6.1-sol\"\nprovider = \"codex\"\n\n[crews.dk]\nkind = \"human\"\n"
+    );
     let (_root, runtime) = runtime_on(HostOs::Linux, &config);
+    let human = add(&runtime, "readout-human", Some("dk"), &[]).unwrap();
+    let human_tagged = add(&runtime, "readout-human-linux", Some("dk"), &["os:linux"]).unwrap();
     let mac = add(&runtime, "readout-mac", Some("muse-wonder"), &[]).unwrap();
     let linux = add(&runtime, "readout-linux", Some("sol"), &["os:linux"]).unwrap();
     let plain = add(&runtime, "readout-plain", Some("sol"), &[]).unwrap();
@@ -1187,7 +1236,10 @@ fn effective_os_readouts_follow_configuration_and_filter_before_the_limit() {
         "fields": ["os_requirement"], "model": "codex"}),
         )
         .unwrap();
-    assert_eq!(projected, shown["os_requirement"]);
+    assert_eq!(
+        projected,
+        json!({"os_requirement": shown["os_requirement"].clone()})
+    );
     let tagged = show(&runtime, &linux);
     assert_eq!(tagged["os_requirement"]["any_of"], json!(["linux"]));
     assert_eq!(
@@ -1195,6 +1247,12 @@ fn effective_os_readouts_follow_configuration_and_filter_before_the_limit() {
         json!(["os:linux"])
     );
     assert!(show(&runtime, &plain).get("os_requirement").is_none());
+    // A human crew is configured on this host and has no executor: it never
+    // reads as unresolved, and only the task's own OS tags bind it.
+    assert!(show(&runtime, &human).get("os_requirement").is_none());
+    let human_tagged = show(&runtime, &human_tagged);
+    assert_eq!(human_tagged["os_requirement"]["state"], "restricted");
+    assert_eq!(human_tagged["os_requirement"]["any_of"], json!(["linux"]));
 
     // Removing a configured crew makes its stored assignment unresolved.
     std::fs::write(runtime.paths().orbit_dir.join("config.toml"), POOL).unwrap();

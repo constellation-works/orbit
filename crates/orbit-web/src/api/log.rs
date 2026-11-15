@@ -21,7 +21,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 
 use super::{LogQuery, map_runtime_error, non_empty_string, server_error};
 use crate::log_format::{
-    Filters as LogFilters, RenderedLogEvent, log_file_generation, parse_matching_event,
+    self, Filters as LogFilters, RenderedLogEvent, log_file_generation, parse_matching_event,
     read_recent_matching_tail, render_log_event_for_web, resolve_log_path,
 };
 
@@ -341,7 +341,7 @@ fn last_event_id_header(headers: &HeaderMap) -> Option<&str> {
 }
 
 fn log_filters(query: &LogQuery) -> Result<LogFilters, orbit_core::OrbitError> {
-    LogFilters::from_query_parts(
+    log_format::filters_from_query_parts(
         query.target.as_deref().and_then(non_empty_string),
         query.level.as_deref().and_then(non_empty_string),
         query

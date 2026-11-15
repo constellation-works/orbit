@@ -11,13 +11,16 @@ stability = "internal"
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+test = false
+
 # Credential code only: no HTTP framework, runtime handle or Orbit store. The
 # only internal dependencies are the foundation crates (see ARCHITECTURE.md).
 [dependencies]
 orbit-common = { path = "../orbit-common", features = ["sqlite"] }
 orbit-types = { path = "../orbit-types" }
 chrono.workspace = true
-getrandom.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 sha2.workspace = true

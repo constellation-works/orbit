@@ -142,6 +142,9 @@ pub struct DispatchOutcome {
     pub success: bool,
     pub output: Value,
     pub message: Option<String>,
+    /// The typed step-failure code parsed once at ingestion, when the
+    /// failure declared one.
+    pub failure_code: Option<orbit_types::workflow::StepFailureCode>,
     pub invocation: Option<DispatchInvocationTrace>,
 }
 
@@ -175,6 +178,15 @@ pub enum DispatchError {
 
     #[error("deterministic action `{action}` failed: {message}")]
     DeterministicActionFailed { action: String, message: String },
+
+    /// A deterministic action failed because it could not reach the
+    /// claimed task's owner. Displays exactly as
+    /// [`DispatchError::DeterministicActionFailed`]; the variant carries
+    /// the typed step-failure code parsed from the underlying
+    /// `OrbitError` at ingestion, so recovery branches on the code
+    /// instead of a marker in the message.
+    #[error("deterministic action `{action}` failed: {message}")]
+    OwnerRouteUnavailable { action: String, message: String },
 
     /// A command failed after it ran. Its bounded diagnostic is retained
     /// independently of successful checkpoints, so resume still reruns it.
@@ -244,6 +256,13 @@ pub enum DispatchError {
     #[error("child_cancelled: {message}")]
     ChildRunCancelled { message: String },
 
+    /// An `auto-task:` step is waiting on a condition, an admission hold or
+    /// its bound task (ORB-20158). Not a failure: the run parks durably,
+    /// without retry, recovery or the failure handoff, and the owner clock
+    /// resumes it at `wake_at`.
+    #[error("auto_task_parked: {}", .0.reason)]
+    AutoTaskParked(Box<orbit_types::workflow::ParkedWait>),
+
     /// Completion cannot overtake a task's verified-live implementation run.
     #[error(
         "task '{task_id}' cannot move to done while linked run '{run_id}' has a verified-live owner"
@@ -271,8 +290,9 @@ pub enum DispatchError {
     InspectionToolsUnavailable { provider: String, reason: String },
 
     /// An image-input run cannot start: its executor declares no
-    /// `spec.image_input`, its crew sets `vision = false`, or it stages more
-    /// images or another format than the declaration admits. Configuration
+    /// `spec.image_input`, its crew sets `vision = false`, its `image_input`
+    /// request is malformed, or it stages more images or another format than
+    /// the declaration admits. Configuration
     /// errors never spend a provider session.
     #[error("image_input_unavailable: executor `{executor}`: {reason}")]
     ImageInputUnavailable { executor: String, reason: String },
@@ -348,6 +368,19 @@ pub enum DispatchError {
         message: String,
     },
 
+    /// A script step's declared output files broke a rule (over a cap, a
+    /// symlink, a directory, an unsafe name), could not be stored, or a
+    /// resumed run's recorded set no longer matches its producer record.
+    /// `code` is a `script_outputs_*` failure code. No partial set is ever
+    /// exposed. Not retried: the same `out/` or record gives the same
+    /// answer.
+    #[error("{code}: step `{step_id}`: {message}; no output file of the step is exposed")]
+    ScriptOutputFiles {
+        code: &'static str,
+        step_id: String,
+        message: String,
+    },
+
     /// Job validation rejected the spec at load time.
     #[error("job validation failed: {0}")]
     JobValidation(String),
@@ -407,22 +440,28 @@ impl DispatchError {
                 | DispatchError::ReviewEvidenceHold(_)
                 | DispatchError::ForgeUnavailableHold(_)
                 | DispatchError::ChildRunCancelled { .. }
+                | DispatchError::AutoTaskParked(_)
                 | DispatchError::ScriptRefused { .. }
                 | DispatchError::ScriptOutputInvalid { .. }
+                | DispatchError::ScriptOutputFiles { .. }
                 | DispatchError::ProtocolSkew(_)
         )
     }
 
     /// The `error_code` the job's terminal failure handoff receives for this
     /// step error. A typed error names its own code; a validation-environment,
-    /// red-base, agent-blocker, upgrade or provider failure is classified from
-    /// its text; anything else is `pipeline_step_failed`.
+    /// red-base, agent-blocker, upgrade, owner-signoff or provider failure is
+    /// classified from its text; anything else is `pipeline_step_failed`.
     pub fn failure_code(&self) -> &'static str {
         use orbit_types::workflow as wf;
+        if matches!(self, DispatchError::OwnerRouteUnavailable { .. }) {
+            return wf::OWNER_ROUTE_UNAVAILABLE_ERROR_CODE;
+        }
         let text = || self.to_string();
         match self {
             DispatchError::WorktreeIntegrity { code, .. } => code,
             DispatchError::ScriptRefused { code, .. } => code,
+            DispatchError::ScriptOutputFiles { code, .. } => code,
             DispatchError::ScriptOutputInvalid { .. } => {
                 orbit_types::workflow::activity_job::script_failure::OUTPUT_INVALID
             }
@@ -442,9 +481,25 @@ impl DispatchError {
             _ if wf::failure_classification_text(&text()).contains(wf::STALLED_MARKER) => {
                 wf::STALLED_ERROR_CODE
             }
+            // [ORB-23956] The typed step code rides on the outcome. This
+            // message token is what the failure handoff sees.
+            _ if wf::is_owner_signoff_required(None, Some(&text())) => {
+                wf::OWNER_SIGNOFF_REQUIRED_ERROR_CODE
+            }
             // [ORB-14266] The handoff preserves the candidate for the next run.
             _ => wf::ProviderFailureClass::of(None, Some(&text()))
                 .map_or("pipeline_step_failed", wf::ProviderFailureClass::as_str),
+        }
+    }
+
+    /// The typed step-failure code this error carries, when it was parsed
+    /// at ingestion rather than left for text classification.
+    pub fn step_failure_code(&self) -> Option<orbit_types::workflow::StepFailureCode> {
+        match self {
+            DispatchError::OwnerRouteUnavailable { .. } => {
+                Some(orbit_types::workflow::StepFailureCode::OwnerRouteUnavailable)
+            }
+            _ => None,
         }
     }
 
@@ -494,6 +549,16 @@ pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
             refusal,
             message: format!("deterministic action `{action}` refused: {message}"),
         },
+        // The typed step-failure code survives the boundary as the
+        // remote-tool wire code, so the caller's step record keeps it.
+        DispatchError::OwnerRouteUnavailable { action, message } => OrbitError::RemoteTool {
+            code: orbit_types::workflow::OWNER_ROUTE_UNAVAILABLE_ERROR_CODE.into(),
+            payload: serde_json::json!({
+                "code": orbit_types::workflow::OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,
+                "message": message,
+            }),
+            message: format!("deterministic action `{action}` failed: {message}"),
+        },
         other => OrbitError::InvalidInput(format!("{other}")),
     }
 }
@@ -501,7 +566,7 @@ pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
 /// Dispatch a v2 activity by type. Emits §7 activity.started/finished
 /// events around the per-type runner and nests the runner's events beneath.
 pub fn dispatch_v2_activity(input: V2DispatchInput<'_>) -> Result<DispatchOutcome, DispatchError> {
-    dispatch_v2_activity_inner(input, None, true)
+    dispatch_v2_activity_inner(input, None, true, None)
 }
 
 /// Dispatch a pipeline step whose id may differ from the catalog activity it
@@ -512,24 +577,27 @@ pub fn dispatch_v2_activity(input: V2DispatchInput<'_>) -> Result<DispatchOutcom
 /// loop's tool policy, `ORBIT_ACTIVITY_NAME`, tool denials and plugin broker
 /// identity are keyed by it, so a step `review` targeting
 /// `agent_review_repair` is authorized as the reviewer. `None` (an inline
-/// spec, which has no catalog name) falls back to the step id.
+/// spec, which has no catalog name) falls back to the step id. An admitted
+/// review's `wall_clock_bound` takes precedence over workspace activity policy.
 pub(crate) fn dispatch_v2_target_activity(
     input: V2DispatchInput<'_>,
     target_activity: Option<&str>,
+    wall_clock_bound: Option<u64>,
 ) -> Result<DispatchOutcome, DispatchError> {
-    dispatch_v2_activity_inner(input, target_activity, true)
+    dispatch_v2_activity_inner(input, target_activity, true, wall_clock_bound)
 }
 
 pub(crate) fn dispatch_v2_activity_without_run_id_injection(
     input: V2DispatchInput<'_>,
 ) -> Result<DispatchOutcome, DispatchError> {
-    dispatch_v2_activity_inner(input, None, false)
+    dispatch_v2_activity_inner(input, None, false, None)
 }
 
 fn dispatch_v2_activity_inner(
     input: V2DispatchInput<'_>,
     target_activity: Option<&str>,
     inject_run_id_into_input: bool,
+    wall_clock_bound: Option<u64>,
 ) -> Result<DispatchOutcome, DispatchError> {
     let activity_input = if inject_run_id_into_input {
         inject_run_id(&input.input, input.run_id)
@@ -564,6 +632,7 @@ fn dispatch_v2_activity_inner(
                 input.audit.clone(),
                 &activity_input,
                 input.fs_profile,
+                wall_clock_bound,
             ),
             None => Err(DispatchError::HostRequired("agent_loop")),
         },
@@ -725,6 +794,9 @@ fn run_deterministic(
                 OrbitError::TaskCompletionLiveRun { task_id, run_id } => {
                     DispatchError::TaskCompletionLiveRun { task_id, run_id }
                 }
+                OrbitError::ForgeUnavailable(failure) => {
+                    DispatchError::ForgeUnavailableHold(Box::new(failure.hold))
+                }
                 error
                     if error.private_vcs_failure().is_some_and(|failure| {
                         failure.class == PrivateVcsFailureClass::CompletionObservationUnavailable
@@ -735,20 +807,20 @@ fn run_deterministic(
                         message: error.to_string(),
                     }
                 }
-                // Only the delivery push writes this hold; a refusal text
-                // that merely quotes the marker carries no parseable hold.
-                // A nested match, not an `if let` guard: guards need a newer
-                // toolchain than the workspace MSRV.
-                error => {
-                    let message = error.to_string();
-                    match orbit_types::workflow::ForgeUnavailableHold::from_text(&message) {
-                        Some(hold) => DispatchError::ForgeUnavailableHold(Box::new(hold)),
-                        None => DispatchError::DeterministicActionFailed {
-                            action: spec.action.clone(),
-                            message,
-                        },
+                error
+                    if error
+                        .step_failure_code()
+                        .is_some_and(|code| code.is_owner_route_unavailable()) =>
+                {
+                    DispatchError::OwnerRouteUnavailable {
+                        action: spec.action.clone(),
+                        message: error.to_string(),
                     }
                 }
+                error => DispatchError::DeterministicActionFailed {
+                    action: spec.action.clone(),
+                    message: error.to_string(),
+                },
             })?
         }
         Some(DeterministicAction::Core(_)) | None => host.run_deterministic(
@@ -762,6 +834,7 @@ fn run_deterministic(
         success: true,
         output,
         message: None,
+        failure_code: None,
         invocation: None,
     })
 }
@@ -776,6 +849,7 @@ fn run_agent_loop_activity(
     audit: Arc<V2AuditWriter>,
     input: &Value,
     fs_profile: Option<&str>,
+    wall_clock_bound: Option<u64>,
 ) -> Result<DispatchOutcome, DispatchError> {
     run_cli_backend_for_step(
         host,
@@ -786,6 +860,7 @@ fn run_agent_loop_activity(
         audit,
         input,
         fs_profile,
+        wall_clock_bound,
     )
     .map(|outcome| label_failure_with_step(step_id, outcome))
 }

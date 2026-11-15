@@ -5,13 +5,19 @@
 //! A reviewer may file a failed attempt as `superseded`. The attempt then
 //! counts only when a required check that passed replaced it, in either report
 //! order, with the same effective identity: a non-empty `check`, otherwise the
-//! normalized command. Both
-//! consumers of these rules are driven here. [`validation_evidence`] gives the
-//! reason the issuing gate escalates with. [`certificate_acceptable`] and
-//! [`exclusion`] decide whether an issued certificate covers a delivery. A
-//! certificate whose `validation_complete` flag is set but whose records do
-//! not establish the replacement must never be spent as coverage.
+//! normalized command. Both consumers of these rules are driven here.
+//! [`validation_evidence`] gives the reason the issuing gate escalates with.
+//! [`certificate_acceptable`] and [`exclusion`] decide whether an issued
+//! certificate covers a delivery. A certificate whose `validation_complete`
+//! flag is set but whose records do not establish the replacement must never
+//! be spent as coverage.
 
+use std::sync::LazyLock;
+
+use NegativeControl::{Counterfactual, PreFix, SupersededAssertion};
+use ReviewInvalidation::{ValidationContractMissing, ValidationIncomplete};
+use ValidationOutcome::{Denied, Failed, NotRun, Passed};
+use ValidationRole::{Diagnostic, Excluded, ExpectedFailure, Required, Superseded};
 use chrono::{TimeZone, Utc};
 use orbit_automation::review::{
     LandingFacts, MutationTarget, SkippedCheck, ValidationContext, ValidationDefect,
@@ -35,163 +41,107 @@ const UNRELATED_FIXTURE: &str = "crates/orbit-engine/tests/fixtures/f066_resume.
 /// ORB-14191's required CodeQL run, which its replacement report omitted.
 const CODEQL: &str = "scripts/codeql-rust-local.sh --ram 16384 \
      codeql/rust-queries:codeql-suites/rust-security-extended.qls";
+const FAST: &str = "make ci-fast";
+const LINT: &str = "make ci-lint";
+const IN_SCOPE: &str = "crates/orbit-review/src/fix.rs";
+const SCOPED_TEST: &str = "crates/orbit-review/tests/fix.rs";
 
 /// The candidate's scope: its task selectors and every path it changed.
-fn scope() -> Vec<String> {
+static SCOPE: LazyLock<Vec<String>> = LazyLock::new(|| {
     vec![
         "dir:crates/orbit-review".to_string(),
-        "file:crates/orbit-review/src/fix.rs".to_string(),
-        "file:crates/orbit-review/tests/fix.rs".to_string(),
+        format!("file:{IN_SCOPE}"),
+        format!("file:{SCOPED_TEST}"),
     ]
-}
+});
 /// Differs from [`ATTEMPT`] by an argument. A leading environment assignment
 /// is the same command, not this fixture [ORB-14302].
 const CORRECTED: &str = "cargo test --package orbit-core --locked";
 
 #[test]
 fn replacement_relationships_that_are_missing_ambiguous_invalid_or_not_passing_fail_closed() {
-    struct Case {
-        name: &'static str,
-        records: Vec<ReviewValidation>,
-    }
+    let core = Some("orbit-core-tests");
+    let attempt = |check: Option<&str>| superseded(ATTEMPT, check);
+    let pass = |command: &str, check: Option<&str>| required(command, check, true);
+    let fmt = "cargo fmt --check";
+    let types = Some("cargo test --package orbit-types");
+    let (units, formatting) = (Some("unit-tests"), Some("formatting"));
     let cases = [
-        Case {
-            name: "missing: a corrected command with no shared check identity",
-            records: vec![superseded(ATTEMPT, None), required(CORRECTED, None, true)],
-        },
-        Case {
-            name: "missing: no same-identity required pass anywhere",
-            records: vec![
-                required("make ci-lint", None, true),
-                superseded(ATTEMPT, None),
-                required("cargo fmt --check", None, true),
+        (
+            "missing: a corrected command with no shared check identity",
+            vec![attempt(None), pass(CORRECTED, None)],
+        ),
+        (
+            "missing: no same-identity required pass anywhere",
+            vec![pass(LINT, None), attempt(None), pass(fmt, None)],
+        ),
+        (
+            "invalid: a broader check identity with the same command",
+            vec![
+                pass(ATTEMPT, Some("runtime tests and formatting")),
+                attempt(Some("runtime tests")),
+                pass(ATTEMPT, Some("runtime tests and formatting")),
             ],
-        },
-        Case {
-            name: "invalid: a broader check identity with the same command",
-            records: vec![
-                required(ATTEMPT, Some("runtime tests and formatting"), true),
-                superseded(ATTEMPT, Some("runtime tests")),
-                required(ATTEMPT, Some("runtime tests and formatting"), true),
+        ),
+        (
+            "ambiguous: an identity on the attempt only",
+            vec![attempt(core), pass(CORRECTED, None)],
+        ),
+        (
+            "ORB-14745: the attempt's explicit identity overrides an identical command",
+            vec![attempt(core), pass(ATTEMPT, None)],
+        ),
+        (
+            "ORB-14745: the replacement's explicit identity overrides an identical command",
+            vec![attempt(None), pass(ATTEMPT, core)],
+        ),
+        (
+            "missing: an explicit identity names a different command",
+            vec![attempt(None), pass(CORRECTED, types)],
+        ),
+        (
+            "invalid: an empty check identity relates no corrected command",
+            vec![attempt(Some("")), pass(CORRECTED, Some(""))],
+        ),
+        (
+            "invalid: a whitespace check identity relates no corrected command",
+            vec![attempt(Some("   ")), pass(CORRECTED, Some("   "))],
+        ),
+        (
+            "invalid: identities naming different checks",
+            vec![attempt(units), pass(CORRECTED, formatting)],
+        ),
+        (
+            "non-passing: the related required check failed",
+            vec![attempt(core), required(CORRECTED, core, false)],
+        ),
+        (
+            "non-passing: the related replacement is not a pass",
+            vec![
+                attempt(core),
+                record(CORRECTED, core, NotRun, Required, None),
+                pass(FAST, None),
             ],
-        },
-        Case {
-            name: "ambiguous: an identity on the attempt only",
-            records: vec![
-                superseded(ATTEMPT, Some("orbit-core-tests")),
-                required(CORRECTED, None, true),
+        ),
+        (
+            "non-passing: the related pass is not a required check",
+            vec![
+                attempt(core),
+                record(CORRECTED, core, Passed, Superseded, Some("also superseded")),
+                pass(FAST, None),
             ],
-        },
-        Case {
-            name: "ORB-14745: the attempt's explicit identity overrides an identical command",
-            records: vec![
-                superseded(ATTEMPT, Some("orbit-core-tests")),
-                required(ATTEMPT, None, true),
-            ],
-        },
-        Case {
-            name: "ORB-14745: the replacement's explicit identity overrides an identical command",
-            records: vec![
-                superseded(ATTEMPT, None),
-                required(ATTEMPT, Some("orbit-core-tests"), true),
-            ],
-        },
-        Case {
-            name: "missing: an explicit identity names a different command",
-            records: vec![
-                superseded(ATTEMPT, None),
-                required(CORRECTED, Some("cargo test --package orbit-types"), true),
-            ],
-        },
-        Case {
-            name: "invalid: an empty check identity relates no corrected command",
-            records: vec![
-                superseded(ATTEMPT, Some("")),
-                required(CORRECTED, Some(""), true),
-            ],
-        },
-        Case {
-            name: "invalid: a whitespace check identity relates no corrected command",
-            records: vec![
-                superseded(ATTEMPT, Some("   ")),
-                required(CORRECTED, Some("   "), true),
-            ],
-        },
-        Case {
-            name: "invalid: identities naming different checks",
-            records: vec![
-                superseded(ATTEMPT, Some("unit-tests")),
-                required(CORRECTED, Some("formatting"), true),
-            ],
-        },
-        Case {
-            name: "non-passing: the related required check failed",
-            records: vec![
-                superseded(ATTEMPT, Some("orbit-core-tests")),
-                required(CORRECTED, Some("orbit-core-tests"), false),
-            ],
-        },
-        Case {
-            name: "non-passing: the related replacement is not a pass",
-            records: vec![
-                superseded(ATTEMPT, Some("orbit-core-tests")),
-                record(
-                    CORRECTED,
-                    Some("orbit-core-tests"),
-                    ValidationOutcome::NotRun,
-                    ValidationRole::Required,
-                    None,
-                ),
-                required("make ci-fast", None, true),
-            ],
-        },
-        Case {
-            name: "non-passing: the related pass is not a required check",
-            records: vec![
-                superseded(ATTEMPT, Some("orbit-core-tests")),
-                record(
-                    CORRECTED,
-                    Some("orbit-core-tests"),
-                    ValidationOutcome::Passed,
-                    ValidationRole::Superseded,
-                    Some("also superseded"),
-                ),
-                required("make ci-fast", None, true),
-            ],
-        },
+        ),
     ];
-
-    for case in cases {
-        let defect = validation_evidence(&case.records, &ValidationContext::default())
+    for (name, records) in cases {
+        let defect = default_evidence(&records)
             .expect_err("an unreplaced superseded attempt must not validate the candidate");
-        assert_eq!(
-            defect,
-            ValidationDefect::SupersededWithoutReplacement {
-                command: ATTEMPT.to_string(),
-            },
-            "{}",
-            case.name
-        );
+        assert_eq!(defect, unreplaced(ATTEMPT), "{name}");
+        let reason = defect.reason();
         assert!(
-            defect.reason().starts_with("validation_incomplete:"),
-            "{}: the gate escalates as incomplete validation: {}",
-            case.name,
-            defect.reason()
+            reason.starts_with("validation_incomplete:"),
+            "{name}: the gate escalates as incomplete validation: {reason}"
         );
-
-        let certificate = certificate(case.records);
-        assert_eq!(
-            certificate_acceptable(&certificate),
-            Err(ReviewInvalidation::ValidationIncomplete),
-            "{}: the flag alone is not coverage",
-            case.name
-        );
-        assert_eq!(
-            exclusion(&exact_delivery(), &certificate, &facts()).map(|_| ()),
-            Err(ReviewInvalidation::ValidationIncomplete),
-            "{}: an exact-tree delivery stays uncovered",
-            case.name
-        );
+        assert_uncovered(&certificate(records), name);
     }
 }
 
@@ -201,104 +151,60 @@ fn replacement_relationships_that_are_missing_ambiguous_invalid_or_not_passing_f
 /// review as incomplete].
 #[test]
 fn a_superseded_attempt_replaced_by_the_same_check_is_coverage() {
+    let attempt = |check: Option<&str>| superseded(ATTEMPT, check);
+    let pass = |command: &str, check: Option<&str>| required(command, check, true);
+    let spaced = format!("  {}", ATTEMPT.replace(' ', "  "));
+    let prefixed = format!("ORBIT_TEST_ALLOWLIST=1 {ATTEMPT}");
+    let (core, padded) = (Some("orbit-core-tests"), Some(" orbit-core-tests "));
+    // [ORB-19519] Two rustdoc attempts whose explicit `check` keeps the
+    // `RUSTDOCFLAGS` assignment are replaced by the required passes of the
+    // same commands, which derive their identity without it. Shaped like
+    // jrun-20261028-1120-c1, whose settlement stayed `incomplete` on this pair.
+    let mut rustdoc = Vec::new();
+    for package in ["orbit-core", "orbit-exec"] {
+        let command = format!("cargo doc --no-deps -p {package}");
+        let flagged = format!("RUSTDOCFLAGS=\"-D warnings\" {command}");
+        rustdoc.extend([superseded(&flagged, Some(&flagged)), pass(&command, None)]);
+    }
     for (name, mut records) in [
         (
             "same command rerun",
-            vec![superseded(ATTEMPT, None), required(ATTEMPT, None, true)],
+            vec![attempt(None), pass(ATTEMPT, None)],
         ),
         (
             "replacement command matches the attempt's explicit identity",
-            vec![
-                superseded(ATTEMPT, Some(ATTEMPT)),
-                required(ATTEMPT, None, true),
-            ],
+            vec![attempt(Some(ATTEMPT)), pass(ATTEMPT, None)],
         ),
         (
             "replacement identity matches the attempt's command",
-            vec![
-                superseded(ATTEMPT, None),
-                required(CORRECTED, Some(ATTEMPT), true),
-            ],
+            vec![attempt(None), pass(CORRECTED, Some(ATTEMPT))],
         ),
         (
             "same command rerun with an empty check and different spacing",
-            vec![
-                superseded(ATTEMPT, Some("")),
-                required(&format!("  {}", ATTEMPT.replace(' ', "  ")), None, true),
-            ],
+            vec![attempt(Some("")), pass(&spaced, None)],
         ),
         (
             "corrected command with a shared check identity",
-            vec![
-                superseded(ATTEMPT, Some("orbit-core-tests")),
-                required(CORRECTED, Some(" orbit-core-tests "), true),
-            ],
+            vec![attempt(core), pass(CORRECTED, padded)],
         ),
         (
             "leading environment assignment is the same command",
-            vec![
-                superseded(ATTEMPT, None),
-                required(
-                    "ORBIT_TEST_ALLOWLIST=1 cargo test --package orbit-core",
-                    None,
-                    true,
-                ),
-            ],
+            vec![attempt(None), pass(&prefixed, None)],
         ),
+        ("ORB-19519: env-prefixed rustdoc identities", rustdoc),
     ] {
         // ORB-14322: final-candidate required passes replace the same check
         // regardless of report order, at issuance and coverage consumption.
         for order in ["attempt first", "pass first"] {
-            assert_eq!(
-                validation_evidence(&records, &ValidationContext::default()),
-                Ok(()),
-                "{name}, {order}"
-            );
-            let certificate = certificate(records.clone());
-            assert_eq!(
-                certificate_acceptable(&certificate),
-                Ok(()),
-                "{name}, {order}"
-            );
-            let covered = exclusion(&exact_delivery(), &certificate, &facts())
-                .unwrap_or_else(|reason| panic!("{name}, {order}: {reason:?}"));
-            assert_eq!(
-                covered.final_candidate_tree, "tree-final",
-                "{name}, {order}"
-            );
+            assert_eq!(default_evidence(&records), Ok(()), "{name}, {order}");
+            let issued = certificate(records.clone());
+            assert_eq!(certificate_acceptable(&issued), Ok(()), "{name}, {order}");
+            let tree = exclusion(&exact_delivery(), &issued, &facts())
+                .unwrap_or_else(|reason| panic!("{name}, {order}: {reason:?}"))
+                .final_candidate_tree;
+            assert_eq!(tree, "tree-final", "{name}, {order}");
             records.reverse();
         }
-    }
-}
-
-/// [ORB-19519] Two rustdoc attempts whose explicit `check` keeps the
-/// `RUSTDOCFLAGS` assignment are replaced by the required passes of the same
-/// commands, which derive their identity without it. Shaped like
-/// jrun-20261028-1120-c1, whose settlement stayed `incomplete` on this pair.
-#[test]
-fn a_superseded_check_with_an_env_prefixed_explicit_identity_is_replaced_by_its_pass() {
-    let mut records = Vec::new();
-    for package in ["orbit-core", "orbit-exec"] {
-        let attempt = format!("RUSTDOCFLAGS=\"-D warnings\" cargo doc --no-deps -p {package}");
-        records.push(superseded(&attempt, Some(&attempt)));
-        records.push(required(
-            &format!("cargo doc --no-deps -p {package}"),
-            None,
-            true,
-        ));
-    }
-    for order in ["attempts first", "passes first"] {
-        assert_eq!(
-            validation_evidence(&records, &ValidationContext::default()),
-            Ok(()),
-            "{order}"
-        );
-        assert_eq!(
-            certificate_acceptable(&certificate(records.clone())),
-            Ok(()),
-            "{order}"
-        );
-        records.reverse();
     }
 }
 
@@ -312,44 +218,22 @@ fn an_env_prefixed_explicit_identity_naming_another_command_still_refuses() {
         superseded(attempt, Some(attempt)),
         required("cargo doc --no-deps -p orbit-exec", None, true),
     ];
-    assert_eq!(
-        validation_evidence(&records, &ValidationContext::default()),
-        Err(ValidationDefect::SupersededWithoutReplacement {
-            command: attempt.to_string(),
-        })
-    );
+    assert_eq!(default_evidence(&records), Err(unreplaced(attempt)));
 }
 
 /// Without any replacement question, a required check that did not pass and
 /// a set with no required pass are refused at both boundaries too.
 #[test]
 fn a_set_without_a_passing_required_check_is_never_coverage() {
+    let note = "the superseded assertion must no longer hold";
+    let control = expected_failure("grep -q legacy-header old.conf", note);
     for (name, records) in [
         ("empty", Vec::new()),
-        (
-            "required check failed",
-            vec![required("make ci-fast", None, false)],
-        ),
-        (
-            "only an explained negative control",
-            vec![record(
-                "grep -q legacy-header old.conf",
-                None,
-                ValidationOutcome::Failed,
-                ValidationRole::ExpectedFailure,
-                Some("the superseded assertion must no longer hold"),
-            )],
-        ),
+        ("required check failed", vec![required(FAST, None, false)]),
+        ("only an explained negative control", vec![control]),
     ] {
-        assert!(
-            validation_evidence(&records, &ValidationContext::default()).is_err(),
-            "{name}"
-        );
-        assert_eq!(
-            certificate_acceptable(&certificate(records)),
-            Err(ReviewInvalidation::ValidationIncomplete),
-            "{name}"
-        );
+        assert!(default_evidence(&records).is_err(), "{name}");
+        assert_eq!(coverage(records), Err(ValidationIncomplete), "{name}");
     }
 }
 
@@ -377,22 +261,61 @@ fn record(
 }
 
 fn superseded(command: &str, check: Option<&str>) -> ReviewValidation {
-    record(
-        command,
-        check,
-        ValidationOutcome::Failed,
-        ValidationRole::Superseded,
-        Some("sandbox allowlist leak; rerun after the fix"),
-    )
+    let note = Some("sandbox allowlist leak; rerun after the fix");
+    record(command, check, Failed, Superseded, note)
 }
 
 fn required(command: &str, check: Option<&str>, passed: bool) -> ReviewValidation {
-    let outcome = if passed {
-        ValidationOutcome::Passed
-    } else {
-        ValidationOutcome::Failed
-    };
-    record(command, check, outcome, ValidationRole::Required, None)
+    let outcome = if passed { Passed } else { Failed };
+    record(command, check, outcome, Required, None)
+}
+
+/// A required check that never ran.
+fn not_run(command: &str) -> ReviewValidation {
+    record(command, None, NotRun, Required, None)
+}
+
+/// A check that never ran, excluded with `note`.
+fn excluded(command: &str, note: &str) -> ReviewValidation {
+    record(command, None, NotRun, Excluded, Some(note))
+}
+
+/// A failure filed as an expected failure with only a note, no control.
+fn expected_failure(command: &str, note: &str) -> ReviewValidation {
+    record(command, None, Failed, ExpectedFailure, Some(note))
+}
+
+fn diagnostic(command: &str, outcome: ValidationOutcome, sources: &[&str]) -> ReviewValidation {
+    let note = Some("workspace-wide observation outside the task's scope");
+    let mut record = record(command, None, outcome, Diagnostic, note);
+    record.sources = sources.iter().map(|source| (*source).to_string()).collect();
+    record
+}
+
+fn control(
+    command: &str,
+    kind: NegativeControl,
+    outcome: ValidationOutcome,
+    sources: &[&str],
+) -> ReviewValidation {
+    let note = Some("the regression the fix removes");
+    let mut record = record(command, None, outcome, ExpectedFailure, note);
+    record.control = Some(kind);
+    record.sources = sources.iter().map(|source| (*source).to_string()).collect();
+    record
+}
+
+fn retained(validation: ReviewValidation) -> RetainedObligation {
+    RetainedObligation {
+        report_sha256: "first-report".into(),
+        observed_at: Utc.with_ymd_and_hms(2026, 10, 5, 9, 54, 0).unwrap(),
+        validation,
+    }
+}
+
+fn with_id(mut record: ReviewValidation, id: &str) -> ReviewValidation {
+    record.id = Some(id.into());
+    record
 }
 
 fn revision(label: &str) -> SourceRevision {
@@ -405,7 +328,7 @@ fn revision(label: &str) -> SourceRevision {
 /// A passing certificate that claims complete validation over `validation`,
 /// judged against [`SCOPE`] with no retained obligations.
 fn certificate(validation: Vec<ReviewValidation>) -> ReviewCertificate {
-    certificate_with(validation, &scope(), Vec::new())
+    certificate_with(validation, &SCOPE, Vec::new())
 }
 
 /// A passing certificate claiming complete validation over `validation`,
@@ -463,6 +386,53 @@ fn certificate_with(
     }
 }
 
+/// [`certificate`] issued with the host's captured required commands.
+fn certificate_requiring(records: Vec<ReviewValidation>, commands: &[String]) -> ReviewCertificate {
+    let mut certificate = certificate(records);
+    certificate.required_validation_commands = Some(commands.to_vec());
+    certificate
+}
+
+/// [`certificate`] issued with the owner's `review.baseline_commands`.
+fn certificate_trusting(records: Vec<ReviewValidation>, baseline: &[String]) -> ReviewCertificate {
+    let mut certificate = certificate(records);
+    certificate.baseline_commands = baseline.to_vec();
+    certificate
+}
+
+/// Whether [`certificate`] over `validation` is acceptable coverage.
+fn coverage(validation: Vec<ReviewValidation>) -> Result<(), ReviewInvalidation> {
+    certificate_acceptable(&certificate(validation))
+}
+
+/// A certificate whose flag claims complete validation is spent neither on
+/// its own nor for an exact-tree delivery.
+fn assert_uncovered(certificate: &ReviewCertificate, name: &str) {
+    assert_eq!(
+        certificate_acceptable(certificate),
+        Err(ValidationIncomplete),
+        "{name}: the flag alone is not coverage"
+    );
+    let delivered = exclusion(&exact_delivery(), certificate, &facts()).map(|_| ());
+    assert_eq!(
+        delivered,
+        Err(ValidationIncomplete),
+        "{name}: an exact-tree delivery stays uncovered"
+    );
+}
+
+/// The certificate's consumer agrees with issuance: it is coverage exactly
+/// when issuance established the records.
+fn assert_consumer_agrees(
+    certificate: &ReviewCertificate,
+    issued: &Result<(), ValidationDefect>,
+    name: &str,
+) {
+    let expected = issued.is_ok().then_some(()).ok_or(ValidationIncomplete);
+    let observed = certificate_acceptable(certificate);
+    assert_eq!(observed, expected, "{name}: certificate coverage");
+}
+
 /// A delivery that reproduced the reviewed base and final trees exactly.
 fn exact_delivery() -> Delivery {
     Delivery {
@@ -490,42 +460,102 @@ fn facts() -> LandingFacts {
     }
 }
 
-fn diagnostic(command: &str, outcome: ValidationOutcome, sources: &[&str]) -> ReviewValidation {
-    let mut record = record(
-        command,
-        None,
-        outcome,
-        ValidationRole::Diagnostic,
-        Some("workspace-wide observation outside the task's scope"),
-    );
-    record.sources = sources.iter().map(|source| (*source).to_string()).collect();
-    record
-}
-
-fn control(
-    command: &str,
-    kind: Option<NegativeControl>,
-    outcome: ValidationOutcome,
-    sources: &[&str],
-) -> ReviewValidation {
-    let mut record = record(
-        command,
-        None,
-        outcome,
-        ValidationRole::ExpectedFailure,
-        Some("the regression the fix removes"),
-    );
-    record.control = kind;
-    record.sources = sources.iter().map(|source| (*source).to_string()).collect();
-    record
-}
-
-fn retained(validation: ReviewValidation) -> RetainedObligation {
-    RetainedObligation {
-        report_sha256: "first-report".into(),
-        observed_at: Utc.with_ymd_and_hms(2026, 10, 5, 9, 54, 0).unwrap(),
-        validation,
+/// A context judged against [`SCOPE`] with every other field defaulted.
+fn scoped() -> ValidationContext<'static> {
+    ValidationContext {
+        scope: &SCOPE,
+        ..ValidationContext::default()
     }
+}
+
+fn default_evidence(records: &[ReviewValidation]) -> Result<(), ValidationDefect> {
+    validation_evidence(records, &ValidationContext::default())
+}
+
+fn scoped_evidence(records: &[ReviewValidation]) -> Result<(), ValidationDefect> {
+    validation_evidence(records, &scoped())
+}
+
+/// The task's nine scoped regressions, all passing on the final candidate.
+fn scoped_passes() -> Vec<ReviewValidation> {
+    let command = |index| format!("cargo test -p orbit-review --test fix case_{index}");
+    (1..=9)
+        .map(|index| required(&command(index), None, true))
+        .collect()
+}
+
+/// [`scoped_passes`] followed by `record`.
+fn scoped_passes_and(record: ReviewValidation) -> Vec<ReviewValidation> {
+    let mut records = scoped_passes();
+    records.push(record);
+    records
+}
+
+fn unreplaced(command: &str) -> ValidationDefect {
+    let command = command.into();
+    ValidationDefect::SupersededWithoutReplacement { command }
+}
+
+fn not_passed(command: &str, outcome: ValidationOutcome) -> ValidationDefect {
+    let command = command.into();
+    ValidationDefect::RequiredNotPassed { command, outcome }
+}
+
+fn host_unestablished(command: &str) -> ValidationDefect {
+    let command = command.into();
+    ValidationDefect::HostCheckNotEstablished { command }
+}
+
+fn unevidenced(command: &str, role: ValidationRole, missing: &'static str) -> ValidationDefect {
+    ValidationDefect::ClassificationUnevidenced {
+        command: command.into(),
+        role,
+        missing,
+    }
+}
+
+fn out_of_scope(command: &str, source: &str) -> ValidationDefect {
+    let (command, source) = (command.into(), source.into());
+    ValidationDefect::ControlOutOfScope { command, source }
+}
+
+fn in_scope(command: &str, source: &str) -> ValidationDefect {
+    let (command, source) = (command.into(), source.into());
+    ValidationDefect::DiagnosticInScope { command, source }
+}
+
+fn contradicted(
+    command: &str,
+    role: ValidationRole,
+    outcome: ValidationOutcome,
+) -> ValidationDefect {
+    ValidationDefect::RoleContradicted {
+        command: command.into(),
+        role,
+        outcome,
+    }
+}
+
+fn check_contradicted(command: &str, role: ValidationRole) -> ValidationDefect {
+    let command = command.into();
+    ValidationDefect::CheckContradicted { command, role }
+}
+
+fn dropped(
+    command: &str,
+    outcome: ValidationOutcome,
+    role: Option<ValidationRole>,
+) -> ValidationDefect {
+    ValidationDefect::ObligationDropped {
+        command: command.into(),
+        outcome,
+        role,
+    }
+}
+
+fn trusted_diagnostic(command: &str) -> ValidationDefect {
+    let command = command.into();
+    ValidationDefect::TrustedCheckDiagnostic { command }
 }
 
 /// Retained obligations match by effective identity across report revisions
@@ -534,143 +564,71 @@ fn retained(validation: ReviewValidation) -> RetainedObligation {
 fn retained_obligations_match_effective_identities_across_report_revisions() {
     const WRAPPED: &str = "set -o pipefail; make ci-fast 2>&1 | tee .orbit/tmp/review-ci-fast.log";
     const PREFIXED: &str = "TMPDIR=\"$PWD/.orbit/tmp\" FOO='two words' make  ci-fast";
-    for (name, earlier_command, earlier_check, final_command, final_check, matches) in [
+    let trimmed = Some(" make ci-fast ");
+    let matching = [
         (
             "command to wrapped explicit identity",
-            "make ci-fast",
-            None,
-            WRAPPED,
-            Some("make ci-fast"),
-            true,
+            [(FAST, None), (WRAPPED, Some(FAST))],
         ),
         (
             "wrapped explicit identity to command",
-            WRAPPED,
-            Some("make ci-fast"),
-            "make ci-fast",
-            None,
-            true,
+            [(WRAPPED, Some(FAST)), (FAST, None)],
         ),
         (
             "normalized command to trimmed explicit identity",
-            PREFIXED,
-            None,
-            WRAPPED,
-            Some(" make ci-fast "),
-            true,
+            [(PREFIXED, None), (WRAPPED, trimmed)],
         ),
         (
             "trimmed explicit identity to normalized command",
-            WRAPPED,
-            Some(" make ci-fast "),
-            PREFIXED,
-            None,
-            true,
+            [(WRAPPED, trimmed), (PREFIXED, None)],
         ),
-        (
-            "different bare commands",
-            "make ci-fast",
-            None,
-            "make ci-lint",
-            None,
-            false,
-        ),
+    ];
+    let distinct = [
+        ("different bare commands", [(FAST, None), (LINT, None)]),
         (
             "different command suffix",
-            "make ci-fast",
-            None,
-            "make ci-fast-extra",
-            None,
-            false,
+            [(FAST, None), ("make ci-fast-extra", None)],
         ),
         (
             "command differs from final explicit identity",
-            "make ci-fast",
-            None,
-            WRAPPED,
-            Some("make ci-lint"),
-            false,
+            [(FAST, None), (WRAPPED, Some(LINT))],
         ),
         (
             "earlier explicit identity differs from command",
-            WRAPPED,
-            Some("make ci-lint"),
-            "make ci-fast",
-            None,
-            false,
+            [(WRAPPED, Some(LINT)), (FAST, None)],
         ),
         (
             "distinct explicit identities override identical commands",
-            "make ci-fast",
-            Some("fast-check"),
-            "make ci-fast",
-            Some("lint-check"),
-            false,
+            [(FAST, Some("fast-check")), (FAST, Some("lint-check"))],
         ),
         (
             "explicit identity overrides the earlier command",
-            "make ci-fast",
-            Some("fast-check"),
-            "make ci-fast",
-            None,
-            false,
+            [(FAST, Some("fast-check")), (FAST, None)],
         ),
-    ] {
-        let obligations = vec![retained(record(
-            earlier_command,
-            earlier_check,
-            ValidationOutcome::NotRun,
-            ValidationRole::Required,
-            None,
-        ))];
-        let records = vec![required(final_command, final_check, true)];
+    ];
+    let cases =
+        (matching.map(|case| (case, true)).into_iter()).chain(distinct.map(|case| (case, false)));
+    for ((name, [(earlier, earlier_check), (current, current_check)]), matches) in cases {
+        let earlier_record = record(earlier, earlier_check, NotRun, Required, None);
+        let obligations = vec![retained(earlier_record)];
+        let records = vec![required(current, current_check, true)];
         let context = ValidationContext {
             obligations: &obligations,
-            retired: &[],
             ..ValidationContext::default()
         };
-        let expected = if matches {
-            Ok(())
-        } else {
-            Err(ValidationDefect::ObligationDropped {
-                command: earlier_command.into(),
-                outcome: ValidationOutcome::NotRun,
-                role: None,
-            })
-        };
+        let expected = matches
+            .then_some(())
+            .ok_or_else(|| dropped(earlier, NotRun, None));
+        let observed = validation_evidence(&records, &context);
+        assert_eq!(observed, expected, "ORB-14312: {name}");
+        let certificate = certificate_with(records, &SCOPE, obligations);
+        assert_consumer_agrees(&certificate, &expected, &format!("ORB-14312: {name}"));
+        let delivered = exclusion(&exact_delivery(), &certificate, &facts()).map(|_| ());
+        let acceptable = certificate_acceptable(&certificate);
         assert_eq!(
-            validation_evidence(&records, &context),
-            expected,
-            "ORB-14312: {name}"
-        );
-        let certificate = certificate_with(records, &scope(), obligations);
-        let expected_coverage = if matches {
-            Ok(())
-        } else {
-            Err(ReviewInvalidation::ValidationIncomplete)
-        };
-        assert_eq!(
-            certificate_acceptable(&certificate),
-            expected_coverage,
-            "ORB-14312: {name}: certificate coverage"
-        );
-        assert_eq!(
-            exclusion(&exact_delivery(), &certificate, &facts()).map(|_| ()),
-            expected_coverage,
+            delivered, acceptable,
             "ORB-14312: {name}: delivery coverage"
         );
-    }
-}
-
-fn with_id(mut record: ReviewValidation, id: &str) -> ReviewValidation {
-    record.id = Some(id.into());
-    record
-}
-
-fn retire(id: &str, reason: &str) -> RetiredValidation {
-    RetiredValidation {
-        id: id.into(),
-        reason: reason.into(),
     }
 }
 
@@ -686,103 +644,71 @@ fn record_ids_account_for_earlier_records_regardless_of_command_text() {
     const SCRIPT: &str = "python3 .orbit/tmp/verify-reference-examples.py";
     const PLACEHOLDER: &str = "cargo test --manifest-path <workspace>/Cargo.toml";
     const ABSOLUTE: &str = "cargo test --manifest-path /srv/checkout/Cargo.toml";
-    let not_run = |command: &str| {
-        with_id(
-            record(
-                command,
-                None,
-                ValidationOutcome::NotRun,
-                ValidationRole::Required,
-                None,
-            ),
-            "V1",
-        )
-    };
+    let unrun = |command: &str| with_id(not_run(command), "V1");
     let failed = |command: &str| with_id(required(command, None, false), "V1");
     let passed = |command: &str, id: &str| with_id(required(command, None, true), id);
-    let gap = |earlier: &ReviewValidation, gap: RecordGap| {
-        Err(ValidationDefect::RecordDropped {
-            id: "V1".into(),
-            command: earlier.command.clone(),
-            outcome: earlier.outcome,
-            gap,
-        })
-    };
-    type Case = (
-        &'static str,
-        ReviewValidation,
-        Vec<ReviewValidation>,
-        Vec<RetiredValidation>,
-        Result<(), ValidationDefect>,
-    );
-    let cases: Vec<Case> = vec![
+    let rerun = with_id(superseded(FAST, None), "V1");
+    let tee = passed("set -o pipefail; make ci-fast | tee log", "V1");
+    let diagnosed = with_id(diagnostic(SCRIPT, Passed, &[]), "V1");
+    // Each case pairs the earlier record with the final report, retires `V1`
+    // with the given reason, if any, and expects the given gap, if any, to
+    // drop the earlier record.
+    let cases = [
         (
             "ORB-14360: prose name to the real command",
-            not_run(PROSE),
-            vec![passed(SCRIPT, "V1")],
-            vec![],
-            Ok(()),
+            (unrun(PROSE), vec![passed(SCRIPT, "V1")]),
+            (None, None),
         ),
         (
             "ORB-14260: placeholder to the absolute path",
-            not_run(PLACEHOLDER),
-            vec![passed(ABSOLUTE, "V1")],
-            vec![],
-            Ok(()),
+            (unrun(PLACEHOLDER), vec![passed(ABSOLUTE, "V1")]),
+            (None, None),
         ),
         (
             "a failed record rerun under its id with a new command",
-            failed("make ci-fast"),
-            vec![
-                with_id(superseded("make ci-fast", None), "V1"),
-                passed("set -o pipefail; make ci-fast | tee log", "V1"),
-            ],
-            vec![],
-            Ok(()),
+            (failed(FAST), vec![rerun, tee]),
+            (None, None),
         ),
         (
             "an unrun record retired with a reason",
-            not_run(PROSE),
-            vec![passed(SCRIPT, "V2")],
-            vec![retire("V1", "folded into V2")],
-            Ok(()),
+            (unrun(PROSE), vec![passed(SCRIPT, "V2")]),
+            (Some("folded into V2"), None),
         ),
         (
             "the same command under another id",
-            not_run(SCRIPT),
-            vec![passed(SCRIPT, "V2")],
-            vec![],
-            gap(&not_run(SCRIPT), RecordGap::Omitted),
+            (unrun(SCRIPT), vec![passed(SCRIPT, "V2")]),
+            (None, Some(RecordGap::Omitted)),
         ),
         (
             "the id carried only as a diagnostic",
-            not_run(PROSE),
-            vec![
-                passed("make ci-lint", "V2"),
-                with_id(diagnostic(SCRIPT, ValidationOutcome::Passed, &[]), "V1"),
-            ],
-            vec![],
-            gap(
-                &not_run(PROSE),
-                RecordGap::Reclassified(ValidationRole::Diagnostic),
-            ),
+            (unrun(PROSE), vec![passed(LINT, "V2"), diagnosed]),
+            (None, Some(RecordGap::Reclassified(Diagnostic))),
         ),
         (
             "a retirement without a reason",
-            not_run(PROSE),
-            vec![passed(SCRIPT, "V2")],
-            vec![retire("V1", "  ")],
-            gap(&not_run(PROSE), RecordGap::RetirementUnexplained),
+            (unrun(PROSE), vec![passed(SCRIPT, "V2")]),
+            (Some("  "), Some(RecordGap::RetirementUnexplained)),
         ),
         (
             "a failed record retired",
-            failed("make ci-fast"),
-            vec![passed("make ci-lint", "V2")],
-            vec![retire("V1", "flaky")],
-            gap(&failed("make ci-fast"), RecordGap::FailureRetired),
+            (failed(FAST), vec![passed(LINT, "V2")]),
+            (Some("flaky"), Some(RecordGap::FailureRetired)),
         ),
     ];
-    for (name, earlier, records, retired, expected) in cases {
+    let retire = |reason: &str| RetiredValidation {
+        id: "V1".into(),
+        reason: reason.into(),
+    };
+    for (name, (earlier, records), (retirement, gap)) in cases {
+        let retired: Vec<_> = retirement.map(retire).into_iter().collect();
+        let expected = gap.map_or(Ok(()), |gap| {
+            Err(ValidationDefect::RecordDropped {
+                id: "V1".into(),
+                command: earlier.command.clone(),
+                outcome: earlier.outcome,
+                gap,
+            })
+        });
         let obligations = vec![retained(earlier)];
         let context = ValidationContext {
             obligations: &obligations,
@@ -790,13 +716,9 @@ fn record_ids_account_for_earlier_records_regardless_of_command_text() {
             ..ValidationContext::default()
         };
         assert_eq!(validation_evidence(&records, &context), expected, "{name}");
-        let mut certificate = certificate_with(records, &scope(), obligations);
+        let mut certificate = certificate_with(records, &SCOPE, obligations);
         certificate.retired_validation = retired;
-        assert_eq!(
-            certificate_acceptable(&certificate).is_ok(),
-            expected.is_ok(),
-            "{name}: certificate coverage"
-        );
+        assert_consumer_agrees(&certificate, &expected, name);
     }
 }
 
@@ -805,45 +727,20 @@ fn record_ids_account_for_earlier_records_regardless_of_command_text() {
 /// rules it was issued under.
 #[test]
 fn certificates_without_record_ids_keep_their_coverage() {
-    let obligations = vec![retained(record(
-        "make ci-fast",
-        None,
-        ValidationOutcome::NotRun,
-        ValidationRole::Required,
-        None,
-    ))];
+    let obligations = vec![retained(not_run(FAST))];
     for (current, covered) in [
         ("TMPDIR=\"$PWD/.orbit/tmp\" make ci-fast", true),
-        ("make ci-lint", false),
+        (LINT, false),
     ] {
-        let issued = certificate_with(
-            vec![required(current, None, true)],
-            &scope(),
-            obligations.clone(),
-        );
+        let records = vec![required(current, None, true)];
+        let issued = certificate_with(records, &SCOPE, obligations.clone());
         let stored = serde_json::to_value(&issued).unwrap();
         assert!(stored.get("retired_validation").is_none());
         assert!(stored["validation"][0].get("id").is_none());
         let certificate: ReviewCertificate = serde_json::from_value(stored).unwrap();
-        assert_eq!(
-            certificate_acceptable(&certificate).is_ok(),
-            covered,
-            "{current}"
-        );
+        let acceptable = certificate_acceptable(&certificate).is_ok();
+        assert_eq!(acceptable, covered, "{current}");
     }
-}
-
-/// The task's nine scoped regressions, all passing on the final candidate.
-fn scoped_passes() -> Vec<ReviewValidation> {
-    (1..=9)
-        .map(|index| {
-            required(
-                &format!("cargo test -p orbit-review --test fix case_{index}"),
-                None,
-                true,
-            )
-        })
-        .collect()
 }
 
 /// ORB-14151's shape: every task-scoped regression passed and a final-candidate
@@ -853,31 +750,14 @@ fn scoped_passes() -> Vec<ReviewValidation> {
 /// claiming the workspace passed.
 #[test]
 fn an_unrelated_workspace_failure_is_an_honest_diagnostic_not_a_blocker_or_a_control() {
+    const CLAIM_FIXTURE: &str = "crates/orbit-engine/tests/fixtures/f071_claim.rs";
+    const ENGINE: &str = "cargo test -p orbit-engine f066";
     let mut records = scoped_passes();
-    records.push(diagnostic(
-        WORKSPACE,
-        ValidationOutcome::Failed,
-        &[
-            UNRELATED_FIXTURE,
-            "crates/orbit-engine/tests/fixtures/f071_claim.rs",
-        ],
-    ));
-    records.push(diagnostic(
-        "cargo test -p orbit-engine f066",
-        ValidationOutcome::Failed,
-        &[UNRELATED_FIXTURE],
-    ));
-    let scope = scope();
-    let context = ValidationContext {
-        scope: &scope,
-        obligations: &[],
-        retired: &[],
-        required_validation_commands: Some(&[]),
-        baseline_commands: &[],
-        known_red: &[],
-    };
-    assert_eq!(validation_evidence(&records, &context), Ok(()));
-
+    records.extend([
+        diagnostic(WORKSPACE, Failed, &[UNRELATED_FIXTURE, CLAIM_FIXTURE]),
+        diagnostic(ENGINE, Failed, &[UNRELATED_FIXTURE]),
+    ]);
+    assert_eq!(scoped_evidence(&records), Ok(()));
     let certificate = certificate(records.clone());
     assert_eq!(certificate_acceptable(&certificate), Ok(()));
     exclusion(&exact_delivery(), &certificate, &facts())
@@ -885,45 +765,26 @@ fn an_unrelated_workspace_failure_is_an_honest_diagnostic_not_a_blocker_or_a_con
     assert_eq!(
         validation_limitations(&certificate.validation),
         vec![
-            format!(
-                "diagnostic `{WORKSPACE}` failed in {UNRELATED_FIXTURE}, \
-                 crates/orbit-engine/tests/fixtures/f071_claim.rs"
-            ),
-            format!("diagnostic `cargo test -p orbit-engine f066` failed in {UNRELATED_FIXTURE}"),
+            format!("diagnostic `{WORKSPACE}` failed in {UNRELATED_FIXTURE}, {CLAIM_FIXTURE}"),
+            format!("diagnostic `{ENGINE}` failed in {UNRELATED_FIXTURE}"),
         ],
         "the certificate discloses exactly what it does not establish"
     );
+    let mut diagnostics = certificate
+        .validation
+        .iter()
+        .filter(|record| record.role == Diagnostic);
     assert!(
-        certificate
-            .validation
-            .iter()
-            .filter(|record| record.role == ValidationRole::Diagnostic)
-            .all(|record| record.outcome == ValidationOutcome::Failed),
+        diagnostics.all(|record| record.outcome == Failed),
         "raw failed outcomes are kept, never rewritten as passes"
     );
 
     // The same observations filed as expected failures, as ORB-14151's
     // report did, are not deliberate controls and never pass.
-    let mut mislabeled = scoped_passes();
-    mislabeled.push(record(
-        WORKSPACE,
-        None,
-        ValidationOutcome::Failed,
-        ValidationRole::ExpectedFailure,
-        Some("out of scope for this task"),
-    ));
-    assert_eq!(
-        validation_evidence(&mislabeled, &context),
-        Err(ValidationDefect::ClassificationUnevidenced {
-            command: WORKSPACE.into(),
-            role: ValidationRole::ExpectedFailure,
-            missing: "control",
-        })
-    );
-    assert_eq!(
-        certificate_acceptable(&certificate_with(mislabeled, &scope, Vec::new())),
-        Err(ReviewInvalidation::ValidationIncomplete)
-    );
+    let mislabeled = scoped_passes_and(expected_failure(WORKSPACE, "out of scope for this task"));
+    let defect = unevidenced(WORKSPACE, ExpectedFailure, "control");
+    assert_eq!(scoped_evidence(&mislabeled), Err(defect));
+    assert_eq!(coverage(mislabeled), Err(ValidationIncomplete));
 }
 
 /// [ORB-14616] ORB-14521's shape: a test-only candidate whose reviewer proved
@@ -936,84 +797,51 @@ fn an_unrelated_workspace_failure_is_an_honest_diagnostic_not_a_blocker_or_a_con
 /// refused naming the file.
 #[test]
 fn a_counterfactual_names_the_file_it_mutated_apart_from_its_in_scope_sources() {
-    let production = "crates/orbit-engine/src/converge.rs";
+    const COMMAND: &str = "cargo test -p orbit-review --test fix guards_read_only";
+    const PRODUCTION: &str = "crates/orbit-engine/src/converge.rs";
     let mutation = |sources: &[&str], targets: &[&str]| {
-        let mut record = control(
-            "cargo test -p orbit-review --test fix guards_read_only",
-            Some(NegativeControl::Counterfactual),
-            ValidationOutcome::Failed,
-            sources,
-        );
+        let mut record = control(COMMAND, Counterfactual, Failed, sources);
         record.mutation_target = targets.iter().map(|target| (*target).to_string()).collect();
-        let mut records = scoped_passes();
-        records.push(record);
-        records
-    };
-    let scope = scope();
-    let context = ValidationContext {
-        scope: &scope,
-        obligations: &[],
-        retired: &[],
-        required_validation_commands: Some(&[]),
-        baseline_commands: &[],
-        known_red: &[],
+        scoped_passes_and(record)
     };
 
-    let restored = mutation(&["crates/orbit-review/tests/fix.rs"], &[production]);
-    assert_eq!(validation_evidence(&restored, &context), Ok(()));
+    let restored = mutation(&[SCOPED_TEST], &[PRODUCTION]);
+    assert_eq!(scoped_evidence(&restored), Ok(()));
     assert_eq!(
-        certificate_acceptable(&certificate_with(restored.clone(), &scope, Vec::new())),
+        coverage(restored.clone()),
         Ok(()),
         "an out-of-scope mutation target is not a source when the certificate is spent"
     );
+    let target = MutationTarget {
+        command: COMMAND,
+        path: PRODUCTION.to_string(),
+        repaired_blob: None,
+    };
     assert_eq!(
         mutation_targets(&restored),
-        Ok(vec![MutationTarget {
-            command: "cargo test -p orbit-review --test fix guards_read_only",
-            path: production.to_string(),
-            repaired_blob: None,
-        }]),
+        Ok(vec![target]),
         "settlement compares the target at its repository-relative path"
     );
-    let old_shape = mutation(&["crates/orbit-review/tests/fix.rs", production], &[]);
-    let defect = validation_evidence(&old_shape, &context).expect_err("old shape is refused");
-    assert_eq!(
-        defect,
-        ValidationDefect::ControlOutOfScope {
-            command: "cargo test -p orbit-review --test fix guards_read_only".into(),
-            source: production.into(),
-        }
-    );
-    assert!(defect.correctable(), "{}", defect.reason());
-    assert!(
-        defect.reason().contains("mutation_target"),
-        "{}",
-        defect.reason()
-    );
+    let old_shape = mutation(&[SCOPED_TEST, PRODUCTION], &[]);
+    let defect = scoped_evidence(&old_shape).expect_err("old shape is refused");
+    assert_eq!(defect, out_of_scope(COMMAND, PRODUCTION));
+    let reason = defect.reason();
+    assert!(defect.correctable(), "{reason}");
+    assert!(reason.contains("mutation_target"), "{reason}");
 
-    let checks_out_of_scope = mutation(&[UNRELATED_FIXTURE], &[production]);
+    let checks_out_of_scope = mutation(&[UNRELATED_FIXTURE], &[PRODUCTION]);
     assert_eq!(
-        validation_evidence(&checks_out_of_scope, &context),
-        Err(ValidationDefect::ControlOutOfScope {
-            command: "cargo test -p orbit-review --test fix guards_read_only".into(),
-            source: UNRELATED_FIXTURE.into(),
-        }),
+        scoped_evidence(&checks_out_of_scope),
+        Err(out_of_scope(COMMAND, UNRELATED_FIXTURE)),
         "a mutation target never lets the control's checks leave the scope"
     );
 
+    let (command, target) = ("cargo test".into(), PRODUCTION.into());
+    let changed = ValidationDefect::MutationTargetChanged { command, target };
     for observed in [
-        ValidationDefect::RequiredNotPassed {
-            command: CODEQL.into(),
-            outcome: ValidationOutcome::Failed,
-        },
-        ValidationDefect::MutationTargetChanged {
-            command: "cargo test".into(),
-            target: production.into(),
-        },
-        ValidationDefect::DiagnosticInScope {
-            command: WORKSPACE.into(),
-            source: "crates/orbit-review/src/fix.rs".into(),
-        },
+        not_passed(CODEQL, Failed),
+        changed,
+        in_scope(WORKSPACE, IN_SCOPE),
     ] {
         assert!(
             !observed.correctable(),
@@ -1032,32 +860,21 @@ fn a_counterfactual_names_the_file_it_mutated_apart_from_its_in_scope_sources() 
 fn a_mutation_target_must_be_a_repository_relative_path() {
     const COMMAND: &str = "cargo test -p orbit-review --test fix guards_read_only";
     let targets = |target: &str| {
-        let mut record = control(
-            COMMAND,
-            Some(NegativeControl::Counterfactual),
-            ValidationOutcome::Failed,
-            &["crates/orbit-review/tests/fix.rs"],
-        );
+        let mut record = control(COMMAND, Counterfactual, Failed, &[SCOPED_TEST]);
         record.mutation_target = vec![target.to_string(), " ".to_string()];
-        mutation_targets(std::slice::from_ref(&record)).map(|targets| {
-            targets
-                .into_iter()
-                .map(|target| target.path)
-                .collect::<Vec<_>>()
-        })
+        let targets = mutation_targets(std::slice::from_ref(&record))?;
+        let paths = targets.into_iter().map(|target| target.path);
+        Ok::<_, ValidationDefect>(paths.collect::<Vec<_>>())
     };
 
+    let canonical = vec!["crates/orbit-engine/src/converge.rs".to_string()];
     for spelled in [
         "crates/orbit-engine/src/converge.rs",
         "./crates/orbit-engine/src/converge.rs",
         " file:crates/orbit-engine/src/converge.rs ",
         "crates//orbit-engine/./src/converge.rs",
     ] {
-        assert_eq!(
-            targets(spelled),
-            Ok(vec!["crates/orbit-engine/src/converge.rs".to_string()]),
-            "{spelled}"
-        );
+        assert_eq!(targets(spelled), Ok(canonical.clone()), "{spelled}");
     }
 
     for refused in [
@@ -1073,15 +890,14 @@ fn a_mutation_target_must_be_a_repository_relative_path() {
         "./",
     ] {
         let defect = targets(refused).expect_err(refused);
+        let (command, target) = (COMMAND.into(), refused.into());
         assert_eq!(
             defect,
-            ValidationDefect::MutationTargetInvalid {
-                command: COMMAND.into(),
-                target: refused.into(),
-            }
+            ValidationDefect::MutationTargetInvalid { command, target }
         );
-        assert!(defect.correctable(), "{}", defect.reason());
-        assert!(defect.reason().contains(refused), "{}", defect.reason());
+        let reason = defect.reason();
+        assert!(defect.correctable(), "{reason}");
+        assert!(reason.contains(refused), "{reason}");
     }
 }
 
@@ -1090,194 +906,89 @@ fn a_mutation_target_must_be_a_repository_relative_path() {
 /// at issuance or when a certificate is spent.
 #[test]
 fn relabeling_or_dropping_a_required_check_never_completes_validation() {
-    let codeql_failed = required(CODEQL, None, false);
-    let in_scope = "crates/orbit-review/src/fix.rs";
-    let cases: Vec<(
-        &str,
-        Vec<ReviewValidation>,
-        Vec<RetainedObligation>,
-        ValidationDefect,
-    )> = vec![
+    let codeql_failed = || vec![retained(required(CODEQL, None, false))];
+    let unrelated = |command: &str| diagnostic(command, Failed, &[UNRELATED_FIXTURE]);
+    let relabeled = [
         (
             "a failed check relabeled expected_failure with only a note",
-            vec![record(
-                "make ci-fast",
-                None,
-                ValidationOutcome::Failed,
-                ValidationRole::ExpectedFailure,
-                Some("known flake"),
-            )],
-            Vec::new(),
-            ValidationDefect::ClassificationUnevidenced {
-                command: "make ci-fast".into(),
-                role: ValidationRole::ExpectedFailure,
-                missing: "control",
-            },
+            vec![expected_failure(FAST, "known flake")],
+            unevidenced(FAST, ExpectedFailure, "control"),
         ),
         (
             "a control naming code outside the candidate's scope",
-            vec![control(
-                "make ci-fast",
-                Some(NegativeControl::Counterfactual),
-                ValidationOutcome::Failed,
-                &[UNRELATED_FIXTURE],
-            )],
-            Vec::new(),
-            ValidationDefect::ControlOutOfScope {
-                command: "make ci-fast".into(),
-                source: UNRELATED_FIXTURE.into(),
-            },
+            vec![control(FAST, Counterfactual, Failed, &[UNRELATED_FIXTURE])],
+            out_of_scope(FAST, UNRELATED_FIXTURE),
         ),
         (
             "a failed check relabeled diagnostic with only a note",
-            vec![diagnostic("make ci-fast", ValidationOutcome::Failed, &[])],
-            Vec::new(),
-            ValidationDefect::ClassificationUnevidenced {
-                command: "make ci-fast".into(),
-                role: ValidationRole::Diagnostic,
-                missing: "sources",
-            },
+            vec![diagnostic(FAST, Failed, &[])],
+            unevidenced(FAST, Diagnostic, "sources"),
         ),
         (
             "a diagnostic whose failure lies in the candidate's own code",
-            vec![diagnostic(
-                "make ci-fast",
-                ValidationOutcome::Failed,
-                &[UNRELATED_FIXTURE, in_scope],
-            )],
-            Vec::new(),
-            ValidationDefect::DiagnosticInScope {
-                command: "make ci-fast".into(),
-                source: in_scope.into(),
-            },
+            vec![diagnostic(FAST, Failed, &[UNRELATED_FIXTURE, IN_SCOPE])],
+            in_scope(FAST, IN_SCOPE),
         ),
         (
             "a diagnostic failing the same check a required record passed",
-            vec![
-                diagnostic(WORKSPACE, ValidationOutcome::Failed, &[UNRELATED_FIXTURE]),
-                required(WORKSPACE, None, true),
-            ],
-            Vec::new(),
-            ValidationDefect::CheckContradicted {
-                command: WORKSPACE.into(),
-                role: ValidationRole::Diagnostic,
-            },
+            vec![unrelated(WORKSPACE), required(WORKSPACE, None, true)],
+            check_contradicted(WORKSPACE, Diagnostic),
         ),
         (
             "a denied check relabeled diagnostic",
-            vec![diagnostic(CODEQL, ValidationOutcome::Denied, &[])],
-            Vec::new(),
-            ValidationDefect::RoleContradicted {
-                command: CODEQL.into(),
-                role: ValidationRole::Diagnostic,
-                outcome: ValidationOutcome::Denied,
-            },
+            vec![diagnostic(CODEQL, Denied, &[])],
+            contradicted(CODEQL, Diagnostic, Denied),
         ),
+    ];
+    // Each of these final reports follows a report that retained CodeQL's failure.
+    let retained_failure = [
         (
             "a retained required failure the final report omits (ORB-14191)",
             Vec::new(),
-            vec![retained(codeql_failed.clone())],
-            ValidationDefect::ObligationDropped {
-                command: CODEQL.into(),
-                outcome: ValidationOutcome::Failed,
-                role: None,
-            },
+            dropped(CODEQL, Failed, None),
         ),
         (
             "a retained required failure the final report calls a diagnostic",
-            vec![diagnostic(
-                CODEQL,
-                ValidationOutcome::Failed,
-                &[UNRELATED_FIXTURE],
-            )],
-            vec![retained(codeql_failed.clone())],
-            ValidationDefect::ObligationDropped {
-                command: CODEQL.into(),
-                outcome: ValidationOutcome::Failed,
-                role: Some(ValidationRole::Diagnostic),
-            },
+            vec![unrelated(CODEQL)],
+            dropped(CODEQL, Failed, Some(Diagnostic)),
         ),
         (
             "a retained required failure the final report calls a control",
-            vec![control(
-                CODEQL,
-                Some(NegativeControl::PreFix),
-                ValidationOutcome::Failed,
-                &[in_scope],
-            )],
-            vec![retained(codeql_failed.clone())],
-            ValidationDefect::ObligationDropped {
-                command: CODEQL.into(),
-                outcome: ValidationOutcome::Failed,
-                role: Some(ValidationRole::ExpectedFailure),
-            },
+            vec![control(CODEQL, PreFix, Failed, &[IN_SCOPE])],
+            dropped(CODEQL, Failed, Some(ExpectedFailure)),
         ),
         (
             "a retained required failure the final report calls excluded",
-            vec![record(
-                CODEQL,
-                None,
-                ValidationOutcome::NotRun,
-                ValidationRole::Excluded,
-                Some("not needed"),
-            )],
-            vec![retained(codeql_failed)],
-            ValidationDefect::ObligationDropped {
-                command: CODEQL.into(),
-                outcome: ValidationOutcome::Failed,
-                role: Some(ValidationRole::Excluded),
-            },
+            vec![excluded(CODEQL, "not needed")],
+            dropped(CODEQL, Failed, Some(Excluded)),
         ),
     ];
-
+    let relabeled =
+        relabeled.map(|(name, records, expected)| (name, records, Vec::new(), expected));
+    let retained_failure = retained_failure
+        .map(|(name, records, expected)| (name, records, codeql_failed(), expected));
+    let cases = relabeled.into_iter().chain(retained_failure);
     for (name, mut records, obligations, expected) in cases {
         // Unrelated passing checks never pay for the defect.
         records.extend(scoped_passes());
-        let scope = scope();
         let context = ValidationContext {
-            scope: &scope,
             obligations: &obligations,
-            retired: &[],
-            required_validation_commands: Some(&[]),
-            baseline_commands: &[],
-            known_red: &[],
+            ..scoped()
         };
-        assert_eq!(
-            validation_evidence(&records, &context),
-            Err(expected),
-            "{name}"
-        );
-        let certificate = certificate_with(records, &scope, obligations);
-        assert_eq!(
-            certificate_acceptable(&certificate),
-            Err(ReviewInvalidation::ValidationIncomplete),
-            "{name}: a flagged certificate is not coverage"
-        );
-        assert_eq!(
-            exclusion(&exact_delivery(), &certificate, &facts()).map(|_| ()),
-            Err(ReviewInvalidation::ValidationIncomplete),
-            "{name}"
-        );
+        let observed = validation_evidence(&records, &context);
+        assert_eq!(observed, Err(expected), "{name}");
+        assert_uncovered(&certificate_with(records, &SCOPE, obligations), name);
     }
 
     // A failed diagnostic judged with no recorded scope proves nothing about
     // where its failures lie.
-    let mut unscoped = scoped_passes();
-    unscoped.push(diagnostic(
-        WORKSPACE,
-        ValidationOutcome::Failed,
-        &[UNRELATED_FIXTURE],
-    ));
-    assert_eq!(
-        validation_evidence(&unscoped, &ValidationContext::default()),
-        Err(ValidationDefect::ScopeUnknown {
-            command: WORKSPACE.into()
-        })
-    );
-    assert_eq!(
-        certificate_acceptable(&certificate_with(unscoped, &[], Vec::new())),
-        Err(ReviewInvalidation::ValidationIncomplete)
-    );
+    let unscoped = scoped_passes_and(unrelated(WORKSPACE));
+    let command = WORKSPACE.into();
+    let scope_unknown = ValidationDefect::ScopeUnknown { command };
+    assert_eq!(default_evidence(&unscoped), Err(scope_unknown));
+    let unscoped_certificate = certificate_with(unscoped, &[], Vec::new());
+    let observed = certificate_acceptable(&unscoped_certificate);
+    assert_eq!(observed, Err(ValidationIncomplete));
 }
 
 /// Deliberate controls, retained obligations a later record legitimately
@@ -1286,299 +997,192 @@ fn relabeling_or_dropping_a_required_check_never_completes_validation() {
 /// of the same check contradicts, does not.
 #[test]
 fn deliberate_controls_and_resolved_obligations_remain_coverage() {
-    let test = "cargo test -p orbit-review --test fix regression";
-    let source = "crates/orbit-review/tests/fix.rs";
-    let accepted: Vec<(&str, Vec<ReviewValidation>, Vec<RetainedObligation>)> = vec![
+    const TEST: &str = "cargo test -p orbit-review --test fix regression";
+    const MUTATION: &str = "cargo test -p orbit-review --test fix rejects_mutation";
+    const DEPLOY: &str = "orbit deploy production";
+    let pass = || required(TEST, None, true);
+    let retained_failure = || vec![retained(required(CODEQL, None, false))];
+    let mutation = control(
+        MUTATION,
+        Counterfactual,
+        Failed,
+        &["dir:crates/orbit-review"],
+    );
+    let replacement = required("ORBIT_RAM=1 codeql", Some(CODEQL), true);
+    let unauthorized = excluded(DEPLOY, "deployment is not authorized by this task");
+    let accepted = [
         (
             "a pre-fix reproduction of the check that now passes",
-            vec![
-                control(
-                    test,
-                    Some(NegativeControl::PreFix),
-                    ValidationOutcome::Failed,
-                    &[source],
-                ),
-                required(test, None, true),
-            ],
+            vec![control(TEST, PreFix, Failed, &[SCOPED_TEST]), pass()],
             Vec::new(),
         ),
         (
             "a counterfactual run on the candidate",
-            vec![
-                control(
-                    "cargo test -p orbit-review --test fix rejects_mutation",
-                    Some(NegativeControl::Counterfactual),
-                    ValidationOutcome::Failed,
-                    &["dir:crates/orbit-review"],
-                ),
-                required(test, None, true),
-            ],
+            vec![mutation, pass()],
             Vec::new(),
         ),
         (
             "a retained failure rerun and passed",
             vec![required(CODEQL, None, true)],
-            vec![retained(required(CODEQL, None, false))],
+            retained_failure(),
         ),
         (
             "a retained failure superseded and replaced by the same check",
-            vec![
-                superseded(CODEQL, Some(CODEQL)),
-                required("ORBIT_RAM=1 codeql", Some(CODEQL), true),
-            ],
-            vec![retained(required(CODEQL, None, false))],
+            vec![superseded(CODEQL, Some(CODEQL)), replacement],
+            retained_failure(),
         ),
         (
             "a retained unperformed action later excluded as out of scope",
-            vec![
-                record(
-                    "orbit deploy production",
-                    None,
-                    ValidationOutcome::NotRun,
-                    ValidationRole::Excluded,
-                    Some("deployment is not authorized by this task"),
-                ),
-                required(test, None, true),
-            ],
-            vec![retained(record(
-                "orbit deploy production",
-                None,
-                ValidationOutcome::NotRun,
-                ValidationRole::Required,
-                None,
-            ))],
+            vec![unauthorized, pass()],
+            vec![retained(not_run(DEPLOY))],
         ),
         (
             "role-less legacy records read as required checks",
-            vec![required(test, None, true)],
+            vec![pass()],
             Vec::new(),
         ),
     ];
     for (name, records, obligations) in accepted {
-        let scope = scope();
         let context = ValidationContext {
-            scope: &scope,
             obligations: &obligations,
-            retired: &[],
-            required_validation_commands: Some(&[]),
-            baseline_commands: &[],
-            known_red: &[],
+            ..scoped()
         };
         assert_eq!(validation_evidence(&records, &context), Ok(()), "{name}");
-        assert_eq!(
-            certificate_acceptable(&certificate_with(records, &scope, obligations)),
-            Ok(()),
-            "{name}"
-        );
+        let certificate = certificate_with(records, &SCOPE, obligations);
+        assert_eq!(certificate_acceptable(&certificate), Ok(()), "{name}");
     }
 
+    let candidate_side = control(TEST, SupersededAssertion, Failed, &[SCOPED_TEST]);
     let refused = [
         (
             "a must-fail control that passed",
-            vec![
-                control(
-                    test,
-                    Some(NegativeControl::PreFix),
-                    ValidationOutcome::Passed,
-                    &[source],
-                ),
-                required(test, None, true),
-            ],
-            ValidationDefect::RoleContradicted {
-                command: test.into(),
-                role: ValidationRole::ExpectedFailure,
-                outcome: ValidationOutcome::Passed,
-            },
+            vec![control(TEST, PreFix, Passed, &[SCOPED_TEST]), pass()],
+            contradicted(TEST, ExpectedFailure, Passed),
         ),
         (
             "a candidate-side control the same required pass contradicts",
-            vec![
-                control(
-                    test,
-                    Some(NegativeControl::SupersededAssertion),
-                    ValidationOutcome::Failed,
-                    &[source],
-                ),
-                required(test, None, true),
-            ],
-            ValidationDefect::CheckContradicted {
-                command: test.into(),
-                role: ValidationRole::ExpectedFailure,
-            },
+            vec![candidate_side, pass()],
+            check_contradicted(TEST, ExpectedFailure),
         ),
         (
             "a control naming no sources",
-            vec![
-                control(
-                    test,
-                    Some(NegativeControl::PreFix),
-                    ValidationOutcome::Failed,
-                    &[],
-                ),
-                required(test, None, true),
-            ],
-            ValidationDefect::ClassificationUnevidenced {
-                command: test.into(),
-                role: ValidationRole::ExpectedFailure,
-                missing: "sources",
-            },
+            vec![control(TEST, PreFix, Failed, &[]), pass()],
+            unevidenced(TEST, ExpectedFailure, "sources"),
         ),
     ];
     for (name, records, expected) in refused {
-        let scope = scope();
-        let context = ValidationContext {
-            scope: &scope,
-            obligations: &[],
-            retired: &[],
-            required_validation_commands: Some(&[]),
-            baseline_commands: &[],
-            known_red: &[],
-        };
-        assert_eq!(
-            validation_evidence(&records, &context),
-            Err(expected),
-            "{name}"
-        );
-        assert_eq!(
-            certificate_acceptable(&certificate_with(records, &scope, Vec::new())),
-            Err(ReviewInvalidation::ValidationIncomplete),
-            "{name}"
-        );
+        assert_eq!(scoped_evidence(&records), Err(expected), "{name}");
+        assert_eq!(coverage(records), Err(ValidationIncomplete), "{name}");
     }
 }
 
+/// The host's captured required command is established only by a passing
+/// required record of that check, at issuance and when the certificate is
+/// spent. ORB-14302: reviewers prefix `TMPDIR` because a nested temp
+/// directory is not hermetic. That required pass is the host command. A
+/// different command is not, including one that only grows the name or
+/// changes the program after its own leading assignment.
 #[test]
 fn captured_host_checks_cannot_be_omitted_or_reclassified() {
-    let command = "make ci-fast";
-    let host_required = vec![command.to_string()];
-    let task_scope = scope();
+    let host_required = vec![FAST.to_string()];
     let context = ValidationContext {
-        scope: &task_scope,
-        obligations: &[],
-        retired: &[],
         required_validation_commands: Some(&host_required),
-        baseline_commands: &[],
-        known_red: &[],
+        ..scoped()
     };
-    let cases = [
-        (
-            "missing",
-            scoped_passes(),
-            ValidationDefect::HostCheckNotEstablished {
-                command: command.into(),
-            },
-        ),
+    let unestablished = || Err(host_unestablished(FAST));
+    let env_wrapped = r#"env TMPDIR="$PWD/.orbit/tmp" make ci-fast"#;
+    let denied = record(FAST, None, Denied, Required, None);
+    let with = scoped_passes_and;
+    let pass = |command| vec![required(command, None, true)];
+    let mut cases = vec![
+        ("missing", scoped_passes(), unestablished()),
         (
             "failed",
-            {
-                let mut records = scoped_passes();
-                records.push(record(
-                    command,
-                    None,
-                    ValidationOutcome::Failed,
-                    ValidationRole::Required,
-                    None,
-                ));
-                records
-            },
-            ValidationDefect::RequiredNotPassed {
-                command: command.into(),
-                outcome: ValidationOutcome::Failed,
-            },
+            with(required(FAST, None, false)),
+            Err(not_passed(FAST, Failed)),
         ),
-        (
-            "denied",
-            {
-                let mut records = scoped_passes();
-                records.push(record(
-                    command,
-                    None,
-                    ValidationOutcome::Denied,
-                    ValidationRole::Required,
-                    None,
-                ));
-                records
-            },
-            ValidationDefect::RequiredNotPassed {
-                command: command.into(),
-                outcome: ValidationOutcome::Denied,
-            },
-        ),
+        ("denied", with(denied), Err(not_passed(FAST, Denied))),
         (
             "diagnostic substitution",
-            {
-                let mut records = scoped_passes();
-                records.push(diagnostic(
-                    command,
-                    ValidationOutcome::Failed,
-                    &[UNRELATED_FIXTURE],
-                ));
-                records
-            },
-            ValidationDefect::TrustedCheckDiagnostic {
-                command: command.into(),
-            },
+            scoped_passes_and(diagnostic(FAST, Failed, &[UNRELATED_FIXTURE])),
+            Err(trusted_diagnostic(FAST)),
         ),
         (
             "negative-control substitution",
-            {
-                let mut records = scoped_passes();
-                records.push(control(
-                    command,
-                    Some(NegativeControl::PreFix),
-                    ValidationOutcome::Failed,
-                    &["crates/orbit-review/src/fix.rs"],
-                ));
-                records
-            },
-            ValidationDefect::HostCheckNotEstablished {
-                command: command.into(),
-            },
+            scoped_passes_and(control(FAST, PreFix, Failed, &[IN_SCOPE])),
+            unestablished(),
         ),
         (
             "excluded substitution",
-            {
-                let mut records = scoped_passes();
-                records.push(record(
-                    command,
-                    None,
-                    ValidationOutcome::NotRun,
-                    ValidationRole::Excluded,
-                    Some("the check was not available"),
-                ));
-                records
-            },
-            ValidationDefect::HostCheckNotEstablished {
-                command: command.into(),
-            },
+            scoped_passes_and(excluded(FAST, "the check was not available")),
+            unestablished(),
+        ),
+        ("passed", with(required(FAST, None, true)), Ok(())),
+        (
+            "a non-assignment wrap satisfies the host command when check names it",
+            vec![required(env_wrapped, Some(FAST), true)],
+            Ok(()),
+        ),
+        (
+            "a non-assignment wrap without check is a different command",
+            vec![required(env_wrapped, None, true)],
+            unestablished(),
         ),
     ];
-
+    for command in [
+        r#"TMPDIR="$PWD/.orbit/tmp" make ci-fast"#,
+        "TMPDIR='$PWD/.orbit/tmp' make ci-fast",
+        "TMPDIR=$PWD/.orbit/tmp make ci-fast",
+        r#"FOO=1 TMPDIR="$PWD/.orbit/tmp" make ci-fast"#,
+        r#"TMPDIR="/tmp/orbit tmp" make  ci-fast"#,
+    ] {
+        cases.push((command, pass(command), Ok(())));
+    }
+    for command in [
+        "make ci-fast-extra",
+        "FOO=1 make other",
+        r#"TMPDIR="$PWD/.orbit/tmp" make ci-fast-extra"#,
+        "make TMPDIR=1 ci-fast",
+        r#""TMPDIR=1" make ci-fast"#,
+    ] {
+        cases.push((command, pass(command), unestablished()));
+    }
+    // Only the superseded record names the host command; the replacing pass
+    // establishes it through their shared identity, in either report order.
+    let note = Some("the runner environment was corrected");
+    let replaced = vec![
+        record(FAST, Some("host-ci"), Failed, Superseded, note),
+        required("make ci-fast --locked", Some("host-ci"), true),
+    ];
+    let reversed = replaced.iter().rev().cloned().collect();
+    cases.push(("same-check replacement, attempt first", replaced, Ok(())));
+    cases.push(("same-check replacement, pass first", reversed, Ok(())));
     for (name, records, expected) in cases {
-        assert_eq!(
-            validation_evidence(&records, &context),
-            Err(expected),
-            "{name}"
-        );
-        let mut certificate = certificate_with(records, &task_scope, Vec::new());
-        certificate.required_validation_commands = Some(host_required.clone());
-        assert_eq!(
-            certificate_acceptable(&certificate),
-            Err(ReviewInvalidation::ValidationIncomplete),
-            "consumer refuses {name}"
-        );
+        assert_eq!(validation_evidence(&records, &context), expected, "{name}");
+        let certificate = certificate_requiring(records, &host_required);
+        assert_consumer_agrees(&certificate, &expected, name);
     }
 
-    let mut valid = scoped_passes();
-    valid.push(required(command, None, true));
-    assert_eq!(validation_evidence(&valid, &context), Ok(()));
-
+    // Neither boundary reads a missing host snapshot as an empty list.
     let mut legacy = certificate(scoped_passes());
     legacy.required_validation_commands = None;
-    assert_eq!(
-        certificate_acceptable(&legacy),
-        Err(ReviewInvalidation::ValidationContractMissing)
-    );
+    let observed = certificate_acceptable(&legacy);
+    assert_eq!(observed, Err(ValidationContractMissing));
+    let snapshotless = ValidationContext {
+        required_validation_commands: None,
+        ..scoped()
+    };
+    let observed = validation_evidence(&scoped_passes(), &snapshotless);
+    assert_eq!(observed, Err(ValidationDefect::HostContractMissing));
+}
+
+const AFFECTED: &str = "make ci-test-affected";
+
+/// ORB-14684's reviewer filed its failed `make ci-test-affected` run as a
+/// diagnostic whose sources lie outside the candidate.
+fn incident_records() -> Vec<ReviewValidation> {
+    let command = format!("CI_TEST_BASE=8d9d8b98 {AFFECTED}");
+    scoped_passes_and(diagnostic(&command, Failed, &[UNRELATED_FIXTURE]))
 }
 
 /// The incident shape [ORB-14684]: the reviewer filed a failed
@@ -1586,39 +1190,18 @@ fn captured_host_checks_cannot_be_omitted_or_reclassified() {
 /// `review.baseline_commands`, as a `diagnostic` whose self-reported sources
 /// all lie outside the candidate. The owner trusts that gate, so the
 /// reviewer's sources cannot excuse it: it passes, or carries a baseline
-/// claim settlement reproduced on the pinned base.
-const AFFECTED: &str = "make ci-test-affected";
-
-fn incident_records() -> Vec<ReviewValidation> {
-    let mut records = scoped_passes();
-    records.push(diagnostic(
-        &format!("CI_TEST_BASE=8d9d8b98 {AFFECTED}"),
-        ValidationOutcome::Failed,
-        &[UNRELATED_FIXTURE],
-    ));
-    records
-}
-
+/// claim settlement reproduced on the pinned base. The neighbouring outcomes
+/// the rule leaves as they were: an unlisted diagnostic, and required or
+/// passing records of the listed gate.
 #[test]
 fn a_failed_trusted_gate_filed_as_diagnostic_is_never_coverage() {
-    let task_scope = scope();
     let baseline = vec![AFFECTED.to_string()];
     let context = ValidationContext {
-        scope: &task_scope,
-        obligations: &[],
-        retired: &[],
-        required_validation_commands: Some(&[]),
         baseline_commands: &baseline,
-        known_red: &[],
+        ..scoped()
     };
     let defect = validation_evidence(&incident_records(), &context)
         .expect_err("a listed gate's failure is not the reviewer's to excuse");
-    assert_eq!(
-        defect,
-        ValidationDefect::TrustedCheckDiagnostic {
-            command: format!("CI_TEST_BASE=8d9d8b98 {AFFECTED}"),
-        }
-    );
     let reason = defect.reason();
     assert!(
         reason.starts_with("validation_incomplete:")
@@ -1630,82 +1213,52 @@ fn a_failed_trusted_gate_filed_as_diagnostic_is_never_coverage() {
         !defect.correctable(),
         "relabeling cannot fix it without a base rerun"
     );
-
-    // A `check` identity naming the listed command is the same gate.
-    let mut wrapped = scoped_passes();
-    let mut record = diagnostic(
-        "set -o pipefail; make ci-test-affected | tee log",
-        ValidationOutcome::Failed,
-        &[UNRELATED_FIXTURE],
-    );
-    record.check = Some(AFFECTED.into());
-    wrapped.push(record);
-    assert!(matches!(
-        validation_evidence(&wrapped, &context),
-        Err(ValidationDefect::TrustedCheckDiagnostic { .. })
-    ));
-
     // The certificate's own snapshot applies the same rule to its consumer.
-    let mut certificate = certificate(incident_records());
-    certificate.baseline_commands = baseline.clone();
-    assert_eq!(
-        certificate_acceptable(&certificate),
-        Err(ReviewInvalidation::ValidationIncomplete)
-    );
+    let certificate = certificate_trusting(incident_records(), &baseline);
     assert!(exclusion(&exact_delivery(), &certificate, &facts()).is_err());
-}
 
-/// The neighbouring outcomes the trusted-gate rule leaves as they were
-/// [ORB-14684].
-#[test]
-fn the_trusted_gate_rule_leaves_unlisted_diagnostics_and_required_records_alone() {
-    let task_scope = scope();
-    let baseline = vec![AFFECTED.to_string()];
-    let context = ValidationContext {
-        scope: &task_scope,
-        obligations: &[],
-        retired: &[],
-        required_validation_commands: Some(&[]),
-        baseline_commands: &baseline,
-        known_red: &[],
-    };
-
-    // An ad hoc observation the owner does not list keeps ORB-14192's
-    // semantics: its out-of-scope failure is an honest diagnostic.
-    let mut unlisted = scoped_passes();
-    unlisted.push(diagnostic(
-        WORKSPACE,
-        ValidationOutcome::Failed,
-        &[UNRELATED_FIXTURE],
-    ));
-    assert_eq!(validation_evidence(&unlisted, &context), Ok(()));
-    let mut certificate_unlisted = certificate(unlisted);
-    certificate_unlisted.baseline_commands = baseline.clone();
-    assert_eq!(certificate_acceptable(&certificate_unlisted), Ok(()));
-
-    // A failed required record of the listed gate with no baseline claim
-    // still blocks as a required failure.
-    let mut failed = scoped_passes();
-    failed.push(required(AFFECTED, None, false));
-    assert_eq!(
-        validation_evidence(&failed, &context),
-        Err(ValidationDefect::RequiredNotPassed {
-            command: AFFECTED.into(),
-            outcome: ValidationOutcome::Failed,
-        })
-    );
-
-    // A passing record of the listed gate is unaffected, as `required` or
-    // as a passing diagnostic.
-    let mut passed = scoped_passes();
-    passed.push(required(AFFECTED, None, true));
-    assert_eq!(validation_evidence(&passed, &context), Ok(()));
-    let mut observed = scoped_passes();
-    observed.push(diagnostic(AFFECTED, ValidationOutcome::Passed, &[]));
-    assert_eq!(validation_evidence(&observed, &context), Ok(()));
-    let mut certificate_passed = certificate(passed);
-    certificate_passed.baseline_commands = baseline;
-    assert_eq!(certificate_acceptable(&certificate_passed), Ok(()));
+    let incident = format!("CI_TEST_BASE=8d9d8b98 {AFFECTED}");
+    let wrapped = "set -o pipefail; make ci-test-affected | tee log";
+    let mut wrapped_record = diagnostic(wrapped, Failed, &[UNRELATED_FIXTURE]);
+    wrapped_record.check = Some(AFFECTED.into());
+    let unlisted = diagnostic(WORKSPACE, Failed, &[UNRELATED_FIXTURE]);
+    for (name, record, expected) in [
+        (
+            "the incident",
+            incident_records().pop().unwrap(),
+            Err(trusted_diagnostic(&incident)),
+        ),
+        (
+            "a `check` identity naming the listed command is the same gate",
+            wrapped_record,
+            Err(trusted_diagnostic(wrapped)),
+        ),
+        (
+            "ORB-14192: an unlisted out-of-scope failure is an honest diagnostic",
+            unlisted,
+            Ok(()),
+        ),
+        (
+            "a failed required record of the gate still blocks as a required failure",
+            required(AFFECTED, None, false),
+            Err(not_passed(AFFECTED, Failed)),
+        ),
+        (
+            "a passing required record of the gate is unaffected",
+            required(AFFECTED, None, true),
+            Ok(()),
+        ),
+        (
+            "a passing diagnostic of the gate is unaffected",
+            diagnostic(AFFECTED, Passed, &[]),
+            Ok(()),
+        ),
+    ] {
+        let records = scoped_passes_and(record);
+        assert_eq!(validation_evidence(&records, &context), expected, "{name}");
+        let certificate = certificate_trusting(records, &baseline);
+        assert_consumer_agrees(&certificate, &expected, name);
+    }
 }
 
 /// A certificate issued before the snapshot carries no `baseline_commands`
@@ -1727,159 +1280,22 @@ fn a_certificate_without_the_baseline_snapshot_stays_readable_and_gains_no_pass(
 
     let read = legacy(&certificate(incident_records()));
     assert!(read.baseline_commands.is_empty());
-    assert_eq!(
-        certificate_acceptable(&read),
-        Ok(()),
-        "judged exactly as when it was issued"
-    );
+    let observed = certificate_acceptable(&read);
+    assert_eq!(observed, Ok(()), "judged exactly as when it was issued");
 
     // A failed diagnostic of a captured required command is refused with
     // or without the baseline snapshot.
     let mut host_diagnostic = scoped_passes();
     host_diagnostic.push(required(AFFECTED, None, true));
-    host_diagnostic.push(diagnostic(
-        "make ci-fast",
-        ValidationOutcome::Failed,
-        &[UNRELATED_FIXTURE],
-    ));
-    let mut issued = certificate(host_diagnostic);
-    issued.required_validation_commands = Some(vec!["make ci-fast".into()]);
-    assert_eq!(
-        certificate_acceptable(&legacy(&issued)),
-        Err(ReviewInvalidation::ValidationIncomplete)
-    );
+    host_diagnostic.push(diagnostic(FAST, Failed, &[UNRELATED_FIXTURE]));
+    let issued = certificate_requiring(host_diagnostic, &[FAST.to_string()]);
+    let observed = certificate_acceptable(&legacy(&issued));
+    assert_eq!(observed, Err(ValidationIncomplete));
 
     let mut contractless = certificate(incident_records());
     contractless.required_validation_commands = None;
-    assert_eq!(
-        certificate_acceptable(&legacy(&contractless)),
-        Err(ReviewInvalidation::ValidationContractMissing)
-    );
-}
-
-/// ORB-14302: reviewers prefix `TMPDIR` because a nested temp directory is
-/// not hermetic. That required pass is the host command. A different
-/// command is not, including one that only grows the name or changes the
-/// program after its own leading assignment.
-#[test]
-fn a_leading_env_assignment_satisfies_the_host_required_command() {
-    let host = "make ci-fast";
-    let host_required = vec![host.to_string()];
-    let task_scope = scope();
-    let context = ValidationContext {
-        scope: &task_scope,
-        obligations: &[],
-        retired: &[],
-        required_validation_commands: Some(&host_required),
-        baseline_commands: &[],
-        known_red: &[],
-    };
-    let satisfied = [
-        r#"TMPDIR="$PWD/.orbit/tmp" make ci-fast"#,
-        "TMPDIR='$PWD/.orbit/tmp' make ci-fast",
-        "TMPDIR=$PWD/.orbit/tmp make ci-fast",
-        r#"FOO=1 TMPDIR="$PWD/.orbit/tmp" make ci-fast"#,
-        r#"TMPDIR="/tmp/orbit tmp" make  ci-fast"#,
-    ];
-    for command in satisfied {
-        let records = [required(command, None, true)];
-        assert_eq!(validation_evidence(&records, &context), Ok(()), "{command}");
-        let mut certificate = certificate_with(records.to_vec(), &task_scope, Vec::new());
-        certificate.required_validation_commands = Some(host_required.clone());
-        assert_eq!(certificate_acceptable(&certificate), Ok(()), "{command}");
-    }
-
-    let wrapped = [required(
-        r#"env TMPDIR="$PWD/.orbit/tmp" make ci-fast"#,
-        Some(host),
-        true,
-    )];
-    assert_eq!(
-        validation_evidence(&wrapped, &context),
-        Ok(()),
-        "a non-assignment wrap satisfies the host command when check names it"
-    );
-    let wrapped_without_check = [required(
-        r#"env TMPDIR="$PWD/.orbit/tmp" make ci-fast"#,
-        None,
-        true,
-    )];
-    assert_eq!(
-        validation_evidence(&wrapped_without_check, &context),
-        Err(ValidationDefect::HostCheckNotEstablished {
-            command: host.into(),
-        }),
-        "a non-assignment wrap without check is a different command"
-    );
-
-    let refused = [
-        "make ci-fast-extra",
-        "FOO=1 make other",
-        r#"TMPDIR="$PWD/.orbit/tmp" make ci-fast-extra"#,
-        "make TMPDIR=1 ci-fast",
-        r#""TMPDIR=1" make ci-fast"#,
-    ];
-    for command in refused {
-        let records = [required(command, None, true)];
-        assert_eq!(
-            validation_evidence(&records, &context),
-            Err(ValidationDefect::HostCheckNotEstablished {
-                command: host.into(),
-            }),
-            "{command}"
-        );
-    }
-}
-
-#[test]
-fn captured_host_check_can_be_resolved_by_a_valid_same_check_replacement() {
-    let command = "make ci-fast";
-    let required_commands = vec![command.to_string()];
-    let task_scope = scope();
-    let context = ValidationContext {
-        scope: &task_scope,
-        obligations: &[],
-        retired: &[],
-        required_validation_commands: Some(&required_commands),
-        baseline_commands: &[],
-        known_red: &[],
-    };
-    let mut records = vec![
-        record(
-            command,
-            Some("host-ci"),
-            ValidationOutcome::Failed,
-            ValidationRole::Superseded,
-            Some("the runner environment was corrected"),
-        ),
-        required("make ci-fast --locked", Some("host-ci"), true),
-    ];
-    // Only the superseded record names the host command; the replacing pass
-    // establishes it through their shared identity, in either report order.
-    for order in ["attempt first", "pass first"] {
-        assert_eq!(validation_evidence(&records, &context), Ok(()), "{order}");
-        let mut certificate = certificate_with(records.clone(), &task_scope, Vec::new());
-        certificate.required_validation_commands = Some(required_commands.clone());
-        assert_eq!(certificate_acceptable(&certificate), Ok(()), "{order}");
-        records.reverse();
-    }
-}
-
-#[test]
-fn missing_host_snapshot_is_not_an_empty_requirement_list() {
-    let task_scope = scope();
-    let context = ValidationContext {
-        scope: &task_scope,
-        obligations: &[],
-        retired: &[],
-        required_validation_commands: None,
-        baseline_commands: &[],
-        known_red: &[],
-    };
-    assert_eq!(
-        validation_evidence(&scoped_passes(), &context),
-        Err(ValidationDefect::HostContractMissing)
-    );
+    let observed = certificate_acceptable(&legacy(&contractless));
+    assert_eq!(observed, Err(ValidationContractMissing));
 }
 
 /// A Bubblewrap-gated test run inside an agent lane, whose own sandbox
@@ -1890,77 +1306,47 @@ const CONFINED: &str =
 const DEFERRAL: &str = "DEFERRED: bubblewrap unavailable: \
      bwrap_child_gets_only_the_supplied_environment: No permissions to create new namespace";
 
-fn deferred(mut record: ReviewValidation, notices: &[&str]) -> ReviewValidation {
+fn deferred(passed: bool, notices: &[&str]) -> ReviewValidation {
+    let mut record = required(CONFINED, None, passed);
     record.deferred = notices.iter().map(|notice| (*notice).to_string()).collect();
     record
 }
 
+/// A pass counts as executing its confined path only when it reported no
+/// deferral; a failed run that also deferred is still a failure.
 #[test]
 fn a_pass_that_deferred_its_confined_path_never_counts_as_executing_it() {
-    let lane_run = deferred(required(CONFINED, None, true), &[DEFERRAL]);
-    let records = vec![required("make ci-fast", None, true), lane_run.clone()];
-    assert_eq!(lane_run.executed_outcome(), ValidationOutcome::NotRun);
-    assert_eq!(
-        validation_evidence(&records, &ValidationContext::default()),
-        Err(ValidationDefect::RequiredDeferred {
-            command: CONFINED.to_string(),
-            notice: DEFERRAL.to_string(),
-        })
-    );
-    assert_eq!(
-        certificate_acceptable(&certificate(records)),
-        Err(ReviewInvalidation::ValidationIncomplete),
-        "a certificate cannot spend a deferred-only pass as coverage"
-    );
-
-    // Nor does it replace a superseded attempt of the same check.
-    assert_eq!(
-        validation_evidence(
-            &[
-                required("make ci-fast", None, true),
-                superseded(CONFINED, None),
-                lane_run.clone(),
-            ],
-            &ValidationContext::default(),
+    let lane_run = deferred(true, &[DEFERRAL]);
+    assert_eq!(lane_run.executed_outcome(), NotRun);
+    let pass = || required(FAST, None, true);
+    let (command, notice) = (CONFINED.to_string(), DEFERRAL.to_string());
+    let deferred_only = ValidationDefect::RequiredDeferred { command, notice };
+    for (name, records, expected) in [
+        (
+            "a certificate cannot spend a deferred-only pass as coverage",
+            vec![pass(), lane_run.clone()],
+            Err(deferred_only),
         ),
-        Err(ValidationDefect::SupersededWithoutReplacement {
-            command: CONFINED.to_string(),
-        })
-    );
-}
-
-#[test]
-fn a_run_that_executed_its_confined_path_stays_coverage() {
-    for (name, notices) in [
-        ("no deferral", &[][..]),
-        ("only blank notices", &["", "  "][..]),
+        (
+            "nor does it replace a superseded attempt of the same check",
+            vec![pass(), superseded(CONFINED, None), lane_run],
+            Err(unreplaced(CONFINED)),
+        ),
+        (
+            "a failed run that also deferred is a failure, not a deferral",
+            vec![deferred(false, &[DEFERRAL])],
+            Err(not_passed(CONFINED, Failed)),
+        ),
+        ("no deferral", vec![pass(), deferred(true, &[])], Ok(())),
+        (
+            "only blank notices",
+            vec![pass(), deferred(true, &["", "  "])],
+            Ok(()),
+        ),
     ] {
-        let records = vec![
-            required("make ci-fast", None, true),
-            deferred(required(CONFINED, None, true), notices),
-        ];
-        assert_eq!(
-            validation_evidence(&records, &ValidationContext::default()),
-            Ok(()),
-            "{name}"
-        );
-        assert_eq!(
-            certificate_acceptable(&certificate(records)),
-            Ok(()),
-            "{name}"
-        );
+        assert_eq!(default_evidence(&records), expected, "{name}");
+        assert_consumer_agrees(&certificate(records), &expected, name);
     }
-    // A failed run that also deferred is still a failure, not a deferral.
-    assert_eq!(
-        validation_evidence(
-            &[deferred(required(CONFINED, None, false), &[DEFERRAL])],
-            &ValidationContext::default(),
-        ),
-        Err(ValidationDefect::RequiredNotPassed {
-            command: CONFINED.to_string(),
-            outcome: ValidationOutcome::Failed,
-        })
-    );
 }
 
 /// [ORB-15083] A diagnostic that never ran is a skipped check under the wrong
@@ -1969,93 +1355,52 @@ fn a_run_that_executed_its_confined_path_stays_coverage() {
 /// command. A denied diagnostic and a passed control stay observations.
 #[test]
 fn a_not_run_diagnostic_is_correctable_with_the_remedy_of_its_class() {
-    const LINT: &str = "make ci-lint";
+    use SkippedCheck::{Baseline, HostRequired, Unlisted};
     const GOLDENS: &str = "make goldens";
     let host_required = [LINT.to_string()];
     let baseline = [GOLDENS.to_string(), LINT.to_string()];
-    let passing = required("make ci-fast", None, true);
-    let judged = |command: &str| {
-        let records = [
-            passing.clone(),
-            diagnostic(command, ValidationOutcome::NotRun, &[]),
-        ];
-        let context = ValidationContext {
-            required_validation_commands: Some(&host_required),
-            baseline_commands: &baseline,
-            ..ValidationContext::default()
-        };
-        validation_evidence(&records, &context).expect_err(command)
+    let context = ValidationContext {
+        required_validation_commands: Some(&host_required),
+        baseline_commands: &baseline,
+        ..ValidationContext::default()
     };
-
+    let passing = required(FAST, None, true);
     for (command, class, remedy) in [
-        (
-            LINT,
-            SkippedCheck::HostRequired,
-            "run it and record it `required`",
-        ),
-        (
-            GOLDENS,
-            SkippedCheck::Baseline,
-            "record it `excluded` or omit it",
-        ),
-        (CODEQL, SkippedCheck::Unlisted, "never record it `excluded`"),
+        (LINT, HostRequired, "run it and record it `required`"),
+        (GOLDENS, Baseline, "record it `excluded` or omit it"),
+        (CODEQL, Unlisted, "never record it `excluded`"),
     ] {
-        let defect = judged(command);
-        assert_eq!(
-            defect,
-            ValidationDefect::DiagnosticNotRun {
-                command: command.into(),
-                class
-            }
-        );
-        assert!(defect.correctable(), "{}", defect.reason());
+        let records = [passing.clone(), diagnostic(command, NotRun, &[])];
+        let defect = validation_evidence(&records, &context).expect_err(command);
+        let expected = ValidationDefect::DiagnosticNotRun {
+            command: command.into(),
+            class,
+        };
+        assert_eq!(defect, expected);
         let reason = defect.reason();
+        assert!(defect.correctable(), "{reason}");
+        let skipped = format!("`{command}` was recorded as diagnostic but is not_run");
         assert!(
             reason.starts_with("validation_contradicted:")
-                && reason.contains(&format!(
-                    "`{command}` was recorded as diagnostic but is not_run"
-                ))
+                && reason.contains(&skipped)
                 && reason.contains(remedy),
             "{reason}"
         );
     }
 
-    for (name, records, defect) in [
+    for (name, observation, defect) in [
         (
             "a denied diagnostic",
-            vec![
-                passing.clone(),
-                diagnostic(CODEQL, ValidationOutcome::Denied, &[]),
-            ],
-            ValidationDefect::RoleContradicted {
-                command: CODEQL.into(),
-                role: ValidationRole::Diagnostic,
-                outcome: ValidationOutcome::Denied,
-            },
+            diagnostic(CODEQL, Denied, &[]),
+            contradicted(CODEQL, Diagnostic, Denied),
         ),
         (
             "a control that never ran",
-            vec![
-                passing.clone(),
-                control(
-                    CODEQL,
-                    Some(NegativeControl::PreFix),
-                    ValidationOutcome::NotRun,
-                    &["crates/orbit-review/src/fix.rs"],
-                ),
-            ],
-            ValidationDefect::RoleContradicted {
-                command: CODEQL.into(),
-                role: ValidationRole::ExpectedFailure,
-                outcome: ValidationOutcome::NotRun,
-            },
+            control(CODEQL, PreFix, NotRun, &[IN_SCOPE]),
+            contradicted(CODEQL, ExpectedFailure, NotRun),
         ),
     ] {
-        let context = ValidationContext {
-            scope: &scope(),
-            ..ValidationContext::default()
-        };
-        let observed = validation_evidence(&records, &context).expect_err(name);
+        let observed = scoped_evidence(&[passing.clone(), observation]).expect_err(name);
         assert_eq!(observed, defect, "{name}");
         assert!(!observed.correctable(), "{name}: {}", observed.reason());
     }
@@ -2063,13 +1408,8 @@ fn a_not_run_diagnostic_is_correctable_with_the_remedy_of_its_class() {
     // The relabel the correction asks for establishes the candidate, and a
     // host-required command recorded excluded does not.
     let relabelled = |command: &str| {
-        let mut skipped = diagnostic(command, ValidationOutcome::NotRun, &[]);
-        skipped.role = ValidationRole::Excluded;
-        let context = ValidationContext {
-            required_validation_commands: Some(&host_required),
-            baseline_commands: &baseline,
-            ..ValidationContext::default()
-        };
+        let mut skipped = diagnostic(command, NotRun, &[]);
+        skipped.role = Excluded;
         let mut records = vec![passing.clone(), skipped];
         if command != LINT {
             records.push(required(LINT, None, true));
@@ -2077,12 +1417,7 @@ fn a_not_run_diagnostic_is_correctable_with_the_remedy_of_its_class() {
         validation_evidence(&records, &context)
     };
     assert_eq!(relabelled(GOLDENS), Ok(()));
-    assert_eq!(
-        relabelled(LINT),
-        Err(ValidationDefect::HostCheckNotEstablished {
-            command: LINT.into()
-        })
-    );
+    assert_eq!(relabelled(LINT), Err(host_unestablished(LINT)));
 }
 
 /// [ORB-15546] A failed required check the host verified known red counts as
@@ -2098,7 +1433,7 @@ fn a_known_red_required_check_counts_only_through_its_bound_host_entry() {
         let mut record = with_id(required(GATE, None, false), "V1");
         record.baseline = Some(ReviewBaselineClaim {
             base_commit: "commit-base".into(),
-            outcome: ValidationOutcome::Failed,
+            outcome: Failed,
             failures: vec!["suite::broken".into()],
         });
         record
@@ -2115,21 +1450,24 @@ fn a_known_red_required_check_counts_only_through_its_bound_host_entry() {
         evidence_artifact: REVIEW_BASELINE_ARTIFACT.into(),
     };
     let issued = |record: ReviewValidation, known_red: Vec<HostKnownRed>| {
-        let mut certificate = certificate(vec![record]);
-        certificate.required_validation_commands = Some(vec![GATE.to_string()]);
+        let mut certificate = certificate_requiring(vec![record], &[GATE.to_string()]);
         certificate.known_red = known_red;
         certificate
     };
 
     let accepted = issued(failed(), vec![known()]);
     assert_eq!(certificate_acceptable(&accepted), Ok(()));
-    assert_eq!(accepted.validation[0].outcome, ValidationOutcome::Failed);
+    assert_eq!(accepted.validation[0].outcome, Failed);
 
     let mutated = |change: fn(&mut HostKnownRed)| {
         let mut entry = known();
         change(&mut entry);
         issued(failed(), vec![entry])
     };
+    let mut unclaimed = failed();
+    unclaimed.baseline = None;
+    let mut never_ran = failed();
+    never_ran.outcome = NotRun;
     let cases = [
         ("no entry", issued(failed(), Vec::new())),
         (
@@ -2146,38 +1484,17 @@ fn a_known_red_required_check_counts_only_through_its_bound_host_entry() {
         ),
         (
             "another command",
-            mutated(|entry| entry.validation.command = "make ci-fast".into()),
+            mutated(|entry| entry.validation.command = FAST.into()),
         ),
         (
             "no test named",
             mutated(|entry| entry.validation.failures = BaselineRedFailures::default()),
         ),
-        (
-            "no baseline claim",
-            issued(
-                ReviewValidation {
-                    baseline: None,
-                    ..failed()
-                },
-                vec![known()],
-            ),
-        ),
-        (
-            "never ran",
-            issued(
-                ReviewValidation {
-                    outcome: ValidationOutcome::NotRun,
-                    ..failed()
-                },
-                vec![known()],
-            ),
-        ),
+        ("no baseline claim", issued(unclaimed, vec![known()])),
+        ("never ran", issued(never_ran, vec![known()])),
     ];
     for (name, certificate) in cases {
-        assert_eq!(
-            certificate_acceptable(&certificate),
-            Err(ReviewInvalidation::ValidationIncomplete),
-            "{name}"
-        );
+        let observed = certificate_acceptable(&certificate);
+        assert_eq!(observed, Err(ValidationIncomplete), "{name}");
     }
 }

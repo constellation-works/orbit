@@ -166,7 +166,7 @@ class Candidate:
 
 
 class Unit:
-    """One parsed Rust file plus the lazy indexes this guard needs."""
+    """One Rust loading context plus the lazy indexes this guard needs."""
 
     def __init__(self, root, path, source, reachable):
         self.path = path
@@ -394,8 +394,8 @@ class Workspace:
 
     def __init__(self, root):
         sources, reachable = portability.scan(root, PLATFORM, DIRECTORIES)
-        self.units = {path: Unit(root, path, source, path in reachable)
-                      for path, source in sources.items()}
+        self.units = {context: Unit(root, context.path, source, context in reachable)
+                      for context, source in sources.items()}
         for unit in self.units.values():
             for module in unit.source.modules:
                 if module.child in self.units:
@@ -410,6 +410,9 @@ class Workspace:
         self.names = {candidate.name for candidate in self.candidates if candidate.kind != "glob"}
 
     def link_includes(self):
+        contexts_by_path = {}
+        for context in self.units:
+            contexts_by_path.setdefault(context.path, []).append(context)
         for unit in self.units.values():
             values, index = unit.values, -1
             while True:
@@ -419,9 +422,9 @@ class Workspace:
                     break
                 if values[index + 1:index + 3] == ["!", "("] and index + 3 < len(values):
                     target = (unit.path.parent / values[index + 3].strip('"')).resolve()
-                    if target in self.units:
-                        unit.includes.append((target, index))
-                        self.units[target].included = True
+                    for context in contexts_by_path.get(target, ()):
+                        unit.includes.append((context, index))
+                        self.units[context].included = True
 
     def propagate_tests(self):
         """A module declared in test code, or under #[cfg(test)], is test code."""
@@ -447,9 +450,9 @@ class Workspace:
             if child is None or not start <= index < end:
                 continue
             child_dead = dead or not unit.live[index]
-            if (child.path, child_dead) in seen:
+            if (target, child_dead) in seen:
                 continue
-            seen.add((child.path, child_dead))
+            seen.add((target, child_dead))
             found = self.walk(child, 0, len(child.values), child_dead, seen, count)
             total = (total[0] + found[0], total[1] + found[1])
         return total

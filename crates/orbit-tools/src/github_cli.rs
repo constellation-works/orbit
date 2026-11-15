@@ -27,7 +27,11 @@ pub use crate::builtin::github::dependabot_alerts::{
     project_pull_request as project_dependabot_pull_request, project_secret_location,
     project_secret_scanning_alert,
 };
-pub use crate::builtin::github::landing::commit_pull_requests as commit_pull_requests_request;
+pub use crate::builtin::github::landing::{
+    commit_pull_requests as commit_pull_requests_request,
+    merge_pull_request_at_head as merge_pull_request_at_head_request,
+    repository_merge_methods as repository_merge_methods_request,
+};
 pub use crate::builtin::github::logs::{
     LogReadBounds, LogScope, MAX_EVIDENCE_LINES, RunLogRead, RunLogRequests, SOURCE_JOB_API_LOG,
     SOURCE_RUN_LOG, log_selection_from_input, read_run_log, read_run_log_guarded,
@@ -56,11 +60,15 @@ pub use crate::builtin::github::task_prs::{
     authenticated_login as authenticated_login_request,
     bound_branch_pull_request as bound_branch_pull_request_request,
     close_pull_request as close_pull_request_request,
+    commit_workflow_runs as commit_workflow_runs_request,
     merged_pull_requests as merged_pull_requests_request,
     open_pull_requests as open_pull_requests_request,
     pull_request_blockers as pull_request_blockers_request,
-    view_pull_request as view_pull_request_request,
+    rerun_failed_jobs as rerun_failed_jobs_request, view_pull_request as view_pull_request_request,
 };
+/// A `gh` read's result check that keeps GitHub's authenticated rate limit
+/// typed, so a caller's policy can wait for its reset.
+pub use crate::builtin::github::throttle::check_read_result as check_gh_read_result;
 pub use crate::builtin::github::{
     CheckoutEvidence, LogSelection, StreamedLog, StreamedLogCollector, parse_gh_json,
     strip_ansi_sequences,

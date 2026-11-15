@@ -1,6 +1,6 @@
 # orbit-cmd
 
-Command groups that need both a Core runtime and Registry state (`orbit-registry` sits above `orbit-core`, so Core can't see the workspace catalog). Consumed by `orbit-cli` and `orbit-web`.
+Command groups that need to compose Core runtime operations with Registry state live here. `orbit-registry` sits below `orbit-core`; Core uses it for workspace catalog reads and publication-success bookkeeping writes. Consumed by `orbit-cli` and `orbit-web`.
 
 - Flat layout: one file per command group, each closing exactly one composition seam named in its module doc. No grouping directories mirroring `--help` sections.
 - Runtime behavior is exposed as per-module `*Commands` extension traits re-exported from the crate root; add new groups the same way.

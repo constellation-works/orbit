@@ -68,9 +68,9 @@ fn public_drain_calls_and_spoofed_initialize_are_refused_and_audited() {
             .map(|tool| tool["name"].as_str().unwrap())
             .collect::<BTreeSet<_>>();
         assert_eq!(
-            names.contains("orbit_task_retry_handoff"),
+            names.contains("orbit_task_recover"),
             index == 1,
-            "the public owner retry is advertised only to the operator session"
+            "the public owner recovery family (retry_handoff) is advertised only to the operator session"
         );
         for name in OPERATIONS {
             let advertised = orbit_types::tool::mcp_advertised_tool_name(name);
@@ -107,7 +107,7 @@ fn public_drain_calls_and_spoofed_initialize_are_refused_and_audited() {
             assert_eq!(refused["error"]["code"], -32602, "{refused}");
         }
         assert!(names.contains("orbit_task_add"));
-        assert_eq!(names.contains("orbit_workflow_ship"), index == 1);
+        assert_eq!(names.contains("orbit_workflow"), index == 1);
         let preflight = client.request("orbit/internal/drain/preflight", json!({}));
         assert_eq!(preflight["error"]["code"], -32601);
     }
@@ -388,7 +388,15 @@ fn follower_internal_transport_reconciles_lost_admission_and_fences_claims() {
             .to_string()
             .contains("request_mismatch")
     );
-    let failure = json!({"claim_id":claim,"run_id":"leaf-1","settlement":{"Fail":{"summary":"Fixture failed","comment":null,"artifacts":[]}}});
+    // [ORB-20906] The settlement carries the leaf's own run record: its job,
+    // build and failing step.
+    let leaf_run = json!({
+        "run_id": "leaf-1",
+        "job_id": "task_claimed_pr_pipeline",
+        "build": {"version": "9.9.9", "source_commit": "abc1234", "dirty": false},
+        "root_cause": {"step": "implement_one", "code": "agent_failed", "message": "Fixture failed"},
+    });
+    let failure = json!({"claim_id":claim,"run_id":"leaf-1","settlement":{"Fail":{"summary":"Fixture failed","comment":null,"artifacts":[],"leaf_run":leaf_run}}});
     assert!(
         call(
             &host("hm_wrong"),
@@ -402,6 +410,15 @@ fn follower_internal_transport_reconciles_lost_admission_and_fences_claims() {
     assert!(call(&follower, "orbit.drain.claim.settle", wrong_run).is_err());
     let settled = call(&follower, "orbit.drain.claim.settle", failure.clone()).unwrap();
     assert_eq!(settled["phase"], "failed");
+    // A replay naming other evidence is refused, and the first record stands.
+    let mut replay = failure.clone();
+    replay["settlement"]["Fail"]["leaf_run"]["job_id"] = json!("task_claimed_local_pipeline");
+    assert!(
+        call(&follower, "orbit.drain.claim.settle", replay)
+            .unwrap_err()
+            .to_string()
+            .contains("mutation_mismatch")
+    );
     assert_eq!(
         call(&follower, "orbit.drain.claim.settle", failure).unwrap(),
         settled
@@ -445,6 +462,40 @@ fn follower_internal_transport_reconciles_lost_admission_and_fences_claims() {
     assert_eq!(settlement["leaf_run_id"], "leaf-1", "{settlements}");
     assert_eq!(settlement["kind"], "fail", "{settlements}");
     assert_eq!(settlement["reason"], "Fixture failed", "{settlements}");
+    let evidence = &settlement["run_evidence"];
+    assert_eq!(evidence["provenance"], "settlement", "{settlements}");
+    assert_eq!(
+        evidence["job_id"], "task_claimed_pr_pipeline",
+        "{settlements}"
+    );
+    assert_eq!(
+        evidence["build"]["source_commit"], "abc1234",
+        "{settlements}"
+    );
+    assert_eq!(evidence["build_state"], "recorded", "{settlements}");
+    assert_eq!(
+        evidence["root_cause"]["step"], "implement_one",
+        "{settlements}"
+    );
+    assert_eq!(evidence["root_cause_state"], "recorded", "{settlements}");
+    // The scan reads the owner's own store; reading a follower's run record
+    // is an operator's, never an agent's or a managed scan's.
+    let refused = McpWorkspace::orbit_command(&owner.work, &owner.home)
+        .env("ORBIT_TASK_ACTOR_KIND", "agent")
+        .args([
+            "run",
+            "settlements-hydrate",
+            "--follower-workspace",
+            "x",
+            "--json",
+        ])
+        .output()
+        .expect("run fixture orbit CLI");
+    assert!(!refused.status.success(), "{refused:?}");
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("requires the operator"),
+        "{refused:?}"
+    );
     let wrong_workspace = follower
         .call_internal_drain(
             "orbit.drain.probe",

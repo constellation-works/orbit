@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Orbit Web SSH Local Forward"
-last_validated: 2026-10-29
+last_validated: 2026-11-15
 tags: [remote-access]
 ---
 
@@ -44,7 +44,7 @@ The local port is free between selection and SSH's bind, so a listener on it doe
 
 - The local -L listener is explicitly bound to 127.0.0.1, and its target is remote localhost.
 - The remote Web process separately enforces its own loopback bind.
-- Orbit Web adds no token, ACL, or session. SSH supplies authentication, encryption, and host verification.
+- Orbit Web adds no token or ACL to the tunnel boundary. SSH supplies authentication, encryption, and host verification.
 - The dashboard API includes writes. Access to the forwarded local port carries the remote Web process's authority.
 - ExitOnForwardFailure=yes prevents the remote command from continuing when SSH cannot establish the forward.
 - The remote command always includes --no-open.

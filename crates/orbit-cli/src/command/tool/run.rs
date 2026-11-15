@@ -3,14 +3,15 @@ use std::sync::OnceLock;
 use clap::Args;
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_cmd::task_owner::bound_workspace_identity;
-use orbit_common::governance::task::{MINIMAL_TASK_FIELDS, select_fields};
+use orbit_common::governance::task::select_fields;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::protocol::tool_input::optional_csv_or_string_list_alias;
-use orbit_core::application::task::{TaskListResultPolicy, TaskListResultProfile};
+use orbit_core::application::task::{
+    TaskListResultPolicy, TaskListResultProfile, artifact_put_result,
+};
 use orbit_core::{OrbitError, OrbitRuntime};
-use orbit_registry::{MachineIdentityState, inspect_machine_identity};
 use orbit_types::task::is_task_show_projection_field;
-use orbit_types::tool::{McpTransport, ToolSessionContext};
+use orbit_types::tool::{McpTransport, ToolSessionContext, tool_family, tool_operation_name};
 use serde_json::{Map, Value};
 
 use crate::command::{CommandOut, Execute, Payload};
@@ -24,6 +25,30 @@ pub(crate) enum ToolRunBootstrap {
     TaskOwner(String),
     /// Valid input that does not select a workspace or a task owner.
     CwdWorkspace,
+}
+
+/// The output policy carried from a prepared tool call to any CLI transport's renderer.
+pub(crate) struct ToolRunShape {
+    operation_name: String,
+    full: bool,
+    fields: Vec<String>,
+    bare_field: bool,
+    list_policy: TaskListResultPolicy,
+}
+
+impl ToolRunShape {
+    /// Apply the call's resolved operation and output flags to its answer.
+    pub(crate) fn render_tool_run_output(self, output: Value) -> CommandOut {
+        let output = shape_tool_output(
+            &self.operation_name,
+            output,
+            &self.list_policy,
+            self.full,
+            &self.fields,
+            self.bare_field,
+        )?;
+        Ok(Payload::document(output).into())
+    }
 }
 
 #[derive(Args)]
@@ -71,6 +96,33 @@ pub struct ToolRunArgs {
 }
 
 impl ToolRunArgs {
+    /// Request write sidecars before workspace binding or dry-run admission.
+    pub(crate) fn prepare_tool_run_input(&self) -> Result<Value, OrbitError> {
+        let mut input = self.parsed_input()?;
+        request_write_sidecars_from_cli_fields(&self.name, &mut input, &self.fields)?;
+        Ok(input)
+    }
+
+    /// Capture output policy from prepared input, then hint only the execution copy.
+    pub(crate) fn prepare_tool_run_shape(
+        &self,
+        execution_input: &mut Value,
+    ) -> Result<ToolRunShape, OrbitError> {
+        let shape = ToolRunShape {
+            operation_name: tool_operation_name(&self.name, execution_input).to_owned(),
+            full: self.full,
+            fields: self.fields.clone(),
+            bare_field: answers_with_bare_field(&self.name, execution_input)?,
+            list_policy: TaskListResultPolicy::for_call(
+                &self.name,
+                execution_input,
+                task_list_result_profile(self.full, &self.fields),
+            ),
+        };
+        shape.list_policy.apply_compact_hint(execution_input);
+        Ok(shape)
+    }
+
     /// Choose the runtime from tool input.
     ///
     /// A JSON parse failure or an unreadable `--input-file` is returned to the
@@ -82,7 +134,8 @@ impl ToolRunArgs {
         if let Some(selector) = trimmed_string_field(&value, "workspace") {
             return Ok(ToolRunBootstrap::SelectedWorkspace(selector));
         }
-        if crate::command::mcp::ID_RESOLVED_WORKSPACE_TOOLS.contains(&self.name.as_str())
+        if crate::command::mcp::ID_RESOLVED_WORKSPACE_TOOLS
+            .contains(&tool_operation_name(&self.name, &value))
             && let Some(task_id) = trimmed_string_field(&value, "id")
         {
             return Ok(ToolRunBootstrap::TaskOwner(task_id));
@@ -135,10 +188,18 @@ impl ToolRunArgs {
     /// call this only, and their tool names are not on the id-resolved list,
     /// so they return before parsing.
     pub(crate) fn id_resolved_task_id(&self) -> Option<String> {
-        if !crate::command::mcp::ID_RESOLVED_WORKSPACE_TOOLS.contains(&self.name.as_str()) {
+        // A family names its operation in the input, so parse first.
+        if !crate::command::mcp::ID_RESOLVED_WORKSPACE_TOOLS.contains(&self.name.as_str())
+            && tool_family(&self.name).is_none()
+        {
             return None;
         }
         let value = self.parsed_input().ok()?;
+        if !crate::command::mcp::ID_RESOLVED_WORKSPACE_TOOLS
+            .contains(&tool_operation_name(&self.name, &value))
+        {
+            return None;
+        }
         trimmed_string_field(&value, "id")
     }
 }
@@ -154,8 +215,7 @@ fn trimmed_string_field(value: &Value, key: &str) -> Option<String> {
 
 impl Execute for ToolRunArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let mut input = self.parsed_input()?;
-        request_write_sidecars_from_cli_fields(&self.name, &mut input, &self.fields)?;
+        let mut input = self.prepare_tool_run_input()?;
 
         // Resolve `workspace` once above local CLI tools, then bind or fail
         // closed. MCP uses its own server-side selector resolution.
@@ -166,14 +226,15 @@ impl Execute for ToolRunArgs {
         // worker binding in Core's claimed-owner bridge. Resolving that owner
         // selector as a local checkout here would either fail before the
         // bridge or replace the worker runtime with owner state.
-        let claimed_owner_call = orbit_types::tool::is_claimed_owner_tool(&self.name)
-            && runtime
-                .worker_invocation()
-                .is_some_and(|binding| binding.execution.machine_id != binding.owner_machine_id);
-        let bound = if claimed_owner_call {
+        let claimed_owner_call =
+            orbit_types::tool::is_claimed_owner_tool(tool_operation_name(&self.name, &input))
+                && runtime.worker_invocation().is_some_and(|binding| {
+                    binding.execution.machine_id != binding.owner_machine_id
+                });
+        let bound = if claimed_owner_call || self.name == "orbit.attention" {
             None
         } else {
-            RegisteredRuntimeFactory::bind_cli_tool_workspace(runtime, &mut input)?
+            RegisteredRuntimeFactory::bind_cli_tool_workspace(runtime, &mut input, &self.name)?
         };
         let runtime = bound.as_ref().unwrap_or(runtime);
 
@@ -212,9 +273,11 @@ impl Execute for ToolRunArgs {
             return Ok(Payload::detail(doc, text).into());
         }
 
+        let mut execution_input = input.clone();
+        let shape = self.prepare_tool_run_shape(&mut execution_input)?;
         let output = runtime.execute_tool_command_with_session_context(
             &self.name,
-            input.clone(),
+            execution_input,
             self.agent,
             self.model,
             session_context,
@@ -225,22 +288,7 @@ impl Execute for ToolRunArgs {
             owner.as_ref(),
             output,
         )?;
-        let bare_field = answers_with_bare_field(&self.name, &input)?;
-        let list_policy = TaskListResultPolicy::for_call(
-            &self.name,
-            &input,
-            task_list_result_profile(self.full, &self.fields),
-        );
-        let output = shape_tool_output(
-            &self.name,
-            output,
-            &list_policy,
-            self.full,
-            &self.fields,
-            bare_field,
-        )?;
-
-        Ok(Payload::document(output).into())
+        shape.render_tool_run_output(output)
     }
 }
 
@@ -250,7 +298,7 @@ fn local_tool_session_context(
     runtime: &OrbitRuntime,
     owner: Option<&orbit_cmd::task_owner::WorkspaceIdentity>,
 ) -> Result<ToolSessionContext, OrbitError> {
-    let (machine_id, machine_name) = local_machine_identity(&runtime.global_root())?;
+    let (machine_id, machine_name) = local_machine_identity(runtime);
     Ok(ToolSessionContext {
         workspace: Some(runtime.paths().repo_root.to_string_lossy().into_owned()),
         workspace_id: owner
@@ -266,12 +314,13 @@ fn local_tool_session_context(
     })
 }
 
-fn local_machine_identity(
-    global_root: &std::path::Path,
-) -> Result<(String, Option<String>), OrbitError> {
-    match inspect_machine_identity(global_root)? {
-        MachineIdentityState::Present(identity) => Ok((identity.id, Some(identity.name))),
-        MachineIdentityState::Absent => Ok((LOCAL_MACHINE_ID_FALLBACK.to_string(), None)),
+fn local_machine_identity(runtime: &OrbitRuntime) -> (String, Option<String>) {
+    // Open already attached this from the narrow machine-identity read.
+    // A runtime with no location (in-memory, or opened outside the factory)
+    // keeps the historical unattributed fallback and does not read config.
+    match runtime.automation_execution_location() {
+        Some(location) => (location.machine_id.clone(), location.machine_name.clone()),
+        None => (LOCAL_MACHINE_ID_FALLBACK.to_string(), None),
     }
 }
 
@@ -286,7 +335,7 @@ fn is_task_write_tool(tool_name: &str) -> bool {
 /// Task writes omit `comments`/`history` unless the tool-side `fields`/`field`
 /// projection asks for them. CLI `--fields` is otherwise a post-filter, so a
 /// write asked for those sidecars must also request them from the tool.
-pub(crate) fn request_write_sidecars_from_cli_fields(
+fn request_write_sidecars_from_cli_fields(
     tool_name: &str,
     input: &mut Value,
     cli_fields: &[String],
@@ -320,21 +369,25 @@ fn requests_write_sidecar(fields: &[String]) -> bool {
 }
 
 /// Whether the tool answered its request's single-field projection with the bare
-/// field value rather than a keyed object. `orbit.task.show` does for every field
-/// except `terminal`, which keeps its `{"terminal": …}` key. The field list uses
-/// the handler's `fields`-before-`field` precedence.
-pub(crate) fn answers_with_bare_field(tool_name: &str, input: &Value) -> Result<bool, OrbitError> {
+/// field value rather than a keyed object. `orbit.task.show` does only for the
+/// `field` alias, for every field except `terminal`, which keeps its
+/// `{"terminal": …}` key. A `fields` array — which takes precedence over
+/// `field` — always answers keyed by field name, even for one field.
+fn answers_with_bare_field(tool_name: &str, input: &Value) -> Result<bool, OrbitError> {
     if tool_name != "orbit.task.show" {
         return Ok(false);
     }
+    if input.get("fields").is_some() {
+        return Ok(false);
+    }
     Ok(matches!(
-        optional_csv_or_string_list_alias(input, &["fields", "field"])?.as_deref(),
+        optional_csv_or_string_list_alias(input, &["field"])?.as_deref(),
         Some([field]) if field != "terminal"
     ))
 }
 
 /// The `orbit.task.list` result profile `orbit tool run`'s output flags ask for.
-pub(crate) fn task_list_result_profile(full: bool, fields: &[String]) -> TaskListResultProfile<'_> {
+fn task_list_result_profile(full: bool, fields: &[String]) -> TaskListResultProfile<'_> {
     if full {
         TaskListResultProfile::Full
     } else {
@@ -347,7 +400,7 @@ pub(crate) fn task_list_result_profile(full: bool, fields: &[String]) -> TaskLis
 /// value, not a record to filter. `list_policy` is Core's result policy for
 /// this call: when it owns the result (`orbit.task.list`), its answer is the
 /// output and no CLI shaping applies.
-pub(crate) fn shape_tool_output(
+fn shape_tool_output(
     tool_name: &str,
     output: Value,
     list_policy: &TaskListResultPolicy,
@@ -363,26 +416,18 @@ pub(crate) fn shape_tool_output(
     }
 
     if !fields.is_empty() {
-        // A single-field tool projection returns the raw value (`["comments"]`
-        // → the comments array). CLI `--fields` is an object-key filter, so
-        // re-wrap that value before selecting.
+        // A bare single-field tool projection returns the raw value (a
+        // `field`-alias `comments` → the comments array). CLI `--fields` is
+        // an object-key filter, so re-wrap that value before selecting.
         let output = wrap_single_field_value(output, fields, bare_field);
         let shaped = filter_top_level_fields(output, fields);
         ensure_write_sidecars_present(tool_name, fields, &shaped)?;
         return Ok(shaped);
     }
 
-    if tool_name == "orbit.task.artifact.put" {
-        return Ok(filter_top_level_fields(
-            output,
-            &MINIMAL_TASK_FIELDS
-                .iter()
-                .map(|field| (*field).to_string())
-                .collect::<Vec<_>>(),
-        ));
-    }
-
-    Ok(output)
+    Ok(artifact_put_result::artifact_put_default_result(
+        tool_name, output,
+    ))
 }
 
 fn ensure_write_sidecars_present(

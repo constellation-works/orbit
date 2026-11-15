@@ -119,7 +119,7 @@ impl LeaseTokenStore {
             .transpose()?
         else {
             return Err(OrbitError::InvalidInput(format!(
-                "no lease token '{token_id}'; `orbit lease token list` shows the ids"
+                "no lease token '{token_id}'"
             )));
         };
         if record.revoked_at.is_some() {

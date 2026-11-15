@@ -11,28 +11,175 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-/// Metric names an experiment may read its verdict or guardrails on.
-pub const EXPERIMENT_METRICS: &[&str] = &[
-    "implement_tokens",
-    "total_tokens",
-    "cost_usd",
-    "lead_time",
-    "implement_duration",
-    "turns_before_first_edit",
-    "result_bytes_before_first_edit",
-    "first_pass_acceptance",
-    "review_repairs",
-    "step_recoveries",
-    "final_recoveries",
-    "failed_checks",
-    "merge_conflicts",
-    "delivery_done_rate",
-    "escaped_regressions",
-    "lines_changed",
-    "visual_landed_mismatches",
-    "visual_review_repairs",
-    "visual_verified_finding_rate",
+/// Whether an arm does better with a lower or a higher value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Better {
+    Lower,
+    Higher,
+}
+
+/// How a metric is summarised: a mean of per-task values, a rate of
+/// per-task 0/1 outcomes, or a ratio of sums over reviewable lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Kind {
+    Mean,
+    Rate,
+    /// Arm total numerator divided by arm total reviewable lines.
+    Ratio,
+}
+
+/// One experiment metric: the single declaration every name list, predicate
+/// and readout row is derived from.
+pub(crate) struct MetricSpec {
+    pub(crate) name: &'static str,
+    pub(crate) kind: Kind,
+    pub(crate) better: Better,
+    pub(crate) unit: &'static str,
+    /// Confined to an implementation step; exploratory, so it cannot be a
+    /// primary.
+    pub(crate) step_local: bool,
+    /// Read from a task's review gate settlements.
+    pub(crate) review_derived: bool,
+    /// For a per-line ratio, the whole-task metric its arm total divides by
+    /// reviewable lines.
+    pub(crate) line_numerator: Option<&'static str>,
+}
+
+const fn spec(name: &'static str, kind: Kind, better: Better, unit: &'static str) -> MetricSpec {
+    MetricSpec {
+        name,
+        kind,
+        better,
+        unit,
+        step_local: false,
+        review_derived: false,
+        line_numerator: None,
+    }
+}
+
+impl MetricSpec {
+    const fn step_local(mut self) -> Self {
+        self.step_local = true;
+        self
+    }
+
+    const fn review_derived(mut self) -> Self {
+        self.review_derived = true;
+        self
+    }
+
+    const fn per_line(mut self, numerator: &'static str) -> Self {
+        self.line_numerator = Some(numerator);
+        self
+    }
+}
+
+/// Every metric an experiment may name, in the order the readout and the
+/// refusal texts list them.
+pub(crate) const METRIC_SPECS: &[MetricSpec] = &[
+    spec(
+        "implement_tokens",
+        Kind::Mean,
+        Better::Lower,
+        "normalized_tokens",
+    )
+    .step_local(),
+    spec(
+        "total_tokens",
+        Kind::Mean,
+        Better::Lower,
+        "normalized_tokens",
+    ),
+    spec("cost_usd", Kind::Mean, Better::Lower, "usd"),
+    spec("lead_time", Kind::Mean, Better::Lower, "hours"),
+    spec("implement_duration", Kind::Mean, Better::Lower, "minutes").step_local(),
+    spec(
+        "turns_before_first_edit",
+        Kind::Mean,
+        Better::Lower,
+        "turns",
+    )
+    .step_local(),
+    spec(
+        "result_bytes_before_first_edit",
+        Kind::Mean,
+        Better::Lower,
+        "bytes",
+    )
+    .step_local(),
+    spec("first_pass_acceptance", Kind::Rate, Better::Higher, "rate").review_derived(),
+    spec("review_repairs", Kind::Mean, Better::Lower, "count").review_derived(),
+    spec("step_recoveries", Kind::Mean, Better::Lower, "count"),
+    spec("final_recoveries", Kind::Mean, Better::Lower, "count"),
+    spec("failed_checks", Kind::Mean, Better::Lower, "count"),
+    spec("merge_conflicts", Kind::Mean, Better::Lower, "count"),
+    spec("delivery_done_rate", Kind::Rate, Better::Higher, "rate"),
+    spec("escaped_regressions", Kind::Mean, Better::Lower, "count"),
+    spec("lines_changed", Kind::Mean, Better::Lower, "lines"),
+    spec("cost_per_line", Kind::Ratio, Better::Lower, "usd_per_line").per_line("cost_usd"),
+    spec(
+        "lead_time_per_line",
+        Kind::Ratio,
+        Better::Lower,
+        "hours_per_line",
+    )
+    .per_line("lead_time"),
 ];
+
+/// The metric registered under `name`.
+pub(crate) fn metric_spec(name: &str) -> Option<&'static MetricSpec> {
+    METRIC_SPECS.iter().find(|spec| spec.name == name)
+}
+
+/// Metric names an experiment may read its verdict or guardrails on, in
+/// table order.
+pub fn experiment_metric_names() -> impl Iterator<Item = &'static str> {
+    METRIC_SPECS.iter().map(|spec| spec.name)
+}
+
+/// Metrics confined to an implementation step, in table order; these are
+/// exploratory.
+pub fn step_local_metric_names() -> impl Iterator<Item = &'static str> {
+    METRIC_SPECS
+        .iter()
+        .filter(|spec| spec.step_local)
+        .map(|spec| spec.name)
+}
+
+/// Whether a registered metric measures only part of a task.
+pub fn experiment_metric_is_step_local(metric: &str) -> bool {
+    metric_spec(metric).is_some_and(|spec| spec.step_local)
+}
+
+/// Whether a registered metric is derived from review gate settlements.
+pub fn experiment_metric_is_review_derived(metric: &str) -> bool {
+    metric_spec(metric).is_some_and(|spec| spec.review_derived)
+}
+
+/// Whether a registered metric is a ratio over reviewable lines.
+fn experiment_metric_is_per_line(metric: &str) -> bool {
+    metric_spec(metric).is_some_and(|spec| spec.line_numerator.is_some())
+}
+
+/// A per-line primary needs a `lines_changed` guardrail so an arm cannot
+/// win by shrinking the denominator. The operator chooses the threshold.
+pub(crate) fn require_lines_changed_guardrail(
+    primary: Option<&str>,
+    guardrails_json: &str,
+) -> Result<(), OrbitError> {
+    let Some(primary) = primary.filter(|metric| experiment_metric_is_per_line(metric)) else {
+        return Ok(());
+    };
+    let present = serde_json::from_str::<BTreeMap<String, String>>(guardrails_json)
+        .ok()
+        .is_some_and(|guardrails| guardrails.contains_key("lines_changed"));
+    if present {
+        return Ok(());
+    }
+    Err(OrbitError::InvalidInput(format!(
+        "primary metric `{primary}` is per line and requires a lines_changed guardrail, for example {{\"lines_changed\": \"+0\"}}"
+    )))
+}
 
 /// Complexities a population filter may name.
 pub const EXPERIMENT_COMPLEXITIES: &[&str] = &["low", "medium", "hard", "xhard"];
@@ -105,6 +252,17 @@ pub struct ConfigOverlay {
     pub roles: Vec<OverlayRole>,
 }
 
+/// Crew memory delivery: the drawn crew's model space (and, with `global`,
+/// the reviewed global memory) reaches each dispatch in `roles` as data.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryOverlay {
+    #[serde(default = "implement_only")]
+    pub roles: Vec<OverlayRole>,
+    #[serde(default)]
+    pub global: bool,
+}
+
 /// What an arm changes, per surface. The control's is usually empty.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -119,6 +277,8 @@ pub struct ExperimentOverlay {
     pub crew: Option<CrewOverlay>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<ConfigOverlay>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<MemoryOverlay>,
 }
 
 impl ExperimentOverlay {
@@ -209,6 +369,10 @@ impl ExperimentOverlay {
             normalize_roles(&mut config.roles)
                 .map_err(|detail| invalid(format!("config.{detail}")))?;
         }
+        if let Some(memory) = &mut self.memory {
+            normalize_roles(&mut memory.roles)
+                .map_err(|detail| invalid(format!("memory.{detail}")))?;
+        }
         Ok(())
     }
 
@@ -217,6 +381,37 @@ impl ExperimentOverlay {
         serde_json::to_string(self).map_err(|error| {
             OrbitError::Execution(format!("serialize experiment overlay: {error}"))
         })
+    }
+
+    /// The activity roles whose dispatches receive this overlay: the roles
+    /// of its instructions, skills, tools and memory. Crew and config surfaces act
+    /// at admission or through workflow settings, not on a dispatch, so
+    /// they name none.
+    pub(crate) fn dispatch_roles(&self) -> BTreeSet<OverlayRole> {
+        let mut roles: BTreeSet<OverlayRole> = self.instructions.keys().copied().collect();
+        roles.extend(
+            self.skills
+                .iter()
+                .flat_map(|skills| skills.roles.iter().copied()),
+        );
+        roles.extend(
+            self.tools
+                .iter()
+                .flat_map(|tools| tools.roles.iter().copied()),
+        );
+        roles.extend(
+            self.memory
+                .iter()
+                .flat_map(|memory| memory.roles.iter().copied()),
+        );
+        roles
+    }
+
+    /// Whether this overlay delivers crew memory to dispatches in `role`.
+    pub(crate) fn memory_for_role(&self, role: OverlayRole) -> Option<&MemoryOverlay> {
+        self.memory
+            .as_ref()
+            .filter(|memory| memory.roles.contains(&role))
     }
 
     /// The config keys this overlay sets.
@@ -447,12 +642,12 @@ fn valid_threshold(threshold: &str) -> bool {
 
 /// Refuse a metric name Orbit does not measure.
 pub(crate) fn validate_metric(field: &str, metric: &str) -> Result<(), OrbitError> {
-    if EXPERIMENT_METRICS.contains(&metric) {
+    if metric_spec(metric).is_some() {
         return Ok(());
     }
     Err(OrbitError::InvalidInput(format!(
         "`{field}` names unknown metric `{metric}`; expected one of {}",
-        EXPERIMENT_METRICS.join(", ")
+        experiment_metric_names().collect::<Vec<_>>().join(", ")
     )))
 }
 

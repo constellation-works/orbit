@@ -186,8 +186,7 @@ fn a_native_os_finding_tags_an_untagged_task_for_that_os() {
     assert_eq!(exclusion(&workspace, &task), None);
     assess(&workspace, &task, Some(needs_macos(2)));
     let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
-    let audit: Value =
-        serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
+    let audit: Value = super::pilot_audit(&workspace.runtime, &task.id, comments.last().unwrap());
     assert_eq!(
         audit["native_os_hold"]["requirements"],
         json!([{"criterion": 2, "os": "macos"}]),
@@ -316,6 +315,13 @@ fn a_native_os_wait_clears_on_a_decision_a_rescope_or_a_newer_assessment() {
                     )
                     .unwrap();
             }
+        }
+        if clearing == "rescope" {
+            let (reason, _) = exclusion(&workspace, &task).unwrap();
+            assert_eq!(reason, "pilot_assessment_stale");
+            // The rescope releases the native finding, but changed criteria
+            // need an explicitly requested current assessment before dispatch.
+            assess(&workspace, &task, Some(json!([])));
         }
         assert_eq!(exclusion(&workspace, &task), None, "{clearing}");
         assert_eq!(
@@ -662,8 +668,7 @@ fn a_machine_finding_holds_every_machine_but_the_owner() {
     let applied = apply_findings(&workspace, &task, needs_owner("FIXTURE-MACHINE"));
     assert_eq!(applied["applied_count"], 1, "{applied}");
     let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
-    let audit: Value =
-        serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
+    let audit: Value = super::pilot_audit(&workspace.runtime, &task.id, comments.last().unwrap());
     assert_eq!(
         audit["native_os_hold"]["machine"],
         json!({"criteria": [1], "machine_id": "fixture-machine"}),
@@ -883,7 +888,13 @@ fn a_pilot_complexity_rerate_falls_back_from_an_incompatible_crew() {
     );
     let kept = workspace.runtime.get_task(&task.id).unwrap();
     assert_eq!(kept.crew.as_deref(), Some("fixture"));
-    assert_eq!(kept.crew_source.as_deref(), Some("default"));
+    assert_eq!(
+        kept.crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("default")
+    );
     assert_eq!(kept.complexity, Some(TaskComplexity::Medium));
     assert_eq!(kept.tags, ["os:linux"]);
     assert_ne!(kept, before);
@@ -972,8 +983,7 @@ fn a_verified_cfg_gate_on_a_named_test_routes_to_that_os() {
         }])),
     );
     let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
-    let audit: Value =
-        serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
+    let audit: Value = super::pilot_audit(&workspace.runtime, &task.id, comments.last().unwrap());
     assert_eq!(
         audit["native_os_hold"]["requirements"],
         json!([{"criterion": 1, "os": "macos"}]),

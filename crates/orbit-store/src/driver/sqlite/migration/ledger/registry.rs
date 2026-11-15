@@ -672,6 +672,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     },
     // Independent optional ledger only. Older writers never touch these tables;
     // no task projection or trigger requires assistance-aware writers.
+    // [ORB-22808] Decision assistance was removed; the tables stay inert.
     Migration {
         version: 72,
         name: "decision_assistance",
@@ -729,12 +730,123 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_agent_execution_identity,
     },
+    // `orbit experiment delete`: experiment events stay append-only while
+    // their experiment exists, so a deletion can remove them after the
+    // experiment row. An older binary never deletes experiments, and reads a
+    // deleted one as never defined.
+    Migration {
+        version: 79,
+        name: "experiment_delete",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_experiment_delete,
+    },
+    Migration {
+        version: 80,
+        name: "application_consent",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_application_consent,
+    },
+    // Index-only workspace/window reads avoid table fetches for reliability.
+    Migration {
+        version: 81,
+        name: "invocation_reliability_window_index",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_invocation_reliability_window_index,
+    },
+    // Optional provenance only; older writers leave it unknown and preserve existing values.
+    Migration {
+        version: 82,
+        name: "job_run_build",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_job_run_build,
+    },
+    // Defaulted flag only: an older binary inserts without it and reads every
+    // row as a complete tool trace.
+    Migration {
+        version: 83,
+        name: "invocation_tool_calls_incomplete",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_invocation_tool_calls_incomplete,
+    },
+    // Nullable counts only. Existing rows stay NULL (unavailable) and are
+    // not recomputed. An older binary never reads or writes the columns.
+    Migration {
+        version: 84,
+        name: "landed_diff_reviewable_lines",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_landed_diff_reviewable_lines,
+    },
+    // Fleet notices slice 1: the notice table and its post and close
+    // history. New tables only, which an older binary never reads or writes.
+    Migration {
+        version: 85,
+        name: "notices",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_notices,
+    },
+    // Separate, additive capability-gap ledger; older binaries leave it alone.
+    Migration {
+        version: 86,
+        name: "evolution",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_evolution,
+    },
+    // Crew memory slice M1: append-only memory revisions, promotion
+    // proposals and their audit events. New tables only, which an older
+    // binary never reads or writes.
+    Migration {
+        version: 87,
+        name: "crew_memory",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_crew_memory,
+    },
+    // Nullable MCP session model. Existing rows stay NULL. An older binary
+    // never reads or writes the column, and it is not part of `role`.
+    Migration {
+        version: 88,
+        name: "audit_session_model",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_audit_session_model,
+    },
+    // Partial indexes over unreleased task-reservation rows. Index-only:
+    // older binaries keep reading and writing the table.
+    Migration {
+        version: 89,
+        name: "task_reservation_unreleased_expires",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_task_reservation_unreleased_expires_indexes,
+    },
+    // Partial expression indexes over claim and lifecycle payloads. Index-only:
+    // older binaries keep reading and writing the table, and SQLite maintains
+    // the indexes on their writes.
+    Migration {
+        version: 90,
+        name: "task_coordination_claim_indexes",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_task_coordination_claim_indexes,
+    },
+    // ORB-24423: per-task agent scorecard facts kept between scans. A new
+    // derived-cache table only, which an older binary never reads or writes.
+    Migration {
+        version: 91,
+        name: "agent_task_facts",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_agent_task_facts,
+    },
+    // Non-unique indexes preserve legacy workspace-scoped collisions while
+    // new allocations reserve a host-wide identity in the shared transaction.
+    Migration {
+        version: 92,
+        name: "job_run_host_id_indexes",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_job_run_host_id_indexes,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 78;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 92;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -2,6 +2,8 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
+use super::introspect::{add_column_if_missing, table_exists};
+
 /// v60 `landed_diff_stats`: one row per landed delivery with its lines added
 /// and deleted, split into code, tests and other. Keyed on workspace, task
 /// and landed commit, so recording the same landing twice keeps one row.
@@ -38,4 +40,17 @@ pub(super) fn apply_landed_diff_stats(conn: &Connection) -> Result<(), OrbitErro
         "#,
     )
     .map_err(sqlite_store_error)
+}
+
+/// v84 `landed_diff_reviewable_lines`: reviewable added and deleted lines
+/// from the task's own commits. Both columns are nullable integers with no
+/// default. A row written before this migration, or one whose attribution
+/// could not be recovered, leaves them NULL. An older binary never reads or
+/// writes the columns, and this migration does not recompute existing rows.
+pub(super) fn apply_landed_diff_reviewable_lines(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_exists(conn, "landed_diff_stats")? {
+        return Ok(());
+    }
+    add_column_if_missing(conn, "landed_diff_stats", "reviewable_added", "INTEGER")?;
+    add_column_if_missing(conn, "landed_diff_stats", "reviewable_deleted", "INTEGER")
 }

@@ -1,0 +1,20 @@
+List evolution signatures and summed costs
+
+Usage: orbit evolution list [OPTIONS]
+
+Options:
+      --state <STATE>
+          Filter open, proposed, declined or resolved
+
+      --since <SINCE>
+          Aggregate occurrences since this RFC 3339 instant
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

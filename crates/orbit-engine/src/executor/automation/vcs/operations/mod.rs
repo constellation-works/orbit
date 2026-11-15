@@ -1,10 +1,10 @@
 mod check_annotations;
 mod ci;
-mod ci_rerun;
 mod dependency_record;
 mod dispatch;
 mod emission;
 mod evidence;
+mod failed_workflow;
 mod input;
 mod pr;
 mod prerequisite;
@@ -14,6 +14,16 @@ mod recovery_log;
 mod workflow_dependency;
 mod workflow_read;
 
+#[cfg(test)]
+mod tests;
+
+use ci::log_answer as ci_log_answer;
+use ci::rerun as ci_rerun;
+pub(super) use ci::{
+    CiCommitJobEvidence, CiCommitJobIdentity, CiCommitJobsAnswer, CiJobConclusion, CiJobEvent,
+    CiJobObservation, CiJobStatus,
+};
+pub(super) use ci::{CiJobLogAnswer, CiLogReadThrottle, CiLogSource};
 pub(crate) use dispatch::run;
 pub(super) use process::{
     GITHUB_TRANSIENT_ATTEMPTS, GITHUB_TRANSIENT_RETRY_DELAY, carry_class, is_transient,
@@ -44,6 +54,9 @@ pub(crate) const PR_CLOSE: &str = "pr.close";
 pub(crate) const PR_REQUIRED_CHECKS: &str = "pr.required_checks";
 /// [ORB-15956] Merge the base's current tip into a pull request's branch.
 pub(crate) const PR_UPDATE_BRANCH: &str = "pr.update_branch";
+/// [ORB-23812] Re-request hosted checks on a pull request head the forge
+/// started no workflow run for, without changing the head.
+pub(crate) const PR_RETRIGGER_CHECKS: &str = "pr.retrigger_checks";
 /// [ORB-15956] The hosted CI jobs that ran on one commit.
 pub(crate) const CI_COMMIT_JOBS: &str = "ci.commit_jobs";
 /// [ORB-15956] One failed job's bounded failed-step log.
@@ -62,6 +75,10 @@ pub(super) const MAX_WORKFLOW_SOURCE_BYTES: usize = 256 * 1024;
 /// The `refusal` a reviewed merge reports, instead of failing, when its
 /// caller opts in with `report_base_modified`.
 pub(crate) const BASE_MODIFIED_REFUSAL: &str = "base_modified";
+
+/// Synchronous merge requests a completion or a landing makes against a base
+/// that keeps moving, before it stops for the owner.
+pub(crate) const BASE_MODIFIED_MERGE_ATTEMPTS: u32 = 3;
 
 pub(crate) const CI_PREREQUISITE_EVIDENCE: &str = "ci.prerequisite_evidence";
 pub(crate) const CI_PREREQUISITE_OBSERVE: &str = "ci.prerequisite_observe";

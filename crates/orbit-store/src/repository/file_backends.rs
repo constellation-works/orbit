@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_types::policy::PolicyDef;
@@ -17,9 +18,25 @@ use crate::contracts::{
 use crate::driver::file::executor_def_store::ExecutorDefFileStore;
 use crate::driver::file::policy_def_store::PolicyDefFileStore;
 use crate::repository::task::TaskV2Store;
-use crate::scope::{ScopeStrategy, ScopedStore, resolve};
 
 impl TaskStoreBackend for TaskV2Store {
+    fn task_decision_snapshots(
+        &self,
+    ) -> Result<BTreeMap<String, crate::contracts::TaskDecisionSnapshot>, OrbitError> {
+        self.task_decision_snapshots()
+    }
+
+    fn record_task_decision_snapshots(
+        &self,
+        records: &[crate::contracts::TaskDecisionSnapshot],
+    ) -> Result<bool, OrbitError> {
+        self.record_task_decision_snapshots(records)
+    }
+
+    fn decision_request_task_id(&self, request_id: &str) -> Result<Option<String>, OrbitError> {
+        self.decision_request_task_id(request_id)
+    }
+
     fn find_accepted_handoff(
         &self,
         claim_id: &str,
@@ -46,6 +63,13 @@ impl TaskStoreBackend for TaskV2Store {
         &self,
     ) -> Result<Vec<orbit_types::workflow::handoff::LandingAttempt>, OrbitError> {
         self.claim_boundary()?.landing_attempts()
+    }
+
+    fn landing_attempt(
+        &self,
+        handoff_id: &str,
+    ) -> Result<Option<orbit_types::workflow::handoff::LandingAttempt>, OrbitError> {
+        self.claim_boundary()?.landing_attempt(handoff_id)
     }
 
     fn landing_retry_receipt(
@@ -138,6 +162,18 @@ impl TaskStoreBackend for TaskV2Store {
     ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
         self.claim_boundary()?.inspect_execution_claims()
     }
+    fn inspect_live_execution_claims(
+        &self,
+    ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
+        self.claim_boundary()?.inspect_live_execution_claims()
+    }
+    fn inspect_task_execution_claims(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
+        self.claim_boundary()?
+            .inspect_task_execution_claims(task_id)
+    }
     fn inspect_admission_receipt_storage(
         &self,
     ) -> Result<crate::contracts::AdmissionReceiptStorage, OrbitError> {
@@ -148,6 +184,18 @@ impl TaskStoreBackend for TaskV2Store {
     ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
         self.claim_boundary()?.resolve_execution_claims()
     }
+    fn resolve_live_execution_claims(
+        &self,
+    ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
+        self.claim_boundary()?.resolve_live_execution_claims()
+    }
+    fn resolve_task_execution_claims(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
+        self.claim_boundary()?
+            .resolve_task_execution_claims(task_id)
+    }
     fn execution_claim_state(
         &self,
         claim_id: &str,
@@ -155,6 +203,26 @@ impl TaskStoreBackend for TaskV2Store {
         self.coordination_boundary().map_or(Ok(None), |boundary| {
             boundary.execution_claim_state(claim_id)
         })
+    }
+    fn record_hydrated_leaf_evidence(
+        &self,
+        claim_id: &str,
+        report: crate::contracts::LeafRunReport,
+    ) -> Result<crate::contracts::LeafEvidenceWrite, OrbitError> {
+        self.claim_boundary()?
+            .record_hydrated_leaf_evidence(claim_id, report)
+    }
+    fn record_late_leaf_report(
+        &self,
+        claim_id: &str,
+        machine_id: &str,
+        run_id: &str,
+        effort: Option<String>,
+        crew: Option<String>,
+        model: Option<String>,
+    ) -> Result<crate::contracts::LateLeafReportWrite, OrbitError> {
+        self.claim_boundary()?
+            .record_late_leaf_report(claim_id, machine_id, run_id, effort, crew, model)
     }
     fn record_deferred_branch_observation(
         &self,
@@ -246,13 +314,17 @@ impl TaskStoreBackend for TaskV2Store {
     ) -> Result<Option<crate::contracts::TaskCandidateKeys>, OrbitError> {
         self.observe_task_candidate_keys(filter, limit)
     }
+    fn registered_task_bundle_ids(&self) -> Result<Option<Vec<String>>, OrbitError> {
+        self.in_boundary(|| self.registered_task_bundle_ids())
+    }
     fn query_task_rows(
         &self,
         filter: &crate::contracts::TaskListFilter,
         limit: usize,
         residual: crate::contracts::TaskResidualFilter<'_>,
+        hydration: crate::contracts::TaskListHydration,
     ) -> Result<crate::contracts::TaskPage, OrbitError> {
-        self.in_boundary(|| self.query_task_rows(filter, limit, residual))
+        self.in_boundary(|| self.query_task_rows(filter, limit, residual, hydration))
     }
     fn get_task_row(
         &self,
@@ -260,6 +332,12 @@ impl TaskStoreBackend for TaskV2Store {
         list_read: bool,
     ) -> Result<Option<crate::contracts::TaskRow>, OrbitError> {
         self.in_boundary(|| self.get_task_row(id, list_read))
+    }
+    fn get_task_row_uncached(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::contracts::TaskRow>, OrbitError> {
+        self.in_boundary(|| TaskV2Store::get_task_row_uncached(self, id))
     }
     fn task_envelopes_for_ids(
         &self,
@@ -288,14 +366,16 @@ impl TaskStoreBackend for TaskV2Store {
         self.in_boundary(|| TaskV2Store::task_status_index_for(self, workspace_id, targets))
     }
 
-    fn task_change_stamps(&self) -> Result<Vec<crate::contracts::TaskChangeStamp>, OrbitError> {
+    fn task_change_stamps(
+        &self,
+    ) -> Result<Arc<Vec<crate::contracts::TaskChangeStamp>>, OrbitError> {
         TaskV2Store::task_change_stamps(self)
     }
 
     fn task_metadata_scan_stamps(
         &self,
     ) -> Result<Vec<crate::contracts::TaskChangeStamp>, OrbitError> {
-        TaskV2Store::task_change_stamps(self)
+        Ok(TaskV2Store::task_change_stamps(self)?.as_ref().clone())
     }
 
     fn task_ids_with_tag(
@@ -315,6 +395,10 @@ impl TaskStoreBackend for TaskV2Store {
         id: &str,
     ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
         self.in_boundary(|| TaskV2Store::registered_task_history(self, id))
+    }
+
+    fn registered_task_workspace(&self, id: &str) -> Result<Option<String>, OrbitError> {
+        self.in_boundary(|| TaskV2Store::registered_task_workspace(self, id))
     }
 
     fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
@@ -343,7 +427,7 @@ impl TaskStoreBackend for TaskV2Store {
     }
 
     fn get_task(&self, id: &str) -> Result<Option<Task>, OrbitError> {
-        self.in_boundary(|| resolve::<Task, _>(self, id))
+        self.in_boundary(|| self.get_task(id))
     }
 
     fn search_tasks(&self, query: &str) -> Result<Vec<Task>, OrbitError> {
@@ -458,29 +542,17 @@ impl TaskStoreBackend for TaskV2Store {
     }
 }
 
-impl ScopedStore<Task> for TaskV2Store {
-    type Err = OrbitError;
-
-    fn strategy(&self) -> ScopeStrategy {
-        ScopeStrategy::WorkspaceOnly
-    }
-
-    fn get_workspace(&self, key: &str) -> Result<Option<Task>, OrbitError> {
-        self.get_task(key)
-    }
-
-    fn get_global(&self, _key: &str) -> Result<Option<Task>, OrbitError> {
-        Ok(None)
-    }
-}
-
 impl TaskDocumentStoreBackend for TaskV2Store {
     fn update_task_document(
         &self,
         id: &str,
         params: TaskDocumentUpdateParams,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<crate::contracts::TaskRow, OrbitError> {
         self.update_task_document(id, &params)
+    }
+
+    fn migrate_task_tool_names(&self, id: &str, actor: &str) -> Result<bool, OrbitError> {
+        self.migrate_task_tool_names(id, actor)
     }
 }
 
@@ -497,12 +569,36 @@ impl TaskHistoryStoreBackend for TaskV2Store {
         self.task_history_stamp(id)
     }
 
+    fn task_history_stamps(
+        &self,
+        ids: &[String],
+    ) -> Result<std::collections::BTreeMap<String, String>, OrbitError> {
+        self.task_history_stamps(ids)
+    }
+
+    fn task_bundle_stamps(
+        &self,
+        ids: &[String],
+    ) -> Result<std::collections::BTreeMap<String, String>, OrbitError> {
+        self.task_bundle_stamps(ids)
+    }
+
     fn update_task_history(
         &self,
         id: &str,
         params: TaskHistoryUpdateParams,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<crate::contracts::TaskRow, OrbitError> {
         self.update_task_history(id, &params)
+    }
+
+    fn check_ordinary_work_start_footprint(
+        &self,
+        id: &str,
+        status: Option<orbit_types::task::TaskStatus>,
+        status_event: Option<&str>,
+        context_files: Option<&[String]>,
+    ) -> Result<(), OrbitError> {
+        self.check_ordinary_work_start_footprint(id, status, status_event, context_files)
     }
 }
 
@@ -520,6 +616,14 @@ impl TaskArtifactStoreBackend for TaskV2Store {
 
     fn get_task_artifact(&self, id: &str, path: &str) -> Result<Option<TaskArtifact>, OrbitError> {
         self.in_boundary(|| self.get_task_artifact(id, path))
+    }
+
+    fn read_manifest_artifact(
+        &self,
+        id: &str,
+        file: &ArtifactManifestFileV2,
+    ) -> Result<TaskArtifact, OrbitError> {
+        self.in_boundary(|| TaskV2Store::read_manifest_artifact(self, id, file))
     }
 
     fn upsert_task_artifacts(

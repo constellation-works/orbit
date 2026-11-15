@@ -70,6 +70,44 @@ fn stale_locks_are_reclaimed_but_active_writers_are_preserved() {
 }
 
 #[test]
+fn expired_budget_still_reclaims_stale_locks() {
+    // A zero budget is spent before the first mkdir. A successful reclaim
+    // must still be acquired rather than reported as a timeout.
+    let expired = DirectoryLockOptions {
+        timeout: Duration::ZERO,
+        ..options()
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("state.json");
+    let lock = temp.path().join("state.json.lock");
+    for directory in [true, false] {
+        if directory {
+            std_fs::create_dir(&lock).unwrap();
+        } else {
+            std_fs::write(&lock, "").unwrap();
+        }
+        age_lock_file(&lock);
+        with_directory_lock_options(&target, "expired stale", expired, || {
+            assert!(
+                lock.is_dir(),
+                "the reclaimed lock must be replaced by mkdir"
+            );
+            Ok::<_, io::Error>(())
+        })
+        .unwrap();
+        assert!(!lock.exists());
+    }
+
+    std_fs::create_dir(&lock).unwrap();
+    let result: io::Result<()> =
+        with_directory_lock_options(&target, "expired fresh", expired, || {
+            panic!("a fresh peer directory must exclude Orbit");
+        });
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
+    assert!(lock.is_dir(), "timeout must preserve the peer's directory");
+}
+
+#[test]
 fn held_directory_is_refreshed_and_removed_on_error_or_unwind() {
     let temp = tempfile::tempdir().unwrap();
     let target = temp.path().join("state.json");
@@ -142,5 +180,10 @@ fn symlink_lock_does_not_redirect_legacy_cleanup() {
     });
     assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
     assert_eq!(std_fs::read_to_string(victim).unwrap(), "preserve");
-    assert!(std_fs::symlink_metadata(lock).unwrap().file_type().is_symlink());
+    assert!(
+        std_fs::symlink_metadata(lock)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
 }

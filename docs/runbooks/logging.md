@@ -13,15 +13,24 @@ last_validated: 2026-10-30
 Use this runbook to locate Orbit process logs, filter structured events, or verify that
 process and routine-sweep logs remain bounded.
 
-## Global process log
+## Process log feeds
 
-All Orbit processes—the CLI, `orbit web serve`, and the MCP server—append structured tracing
-events to two global JSONL feeds with independent byte budgets:
+Ordinary Orbit processes—the CLI, `orbit web serve`, and the MCP server—append
+structured tracing events to two home-global JSONL feeds with independent byte
+budgets:
 
 ```text
 ~/.orbit/state/logs/orbit.jsonl        # operational events
 ~/.orbit/state/logs/orbit-agent.jsonl  # agent stdout/stderr relay
 ```
+
+An Orbit-managed run normally uses its inherited registry root for these feeds.
+If that run starts Orbit with a different explicit `--root` or `ORBIT_ROOT`,
+both feeds are instead written and read under that selected root's
+`state/logs/` directory. This keeps a scratch invocation's startup tracing out
+of the inherited registry. The diversion requires the managed-run context; an
+unmanaged command's `--root` or `ORBIT_ROOT` does not move its feeds away from
+the home-global paths above.
 
 `orbit log tail` and the dashboard merge both active feeds. `orbit log tail` can
 read another sink with `--path` or `$ORBIT_LOG_PATH`; filenames other than
@@ -100,22 +109,6 @@ follows the same toggle: while stdout relays are hidden it holds the newest
 event that is not one, so a drain's agent traffic does not replace an Orbit
 warning.
 
-To validate the dashboard in Chromium, source the host's
-[browser kit](../DEVELOPMENT.md#browser-checks-on-a-prepared-host) and run the
-isolated browser fixture (1440 px, snapshot, live and paused relays, the
-discarded-history notice after a paused buffer overflows, paths, filters, and
-reload persistence). The kit's `env.sh` exports
-`PLAYWRIGHT_MODULE` and `PLAYWRIGHT_BROWSERS_PATH`, plus `LD_LIBRARY_PATH` and
-`FONTCONFIG_FILE` on Linux:
-
-```sh
-. "${ORBIT_BROWSER_KIT_ENV:-$HOME/.local/chromium-deps/env.sh}"
-ORBIT_PLAYWRIGHT_MODULE="$PLAYWRIGHT_MODULE" \
-ORBIT_LOG_BROWSER_EVIDENCE_DIR="$PWD/.orbit/tmp/log-browser" \
-./scripts/build-budget.py -- cargo test -p orbit-web --test http_api \
-  log::dashboard_log_message_priority_and_agent_filter -- --ignored --nocapture
-```
-
 ## Rotation and retention
 
 Rotation is size-based. Long-lived commands (`mcp serve`, `mcp listen`, `web serve`,
@@ -130,15 +123,11 @@ so transcript volume cannot evict operational events. The same age limit applies
 to both feeds; either feed can be pruned sooner when its own size budget fills.
 Writers recheck size and reopen after each MiB written, so long-lived producers
 also enforce the cap. Relay archives use `orbit-agent.jsonl.<UTC-timestamp>`.
-Override the operational size limits and shared age limit in
-`~/.orbit/config.toml`:
-
-```toml
-[runtime]
-log_retention_days = 7
-log_max_total_mb = 500
-log_max_file_mb = 100
-```
+These operational size limits and the shared age limit are fixed in code and
+are not tunable. The former `runtime.log_retention_days`,
+`runtime.log_max_total_mb` and `runtime.log_max_file_mb` keys are ignored
+when present (recognised only until 2026-12-08); delete them from
+`~/.orbit/config.toml`.
 
 Log snapshots return an opaque `cursor` that binds each feed's complete-record
 byte offset to the identity of the open file scanned by that snapshot. Pass it
@@ -189,7 +178,7 @@ separate file because it is not the JSONL tracing sink:
 ~/.orbit/logs/sweep.log
 ```
 
-Two behaviors keep it bounded on an always-on host [ORB-00423]:
+These behaviors keep it bounded on an always-on host [ORB-00423]:
 
 - `orbit sweep` prints only fires, retries, baselines, errors, and a one-line heartbeat when
   nothing was due; `--verbose` restores one row per routine.

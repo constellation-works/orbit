@@ -4,6 +4,7 @@ use orbit_types::task::{
     ArtifactManifestFileV2, ExternalRef, Task, TaskComment, TaskEnvelopeV2, TaskHistoryEntry,
     TaskOrigin, TaskPriority, TaskRelationType, TaskStatus, TaskType, normalize_task_tags,
 };
+use serde::{Deserialize, Serialize};
 
 use super::TaskIndexFilter;
 
@@ -25,6 +26,9 @@ pub struct TaskListFilter {
     pub parent_id: Option<String>,
     pub job_run_id: Option<String>,
     pub tags: Vec<String>,
+    /// Keep only tasks carrying at least one of these tags (case-insensitive,
+    /// like `tags`). Empty means no such restriction.
+    pub any_tags: Vec<String>,
     pub external_ref: Option<ExternalRef>,
     pub has_external_ref_system: Option<String>,
     /// Order tasks in a terminal status (done, archived, rejected) after the
@@ -42,9 +46,70 @@ pub struct TaskListFilter {
 }
 
 impl TaskListFilter {
+    /// Sort an already-loaded snapshot in this filter's listing order.
+    ///
+    /// The canonical order is newest first, with task ID ascending for ties.
+    /// `scheduled_after` orders schedules soonest first; otherwise
+    /// `terminal_last` moves terminal tasks behind non-terminal tasks. Each
+    /// partition retains the canonical order. No filtering or I/O is done.
+    pub fn sort_snapshot(&self, snapshot: &mut [TaskEnvelopeV2]) {
+        self.sort_task_listing(
+            snapshot,
+            |task| task.not_before,
+            |task| &task.created_at,
+            |task| &task.id,
+            |task| task.status,
+        );
+    }
+
+    /// Filter, count and bound an already-loaded, ordered snapshot.
+    ///
+    /// `snapshot` must be ordered as by [`Self::sort_snapshot`] with this
+    /// filter. All metadata predicates are applied, with counts as defined by
+    /// [`TaskCandidates`]. Only the selected page's envelopes are cloned; the
+    /// rest are borrowed to count matches. No I/O or bundle validation is done.
+    pub fn select_ordered_snapshot(
+        &self,
+        snapshot: &[TaskEnvelopeV2],
+        limit: usize,
+    ) -> TaskCandidates {
+        select_task_snapshot_items(snapshot, self, limit, |task| task, TaskEnvelopeV2::clone)
+    }
+
+    pub(crate) fn select_owned_snapshot(
+        &self,
+        snapshot: Vec<TaskEnvelopeV2>,
+        limit: usize,
+    ) -> TaskCandidates {
+        // Move all matches before sorting; applying the cursor first cannot
+        // change their relative order or either count.
+        let mut candidates =
+            select_task_snapshot_items(snapshot, self, usize::MAX, |task| task, |task| task);
+        self.sort_snapshot(&mut candidates.items);
+        candidates.items.truncate(limit);
+        candidates
+    }
+
+    pub(crate) fn sort_task_listing<T>(
+        &self,
+        items: &mut [T],
+        not_before: impl Fn(&T) -> Option<chrono::DateTime<chrono::Utc>>,
+        created_at: impl Fn(&T) -> &chrono::DateTime<chrono::Utc>,
+        id: impl Fn(&T) -> &str,
+        status: impl Fn(&T) -> TaskStatus,
+    ) {
+        sort_task_created_desc_id_asc(items, created_at, id);
+        if self.scheduled_after.is_some() {
+            items.sort_by_key(not_before);
+        } else if self.terminal_last {
+            items.sort_by_key(|item| status(item).is_terminal());
+        }
+    }
+
     pub(crate) fn normalized(&self) -> Self {
         Self {
             tags: normalize_task_tags(self.tags.clone()),
+            any_tags: normalize_task_tags(self.any_tags.clone()),
             search: self
                 .search
                 .as_deref()
@@ -94,6 +159,11 @@ impl TaskListFilter {
                     .iter()
                     .any(|available| available.trim().to_lowercase() == *tag)
             })
+            && (self.any_tags.is_empty()
+                || task
+                    .tags
+                    .iter()
+                    .any(|available| self.any_tags.contains(&available.trim().to_lowercase())))
             && self.external_ref.as_ref().is_none_or(|value| {
                 task.external_refs
                     .iter()
@@ -114,6 +184,7 @@ impl TaskListFilter {
             priority: self.priority,
             job_run_id: self.job_run_id.clone(),
             tags: self.tags.clone(),
+            any_tags: self.any_tags.clone(),
             parent_id: self.parent_id.clone(),
             scan_before: self.scan_before.clone(),
             excluded_ids,
@@ -157,6 +228,59 @@ impl TaskListFilter {
     }
 }
 
+/// Shared canonical ordering for snapshot selection and generated-index reads.
+pub(crate) fn sort_task_created_desc_id_asc<T>(
+    items: &mut [T],
+    created_at: impl Fn(&T) -> &chrono::DateTime<chrono::Utc>,
+    id: impl Fn(&T) -> &str,
+) {
+    items.sort_by(|a, b| {
+        created_at(b)
+            .cmp(created_at(a))
+            .then_with(|| id(a).cmp(id(b)))
+    });
+}
+
+fn select_task_snapshot_items<T>(
+    snapshot: impl IntoIterator<Item = T>,
+    filter: &TaskListFilter,
+    limit: usize,
+    envelope: impl Fn(&T) -> &TaskEnvelopeV2,
+    into_envelope: impl Fn(T) -> TaskEnvelopeV2,
+) -> TaskCandidates {
+    let filter = filter.normalized();
+    let unbounded = filter.without_cursor();
+    let mut candidates = TaskCandidates::default();
+    for item in snapshot {
+        let task = envelope(&item);
+        if !unbounded.matches(task) {
+            continue;
+        }
+        candidates.total_without_cursor += 1;
+        if !filter.matches_cursor(task) {
+            continue;
+        }
+        candidates.total += 1;
+        if candidates.items.len() < limit {
+            candidates.items.push(into_envelope(item));
+        }
+    }
+    candidates
+}
+
+/// How `query_task_rows` materializes the rows that fill a page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TaskListHydration {
+    /// Read each selected task's bundle (body documents and sidecars).
+    #[default]
+    Full,
+    /// Build each row from its candidate envelope only: no bundle read,
+    /// with empty body documents and sidecars. Every field of a compact
+    /// task-list row is envelope-derived, so a page projected to those
+    /// fields is identical to a hydrated page.
+    EnvelopeOnly,
+}
+
 /// Ordered metadata matches. Counts do not certify off-page bundle integrity.
 #[derive(Debug, Clone, Default)]
 pub struct TaskCandidates {
@@ -196,7 +320,7 @@ pub struct TaskChangeStamp {
 }
 
 /// One fully validated bundle, retaining sidecars from that same read.
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskRow {
     pub task: Task,
     pub comments: Vec<TaskComment>,
@@ -211,9 +335,12 @@ pub struct TaskPage {
     pub total: usize,
     /// Matches ignoring `scan_before`. Equals [`Self::total`] when no cursor.
     pub total_without_cursor: usize,
-    /// Dependency statuses captured after index freshness/rebuild work: every
-    /// task in the listed workspace plus each relation target the hydrated
-    /// rows name, wherever that target is registered.
+    /// Dependency statuses captured after index freshness/rebuild work.
+    /// For a small relation-target set this is the bounded projection of
+    /// those targets (wherever registered, plus one representative per
+    /// still-missing prefix, as `task_status_index_for` returns it); for a
+    /// large or empty set it is every task in the listed workspace plus each
+    /// relation target the hydrated rows name, wherever registered.
     pub status_by_id: std::collections::BTreeMap<String, TaskStatus>,
 }
 

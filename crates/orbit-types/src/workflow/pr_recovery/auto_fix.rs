@@ -11,7 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::task::TaskHistoryEntry;
+use crate::task::{TaskDecision, TaskHistoryEntry};
 
 /// Repairs one pull request may receive across every head, run and restart.
 /// Exhausting it stops the watcher with diagnostics; nothing escalates.
@@ -22,6 +22,101 @@ pub const PR_AUTO_FIX_ADMITTED_EVENT: &str = "pr_auto_fix_admitted";
 
 /// History event recording a repaired head the watcher published.
 pub const PR_AUTO_FIX_PUSHED_EVENT: &str = "pr_auto_fix_pushed";
+
+/// History event recording an admitted check repair that made no edit and
+/// wrote no scope record: the repair judged the failure not caused by the
+/// candidate, so the watcher reruns the failed checks once on the same head.
+pub const PR_AUTO_FIX_NO_EDIT_RERUN_EVENT: &str = "pr_auto_fix_no_edit_rerun";
+
+/// One no-edit check repair, as recorded in task history. The repair attempt
+/// that produced it already spent one auto-fix attempt for the head; the
+/// rerun it triggers additionally reserves the head's shared CI rerun budget.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrAutoFixNoEditRerun {
+    pub pr_number: String,
+    pub head_sha: String,
+    pub run_id: String,
+    pub attempt: u32,
+}
+
+/// Every no-edit repair recorded for `pr_number`, oldest first.
+pub fn pr_auto_fix_no_edit_reruns(
+    history: &[TaskHistoryEntry],
+    pr_number: &str,
+) -> Vec<PrAutoFixNoEditRerun> {
+    ledger_notes(history, PR_AUTO_FIX_NO_EDIT_RERUN_EVENT)
+        .filter(|record: &PrAutoFixNoEditRerun| record.pr_number == pr_number)
+        .collect()
+}
+
+/// History event recording a failed head held for an inherited base failure.
+pub const PR_AUTO_FIX_BASE_RED_EVENT: &str = "pr_auto_fix_base_red";
+
+/// A failed head whose repair is held until the base proves it fixed.
+///
+/// Only `failed_head` supplies hold authority. The optional fields retain the
+/// rich base-tip evidence or the minimal poll reason without changing the
+/// historical note. New history entries also carry this record in a decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrAutoFixBaseRed {
+    pub failed_head: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landed_base: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checks: Option<Vec<serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+impl PrAutoFixBaseRed {
+    /// A poll's minimal same-head hold and its diagnostic reason.
+    #[must_use]
+    pub fn for_failed_head(failed_head: String, reason: String) -> Self {
+        Self {
+            failed_head,
+            reason: Some(reason),
+            landed_base: None,
+            base_branch: None,
+            source: None,
+            checks: None,
+            path: None,
+        }
+    }
+
+    /// Decode the base-tip evidence boundary, selecting only known-red
+    /// evidence. A refresh decision supplies no inherited-failure hold.
+    #[must_use]
+    pub fn from_base_tip_evidence(evidence: &serde_json::Value) -> Option<Self> {
+        let record: Self = serde_json::from_value(evidence.clone()).ok()?;
+        (record.path.as_deref() == Some("known_red_base")).then_some(record)
+    }
+
+    /// Read a hold once at the task-history boundary. A typed decision wins
+    /// over diagnostic text; only an absent decision permits legacy decoding.
+    #[must_use]
+    pub fn from_entry(entry: &TaskHistoryEntry) -> Option<Self> {
+        if entry.event != PR_AUTO_FIX_BASE_RED_EVENT {
+            return None;
+        }
+        match &entry.decision {
+            Some(TaskDecision::PrAutoFixBaseRed(record)) => Some(record.clone()),
+            Some(_) => None,
+            None => Self::from_legacy_note(entry.note.as_deref()?),
+        }
+    }
+
+    /// Both historical shapes are this record's JSON: rich base-tip evidence
+    /// and a minimal failed-head/reason pair. Neither requires a rewrite.
+    fn from_legacy_note(note: &str) -> Option<Self> {
+        serde_json::from_str(note).ok()
+    }
+}
 
 /// Leads the completion failure that hands an admitted check repair to the
 /// step's repair activity. Only the watcher writes it, after admission.
@@ -171,6 +266,103 @@ pub fn decide_pr_auto_fix(
         crew: crew.to_string(),
         crew_source: crew_source.to_string(),
     })
+}
+
+/// History event recording one bounded wait for a throttled log read.
+pub const PR_AUTO_FIX_READ_DEFERRED_EVENT: &str = "pr_auto_fix_read_deferred";
+
+/// Where a throttled read's not-before came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PrAutoFixReadReset {
+    /// The provider named `Retry-After` or a rate-limit reset.
+    Provider,
+    /// The provider named neither, so the wait is a conservative backoff.
+    #[default]
+    Unknown,
+}
+
+/// One bounded wait for a throttled pull-request log read.
+///
+/// The history note stays this record's JSON. New entries also store it as
+/// [`TaskDecision::PrAutoFixReadDeferred`]. A note written before that
+/// decision still parses through [`Self::from_entry`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrAutoFixReadDeferral {
+    pub execution: String,
+    pub pr: String,
+    pub head_sha: String,
+    #[serde(default)]
+    pub repository: Option<String>,
+    pub run_id: u64,
+    pub job_id: u64,
+    /// Absent when the provider's job did not name a run attempt.
+    #[serde(default)]
+    pub run_attempt: Option<u64>,
+    #[serde(default)]
+    pub attempt: u64,
+    #[serde(default)]
+    pub observed_at_ms: u64,
+    /// Absent on a legacy note that recorded no not-before. Readers treat
+    /// that as a wait that does not fit a deadline.
+    #[serde(default)]
+    pub not_before_ms: Option<u64>,
+    #[serde(default)]
+    pub deadline_ms: u64,
+    #[serde(default)]
+    pub reset: PrAutoFixReadReset,
+    #[serde(default)]
+    pub retry_after_seconds: Option<u64>,
+    #[serde(default)]
+    pub reset_epoch_seconds: Option<u64>,
+    #[serde(default)]
+    pub resource: String,
+    #[serde(default)]
+    pub principal: String,
+    #[serde(default)]
+    pub request_id: String,
+    /// Absent on a legacy note that recorded no diagnostic.
+    #[serde(default)]
+    pub diagnostic: Option<String>,
+}
+
+impl PrAutoFixReadDeferral {
+    /// Not-before instant in milliseconds, or [`u64::MAX`] when a legacy
+    /// note omitted it.
+    #[must_use]
+    pub fn effective_not_before_ms(&self) -> u64 {
+        self.not_before_ms.unwrap_or(u64::MAX)
+    }
+
+    /// Diagnostic recorded for the wait. A legacy note that omitted one
+    /// still surfaces the historical placeholder.
+    #[must_use]
+    pub fn diagnostic_text(&self) -> &str {
+        self.diagnostic.as_deref().unwrap_or("a throttled log read")
+    }
+
+    /// The deferral a `pr_auto_fix_read_deferred` entry records.
+    ///
+    /// A matching decision is authoritative, including when its note
+    /// disagrees. An entry with no decision is read from its note. A
+    /// decision of another kind is not that note.
+    #[must_use]
+    pub fn from_entry(entry: &TaskHistoryEntry) -> Option<Self> {
+        if entry.event != PR_AUTO_FIX_READ_DEFERRED_EVENT {
+            return None;
+        }
+        match &entry.decision {
+            Some(TaskDecision::PrAutoFixReadDeferred(record)) => Some(record.clone()),
+            Some(_) => None,
+            None => Self::from_legacy_note(entry.note.as_deref()?),
+        }
+    }
+
+    /// Isolated compatibility reader for a note written before the typed
+    /// decision. The note is the record's JSON and nothing else.
+    fn from_legacy_note(note: &str) -> Option<Self> {
+        serde_json::from_str(note).ok()
+    }
 }
 
 /// Whether a step failure is the watcher's handoff of an admitted check

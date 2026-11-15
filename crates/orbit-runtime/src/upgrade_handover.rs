@@ -137,6 +137,18 @@ impl RuntimeKernel {
         }
     }
 
+    /// [`Self::record_upgrade_interruption`] for a fixture, which has no worker
+    /// process to yield and exit.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn record_upgrade_interruption_for_test(
+        &self,
+        run_id: &str,
+        pid: u32,
+        role: ParticipantRole,
+    ) {
+        self.record_upgrade_interruption(run_id, pid, role);
+    }
+
     /// The diagnostic recorded on an upgrade-interrupted run.
     ///
     /// A claimed leaf is refused by generic resume, so it must not be pointed

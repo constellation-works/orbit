@@ -10,23 +10,28 @@ mod fields_updated;
 mod granted_tools;
 mod host_labels;
 mod light_delivery;
-mod mock_review;
 mod model;
 mod mutation_proposal;
 mod os_requirement;
+mod pilot_summary;
 mod plan;
 mod readiness;
 mod receipt;
 mod regression;
+mod reservation_owner;
+mod resolves;
 mod schedule;
 mod severity;
 mod show_fields;
+mod source_location;
 mod tags_changed;
 mod ui_requirement;
-mod visual_capture;
-mod visual_review;
 mod work_class;
 pub use error::TaskError;
+pub use resolves::{
+    RESOLVES_SIDE_EFFECT_PENDING_EVENT, RESOLVES_TARGET_NOTE_PREFIX, named_friction_targets,
+    pending_resolves_entries, resolves_relation_targets,
+};
 
 pub use context_creation::{
     CONTEXT_CREATION_AUTHORIZED_EVENT, CONTEXT_CREATION_GRANT_VERSION, ContextCreationGrant,
@@ -36,17 +41,29 @@ pub use context_widening::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep,
 };
 pub use decision::{
-    CiFailureIdentity, CiFailureIdentityError, CiFailureSource, CodeScanningAlertEvidence,
-    CodeScanningAlertEvidenceError, DECISION_ANSWERED_EVENT, DECISION_DIGEST_EXPIRY_WINDOW_HOURS,
-    DECISION_REQUESTED_EVENT, DECISION_TOKEN_CONSUMED_EVENT, DEFAULT_DECISION_REQUEST_TTL_HOURS,
-    DecisionAnswer, DecisionBinding, DecisionGate, DecisionRequest, DecisionRequestState,
-    DecisionResolution, DesktopMutationReceipt, DesktopMutationReceiptError,
-    FINAL_RECOVERY_DECIDED_EVENT, PILOT_ADMISSION_DECIDED_EVENT, PilotAdmissionVerdict,
-    PublicationHistoryError, PublicationProofContainer, PublicationProofValue,
-    PublicationPushCheckpoint, PublicationPushDecision, PublicationPushPerformed,
-    PublicationPushProof, PublicationSettlingDecision, PublicationSettlingObservation,
-    RecordedFinalRecovery, TaskDecision, current_candidate_identity,
-    decision_requests_from_history, open_decision_requests,
+    AGENT_DECISION_MAX_OPTIONS, AGENT_DECISION_MIN_OPTIONS, AgentDecisionOptionInput,
+    AgentDecisionRequestError, CREW_ASSIGNED_EVENT, CREW_REDRAWN_EVENT, CiFailureIdentity,
+    CiFailureIdentityError, CiFailureSource, CodeScanningAlertEvidence,
+    CodeScanningAlertEvidenceError, CrewAssignmentField, CrewAssignmentState,
+    DECISION_ANSWERED_EVENT, DECISION_DIGEST_EXPIRY_WINDOW_HOURS, DECISION_MODEL_CONFIRMED_EVENT,
+    DECISION_REOPENED_EVENT, DECISION_REQUESTED_EVENT, DECISION_TOKEN_CONSUMED_EVENT,
+    DEFAULT_DECISION_REQUEST_TTL_HOURS, DecisionAction, DecisionAnswer, DecisionBinding,
+    DecisionGate, DecisionOption, DecisionOptionError, DecisionOptionInput, DecisionRequest,
+    DecisionRequestState, DecisionResolution, DecisionRewrite, DecisionRiskTier,
+    DesktopMutationReceipt, DesktopMutationReceiptError, FINAL_RECOVERY_DECIDED_EVENT,
+    JobStepInvocation, MODEL_ANSWER_ACTOR, MODEL_ANSWER_CONFIRM, MODEL_ANSWER_VETO,
+    ModelAnswerCitation, ModelAnswerConfirmation, ModelAnswerEnablement, ModelCitedPrecedent,
+    PILOT_ADMISSION_DECIDED_EVENT, PRECEDENT_ACTOR, PRECEDENT_BOOKKEEPING_NOTE,
+    PilotAdmissionOperatorRecord, PilotAdmissionRecordRefusal, PilotAdmissionVerdict,
+    PrecedentCitation, PrecedentSource, PublicationHistoryError, PublicationProofContainer,
+    PublicationProofValue, PublicationPushCheckpoint, PublicationPushDecision,
+    PublicationPushPerformed, PublicationPushProof, PublicationSettlingDecision,
+    PublicationSettlingObservation, RESIDENT_AUTHORITY_GRANT, RESIDENT_AUTHORITY_REJECT,
+    REVIEW_SETTLED_EVENT, RecordedCrewAssignment, RecordedFinalRecovery, RecordedReviewFinding,
+    RecordedReviewSettlement, ReviewSettlementGate, SCRIPT_GRANT_GRANT, SCRIPT_GRANT_REJECT,
+    TaskDecision, agent_decision_answers, current_candidate_identity, decision_option_answers,
+    decision_requests_from_history, is_precedent_bookkeeping, normalize_agent_decision_topic,
+    recorded_review_settlements,
 };
 pub use epic::{EPIC_TAG, EpicHierarchyNode, has_epic_tag, inherited_only_epic_roots};
 pub use fields_updated::{
@@ -54,11 +71,13 @@ pub use fields_updated::{
     TASK_FIELDS_UPDATED_EVENT, task_fields_updated_documents, task_fields_updated_note,
 };
 pub use granted_tools::{
-    GRANTED_TOOLS_CHANGED_EVENT, GRANTED_TOOLS_FIELD, granted_tools_change_note,
+    GRANTED_TOOLS_CHANGED_EVENT, GRANTED_TOOLS_FIELD, TOOL_NAMES_MIGRATED_EVENT,
+    granted_tools_change_note, tool_names_migrated_note,
 };
 pub use host_labels::{
-    MAX_HOST_LABEL_BYTES, REQUIRES_LABELS_FIELD, effective_host_labels, host_labels_unavailable,
-    host_labels_wait, missing_host_labels, normalize_host_labels, quoted_labels,
+    MAX_HOST_LABEL_BYTES, REQUIRES_LABELS_FIELD, TAG_REQUIRES_LABELS_KEY, TagLabelRequirements,
+    effective_host_labels, host_labels_unavailable, host_labels_wait, missing_host_labels,
+    normalize_host_labels, quoted_labels,
 };
 pub use light_delivery::{
     DEFAULT_LIGHT_DELIVERY_PATHS, GuardOutcome, LIGHT_DELIVERY_APPLIED_EVENT,
@@ -73,47 +92,41 @@ pub use schedule::{
 
 pub use artifacts::{
     ArtifactManifestFileV2, ArtifactManifestV2, ArtifactWriter, CYCLIC_RELATION_TYPES,
-    EXPLORE_BRIEF_ARTIFACT, ORB_TASK_ID_MAX, TASK_ACCEPTANCE_FILE_NAME,
-    TASK_ARTIFACT_FILES_DIR_NAME, TASK_ARTIFACT_MANIFEST_FILE_NAME, TASK_ARTIFACT_SCHEMA_VERSION,
-    TASK_ARTIFACTS_DIR_NAME, TASK_COMMENTS_FILE_NAME, TASK_DESCRIPTION_FILE_NAME,
-    TASK_ENVELOPE_FILE_NAME, TASK_EVENTS_FILE_NAME, TASK_EXECUTION_SUMMARY_FILE_NAME,
-    TASK_PLAN_FILE_NAME, TaskArtifactMetadata, TaskCommentRowV2, TaskEnvelopeV2, TaskEventRowV2,
-    TaskRelation, TaskRelationEdge, TaskRelationType, canonical_artifact_path, format_task_id,
-    is_explore_brief_artifact, is_valid_orb_task_id, is_valid_task_id_prefix, parse_task_number,
-    serialize_task_artifacts, task_id_prefix, validate_orb_task_id,
-    validate_relative_artifact_path, validate_task_relations_for_source,
-};
-pub use mock_review::{
-    MOCK_DEVIATIONS_ARTIFACT, MOCK_DIGESTS_ARTIFACT, MOCK_EXTENSIONS, MOCK_STATES,
-    MOCKS_ARTIFACT_PREFIX, ManifestApp, ManifestView, MockDeviation, MockDeviationBasis,
-    MockDeviations, MockDigest, MockDigestRecord, MockRefusal, MockRefusalCode, ResolvedMock,
-    VERIFY_MOCK_UI_TAG, ViewManifestSet, changed_mock_artifacts, has_verify_mock_ui_tag,
-    is_mock_artifact, mock_refusals_detail, mock_sha256_hex, parse_mock_name, record_mock_digests,
-    record_mock_digests_for_admission, validate_task_mocks,
+    ORB_TASK_ID_MAX, TASK_ACCEPTANCE_FILE_NAME, TASK_ARTIFACT_FILES_DIR_NAME,
+    TASK_ARTIFACT_MANIFEST_FILE_NAME, TASK_ARTIFACT_SCHEMA_VERSION, TASK_ARTIFACTS_DIR_NAME,
+    TASK_COMMENTS_FILE_NAME, TASK_DESCRIPTION_FILE_NAME, TASK_ENVELOPE_FILE_NAME,
+    TASK_EVENTS_FILE_NAME, TASK_EXECUTION_SUMMARY_FILE_NAME, TASK_PLAN_FILE_NAME,
+    TaskArtifactMetadata, TaskCommentRowV2, TaskEnvelopeV2, TaskEventRowV2, TaskRelation,
+    TaskRelationEdge, TaskRelationType, canonical_artifact_path, format_task_id,
+    is_valid_orb_task_id, is_valid_task_id_prefix, parse_task_number, serialize_task_artifacts,
+    task_id_prefix, validate_orb_task_id, validate_relative_artifact_path,
+    validate_task_relations_for_source,
 };
 pub use model::{
-    AdmissionAffinityReach, ArtifactPresentation, CANDIDATE_DISCARDED_EVENT,
-    CANDIDATE_RESUME_EVENT, CI_FAILURE_KEY_TAG_PREFIX, CLAIM_CANDIDATE_KEPT_EVENT,
+    ADMISSION_AFFINITY, AdmissionAffinityReach, ArtifactPresentation, CANDIDATE_DISCARDED_EVENT,
+    CANDIDATE_RESUME_EVENT, CI_FAILURE_KEY_TAG_PREFIX, CLAIM_CANDIDATE_KEPT_EVENT, CrewSource,
     DEFAULT_TASK_LIST_LIMIT, DELIVERY_JOB_TAG_PREFIX, DERIVED_EXECUTION_SUMMARY_PREFIX,
     DependencyDeadEnd, DispatchAffinity, EXECUTION_SUMMARY_DERIVED_EVENT, ExecutionLocation,
     ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, MAX_TASK_ARTIFACT_CONTENT_BYTES,
-    NEUTRAL_PRESSURE_MILLI, NO_AUTO_APPROVE_TAG, NO_DIFF_EXPECTED_TAG, OrchestratorModelSource,
-    ResolvedTaskDependency, ResolvedTaskRelation, TASK_REFERENCE_NOT_VERIFIABLE_HERE, Task,
-    TaskArtifact, TaskComment, TaskComplexity, TaskCreateStatus, TaskHistoryEntry, TaskOrigin,
-    TaskPriority, TaskReferenceIndex, TaskStatus, TaskType, UNSET_BUCKET,
-    UnsatisfiableTaskDependency, archived_task_completed_before_archive, artifact_presentation,
-    automatic_dispatch_cmp, automatic_dispatch_cmp_with_affinity,
+    NEUTRAL_PRESSURE_MILLI, NO_AUTO_APPROVE_TAG, NO_DIFF_EXPECTED_TAG, NO_DRAIN_TAG,
+    OrchestratorModelSource, RedrawReason, ResolvedTaskDependency, ResolvedTaskRelation,
+    TASK_REFERENCE_NOT_VERIFIABLE_HERE, Task, TaskArtifact, TaskComment, TaskComplexity,
+    TaskCreateStatus, TaskHistoryEntry, TaskOrigin, TaskPriority, TaskReferenceIndex, TaskStatus,
+    TaskType, UNSET_BUCKET, UnsatisfiableTaskDependency, archived_task_completed_before_archive,
+    artifact_presentation, automatic_dispatch_cmp, automatic_dispatch_cmp_with_affinity,
     automatic_dispatch_cmp_with_expiry, complexity_bucket, complexity_bucket_ord,
     delivery_job_selection, deserialize_required_tools, image_bytes_match_media_type,
     inline_safe_artifact_media_type, is_inline_image_media_type, is_system_identity_tag,
     is_textual_artifact_media_type, labeled_or_unset, media_type_for_artifact_path,
     names_task_delivery_pull_request, normalize_required_tools, normalize_task_dependencies,
     normalize_task_tags, normalized_artifact_media_type, push_external_ref_if_missing,
-    resolve_task_dependencies, resolve_task_dependencies_with_index, resolve_task_relations,
-    resolve_task_relations_with_index, satisfy_completed_archived_dependencies,
-    task_dependencies_ready_with_index, task_matches_tags, unmet_task_dependencies,
-    unmet_task_dependencies_with_index, unsatisfiable_task_dependencies,
+    resolve_task_dependencies, resolve_task_dependencies_with_index,
+    satisfy_completed_archived_dependencies, task_dependencies_ready_with_index, task_matches_tags,
+    unmet_task_dependencies, unmet_task_dependencies_with_index, unsatisfiable_task_dependencies,
     unsatisfiable_task_dependencies_with_index, validate_task_dependencies_with,
+};
+pub(crate) use model::{
+    LazyTaskReferenceIndex, project_task_relations_lazily, resolve_task_dependencies_lazily,
 };
 pub use mutation_proposal::{
     MUTATION_PROPOSAL_ARTIFACT_DIR, MUTATION_PROPOSAL_SCHEMA_VERSION,
@@ -135,40 +148,21 @@ pub use regression::{
     REGRESSION_RISK_MARKED_EVENT, RegressionClassification, RegressionEscape, RegressionNature,
     RegressionRiskMarks,
 };
+pub use reservation_owner::{PipelineChildAdmissionMeta, ReservationOwnerMetadata};
 pub use severity::{DefectSeverity, SeveritySource};
 pub use show_fields::{
     TASK_SHOW_DELIVERY_FIELD, TASK_SHOW_PROJECTION_FIELDS, TASK_SHOW_PROJECTION_FIELDS_CSV,
-    TASK_SHOW_PUBLIC_DTO_FIELDS, is_task_show_projection_field, refuses_implementer_writes,
-    task_artifact_manifest_json, task_base_json, task_dependency_labels, task_os_requirement_json,
-    task_show_record_field_json, task_show_reference_field_json, unknown_task_show_field_message,
+    TASK_SHOW_PUBLIC_DTO_FIELDS, is_task_show_projection_field, ordered_external_refs_for_show,
+    refuses_implementer_writes, task_artifact_manifest_json, task_base_json,
+    task_os_requirement_json, task_show_record_field_json, task_show_reference_field_json,
+    unknown_task_show_field_message,
+};
+pub use source_location::{
+    SourceLocationEmptyComponents, SourceLocationParseError, parse_source_location,
 };
 pub use tags_changed::{TAGS_CHANGED_EVENT, TagsChanged, TagsChangedError, tags_at};
 pub use ui_requirement::{
     BROWSER_KIT_INSTALL_COMMAND, UI_TAG, browser_kit_wait, requires_browser_kit,
-};
-pub use visual_capture::{
-    DEFAULT_VISUAL_MAX_MOCKS, VISUAL_ARTIFACT_PREFIX, VISUAL_CAPTURE_ARTIFACT,
-    VISUAL_CAPTURE_MISMATCH, VISUAL_CHECKS_ARTIFACT, VISUAL_MAX_IMAGE_BYTES,
-    VISUAL_SETTLE_ARTIFACT, VisualCaptureError, VisualCaptureExpectation, VisualCaptureImage,
-    VisualCaptureOutcome, VisualCaptureRecord, VisualCapturedMock, VisualCheckFinding,
-    VisualChecksRecord, VisualKitPin, VisualManifestCapture, VisualManifestRef, VisualMockDigest,
-    VisualMockDigestRecord, VisualNotEstablished, VisualReviewContract, VisualReviewMode,
-    VisualSettleOutcome, VisualSettleRecord, VisualSettleRefusal, is_visual_artifact,
-    visual_capture_mismatches, visual_review_summary, visual_review_summary_with_review,
-};
-pub use visual_review::{
-    DEFAULT_VISUAL_BLOCK_AT, DEFAULT_VISUAL_FILE_AT, DEFAULT_VISUAL_MAX_FINDINGS,
-    DEFAULT_VISUAL_MAX_IMAGE_TOKENS, DEFAULT_VISUAL_MAX_IMAGES, VISUAL_DISPUTE_ACCEPTED_EVENT,
-    VISUAL_IMAGE_TOKEN_CONSTANT, VISUAL_MEASURE_INVOCATION_IDS, VISUAL_MEASURE_PURPOSE,
-    VISUAL_NO_VISION_CREW, VISUAL_REVIEW_ARTIFACT, VISUAL_REVIEW_PURPOSE, VISUAL_REVIEW_TAG,
-    VISUAL_VERIFY_BATCH_SIZE, VisualBudgetMock, VisualBudgetSelection, VisualDeviationRecord,
-    VisualDisposition, VisualEvidence, VisualFindingVerdict, VisualImageCatalog,
-    VisualNotShownMock, VisualPass, VisualRecaptureRecord, VisualResolution,
-    VisualReviewBudgetRecord, VisualReviewFinding, VisualReviewRecord, VisualShownForm,
-    VisualShownMock, VisualThreshold, VisualVerdictKind, parse_visual_region_location,
-    select_visual_budget, validate_visual_evidence, validate_visual_region_location,
-    visual_disposition, visual_image_catalog, visual_image_dimensions, visual_image_tokens,
-    visual_region_inside, visual_severity_rank, visual_severity_weight,
 };
 pub use work_class::{
     CHANGE_WORK_CLASS, NO_DIFF_WORK_CLASS, auto_task_template, is_no_diff_expected, work_class,

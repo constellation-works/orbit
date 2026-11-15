@@ -8,8 +8,8 @@ tags: [plugins, security, sandbox, secrets, ipc]
 paths: ["crates/orbit-core/src/adapter/engine_host/actions/sandbox/**", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-runtime/src/plugin/**", "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs", "crates/orbit-tools/src/plugin/backend/**"]
 related_features: [policy-sandbox, plugins]
 related_artifacts: [ORB-13038, ORB-13008, ORB-13009, ORB-14017, ORB-14194, F2026-09-230]
-last_updated: 2026-10-27
-last_validated: 2026-10-26
+last_updated: 2026-11-04
+last_validated: 2026-11-04
 ---
 
 # Design: host-side broker for agent-initiated plugin calls
@@ -21,7 +21,7 @@ server UID. The broker executes authenticated requests for exec-backed plugin to
 the audited dispatch, under the run's own record and the §5 profile (§4.4, "As implemented").
 It also runs the read-only `github.*` tools on the host, so they authenticate with the host's
 `gh` while the sandbox keeps `~/.config/gh` masked (§3), and it carries a claimed worker's
-owner calls, including a before-PR reviewer's review-artifact reads and report write, to the
+owner calls [ORB-14260], including a before-PR reviewer's review-artifact reads and report write, to the
 claim's remote owner, so SSH runs outside the sandbox that masks `~/.ssh` (§3, "Claimed-owner
 calls").
 Every sandboxed agent run masks plugin state and secrets (§6, "As implemented").
@@ -144,7 +144,7 @@ The nested `orbit` sends it to the broker, and the broker is the only party that
 plugin's secrets or spawns its backend. Built-in `orbit.*` tools are unchanged and still run in
 the nested `orbit`.
 
-**Host-credentialed reads.** The one exception among built-ins is a closed list of read-only
+**Host-credentialed reads.** One exception among built-ins is a closed list of read-only
 GitHub tools: `github.auth.status`, `github.pr.list`, `github.run.list`, `github.run.view` and
 `github.run.logs`. Each runs `gh`, which needs the host account's `~/.config/gh`, and every
 agent sandbox masks that directory (policy-sandbox [2_design.md](../policy-sandbox/2_design.md)
@@ -155,9 +155,29 @@ credential enters the sandbox. Forwarding a `GH_TOKEN` into the sandbox was reje
 agent and every command it runs could read it, and it would bypass the tools' redaction.
 Nothing that changes GitHub is on the list.
 
-**Claimed-owner calls.** The only other built-ins the broker carries are a claimed worker's
+**A resident cycle's ship.** A resident cycle's `orbit.workflow` action `ship` is brokered for a similar
+reason: started inside the cycle's read-only sandbox, the leaf's worker could neither write its
+worktree nor start its own agent sandbox. With `ORBIT_PLUGIN_BROKER` set and the managed-run envelope
+naming a resident cycle's run, the nested `orbit` forwards the call. The broker refuses it unless the
+job run it serves is a cycle, then runs the ship through the tool host for that run, so the cycle guard
+decides the live grant, the `dispatch` right and the workspace and writes the action ledger row.
+
+**A resident cycle's decision raise.** A cycle escalates with `orbit.decision` action `raise`, whose
+workspace-wide raise lock lies in `.orbit`, which the cycle's sandbox mounts read-only. The nested
+`orbit` forwards the raise on the same terms as the ship, and the broker runs it through the tool host
+for the run it serves. The sandbox gains no write grant. The handler still refuses a task no human crew
+holds, and the request's filer is the run's identity, never one the input names.
+
+**A resident cycle's landing and move to `done`.** `orbit.workflow` action `land`, and an `orbit.task.update`
+whose `status` is `done`, reach the forge with the host's `gh` credentials, which the cycle's sandbox
+does not hold. The nested `orbit` forwards them on the same terms as the ship, and the broker runs them
+through the tool host for the run it serves, so the cycle guard decides the live grant, the `merge`
+right and the open pull request. The broker carries no other `orbit.task.update` for a cycle.
+
+**Claimed-owner calls.** The last built-ins the broker carries are a claimed worker's
 owner calls (`CLAIMED_OWNER_TOOLS`): `orbit.task.show`, `orbit.search`, `orbit.task.list`,
-`orbit.task.add`, `orbit.friction.add`, `orbit.task.artifact.get` and `orbit.task.artifact.put`. A claimed leaf's
+`orbit.task.add`, `orbit.friction` action `add`, `orbit.task.artifact` action `get`, `orbit.task.artifact` action `put`,
+`orbit.notice.post`, `orbit.notice.show` and `orbit.notice.close`. A claimed leaf's
 task lives on its owner, another machine reached over SSH, and every agent sandbox masks
 `~/.ssh` (policy-sandbox [2_design.md](../policy-sandbox/2_design.md) §7.1), so the worker's own
 SSH route can only fail host-key verification. With `ORBIT_PLUGIN_BROKER` set, the nested
@@ -173,7 +193,9 @@ artifact get naming a task the owner does not hold there is refused as `claimed_
 after a task-only check on the owner. An artifact put names the claimed task. A new task must name the
 claimed task as `spawned_from`, and may relate to nothing else, except that a claimed review
 task's finding may also name the task that introduced it as `regression_from` ([ORB-14792]); a
-friction may name only the claimed task as the one it was found during. Internal
+friction may name only the claimed task as the one it was found during. A notice is
+stored only on the owner and attributed to the claim's task and run; its request's
+`orchestrator` attribution never crosses the broker. Internal
 (`_`-prefixed) fields are refused; task show and artifact calls also use closed field
 allowlists. The activity's own tool policy still applies.
 For `orbit.task.show`, supplying `limit`, `comments_offset`, `history_offset` or
@@ -316,8 +338,10 @@ behind `orbit-core`, not `orbit-engine`, so the listener reaches dispatch throug
 existing host seam (`RuntimeHost`) and not through a new crate dependency.
 
 **Which calls it serves.** Every call a sandboxed nested `orbit` makes to a tool whose
-registration is a plugin backend, plus the five host-credentialed reads and the claimed
-worker's owner calls above. That covers `orbit tool run <ns>.<verb>`, its
+registration is a plugin backend, plus the five host-credentialed reads, the claimed
+worker's owner calls above and the guarded
+resident actions (`orbit.workflow` action `ship`, `orbit.decision` action `raise`, `orbit.workflow` action `land` and
+the move to `done` via `orbit.task.update`) below. That covers `orbit tool run <ns>.<verb>`, its
 `orbit <ns> <verb>` spelling, and `tools/call` on an agent's `orbit mcp serve`. Tool listing,
 schemas and `--help` still come from the nested `orbit`. Those need only the plugin rows,
 install trees and grant witnesses, which stay readable. Calls that are not made from inside an
@@ -458,11 +482,11 @@ service side regardless.
   `dry_run` to false. A missing or invalid required field, or an invalid optional field,
   is `plugin_broker_invalid_request`; unrecognized fields are ignored.
 - The request is refused with `plugin_broker_refused` when its `cwd` does not resolve inside
-  the run's worktree, it names a workspace other than the run's, it asks for a dry run (the
+  the run's worktree, it names a workspace other than the run's (the run's own workspace is accepted under any of its spellings: logical id, registered name or task-partition id; a run with no recorded workspace accepts none), it asks for a dry run (the
   nested `orbit` answers those itself), or it names a tool outside the plugin tools, the
-  five read-only `github.*` tools and `CLAIMED_OWNER_TOOLS` (§3). Claimed-owner calls also pass
-  the claim-specific scope checks described above. The run's policy applies fail-closed: an activity whose allowlist names nothing admits no
-  brokered call, where an in-process call with no activity would be unrestricted.
+  five read-only `github.*` tools, `CLAIMED_OWNER_TOOLS` and a resident cycle's guarded ship, decision raise, landing and move to `done`
+  (§3). Claimed-owner calls also pass
+  the claim-specific scope checks described above.
 - The call runs through the same audited dispatch and tool chokepoint as an in-process call,
   with an `agent` session, the run's allowlist or deny policy, and the backend's `context`
   bound to the run's task and job run. An exec backend is confined by the §5 intersection.
@@ -597,7 +621,8 @@ It returns the plugin profile with these changes:
   `enforce_programs` does for any restricted caller.
 - A plugin profile that runs unsandboxed refuses the call (below).
 
-Landlock carves each read exclusion out beneath every remaining read root. The directory that
+Landlock carves each read exclusion out beneath every remaining read root and every host
+runtime or tool-state grant (`$RUSTUP_HOME`, `$GH_CONFIG_DIR`). The directory that
 holds an excluded path stays listable, as in the activity ruleset. An exact or subtree
 exclusion holds even for a name created after spawn. A wildcard exclusion (`**/.env`) is held
 only at the paths it matches when the ruleset is compiled. The same limit applies to a wildcard
@@ -606,10 +631,12 @@ agent has the same limit for a name created after spawn.
 
 A write root is not dropped for a read exclusion or a credential read deny. When the root is
 at or above one of those paths, Landlock carves it out of the write root's read rights, so the
-subtree stays writable and is not readable. A write root nested inside a broader deny, with
-nothing denied beneath it, stays read-write: that is the plugin's own state directory under
-`state/plugins`. A wildcard read exclusion has the same spawn-time limit under a write root as
-under a read root.
+subtree stays writable and is not readable. A write root or store file inside a read exclusion
+or a credential deny is granted write rights only, so a name the agent may modify but not read
+stays unreadable to the backend, including one created after spawn. The one write root that
+keeps read inside a deny is one beneath a read root the host names there: `{{plugin_state}}`
+under `state/plugins`. A wildcard read exclusion has the same spawn-time limit under a write
+root as under a read root. [ORB-20350]
 
 The seatbelt profile replays the caller's `modify` rules in their own order, after the
 plugin's grants. Each exclusion is replayed as written. Each grant is clipped to the roots the
@@ -728,9 +755,9 @@ anything:
 | The client disconnects mid-call | The backend's process group is killed. A reported rotation is still applied. |
 | A claimed reviewer's artifact call arrives after its reviewer finished, or outside the reviewer activity | `plugin_broker_refused` with `review_attempt_stale` or `claimed_review_bridge_refused`; nothing reaches the owner. The reviewer reports `incomplete`, and the next run admits a fresh attempt. |
 | A claimed worker's ordinary owner call writes to another task, names an unsupported relation or field, or reads a task outside the claimed workspace | `plugin_broker_refused` with `claimed_owner_bridge_refused`; nothing reaches the owner, except the read whose not-found tells the broker the task is outside the claimed workspace. A `regression_from` relation reaches the owner, which refuses it with `PolicyDenied` unless the claimed task is a review task and the target is a task in its workspace. |
-| A claimed worker remotely reads another task's `review-*` artifact | `plugin_broker_refused`; the marker follows the activity-dependent scopes in §3. An ordinary `agent_implement` read of `review-report.json` or `review-manifest.json` fails the reviewer activity check first with `claimed_review_bridge_refused`. An admitted reviewer, live final recovery or the findings-read route can reach the claimed-task check, which returns `claimed_owner_bridge_refused`. Nothing reaches the owner. |
+| A claimed worker remotely reads another task's `review-*` artifact | `plugin_broker_refused` with `claimed_owner_bridge_refused` before any activity-dependent scope in §3; nothing reaches the owner. The claimed-task check runs first for every activity, so an ordinary `agent_implement` read of another task's `review-report.json` or `review-manifest.json` never reaches the reviewer activity check. Same-task reads keep the §3 scopes: an ordinary `agent_implement` read of its own task's `review-report.json` or `review-manifest.json` fails the reviewer activity check with `claimed_review_bridge_refused`, while an admitted reviewer, a live final recovery and the findings-read route serve their own named artifacts. |
 | A claimed final recovery writes a `review-*` artifact, reads one outside the gate's named evidence, or reads after its recovery decided or its claim began settling; or any claimed worker asks for another run's delivery of its claimed task | `plugin_broker_refused` with `review_write_refused`, `review_read_refused`, `final_recovery_stale`, `claim_not_live` or `delivery_run_refused`; nothing reaches the owner. The final-recovery prompt treats a refused read as a gap in its evidence, not a reason to stop. |
-| A claimed worker's owner call cannot reach the broker | `owner_route_unavailable`, `retryable: false`, naming this run's coordinator as stopped (or `ORBIT_PLUGIN_BROKER` as unset). The agent ends its step on that code and must not route around the sandbox. The run skips step and final recovery, and a pull drain releases the claim and stops offering that crew for its window. |
+| A claimed worker's owner call cannot reach the broker | `owner_route_unavailable`, `retryable: false`, naming this run's coordinator as stopped (or `ORBIT_PLUGIN_BROKER` as unset). The agent ends its step on that code and must not route around the sandbox. The run skips step and final recovery, and a pull drain preserves release evidence, the owner holds the task for an operator decision, and the drain suppresses its host for the window. |
 | The host is an older Orbit that starts no broker | It applies no mask either, so nested calls keep today's in-process path. Rollout order (§8) keeps this pairing. |
 
 A call the broker accepts but cannot run is answered with the codes in §4.4 ("As
@@ -783,5 +810,9 @@ The mask ships last, only once every call it would break has a broker to go to:
 - [ORB-18667] — a claimed leaf's read of the evidence findings on the kept candidate it resumes (§3).
 - [ORB-14792] — a claimed review task's `regression_from` findings and `unfiled-findings.json` (§3).
 - [ORB-19270] — a claimed worker's task show and artifact get of any task in the claimed workspace (§3).
+- [ORB-20350] — prevented nested Landlock write grants from reopening the
+  agent's read exclusions (§6.2).
+- [ORB-20566] — moved managed explorer submissions to a sibling worker
+  outside the caller's sandbox (§3).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

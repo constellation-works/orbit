@@ -1,0 +1,74 @@
+{
+  "fixture": "residents",
+  "frozen_instant": "2026-01-01T12:00:00Z",
+  "tasks": [
+    {
+      "title": "Ship the CSV export behind the reports flag",
+      "complexity": "medium",
+      "status": "backlog"
+    }
+  ],
+  "residents": [
+    {
+      "title": "Keep the release branch green",
+      "mandate": {
+        "goal": "Keep the release branch green until the 0.44 cut.",
+        "exit_criteria": [
+          "Every task tagged release is done.",
+          "The release branch CI is green on its last three runs."
+        ],
+        "watch": {
+          "tasks": [],
+          "tags": [
+            "release"
+          ]
+        },
+        "cadence": {
+          "floor_minutes": 15,
+          "heartbeat_minutes": 60
+        },
+        "continuity": "prefer"
+      },
+      "requests": [
+        {
+          "add": [
+            "dispatch",
+            "promote"
+          ],
+          "workspace": true,
+          "quote": "Dispatch and promote release work in this workspace."
+        },
+        {
+          "add": [
+            "merge"
+          ],
+          "quote": "Merge reviewed release PRs."
+        }
+      ]
+    },
+    {
+      "title": "Triage incoming frictions",
+      "mandate": {
+        "goal": "Triage new frictions into tasks or closures each morning.",
+        "exit_criteria": [
+          "No friction stays untriaged for more than a day."
+        ],
+        "watch": {
+          "tasks": [],
+          "tags": [
+            "friction"
+          ]
+        },
+        "cadence": {
+          "floor_minutes": 30,
+          "heartbeat_minutes": 240
+        },
+        "continuity": "off"
+      },
+      "control": {
+        "action": "pause",
+        "reason": "Paused while the triage rules are rewritten."
+      }
+    }
+  ]
+}

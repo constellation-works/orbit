@@ -1,7 +1,7 @@
 ---
 title: "Remote Access — Decisions"
 owner: codex
-last_updated: 2026-10-08
+last_updated: 2026-11-14
 last_validated: 2026-10-13
 status: Accepted
 feature: remote-access
@@ -41,6 +41,8 @@ These choices describe the current implementation.
 **Decision.** Refuse every non-loopback Web bind and explicitly bind the SSH local-forward listener to 127.0.0.1. Reach a remote dashboard through SSH rather than adding Orbit Web credentials or a routable listener.
 
 **Consequences.** Network authentication, encryption, and host verification use the operator's SSH configuration. Cost: remote use requires SSH access and grants the forwarded client the remote dashboard's full authority.
+
+**Authority rule.** A dashboard's operator authority comes only from `orbit web serve --operator`, never from the server's terminal or `ORBIT_OPERATOR`; `orbit web connect` passes the flag by default and `--no-operator` leaves governed controls refused even though the remote `serve` runs on the `ssh -tt` pty. Host and Origin checks do not authenticate a request: any local process reaching an `--operator` dashboard's loopback port can drive its governed writes, which are audited with provenance `session`, not `interactive-terminal` ([ORB-23047], [The dashboard takes operator authority from its session only](../operations-as-data/4_decisions.md#the-dashboard-takes-operator-authority-from-its-session-only)).
 
 ## Connect attaches before spawning
 
@@ -84,3 +86,9 @@ These choices describe the current implementation.
 - An attached remote dashboard keeps whatever capability it was started with; the forward cannot raise or lower it.
 - Each host adds an SSH child and a remote dashboard process while its tunnel is open.
 - A host that needs an interactive SSH prompt cannot be reached this way.
+
+## Task References
+
+- [ORB-23047] — recorded that dashboard operator authority comes from the serve session, not the server terminal or `ORBIT_OPERATOR`.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

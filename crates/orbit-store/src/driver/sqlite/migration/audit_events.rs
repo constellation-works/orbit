@@ -104,6 +104,19 @@ pub(super) fn apply_audit_actor_identity(conn: &Connection) -> Result<(), OrbitE
     backfill_audit_actor_identity_v16(conn)
 }
 
+/// v88 `audit_session_model`: the model an MCP tool call is counted under.
+///
+/// Written by the server from the job's resolved crew model, else the
+/// session `--orchestrator` crew's configured model, else MCP `clientInfo`.
+/// It is not backfilled: older rows keep NULL and the tools breakdown falls
+/// back to the role-derived actor. The column never feeds `role` or `actor_*`.
+pub(super) fn apply_audit_session_model(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_exists(conn, "audit_events")? {
+        return Ok(());
+    }
+    add_column_if_missing(conn, "audit_events", "session_model", "TEXT")
+}
+
 /// v17 `audit_self_reported_actor` migration (ORB-10890): record the identity
 /// an unauthenticated caller claims for itself in a column of its own.
 ///

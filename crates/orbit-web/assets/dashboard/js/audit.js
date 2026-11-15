@@ -1,9 +1,8 @@
 // Orbit dashboard audit-domain rendering and actions: the event log (Health ›
-// Incidents › Events), the tool-call summary (Analytics › Reliability › Tools)
-// and the denial count on the Health rail entry.
+// Incidents › Events) and the tool-call summary (Analytics › Reliability › Tools).
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { auditActorLabel, incidentClassLabel, el, fetchJson, fetchJsonPage, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, isMultiWorkspace, isWorkspaceListReady, renderPanelPlaceholder, requestPanel, onWorkspaceChange, onWorkspaceNamesChange, workspaceDisplayName, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, runHref, DEFAULT_DASHBOARD_WINDOW } from './common.js';
+import { auditActorLabel, incidentClassLabel, el, fetchJson, fetchJsonPage, fmtDuration, formatAge, formatDateTime, syncNodes, makeToggleRow, pinnedInfoHint, positiveIntParam, isAggregateView, isMultiWorkspace, isWorkspaceListReady, renderPanelPlaceholder, requestPanel, onWorkspaceChange, onWorkspaceNamesChange, workspaceDisplayName, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, runHref, DEFAULT_DASHBOARD_WINDOW } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -60,18 +59,6 @@ const AUDIT_COLUMNS = [
 // Context injection helpers (mirror tasks.js pattern; ctx as last arg on public entry points)
 function hasCtx(ctx, key) {
   return ctx && typeof ctx[key] === "function";
-}
-
-function fmtDurationValue(ctx, v) {
-  return hasCtx(ctx, "fmtDuration") ? ctx.fmtDuration(v) : (v == null ? "-" : String(v));
-}
-
-function fmtTimestampValue(ctx, v) {
-  return hasCtx(ctx, "fmtTimestamp") ? ctx.fmtTimestamp(v) : (v || "-");
-}
-
-function fmtAbsTimeValue(ctx, v) {
-  return hasCtx(ctx, "fmtAbsTime") ? ctx.fmtAbsTime(v) : (v || "-");
 }
 
 function doRefresh(ctx) {
@@ -163,6 +150,14 @@ function renderScopeChips() {
     if (windowLabel !== getWindow()) chip.classList.add("independent");
     host.appendChild(chip);
   }
+  if (auditFilter.tool) {
+    const chip = scopeChip("tool", auditFilter.tool, () => {
+      auditFilter.tool = null;
+      window.location.hash = buildAuditHash();
+    });
+    chip.title = `Remove tool filter: ${auditFilter.tool}`;
+    host.appendChild(chip);
+  }
   if (auditFilter.role) {
     const chip = scopeChip("actor", auditActorLabel(auditFilter.role), () => {
       auditFilter.role = null;
@@ -176,6 +171,22 @@ function renderScopeChips() {
       auditFilter.agent_family = null;
       window.location.hash = buildAuditHash();
     }));
+  }
+  if (auditFilter.execution_id) {
+    const chip = scopeChip("execution", auditFilter.execution_id, () => {
+      auditFilter.execution_id = null;
+      window.location.hash = buildAuditHash();
+    });
+    chip.title = `Remove execution filter: ${auditFilter.execution_id}`;
+    host.appendChild(chip);
+  }
+  if (auditFilter.profile) {
+    const chip = scopeChip("profile", auditFilter.profile, () => {
+      auditFilter.profile = null;
+      window.location.hash = buildAuditHash();
+    });
+    chip.title = `Remove profile filter: ${auditFilter.profile}`;
+    host.appendChild(chip);
   }
   if (auditFilter.status) {
     host.appendChild(scopeChip("status", auditFilter.status === "non_success" ? "failure + denied" : auditFilter.status, () => {
@@ -478,26 +489,18 @@ function incidentScanPartialCoverageNote(scanLimit) {
   return `Partial coverage: counts include only ${scannedRows} in this window. Older failures and affected runs may be omitted.`;
 }
 
-function renderToolCallFailureRateCard(stats, window = "24h") {
+// The headline failure rate is the first line of the per-tool failures panel it
+// summarises (STD-07 §R29). Its definition sits behind an info icon (§R13), so
+// it reads on hover, keyboard focus or tap rather than as a caption.
+function toolCallFailureRateLine(stats) {
   const failed = Number(stats && stats.failed) || 0;
   const total = Number(stats && stats.total) || 0;
   const rate = stats && stats.rate != null ? Number(stats.rate) : (total ? failed / total : 0);
-  const card = el("div", { class: "audit-summary-card" });
-  card.appendChild(el("div", {
-    class: "card-title section-title",
-    text: `Tool call failure rate · window ${window}`,
-  }));
-  const body = el("div", { class: "card-body" });
-  body.appendChild(el("div", {
-    class: "tool-call-failure-rate",
-    text: `${formatFailureRatePct(rate)} · ${failed} failed / ${total} tool calls`,
-  }));
-  body.appendChild(el("div", {
-    class: "metric-trend tool-call-failure-rate-note",
-    text: `Raw status=failure over successful + failed callable tool calls (tool run + tool run-mcp). ${Number(stats && stats.denied) || 0} denied calls excluded. Distinct from unexpected failure rate.`,
-  }));
-  card.appendChild(body);
-  return card;
+  const denied = Number(stats && stats.denied) || 0;
+  return el("div", { class: "tool-call-failure-rate" }, [
+    el("span", { text: `${formatFailureRatePct(rate)} · ${failed} failed / ${total} tool calls` }),
+    pinnedInfoHint(`Raw status=failure over successful + failed callable tool calls (tool run + tool run-mcp). ${denied} denied calls excluded. Distinct from unexpected failure rate.`),
+  ]);
 }
 
 function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = "24h", capped = false, scanLimit = 0) {
@@ -506,13 +509,16 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
     if (isNamedTool(f.tool)) failByTool.set(f.tool, f);
   }
 
-  const container = el("div", { class: "audit-summary-container" });
-  container.appendChild(el("h3", {
-    class: "summary-title section-title",
+  // Same card chrome and title row as the per-tool panel beside it, so the
+  // side-by-side pair's headers share a top edge and height (§R2).
+  const panel = el("div", { class: "audit-summary-card" });
+  panel.appendChild(el("h3", {
+    class: "card-title section-title",
     text: `Unexpected failures by callable tool (${window})${capped ? " · capped counts" : ""}`,
   }));
+  const body = el("div", { class: "card-body tool-health-body" });
   if (capped) {
-    container.appendChild(el("div", {
+    body.appendChild(el("div", {
       class: "metric-trend",
       text: `${incidentScanPartialCoverageNote(scanLimit)} Unexpected-failure counts are scanned, while successful-call counts cover the full window; rates can be understated.`,
     }));
@@ -544,40 +550,105 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
 
     if (onCardClick) {
       card.classList.add("clickable");
-      card.addEventListener("click", () => onCardClick(row));
+      card.setAttribute("aria-label", `Filter unexpected failures by ${row.tool}`);
+      makeToggleRow(card, { onToggle: () => onCardClick(row) });
     }
     grid.appendChild(card);
   }
 
-  container.appendChild(grid);
-  return container;
+  body.appendChild(grid);
+  panel.appendChild(body);
+  return panel;
 }
 
-// The canonical denial count of /api/audit/summary (`denials`: denied audit
-// rows plus v2 loop denials) rides on the Health rail entry. Its route opens
-// Health › Incidents › Events filtered to denials for the window it counted.
-function renderDenialCount(data) {
-  const node = $("rail-count-denials");
-  if (!node) return;
-  const denials = Number(data && data.denials) || 0;
-  const window = (data && data.window) || "24h";
-  node.hidden = denials === 0;
-  node.textContent = denials ? `${denials >= 10000 ? `${(denials / 1000).toFixed(1)}k` : denials} denied` : "";
-  if (!denials) {
-    node.title = "";
-    delete node.dataset.route;
-    return;
+// ORB-20482 — the failures-by-tool table reached 50 rows, pushing the rest
+// of the Tools pane more than 2000px below the fold. The initial view shows
+// the top slice and reveals the rest on demand, mirroring the pipeline
+// reliability tables. Ordering and rates are the caller's; only the
+// presentation is bounded.
+const AUDIT_TOOL_FAILURES_VISIBLE_ROWS = 10;
+const AUDIT_TOOL_FAILURES_CARD_KEY = "tool-call-failures-by-tool";
+const AUDIT_TOOL_MODEL_FAILURES_CARD_KEY = "tool-call-failures-by-model";
+const expandedAuditSummaryCards = new Set();
+let lastAuditSummaryPayload = null;
+
+function toggleAuditSummaryCard(cardKey) {
+  if (expandedAuditSummaryCards.has(cardKey)) expandedAuditSummaryCards.delete(cardKey);
+  else expandedAuditSummaryCards.add(cardKey);
+  if (lastAuditSummaryPayload) {
+    renderAuditSummary(lastAuditSummaryPayload.data, lastAuditSummaryPayload.ctx);
   }
-  const sql = Number(data.denials_sql) || 0;
-  const v2 = Number(data.denials_v2) || 0;
-  node.title = `${denials} policy denials in the ${window} window (${sql} audit rows, ${v2} loop denials). Click to open Health › Incidents › Events filtered to denials.`;
-  const sp = new URLSearchParams();
-  if (window !== "all") sp.set("since", window);
-  sp.set("status", "denied");
-  node.dataset.route = `diagnostics/incidents/events?${sp.toString()}`;
+}
+
+function buildAuditSummaryTable(items, cols, onRowClick) {
+  const table = el("table", { class: "summary-table" });
+  const thead = el("thead");
+  const tr = el("tr");
+  for (const c of cols) {
+    const th = el("th", { class: `${c.num ? "num" : ""} ${c.secondary ? "summary-secondary" : ""}`, text: c.label, title: c.title });
+    th.dataset.column = c.key;
+    tr.appendChild(th);
+  }
+  thead.appendChild(tr);
+  table.appendChild(thead);
+
+  const tbody = el("tbody");
+  for (const item of items) {
+    const row = el("tr");
+    if (onRowClick) {
+      row.classList.add("clickable");
+      row.addEventListener("click", () => onRowClick(item));
+    }
+    for (const c of cols) {
+      const val = c.format ? c.format(item[c.key]) : item[c.key];
+      const title = c.num ? String(val ?? "") : cols.map(col => {
+        const value = col.format ? col.format(item[col.key]) : item[col.key];
+        return `${col.title || col.label}: ${value ?? "-"}`;
+      }).join("; ");
+      const td = el("td", { class: `${c.num ? "num" : ""} ${c.secondary ? "summary-secondary" : ""}`, text: val, title });
+      if (c.render) td.textContent = c.render(item[c.key], item, td);
+      td.dataset.column = c.key;
+      row.appendChild(td);
+    }
+    tbody.appendChild(row);
+  }
+  table.appendChild(tbody);
+  return table;
+}
+
+function boundedAuditSummaryTable(items, cols, onRowClick, cardKey, unit) {
+  return (body) => {
+    if (!items || items.length === 0) {
+      body.appendChild(el("div", { class: "empty", text: "No data" }));
+      return;
+    }
+    if (items.length <= AUDIT_TOOL_FAILURES_VISIBLE_ROWS) {
+      body.appendChild(buildAuditSummaryTable(items, cols, onRowClick));
+      return;
+    }
+    const expanded = expandedAuditSummaryCards.has(cardKey);
+    const visible = expanded ? items : items.slice(0, AUDIT_TOOL_FAILURES_VISIBLE_ROWS);
+    body.appendChild(buildAuditSummaryTable(visible, cols, onRowClick));
+    const metaText = expanded
+      ? `Showing all ${items.length} ${unit}`
+      : `Showing top ${visible.length} of ${items.length} ${unit}`;
+    const meta = el("span", { class: "rel-table-meta", text: metaText });
+    const toggle = el("button", {
+      class: "mx-link-btn",
+      type: "button",
+      text: expanded ? `Show top ${AUDIT_TOOL_FAILURES_VISIBLE_ROWS}` : `Show all ${items.length} ${unit}`,
+      "aria-expanded": String(expanded),
+    });
+    toggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleAuditSummaryCard(cardKey);
+    });
+    body.appendChild(el("div", { class: "rel-table-footer" }, [meta, toggle]));
+  };
 }
 
 function renderAuditSummary(data, ctx) {
+  lastAuditSummaryPayload = { data, ctx };
   const events = Number(data && data.events);
   auditWindowTotal = Number.isFinite(events) && data.window ? { events, window: data.window } : null;
   updateAuditCount();
@@ -614,39 +685,7 @@ function renderAuditSummary(data, ctx) {
         body.appendChild(el("div", { class: "empty", text: "No data" }));
         return;
       }
-      const table = el("table", { class: "summary-table" });
-      const thead = el("thead");
-      const tr = el("tr");
-      for (const c of cols) {
-        const th = el("th", { class: `${c.num ? "num" : ""} ${c.secondary ? "summary-secondary" : ""}`, text: c.label, title: c.title });
-        th.dataset.column = c.key;
-        tr.appendChild(th);
-      }
-      thead.appendChild(tr);
-      table.appendChild(thead);
-
-      const tbody = el("tbody");
-      for (const item of items) {
-        const row = el("tr");
-        if (onRowClick) {
-          row.classList.add("clickable");
-          row.addEventListener("click", () => onRowClick(item));
-        }
-        for (const c of cols) {
-          const val = c.format ? c.format(item[c.key]) : item[c.key];
-          const title = c.num ? String(val ?? "") : cols.map(col => {
-            const value = col.format ? col.format(item[col.key]) : item[col.key];
-            return `${col.title || col.label}: ${value ?? "-"}`;
-          }).join("; ");
-          const td = el("td", { class: `${c.num ? "num" : ""} ${c.secondary ? "summary-secondary" : ""}`, text: val, title });
-          if (c.render) td.textContent = c.render(item[c.key], item, td);
-          td.dataset.column = c.key;
-          row.appendChild(td);
-        }
-        tbody.appendChild(row);
-      }
-      table.appendChild(tbody);
-      body.appendChild(table);
+      body.appendChild(buildAuditSummaryTable(items, cols, onRowClick));
     };
   };
 
@@ -664,28 +703,44 @@ function renderAuditSummary(data, ctx) {
   const title = $("audit-summary-title");
   if (title) title.textContent = `Tool calls ${windowLabel}`;
 
-  if (data.tool_call_failure_rate) {
-    addCard(
-      "tool-call-failure-rate",
-      renderToolCallFailureRateCard(data.tool_call_failure_rate, windowLabel),
-      [data.tool_call_failure_rate, windowLabel],
-    );
+  // The headline rate opens the per-tool panel it summarises (STD-07 §R29), so
+  // the panel also appears with no rows when only the rate is present.
+  const failureRate = data.tool_call_failure_rate;
+  const namedToolFailures = (data.tool_call_failures_by_tool || []).filter((row) => isNamedTool(row.tool));
+  if (failureRate || namedToolFailures.length) {
+    const renderToolRows = boundedAuditSummaryTable(namedToolFailures, [
+      { key: "tool", label: "tool" },
+      { key: "failed", label: "failed", num: true },
+      { key: "total", label: "total", num: true, secondary: true, title: "Successful + failed calls; denied calls excluded" },
+      { key: "rate", label: "rate", num: true, format: (v) => formatFailureRatePct(v) },
+      { key: "unexpected", label: "unexp.", num: true, secondary: true, title: "Failed calls classified as unexpected" },
+      { key: "denied", label: "denied", num: true, title: "Calls recorded as denied; excluded from total and rate" },
+    ], filterByTool, AUDIT_TOOL_FAILURES_CARD_KEY, "tools");
+    addCard(AUDIT_TOOL_FAILURES_CARD_KEY, createCard(
+      `Tool call failures by tool · window ${windowLabel}`,
+      (body) => {
+        if (failureRate) body.appendChild(toolCallFailureRateLine(failureRate));
+        renderToolRows(body);
+      },
+      true,
+    ), [namedToolFailures, windowLabel, failureRate, expandedAuditSummaryCards.has(AUDIT_TOOL_FAILURES_CARD_KEY)]);
   }
 
-  const namedToolFailures = (data.tool_call_failures_by_tool || []).filter((row) => isNamedTool(row.tool));
-  if (namedToolFailures.length) {
-    addCard("tool-call-failures-by-tool", createCard(
-      `Tool call failures by tool · window ${windowLabel}`,
-      renderTable(namedToolFailures, [
+  const namedModelFailures = (data.tool_call_failures_by_model || []).filter((row) => isNamedTool(row.tool));
+  if (namedModelFailures.length) {
+    addCard(AUDIT_TOOL_MODEL_FAILURES_CARD_KEY, createCard(
+      `Tool call failures by model · window ${windowLabel}`,
+      boundedAuditSummaryTable(namedModelFailures, [
+        { key: "model", label: "model", title: "Server-derived session model, not the authenticated role" },
         { key: "tool", label: "tool" },
         { key: "failed", label: "failed", num: true },
         { key: "total", label: "total", num: true, secondary: true, title: "Successful + failed calls; denied calls excluded" },
         { key: "rate", label: "rate", num: true, format: (v) => formatFailureRatePct(v) },
         { key: "unexpected", label: "unexp.", num: true, secondary: true, title: "Failed calls classified as unexpected" },
         { key: "denied", label: "denied", num: true, title: "Calls recorded as denied; excluded from total and rate" },
-      ], filterByTool),
+      ], filterByTool, AUDIT_TOOL_MODEL_FAILURES_CARD_KEY, "models"),
       true,
-    ), [namedToolFailures, windowLabel]);
+    ), [namedModelFailures, windowLabel, expandedAuditSummaryCards.has(AUDIT_TOOL_MODEL_FAILURES_CARD_KEY)]);
   }
 
   const namedRates = (data.failure_rate_by_tool || []).filter((row) => isNamedTool(row.tool));
@@ -778,8 +833,8 @@ function renderAuditSummary(data, ctx) {
       [
         { key: "tool", label: "tool" },
         { key: "count", label: "count", num: true },
-        { key: "avg", label: "avg", num: true, format: (v) => fmtDurationValue(ctx, v) },
-        { key: "p95", label: "p95", num: true, format: (v) => fmtDurationValue(ctx, v) }
+        { key: "avg", label: "avg", num: true, format: (v) => fmtDuration(v) },
+        { key: "p95", label: "p95", num: true, format: (v) => fmtDuration(v) }
       ],
       filterByTool
     )), durations);
@@ -800,6 +855,7 @@ onWorkspaceChange(() => {
   lastAudit = [];
   auditPaging = freshAuditPaging();
   auditWindowTotal = null;
+  lastAuditSummaryPayload = null;
   renderScopeChips();
 });
 
@@ -964,15 +1020,17 @@ function renderAudit(events, ctx) {
     // Expansion is part of the row's identity: without it the keyed diff reuses
     // the collapsed node and drops the `expanded` class and `aria-expanded`
     // the toggle just set.
-    tr.dataset.hash = `${ev.id}-${ev.status}-${exit}-${expandedAuditIds.has(ev.id)}`;
-    tr.appendChild(el("td", { class: "c-time", text: fmtTimestampValue(ctx, ev.timestamp), title: fmtAbsTimeValue(ctx, ev.timestamp) }));
+    // Include the displayed relative age so syncNodes rebuilds the row when
+    // the age advances instead of reusing the first-render age forever.
+    tr.dataset.hash = `${ev.id}-${ev.status}-${exit}-${expandedAuditIds.has(ev.id)}-${formatAge(ev.timestamp)}`;
+    tr.appendChild(el("td", { class: "c-time", text: formatAge(ev.timestamp), title: formatDateTime(ev.timestamp) }));
     const statusTd = el("td", { class: "c-status" });
     statusTd.appendChild(el("span", { class: `audit-status ${ev.status}`, text: ev.status }));
     tr.appendChild(statusTd);
     tr.appendChild(el("td", { class: "c-role", text: auditActorLabel(ev.role), title: ev.role === "unverified" ? "unverified: caller identity has not been confirmed" : ev.role || "" }));
     tr.appendChild(el("td", { class: "c-command", text: ev.tool_name || cmd || "-", title: ev.tool_name || cmd || "" }));
     tr.appendChild(el("td", { class: "c-target", text: target, title: target }));
-    tr.appendChild(el("td", { class: "num c-duration", text: fmtDurationValue(ctx, ev.duration_ms) }));
+    tr.appendChild(el("td", { class: "num c-duration", text: fmtDuration(ev.duration_ms) }));
     tr.appendChild(el("td", { class: `${exitClass} c-exit`, text: exit == null ? "-" : String(exit) }));
     if (expandedAuditIds.has(ev.id)) tr.classList.add("expanded");
     makeToggleRow(tr, {
@@ -989,14 +1047,14 @@ function renderAudit(events, ctx) {
     frag.appendChild(tr);
 
     if (expandedAuditIds.has(ev.id)) {
-      frag.appendChild(buildAuditDetailRow(ev, ctx));
+      frag.appendChild(buildAuditDetailRow(ev));
     }
   }
   syncNodes(tbody, Array.from(frag.children));
   syncNodes(body, footer ? [table, footer] : [table]);
 }
 
-function buildAuditDetailRow(ev, ctx) {
+function buildAuditDetailRow(ev) {
   const tr = el("tr", { class: "audit-detail-row" });
   tr.dataset.key = `audit-detail-${ev.id}`;
   // The event row's `aria-controls` points here, so the detail needs a real id.
@@ -1042,7 +1100,7 @@ function buildAuditDetailRow(ev, ctx) {
   addMeta("host", ev.host);
   addMeta("pid", ev.pid);
   addMeta("cwd", ev.working_directory);
-  addMeta("timestamp", fmtAbsTimeValue(ctx, ev.timestamp));
+  addMeta("timestamp", formatDateTime(ev.timestamp));
   td.appendChild(meta);
 
   if (ev.arguments_json) {
@@ -1087,7 +1145,6 @@ export {
   effectiveAuditWindow,
   // refresh entry points
   fetchAndRenderAudit,
-  renderDenialCount,
   renderAuditSummary,
   // module init
   buildAuditChips,

@@ -15,16 +15,14 @@ use std::thread;
 use std::time::Duration;
 
 use clap::Args;
+use orbit_cmd::log_format::{self, Filters};
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Execute, Payload};
 use crate::output::sink::OutputMode;
 
-use super::format::{
-    Filters, LevelFilter, build_filters as build_shared_filters, format_event_line,
-    resolve_log_path,
-};
+use super::format::{self, LevelFilter};
 
 #[derive(Args)]
 pub struct TailArgs {
@@ -62,7 +60,7 @@ pub struct TailArgs {
 
 impl Execute for TailArgs {
     fn execute(self, _runtime: &OrbitRuntime) -> CommandOut {
-        let path = resolve_log_path(self.path.as_deref())?;
+        let path = log_format::resolve_log_path(self.path.as_deref())?;
         let filters = build_filters(&self)?;
         // A follow tail is unbounded, so its records cannot be collected into a
         // document before the first one is written. It is handed back as a
@@ -96,7 +94,11 @@ impl Execute for TailArgs {
 }
 
 pub(super) fn build_filters(args: &TailArgs) -> Result<Filters, OrbitError> {
-    build_shared_filters(args.target.clone(), args.level, args.since.as_deref())
+    log_format::build_filters(
+        args.target.clone(),
+        args.level.map(Into::into),
+        args.since.as_deref(),
+    )
 }
 
 fn run_tail<W: Write + ?Sized>(
@@ -550,7 +552,7 @@ fn emit_line<W: Write + ?Sized>(
             return Ok(());
         }
     };
-    let formatted = format_event_line(&value, use_color);
+    let formatted = format::format_event_line(&value, use_color);
     writeln!(writer, "{formatted}")
 }
 

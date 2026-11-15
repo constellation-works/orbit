@@ -52,7 +52,8 @@ fn matching_task() -> TaskAddParams {
 
 fn seed(fixture: &Fixture, other: &OrbitRuntime) -> Vec<(String, Task)> {
     let mut matches = Vec::new();
-    // Interleave workspaces so an aggregate must merge, not concatenate pages.
+    // Interleave creation across workspaces so the aggregate must regroup
+    // rows by workspace, and a page boundary falls inside a workspace.
     for index in 0..7 {
         for (workspace, runtime) in [(WORKSPACE, &fixture.runtime), (OTHER, other)] {
             let mut params = matching_task();
@@ -111,11 +112,6 @@ fn filtered_pages_reach_every_match_and_continue_stably_on_both_endpoints() {
                 let fixture = Fixture::new();
                 let other = add_workspace(&fixture);
                 let matches = seed(&fixture, &other);
-                let expected: Vec<_> = matches
-                    .iter()
-                    .filter(|(workspace, _)| aggregate || workspace == WORKSPACE)
-                    .map(|(_, task)| task.id.clone())
-                    .collect();
                 let endpoint = if aggregate {
                     "/api/tasks/all"
                 } else {
@@ -123,6 +119,26 @@ fn filtered_pages_reach_every_match_and_continue_stably_on_both_endpoints() {
                 };
                 let filter = format!("{FILTER}&workspace={WORKSPACE}");
                 let server = fixture.server(true);
+                // The aggregate reads workspace by workspace, in the order the
+                // workspace picker lists them, so a status section never shows
+                // one workspace's rows on both sides of another's across pages.
+                let picker_order: Vec<String> = json_ok(server.get("/api/workspaces"))
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|workspace| workspace["id"].as_str().unwrap().to_string())
+                    .collect();
+                let mut expected: Vec<_> = matches
+                    .iter()
+                    .filter(|(workspace, _)| aggregate || workspace == WORKSPACE)
+                    .collect();
+                expected.sort_by_key(|(workspace, _)| {
+                    picker_order.iter().position(|id| id == workspace).unwrap()
+                });
+                let expected: Vec<_> = expected
+                    .into_iter()
+                    .map(|(_, task)| task.id.clone())
+                    .collect();
                 let mut current = page(&server, endpoint, &filter, None);
                 assert_eq!(current["total"], expected.len());
                 assert_eq!(current, page(&server, endpoint, &filter, None));

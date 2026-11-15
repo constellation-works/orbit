@@ -1,6 +1,6 @@
-//! The template variables a manifest may use in a path: `{{workspace}}`,
-//! `{{plugin_root}}`, `{{plugin_state}}` and `{{config.<key>}}`, and nothing
-//! else (design §2).
+//! The template variables a manifest may use in a path or link URL:
+//! `{{workspace}}`, `{{plugin_root}}`, `{{plugin_state}}` and
+//! `{{config.<key>}}`, and nothing else (design §2).
 
 use std::collections::BTreeMap;
 

@@ -1,8 +1,8 @@
 ---
 title: State Compatibility — Design
 owner: claude
-last_updated: 2026-10-26
-last_validated: 2026-10-26
+last_updated: 2026-11-03
+last_validated: 2026-11-03
 status: Draft
 feature: state-compatibility
 doc_role: design
@@ -40,7 +40,10 @@ Both registries carry a `compat: MigrationCompatibility` field per entry:
   an older binary reads *or writes*. Layout v3
   (`remove-task-checkout-projections`) is the canonical example: binaries
   without it read tasks through the removed projections and recreate them
-  when they write ([ORB-11994], [ORB-12078]).
+  when they write ([ORB-11994], [ORB-12078]). Layout v9
+  (`skipped-step-checkpoints`, [ORB-21604]) applies the same rule to run
+  state: a v8 writer cannot preserve skipped-step checkpoint markers, so
+  the migration fences v8 clients instead of letting them drop the markers.
 
 The declaration is a claim about *readers and writers that do not have the
 migration*, not about the SQL statements it runs. When in doubt, declare the
@@ -371,5 +374,6 @@ and sandbox protections are unchanged.
 - [ORB-15824] moved recovery authority onto its own versioned schema ledger.
 - [ORB-16825] repaired defect-index task-type freshness after writes from older binaries.
 - [ORB-17530] preserved older-client handoff compatibility with a sidecar and read-compatible v57.
+- [ORB-21604] fenced older workspace writers from dropping skipped-step resume markers with breaking layout v9.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

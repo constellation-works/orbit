@@ -99,7 +99,10 @@ impl ForecastAdmission {
     /// single-slot drain applies no unknown-footprint rule. `admitted_at`
     /// holds each running task's admission hour, which gap fit ages its
     /// profile by.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the forecast pass threads the drain snapshot, slot ceiling and caller-owned scratch, selected and wait buffers"
+    )]
     pub(crate) fn pass(
         &self,
         ready: &[usize],

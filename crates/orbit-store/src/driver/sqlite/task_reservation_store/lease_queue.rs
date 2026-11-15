@@ -7,7 +7,7 @@
 //! looks at `queued_files_json`, so a queued lease holds nothing.
 //!
 //! The queue orders by priority, then by `queued_at`; an entry waiting at
-//! least `lease.aging_minutes` ranks one priority level higher. A request is
+//! least the policy's aging minutes ranks one priority level higher. A request is
 //! granted once nothing holds its paths and no entry ranked ahead of it that
 //! still waits wants them. An expansion waits only on held paths, so the only
 //! cycles are leases each waiting on another's held paths; the owner breaks
@@ -94,7 +94,7 @@ fn load_queue(
            AND expires_at > ?3
            AND queue_kind IS NOT NULL
            AND queued_files_json IS NOT NULL",
-        reservation_scope_clause(TaskReservationScope::Files),
+        reservation_scope_clause(TaskReservationScope::Files, workspace_id),
     );
     let mut stmt = tx.tx.prepare(&sql).map_err(sqlite_store_error)?;
     let rows = stmt

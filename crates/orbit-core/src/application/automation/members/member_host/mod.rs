@@ -5,3 +5,4 @@ mod host;
 mod observation;
 mod outcomes;
 mod pilot_steps;
+mod resident;

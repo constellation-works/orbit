@@ -21,6 +21,7 @@ use orbit_types::workflow::{
 };
 
 use crate::OrbitRuntime;
+use crate::application::job::JobExperimentPort;
 
 fn refused(message: impl Into<String>) -> OrbitError {
     OrbitError::PolicyDenied(message.into())
@@ -32,12 +33,6 @@ pub(crate) struct ClaimedLeaf {
     pub(crate) claim: ExecutionClaim,
     pub(crate) binding: WorkerInvocation,
 }
-
-/// Leaf definitions that only a claim may run. A run on one of these without
-/// a durable admission is a mis-dispatch, not a workload: every step below
-/// `worktree` reads claim context that will never resolve.
-pub(crate) const CLAIMED_LEAF_JOBS: &[&str] =
-    crate::runtime::host_resource::delivery::CLAIMED_LEAF_JOBS;
 
 impl ClaimedLeaf {
     /// The owner's gates this claim was admitted under [ORB-15622]: the
@@ -160,7 +155,7 @@ impl OrbitRuntime {
             .as_ref()
             .and_then(|receipt| receipt.claim.clone())
             .ok_or_else(|| refused("claimed leaf has no admitted claim"))?;
-        crate::application::experiment::validate_experiment_capture(
+        self.validate_job_experiment_capture(
             admission
                 .receipt
                 .as_ref()

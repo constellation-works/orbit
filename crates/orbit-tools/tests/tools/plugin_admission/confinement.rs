@@ -179,7 +179,9 @@ fn env_pass_cannot_forward_a_privilege_bearing_orbit_name_even_if_requested() {
     ]);
     let ctx = context(temp.path());
 
-    let env = granted.child_environment(&ctx, "/tmp", None);
+    let env = granted
+        .child_environment(&ctx, "/tmp", None)
+        .expect("child environment");
 
     assert!(
         !env.iter().any(|(key, _)| key == "ORBIT_OPERATOR"),

@@ -1,11 +1,9 @@
-//! Task-id routing consumes the canonical tool definitions' routing metadata.
-//! The classification lists remain exported for callers of the existing API;
-//! their sole declaration lives with the builtin rules in orbit-tools.
+//! Task-id routing consumes the routing metadata each builtin tool
+//! declares at its own definition site, resolved by orbit-tools into
+//! `McpToolRules::id_route`.
 
 use orbit_types::tool::McpIdRoute;
 use serde_json::Value;
-
-pub use orbit_tools::{ID_ROUTED_TASK_TOOLS, NOT_ID_ROUTED_TOOLS};
 
 /// Whether `name` is an id-routed task tool.
 pub fn is_id_routed_tool(name: &str) -> bool {
@@ -20,7 +18,7 @@ pub fn is_id_routed_tool(name: &str) -> bool {
 /// destination to refuse rather than read as absent, so a malformed selector
 /// never turns into a prefix route.
 pub fn id_only_task_target<'a>(name: &str, input: &'a Value) -> Option<&'a str> {
-    if !is_id_routed_tool(name) {
+    if !is_id_routed_tool(orbit_types::tool::tool_operation_name(name, input)) {
         return None;
     }
     match input.get("workspace") {

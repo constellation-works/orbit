@@ -195,13 +195,22 @@ impl Store {
     }
 }
 
-fn build_invocation_list_query(filter: &InvocationQuery) -> (String, Vec<Box<dyn ToSql>>) {
+// Visibility widened to pub(super) for sibling unit tests (records/tests/query.rs).
+pub(super) fn build_invocation_list_query(
+    filter: &InvocationQuery,
+) -> (String, Vec<Box<dyn ToSql>>) {
     let mut query = InvocationListQuery::default();
 
     if filter.succeeded_candidate_only {
         // Outcomes are workspace-qualified. EXISTS preserves one row per
         // invocation even when an activity appears more than once in a job.
         // A later successful retry must not relabel an earlier attempt.
+        //
+        // The later-invocation probe is pinned to the (workspace, run)
+        // index. The store collects no planner statistics, so SQLite prefers
+        // the covering `idx_invocations_reliability_window` with only
+        // `workspace_id` bound, and walks every invocation of the workspace
+        // once per candidate: seconds on a review-scale store [ORB-21827].
         query.conditions.push(
             "EXISTS (SELECT 1 FROM job_runs jr
              WHERE jr.workspace_id = i.workspace_id AND jr.run_id = i.job_run_id
@@ -213,6 +222,7 @@ fn build_invocation_list_query(filter: &InvocationQuery) -> (String, Vec<Box<dyn
                AND s.target_type = 'activity' AND s.target_id = i.activity_id AND s.state = 'success'
                AND julianday(i.ts) BETWEEN julianday(s.started_at) AND julianday(s.finished_at)
                AND NOT EXISTS (SELECT 1 FROM invocations later
+                 INDEXED BY idx_invocations_workspace_job_run_id
                  WHERE later.workspace_id = i.workspace_id AND later.job_run_id = i.job_run_id
                    AND later.activity_id = i.activity_id
                    AND julianday(later.ts) BETWEEN julianday(s.started_at) AND julianday(s.finished_at)
@@ -262,7 +272,8 @@ fn build_invocation_list_query(filter: &InvocationQuery) -> (String, Vec<Box<dyn
         "SELECT i.id, i.ts, i.job_run_id, i.activity_id, i.agent, i.model, i.duration_ms, \
          i.input_tokens, i.cache_read_tokens, i.cache_create_tokens, i.cache_create_1h_tokens, \
          i.output_tokens, i.tool_call_count, i.provider_cost_usd, i.account, \
-         i.long_prompt_requests_json, e.identity_json \
+         i.long_prompt_requests_json, e.identity_json, COALESCE(i.provider, e.provider), \
+         i.tool_calls_incomplete \
          FROM invocations i LEFT JOIN agent_executions e ON e.id = i.agent_execution_id AND e.workspace_id = i.workspace_id AND e.run_id = i.job_run_id AND e.activity_id = i.activity_id {} ORDER BY i.ts DESC, i.id DESC LIMIT ?{}",
         query.where_clause(),
         query.len()

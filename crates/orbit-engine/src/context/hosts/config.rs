@@ -32,13 +32,23 @@ pub struct CrewConfig {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PrConfig {
     pub task_url_template: Option<String>,
-    /// `pr.close_on_terminal`: a run's `pr_open` also closes the earlier open
-    /// delivery pull requests of the tasks it publishes, so each task keeps
-    /// one. Off for hosts bound to no workspace configuration.
+    /// A run's `pr_open` also closes the earlier open delivery pull requests
+    /// of the tasks it publishes, so each task keeps one
+    /// ([`orbit_types::workflow::PR_CLOSE_ON_TERMINAL`] for a configured
+    /// host). Off for hosts bound to no workspace configuration.
     pub close_superseded: bool,
     /// `pr.delivery_authors`: forge logins whose pull requests count as
     /// Orbit's. Empty means the login that opened this run's pull request.
     pub delivery_authors: Vec<String>,
+    /// `workflow.ci_infrastructure_signatures`: log-line prefixes that mark a
+    /// failed CI job as an infrastructure failure. Empty declares none.
+    pub ci_infrastructure_signatures: Vec<String>,
+    /// Owner policy for logged infrastructure failures; reservations survive runs.
+    pub ci_infrastructure_retry: orbit_types::workflow::CiInfrastructureRetryPolicy,
+    /// `workflow.ci_infrastructure_retry.handoff_steps`: failed-step name
+    /// patterns of dependency handoffs. A failed set whose every failed job
+    /// stopped in a matching step is transient. Empty declares none.
+    pub ci_handoff_steps: Vec<String>,
     /// `pr.*`, `commit.*` and `branch.*` templates and switches; the default
     /// is Orbit's built-in titles, bodies, messages and branch names.
     pub conventions: orbit_types::workflow::DeliveryConventions,

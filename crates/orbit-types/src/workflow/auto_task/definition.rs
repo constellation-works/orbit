@@ -192,6 +192,19 @@ pub struct AutoTaskDefinition {
     /// host's rule; this only switches the check on.
     #[serde(default, skip_serializing_if = "is_false")]
     pub skip_unless_blocked_candidates: bool,
+    /// The opt-in completion contract a job step on this definition is held
+    /// to. Omitted, ordinary structured task completion applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion: Option<super::AutoTaskCompletionContract>,
+    /// Tools an operator granted every task this definition mints, copied to
+    /// each minted task's `granted_tools`. Not part of the template: only an
+    /// operator may set or change it, which `orbit-core` enforces.
+    #[serde(
+        default,
+        deserialize_with = "crate::task::deserialize_required_tools",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub granted_tools: Vec<String>,
     /// Actor that created the definition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<String>,
@@ -271,19 +284,6 @@ impl AutoTaskSchedule {
             | Self::Interval { guard, .. } => Some(guard),
             Self::Condition { .. } => None,
         }
-    }
-
-    /// Replace the guard of a typed kind; a condition keeps none.
-    pub fn with_guard(mut self, replacement: ScheduleGuard) -> Self {
-        match &mut self {
-            Self::Deliveries { guard, .. }
-            | Self::Cron { guard, .. }
-            | Self::Interval { guard, .. } => {
-                *guard = replacement;
-            }
-            Self::Condition { .. } => {}
-        }
-        self
     }
 }
 
@@ -401,8 +401,9 @@ pub struct AutoTaskTemplate {
     /// Crew override, when the chore should route to a specific crew.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,
-    /// Status the created task enters (defaults to `backlog`). Auto-tasks are
-    /// operator-defined chores, so they skip the proposed→approved gate.
+    /// Requested initial status (serialized default: `backlog`). At mint
+    /// time, `backlog` becomes `proposed` unless the normalized task tags
+    /// include `no-diff-expected`; explicit non-backlog statuses are preserved.
     #[serde(default = "default_status")]
     pub status: TaskStatus,
 }
@@ -476,6 +477,9 @@ impl AutoTaskDefinition {
                  with '-' or '_' separators, and start alphanumeric",
                 self.name
             )));
+        }
+        if let Some(completion) = &self.completion {
+            completion.validate()?;
         }
         match &self.schedule {
             AutoTaskSchedule::Deliveries {

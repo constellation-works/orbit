@@ -1,7 +1,8 @@
 use orbit_agent::{AgentResponseStatus, ParsedStdout};
 use orbit_common::governance::authorization::governed_tool;
 use orbit_types::telemetry::InvocationTrace;
-use orbit_types::tool::{ExecutionResult, McpCapability};
+use orbit_types::tool::{ExecutionResult, McpCapability, tool_policy_operations};
+use orbit_types::workflow::CrewMemoryBlock;
 use orbit_types::workflow::activity_job::AgentLoopSpec;
 use serde_json::Value;
 
@@ -14,6 +15,7 @@ pub(super) fn cli_agent_envelope_json(
     task_ctx: Option<&Value>,
     requested_tools: &[String],
     effective_tools: &[String],
+    crew_memory: Option<&CrewMemoryBlock>,
 ) -> Result<Vec<u8>, DispatchError> {
     let mut envelope = serde_json::Map::new();
     envelope.insert("schemaVersion".to_string(), Value::from(1));
@@ -47,6 +49,16 @@ pub(super) fn cli_agent_envelope_json(
     if let Some(task) = task_ctx {
         envelope.insert("task".to_string(), task.clone());
     }
+    // A memory arm's notes ride as a JSON object, never inside
+    // `instruction`, so a note cannot close a fence and read as instruction.
+    if let Some(block) = crew_memory {
+        envelope.insert(
+            "crew_memory".to_string(),
+            serde_json::to_value(block).map_err(|err| {
+                DispatchError::CliInvocationFailed(format!("serialize crew memory: {err}"))
+            })?,
+        );
+    }
 
     serde_json::to_vec(&Value::Object(envelope))
         .map_err(|err| DispatchError::CliInvocationFailed(format!("serialize envelope: {err}")))
@@ -55,17 +67,35 @@ pub(super) fn cli_agent_envelope_json(
 /// Keep the advertised tool list aligned with the capability held by the
 /// managed agent. The activity allowlist is still enforced separately, and
 /// ungoverned tools remain visible as before.
+///
+/// An effective tool may name a family action (`orbit.run:observe`), whose
+/// governed operation (`orbit.workflow.run.observe`) is what the catalog
+/// keys on, so resolve through [`tool_policy_operations`] first: a tool is
+/// hidden when any operation it covers is governed without the agent
+/// capability.
 fn agent_visible_tools(effective_tools: &[String]) -> Vec<&str> {
     effective_tools
         .iter()
         .filter(|tool| {
-            governed_tool(tool)
-                .is_none_or(|operation| operation.allowed.contains(&McpCapability::Agent))
+            tool_policy_operations(tool).iter().all(|operation| {
+                governed_tool(operation)
+                    .is_none_or(|governed| governed.allowed.contains(&McpCapability::Agent))
+            })
         })
         .map(String::as_str)
         .collect()
 }
 
+/// The invocation trace of a finished provider process, or `None` when neither
+/// the verdict nor a response-envelope frame yields one.
+///
+/// The verdict's own outcomes, including synthesized timeouts and failures,
+/// keep their trace. A framed envelope the verdict rejects, because its status
+/// disagrees with the exit code or its content is invalid, still belongs to an
+/// invocation that spent tokens, so its telemetry is kept. That fallback is
+/// gated on the frame alone, the content-blind check the completion gate also
+/// uses, so the rejection itself is unchanged. The answer projection never reads
+/// this trace.
 pub(super) fn parse_cli_invocation_trace_from(
     parsed: &ParsedStdout<'_>,
     stderr: &[u8],
@@ -73,16 +103,14 @@ pub(super) fn parse_cli_invocation_trace_from(
     duration_ms: u64,
     success: bool,
 ) -> Option<InvocationTrace> {
-    parsed
-        .parse_and_validate(&cli_exec_result(
-            parsed,
-            stderr,
-            exit_code,
-            duration_ms,
-            success,
-        ))
-        .map(|(_, _, trace)| trace)
-        .ok()
+    let exec_result = cli_exec_result(parsed, stderr, exit_code, duration_ms, success);
+    match parsed.parse_and_validate(&exec_result) {
+        Ok((_, _, trace)) => Some(trace),
+        Err(_) => parsed
+            .response_envelope_protocol_check()
+            .is_ok()
+            .then(|| parsed.cli_invocation_trace(duration_ms)),
+    }
 }
 
 /// Parse the provider's stdout as an Orbit response envelope and return the

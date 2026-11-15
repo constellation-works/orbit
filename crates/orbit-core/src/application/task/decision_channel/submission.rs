@@ -1,3 +1,4 @@
+use orbit_common::security::release;
 use orbit_common::{DecisionRefusalCode, OrbitError};
 use orbit_types::task::{
     DECISION_ANSWERED_EVENT, DECISION_TOKEN_CONSUMED_EVENT, DecisionGate, DecisionRequest,
@@ -235,7 +236,7 @@ impl OrbitRuntime {
                 )
             })?;
         let token = params.token.trim().to_ascii_uppercase();
-        let fingerprint = token::sha256_hex(token.as_bytes());
+        let fingerprint = release::sha256_hex(token.as_bytes());
         if !token::token_well_formed(&token)
             || !token::token_matches(&token, &registration.key_hex, registration.epoch, &request)?
         {

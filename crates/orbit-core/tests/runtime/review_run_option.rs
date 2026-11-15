@@ -11,12 +11,13 @@ use std::path::Path;
 
 use orbit_core::application::job::JobRunListParams;
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::WorkspaceRuntimeBinding;
 use orbit_core::{
     CompletionPolicy, OrbitError, OrbitRuntime, ShipMode, TaskComplexity, TaskStatus,
-    WorkspaceRuntimeBinding,
 };
 use orbit_engine::RuntimeHost;
 use orbit_tools::{ReservationOwnerContext, ToolContext};
+use orbit_types::task::{PipelineChildAdmissionMeta, ReservationOwnerMetadata};
 use orbit_types::workflow::{JobRunTrigger, PipelineState, ReviewAdmission, ReviewLayer};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -94,40 +95,40 @@ fn ship(
     mode: ShipMode,
     review: Option<ReviewLayer>,
 ) -> Result<orbit_core::PipelineInvokeResult, OrbitError> {
-    runtime.submit_ship_run_with_containment(
+    runtime.submit_ship_run(orbit_core::ShipRunRequest {
         mode,
-        Some("main"),
-        &[],
-        CompletionPolicy::Review,
-        &[],
-        Some("test"),
-        None,
-        JobRunTrigger::cli(),
-        false,
+        base_branch: Some("main"),
+        task_ids: &[],
+        completion: CompletionPolicy::Review,
+        allowed_crews: &[],
+        actor: Some("test"),
+        claim_token: None,
+        trigger: JobRunTrigger::cli(),
+        strict_containment: false,
         review,
-        false,
-    )
+        ignore_schedule: false,
+    })
 }
 
 fn drain(
     runtime: &OrbitRuntime,
     review: Option<ReviewLayer>,
 ) -> Result<orbit_core::PipelineInvokeResult, OrbitError> {
-    runtime.submit_workspace_auto_run_with_mode(
-        Some(600),
-        Some(1),
-        CompletionPolicy::Review,
-        &[],
-        &Default::default(),
-        Some("test"),
-        None,
-        JobRunTrigger::cli(),
-        false,
-        false,
-        false,
-        None,
+    runtime.submit_workspace_auto_run(orbit_core::AutoDrainRequest {
+        for_seconds: Some(600),
+        max_active_leaf_runs: Some(1),
+        completion: CompletionPolicy::Review,
+        allowed_crews: &[],
+        complexity_crews: Default::default(),
+        actor: Some("test"),
+        claim_token: None,
+        trigger: JobRunTrigger::cli(),
+        strict_containment: false,
+        approve_proposed: false,
+        auto_fix: false,
+        auto_concurrency: None,
         review,
-    )
+    })
 }
 
 fn refusal(result: Result<orbit_core::PipelineInvokeResult, OrbitError>) -> String {
@@ -242,10 +243,14 @@ fn a_run_option_adds_review_that_children_and_resumes_keep() {
     let context = ToolContext {
         reservation_owner: Some(ReservationOwnerContext {
             owner_run_id: live.clone(),
-            owner_metadata_json: Some(
-                json!({"pipeline_child_admission": {"action": "ship", "blocking": false}})
-                    .to_string(),
-            ),
+            owner_metadata: Some(ReservationOwnerMetadata {
+                pipeline_child_admission: Some(PipelineChildAdmissionMeta {
+                    action: "ship".to_string(),
+                    parent_step_id: None,
+                    blocking: false,
+                }),
+                ..Default::default()
+            }),
         }),
         session_context: orbit_types::tool::ToolSessionContext {
             effective_capabilities: std::collections::BTreeSet::from([
@@ -256,10 +261,9 @@ fn a_run_option_adds_review_that_children_and_resumes_keep() {
         ..ToolContext::default()
     };
     // The child is admitted, then its worker cannot start.
-    let _ = runtime.run_tool_with_context_and_role(
+    let _ = runtime.run_tool_with_context(
         "orbit.pipeline.invoke",
         json!({"job_name": "task_auto_pipeline", "input": {"task_ids": [], "mode": "pr"}}),
-        orbit_types::policy::Role::Admin,
         context,
     );
     // Workspace policy alone would capture none for this child.

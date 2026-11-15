@@ -546,7 +546,7 @@ fn run_retention_prunes_resource_minutes_past_thirty_days() {
 }
 
 /// `orbit gc journal` plans by default and deletes applied commit journal
-/// rows past `retention.journal_days` only with operator `--apply`. It keeps
+/// rows past the fixed 14-day journal window only with operator `--apply`. It keeps
 /// each task's newest applied row and every row that is not applied, and its
 /// report names counts, never journal or task ids.
 fn journal_retention_plans_then_prunes_applied_rows() {
@@ -657,72 +657,14 @@ fn doctor_check(fixture: &Fixture, name: &str) -> Value {
         .clone()
 }
 
-fn set_store_warn_bytes(fixture: &Fixture, bytes: u64) {
-    let path = fixture.work.join(".orbit/config.toml");
-    let mut text = fs::read_to_string(&path).unwrap_or_default();
-    const MARKER: &str = "\n# store-warn-bytes-test\n";
-    if let Some(start) = text.find(MARKER) {
-        text.truncate(start);
-    }
-    text.push_str(&format!(
-        "{MARKER}[retention]\nstore_warn_bytes = {bytes}\n"
-    ));
-    fs::write(&path, text).unwrap();
-}
-
-/// A store past `retention.store_warn_bytes` warns, and names how to enable
-/// store GC, while GC is disabled. Under the threshold, or once the routine
-/// is enabled, the same check is ok.
-fn store_retention_warns_only_when_the_store_is_large_and_gc_is_disabled() {
+/// A fixture store sits far under the fixed 1 GiB warning threshold, so the
+/// check is ok while store GC is disabled.
+fn store_retention_is_ok_for_a_fixture_store() {
     let fixture = Fixture::new();
     assert_eq!(
         doctor_check(&fixture, "store-retention")["status"],
         "ok",
-        "the default threshold leaves a fixture store ok"
-    );
-
-    set_store_warn_bytes(&fixture, 1);
-    let warning = doctor_check(&fixture, "store-retention");
-    assert_eq!(warning["status"], "warning", "{warning}");
-    let remediation = warning["remediation"].as_str().expect("remediation");
-    assert!(
-        remediation.contains("orbit.routine.control")
-            && remediation.contains("enabled")
-            && remediation.contains(".orbit/routines/store_gc.yaml")
-            && remediation.contains("job:store_gc_pipeline"),
-        "the warning names the enable command: {remediation}"
-    );
-
-    set_store_warn_bytes(&fixture, 10 * 1024 * 1024 * 1024);
-    assert_eq!(
-        doctor_check(&fixture, "store-retention")["status"],
-        "ok",
-        "under the configured threshold the check is ok"
-    );
-
-    set_store_warn_bytes(&fixture, 1);
-    // `workspace init` does not seed routines; the check reads whatever YAML
-    // is under `.orbit/routines`. A disabled definition still warns.
-    let routines = fixture.work.join(".orbit/routines");
-    fs::create_dir_all(&routines).unwrap();
-    let routine = routines.join("store_gc.yaml");
-    fs::write(
-        &routine,
-        "schemaVersion: 1\nname: store-gc-retention\nenabled: false\ntrigger:\n  \
-         cron: \"17 4 * * *\"\n  missed_run: skip\ntarget: job:store_gc_pipeline\n",
-    )
-    .unwrap();
-    assert_eq!(
-        doctor_check(&fixture, "store-retention")["status"],
-        "warning",
-        "a disabled store-gc routine still warns"
-    );
-    let raw = fs::read_to_string(&routine).unwrap();
-    fs::write(&routine, raw.replacen("enabled: false", "enabled: true", 1)).unwrap();
-    assert_eq!(
-        doctor_check(&fixture, "store-retention")["status"],
-        "ok",
-        "an enabled store-gc routine keeps the check ok"
+        "the fixed threshold leaves a fixture store ok"
     );
 }
 
@@ -918,8 +860,8 @@ fn store_retention_contracts() {
             journal_retention_plans_then_prunes_applied_rows as fn(),
         ),
         (
-            "store_retention_warns_only_when_the_store_is_large_and_gc_is_disabled",
-            store_retention_warns_only_when_the_store_is_large_and_gc_is_disabled as fn(),
+            "store_retention_is_ok_for_a_fixture_store",
+            store_retention_is_ok_for_a_fixture_store as fn(),
         ),
         (
             "legacy_workspace_rows_are_counted_and_removed_without_touching_registered_ones",

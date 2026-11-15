@@ -46,6 +46,7 @@ fn an_owner_before_landing_review_keeps_the_durable_task_summary() {
                 "implement_one".into(),
                 json!({"execution_summary": "a different implementer account"}),
             )]),
+            &std::collections::BTreeMap::new(),
         )
         .unwrap();
     fixture.input["before_landing"] = json!(true);

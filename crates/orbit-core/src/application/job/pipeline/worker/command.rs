@@ -7,11 +7,14 @@
 //! through the `test-support` override. The old Cargo path heuristic was
 //! removed because filename layout does not prove which entry point ran.
 
-use super::log::pipeline_worker_file_name;
 #[cfg(test)]
 use super::scope::contain_worker_command_with_availability;
 use super::scope::{STRICT_WORKER_CONTAINMENT_ENV, WorkerLimits, contain_worker_command};
 use super::*;
+use crate::application::job::run::definition::pipeline_worker_file_name;
+use orbit_common::security::child_env::{
+    MCP_MANAGED_BINDING_ENV_VARS, MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAGED_WORKSPACE_ENV,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Set only by a production Orbit binary's `main` before it can submit runs.
@@ -113,14 +116,6 @@ pub(crate) fn pipeline_worker_profile_file(
     ))
 }
 
-/// Where a submitted run's pinned job definition lives.
-pub(crate) fn run_definition_snapshot_path(
-    job_runs_dir: &Path,
-    run_id: &str,
-) -> Result<PathBuf, OrbitError> {
-    Ok(job_runs_dir.join(pipeline_worker_file_name(run_id, ".job.yaml")?))
-}
-
 /// The durable input one workspace drain carries for its whole window.
 ///
 /// Every key here is *omitted* unless the caller asked for it, so a run's
@@ -129,13 +124,14 @@ pub(crate) fn run_definition_snapshot_path(
 /// that predated it. Pure, so the durable contract this shape represents can
 /// be asserted without submitting a run.
 pub(crate) fn workspace_auto_run_input(
-    for_seconds: Option<u64>,
-    max_active_leaf_runs: Option<u32>,
-    completion: crate::application::workflow::CompletionPolicy,
+    request: &crate::application::job::AutoDrainRequest<'_>,
     allowed_crews: &[String],
-    approve_proposed: bool,
-    auto_fix: bool,
 ) -> Result<Value, OrbitError> {
+    let for_seconds = request.for_seconds;
+    let max_active_leaf_runs = request.max_active_leaf_runs;
+    let completion = request.completion;
+    let approve_proposed = request.approve_proposed;
+    let auto_fix = request.auto_fix;
     if max_active_leaf_runs == Some(0) {
         return Err(OrbitError::InvalidInput(
             "concurrency must be at least 1".to_string(),
@@ -415,6 +411,22 @@ impl WorkerCommandConfig {
     /// An edit already on `command`, including a removal, keeps precedence over
     /// the policy snapshot.
     fn apply_launch_environment(&self, command: &mut Command) {
+        // A worker is its own run. Submitted from a managed process (a resident
+        // cycle outside a sandbox, say), it must not inherit that run's binding
+        // and activity policy, or its own tool calls would be judged as the
+        // submitter's. The workspace and registry locators stay.
+        if crate::runtime::run_input::managed_run_context_from_env() {
+            for name in MCP_MANAGED_BINDING_ENV_VARS
+                .iter()
+                .copied()
+                .filter(|name| {
+                    ![MCP_MANAGED_WORKSPACE_ENV, MCP_MANAGED_REGISTRY_ROOT_ENV].contains(name)
+                })
+                .chain(["ORBIT_TASK_ID", "ORBIT_ACTIVE_TASK_ID"])
+            {
+                command.env_remove(name);
+            }
+        }
         if let Some(policy) = &self.environment {
             // Crew `env` sources ride along under their own names: the worker
             // composes each crew's agent environment from its own process

@@ -2,10 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use orbit_tools::ToolContext;
-use orbit_types::workflow::activity_job::{AgentLoopSpec, TrustedHostAdmission, V2AuditEventKind};
-use orbit_types::workflow::{
-    ExperimentActivityOverlay, ExperimentOverlayRecord, ExploreBriefAdmission,
-};
+use orbit_types::workflow::activity_job::{AgentLoopSpec, Provider, V2AuditEventKind};
+use orbit_types::workflow::{ExperimentActivityOverlay, ExperimentOverlayRecord};
 use serde_json::Value;
 
 use crate::activity_job::cli_runner::image_input::{ImageInputPlan, admit_image_input};
@@ -25,13 +23,13 @@ use super::super::policy::{
 };
 use super::super::prepare::{
     SourceCheckout, activity_tool_context, invocation_timeout_seconds, prepare_source_checkout,
-    require_conflict_recovery_target, trusted_host_admission,
+    reject_removed_trusted_host_execution, require_conflict_recovery_target,
 };
 use super::CliDispatchContext;
 
 pub(super) struct PreparedCliDispatch<'a> {
     pub(super) provider: String,
-    pub(super) trusted_host: Option<TrustedHostAdmission>,
+    pub(super) provider_enum: Provider,
     pub(super) cli_executor: ResolvedCliExecutor,
     pub(super) inspection_tools: Option<InspectionTools>,
     pub(super) image_input: Option<ImageInputPlan>,
@@ -43,8 +41,8 @@ pub(super) struct PreparedCliDispatch<'a> {
     pub(super) tool_disallow_list: Option<Vec<String>>,
     pub(super) activity_tools: ResolvedActivityTools,
     pub(super) task_ctx: Option<Value>,
-    pub(super) regression_risk_instruction: Option<&'a str>,
-    pub(super) explore_brief_instruction: Option<&'a str>,
+    pub(super) notice_instruction: Option<&'a str>,
+    pub(super) notice_posting_instruction: Option<&'a str>,
     pub(super) tool_ctx: ToolContext,
     pub(super) declared_worktree_pair: Option<DeclaredWorktreePair>,
     pub(super) source_checkout: SourceCheckout,
@@ -52,72 +50,120 @@ pub(super) struct PreparedCliDispatch<'a> {
     pub(super) experiment_records: Vec<ExperimentOverlayRecord>,
 }
 
-/// Add the host's `regression_risk` marks to the task snapshot of an
-/// activity that declares how to act on them, and return that instruction
-/// when it did. An activity without one, a prompt with no task snapshot, or
-/// a task with nothing marked leaves the snapshot and instruction as they
-/// are.
-fn attach_regression_risk<'a>(
-    host: &dyn RuntimeHost,
-    spec: &'a AgentLoopSpec,
-    run_id: &str,
-    activity_name: &str,
-    input: &Value,
-    task_ctx: Option<&mut Value>,
-) -> Option<&'a str> {
-    let instruction = spec
-        .regression_risk_instruction
-        .as_deref()
-        .filter(|instruction| !instruction.trim().is_empty())?;
-    let context = task_ctx?.as_object_mut()?;
-    let marks = host.regression_risk_for_agent_input(run_id, activity_name, input)?;
-    context.insert("regression_risk".to_string(), marks);
-    Some(instruction)
+/// The notice instructions one dispatch carries: the untrusted-data
+/// handling, only when a brief rides in the prompt, and the posting
+/// guidance, only when this dispatch may call `orbit.notice.post`.
+pub(super) struct FleetNoticeInstructions<'a> {
+    pub(super) notice_instruction: Option<&'a str>,
+    pub(super) notice_posting_instruction: Option<&'a str>,
 }
 
-/// Ask the host for the task's explore brief when `spec` declares an
-/// `explore_brief_instruction`, record the outcome whatever it is, and put a
-/// delivered brief into the task context. Returns the instruction to append
-/// only when the prompt carries the brief.
-#[allow(clippy::too_many_arguments)]
-fn attach_explore_brief<'a>(
+/// The built-in untrusted-data handling an activity with `fleet_notices: read` or
+/// `post` receives when it declares no `notice_instruction` of its own.
+const BUILT_IN_NOTICE_INSTRUCTION: &str =
+    include_str!("../../../../../assets/fleet_notices/untrusted_data.txt");
+
+/// The built-in posting guidance an activity with `fleet_notices: post`
+/// receives when it declares no `notice_posting_instruction` of its own.
+const BUILT_IN_NOTICE_POSTING_INSTRUCTION: &str =
+    include_str!("../../../../../assets/fleet_notices/posting.txt");
+
+/// The activity's own non-empty instruction, else the built-in text when the
+/// activity opts into the matching `fleet_notices` level.
+fn fleet_notice_text<'a>(
+    declared: Option<&'a str>,
+    opted_in: bool,
+    built_in: &'static str,
+) -> Option<&'a str> {
+    declared
+        .filter(|instruction| !instruction.trim().is_empty())
+        .or(opted_in.then_some(built_in))
+}
+
+/// Ask the host for the workspace's open fleet notices when `spec` declares
+/// a `notice_instruction` or opts into `fleet_notices`, put the brief into the task context and record
+/// what was delivered. Notices are workspace-scoped, so a prompt with no
+/// task snapshot (a multi-task pilot) gains a task object holding only the
+/// block. The untrusted-data instruction rides only when the prompt
+/// carries the block; the posting instruction is independent of the brief
+/// and rides whenever the resolved callable set carries
+/// `orbit.notice.post`, so an empty board never suppresses it.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "notice delivery needs the step identity, the mutable task context and the audit writer together"
+)]
+fn attach_fleet_notices<'a>(
     host: &dyn RuntimeHost,
     spec: &'a AgentLoopSpec,
     run_id: &str,
     step_id: &str,
     activity_name: &str,
     input: &Value,
-    task_ctx: Option<&mut Value>,
+    task_ctx: &mut Option<Value>,
+    effective_tools: &[String],
     audit: &V2AuditWriter,
-) -> Option<&'a str> {
-    let instruction = spec
-        .explore_brief_instruction
-        .as_deref()
-        .filter(|instruction| !instruction.trim().is_empty())?;
-    let ExploreBriefAdmission { mut record, brief } =
-        host.explore_brief_for_activity(run_id, activity_name, input)?;
-    let delivered = match (brief, task_ctx.and_then(Value::as_object_mut)) {
-        (Some(brief), Some(context)) if record.deliverable() => {
-            context.insert("explore_brief".to_string(), brief);
-            true
-        }
-        _ => false,
+) -> FleetNoticeInstructions<'a> {
+    let notice_posting_instruction = fleet_notice_text(
+        spec.notice_posting_instruction.as_deref(),
+        spec.fleet_notices.posts(),
+        BUILT_IN_NOTICE_POSTING_INSTRUCTION,
+    )
+    .filter(|_| {
+        effective_tools
+            .iter()
+            .any(|tool| tool == "orbit.notice.post")
+    });
+    let Some(instruction) = fleet_notice_text(
+        spec.notice_instruction.as_deref(),
+        spec.fleet_notices.reads(),
+        BUILT_IN_NOTICE_INSTRUCTION,
+    ) else {
+        return FleetNoticeInstructions {
+            notice_instruction: None,
+            notice_posting_instruction,
+        };
     };
-    record.delivered = delivered;
-    audit.emit_lossy(V2AuditEventKind::ExploreBriefApplied {
+    let Some(brief) = host.notices_for_agent_input(run_id, activity_name, input) else {
+        return FleetNoticeInstructions {
+            notice_instruction: None,
+            notice_posting_instruction,
+        };
+    };
+    if task_ctx.is_none() {
+        *task_ctx = Some(Value::Object(serde_json::Map::new()));
+    }
+    let Some(context) = task_ctx.as_mut().and_then(Value::as_object_mut) else {
+        return FleetNoticeInstructions {
+            notice_instruction: None,
+            notice_posting_instruction,
+        };
+    };
+    context.insert("fleet_notices".to_string(), brief.block);
+    audit.emit_lossy(V2AuditEventKind::NoticesDelivered {
         step_id: step_id.to_string(),
         activity_name: activity_name.to_string(),
         task_id: task_id_from_input(input).unwrap_or_default().to_string(),
-        brief: record,
+        notices: brief.notices,
+        omitted: brief.omitted,
     });
-    delivered.then_some(instruction)
+    FleetNoticeInstructions {
+        notice_instruction: Some(instruction),
+        notice_posting_instruction,
+    }
 }
 
 /// Run a catalog activity on behalf of a pipeline step whose id differs from
 /// the activity name. Policy and broker authorization use `activity_name`;
 /// audit labels and worktree-boundary reports use `step_id`.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn run_cli_backend_for_step(
+/// One provider invocation of a step: admission, preparation, the
+/// subprocess and its completion projection. The step entry
+/// (`continuation::run_cli_backend_for_step`) may call it again for a
+/// bounded implementation continuation [ORB-21837].
+#[allow(
+    clippy::too_many_arguments,
+    reason = "policy authorizes the activity name while audit and the worktree boundary report the step id"
+)]
+pub(crate) fn dispatch_cli_invocation(
     host: &dyn RuntimeHost,
     spec: &AgentLoopSpec,
     step_id: &str,
@@ -135,8 +181,9 @@ pub(crate) fn run_cli_backend_for_step(
     if fs_profile != Some("reviewer") {
         host.acquire_deferred_footprint(run_id, activity_name)?;
     }
-    let provider = spec.provider.as_str().to_string();
-    let trusted_host = trusted_host_admission(spec, activity_name, input)?;
+    let provider_enum = spec.provider;
+    let provider = provider_enum.as_str().to_string();
+    reject_removed_trusted_host_execution(spec, activity_name)?;
     // Reject an inspection configuration that cannot start (a non-reviewer
     // profile, a provider with no CLI runtime) before executor lookup can
     // classify it as a transient missing-CLI error.
@@ -147,8 +194,7 @@ pub(crate) fn run_cli_backend_for_step(
     // Like inspection, an image-input run its lane or crew cannot serve is
     // refused before any session or checkout exists.
     let image_input = admit_image_input(&provider, spec, input, cli_executor.image_input.as_ref())?;
-    let timeout_seconds =
-        invocation_timeout_seconds(spec, activity_name, trusted_host.as_ref(), input);
+    let timeout_seconds = invocation_timeout_seconds(spec);
     let wall_clock_timeout = Duration::from_secs(timeout_seconds);
     let stall_window = host.agent_stall_window();
 
@@ -159,7 +205,7 @@ pub(crate) fn run_cli_backend_for_step(
     // A live experiment arm's tool delta applies after the grant, so the
     // audit row below and the child's policy envelope carry the treatment.
     let experiment_overlays =
-        host.experiment_overlays_for_activity(run_id, activity_name, input)?;
+        host.experiment_overlays_for_activity(run_id, activity_name, input, spec.model.as_deref())?;
     let experiment_records = apply_experiment_tool_overlays(
         host,
         &mut grant,
@@ -189,16 +235,18 @@ pub(crate) fn run_cli_backend_for_step(
     });
 
     let mut task_ctx = host.task_context_for_agent_input(run_id, step_id, input)?;
-    let regression_risk_instruction =
-        attach_regression_risk(host, spec, run_id, activity_name, input, task_ctx.as_mut());
-    let explore_brief_instruction = attach_explore_brief(
+    let FleetNoticeInstructions {
+        notice_instruction,
+        notice_posting_instruction,
+    } = attach_fleet_notices(
         host,
         spec,
         run_id,
         step_id,
         activity_name,
         input,
-        task_ctx.as_mut(),
+        &mut task_ctx,
+        &activity_tools.effective_tools,
         &audit,
     );
     let tool_ctx = activity_tool_context(host, spec, run_id, fs_profile, &provider);
@@ -231,7 +279,7 @@ pub(crate) fn run_cli_backend_for_step(
         },
         PreparedCliDispatch {
             provider,
-            trusted_host,
+            provider_enum,
             cli_executor,
             inspection_tools,
             image_input,
@@ -243,8 +291,8 @@ pub(crate) fn run_cli_backend_for_step(
             tool_disallow_list,
             activity_tools,
             task_ctx,
-            regression_risk_instruction,
-            explore_brief_instruction,
+            notice_instruction,
+            notice_posting_instruction,
             tool_ctx,
             declared_worktree_pair,
             source_checkout,

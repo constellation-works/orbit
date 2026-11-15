@@ -20,9 +20,7 @@ use serde_json::{Value, json};
 use crate::context::{ClaimExecutionContext, RuntimeHost};
 
 use super::super::deferred_sandbox::{claimed_deferred_replays, with_replays};
-use super::super::git::{
-    BaseSyncMode, git_command_success, git_output, resolve_worktree_start_point,
-};
+use super::super::git::{BaseSyncMode, git_output, resolve_worktree_start_point};
 use super::super::review_gate::revision;
 use super::already_resolved;
 use super::delivery::repository;
@@ -95,7 +93,12 @@ fn require_checkpoint_identity(report: &Value, task: &str, run: &str) -> Result<
             report["decision"].as_str(),
             // [ORB-14791] A claimed `no-diff-expected` skip pins its run and
             // base; its verifier rechecks the owner's tag.
-            Some("verified_no_diff" | "verified_already_landed" | "skipped_no_diff_expected")
+            Some(
+                "verified_no_diff"
+                    | "verified_already_landed"
+                    | "verified_already_resolved"
+                    | "skipped_no_diff_expected",
+            )
         )
     {
         return Err(refused(
@@ -242,15 +245,10 @@ pub fn observe_no_diff_candidate<H: RuntimeHost + ?Sized>(
     let submitted = &handoff.candidate;
     let base_ref = resolve_worktree_start_point(workspace, &submitted.base_branch, base_sync)?;
     let tip = revision(workspace, &base_ref)?;
-    let contained = git_command_success(
+    let contained = crate::executor::automation::vcs::git::is_ancestor(
         workspace,
-        &[
-            "merge-base",
-            "--is-ancestor",
-            "--end-of-options",
-            &submitted.base.commit,
-            &tip.commit,
-        ],
+        &submitted.base.commit,
+        &tip.commit,
     )?;
     if !contained {
         return Err(refused(format!(
@@ -272,7 +270,17 @@ pub fn observe_no_diff_candidate<H: RuntimeHost + ?Sized>(
         ));
     }
     let task = host.get_task(&handoff.task_id)?;
-    verify_clean_tree_handoff_at_revision(host, &task, workspace, &handoff.run_id, &report)?;
+    // The owner recorded the handoff's own `regression_from` culprits when it
+    // accepted the handoff; that recording must not invalidate the leaf's
+    // already-landed verification [ORB-24696].
+    verify_clean_tree_handoff_at_revision(
+        host,
+        &task,
+        workspace,
+        &handoff.run_id,
+        &report,
+        &handoff.regression_from,
+    )?;
     Ok(HandoffCandidate {
         candidate: base.clone(),
         base,

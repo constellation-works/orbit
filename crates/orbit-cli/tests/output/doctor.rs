@@ -383,6 +383,46 @@ fn corrupt_unrelated_data_page(fixture: &WorkCheckout) {
         .expect("data page offset");
     file.write_all(&[0]).expect("invalid B-tree page type");
 }
+
+#[test]
+fn doctor_unknown_check_suggests_listing_valid_checks() {
+    if in_child("doctor::doctor_unknown_check_suggests_listing_valid_checks") {
+        return;
+    }
+    let f = WorkCheckout::new();
+    run_ok(
+        &f,
+        &["workspace", "init", "--name", "doctor-check-recovery"],
+    );
+
+    let listed = run_ok(&f, &["doctor", "--json"]);
+    let listed_rows = rows(&listed);
+    let database = row(&listed_rows, "database");
+
+    let selected = run_ok(&f, &["doctor", "--check", "database", "--json"]);
+    let selected: Value = serde_json::from_slice(&selected.stdout).expect("selected check JSON");
+    assert_eq!(selected["check"], database["check"]);
+    assert_eq!(selected["status"], database["status"]);
+    assert_eq!(selected["message"], database["message"]);
+    assert_eq!(selected["remediation"], database["remediation"]);
+
+    let text = run(&f, &["doctor", "--check", "missing-check"]);
+    assert_eq!(text.status.code(), Some(1), "{text:?}");
+    let text_error = String::from_utf8_lossy(&text.stderr);
+    has(&text_error, "invalid input");
+    has(&text_error, "missing-check");
+    has(&text_error, "orbit doctor --json");
+
+    let json = run(&f, &["doctor", "--check", "missing-check", "--json"]);
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    assert!(json.stdout.is_empty(), "{json:?}");
+    let error: Value = serde_json::from_slice(&json.stderr).expect("JSON error");
+    assert_eq!(error["code"], "invalid_input", "{error}");
+    let message = error["error"].as_str().expect("error message");
+    assert!(message.contains("missing-check"), "{message}");
+    assert!(message.contains("orbit doctor --json"), "{message}");
+}
+
 #[test]
 fn default_doctor_checks_schema_and_deep_detects_corrupt_data() {
     if in_child("doctor::default_doctor_checks_schema_and_deep_detects_corrupt_data") {
@@ -399,6 +439,20 @@ fn default_doctor_checks_schema_and_deep_detects_corrupt_data() {
     assert_eq!(code, Some(1), "deep failure exit: {deep:?}");
     let deep_rows = rows(&deep);
     expect_status(&deep_rows, "database", "error");
+    let selected = run(&f, &["doctor", "--deep", "--check", "database", "--json"]);
+    assert_eq!(
+        selected.status.code(),
+        Some(1),
+        "selected failure exit: {selected:?}"
+    );
+    let selected: Value = serde_json::from_slice(&selected.stdout).expect("single check JSON");
+    let failed = row(&deep_rows, "database");
+    assert_eq!(selected["message"], failed["message"]);
+    assert_eq!(selected["remediation"], failed["remediation"]);
+    let detail = run(&f, &["doctor", "--deep", "--check", "database"]);
+    assert_eq!(detail.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&detail.stdout).contains(failed["message"].as_str().unwrap()));
+
     for diagnostics in [&cheap, &deep_rows] {
         assert!(!diagnostics.is_empty());
         for d in diagnostics {
@@ -746,7 +800,7 @@ fn terminal_findings_preserve_messages_commands_and_one_line_rows() {
     for line in findings.lines().filter(|l| !l.starts_with("Table details")) {
         assert!(line.chars().count() <= 48, "line exceeds width: {line}");
     }
-    has(findings, "--format plain or --json");
+    has(&collapsed, "--format plain or --json");
     let narrow = render_fixture("narrow");
     assert!(
         !narrow.lines().any(|l| l == format!("Fix: {FIX}")),
@@ -817,7 +871,7 @@ fn doctor_reports_the_worker_cpu_quota() {
 fn doctor_lists_a_retired_config_key_and_the_fix_removes_only_that_key() {
     let f = WorkCheckout::new();
     let global_body = "[workflow]\nbase_branch = \"main\"\n";
-    let workspace_body = "# keep this note\n[workflow]\nbase_branch = \"agent-main\"\nsystem_crew = \"sol\"\n\n[plugin]\nlegacy_callback_identity = true\n\n[scoring]\nenabled = false\n\n[task.approval]\ndelegate_approval = true\n\n[workflow.future]\nenabled = true\n\n[plugins.future]\narbitrary = { nested = true }\n\n[future]\n";
+    let workspace_body = "# keep this note\n[workflow]\nbase_branch = \"agent-main\"\nsystem_crew = \"sol\"\n\n[plugin]\nlegacy_callback_identity = true\n\n[lease]\nenabled = false\n\n[task.approval]\ndelegate_approval = true\n\n[workflow.future]\nenabled = true\n\n[plugins.future]\narbitrary = { nested = true }\n\n[future]\n";
     let (_, gc, wc) = write_configs(&f, global_body, workspace_body);
     let reported = doctor(&f, &[]);
     expect_file(&wc, workspace_body);
@@ -833,7 +887,7 @@ fn doctor_lists_a_retired_config_key_and_the_fix_removes_only_that_key() {
         .collect();
     for key in [
         "workflow.system_crew",
-        "scoring.enabled",
+        "lease.enabled",
         "task.approval",
         "workflow.future",
         "future",
@@ -866,7 +920,7 @@ fn doctor_lists_a_retired_config_key_and_the_fix_removes_only_that_key() {
     let repair = row(&fixed, "fix-retired-config-keys");
     for needle in [
         "workflow.system_crew",
-        "scoring.enabled",
+        "lease.enabled",
         "plugin.legacy_callback_identity",
     ] {
         msg_has(repair, needle);
@@ -962,58 +1016,6 @@ fn doctor_retired_repair_keeps_host_evidence_rules_in_each_layer() {
         assert_fix_ok(&again);
         assert_eq!(effective_host_evidence(&f), before, "repeat repair");
     }
-}
-
-/// Live visual-review settings survive repair while an unknown sibling is removed.
-#[test]
-fn doctor_retired_repair_keeps_visual_review_settings() {
-    if in_child("doctor::doctor_retired_repair_keeps_visual_review_settings") {
-        return;
-    }
-    let f = WorkCheckout::new();
-    let workspace_body = "[visual_review]\nmanifests = [\"views.toml\"]\ndefault_width = 375\nmock_neighbor = true\n";
-    let (gd, gc, wc) = write_configs(&f, "", workspace_body);
-
-    let diagnosis = rows(&doctor(&f, &[]));
-    let retired = retired_rows(&diagnosis);
-    expect_mentions(&retired, "visual_review.mock_neighbor", &wc);
-    expect_no_mentions(&retired, "visual_review.manifests", &wc);
-    expect_no_mentions(&retired, "visual_review.default_width", &wc);
-    expect_file(&gc, "");
-    expect_file(&wc, workspace_body);
-
-    let fixed = fix_rows(&f);
-    assert_fix_ok(&fixed);
-    let repair = row(&fixed, "fix-retired-config-keys");
-    msg_has(repair, "visual_review.mock_neighbor");
-    let updated = read_toml(&wc);
-    assert_eq!(
-        updated["visual_review"]["manifests"]
-            .as_array()
-            .map(Vec::len),
-        Some(1)
-    );
-    assert_eq!(
-        updated["visual_review"]["manifests"][0].as_str(),
-        Some("views.toml")
-    );
-    assert_eq!(
-        updated["visual_review"]["default_width"].as_integer(),
-        Some(375)
-    );
-    assert!(updated["visual_review"].get("mock_neighbor").is_none());
-    let config = ResolvedConfig::load(&ConfigRoots::new(
-        f.home.join(".orbit"),
-        f.work.join(".orbit"),
-    ))
-    .expect("repaired config loads");
-    assert_eq!(config.visual_review.manifests, ["views.toml"]);
-    assert_eq!(config.visual_review.default_width, 375);
-    assert_backup(&f.work.join(".orbit"), workspace_body);
-    assert!(backup_names(&gd).is_empty(), "global config was unchanged");
-
-    let settled = assert_repair_settled(&f, &[&wc, &gc], &[&f.work.join(".orbit"), &gd]);
-    assert_fix_ok(&settled);
 }
 
 /// The repair preserves translated review values in their original layer and keeps the first backup.
@@ -1141,13 +1143,12 @@ fn doctor_retired_repair_rewrites_consolidated_key_families() {
     if in_child("doctor::doctor_retired_repair_rewrites_consolidated_key_families") {
         return;
     }
-    const KEYS: [&str; 6] = [
+    const KEYS: [&str; 5] = [
         "workflow.purpose_crews.review",
         "workflow.purpose_crews.final_recovery",
         "workflow.purpose_crews.sweep_tasks",
         "review.timing",
         "machine.worker_containment",
-        "workflow.validation_env.shell_probe",
     ];
     let f = WorkCheckout::new();
     let global = "[workflow]\nfinal_recovery_crews = [\"sol\"]\n\n[workflow.validation_env]\nlogin_shell = false\n\n[machine]\nworker_containment = false\n";
@@ -1162,7 +1163,6 @@ fn doctor_retired_repair_rewrites_consolidated_key_families() {
             serde_json::json!(["sol"]),
             serde_json::json!(["sol"]),
             serde_json::json!("off"),
-            serde_json::json!("off"),
             serde_json::json!("off")
         ],
         "deprecated spellings load"
@@ -1175,9 +1175,16 @@ fn doctor_retired_repair_rewrites_consolidated_key_families() {
     let v = g["workflow"]["purpose_crews"]["final_recovery"].clone();
     assert_eq!(v, toml::Value::Array(vec!["sol".into()]));
     assert!(g["workflow"].get("final_recovery_crews").is_none());
-    let v = g["workflow"]["validation_env"]["shell_probe"].as_str();
-    assert_eq!(v, Some("off"));
-    assert!(g["workflow"]["validation_env"].get("login_shell").is_none());
+    // The shell probe is fixed [ORB-22808]: its switches are deleted, not
+    // translated.
+    let probe = |doc: &toml::Value, key: &str| {
+        doc["workflow"]
+            .get("validation_env")
+            .and_then(|table| table.get(key))
+            .cloned()
+    };
+    assert_eq!(probe(&g, "login_shell"), None);
+    assert_eq!(probe(&g, "shell_probe"), None);
     let v = g["machine"]["worker_containment"].as_str();
     assert_eq!(v, Some("off"));
     let w = read_toml(&wp);
@@ -1199,8 +1206,8 @@ fn doctor_retired_repair_rewrites_consolidated_key_families() {
     let v = w["review"]["timing"].as_str();
     assert_eq!(v, Some("off"));
     assert!(w["review"].get("before_landing").is_none());
-    let v = w["workflow"]["validation_env"]["shell_probe"].as_str();
-    assert_eq!(v, Some("off"));
+    assert_eq!(probe(&w, "interactive"), None);
+    assert_eq!(probe(&w, "shell_probe"), None);
     has(&read_str(&wp), "# keep this note");
     assert_backup(&gd, global);
     assert_backup(&f.work.join(".orbit"), workspace);
@@ -1379,13 +1386,16 @@ fn doctor_warns_when_routine_last_success_is_stale() {
     let db = Connection::open(root.join("orbit.db")).expect("host database");
     db.execute("INSERT INTO routine_cursors (routine_name, baseline_at, last_slot, updated_at) VALUES (?1, ?2, ?2, ?2)", rusqlite::params![name, rfc(chrono::Duration::hours(5))]).expect("cursor");
     db.execute("INSERT INTO routine_fires (routine_name, slot, attempt, state, run_id, source_workspace, detail, created_at, updated_at) VALUES (?1, ?2, 1, 'succeeded', 'jrun-fresh', 'routine-freshness', NULL, ?3, ?4)", rusqlite::params![name, rfc(chrono::Duration::hours(5)), rfc(chrono::Duration::hours(5)), rfc(chrono::Duration::hours(4))]).expect("old success");
-    let before = rows(&run_root(&["doctor", "--json"]));
-    expect_status(&before, "routine-freshness", "ok");
     // With `--root`, this host keeps seeded routines in the global catalog.
     let definition = root.join("routines/worktree_gc.yaml");
-    let yaml = read_str(&definition);
-    has(&yaml, "enabled: false");
-    let enabled_yaml = yaml.replacen("enabled: false", "enabled: true", 1);
+    let enabled_yaml = read_str(&definition);
+    has(&enabled_yaml, "enabled: true");
+    put(
+        &definition,
+        &enabled_yaml.replacen("enabled: true", "enabled: false", 1),
+    );
+    let before = rows(&run_root(&["doctor", "--json"]));
+    expect_status(&before, "routine-freshness", "ok");
     put(&definition, &enabled_yaml);
     let stale = rows(&run_root(&["doctor", "--json"]));
     expect_status(&stale, "routine-freshness", "warning");
@@ -1645,4 +1655,190 @@ fn doctor_prints_summary_count_orders_by_severity_and_filters_problems() {
         }
         assert_eq!(n["remediation"], pr["remediation"]);
     }
+}
+/// ORB-21576: plain stdout holds only records; health/status trailers are on stderr in every mode.
+#[test]
+fn stdout_trailers_go_to_stderr_for_doctors_and_migrate() {
+    if in_child("doctor::stdout_trailers_go_to_stderr_for_doctors_and_migrate") {
+        return;
+    }
+    let f = WorkCheckout::new();
+    run_ok(
+        &f,
+        &[
+            "workspace",
+            "init",
+            "--name",
+            "trailer-fixture",
+            "--ship-mode",
+            "local",
+        ],
+    );
+    // A healthy workspace doctor is the case that emits the trailer: clear
+    // the three warnings a bare fixture would otherwise report.
+    #[cfg(unix)]
+    set_mode(&f.work.join(".orbit"), 0o700);
+    run_ok(&f, &["mcp", "init", "--claude"]);
+    let plain_records_only = |out: &Output, label: &str| {
+        let stdout = utf8(out.stdout.clone());
+        for line in stdout.lines().filter(|line| !line.is_empty()) {
+            assert!(
+                line.contains('\t'),
+                "{label}: plain stdout line is not a record: {line:?}\n{stdout}"
+            );
+        }
+        stdout
+    };
+    // tool doctor: healthy summary is a notice, not a record.
+    let tool_plain = run_ok(&f, &["tool", "doctor", "--format", "plain"]);
+    plain_records_only(&tool_plain, "tool doctor plain");
+    assert!(
+        !utf8(tool_plain.stdout.clone()).contains("All tools healthy."),
+        "tool doctor healthy prose must not be on stdout"
+    );
+    has(&utf8(tool_plain.stderr.clone()), "All tools healthy.");
+    let tool_json = run_ok(&f, &["tool", "doctor", "--format", "json"]);
+    let parsed: Value = serde_json::from_slice(&tool_json.stdout).expect("tool doctor JSON");
+    assert!(parsed.is_array(), "tool doctor JSON shape: {parsed}");
+    has(&utf8(tool_json.stderr.clone()), "All tools healthy.");
+    let tool_ndjson = run_ok(&f, &["tool", "doctor", "--format", "ndjson"]);
+    for line in utf8(tool_ndjson.stdout.clone()).lines() {
+        serde_json::from_str::<Value>(line).expect("tool doctor ndjson record");
+    }
+    has(&utf8(tool_ndjson.stderr.clone()), "All tools healthy.");
+    // skill doctor: same contract.
+    let skill_plain = run_ok(&f, &["skill", "doctor", "--format", "plain"]);
+    plain_records_only(&skill_plain, "skill doctor plain");
+    assert!(
+        !utf8(skill_plain.stdout.clone()).contains("All skills healthy."),
+        "skill doctor healthy prose must not be on stdout"
+    );
+    has(&utf8(skill_plain.stderr.clone()), "All skills healthy.");
+    let skill_json = run_ok(&f, &["skill", "doctor", "--format", "json"]);
+    let parsed: Value = serde_json::from_slice(&skill_json.stdout).expect("skill doctor JSON");
+    assert!(parsed.is_array(), "skill doctor JSON shape: {parsed}");
+    has(&utf8(skill_json.stderr.clone()), "All skills healthy.");
+    // migrate inspection: version rows are records; the status trailer is not.
+    let migrate_plain = run_ok(&f, &["migrate", "--format", "plain"]);
+    plain_records_only(&migrate_plain, "migrate plain");
+    assert!(
+        !utf8(migrate_plain.stdout.clone()).contains("Workspace is up to date."),
+        "migrate trailer must not be on stdout"
+    );
+    has(
+        &utf8(migrate_plain.stderr.clone()),
+        "Workspace is up to date.",
+    );
+    let migrate_json = run_ok(&f, &["migrate", "--format", "json"]);
+    let parsed: Value = serde_json::from_slice(&migrate_json.stdout).expect("migrate JSON");
+    assert_eq!(parsed["up_to_date"], true, "migrate JSON shape: {parsed}");
+    has(
+        &utf8(migrate_json.stderr.clone()),
+        "Workspace is up to date.",
+    );
+    let migrate_ndjson = run_ok(&f, &["migrate", "--format", "ndjson"]);
+    let nd: Value = serde_json::from_slice(&migrate_ndjson.stdout).expect("migrate ndjson record");
+    assert_eq!(nd["up_to_date"], true, "migrate ndjson shape: {nd}");
+    has(
+        &utf8(migrate_ndjson.stderr.clone()),
+        "Workspace is up to date.",
+    );
+    // workspace doctor: the healthy line, when the fixture is healthy, is on stderr in every mode.
+    let doctor_plain = run(&f, &["doctor", "--format", "plain"]);
+    plain_records_only(&doctor_plain, "doctor plain");
+    assert!(
+        !utf8(doctor_plain.stdout.clone()).contains("Workspace healthy."),
+        "doctor healthy prose must not be on stdout"
+    );
+    let doctor_stderr = utf8(doctor_plain.stderr.clone());
+    if doctor_stderr.contains("0 failure(s), 0 warning(s).") {
+        has(&doctor_stderr, "Workspace healthy.");
+        let doctor_json = run(&f, &["doctor", "--format", "json"]);
+        let parsed: Value = serde_json::from_slice(&doctor_json.stdout).expect("doctor JSON");
+        assert!(parsed.is_array(), "doctor JSON shape: {parsed}");
+        has(&utf8(doctor_json.stderr.clone()), "Workspace healthy.");
+    }
+    // ORB-11597: --fix repair counts stay structured rows with the notice on stderr.
+    let fix = doctor(&f, &["--fix-retired-config-keys"]);
+    let fix_rows = rows(&fix);
+    expect_status(&fix_rows, "fix-retired-config-keys", "ok");
+}
+/// ORB-22883: a `ux_rules_runner` manifest left from the retired ux-rules
+/// routine names a deleted entry and refuses jobs that reference it; doctor
+/// names the manifest and how to remove it before dispatch fails.
+#[test]
+fn doctor_reports_the_retired_ux_rules_runner_manifest_with_its_removal() {
+    if in_child("doctor::doctor_reports_the_retired_ux_rules_runner_manifest_with_its_removal") {
+        return;
+    }
+    let f = WorkCheckout::new();
+    run_ok(&f, &["workspace", "init", "--name", "retired-script"]);
+    let scripts = f.work.join(".orbit/resources/scripts");
+    mkdir(&scripts);
+    let manifest = scripts.join("ux_rules_runner.yaml");
+    put(
+        &manifest,
+        "schemaVersion: 1\nkind: Script\nmetadata:\n  name: ux_rules_runner\nspec:\n  \
+         description: Measure configured UX rule surfaces.\n  entry: scripts/ux-rules/step.mjs\n  \
+         interpreter: [/opt/node/bin/node]\n",
+    );
+    let check = |f: &WorkCheckout| -> Value {
+        let output = doctor(f, &["--check", "retired-scripts"]);
+        serde_json::from_slice(&output.stdout)
+            .unwrap_or_else(|error| panic!("doctor JSON: {error}; {output:?}"))
+    };
+    let reported = check(&f);
+    assert_eq!(reported["status"], "warning", "{reported}");
+    msg_has(&reported, &manifest.display().to_string());
+    msg_has(&reported, "jobs that reference it refuse");
+    fix_has(&reported, &format!("Delete {}", manifest.display()));
+    fix_has(&reported, "orbit script revoke ux_rules_runner");
+    assert!(manifest.is_file(), "diagnosis leaves the manifest in place");
+    fs::remove_file(&manifest).expect("remove manifest");
+    assert_eq!(check(&f)["status"], "ok");
+}
+
+#[test]
+fn broken_script_only_refuses_jobs_that_reference_it() {
+    if in_child("doctor::broken_script_only_refuses_jobs_that_reference_it") {
+        return;
+    }
+    let f = WorkCheckout::new();
+    run_ok(&f, &["workspace", "init", "--name", "script-isolation"]);
+    put(
+        &f.work.join(".orbit/config.toml"),
+        "[workflow]\ndefault_crew = \"isolation\"\n\n[crews.isolation]\nprovider = \"codex\"\nmodel = \"fixture\"\nenabled = true\n",
+    );
+    let scripts = f.work.join(".orbit/resources/scripts");
+    mkdir(&scripts);
+    let manifest = scripts.join("broken.yaml");
+    put(
+        &manifest,
+        "schemaVersion: 1\nkind: Script\nmetadata:\n  name: broken\nspec:\n  description: Broken fixture\n  entry: missing.sh\n",
+    );
+    let jobs = f.work.join(".orbit/resources/jobs");
+    mkdir(&jobs);
+    put(
+        &jobs.join("independent.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: independent\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        seconds: 0\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n",
+    );
+    put(
+        &jobs.join("dependent.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: dependent\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: run\n      target: script:broken\n",
+    );
+    let report = rows(&doctor(&f, &[]));
+    let script_row = row(&report, "script-grants");
+    assert_eq!(script_row["status"], "warning", "{script_row}");
+    msg_has(script_row, &manifest.display().to_string());
+    let independent = run(&f, &["job", "run", "independent", "--wait", "--json"]);
+    assert!(
+        independent.status.success(),
+        "independent job: {independent:?}"
+    );
+    let dependent = run(&f, &["job", "run", "dependent", "--wait", "--json"]);
+    assert!(!dependent.status.success(), "dependent job must refuse");
+    let error = format!("{}{}", utf8(dependent.stdout), utf8(dependent.stderr));
+    has(&error, &manifest.display().to_string());
+    has(&error, "repair that manifest");
+    has(&error, "orbit script revoke broken");
 }

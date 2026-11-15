@@ -57,12 +57,45 @@ if [ -f "$forge/gates-pending" ] && [ -f "$forge/base-applied" ]; then
     rollup=$(printf '%s' "$rollup" | sed 's/"Protected (rust)","status":"COMPLETED","conclusion":"SUCCESS"/"Protected (rust)","status":"IN_PROGRESS","conclusion":""/')
     checks=$(printf '%s' "$checks" | sed 's/"name":"Protected (rust)"/"name":"Not emitted"/')
 fi
+# Every required check has passed, but the provider merge state still reads
+# BLOCKED: its mergeability has not refreshed yet.
+if [ -f "$forge/blocked-lag" ] && [ -f "$forge/base-applied" ]; then
+    merge_state=BLOCKED
+fi
+# The policy-required check is running: the PR rollup and the check-runs API
+# show it in progress, but the required-checks GraphQL read has not reported
+# it as required yet (its nodes below carry only the non-required check).
+if [ -f "$forge/required-pending-unreported" ] && [ -f "$forge/base-applied" ]; then
+    merge_state=BLOCKED
+    rollup=$(printf '%s' "$rollup" | sed 's/"Protected (rust)","status":"COMPLETED","conclusion":"SUCCESS"/"Protected (rust)","status":"IN_PROGRESS","conclusion":""/')
+    checks="{\"id\":1,\"name\":\"test\",\"head_sha\":\"$head\",\"app\":{\"id\":900},\"check_suite\":{\"id\":800},\"status\":\"completed\",\"conclusion\":\"success\"},{\"id\":2,\"name\":\"Protected (rust)\",\"head_sha\":\"$head\",\"app\":{\"id\":900},\"check_suite\":{\"id\":800},\"status\":\"in_progress\",\"conclusion\":null}"
+    check_count=2
+fi
+if [ -f "$forge/required-failed-unreported" ] && [ -f "$forge/base-applied" ]; then
+    merge_state=BLOCKED
+    rollup=$(printf '%s' "$rollup" | sed 's/"Protected (rust)","status":"COMPLETED","conclusion":"SUCCESS"/"Protected (rust)","status":"IN_PROGRESS","conclusion":""/')
+    checks="{\"id\":1,\"name\":\"test\",\"head_sha\":\"$head\",\"app\":{\"id\":900},\"check_suite\":{\"id\":800},\"status\":\"completed\",\"conclusion\":\"success\"},{\"id\":2,\"name\":\"Protected (rust)\",\"head_sha\":\"$head\",\"app\":{\"id\":900},\"check_suite\":{\"id\":800},\"status\":\"completed\",\"conclusion\":\"failure\"}"
+    check_count=2
+fi
 if [ -f "$forge/clean-missing" ] && [ -f "$forge/base-applied" ]; then
     checks=$(printf '%s' "$checks" | sed 's/"name":"Protected (rust)"/"name":"Not emitted"/')
+fi
+# A docs-only head: the required check concluded skipped, which branch
+# protection accepts. `failed-history` names the checks that failed on this
+# head before; the required-check read reports history only with that file.
+if [ -f "$forge/required-skipped" ]; then
+    rollup=$(printf '%s' "$rollup" | sed 's/"Protected (rust)","status":"COMPLETED","conclusion":"SUCCESS"/"Protected (rust)","status":"COMPLETED","conclusion":"SKIPPED"/')
+    checks=$(printf '%s' "$checks" | sed 's/"name":"Protected (rust)",\(.*\)"conclusion":"success"}/"name":"Protected (rust)",\1"conclusion":"skipped"}/')
+fi
+history=''
+if [ -f "$forge/failed-history" ]; then
+    history=$(sed 's/.*/{"name":"&"}/' "$forge/failed-history" | paste -sd, -)
+    history=',"checkSuites":{"pageInfo":{"hasNextPage":false},"nodes":[{"checkRuns":{"pageInfo":{"hasNextPage":false},"nodes":['"$history"']}}]}'
 fi
 if [ -f "$forge/legacy-state" ]; then
     rollup="$rollup,"'{"__typename":"StatusContext","context":"external-ci","state":"SUCCESS","isRequired":true}'
 fi
+[ ! -f "$forge/closed" ] || state=CLOSED
 if [ -f "$forge/merged" ]; then
     state=MERGED; merge_state=UNKNOWN
     merged_at='"2026-10-15T08:00:00Z"'
@@ -75,6 +108,10 @@ if [ -f "$forge/auth" ] && [ "$1" = api ]; then echo 'HTTP 403 forbidden' >&2; e
 [ ! -f "$forge/review-required" ] || review=REVIEW_REQUIRED
 review_json="\"$review\""
 [ ! -f "$forge/review-raw" ] || review_json=$(cat "$forge/review-raw")
+gql_rollup=$rollup
+if [ -f "$forge/required-pending-unreported" ] || [ -f "$forge/required-failed-unreported" ]; then
+    gql_rollup='{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS","isRequired":false}'
+fi
 case "$1 ${2:-}" in
     'pr view')
         if [ -f "$forge/review-missing" ]; then
@@ -82,15 +119,25 @@ case "$1 ${2:-}" in
         else
             printf '{"number":42,"state":"%s","mergedAt":%s,"mergeable":"MERGEABLE","mergeStateStatus":"%s","reviewDecision":%s,"statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":%s,"url":"https://github.com/%s/pull/42"}\n' "$state" "$merged_at" "$merge_state" "$review_json" "$rollup" "$branch" "$head" "$base" "$merge_commit" "$slug"
         fi ;;
+    # [ORB-23812] A check re-trigger closes and reopens the pull request;
+    # `checks-on-reopen` makes the reopened head report its required check.
+    'pr close')
+        printf 'close\n' >> "$forge/mutations"
+        touch "$forge/closed" ;;
+    'pr reopen')
+        printf 'reopen\n' >> "$forge/mutations"
+        rm -f "$forge/closed"
+        [ ! -f "$forge/checks-on-reopen" ] || touch "$forge/base-applied" ;;
     'repo view') printf '{"nameWithOwner":"%s"}\n' "$slug" ;;
     'api graphql')
-        if [ -f "$forge/policy-unreadable" ]; then echo '{"errors":[{"message":"unavailable"}]}'; exit; fi
         case "$*" in
             *requiredStatusChecks*)
+                if [ -f "$forge/policy-unreadable" ]; then echo '{"errors":[{"message":"unavailable"}]}'; exit; fi
                 if [ -f "$forge/policy-no-rule" ]; then printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","baseRefName":"%s","reviewDecision":null,"baseRef":{"branchProtectionRule":null}}}}}\n' "$head" "$base"; exit; fi
                 printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","baseRefName":"%s","reviewDecision":null,"baseRef":{"branchProtectionRule":{"id":"RULE-1","requiredStatusChecks":[]}}}}}}\n' "$head" "$base" ;;
             *statusCheckRollup*)
-                printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[%s]}}}}]}}}}}\n' "$head" "$head" "$rollup" ;;
+                if [ -f "$forge/required-rollup-truncated" ]; then printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":true},"nodes":[]}}}}]}}}}}\n' "$head" "$head"; exit; fi
+                printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[%s]}}%s}}]}}}}}\n' "$head" "$head" "$gql_rollup" "$history" ;;
             *merge*|*Merge*) echo '{"data":{"repository":{"nameWithOwner":"'"$slug"'","mergeCommitAllowed":true,"squashMergeAllowed":true,"rebaseMergeAllowed":false,"autoMergeAllowed":false,"pullRequest":{"baseRefName":"'"$base"'","baseRef":{"branchProtectionRule":{"requiresLinearHistory":false}}}}}}' ;;
             *) echo "unknown graphql $*" >&2; exit 2 ;;
         esac ;;
@@ -133,7 +180,7 @@ case "$1 ${2:-}" in
         [ ! -f "$forge/lost-reply" ] || exit 1
         echo '{}' ;;
     'api repos/{owner}/{repo}/pulls/42/merge')
-        [ -f "$forge/base-applied" ] && [ ! -f "$forge/gates-pending" ] || { echo 'merge before checks' >&2; exit 1; }
+        [ -f "$forge/base-applied" ] && [ ! -f "$forge/gates-pending" ] && [ ! -f "$forge/blocked-lag" ] || { echo 'merge before checks' >&2; exit 1; }
         case "$*" in *"sha=$head"*) ;; *) echo 'merge lease' >&2; exit 1 ;; esac
         printf 'merge\n' >> "$forge/mutations"
         tree=$(git --git-dir="$remote" rev-parse "$head^{tree}")
@@ -201,6 +248,10 @@ case "$1 ${2:-}" in
                 old_base=$(cat "$forge/old-base")
                 run="{\"id\":700,\"run_attempt\":1,\"workflow_id\":600,\"check_suite_id\":800,\"path\":\".github/workflows/ci.yml\",\"head_sha\":\"$head\",\"head_branch\":\"$branch\",\"repository\":$repo,\"head_repository\":$repo,\"event\":\"pull_request\",\"actor\":{\"id\":123,\"login\":\"owner\"},\"status\":\"completed\",\"conclusion\":\"success\",\"pull_requests\":[{\"number\":42,\"head\":{\"sha\":\"$head\"},\"base\":{\"sha\":\"$old_base\",\"ref\":\"$base\",\"repo\":$repo}}]}"
                 if [ -f "$forge/push" ]; then run=$(printf '%s' "$run" | sed 's/"event":"pull_request"/"event":"push"/'); fi
+                if [ -f "$forge/workflow-run-status" ]; then
+                    run_status=$(tr -d '\n' < "$forge/workflow-run-status")
+                    run=$(printf '%s' "$run" | sed "s/\"status\":\"completed\",\"conclusion\":\"success\"/\"status\":\"${run_status}\",\"conclusion\":null/")
+                fi
                 case "$2" in *'/700') printf '%s\n' "$run" ;; *) printf '{"total_count":1,"workflow_runs":[%s]}\n' "$run" ;; esac ;;
             *'/actions/workflows/600') echo '{"id":600,"path":".github/workflows/ci.yml"}' ;;
             *'/check-suites/800') printf '{"id":800,"head_sha":"%s","repository":%s,"app":{"id":900,"slug":"github-actions"}}\n' "$head" "$repo" ;;

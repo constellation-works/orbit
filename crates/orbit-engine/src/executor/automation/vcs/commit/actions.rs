@@ -13,16 +13,16 @@ use crate::context::RuntimeHost;
 use super::super::super::input::{
     canonicalize_existing_dir, input_string_field, required_job_run_id,
 };
+use super::super::conventions::meaningful_execution_summary;
 use super::super::failure::commit_head_matches_failure_handoff;
 use super::super::git::git_output;
 use super::super::handoff::{
     claimed_attempt_summary, reject_failed_attempt, reject_failed_delivery,
 };
-use super::super::pr::meaningful_execution_summary;
 use super::author::{append_co_author_trailers, commit_author_for_tasks};
 use super::checkpoint::{
-    PinnedHead, head_descends_from_pin, head_matches_final_recovery, validate_pinned_head,
-    verify_clean_tree,
+    PinnedHead, head_descends_from_pin, head_matches_final_recovery, head_matches_settled_review,
+    validate_pinned_head, verify_clean_tree,
 };
 use super::diagnostics::{changed_head_error, empty_stage_error};
 use super::finding_invalid;
@@ -33,6 +33,7 @@ use super::git_ops::{
 use super::message::{batch_commit_message, finalize_commit_message, task_commit_message};
 use super::published_replay::final_recovery_published_candidate;
 use super::recovery::{RecoveryCommit, RecoveryCommitRequest, commit_recovery_repair};
+use super::regression::resolve_regression_landed_commits;
 use super::scope::{NewPathPolicy, attribute_candidate_paths, task_candidate_paths};
 use super::summary::ensure_durable_execution_summary;
 use super::tagged_no_diff;
@@ -116,6 +117,8 @@ pub(super) fn commit_task_artifact_changes<H: RuntimeHost + ?Sized>(
 
     let mut committed_task_ids = Vec::new();
     let mut skipped_task_ids = Vec::new();
+    let pr_config = host.pr_config();
+    let landed = resolve_regression_landed_commits(host, &workspace_path, &tasks, &pr_config);
 
     for task in tasks {
         let changed_files = assigned
@@ -129,7 +132,7 @@ pub(super) fn commit_task_artifact_changes<H: RuntimeHost + ?Sized>(
         }
 
         stage_paths(&workspace_path, &changed_files)?;
-        let message = task_commit_message(&task, &host.pr_config());
+        let message = task_commit_message(&task, &pr_config, &landed);
         git_commit_paths_with_identity(
             &workspace_path,
             &message,
@@ -191,7 +194,10 @@ pub(super) fn commit_finalize_artifact_changes<H: RuntimeHost + ?Sized>(
 
     let files_to_commit: Vec<String> = files_to_commit.into_iter().collect();
     stage_paths(&workspace_path, &files_to_commit)?;
-    let mut message = finalize_commit_message(&affected_tasks, &host.pr_config());
+    let pr_config = host.pr_config();
+    let landed =
+        resolve_regression_landed_commits(host, &workspace_path, &affected_tasks, &pr_config);
+    let mut message = finalize_commit_message(&affected_tasks, &pr_config, &landed);
     let (_, coauthors) = commit_author_for_tasks(&affected_tasks);
     append_co_author_trailers(&mut message, &coauthors);
     let resolved_model = host.resolved_crew_model(batch_id)?;
@@ -318,6 +324,13 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
                         host,
                         input,
                         batch_id,
+                        &task.id,
+                        &workspace_path,
+                        &base_sha,
+                        &head_sha,
+                    )?
+                    && !head_matches_settled_review(
+                        host,
                         &task.id,
                         &workspace_path,
                         &base_sha,
@@ -451,14 +464,19 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         if input.get("verify_already_landed").and_then(Value::as_bool) == Some(true)
             && let Some(base_sha) = base_sha.as_deref()
         {
-            return verify_clean_tree(host, &task, &workspace_path, run_id, base_sha).map_err(
-                |error| match empty_stage_error(&task.id, &workspace_path, Some(base_sha)) {
-                    Ok(OrbitError::Execution(observed)) => {
-                        OrbitError::Execution(format!("{observed}; {error}"))
-                    }
-                    Ok(observed) | Err(observed) => observed,
-                },
-            );
+            match verify_clean_tree(host, &task, &workspace_path, run_id, base_sha, input) {
+                Ok(checkpoint) => return Ok(checkpoint),
+                Err(error) => {
+                    return Err(
+                        match empty_stage_error(&task.id, &workspace_path, Some(base_sha)) {
+                            Ok(OrbitError::Execution(observed)) => {
+                                OrbitError::Execution(format!("{observed}; {error}"))
+                            }
+                            Ok(observed) | Err(observed) => observed,
+                        },
+                    );
+                }
+            }
         }
         return Err(empty_stage_error(
             &task.id,
@@ -485,7 +503,14 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         std::slice::from_ref(&task),
         true,
     );
-    let message = batch_commit_message(&task, &host.pr_config());
+    let pr_config = host.pr_config();
+    let landed = resolve_regression_landed_commits(
+        host,
+        &workspace_path,
+        std::slice::from_ref(&task),
+        &pr_config,
+    );
+    let message = batch_commit_message(&task, &pr_config, &landed);
     let resolved_model = host.resolved_crew_model(batch_id)?;
 
     git_commit_with_identity(&workspace_path, &message, resolved_model.as_deref())?;
@@ -534,7 +559,14 @@ pub(in crate::executor::automation::vcs) fn commit_failure_candidate<H: RuntimeH
             std::slice::from_ref(task),
             true,
         );
-        let message = batch_commit_message(task, &host.pr_config());
+        let pr_config = host.pr_config();
+        let landed = resolve_regression_landed_commits(
+            host,
+            workspace_path,
+            std::slice::from_ref(task),
+            &pr_config,
+        );
+        let message = batch_commit_message(task, &pr_config, &landed);
         let resolved_model = host.resolved_crew_model(run_id)?;
         git_commit_with_identity(workspace_path, &message, resolved_model.as_deref())?;
     }

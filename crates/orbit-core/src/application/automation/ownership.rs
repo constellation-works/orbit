@@ -6,6 +6,45 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::automation::{DeliveryOwnership, DeliveryTrigger, OwnerAuthority};
 use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule, RoutineDefinition};
 
+/// Resolve the ownership, effective trigger and epoch shared by delivery
+/// auto-task evaluation, inspection, recovery and reset.
+pub(super) fn resolve_delivery_auto_task(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+) -> Result<(DeliveryOwnership, DeliveryTrigger, String), OrbitError> {
+    let AutoTaskSchedule::Deliveries {
+        deliveries_landed: declared,
+        ..
+    } = &definition.schedule
+    else {
+        return Err(OrbitError::InvalidInput("not a delivery definition".into()));
+    };
+
+    let ownership = resolve(runtime, declared.owner_machine.as_deref());
+    let trigger = with_resolved_owner(declared, &ownership);
+    let epoch = auto_task_epoch(definition, &trigger)?;
+    Ok((ownership, trigger, epoch))
+}
+
+/// Resolve a delivery routine identically for evaluation and inspection.
+/// Hash the uncapped trigger before applying the routine's retry policy.
+pub(super) fn resolve_delivery_routine(
+    runtime: &OrbitRuntime,
+    definition: &RoutineDefinition,
+) -> Result<(DeliveryOwnership, DeliveryTrigger, String), OrbitError> {
+    let declared = definition
+        .trigger
+        .deliveries_landed
+        .as_ref()
+        .ok_or_else(|| OrbitError::InvalidInput("not a delivery routine".into()))?;
+
+    let ownership = resolve(runtime, declared.owner_machine.as_deref());
+    let mut trigger = with_resolved_owner(declared, &ownership);
+    let epoch = routine_epoch(definition, &trigger)?;
+    trigger.retries = trigger.retries.min(definition.policy.retries.max);
+    Ok((ownership, trigger, epoch))
+}
+
 /// Resolve the effective owner of a delivery definition on this host.
 ///
 /// An explicit `owner_machine` always wins. Otherwise this workspace's
@@ -83,7 +122,7 @@ pub(crate) fn auto_task_epoch(
 
 /// Epoch of a delivery routine under its resolved owner. The routine's retry
 /// cap is applied after this, and has never been part of the epoch.
-pub(crate) fn routine_epoch(
+fn routine_epoch(
     definition: &RoutineDefinition,
     trigger: &DeliveryTrigger,
 ) -> Result<String, OrbitError> {

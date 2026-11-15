@@ -30,8 +30,8 @@ pub(super) const TOKEN_MAX_LEASE_SELECTORS: usize = 64;
 pub struct LeaseTokenGrant {
     /// The token's principal; it replaces any principal in the input.
     pub principal: String,
-    /// The token's principal class, which selects the workspace's
-    /// `lease.hard.<class>` and `lease.max_priority.<class>`.
+    /// The token's principal class, which selects the lease policy's hard
+    /// permission and priority ceiling for that class.
     pub principal_class: LeasePrincipalClass,
     /// The token's public id, recorded on the lease and in audit rows.
     pub token_id: String,

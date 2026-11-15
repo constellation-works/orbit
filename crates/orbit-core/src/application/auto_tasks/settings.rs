@@ -200,8 +200,7 @@ impl OrbitRuntime {
             let overrides = split_overrides(&body, definition);
             if overrides.body_fields.is_empty() {
                 // The entry stays even with no override left: its edit stamp
-                // records that an operator configured the definition, which
-                // the retired after-landing policy consults.
+                // records that an operator configured the definition.
                 let mut settings = overrides.settings;
                 settings.updated_by = definition.updated_by.clone();
                 settings.updated_at = definition.updated_at.clone();

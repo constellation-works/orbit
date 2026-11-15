@@ -3,6 +3,10 @@
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(
+    not(any(test, feature = "test-support")),
+    deny(clippy::disallowed_methods)
+)]
 //! Directional application operations, adapters, bootstrap, and composition
 //! over the `orbit-runtime` kernel.
 //!
@@ -20,11 +24,15 @@
 //! translation lives in [`adapter`]. The runtime kernel is the `orbit-runtime`
 //! crate, which owns mechanisms and cannot import application or adapter
 //! modules; [`runtime`] re-exports it and defines [`OrbitRuntime`], which owns
-//! the kernel and implements the application port it calls back through.
+//! the kernel. The kernel reaches application methods only through
+//! [`runtime::ApplicationPort`]; [`composition`] implements that port with
+//! `CoreApplicationPort`.
 //!
 //! # Root re-export policy (ORB-10016)
 //! Every root `pub use` below is justified by a real import in a consumer
-//! crate (`orbit-cli`, `orbit-web`, `orbit-cmd`). Anything else must be
+//! crate (`orbit-cli`, `orbit-web`, `orbit-cmd`), except `GlobalSearchParams`,
+//! which the `orbit-core` runtime integration test imports because its owning
+//! module `application::search` is `pub(crate)`. Anything else must be
 //! imported from its owning module (`orbit_core::application::…`,
 //! `orbit_core::runtime::…`) or its owning crate (`orbit_common`,
 //! `orbit_store`, `orbit_engine`).
@@ -61,7 +69,6 @@ pub mod bootstrap;
 pub mod composition;
 pub mod metrics;
 pub mod runtime;
-pub use orbit_runtime::context;
 use orbit_runtime::paths;
 
 /// Allow this production Orbit binary to re-execute itself as a pipeline
@@ -75,15 +82,23 @@ pub fn mark_process_as_pipeline_worker_binary() {
 /// `test-support` feature. Enable it only from `[dev-dependencies]`.
 #[cfg(feature = "test-support")]
 pub mod test_support {
+    pub use crate::application::auto_tasks::completion_test_support::with_completion_adapter_run;
     /// Freeze source budget time in an isolated test process and its CLI children.
     pub use crate::application::automation::source::SOURCE_ELAPSED_ENV;
     pub use crate::application::automation::source::test_support::with_delivery_source_clock;
     pub use crate::application::automation::with_reset_probe_hook;
+    /// Replace the backlog forecast's wall-time budget for a scenario with
+    /// arrivals, in milliseconds, in an isolated test's server child.
+    pub use crate::application::backlog_forecast::COMPUTE_BUDGET_ENV as BACKLOG_FORECAST_COMPUTE_BUDGET_ENV;
+    /// Replace the backlog forecast's generated-node bound for a scenario
+    /// with arrivals, in an isolated test's server child.
+    pub use crate::application::backlog_forecast::MAX_GENERATED_ENV as BACKLOG_FORECAST_MAX_GENERATED_ENV;
     pub use crate::application::distributed::admission_checkpoint::{
         with_claim_settle_checkpoint, with_pull_admission_checkpoint,
     };
     pub use crate::application::job::crew_pools::{
-        with_crew_backfill_checkpoint, with_crew_selection_checkpoint,
+        with_crew_backfill_checkpoint, with_crew_draw_quantile, with_crew_selection_checkpoint,
+        without_auto_effort_exploration,
     };
     pub use crate::application::job::pipeline::pipeline_worker_observer_completed;
     #[cfg(unix)]
@@ -95,12 +110,20 @@ pub mod test_support {
     /// must install one: a test harness has no production entry-point marker,
     /// so an unsubstituted submission fails.
     pub use crate::application::job::pipeline::worker_command_override::install_process_wide as install_substitute_pipeline_worker;
-    /// Stop a worker's startup observer just after it reaps the worker.
+    /// Stop a worker's startup observer around reaping and exit recording.
     pub use crate::application::job::pipeline::{WorkerReapPhase, install_worker_reap_hook};
+    pub use crate::application::job::with_run_root_cause_write_hook;
     pub use crate::application::landing::with_landing_retry_reservation_hook;
     pub use crate::application::managed_assets::test_support::with_auto_task_manifest_read_hook;
+    pub use crate::application::notice::test_support::with_notice_close_snapshot_hook;
+    pub use crate::application::notice::test_support::with_notice_post_time;
+    pub use crate::application::resident::with_resident_cycle_admission_checkpoint;
     pub use crate::application::review::fulfilment_test_support::with_review_evidence_completion;
-    pub use crate::application::task::with_decision_dkim_resolver;
+    pub use crate::application::task::candidate_checkpoint::install_candidate_selection_checkpoint;
+    pub use crate::application::task::{
+        with_decision_answer_checkpoint, with_decision_dkim_resolver,
+        with_decision_raise_checkpoint,
+    };
     /// Fail the next drain pass's release of its unadmitted gap-fit reservations.
     pub use crate::application::workspace_auto::with_reservation_release_failure;
     pub use crate::runtime::{
@@ -111,6 +134,12 @@ pub mod test_support {
     /// reviewer's start and end, as the before-PR gate writes them, for tests
     /// that drive a reviewer without running the whole delivery pipeline.
     pub use orbit_store::contracts::{ReviewInvocationRecord, ReviewReserveRequest};
+    /// Canonical (artifact-hashing) task-bundle reads on this thread.
+    pub use orbit_store::test_support::canonical_bundle_reads;
+    /// Lightweight task-bundle reads on this thread, listing or by id.
+    pub use orbit_store::test_support::lightweight_bundle_reads;
+    /// Listing-path task-bundle reads on this thread.
+    pub use orbit_store::test_support::listing_bundle_reads;
     /// Treat every pending landing repair's owner fallback window as passed
     /// on this thread, for tests of the owner drain taking a repair.
     pub use orbit_store::test_support::with_repair_owner_fallback_elapsed;
@@ -160,69 +189,61 @@ pub use orbit_store::{InvocationInsertParams, InvocationQuery, InvocationRecord}
 
 // Command-layer types the CLI names in its clap surfaces.
 pub use application::contracts::{DrainEntryPoint, PullSettlementEntry};
-pub use application::distributed::{DrainEntryRefusal, WorkspacePullRequest};
+pub use application::distributed::WorkspacePullRequest;
 pub use application::job::{
-    AgentInvokeRequest, CatalogReferenceLayer, DrainAdmissionsStopRequest,
+    AutoDrainRequest, CatalogReferenceLayer, DrainAdmissionsStopRequest,
     DrainWindowExtensionRequest, DrainWorkerLimitRequest, PipelineInvokeResult, PipelineWaitEntry,
-    PipelineWaitStatus,
+    PipelineWaitStatus, ShipModeResolutionProfile, ShipRunRequest,
 };
 pub use application::routines::seed::{
     RoutineNameCollision, RoutineSeedIdentity, default_routine_name_collisions,
 };
+// Kept for the orbit-core runtime integration test: `application::search` is
+// `pub(crate)`, so an integration test cannot name `GlobalSearchParams` through
+// its owning module.
+pub use application::backlog_forecast::BacklogForecastHistory;
 pub use application::search::{
-    GlobalSearchHit, GlobalSearchKind, GlobalSearchParams, SearchRequest, SearchRequestProfile,
+    GlobalSearchKind, GlobalSearchParams, SearchRequest, SearchRequestProfile,
 };
 pub use application::task::LockContentionReport;
 pub use application::workflow::{CompletionPolicy, ShipMode, find_workflow, resolved_ship_mode};
+pub use application::workspace_auto::FleetReadinessFacts;
+pub use application::workspace_live_runs::workspace_live_run_ids;
 pub use application::workspace_sync::{
     ManagedArtifactOutcome, ManagedArtifactScope, WorkspaceManagedArtifactSyncReport,
     reconcile_workspace_managed_artifacts, seed_absent_workspace_managed_artifacts,
 };
-pub use context::ActorIdentity;
-/// The per-tier pool overrides `submit_workspace_auto_run_with_mode` takes.
+/// The per-tier pool overrides `submit_workspace_auto_run` takes.
 pub use orbit_config::ComplexityCrewPools;
-pub use orbit_config::CrewPerformanceType;
-/// The operator's `lease.intake.peer_user`, read by Orbit Web at startup.
-pub use orbit_config::load_lease_intake_peer_user;
+pub use orbit_config::TaskTypeDefinition;
+pub use orbit_runtime::context::ActorIdentity;
 pub use runtime::workspace::catalog::{FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope};
 // Shared domain types (owned by orbit-common) that the CLI and dashboard
 // render or construct.
-pub use application::auto_tasks::{
-    AutoTaskAddParams, AutoTaskDeleteParams, AutoTaskDeleteReport, AutoTaskTemplatePatch,
-    AutoTaskUpdateParams,
-};
+pub use application::auto_tasks::AutoTaskAddParams;
 pub use orbit_common::security::redaction::redact_sensitive_env_text;
 pub use orbit_common::{NotFoundKind, OrbitError};
 pub use orbit_store::{
-    AuditEventFilter, AuditEventInsertParams, AuditToolAggregate, V2AuditEventFilter,
-    V2AuditEventInsertParams,
+    AuditEventFilter, AuditEventInsertParams, AuditToolAggregate, AuditToolModelAggregate,
+    V2AuditEventFilter, V2AuditEventInsertParams,
 };
 pub use orbit_types::task::{
     DEFAULT_TASK_LIST_LIMIT, ExternalRef, Task, TaskComplexity, TaskCreateStatus, TaskPriority,
-    TaskReferenceIndex, TaskStatus, TaskType, resolve_task_dependencies, resolve_task_relations,
-    task_dependencies_ready_with_index,
+    TaskStatus, TaskType,
 };
 pub use orbit_types::telemetry::{AuditEvent, AuditEventStatus, AuditStats};
-pub use orbit_types::workflow::{
-    AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, JobRun, JobRunState,
-    JobRunStep, JobTargetType,
-};
+pub use orbit_types::workflow::{JobRun, JobRunState, JobRunStep, JobTargetType};
 pub use orbit_types::workflow::{MissedRunPolicy, OverlapPolicy};
 // Failure-incident grouping over the raw audit rows [ORB-10871]; consumed by
 // the dashboard's incident and audit-summary surfaces.
 pub use orbit_store::{
-    CauseBasis, DOCTOR_FINDINGS_MESSAGE_PREFIX, FailureClass, FailureIncident,
-    FailureIncidentQuery, FailureIncidentReport, IncidentCause, IncidentEventRef,
-    JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL, PropagationLink,
-    is_failure_only_diagnostic_surface,
+    DOCTOR_FINDINGS_MESSAGE_PREFIX, FailureClass, FailureIncident, FailureIncidentQuery,
+    FailureIncidentReport, IncidentEventRef, JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL,
+    PropagationLink, is_failure_only_diagnostic_surface,
 };
-// Routine fire records surfaced by the dashboard's routine-health JSON API.
-pub use orbit_store::{RoutineFireRecord, RoutineFireState};
-// Reservation history behind the dashboard's codebase analytics.
-pub use orbit_store::contracts::TaskReservationRecord;
 // Landed-delivery diff stats behind the dashboard's Metrics diff trend.
 pub use orbit_store::contracts::LandedDiffStats;
 // Stored backlog forecasts behind the dashboard's Analytics › Forecast.
 pub use orbit_store::contracts::StoredBacklogForecast;
-pub use runtime::engine::{ResolvedCrewProjection, TaskCrewRead};
-pub use runtime::{OrbitRuntime, WorkspaceRuntimeBinding};
+pub use runtime::OrbitRuntime;
+pub use runtime::engine::ResolvedCrewProjection;

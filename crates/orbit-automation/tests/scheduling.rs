@@ -60,6 +60,8 @@ mod member_consumers;
 mod pending_mints;
 #[path = "scheduling/released_attempts.rs"]
 mod released_attempts;
+#[path = "scheduling/retired_block_trigger.rs"]
+mod retired_block_trigger;
 #[path = "scheduling/routine_sweep.rs"]
 mod routine_sweep;
 

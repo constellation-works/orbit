@@ -14,9 +14,12 @@ mod write_operations;
 pub use artifact_hints::{
     ARTIFACT_LISTING_HINT_CLI, ARTIFACT_LISTING_HINT_MCP, artifact_listing_hint,
 };
-pub use list_projection::{MINIMAL_TASK_FIELDS, project_task_list_output, select_fields};
+pub use list_projection::{
+    MINIMAL_TASK_FIELDS, TASK_LIST_COMPACT_HINT, project_task_list_output, select_fields,
+};
 pub use operations::{
     TASK, TASK_COMPLEXITY_VALUES, TASK_HOST_HELP, TASK_OPERATIONS, TASK_ORIGIN_VALUES,
     TASK_PRIORITY_VALUES, TASK_STATUS_VALUES, TASK_TYPE_VALUES, TaskOperation, TaskVerb,
 };
 pub use write_operations::TASK_CLI_OPTIONS_PARAM;
+pub(crate) use write_operations::TASK_UPDATE_STATUS_VALUES;

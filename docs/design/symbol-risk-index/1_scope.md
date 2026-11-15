@@ -1,8 +1,8 @@
 ---
 title: "Scope: symbol risk index"
 owner: claude
-last_updated: 2026-10-30
-last_validated: 2026-10-30
+last_updated: 2026-11-06
+last_validated: 2026-11-06
 status: Draft
 stage: designing
 next: "Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance"
@@ -174,7 +174,7 @@ coverage priorities, retirement evidence and timing.
   incident invariant. Low coverage alone is not one.
 - **It supplies retirement candidates, not retirements.** A retirement still follows
   [Retiring a unit test](../../design-patterns/test_strategy.md#retiring-a-unit-test) and the
-  10-minute budget's rules: name the surviving coverage, measure the cost before and after,
+  CI budget's rules: name the surviving coverage, measure the cost before and after,
   and never retire the only guard of a security invariant, recovery path or known incident.
   The unit-test growth ratchet is unchanged.
 
@@ -270,9 +270,9 @@ completed design repairs, not index implementation.
    until G3b shows coverage is predictive?
 3. **Indexer without a plugin?** A configured command needs a sandboxed, granted execution
    path. [Script steps](../script-steps/1_scope.md), designed by [ORB-19294], now have
-   manifests and grants ([ORB-19983]) and granted Linux execution ([ORB-19985]), while
-   declared file inputs and macOS execution remain later work. Until the indexer's file
-   contract can use that path, it stays a plugin tool.
+   manifests and grants ([ORB-19983]), granted Linux execution ([ORB-19985]), declared
+   file inputs on Linux ([ORB-21297]) and a macOS script sandbox profile ([ORB-21298]).
+   Until the indexer's file contract can use that path, it stays a plugin tool.
 4. **Generation per base commit, or per N deliveries?** Rebuilding on every advance is
    cheapest to reason about. If a build costs minutes, a coarser cadence trades staleness for
    load.
@@ -309,5 +309,7 @@ completed design repairs, not index implementation.
 - [ORB-19294] — designed script steps, a granted execution path for workspace scripts
 - [ORB-19983] — added script manifests, parsing and digest-bound grants
 - [ORB-19985] — executed granted script steps on Linux under the script sandbox profile
+- [ORB-21297] — admitted declared script file inputs on Linux, bound read-only at `in/<as>`
+- [ORB-21298] — added the macOS script sandbox profile, so granted script steps run on macOS
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

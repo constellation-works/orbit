@@ -2,7 +2,9 @@
 //! waiting on, the operator CLI's answer verb, and the delegated-human
 //! channel that submits a human's answer through `orbit.decision.submit`.
 //!
-//! Listing and showing are read-only tools any caller may use. Answering is
+//! Listing and showing are read-only tools any caller may use. Raising is the
+//! agent's: `orbit.decision.raise` puts a bounded multiple-choice question on a
+//! human-crew task. Answering is
 //! the operator's: its operation carries no MCP scope and the noun registers
 //! tool-only operations inactive, so no agent session can answer a request
 //! through the tool surface. The bare CLI applies the answer in core as the
@@ -17,10 +19,9 @@
 //! verbs with no MCP scope, like answering.
 use crate::governance::operation::{
     CliArgKind, CliGroup, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec,
-    ParamType, ToolOnlyRegistration, UnknownFields, both, free_text, mcp_only, operation_registry,
-    required,
+    ParamType, ToolOnlyRegistration, UnknownFields, both, free_text, operation_registry, required,
 };
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 operation_registry! {
     noun: DECISION;
@@ -33,8 +34,16 @@ operation_registry! {
         List => LIST,
         /// One decision request with its answers and binding.
         Show => SHOW,
+        /// Raise a multiple-choice decision request on a human-crew task.
+        Raise => RAISE,
         /// Answer one open decision request (operator CLI only).
         Answer => ANSWER,
+        /// Re-open a precedent or model answer (operator CLI only).
+        Reverse => REVERSE,
+        /// Set auto on one current corpus rule (operator CLI only).
+        RuleAuto => RULE_AUTO,
+        /// Propose corpus rule edits without writing them (operator CLI only).
+        Consolidate => CONSOLIDATE,
         /// Submit a human's answer through a registered decision channel.
         Submit => SUBMIT,
         /// Raise missing approval requests and return the decision digest.
@@ -67,23 +76,21 @@ pub const DECISION: NounSpec<DecisionVerb> = NounSpec {
 };
 
 const GATES: &[EnumValue] = &[
+    EnumValue::plain("agent_request"),
     EnumValue::plain("block_triage"),
+    EnumValue::plain("model_answer_review"),
     EnumValue::plain("pilot_admission"),
     EnumValue::plain("proposed_approval"),
+    EnumValue::plain("resident_authority"),
     EnumValue::plain("review_approval"),
+    EnumValue::plain("script_grant"),
 ];
-
-const MODEL: &[ParamSpec] = &[mcp_only(
-    "model",
-    ParamType::String,
-    "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
-)];
 
 const LIST_FILTER: &[ParamSpec] = &[
     both(
         "gate",
         ParamType::Enum(GATES),
-        "Only requests waiting on this gate: block_triage, pilot_admission, proposed_approval or review_approval.",
+        "Only requests waiting on this gate: agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval, resident_authority, review_approval or script_grant.",
         CliArgKind::flag("gate"),
         "Only requests waiting on this gate",
     ),
@@ -93,6 +100,13 @@ const LIST_FILTER: &[ParamSpec] = &[
         "Only requests on this task.",
         CliArgKind::flag("task"),
         "Only requests on this task",
+    ),
+    both(
+        "topic",
+        ParamType::String,
+        "Only requests carrying exactly this structured topic.",
+        CliArgKind::flag("topic"),
+        "Only requests carrying exactly this topic",
     ),
     both(
         "include_closed",
@@ -107,21 +121,22 @@ const LIST: OperationSpec<DecisionVerb> = OperationSpec {
     verb: DecisionVerb::List,
     cli_path: &["list"],
     tool_name: "orbit.decision.list",
-    tool_description: "List the workspace's human decision requests on held work, open ones unless include_closed is set. Each request names its task, gate, allowed answers, expiry and effective state (open, answered, superseded or expired, with supersession and expiry derived when read). Filter by gate or task_id. Read-only: seeing a request never answers it; an operator answers from the CLI or the dashboard.",
+    tool_description: "List the workspace's human decision requests on held work, open ones unless include_closed is set. Each request names its task, gate, allowed answers, expiry and effective state (open, answered, superseded or expired, with supersession and expiry derived when read). Filter by gate, task_id or an exact topic. Read-only: seeing a request never answers it; an operator answers from the CLI or the dashboard.",
     cli_about: "List decision requests held work is waiting on",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
-    params: &[LIST_FILTER, MODEL],
+    params: &[LIST_FILTER],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const REQUEST_ID: &[ParamSpec] = &[required(both(
     "id",
     ParamType::String,
-    "The decision request id, as `orbit.decision.list` prints it.",
+    "The decision request id, as action `list` prints it.",
     CliArgKind::Positional,
     "The decision request id",
 ))];
@@ -134,11 +149,61 @@ const SHOW: OperationSpec<DecisionVerb> = OperationSpec {
     cli_about: "Show one decision request with its answers and binding",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
-    params: &[REQUEST_ID, MODEL],
+    params: &[REQUEST_ID],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "a decision request id is workspace-local and carries no host prefix",
+    ),
+};
+
+const RAISE_PARAMS: &[ParamSpec] = &[
+    required(both(
+        "task_id",
+        ParamType::String,
+        "The human-crew task this decision concerns. The task must be assigned to a human crew and not be done, archived or rejected.",
+        CliArgKind::flag("task"),
+        "The human-crew task the decision is for",
+    )),
+    required(free_text(both(
+        "question",
+        ParamType::String,
+        "One or two plain-language sentences naming the decision needed, readable without opening the code.",
+        CliArgKind::flag("question"),
+        "The decision needed, in one or two sentences",
+    ))),
+    required(both(
+        "options",
+        ParamType::Array,
+        "Two to four options as an array of {label, consequence, recommended, risk_tier?} objects. risk_tier may be routine, reversible, irreversible, authority or spend; omitted means unknown. label and consequence are one line each; exactly one option has recommended: true, and it is listed first.",
+        CliArgKind::flag("options"),
+        "The options as a JSON array of {label, consequence, recommended, risk_tier?} objects. risk_tier may be routine, reversible, irreversible, authority or spend; omitted means unknown, and any other value is refused.",
+    )),
+    both(
+        "topic",
+        ParamType::String,
+        "Optional structured topic or corpus rule id (1-64 characters of letters, digits and . _ : / -), so a later reader matches the request by exact value.",
+        CliArgKind::flag("topic"),
+        "Structured topic or corpus rule id",
+    ),
+];
+
+const RAISE: OperationSpec<DecisionVerb> = OperationSpec {
+    verb: DecisionVerb::Raise,
+    cli_path: &["raise"],
+    tool_name: "orbit.decision.raise",
+    tool_description: "Raise a multiple-choice request on a human-crew task when an operator decision is needed to proceed. Answering and limits: installed Orbit skill `references/tool-surface.md#raising-a-decision`.",
+    cli_about: "Raise a multiple-choice decision request on a human-crew task",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[RAISE_PARAMS],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const ANSWER_PARAMS: &[ParamSpec] = &[
@@ -171,6 +236,85 @@ const ANSWER: OperationSpec<DecisionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "a decision request id is workspace-local and carries no host prefix",
+    ),
+};
+
+const REVERSE: OperationSpec<DecisionVerb> = OperationSpec {
+    verb: DecisionVerb::Reverse,
+    cli_path: &["reverse"],
+    tool_name: "orbit.decision.reverse",
+    tool_description: "Re-open a precedent or model answer as the operator. Operator CLI only: this operation has no MCP scope and is registered inactive as a tool. The request becomes open again and the task returns to the status it had before the automation answer; a model answer's open review request is retired. A human answer is refused and nothing changes.",
+    cli_about: "Re-open a precedent or model answer",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[REQUEST_ID],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: None,
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "a decision request id is workspace-local and carries no host prefix",
+    ),
+};
+
+const AUTO_SWITCH: &[EnumValue] = &[EnumValue::plain("on"), EnumValue::plain("off")];
+
+const RULE_REF: &[ParamSpec] = &[required(both(
+    "rule",
+    ParamType::String,
+    "The corpus rule, as `topic/rule` or a rule id that appears in exactly one topic file.",
+    CliArgKind::Positional,
+    "The corpus rule (`topic/rule` or a unique rule id)",
+))];
+
+const AUTO_SETTING: &[ParamSpec] = &[required(both(
+    "auto",
+    ParamType::Enum(AUTO_SWITCH),
+    "on lets this current rule answer an exact topic match. off clears that opt-in.",
+    CliArgKind::Positional,
+    "on or off",
+))];
+
+const RULE_AUTO: OperationSpec<DecisionVerb> = OperationSpec {
+    verb: DecisionVerb::RuleAuto,
+    cli_path: &["rule-auto"],
+    tool_name: "orbit.decision.rule_auto",
+    tool_description: "Set auto on one current corpus decision rule as the operator. Operator CLI only: this operation has no MCP scope and is registered inactive as a tool, so an agent session cannot mark a rule auto. on records that the operator approved the rule; off clears it. A stale or superseded rule is refused and nothing is written.",
+    cli_about: "Set auto on one current corpus rule",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[RULE_REF, AUTO_SETTING],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
+};
+
+const CONSOLIDATE_PARAMS: &[ParamSpec] = &[both(
+    "since",
+    ParamType::String,
+    "Include human answers on or after this YYYY-MM-DD date. Omit to include every human answer.",
+    CliArgKind::flag("since"),
+    "Include human answers on or after this YYYY-MM-DD date",
+)];
+
+const CONSOLIDATE: OperationSpec<DecisionVerb> = OperationSpec {
+    verb: DecisionVerb::Consolidate,
+    cli_path: &["consolidate"],
+    tool_name: "orbit.decision.consolidate",
+    tool_description: "Propose corpus decision-rule edits from human answers. Operator CLI only: this operation has no MCP scope. It prints the proposed files and writes nothing. The proposal is what a pull request carries; a rule is never edited outside that pull request.",
+    cli_about: "Propose corpus decision-rule edits without writing them",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Read,
+    params: &[CONSOLIDATE_PARAMS],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const SUBMIT_PARAMS: &[ParamSpec] = &[
@@ -233,11 +377,14 @@ const SUBMIT: OperationSpec<DecisionVerb> = OperationSpec {
     cli_about: "Submit a human's answer through a registered decision channel",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
-    params: &[REQUEST_ID, SUBMIT_PARAMS, MODEL],
+    params: &[REQUEST_ID, SUBMIT_PARAMS],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "a decision request id is workspace-local and carries no host prefix",
+    ),
 };
 
 const DIGEST_PARAMS: &[ParamSpec] = &[required(both(
@@ -256,11 +403,12 @@ const DIGEST: OperationSpec<DecisionVerb> = OperationSpec {
     cli_about: "Raise missing approval requests and show the decision digest",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
-    params: &[DIGEST_PARAMS, MODEL],
+    params: &[DIGEST_PARAMS],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const CHANNEL_NAME: &[ParamSpec] = &[required(both(
@@ -315,6 +463,7 @@ const CHANNEL_REGISTER: OperationSpec<DecisionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const CHANNEL_LIST: OperationSpec<DecisionVerb> = OperationSpec {
@@ -325,11 +474,12 @@ const CHANNEL_LIST: OperationSpec<DecisionVerb> = OperationSpec {
     cli_about: "List this host's decision channels",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
-    params: &[MODEL],
+    params: &[],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const CHANNEL_REVOKE: OperationSpec<DecisionVerb> = OperationSpec {
@@ -345,6 +495,7 @@ const CHANNEL_REVOKE: OperationSpec<DecisionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const CHANNEL_ROTATE_KEY: OperationSpec<DecisionVerb> = OperationSpec {
@@ -360,4 +511,5 @@ const CHANNEL_ROTATE_KEY: OperationSpec<DecisionVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };

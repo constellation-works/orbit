@@ -23,6 +23,11 @@ use serde_json::{Value, json};
 /// light slot is taken.
 pub(crate) const CPU_LIGHT_BUDGET_FULL: &str = "cpu_light_budget_full";
 
+/// The former `workflow.resource_throttle.cpu_light_leaves` default, fixed
+/// when the key was removed [ORB-22808]: CPU-light leaves still admitted
+/// while only CPU pressure throttles.
+pub(crate) const CPU_LIGHT_LEAVES: u8 = 2;
+
 /// A leaf that adds almost no CPU: an auto-task tagged `no-diff-expected`
 /// whose brief does no build work [ORB-15766].
 ///
@@ -96,9 +101,8 @@ impl LightBudget {
     /// Why a light leaf waits when the budget is spent.
     pub(crate) fn full_detail(self) -> String {
         format!(
-            "{} of {} reserved CPU-light leaves are running under the CPU throttle \
-             (workflow.resource_throttle.cpu_light_leaves); this task starts when one finishes \
-             or CPU falls below its resume mark",
+            "{} of {} reserved CPU-light leaves are running under the CPU throttle; \
+             this task starts when one finishes or CPU falls below its resume mark",
             self.active, self.reserved
         )
     }

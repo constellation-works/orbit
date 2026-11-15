@@ -8,11 +8,13 @@
 //! the backlog (a claimed leaf releases its claim) until the base moves to a
 //! commit where the command passes.
 //!
-//! The failure text and the hold's task-history note carry the same typed
-//! [`BaselineRedHold`], written as JSON straight after
-//! [`BASELINE_RED_MARKER`], so every consumer — failure handoff, run
-//! finalization, claim settlement and admission — reads the hold from the
-//! text it already has.
+//! The failure text carries the typed [`BaselineRedHold`], written as JSON
+//! straight after [`BASELINE_RED_MARKER`], so failure handoff, run
+//! finalization and claim settlement read the hold from the step error they
+//! already have. The hold's task-history entry records it as its
+//! [`TaskDecision::BaselineRedHold`] beside a note of the same text, which
+//! older readers and entries written before typed decisions still use;
+//! history readers go through [`BaselineRedHold::from_entry`].
 //!
 //! [ORB-15374] The hold also names what fails on the base
 //! ([`BaselineRedFailures`]), so the hold text, its verdicts and the
@@ -39,6 +41,11 @@ pub const BASELINE_RED_MARKER: &str = "[baseline_red]";
 /// Task history event that moves a task to `backlog` under a
 /// [`BaselineRedHold`]. Admission withholds the task while the hold stands.
 pub const BASELINE_RED_HOLD_EVENT: &str = "baseline_red_hold";
+
+/// Task history event recording the latest check of a standing
+/// [`BaselineRedHold`]. Its decision is the [`BaselineHoldVerdict`]; its note
+/// is the verdict as JSON. It changes no status.
+pub const BASELINE_RED_HOLD_VERDICT_EVENT: &str = "baseline_red_hold_verdict";
 
 /// Task history event recording a required command a candidate failed only
 /// with tests its base fails too [ORB-15375]. Its decision is the
@@ -274,7 +281,30 @@ impl BaselineRedHold {
             .unwrap_or_default()
     }
 
-    /// The hold a failure message or history note carries, if any.
+    /// The hold a [`BASELINE_RED_HOLD_EVENT`] history entry records: its
+    /// decision, or for an entry written before typed decisions, its note.
+    /// Any other entry records none, even when its note quotes a step
+    /// failure's hold text.
+    #[must_use]
+    pub fn from_entry(entry: &TaskHistoryEntry) -> Option<Self> {
+        match &entry.decision {
+            Some(TaskDecision::BaselineRedHold(hold)) => Some(hold.clone()),
+            Some(_) => None,
+            None if entry.event == BASELINE_RED_HOLD_EVENT => {
+                Self::from_text(entry.note.as_deref()?)
+            }
+            None => None,
+        }
+        .filter(Self::valid)
+    }
+
+    /// Whether the hold names the base commit and command it holds for.
+    fn valid(&self) -> bool {
+        !self.base_sha.trim().is_empty() && !self.command.trim().is_empty()
+    }
+
+    /// The hold a step failure message carries, if any. History entries are
+    /// read with [`Self::from_entry`].
     #[must_use]
     pub fn from_text(text: &str) -> Option<Self> {
         let text = failure_classification_text(text);
@@ -283,7 +313,42 @@ impl BaselineRedHold {
             .into_iter::<Self>()
             .next()?
             .ok()
-            .filter(|hold| !hold.base_sha.trim().is_empty() && !hold.command.trim().is_empty())
+            .filter(Self::valid)
+    }
+}
+
+/// A check of a standing [`BaselineRedHold`], recorded on a
+/// [`BASELINE_RED_HOLD_VERDICT_EVENT`] entry as its
+/// [`TaskDecision::BaselineHoldVerdict`] and, as JSON, its note.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BaselineHoldVerdict {
+    /// The command passed on a new base tip, so admission may hand the task out.
+    pub lifted: bool,
+    /// Why, naming the base tip checked and the command.
+    pub reason: String,
+}
+
+impl BaselineHoldVerdict {
+    /// The verdict's note text: the verdict as JSON, which readers written
+    /// before typed decisions parse.
+    #[must_use]
+    pub fn text(&self) -> String {
+        serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    /// The verdict a [`BASELINE_RED_HOLD_VERDICT_EVENT`] history entry
+    /// records: its decision, or for an entry written before typed decisions,
+    /// its note. Any other entry records none.
+    #[must_use]
+    pub fn from_entry(entry: &TaskHistoryEntry) -> Option<Self> {
+        match &entry.decision {
+            Some(TaskDecision::BaselineHoldVerdict(verdict)) => Some(verdict.clone()),
+            Some(_) => None,
+            None if entry.event == BASELINE_RED_HOLD_VERDICT_EVENT => {
+                serde_json::from_str(entry.note.as_deref()?).ok()
+            }
+            None => None,
+        }
     }
 }
 

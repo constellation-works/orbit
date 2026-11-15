@@ -38,11 +38,9 @@ use orbit_engine::{
     dispatch_v2_activity, execute_job_with_resume, resolve_job_catalog_refs_for_execution,
 };
 use orbit_store::{Store, V2AuditEventFilter};
-use orbit_types::workflow::JobScheduleState;
 use orbit_types::workflow::activity_job::{
-    ActivityV2, ActivityV2Spec, AgentLoopSpec, DeterministicSpec, JobKind, JobV2, JobV2Step,
-    JobV2StepBody, LoopBlock, OnDenial, Provider, RetiredFeatureError, TargetStep,
-    ToolAllowlistError, V2AuditEvent, validate_job_retired_sessions,
+    ActivityV2, ActivityV2Spec, AgentLoopSpec, DeterministicSpec, JobV2StepBody, Provider,
+    ToolAllowlistError, V2AuditEvent,
 };
 use serde_json::Value;
 use tempfile::TempDir;
@@ -52,17 +50,23 @@ const CLAUDE_REVOKED_TOKEN: &str = r#"{"is_error":true,"api_error_status":401,"r
 #[cfg(unix)]
 mod build_budget;
 #[cfg(unix)]
-mod explore;
 #[cfg(unix)]
-mod explore_brief;
+#[cfg(unix)]
+mod contract_correction;
+#[cfg(unix)]
+mod fleet_notices;
+#[cfg(unix)]
+mod incomplete_continuation;
 #[cfg(unix)]
 mod no_diff;
 #[cfg(unix)]
-mod regression_risk;
+mod response_correction;
 #[cfg(unix)]
 mod stderr_failure;
 #[cfg(unix)]
 mod tag_instructions;
+#[cfg(unix)]
+mod truncated_envelope;
 
 /// Provider failures are control-plane evidence; transcripts and Orbit work
 /// failures must never exclude a crew. Recorded Claude payload: ORB-13965.
@@ -370,14 +374,82 @@ fn claude_revoked_token_preserves_the_release_marker_without_step_recovery() {
     );
 }
 
+/// [ORB-24803] Claude Code's credit exhaustion ends the turn as
+/// provider-unavailable on either exit convention, read from the provider's
+/// own `result` frame. A timed usage limit named in the same turn keeps its
+/// limit classification and reset instead.
+#[cfg(unix)]
+#[test]
+fn claude_credit_balance_results_are_provider_unavailable_unless_a_limit_is_named() {
+    const CREDIT: &str = r#"{"type":"result","is_error":true,"terminal_reason":"api_error","result":"Credit balance is too low"}"#;
+    const CREDIT_AND_LIMIT: &str = r#"{"type":"result","is_error":true,"terminal_reason":"api_error","result":"Credit balance is too low\nUsage limit reached. Please retry in 34s."}"#;
+    for (index, (payload, limited)) in [(CREDIT, false), (CREDIT_AND_LIMIT, true)]
+        .into_iter()
+        .enumerate()
+    {
+        for exit_code in [0, 1] {
+            let run = format!("claude-credit-{index}-{exit_code}");
+            let writer = Arc::new(V2AuditWriter::new(
+                &run,
+                "smoke",
+                Arc::new(orbit_agent::loop_engine::audit::NullSink),
+            ));
+            let fake = fake_cli(
+                "claude",
+                &format!(
+                    "#!/bin/sh\ncat > /dev/null\ncat <<'PAYLOAD'\n{payload}\nPAYLOAD\nexit {exit_code}\n"
+                ),
+            )
+            .unwrap();
+            let mut spec = cli_agent_loop_spec(Some(Provider::Claude));
+            spec.model = None;
+            spec.require_completion_envelope = false;
+            let host = ScriptHost::new(fake.cli_path());
+            let outcome = dispatch_v2_activity(V2DispatchInput {
+                activity_name: "credit_fixture",
+                spec: &ActivityV2Spec::AgentLoop(spec),
+                fs_profile: None,
+                input: serde_json::json!({"prompt":"test"}),
+                audit: writer,
+                run_id: &run,
+                host: Some(&host),
+            })
+            .unwrap();
+            assert!(!outcome.success, "exit {exit_code}: {outcome:?}");
+            let message = outcome.message.as_deref().unwrap_or_default();
+            if limited {
+                assert_eq!(
+                    orbit_types::workflow::ProviderFailureClass::of(None, Some(message)),
+                    Some(orbit_types::workflow::ProviderFailureClass::Limit),
+                    "exit {exit_code}: a named usage limit keeps its classification: {message}"
+                );
+                assert!(
+                    orbit_types::workflow::ProviderLimitFailure::from_text(message)
+                        .is_some_and(|limit| limit.resets_at.is_some()),
+                    "exit {exit_code}: the usage limit keeps its reset: {message}"
+                );
+            } else {
+                assert!(
+                    orbit_types::workflow::is_provider_unavailable(None, Some(message)),
+                    "exit {exit_code}: credit exhaustion is provider-unavailable: {message}"
+                );
+                assert!(
+                    message.contains("provider quota exceeded")
+                        && message.contains("Credit balance is too low"),
+                    "exit {exit_code}: the quota text is recorded: {message}"
+                );
+            }
+        }
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn cli_agent_dispatch_regressions() -> Result<(), Box<dyn std::error::Error>> {
     scenario_a_cli_dispatch_emits_envelope_events()?;
     scenario_b_argv_redaction()?;
     scenario_c_wall_clock_timeout()?;
-    scenario_e_loader_rejection_retired_session()?;
-    scenario_f_loader_rejection_retired_backend_value()?;
+    scenario_e_loader_rejection_retired_backend_value()?;
     scenario_j_cli_executor_static_args_are_audited()?;
 
     Ok(())
@@ -425,6 +497,129 @@ fn scenario_a_cli_dispatch_emits_envelope_events() -> Result<(), Box<dyn std::er
     must_contain(&types, "cli.invocation.finished");
     println!("    events: {:?}", types);
     Ok(())
+}
+
+/// [ORB-20572] A provider stream that outgrows the bounded capture keeps only
+/// its final lines, so the calls recorded from it are a suffix numbered from 1.
+/// The invocation says so instead of passing that suffix off as the whole
+/// trace, while the completion envelope and usage stay read from the tail.
+#[cfg(unix)]
+#[test]
+fn oversized_provider_stream_marks_its_surviving_tool_calls_incomplete() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "oversized_provider_stream_marks_its_surviving_tool_calls_incomplete",
+        || {
+            const CAPTURE_LIMIT_ENV: &str = "ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES";
+            let tool_use = |id: &str, name: &str| {
+                serde_json::json!({"type":"assistant","message":{"role":"assistant","content":[
+                    {"type":"tool_use","id":id,"name":name,"input":{}}]}})
+            };
+            let tool_result = |id: &str| {
+                serde_json::json!({"type":"user","message":{"role":"user","content":[
+                    {"type":"tool_result","tool_use_id":id,"content":"ok"}]}})
+            };
+            let padding = serde_json::json!({"type":"assistant","message":{"role":"assistant",
+                "content":[{"type":"text","text":"padding ".repeat(32)}]}});
+            let envelope = r#"{"schemaVersion":1,"status":"success","result":{},"error":null}"#;
+            let mut frames = vec![
+                tool_use("t1", "mcp__orbit__orbit_agent_invoke"),
+                tool_result("t1"),
+                tool_use("t2", "Read"),
+                tool_result("t2"),
+            ];
+            frames.extend(std::iter::repeat_n(padding, 64));
+            frames.extend([
+                tool_use("t3", "Edit"),
+                tool_result("t3"),
+                serde_json::json!({"type":"result","subtype":"success","is_error":false,
+                    "result":envelope,
+                    "usage":{"input_tokens":11,"output_tokens":22,
+                        "cache_read_input_tokens":3,"cache_creation_input_tokens":4}}),
+            ]);
+            let stream = frames
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            let limit = 4_096;
+            assert!(
+                stream.len() > 4 * limit,
+                "the stream must outgrow the capture"
+            );
+
+            let data = tempfile::tempdir().unwrap();
+            let stream_path = data.path().join("stream.jsonl");
+            fs::write(&stream_path, format!("{stream}\n")).unwrap();
+            let fake = fake_cli(
+                "claude",
+                &format!(
+                    "#!/bin/sh\ncat > /dev/null\ncat '{}'\n",
+                    stream_path.display()
+                ),
+            )
+            .unwrap();
+            let dispatch = |capture_limit: usize, run_id: &str| {
+                // SAFETY: this test runs alone in its own nextest process (.config/nextest.toml);
+                // the variable is set here and removed below, once dispatch has returned.
+                unsafe { std::env::set_var(CAPTURE_LIMIT_ENV, capture_limit.to_string()) };
+                let tmp_audit = tempfile::tempdir().unwrap();
+                let (writer, _store) = build_writer(tmp_audit.path(), run_id).unwrap();
+                let host = ScriptHost::new(fake.cli_path());
+                let outcome = dispatch_v2_activity(V2DispatchInput {
+                    activity_name: "cli_oversized_tool_trace",
+                    spec: &ActivityV2Spec::AgentLoop(cli_agent_loop_spec(None)),
+                    fs_profile: None,
+                    input: serde_json::json!({ "prompt": "implement" }),
+                    audit: writer,
+                    run_id,
+                    host: Some(&host),
+                })
+                .unwrap();
+                // SAFETY: same single-test process as the set_var above; dispatch has returned.
+                unsafe { std::env::remove_var(CAPTURE_LIMIT_ENV) };
+                outcome
+            };
+            let names = |outcome: &orbit_engine::DispatchOutcome| -> Vec<String> {
+                outcome
+                    .invocation
+                    .as_ref()
+                    .unwrap()
+                    .trace
+                    .tool_calls
+                    .iter()
+                    .map(|call| call.tool_name.clone())
+                    .collect()
+            };
+
+            let whole = dispatch(stream.len() * 2, "oversized-whole");
+            assert!(whole.success, "{:?}", whole.message);
+            let whole_trace = &whole.invocation.as_ref().unwrap().trace;
+            assert!(!whole_trace.tool_calls_incomplete);
+            assert_eq!(
+                names(&whole),
+                ["mcp__orbit__orbit_agent_invoke", "Read", "Edit"]
+            );
+
+            let cut = dispatch(limit, "oversized-cut");
+            assert_eq!(cut.output["stdout_capture_truncated"], true);
+            assert!(cut.success, "{:?}", cut.message);
+            let cut_trace = &cut.invocation.as_ref().unwrap().trace;
+            assert!(
+                cut_trace.tool_calls_incomplete,
+                "the lost early calls must be recorded as lost"
+            );
+            assert_eq!(
+                names(&cut),
+                ["Edit"],
+                "only the late editor survives, renumbered from 1"
+            );
+            assert_eq!(cut.output["completion_envelope_satisfied"], true);
+            assert_eq!(cut_trace.usage, whole_trace.usage);
+            assert_eq!(cut_trace.usage.input, 11);
+            assert_eq!(cut_trace.usage.output, 22);
+        },
+    );
 }
 
 /// A worker's environment carries the browser kit's locators exactly when the
@@ -481,6 +676,7 @@ fn cli_dispatch_hands_workers_only_a_verified_browser_kit() -> Result<(), Box<dy
     let shell = root.join("browsers/chromium_headless_shell-1248");
     fs::create_dir_all(&shell)?;
     fs::write(shell.join("INSTALLATION_COMPLETE"), "")?;
+    fs::write(shell.join("chrome-headless-shell"), "fixture")?;
     fs::create_dir_all(root.join("root/usr/lib/x86_64-linux-gnu"))?;
     fs::write(root.join("env.sh"), "export LD_LIBRARY_PATH=/kit/libs\n")?;
 
@@ -606,32 +802,10 @@ fn scenario_c_wall_clock_timeout() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// E: [ORB-10801] a `session:` binding is refused at load time, so a run
-/// never starts a DAG whose cross-iteration semantics no longer exist.
-fn scenario_e_loader_rejection_retired_session() -> Result<(), Box<dyn std::error::Error>> {
-    println!("  E) loader rejects a retired `session:` binding");
-    let job = synthetic_loop_session_job();
-    let err = validate_job_retired_sessions(&job, "synthetic/loop_session.yaml")
-        .expect_err("expected rejection");
-    let RetiredFeatureError::SessionBinding {
-        asset_path,
-        step_id,
-        session_name,
-    } = &err;
-    assert_eq!(asset_path, "synthetic/loop_session.yaml");
-    assert_eq!(step_id, "assess");
-    assert_eq!(session_name, "assessor");
-    assert!(
-        err.to_string().contains("CLI agent path"),
-        "rejection must carry the migration: {err}"
-    );
-    Ok(())
-}
-
-/// F: [ORB-10801] the removed `backend:` values are refused at parse time, and
+/// E: [ORB-10801] the removed `backend:` values are refused at parse time, and
 /// never quietly remapped onto the surviving CLI agent path.
-fn scenario_f_loader_rejection_retired_backend_value() -> Result<(), Box<dyn std::error::Error>> {
-    println!("  F) parser rejects retired backend values");
+fn scenario_e_loader_rejection_retired_backend_value() -> Result<(), Box<dyn std::error::Error>> {
+    println!("  E) parser rejects retired backend values");
     for removed in ["http", "auto"] {
         let yaml = format!(
             "schemaVersion: 2\nkind: Activity\nmetadata:\n  name: retired\nspec:\n  type: agent_loop\n  description: retired\n  instruction: hi\n  backend: {removed}\n"
@@ -927,6 +1101,313 @@ fn image_input_regular_and_canary_only_stage_and_reach_provider()
     Ok(())
 }
 
+/// [ORB-24053] A malformed `image_input` request is refused before staging or
+/// provider launch instead of being shortened: a string `images`, a list with
+/// a non-string entry, a non-object request and an unknown field each used to
+/// drop the requested image and run canary-only.
+#[cfg(unix)]
+#[test]
+fn image_input_malformed_request_is_refused_before_launch() -> Result<(), Box<dyn std::error::Error>>
+{
+    let cases = [
+        (
+            "string-images",
+            serde_json::json!({ "images": "diagram.png" }),
+        ),
+        (
+            "non-string-entry",
+            serde_json::json!({ "images": ["diagram.png", 42] }),
+        ),
+        ("non-object", serde_json::json!(true)),
+        (
+            "unknown-field",
+            serde_json::json!({ "images": ["diagram.png"], "image": "extra.png" }),
+        ),
+    ];
+    for (name, request) in cases {
+        let fixture = TempDir::new()?;
+        let marker = fixture.path().join("spawned-marker");
+        let tmp_audit = tempfile::tempdir()?;
+        let run_id = format!("cli-image-malformed-{name}");
+        let (writer, store) = build_writer(tmp_audit.path(), &run_id)?;
+        let fake = fake_cli(
+            "claude",
+            &format!(
+                "#!/bin/sh\ntouch '{}'\ncat > /dev/null\necho '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
+                marker.display()
+            ),
+        )?;
+        let spec = cli_agent_loop_spec(None);
+        let host = ScriptHost::new(fake.cli_path()).with_image_input(image_test_declaration());
+        let dispatched = dispatch_v2_activity(V2DispatchInput {
+            activity_name: "cli_image_malformed",
+            spec: &ActivityV2Spec::AgentLoop(spec),
+            fs_profile: None,
+            input: serde_json::json!({
+                "prompt": "hello",
+                "crew": "test-crew",
+                "image_input": request,
+            }),
+            audit: writer,
+            run_id: &run_id,
+            host: Some(&host),
+        });
+        let display = match dispatched {
+            Ok(outcome) => {
+                return Err(format!(
+                    "{name}: a malformed image_input must be refused, got outcome {:?}",
+                    outcome.message
+                )
+                .into());
+            }
+            Err(error) => error.to_string(),
+        };
+        assert!(
+            display.contains("image_input_unavailable")
+                && display.contains("invalid `image_input`"),
+            "{name}: the refusal must say the request is invalid, got: {display}"
+        );
+        assert!(
+            !marker.exists(),
+            "{name}: the provider must not spawn for a malformed image_input"
+        );
+        let events = events_snapshot(&store, &run_id)?;
+        assert!(
+            !events
+                .iter()
+                .any(|event| event.envelope.event_type == "cli.invocation.started"),
+            "{name}: no invocation may start for a malformed image_input"
+        );
+    }
+    Ok(())
+}
+
+/// A probe run that returns the staged code is seen, a probe run that returns
+/// a different code is not seen and still succeeds, and a delivery that
+/// returns a different code fails. One crew's miss does not fail the probe.
+#[cfg(unix)]
+#[test]
+fn probe_records_a_returned_canary_and_a_miss_without_failing_the_probe()
+-> Result<(), Box<dyn std::error::Error>> {
+    let seen = dispatch_canary(
+        "image_input_probe",
+        "probe-seen",
+        "reader",
+        CANARY_READER_SCRIPT,
+    )?;
+    assert!(
+        seen.success,
+        "a probe that returns the staged code succeeds: {:?}",
+        seen.message
+    );
+    assert_eq!(seen.canary_seen, Some(true), "returned code is seen");
+    let code = seen.returned.unwrap_or_default();
+    assert!(
+        code.len() == 6
+            && code
+                .bytes()
+                .all(|byte| b"ACEFHJKMNPQRTUVWXY3479".contains(&byte)),
+        "the returned code should be the staged canary, got {code:?}"
+    );
+    assert_eq!(seen.audit_seen, Some(true));
+
+    let miss = dispatch_canary(
+        "image_input_probe",
+        "probe-miss",
+        "misser",
+        CANARY_MISS_SCRIPT,
+    )?;
+    assert!(
+        miss.success,
+        "a probe miss is reported for that crew and does not fail the probe run: {:?}",
+        miss.message
+    );
+    assert_eq!(miss.canary_seen, Some(false));
+    assert_eq!(miss.returned.as_deref(), Some("KT2NJ4"));
+    assert!(
+        miss.message.is_none(),
+        "a probe miss must not record a step failure: {:?}",
+        miss.message
+    );
+    assert_eq!(miss.audit_seen, Some(false));
+
+    let delivery = dispatch_canary(
+        "image_delivery",
+        "delivery-miss",
+        "misser",
+        CANARY_MISS_SCRIPT,
+    )?;
+    assert!(
+        !delivery.success,
+        "a delivery that does not return the code still fails closed"
+    );
+    let message = delivery.message.unwrap_or_default();
+    assert!(
+        message.contains("[image_not_seen]"),
+        "delivery miss stays [image_not_seen], got: {message}"
+    );
+    assert_eq!(delivery.canary_seen, Some(false));
+    assert_eq!(delivery.audit_seen, Some(false));
+    Ok(())
+}
+
+#[cfg(unix)]
+struct CanaryDispatch {
+    success: bool,
+    message: Option<String>,
+    returned: Option<String>,
+    canary_seen: Option<bool>,
+    audit_seen: Option<bool>,
+}
+
+#[cfg(unix)]
+fn dispatch_canary(
+    activity_name: &str,
+    run_id: &str,
+    crew: &str,
+    script: &str,
+) -> Result<CanaryDispatch, Box<dyn std::error::Error>> {
+    let tmp_audit = tempfile::tempdir()?;
+    let (writer, store) = build_writer(tmp_audit.path(), run_id)?;
+    let fake = fake_cli("claude", script)?;
+    let spec = cli_agent_loop_spec(None);
+    let host = ScriptHost::new(fake.cli_path()).with_image_input(attach_image_declaration());
+    let outcome = dispatch_v2_activity(V2DispatchInput {
+        activity_name,
+        spec: &ActivityV2Spec::AgentLoop(spec),
+        fs_profile: None,
+        input: serde_json::json!({
+            "prompt": "read the canary",
+            "crew": crew,
+            "image_input": { "images": [] },
+        }),
+        audit: writer,
+        run_id,
+        host: Some(&host),
+    })?;
+    let events = events_snapshot(&store, run_id)?;
+    let audit_seen = events.iter().find_map(|event| match &event.kind {
+        orbit_types::workflow::activity_job::V2AuditEventKind::ImageCanaryChecked {
+            seen,
+            activity_name: audited,
+            ..
+        } => {
+            assert_eq!(audited, activity_name);
+            Some(*seen)
+        }
+        _ => None,
+    });
+    Ok(CanaryDispatch {
+        success: outcome.success,
+        message: outcome.message,
+        returned: outcome
+            .output
+            .get("canary")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        canary_seen: outcome
+            .output
+            .get("image_canary")
+            .and_then(|canary| canary.get("seen"))
+            .and_then(Value::as_bool),
+        audit_seen,
+    })
+}
+
+/// `attach_args` lane, the route codex and muse use for the canary.
+#[cfg(unix)]
+fn attach_image_declaration() -> orbit_types::workflow::ExecutorImageInput {
+    orbit_types::workflow::ExecutorImageInput {
+        mode: orbit_types::workflow::ImageInputMode::AttachArgs,
+        formats: vec![orbit_types::workflow::ImageFormat::Png],
+        max_images: 5,
+        attach_args: Some(vec!["--image".to_string(), "{path}".to_string()]),
+    }
+}
+
+#[cfg(unix)]
+const CANARY_MISS_SCRIPT: &str = "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' \
+ '{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"canary\":\"KT2NJ4\"},\"error\":null}'\n";
+
+/// Read the staged PNG the way the provider receives it (`--image`) and return
+/// the code it draws. The script fails closed if it cannot read the file.
+#[cfg(unix)]
+const CANARY_READER_SCRIPT: &str = r#"#!/bin/sh
+cat >/dev/null
+exec /usr/bin/python3 - "$@" <<'PY'
+import struct, sys, zlib
+path = None
+args = sys.argv[1:]
+for index, arg in enumerate(args):
+    if arg == "--image" and index + 1 < len(args):
+        path = args[index + 1]
+if not path:
+    sys.stderr.write("canary reader: no --image argument\n")
+    sys.exit(2)
+data = open(path, "rb").read()
+if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+    sys.stderr.write("canary reader: not a png\n")
+    sys.exit(2)
+pos, width, height, idat = 8, None, None, b""
+while pos + 8 <= len(data):
+    length = struct.unpack(">I", data[pos:pos + 4])[0]
+    kind = data[pos + 4:pos + 8]
+    chunk = data[pos + 8:pos + 8 + length]
+    if kind == b"IHDR":
+        width, height = struct.unpack(">II", chunk[:8])
+    elif kind == b"IDAT":
+        idat += chunk
+    elif kind == b"IEND":
+        break
+    pos += 12 + length
+raw = zlib.decompress(idat)
+scale, margin, glyph_width, glyph_height = 12, 3, 5, 7
+glyphs = {
+    "A": [0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
+    "C": [0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E],
+    "E": [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F],
+    "F": [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10],
+    "H": [0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
+    "J": [0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0C],
+    "K": [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11],
+    "M": [0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11],
+    "N": [0x11, 0x11, 0x19, 0x15, 0x13, 0x11, 0x11],
+    "P": [0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10],
+    "Q": [0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D],
+    "R": [0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11],
+    "T": [0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
+    "U": [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
+    "V": [0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04],
+    "W": [0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0A],
+    "X": [0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11],
+    "Y": [0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04],
+    "3": [0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E],
+    "4": [0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02],
+    "7": [0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
+    "9": [0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C],
+}
+def ink(column, row):
+    x = column * scale + scale // 2
+    y = row * scale + scale // 2
+    return raw[y * (width + 1) + 1 + x] == 0
+code = []
+for index in range(6):
+    bits = []
+    for row in range(glyph_height):
+        byte = 0
+        for offset in range(glyph_width):
+            if ink(margin + index * (glyph_width + 1) + offset, margin + row):
+                byte |= 0x10 >> offset
+        bits.append(byte)
+    match = [char for char, glyph in glyphs.items() if glyph == bits]
+    if len(match) != 1:
+        sys.stderr.write("canary reader: unreadable glyph %s\n" % bits)
+        sys.exit(2)
+    code.append(match[0])
+sys.stdout.write('{"schemaVersion":1,"status":"success","result":{"canary":"%s"},"error":null}\n' % "".join(code))
+PY
+"#;
+
 /// Image-input declaration shared by the staging regression tests: canary
 /// plus one image on a `native_read` lane.
 #[cfg(unix)]
@@ -1086,7 +1567,7 @@ fn workspace_catalog_refuses_crafted_tool_policy_violations() {
         Case {
             name: "agent_invoke",
             policy: "  trustedHostExecution: true\n  tools:\n    - orbit.task.show\n",
-            expected: None,
+            expected: Some("trusted_host_activity"),
         },
     ];
 
@@ -1247,29 +1728,13 @@ fn agent_relay_uses_an_independent_persistent_feed() {
 
 pub(super) fn cli_agent_loop_spec(provider: Option<Provider>) -> AgentLoopSpec {
     AgentLoopSpec {
-        crew_name: None,
-        tool_disallow_list: None,
-        instruction: "cli smoke".to_string(),
-        steering_instruction: None,
-        regression_risk_instruction: None,
-        explore_instruction: None,
-        explore_brief_instruction: None,
         tools: vec!["orbit.task.show".to_string(), "proc.spawn".to_string()],
-        on_denial: OnDenial::Terminate,
         model: Some(orbit_common::model_defaults::CLAUDE_DEFAULT_STRONG.to_string()),
-        reasoning_effort: None,
-        max_iterations: 1,
-        backend: None,
-        provider: provider.unwrap_or(Provider::Claude),
-        wall_clock_timeout_seconds: 30,
-        require_response_envelope: false,
-        require_completion_envelope: true,
-        proc_allowed_programs: None,
-        proc_disallowed_programs: None,
-        trusted_host_execution: false,
-        crew_env: Vec::new(),
-        crew_account: None,
-        crew_vision_disabled: false,
+        ..AgentLoopSpec::for_provider(
+            "cli smoke".to_string(),
+            provider.unwrap_or(Provider::Claude),
+            30,
+        )
     }
 }
 
@@ -1347,94 +1812,6 @@ pub(super) fn fake_cli(basename: &str, body: &str) -> Result<FakeCli, Box<dyn st
         _tempdir: tempdir,
         path,
     })
-}
-
-fn synthetic_loop_session_job() -> JobV2 {
-    let assess_step = JobV2Step {
-        id: "assess".to_string(),
-        stage: None,
-        when: None,
-        retry: None,
-        recovery_activity: None,
-        resolved_recovery_activity: None,
-        wait_until: None,
-        expire_when: None,
-        reuse_when: None,
-        require_result: None,
-        body: JobV2StepBody::Target(TargetStep {
-            spec: ActivityV2Spec::AgentLoop(AgentLoopSpec {
-                crew_name: None,
-                tool_disallow_list: None,
-                instruction: String::new(),
-                steering_instruction: None,
-                regression_risk_instruction: None,
-                explore_instruction: None,
-                explore_brief_instruction: None,
-                tools: vec![],
-                on_denial: OnDenial::Terminate,
-                model: None,
-                reasoning_effort: None,
-                max_iterations: 1,
-                backend: None,
-                provider: Provider::Claude,
-                wall_clock_timeout_seconds: 30,
-                require_response_envelope: false,
-                require_completion_envelope: true,
-                proc_allowed_programs: None,
-                proc_disallowed_programs: None,
-                trusted_host_execution: false,
-                crew_env: Vec::new(),
-                crew_account: None,
-                crew_vision_disabled: false,
-            }),
-            activity_name: None,
-            input_schema_json: None,
-            fs_profile: None,
-            default_input: None,
-            timeout_seconds: 0,
-            session: Some("assessor".to_string()),
-        }),
-    };
-    let loop_step = JobV2Step {
-        id: "assess_fix".to_string(),
-        stage: None,
-        when: None,
-        retry: None,
-        recovery_activity: None,
-        resolved_recovery_activity: None,
-        wait_until: None,
-        expire_when: None,
-        reuse_when: None,
-        require_result: None,
-        body: JobV2StepBody::Loop {
-            loop_: LoopBlock {
-                timeout_seconds: None,
-                interval_seconds: None,
-                items: None,
-                max_iterations: 3,
-                break_when: None,
-                steps: vec![assess_step],
-            },
-        },
-    };
-    JobV2 {
-        schema_version: 2,
-        state: JobScheduleState::Enabled,
-        owns_task_worktree: false,
-        task_delivery: None,
-        default_input: None,
-        recovery_activity: None,
-        resolved_recovery_activity: None,
-        failure_activity: None,
-        resolved_failure_activity: None,
-        final_recovery_activity: None,
-        resolved_final_recovery_activity: None,
-        steering_gate: None,
-        max_active_runs: 1,
-        kind: JobKind::Workflow,
-        expire_when: None,
-        steps: vec![loop_step],
-    }
 }
 
 // Hosts --------------------------------------------------------------------

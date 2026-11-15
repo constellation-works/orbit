@@ -18,7 +18,9 @@ use orbit_engine::{
     FinalRecoveryApplied, RuntimeHost,
 };
 use orbit_store::contracts::JobRunStoreBackend;
-use orbit_types::workflow::{FinalRecoveryDecision, JobRunState, PipelineState};
+use orbit_types::workflow::{
+    FinalRecoveryCheckpointOutcome, FinalRecoveryDecision, JobRunState, PipelineState,
+};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -168,12 +170,24 @@ impl Fixture {
         decision: FinalRecoveryDecision,
         resume_step_index: Option<u32>,
     ) -> FinalRecoveryApplied {
+        self.apply_result(run, task, decision, resume_step_index)
+            .unwrap()
+    }
+
+    fn apply_result(
+        &self,
+        run: &str,
+        task: &str,
+        decision: FinalRecoveryDecision,
+        resume_step_index: Option<u32>,
+    ) -> Result<FinalRecoveryApplied, orbit_core::OrbitError> {
         // Named through the trait: `OrbitRuntime` also has the applier's own
         // `apply_final_recovery`, which the host method calls after recording.
         RuntimeHost::apply_final_recovery(
             &self.runtime,
             run,
             &FinalRecoveryApplication {
+                fault: Default::default(),
                 task_id: task.to_string(),
                 failed_step_id: "implement".to_string(),
                 decision,
@@ -186,7 +200,6 @@ impl Fixture {
                 infrastructure: None,
             },
         )
-        .unwrap()
     }
 
     /// Fail every run-state write that would record a final-recovery
@@ -202,11 +215,11 @@ impl Fixture {
         let connection = rusqlite::Connection::open(db).unwrap();
         connection
             .execute_batch(
-                "CREATE TRIGGER fail_final_recovery_outcome \
+                "CREATE TRIGGER fail_recovery_outcome \
                  BEFORE UPDATE ON job_run_states \
                  WHEN NEW.pipeline_state_json LIKE '%\"final_recovery\"%\"outcome\"%' \
                  BEGIN SELECT RAISE(ABORT, 'injected run-state write failure'); END; \
-                 CREATE TRIGGER fail_final_recovery_outcome_insert \
+                 CREATE TRIGGER fail_recovery_outcome_insert \
                  BEFORE INSERT ON job_run_states \
                  WHEN NEW.pipeline_state_json LIKE '%\"final_recovery\"%\"outcome\"%' \
                  BEGIN SELECT RAISE(ABORT, 'injected run-state write failure'); END;",
@@ -270,8 +283,8 @@ impl Drop for OutcomeWriteFault {
     fn drop(&mut self) {
         self.0
             .execute_batch(
-                "DROP TRIGGER IF EXISTS fail_final_recovery_outcome; \
-                 DROP TRIGGER IF EXISTS fail_final_recovery_outcome_insert;",
+                "DROP TRIGGER IF EXISTS fail_recovery_outcome; \
+                 DROP TRIGGER IF EXISTS fail_recovery_outcome_insert;",
             )
             .unwrap();
     }
@@ -354,6 +367,7 @@ fn final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints() {
                 &fixture.runtime,
                 &run,
                 &FinalRecoveryApplication {
+                    fault: Default::default(),
                     task_id: task.clone(),
                     failed_step_id: "implement".to_string(),
                     decision: resume.clone(),
@@ -404,6 +418,49 @@ fn final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints() {
     }
 }
 
+fn a_resume_after_another_recorded_decision_is_refused_and_keeps_checkpoints() {
+    let fixture = fixture("[\"sol\"]");
+    let task = fixture.task();
+    let run = fixture.running_run(&task);
+    assert_eq!(fixture.admit(&run, &task), FinalRecoveryAdmission::Admitted);
+    fixture.apply(&run, &task, archive(), None);
+    assert_eq!(fixture.state(&run).step_states.len(), 3);
+
+    let refused = fixture.apply_result(
+        &run,
+        &task,
+        FinalRecoveryDecision::Resume {
+            step_id: "implement".to_string(),
+            rationale: "retry the failed step".to_string(),
+        },
+        Some(1),
+    );
+    let message = refused
+        .expect_err("resume must not replace archive")
+        .to_string();
+    assert!(
+        message.contains("already recorded")
+            && message.contains("archive")
+            && message.contains("resume"),
+        "{message}"
+    );
+    let state = fixture.state(&run);
+    assert!(
+        matches!(
+            state
+                .final_recovery
+                .and_then(|checkpoint| checkpoint.decision),
+            Some(FinalRecoveryDecision::Archive { .. })
+        ),
+        "the recorded decision stays archive"
+    );
+    assert_eq!(
+        state.step_states.keys().copied().collect::<Vec<_>>(),
+        vec![0, 1, 2],
+        "a refused resume does not drop step checkpoints"
+    );
+}
+
 fn a_local_decision_is_applied_to_the_task_through_the_applier() {
     let fixture = fixture("[\"sol\"]");
     let task = fixture.task();
@@ -426,9 +483,10 @@ fn a_local_decision_is_applied_to_the_task_through_the_applier() {
     assert_eq!(fixture.status(&task), "archived");
     let recorded = fixture.state(&run).final_recovery.unwrap();
     assert!(
-        recorded
-            .outcome
-            .is_some_and(|outcome| outcome.starts_with("settled")),
+        matches!(
+            recorded.outcome,
+            Some(FinalRecoveryCheckpointOutcome::Settled { .. })
+        ),
         "the outcome is recorded with the decision"
     );
 }
@@ -445,6 +503,7 @@ fn an_escalation_blocks_the_task_and_continues_into_the_failure_path() {
         FinalRecoveryDecision::Escalate {
             diagnosis: "the provider rejected the push".to_string(),
             human_action: "grant the token repository write access".to_string(),
+            summary: None,
         },
         None,
     );
@@ -523,7 +582,9 @@ fn a_run_resumed_after_a_crash_mid_settlement_converges_on_one_outcome() {
             .final_recovery
             .unwrap()
             .outcome
-            .is_some_and(|outcome| outcome.starts_with("settled")),
+            .is_some_and(|outcome| {
+                matches!(outcome, FinalRecoveryCheckpointOutcome::Settled { .. })
+            }),
         "the replay records the outcome the crash lost"
     );
 
@@ -601,7 +662,7 @@ fn final_recovery_keeps_run_observers_and_every_declared_tool_write_denied() {
         let denied = spec.tool_disallow_list.unwrap();
         for observer in ["orbit.workflow.run.show", "orbit.workflow.run.list"] {
             assert!(
-                denied.iter().any(|tool| tool == observer),
+                orbit_types::workflow::tool_allowed(observer, &denied),
                 "ORB-14267: {activity} must withhold {observer}; recovery receives run evidence without operator authority"
             );
         }
@@ -626,10 +687,16 @@ fn final_recovery_keeps_run_observers_and_every_declared_tool_write_denied() {
         // deny list is applied. Advertising or requiring a tool grants no capability.
         {
             let _env = orbit_common::test_env::scoped([("ORBIT_AGENT_NAME", Some("codex"))]);
-            for tool in ["orbit.workflow.run.show", "orbit.workflow.run.list"] {
+            for action in ["show", "list"] {
+                let tool = format!("orbit.run:{action}");
                 let error = fixture
                     .runtime
-                    .execute_tool_command(tool, json!({"id": "jrun-missing"}), None, None)
+                    .execute_tool_command(
+                        "orbit.run",
+                        json!({"action": action, "id": "jrun-missing"}),
+                        None,
+                        None,
+                    )
                     .unwrap_err();
                 assert!(
                     matches!(error, OrbitError::CapabilityDenied(_)),
@@ -647,9 +714,14 @@ fn final_recovery_keeps_run_observers_and_every_declared_tool_write_denied() {
             (ACTIVITY_TOOLS_DENY_ENV, Some(deny_env.as_str())),
         ]);
         for tool in &denied {
+            // A denied family action is called through its family.
+            let (name, input) = match tool.split_once(':') {
+                Some((family, action)) => (family, json!({"action": action})),
+                None => (tool.as_str(), json!({})),
+            };
             let error = fixture
                 .runtime
-                .execute_tool_command(tool, json!({}), None, None)
+                .execute_tool_command(name, input, None, None)
                 .unwrap_err();
             assert!(
                 matches!(
@@ -660,6 +732,63 @@ fn final_recovery_keeps_run_observers_and_every_declared_tool_write_denied() {
             );
         }
     }
+}
+
+fn agent_loop_activities_withhold_run_show_and_keep_its_operator_gate() {
+    use orbit_common::OrbitError;
+    use orbit_types::workflow::ActivityV2Spec;
+
+    let fixture = fixture("[]");
+    for activity in [
+        "agent_implement",
+        "agent_review_repair",
+        "task_pilot",
+        "resident_cycle",
+        "image_input_probe",
+        "review_reconciliation_review",
+        "triage_escalation",
+    ] {
+        let yaml = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("assets/activities/{activity}.yaml")),
+        )
+        .unwrap();
+        let asset = orbit_engine::activity_job::load_activity_asset(&yaml).unwrap();
+        let ActivityV2Spec::AgentLoop(spec) = asset.spec.spec else {
+            panic!("agent activity")
+        };
+        let denied = spec.tool_disallow_list.unwrap();
+        assert!(
+            orbit_types::workflow::tool_allowed("orbit.workflow.run.show", &denied),
+            "{activity} must withhold the operator-only run observer from its agent"
+        );
+        let resolved = fixture
+            .runtime
+            .resolve_activity_tool_denials(&[], activity, &denied)
+            .unwrap();
+        assert!(
+            !orbit_types::workflow::tool_allowed(
+                "orbit.workflow.run.show",
+                &resolved.effective_tools
+            ),
+            "{activity} must not advertise the operator-only run observer"
+        );
+    }
+
+    let _env = orbit_common::test_env::scoped([("ORBIT_AGENT_NAME", Some("codex"))]);
+    let error = fixture
+        .runtime
+        .execute_tool_command(
+            "orbit.run",
+            json!({"action": "show", "id": "jrun-missing"}),
+            None,
+            None,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(error, OrbitError::CapabilityDenied(_)),
+        "run.show remains operator-only for agent sessions: {error}"
+    );
 }
 
 /// [ORB-15162] A task that requires `orbit.task.add` still gets a final-recovery
@@ -784,6 +913,11 @@ fn shipped_disallow_list(activity: &str) -> Vec<String> {
 
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
+    agent_loop_activity_tool_surface,
+    agent_loop_activities_withhold_run_show_and_keep_its_operator_gate
+);
+
+crate::scenario_table!(
     an_empty_crew_pool_skips_final_recovery_and_records_nothing_scenarios,
     an_empty_crew_pool_skips_final_recovery_and_records_nothing,
     final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints,
@@ -794,4 +928,9 @@ crate::scenario_table!(
     final_recovery_log_tail_reads_only_the_requested_runs_bounded_log,
     final_recovery_keeps_run_observers_and_every_declared_tool_write_denied,
     final_recovery_drops_a_required_tool_its_disallow_list_covers
+);
+
+crate::scenario_table!(
+    a_resume_after_another_recorded_decision_is_refused_and_keeps_checkpoints_scenarios,
+    a_resume_after_another_recorded_decision_is_refused_and_keeps_checkpoints,
 );

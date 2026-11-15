@@ -1,4 +1,4 @@
-//! `orbit browser-kit install`: build, upgrade or adopt the kit, then
+//! `orbit config browser-kit install`: build, upgrade or adopt the kit, then
 //! verify it.
 //!
 //! Every step is skipped when the kit already satisfies it, so a hand-built
@@ -106,7 +106,7 @@ pub fn install(
         }
     }
 
-    // The visual capture driver's pixel-compare helper, pinned beside
+    // The kit's pixel-compare helper, pinned beside
     // Playwright so every host compares pixels with the same code.
     match before.pixel_helper_version.as_deref() {
         Some(PIXEL_HELPER_VERSION) => steps.push(format!(
@@ -138,7 +138,7 @@ pub fn install(
                 .to_string(),
         )
     })?;
-    if package.browser_installed {
+    if package.browser_installed && package.executable.is_some() {
         steps.push(format!("kept chromium_headless_shell-{revision}"));
     } else {
         progress(&format!(
@@ -148,6 +148,11 @@ pub fn install(
         command
             .arg(layout.cli_script())
             .args(["install", "--only-shell", "chromium"])
+            .args(if package.browser_installed {
+                &["--force"][..]
+            } else {
+                &[]
+            })
             .env(BROWSERS_PATH_ENV, layout.browsers())
             .current_dir(layout.npm_project());
         run_streaming(&mut command, "playwright install --only-shell chromium")?;

@@ -1,21 +1,20 @@
-pub mod agent;
 mod agents;
 mod auto_task;
 mod automation;
 mod codebase;
 pub mod command;
-mod crew;
 mod decision;
 mod domain_control;
 pub mod drain;
+mod evolution;
 mod experiment;
-pub mod lease;
+mod memory;
+mod notice;
 pub mod operation;
-mod orchestrator;
 pub mod pipeline;
+mod resident;
 pub mod search;
 pub mod task;
-mod visual;
 mod workflow;
 pub mod workspace_claim;
 
@@ -29,5 +28,6 @@ pub use self::register::register;
 use self::dispatch::{
     execute_host_action, reject_agent_field, reject_unknown_tool_arguments, report_unknown_fields,
 };
-use self::identity::{identity_params, model_identity_params};
 use self::workspace::{apply_session_orchestrator_default, resolve_workspace_argument};
+
+mod attention;

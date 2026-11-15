@@ -41,6 +41,7 @@ pub struct FederatedMcpHost {
     /// owner route a claimed worker or pull drain uses.
     task_prefixes: Option<TaskPrefixTable>,
     local_mirror: Option<LocalMirrorHint>,
+    attention: super::attention_aggregate::AttentionFanout,
 }
 
 impl FederatedMcpHost {
@@ -50,7 +51,25 @@ impl FederatedMcpHost {
             probe,
             task_prefixes: None,
             local_mirror: None,
+            attention: super::attention_aggregate::AttentionFanout::default(),
         }
+    }
+
+    /// The deadline, cursor lifetime and host names the attention fan-out uses.
+    pub fn with_attention_fanout(
+        mut self,
+        fanout: super::attention_aggregate::AttentionFanout,
+    ) -> Self {
+        self.attention = fanout;
+        self
+    }
+
+    pub(super) fn attention_fanout(&self) -> &super::attention_aggregate::AttentionFanout {
+        &self.attention
+    }
+
+    pub(super) fn probe(&self) -> Arc<dyn DestinationProbe> {
+        Arc::clone(&self.probe)
     }
 
     /// Route id-only task calls to the host their prefix names.
@@ -144,9 +163,14 @@ impl FederatedMcpHost {
         Ok(json!({ "workspaces": self.probe_all_destinations(include_crews) }))
     }
 
+    /// The configured destinations, in configured order.
+    pub(super) fn destinations(&self) -> &[Destination] {
+        &self.destinations
+    }
+
     /// Probe every destination concurrently, so the list costs the slowest
     /// destination rather than the sum of all of them.
-    fn probe_all_destinations(&self, include_crews: bool) -> Vec<WorkspaceDescriptor> {
+    pub(super) fn probe_all_destinations(&self, include_crews: bool) -> Vec<WorkspaceDescriptor> {
         std::thread::scope(|scope| {
             let probes = self
                 .destinations
@@ -228,14 +252,14 @@ impl FederatedMcpHost {
     /// That precedence covers everything decidable *before* dispatch. The
     /// delivery itself runs on its own budget and, if its answer is lost, is
     /// reported as `outcome_unknown` rather than re-entering this ladder.
-    fn route_workspace_call(
+    pub(super) fn route_workspace_call(
         &self,
         name: &str,
         input: Value,
         session_context: ToolSessionContext,
         internal: bool,
     ) -> Result<Value, OrbitError> {
-        let token = workspace_selector(&input, &session_context).ok_or_else(|| {
+        let token = workspace_selector(&input, &session_context)?.ok_or_else(|| {
             OrbitError::InvalidInput(format!(
                 "tool '{name}' requires a host-qualified workspace selector; copy `selector` from \
                  federated orbit.workspace.list"
@@ -504,6 +528,18 @@ impl crate::McpHost for FederatedMcpHost {
         {
             return self.route_task_call(name, &task_id, input, session_context);
         }
+        // The named fan-out read. `host`, `all`, and a workspace — including a
+        // host-qualified selector — read every in-scope destination. Only a
+        // bare call whose session is already bound to one host-qualified
+        // workspace is routed like any other workspace call.
+        if let Some(aggregated) = self.aggregate_attention(name, &input, &session_context) {
+            return aggregated;
+        }
+        if let Some(aggregated) =
+            self.aggregate_notice_list(name, input.clone(), session_context.clone())
+        {
+            return aggregated;
+        }
         self.route_workspace_call(name, input, session_context, false)
     }
 
@@ -578,6 +614,10 @@ fn ensure_on_public_surface(
     let advertised = session
         .advertised_tools()
         .map_err(|error| delivery_unreachable(destination, error))?;
+    // A family action's operation is served through its family, whose
+    // advertised schema carries the operation's arguments.
+    let surface_name =
+        orbit_types::tool::tool_family_of_operation(name).map_or(name, |(family, _)| family.name);
     for argument in [
         "view",
         "snapshot",
@@ -591,14 +631,16 @@ fn ensure_on_public_surface(
         "default_input",
         "include_catalog",
     ] {
-        if input.get(argument).is_some() && !session.supports_tool_argument(name, argument)? {
+        if input.get(argument).is_some()
+            && !session.supports_tool_argument(surface_name, argument)?
+        {
             return Err(OrbitError::ToolNotOnThisHost(format!(
                 "'{name}' argument '{argument}' is unsupported on '{}'",
                 destination.machine_id
             )));
         }
     }
-    if !tool_on_surface(&advertised, name)
+    if !tool_on_surface(&advertised, surface_name)
         && !session_cannot_authorize_governed_tool(name, session_context)
     {
         return Err(OrbitError::ToolNotOnThisHost(format!(
@@ -624,7 +666,6 @@ fn session_cannot_authorize_governed_tool(
         .iter()
         .find(|operation| {
             operation.surface == OperationSurface::Tool
-                && operation.id != "orbit.agent.invoke"
                 && mcp_advertised_tool_name(operation.id) == advertised_name
         })
         .is_some_and(|operation| authorization::authorize(operation, &caller).is_err())
@@ -632,7 +673,7 @@ fn session_cannot_authorize_governed_tool(
 
 /// The operator's config pin is the identity of record; a live answer only
 /// confirms it.
-fn confirm_pinned_identity(
+pub(super) fn confirm_pinned_identity(
     destination: &Destination,
     snapshot: &DestinationSnapshot,
 ) -> Result<(), OrbitError> {
@@ -662,13 +703,38 @@ fn listed_workspaces(snapshot: &DestinationSnapshot) -> String {
 }
 
 /// The selector the call itself passed, else the session's announced one.
-fn workspace_selector<'a>(input: &'a Value, context: &'a ToolSessionContext) -> Option<&'a str> {
-    input
-        .get("workspace")
-        .and_then(Value::as_str)
-        .or(context.workspace.as_deref())
+///
+/// An omitted or null `workspace` falls back to the session's. A non-string
+/// value is malformed input and is refused rather than silently replaced by
+/// the session default.
+pub(super) fn workspace_selector<'a>(
+    input: &'a Value,
+    context: &'a ToolSessionContext,
+) -> Result<Option<&'a str>, OrbitError> {
+    let selector = match input.get("workspace") {
+        None | Some(Value::Null) => context.workspace.as_deref(),
+        Some(Value::String(selector)) => Some(selector.as_str()),
+        Some(other) => {
+            return Err(OrbitError::InvalidInput(format!(
+                "`workspace` must be a string selector, got {}",
+                json_type_name(other)
+            )));
+        }
+    };
+    Ok(selector
         .map(str::trim)
-        .filter(|selector| !selector.is_empty())
+        .filter(|selector| !selector.is_empty()))
+}
+
+fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "a boolean",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Array(_) => "an array",
+        Value::Object(_) => "an object",
+    }
 }
 
 /// v1 destinations address a local `ws_*`, not the host-qualified token.
@@ -684,7 +750,7 @@ fn destination_arguments(input: Value, workspace_id: &str) -> Value {
     Value::Object(object)
 }
 
-fn tool_on_surface(advertised: &[String], name: &str) -> bool {
+pub(super) fn tool_on_surface(advertised: &[String], name: &str) -> bool {
     let wire = mcp_advertised_tool_name(name);
     advertised
         .iter()

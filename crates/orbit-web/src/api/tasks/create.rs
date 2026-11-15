@@ -21,6 +21,13 @@ use serde_json::{Value, json};
 use crate::api::{bad_request, blocking};
 use crate::state::{DashboardState, WsEntry};
 
+/// Message and stable code for the environmental refusal when the frozen
+/// destination is not an active registered workspace. This state can change
+/// between attempts, so it is not a function of the frozen body: a retry of
+/// an uncertain submission must not treat it as proof of no commit.
+const WORKSPACE_UNAVAILABLE_MESSAGE: &str = "select an active registered workspace";
+const WORKSPACE_UNAVAILABLE_CODE: &str = "workspace_unavailable";
+
 /// Content identity of the exact registered destination, stable across server
 /// restarts. Snapshot generation is checked separately within each request.
 pub(in crate::api) fn binding_token(entry: &WsEntry) -> Option<String> {
@@ -87,9 +94,7 @@ pub(in crate::api) async fn create_proposal(
                 .entries()
                 .iter()
                 .find(|entry| entry.id == workspace && entry.active)
-                .ok_or_else(|| {
-                    OrbitError::InvalidInput("select an active registered workspace".into())
-                })?;
+                .ok_or_else(|| OrbitError::InvalidInput(WORKSPACE_UNAVAILABLE_MESSAGE.into()))?;
             if binding_token(entry).as_deref() != Some(body.binding.as_str()) {
                 return Err(OrbitError::PolicyDenied(
                     "workspace binding changed; the frozen submission cannot be retargeted".into(),
@@ -140,6 +145,11 @@ pub(in crate::api) async fn create_proposal(
         )) => (
             axum::http::StatusCode::FORBIDDEN,
             Json(json!({"error": error.to_string()})),
+        )
+            .into_response(),
+        Ok(Err(OrbitError::InvalidInput(message))) if message == WORKSPACE_UNAVAILABLE_MESSAGE => (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({"error": message, "code": WORKSPACE_UNAVAILABLE_CODE})),
         )
             .into_response(),
         Ok(Err(error)) => crate::api::map_runtime_error(error),

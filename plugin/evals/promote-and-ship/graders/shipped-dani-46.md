@@ -1,5 +1,5 @@
 ---
 type: tool_used
-tool: mcp__plugin_orbit_orbit__orbit_workflow_ship
+tool: mcp__plugin_orbit_orbit__orbit_workflow
 input_match: '"task_ids"\s*:\s*(\[\s*)?"DANI-46"'
 ---

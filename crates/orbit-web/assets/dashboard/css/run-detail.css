@@ -5,9 +5,12 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 14px 16px;
+  margin: 12px 16px;
   padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--bg-control);
   font-size: 13.5px;
-  border-bottom: 1px solid var(--hair);
 }
 .run-meta-grid .label {
   color: var(--fg-dim);
@@ -121,6 +124,7 @@ a.failure-id-link:focus-visible {
 .child-dispatch-summary { margin-bottom: 8px; }
 .child-dispatch-row .state-label { color: var(--dot); }
 .child-dispatch-row .duration { white-space: nowrap; }
+.provider-process-message { overflow-wrap: anywhere; }
 
 /* ORB-12516: distributed claim provenance and the owner's handoff
    actions, rendered inside the existing task detail and run meta rather
@@ -437,6 +441,19 @@ a.failure-id-link:focus-visible {
   min-width: 0;
 }
 .claim-reason:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The recover target picker sits before its one action button. */
+.claim-status-picker {
+  min-height: 30px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0 8px;
+  font: inherit;
+  font-size: 12.5px;
+}
+.claim-status-picker:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.claim-status-picker:disabled { opacity: 0.5; cursor: not-allowed; }
 .claim-reason[aria-invalid="true"] { border-color: var(--danger-fg); }
 
 /* An unauthorized action is explained, not hidden: the operator learns
@@ -590,6 +607,7 @@ a.failure-id-link:focus-visible {
   color: var(--fg-dim);
   transition: all 0.2s ease;
 }
+a.back-action { display: inline-flex; align-items: center; box-sizing: border-box; text-decoration: none; }
 .back-action:hover {
   color: var(--fg);
   border-color: var(--fg-dim);

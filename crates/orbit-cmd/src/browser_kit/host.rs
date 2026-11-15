@@ -11,7 +11,7 @@ use orbit_common::security::child_env::MCP_MANAGED_CONTEXT_ENV;
 
 /// The fix for a host without Node; Orbit never installs it.
 pub(crate) const NODE_FIX: &str = "Install Node.js 18 or newer (https://nodejs.org or the system \
-     package manager) so `node` and `npm` are on PATH, then rerun `orbit browser-kit install`. \
+     package manager) so `node` and `npm` are on PATH, then rerun `orbit config browser-kit install`. \
      Orbit does not install Node.";
 
 /// Output retained from a probe.
@@ -53,7 +53,7 @@ pub(super) fn require_host_operator() -> Result<(), OrbitError> {
     let set = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
     if set(MCP_MANAGED_CONTEXT_ENV) || set("ORBIT_WORKER_CONTEXT_REQUIRED") {
         return Err(OrbitError::InvalidInput(
-            "the browser kit is host setup: run `orbit browser-kit` on the host as the user who \
+            "the browser kit is host setup: run `orbit config browser-kit` on the host as the user who \
              runs workers, never inside a worker"
                 .to_string(),
         ));
@@ -61,7 +61,7 @@ pub(super) fn require_host_operator() -> Result<(), OrbitError> {
     #[cfg(unix)]
     if unsafe { libc::geteuid() } == 0 {
         return Err(OrbitError::InvalidInput(
-            "run `orbit browser-kit` as the user who runs workers, not as root; \
+            "run `orbit config browser-kit` as the user who runs workers, not as root; \
              `install --with-deps` asks sudo for the system libraries itself"
                 .to_string(),
         ));

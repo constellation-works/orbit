@@ -72,7 +72,8 @@ pub const ERROR_MARKERS: &[&str] = &[
 /// 3. A specific `##[error]` annotation.
 /// 4. A labelled diagnostic (`error[vulnerability]: …`).
 /// 5. Any remaining marker diagnostic (compiler `error:`, `assertion failed`).
-/// 6. The nearest unannotated content line with letters or digits before a generic trailer.
+/// 6. The nearest unannotated content line with letters or digits before a generic trailer,
+///    excluding `ci-await-api:` bookkeeping the waiter prints after its own report.
 /// 7. The failing step name, labelled as a fallback — used when the excerpt
 ///    only has wrappers, bookkeeping, or assertion payload.
 ///
@@ -165,7 +166,23 @@ pub fn diagnostic_anchor(lines: &[(LineKind, &str)]) -> Option<usize> {
             return Some(previous);
         }
     }
-    None
+    // A waiter that only reports `ci-await:` has no compiler or trailer
+    // anchor. That line is still the failure, so it must not fall through to
+    // the step name. Stronger diagnostics above keep their own identity.
+    lines
+        .iter()
+        .rposition(|(kind, line)| *kind == LineKind::Content && is_await_waiter_signal(line))
+}
+
+/// `ci-await:` from the job waiter. `ci-await-api:` bookkeeping does not match.
+fn is_await_waiter_signal(line: &str) -> bool {
+    signature_payload(line).trim().starts_with("ci-await:")
+}
+
+/// `ci-await-api:` counters the waiter prints in a `finally` block, after any
+/// timeout it just reported. Bookkeeping, not a diagnostic.
+fn is_await_api_bookkeeping(line: &str) -> bool {
+    signature_payload(line).trim().starts_with("ci-await-api:")
 }
 
 /// Bounded raw evidence around the same emitted diagnostic used for identity.
@@ -487,7 +504,9 @@ fn is_assertion_payload(lowered: &str) -> bool {
 fn is_diagnostic_content(line: &str) -> bool {
     let payload = signature_payload(line);
     let trimmed = payload.trim();
-    trimmed.chars().any(char::is_alphanumeric) && !trimmed.starts_with("##[")
+    trimmed.chars().any(char::is_alphanumeric)
+        && !trimmed.starts_with("##[")
+        && !is_await_api_bookkeeping(line)
 }
 
 /// The `##[group]Run …` line that opens a step's command.
@@ -592,16 +611,94 @@ fn is_successful_test_result(lowered: &str) -> bool {
 
 /// Strip a raw timestamp or the `job<TAB>step<TAB>timestamp ` runner columns,
 /// preserving payload tabs and indentation used to distinguish printed source.
-pub fn log_payload(line: &str) -> &str {
+/// The first `workflow.ci_infrastructure_signatures` entry a line the job
+/// emitted starts with. The script text of a run step is not emitted output,
+/// and a prefix keeps a test that quotes the line from matching.
+pub fn declared_infrastructure_signature<'a>(
+    log: &str,
+    signatures: &'a [String],
+) -> Option<&'a str> {
+    if signatures.is_empty() {
+        return None;
+    }
+    classify_log_lines(log)
+        .into_iter()
+        .filter(|(kind, _)| {
+            !matches!(
+                kind,
+                LineKind::RunCommand
+                    | LineKind::CommandBody
+                    | LineKind::ParamDump
+                    | LineKind::EndGroup
+            )
+        })
+        .find_map(|(_, line)| {
+            let payload = log_payload(line).trim_start();
+            signatures
+                .iter()
+                .find(|signature| payload.starts_with(signature.as_str()))
+                .map(String::as_str)
+        })
+}
+
+/// The step column `gh run view --log*` prints when it cannot attribute a log
+/// line to a step. Some runs label every line of a job this way.
+pub const UNATTRIBUTED_STEP: &str = "UNKNOWN STEP";
+
+/// How every line of an excerpt names the job's one failed step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepBinding {
+    /// Every line's step column is the failed step.
+    Named,
+    /// Every line's step column is [`UNATTRIBUTED_STEP`].
+    Unattributed,
+}
+
+/// Job, step and remainder of one `gh run view --log` line (`job`, `step`, rest).
+///
+/// `None` for a timestamp-led raw job-API line, whose payload may contain tabs,
+/// and for a line that does not carry two tab separators.
+pub fn log_columns(line: &str) -> Option<(&str, &str, &str)> {
     // Raw job API logs have no job/step columns. Their payload can contain
     // arbitrary tabs, so recognize the leading timestamp before splitting.
-    if let Some(payload) = timestamp_payload(line) {
-        return payload;
+    if timestamp_payload(line).is_some() {
+        return None;
     }
     let mut columns = line.splitn(3, '\t');
-    let rest = match (columns.next(), columns.next(), columns.next()) {
-        (Some(_job), Some(_step), Some(rest)) => rest,
-        _ => line,
+    Some((columns.next()?, columns.next()?, columns.next()?))
+}
+
+/// An excerpt belongs to `job` only when every line's job and step columns name
+/// that job and one failed step: `step` or [`UNATTRIBUTED_STEP`], the same
+/// label on every line. An empty excerpt binds nothing.
+pub fn step_binding(text: &str, job: &str, step: &str) -> Option<StepBinding> {
+    let mut binding = None;
+    for line in text.lines() {
+        let (line_job, line_step, _) = log_columns(line)?;
+        if line_job != job || (line_step != step && line_step != UNATTRIBUTED_STEP) {
+            return None;
+        }
+        let line_binding = if line_step == UNATTRIBUTED_STEP {
+            StepBinding::Unattributed
+        } else {
+            StepBinding::Named
+        };
+        if let Some(seen) = binding
+            && seen != line_binding
+        {
+            return None;
+        }
+        binding = Some(line_binding);
+    }
+    binding
+}
+
+pub fn log_payload(line: &str) -> &str {
+    let rest = match log_columns(line) {
+        Some((_job, _step, rest)) => rest,
+        // A timestamp-led raw line, or a line without runner columns, still
+        // drops a leading timestamp below. Payload tabs stay intact.
+        None => line,
     };
     timestamp_payload(rest).unwrap_or(rest)
 }

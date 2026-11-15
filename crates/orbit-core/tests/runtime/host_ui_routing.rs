@@ -21,7 +21,7 @@ use tempfile::TempDir;
 
 const REVISION: &str = "1248";
 
-/// Lay out a kit under `home` as `orbit browser-kit install` leaves it, with
+/// Lay out a kit under `home` as `orbit config browser-kit install` leaves it, with
 /// the smoke-test record `verify` writes only when `verified`.
 pub(crate) fn write_kit(home: &Path, verified: bool) {
     let layout = KitLayout::for_home(home);
@@ -45,6 +45,7 @@ pub(crate) fn write_kit(home: &Path, verified: bool) {
     let shell = root.join(format!("browsers/chromium_headless_shell-{REVISION}"));
     std::fs::create_dir_all(&shell).unwrap();
     std::fs::write(shell.join("INSTALLATION_COMPLETE"), "").unwrap();
+    std::fs::write(shell.join("chrome-headless-shell"), "fixture").unwrap();
     std::fs::write(root.join("env.sh"), "# fixture\n").unwrap();
     if verified {
         std::fs::write(
@@ -162,16 +163,17 @@ fn running_drain(runtime: &OrbitRuntime) -> String {
 
 fn ship(runtime: &OrbitRuntime, task: &str) -> OrbitError {
     runtime
-        .submit_ship_run(
-            ShipMode::Local,
-            Some("main"),
-            &[task.to_string()],
-            CompletionPolicy::Review,
-            &[],
-            Some("test"),
-            None,
-            JobRunTrigger::cli(),
-        )
+        .submit_ship_run(orbit_core::ShipRunRequest {
+            mode: ShipMode::Local,
+            base_branch: Some("main"),
+            task_ids: &[task.to_string()],
+            completion: CompletionPolicy::Review,
+            allowed_crews: &[],
+            actor: Some("test"),
+            claim_token: None,
+            trigger: JobRunTrigger::cli(),
+            ..Default::default()
+        })
         .expect_err("a fixture without job assets never submits a run")
 }
 
@@ -186,7 +188,10 @@ fn a_host_without_a_verified_kit_withholds_ui_tasks_until_its_kit_is_verified() 
     let ui = task(&linux, "ui", None, &["UI"]);
     let topical = task(&linux, "topical", None, &["dashboard", "ux"]);
     let wait = browser_kit_wait();
-    assert!(wait.contains("`orbit browser-kit install`"), "{wait}");
+    assert!(
+        wait.contains("`orbit config browser-kit install`"),
+        "{wait}"
+    );
 
     let discovered = backlog(&linux);
     assert_eq!(
@@ -260,6 +265,15 @@ fn a_host_without_a_verified_kit_withholds_ui_tasks_until_its_kit_is_verified() 
     );
 
     write_kit(&kit_home, true);
+    let executable = KitLayout::for_home(&kit_home).browsers().join(format!(
+        "chromium_headless_shell-{REVISION}/chrome-headless-shell"
+    ));
+    std::fs::remove_file(&executable).unwrap();
+    assert_eq!(
+        exclusion(&backlog(&linux), &ui.id).map(|(reason, _)| reason),
+        Some("browser_kit_missing".to_string())
+    );
+    std::fs::write(executable, "fixture").unwrap();
     let next = backlog(&linux);
     assert_eq!(admitted(&next), vec![ui.id.clone(), topical.id], "{next}");
     assert!(linux.browser_kit_backlog_waits().unwrap().is_empty());

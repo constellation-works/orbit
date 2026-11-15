@@ -11,6 +11,9 @@ stability = "internal"
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+
 [features]
 # Test-only hooks (the forced Seatbelt-refusal setter in the sandbox-exec
 # probe). Enable it only from `[dev-dependencies]`, never in a shipped build.

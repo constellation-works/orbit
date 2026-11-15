@@ -1,0 +1,527 @@
+/* Documentation pages: page chrome that surrounds the prose, then the prose
+   itself. Tokens come from tokens.css. */
+
+html {
+  scroll-padding-top: 5rem;
+}
+
+body {
+  background: var(--sl-color-bg);
+  letter-spacing: 0;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--sl-color-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--orbit-line);
+  border: 2px solid var(--sl-color-bg);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--sl-color-gray-4);
+}
+
+/* ------------------------------------------------------------------------
+   Header
+   ------------------------------------------------------------------------ */
+.site-title,
+.header .site-title {
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.site-title img {
+  color: var(--orbit-text);
+  height: 1.5rem;
+}
+
+/* Starlight clips the title wrapper so long titles cannot cover the search
+   box; the section links have to sit outside that clip. */
+.header .title-wrapper {
+  gap: var(--orbit-space-6);
+  overflow: visible;
+}
+
+/* The latest release, beside the logo in every header. */
+.orbit-version {
+  border: 1px solid var(--orbit-line);
+  border-radius: 999px;
+  color: var(--orbit-text-muted);
+  display: none;
+  font-family: var(--sl-font-mono);
+  font-size: var(--orbit-text-xs);
+  line-height: 1;
+  padding: 0.3rem 0.5rem;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.orbit-version:hover,
+.orbit-version:focus-visible {
+  border-color: var(--sl-color-accent);
+  color: var(--orbit-link);
+}
+
+/* Section links, rendered next to the site title by SiteTitle.astro. */
+.orbit-topnav {
+  align-items: center;
+  display: none;
+  gap: var(--orbit-space-5);
+  white-space: nowrap;
+}
+
+.orbit-topnav a {
+  color: var(--orbit-text-2);
+  font-size: var(--orbit-text-ui);
+  text-decoration: none;
+}
+
+.orbit-topnav a:hover,
+.orbit-topnav a:focus-visible,
+.orbit-topnav a[aria-current='true'] {
+  color: var(--orbit-link);
+}
+
+/* Reserve space for the splash Menu button (same inset as Starlight's sidebar
+   toggle). Documentation pages already get this from `[data-has-sidebar]`. */
+html:not([data-has-sidebar]) header.header {
+  overflow: visible;
+  padding-inline-end: calc(var(--sl-nav-gap) + var(--sl-nav-pad-x) + var(--sl-menu-button-size));
+}
+
+/* Starlight's `md` breakpoint: below 50rem the splash page uses HomeMenu and
+   documentation pages use Starlight's sidebar Menu. */
+@media (min-width: 50rem) {
+  .orbit-version {
+    display: inline-block;
+  }
+
+  .orbit-topnav {
+    display: flex;
+  }
+
+  html:not([data-has-sidebar]) header.header {
+    padding-inline-end: var(--sl-nav-pad-x);
+  }
+}
+
+@media (min-width: 50rem) and (max-width: 72rem) {
+  .orbit-topnav {
+    gap: var(--orbit-space-4);
+  }
+}
+
+/* ------------------------------------------------------------------------
+   Sidebar and "On this page"
+   ------------------------------------------------------------------------ */
+/* Group labels are eyebrows, not headings: the pages under them are what a
+   reader scans. */
+.sidebar-content .top-level > li > details > summary .large {
+  color: var(--orbit-text-muted);
+  font-family: var(--sl-font-mono);
+  font-size: var(--orbit-text-xs);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* A group inside a group (Guides) reads as a row among its sibling links. */
+.sidebar-content ul ul summary .large {
+  color: var(--orbit-text);
+  font-size: var(--orbit-text-ui);
+  font-weight: 500;
+}
+
+.sidebar-content a {
+  font-size: var(--orbit-text-ui);
+}
+
+.sidebar-content ul ul li {
+  border-inline-start-color: var(--orbit-line);
+}
+
+/* The active page is marked by a 2px accent bar on the left edge, not by
+   Starlight's filled block. */
+.sidebar-content a[aria-current='page'] {
+  background-color: transparent;
+  box-shadow: inset 2px 0 0 var(--sl-color-accent);
+  color: var(--orbit-link);
+  font-weight: 500;
+}
+
+starlight-toc h2,
+mobile-starlight-toc .toggle {
+  font-size: var(--orbit-text-ui);
+}
+
+starlight-toc h2 {
+  color: var(--orbit-text-muted);
+  font-family: var(--sl-font-mono);
+  font-size: var(--orbit-text-xs);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* ------------------------------------------------------------------------
+   Prose
+   ------------------------------------------------------------------------ */
+.sl-markdown-content {
+  line-height: 1.65;
+}
+
+.sl-markdown-content :is(p, li) {
+  color: var(--orbit-text-2);
+}
+
+/* A hairline and a fixed step of space open each section, so a long page
+   reads as a list of sections rather than one column of text. */
+.sl-markdown-content .sl-heading-wrapper.level-h2 {
+  border-top: 1px solid var(--orbit-line);
+  margin-top: var(--orbit-space-7);
+  padding-top: var(--orbit-space-6);
+}
+
+.sl-markdown-content > .sl-heading-wrapper.level-h2:first-child {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h3 {
+  margin-top: var(--orbit-space-6);
+}
+
+.sl-markdown-content .sl-heading-wrapper + :is(p, ul, ol, table, blockquote, .starlight-aside, pre, .expressive-code, .orbit-index, .orbit-stack, .orbit-pipeline) {
+  margin-block-start: var(--orbit-space-3);
+}
+
+.sl-markdown-content a {
+  text-decoration-color: color-mix(in srgb, var(--orbit-link) 45%, transparent);
+  text-underline-offset: 0.2em;
+}
+
+.sl-markdown-content blockquote {
+  background: color-mix(in srgb, var(--sl-color-accent) 6%, transparent);
+  border-inline-start-color: var(--sl-color-accent);
+}
+
+.sl-markdown-content .starlight-aside {
+  border-radius: var(--orbit-radius);
+}
+
+/* Screenshots (src/assets/dashboard, from scripts/dashboard-shots): a hairline
+   frame so the dark captures sit on either theme. */
+.sl-markdown-content img {
+  border: 1px solid var(--orbit-line);
+  border-radius: var(--orbit-radius);
+}
+
+/* ------------------------------------------------------------------------
+   Inline code and tables
+   ------------------------------------------------------------------------ */
+:not(pre) > code {
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.sl-markdown-content code:not(pre code) {
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 4px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  display: inline-block;
+  /* Leave room on a full-width code's last line for the punctuation after it;
+     the nowrap box below forbids a break there. */
+  max-width: calc(100% - 3ch);
+  /* A single identifier wider than its container stays intact and scrolls
+     locally. Commands and paths wrap at the transform's token boundaries. */
+  overflow-x: auto;
+  vertical-align: bottom;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+/* See plugins/inline-code.mjs: the nowrap box keeps trailing punctuation with
+   the code, and the code's max-width above reserves room for it. Text decoration does not reach an inline-block's text, so a code
+   inside a link repeats the link underline itself. */
+.sl-markdown-content .orbit-code-box {
+  white-space: nowrap;
+}
+
+.sl-markdown-content a code:not(pre code) {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--sl-color-text-accent) 45%, transparent);
+  text-underline-offset: 0.2em;
+}
+
+.sl-markdown-content table {
+  font-size: var(--orbit-text-ui);
+  background-color: var(--sl-color-bg-inline-code);
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.sl-markdown-content table.orbit-config-keys {
+  display: table;
+  width: 100%;
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--sl-color-hairline-light);
+  table-layout: fixed;
+  /* Prose such as a nested type signature has no break opportunity. anywhere,
+     unlike break-word, also lowers the minimum width that auto layout gives the
+     description column, so the table fits its container at 320 px and 1152 px.
+     Code keeps its own overflow-wrap: normal. */
+  overflow-wrap: anywhere;
+}
+
+.sl-markdown-content table.orbit-config-keys th:first-child,
+.sl-markdown-content table.orbit-config-keys td:first-child {
+  width: 45%;
+}
+
+.sl-markdown-content table.orbit-config-keys code:not(pre code) {
+  overflow-x: visible;
+  /* DESIGN.md §3.2: code is 14px (--orbit-text-ui). */
+  font-size: var(--orbit-text-ui);
+  white-space: normal;
+}
+
+.sl-markdown-content table.orbit-config-keys .orbit-config-token {
+  white-space: nowrap;
+}
+
+@media (min-width: 1024px) {
+  /* Each key stays on one line at its natural width, and the description takes
+     the rest, so the provider-budget code keeps room in its cell. */
+  .sl-markdown-content table.orbit-config-keys {
+    table-layout: auto;
+  }
+
+  .sl-markdown-content table.orbit-config-keys th:first-child,
+  .sl-markdown-content table.orbit-config-keys td:first-child {
+    width: 1%;
+    white-space: nowrap;
+  }
+
+  /* The key's <wbr> points still break under nowrap, so size the box to its
+     full width; the column then reserves the whole key. */
+  .sl-markdown-content table.orbit-config-keys td:first-child code:not(pre code) {
+    width: max-content;
+    max-width: none;
+    white-space: nowrap;
+  }
+
+  .sl-markdown-content table.orbit-config-keys th,
+  .sl-markdown-content table.orbit-config-keys td {
+    padding-inline: 0.125rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .sl-markdown-content table.orbit-config-keys th:first-child,
+  .sl-markdown-content table.orbit-config-keys td:first-child {
+    width: 40%;
+  }
+
+  .sl-markdown-content table.orbit-config-keys th,
+  .sl-markdown-content table.orbit-config-keys td {
+    padding-inline: 0.5rem;
+  }
+}
+
+/* Phone widths stack each config row: the key sits above a full-width
+   description, because a two-column table cannot hold the provider-budget
+   code beside its key at 320 px. The header stays available to screen readers. */
+@media (max-width: 480px) {
+  .sl-markdown-content table.orbit-config-keys thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .sl-markdown-content table.orbit-config-keys,
+  .sl-markdown-content table.orbit-config-keys tbody,
+  .sl-markdown-content table.orbit-config-keys tr,
+  .sl-markdown-content table.orbit-config-keys th,
+  .sl-markdown-content table.orbit-config-keys td,
+  .sl-markdown-content table.orbit-config-keys th:first-child,
+  .sl-markdown-content table.orbit-config-keys td:first-child {
+    display: block;
+    width: 100%;
+  }
+
+  .sl-markdown-content table.orbit-config-keys th,
+  .sl-markdown-content table.orbit-config-keys td {
+    border-right: 0;
+  }
+
+  .sl-markdown-content table.orbit-config-keys td:first-child {
+    border-bottom: 0;
+    padding-bottom: 0.25rem;
+  }
+}
+
+/* CLI reference rows keep both columns on their first line. Their code wraps
+   at explicit token boundaries instead of hiding command names in scroll boxes. */
+.sl-markdown-content table.orbit-cli-commands {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+}
+
+.sl-markdown-content table.orbit-cli-commands th,
+.sl-markdown-content table.orbit-cli-commands td {
+  vertical-align: top;
+  white-space: normal;
+}
+
+.sl-markdown-content table.orbit-cli-commands th:first-child,
+.sl-markdown-content table.orbit-cli-commands td:first-child {
+  width: 45%;
+  white-space: normal;
+}
+
+.sl-markdown-content table.orbit-cli-commands code:not(pre code) {
+  overflow-x: visible;
+  white-space: normal;
+}
+
+.sl-markdown-content table.orbit-cli-commands .orbit-cli-token {
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .sl-markdown-content table.orbit-cli-commands th,
+  .sl-markdown-content table.orbit-cli-commands td {
+    padding-inline: 0.5rem;
+  }
+}
+
+/* Ordinary tables (anything without a specialized class) keep short inline
+   code chips fully readable at phone widths. The prose rule sizes code as a
+   local scroll box (max-width minus 3ch for trailing punctuation, nowrap,
+   overflow-x auto), which gives the table's auto layout a near-zero
+   min-content width for the cell, so a narrow column such as a Status column
+   clips even short labels. Let ordinary-table code use its cell width and
+   wrap at token boundaries instead, like the specialized tables. Prose
+   outside tables keeps the punctuation reservation and scroll behavior, and
+   the config-keys and cli-commands overrides above stay authoritative. */
+.sl-markdown-content table:not(.orbit-config-keys):not(.orbit-cli-commands):not(.orbit-config-paths) code:not(pre code) {
+  max-width: 100%;
+  overflow-x: visible;
+  white-space: normal;
+}
+
+/* File locations (Path | Scope on /reference/config/): path chips must not
+   split inside a file name (config. / toml). Keep the whole path on one line
+   at the DESIGN.md §3.2 code size; the table itself scrolls in its wrapper. */
+.sl-markdown-content table.orbit-config-paths {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.sl-markdown-content table.orbit-config-paths code:not(pre code) {
+  font-size: var(--orbit-text-ui);
+  max-width: 100%;
+  overflow-x: visible;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.sl-markdown-content table.orbit-config-paths code:not(pre code) wbr {
+  display: none;
+}
+
+.sl-markdown-content table th,
+.sl-markdown-content table td {
+  border-bottom: 1px solid var(--sl-color-hairline-light);
+  border-right: 1px solid var(--sl-color-hairline-light);
+  padding: 0.6rem 1rem;
+  /* Cells in a row start at the same top edge. Without this the Scope text
+     baseline/bottom-aligned against a multi-line path chip. */
+  vertical-align: top;
+}
+
+.sl-markdown-content table code:not(pre code) {
+  vertical-align: top;
+}
+
+.sl-markdown-content table th {
+  background-color: color-mix(in srgb, var(--sl-color-gray-6) 40%, transparent);
+}
+
+.sl-markdown-content table th:last-child,
+.sl-markdown-content table td:last-child {
+  border-right: none;
+}
+
+.sl-markdown-content table tr:last-child th,
+.sl-markdown-content table tr:last-child td {
+  border-bottom: none;
+}
+
+@media (max-width: 54rem) {
+  .sl-markdown-content table {
+    display: block;
+    overflow-x: auto;
+    max-width: 100%;
+  }
+}
+
+/* ------------------------------------------------------------------------
+   Footer
+   ------------------------------------------------------------------------ */
+.orbit-footer {
+  align-items: baseline;
+  border-top: 1px solid var(--orbit-line);
+  color: var(--orbit-text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--orbit-text-sm);
+  gap: var(--orbit-space-3) var(--orbit-space-6);
+  justify-content: space-between;
+  margin-top: var(--orbit-space-7);
+  padding-top: var(--orbit-space-5);
+}
+
+.orbit-footer p {
+  margin: 0;
+}
+
+.orbit-footer-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--orbit-space-2) var(--orbit-space-5);
+}
+
+.orbit-footer a {
+  color: var(--orbit-text-2);
+  text-decoration: none;
+}
+
+.orbit-footer a:hover,
+.orbit-footer a:focus-visible {
+  color: var(--orbit-link);
+}
+
+/* Search dialog Cancel (mobile): Starlight paints this button with
+   --sl-color-text-accent on the gray-6 dialog surface, which is 4.46:1 in
+   light theme, below the 4.5:1 normal-text threshold. Repoint just this
+   control at the darker accent-high step (9.07:1). Unlayered rules win over
+   Starlight's layered ones, so no !important is needed. */
+:root[data-theme='light'] site-search button[data-close-modal] {
+  color: var(--sl-color-accent-high);
+}

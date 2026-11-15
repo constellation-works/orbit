@@ -3,16 +3,16 @@ use orbit_store::contracts::JobRunStepParams;
 use orbit_store::contracts::{InvocationQuery, InvocationRecord, KeptClaimCandidate};
 use orbit_tools::{FsAuditLogger, ToolContext};
 use orbit_types::identity::AgentModelPair;
-use orbit_types::policy::Role;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     ContextWideningStep, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
     TaskPriority, TaskStatus,
 };
 use orbit_types::telemetry::ProviderLimitObservation;
+use orbit_types::workflow::{AutoTaskStepRecord, ParkedWait};
 use orbit_types::workflow::{
-    DeferralProbe, ExperimentActivityOverlay, ExploreBriefAdmission, JobRun, JobRunStartOutcome,
-    JobRunState, NamespaceProbe, PipelineState, TagInstruction,
+    DeferralProbe, ExperimentActivityOverlay, JobRun, JobRunStartOutcome, JobRunState,
+    NamespaceProbe, PipelineState, TagInstruction,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -25,6 +25,7 @@ use crate::activity_job::{
 };
 
 use super::super::RuntimeHost;
+use super::super::{AutoTaskAdmission, AutoTaskObservation, AutoTaskStepRequest};
 use super::super::{
     ClaimExecutionContext, CompletionObservationAdmission, CrewConfig, FinalRecoveryAdmission,
     FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied,
@@ -40,6 +41,39 @@ use super::super::{
 use super::NullRuntimeHost;
 
 impl<T: NullRuntimeHost> RuntimeHost for T {
+    fn validation_build_output_env(&self) -> Vec<String> {
+        NullRuntimeHost::validation_build_output_env(self)
+    }
+    fn mid_run_steering_enabled(&self) -> bool {
+        NullRuntimeHost::mid_run_steering_enabled(self)
+    }
+    fn record_resident_continuity_rebuilt(&self, run_id: &str) -> Result<(), OrbitError> {
+        NullRuntimeHost::record_resident_continuity_rebuilt(self, run_id)
+    }
+    fn completion_deadline(
+        &self,
+        run_id: &str,
+        pull_request: &str,
+        proposed: u64,
+    ) -> Result<u64, OrbitError> {
+        NullRuntimeHost::completion_deadline(self, run_id, pull_request, proposed)
+    }
+    fn completion_policy_digest(
+        &self,
+        run_id: &str,
+        task_ids: &[String],
+    ) -> Result<Option<String>, OrbitError> {
+        NullRuntimeHost::completion_policy_digest(self, run_id, task_ids)
+    }
+    fn authenticate_completion_tail(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        step_id: &str,
+    ) -> Result<bool, OrbitError> {
+        NullRuntimeHost::authenticate_completion_tail(self, run_id, task_id, step_id)
+    }
+
     fn start_plugin_broker(
         &self,
         run: &PluginBrokerRun,
@@ -132,6 +166,13 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
         path: &str,
     ) -> Result<Option<TaskArtifact>, OrbitError> {
         NullRuntimeHost::get_task_artifact(self, task_id, path)
+    }
+    fn observe_task_artifact(
+        &self,
+        task_id: &str,
+        path: &str,
+    ) -> Result<Option<TaskArtifact>, OrbitError> {
+        NullRuntimeHost::observe_task_artifact(self, task_id, path)
     }
     fn get_task_artifacts(&self, task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
         NullRuntimeHost::get_task_artifacts(self, task_id)
@@ -281,8 +322,9 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
         task_ids: &[String],
         handoff_id: Option<&str>,
         plan: &orbit_types::workflow::CiRerunPlan,
+        now_ms: u64,
     ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError> {
-        NullRuntimeHost::admit_ci_rerun(self, task_ids, handoff_id, plan)
+        NullRuntimeHost::admit_ci_rerun(self, task_ids, handoff_id, plan, now_ms)
     }
     fn admit_pr_infrastructure(
         &self,
@@ -350,6 +392,14 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Result<(), OrbitError> {
         NullRuntimeHost::record_handoff_landing_history(self, handoff_id, event, note)
     }
+    fn record_handoff_landing_completion_hold(
+        &self,
+        handoff_id: &str,
+        history: &orbit_types::task::TaskHistoryEntry,
+        comment: &str,
+    ) -> Result<(), OrbitError> {
+        NullRuntimeHost::record_handoff_landing_completion_hold(self, handoff_id, history, comment)
+    }
     fn local_machine_id(&self) -> Option<String> {
         NullRuntimeHost::local_machine_id(self)
     }
@@ -405,6 +455,9 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     fn required_validation_commands(&self) -> Vec<String> {
         NullRuntimeHost::required_validation_commands(self)
     }
+    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule> {
+        NullRuntimeHost::completion_hold_rules(self)
+    }
     fn review_baseline_commands(&self) -> Vec<String> {
         NullRuntimeHost::review_baseline_commands(self)
     }
@@ -437,6 +490,9 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     }
     fn agent_provider_config(&self) -> HashMap<String, String> {
         NullRuntimeHost::agent_provider_config(self)
+    }
+    fn activity_wall_clock_timeout_seconds(&self, activity_name: &str) -> Option<u64> {
+        NullRuntimeHost::activity_wall_clock_timeout_seconds(self, activity_name)
     }
     fn agent_stall_window(&self) -> Option<std::time::Duration> {
         NullRuntimeHost::agent_stall_window(self)
@@ -523,14 +579,13 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     fn resolved_crew_model(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
         NullRuntimeHost::resolved_crew_model(self, run_id)
     }
-    fn run_tool_with_context_and_role(
+    fn run_tool_with_context(
         &self,
         name: &str,
         input: Value,
-        role: Role,
         tool_context: ToolContext,
     ) -> Result<Value, OrbitError> {
-        NullRuntimeHost::run_tool_with_context_and_role(self, name, input, role, tool_context)
+        NullRuntimeHost::run_tool_with_context(self, name, input, tool_context)
     }
     fn run_private_vcs_operation(
         &self,
@@ -569,6 +624,13 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> crate::context::ScriptStepRun {
         NullRuntimeHost::run_script_step(self, request)
     }
+    fn verify_script_output_set(
+        &self,
+        consumer_run_id: &str,
+        set: &orbit_types::workflow::activity_job::ScriptOutputSet,
+    ) -> Result<(), String> {
+        NullRuntimeHost::verify_script_output_set(self, consumer_run_id, set)
+    }
     fn resolve_local_shell_executor(
         &self,
         executor: &str,
@@ -603,14 +665,14 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Result<Option<Value>, DispatchError> {
         NullRuntimeHost::task_context_for_agent_input(self, run_id, step_id, input)
     }
-    fn regression_risk_for_agent_input(
+    fn agent_corpus_for_activity(
         &self,
         run_id: &str,
         activity_name: &str,
-        input: &Value,
-    ) -> Option<Value> {
-        NullRuntimeHost::regression_risk_for_agent_input(self, run_id, activity_name, input)
+    ) -> Result<Option<orbit_types::workflow::AgentCorpusInjection>, DispatchError> {
+        NullRuntimeHost::agent_corpus_for_activity(self, run_id, activity_name)
     }
+
     fn tag_instructions_for_activity(
         &self,
         run_id: &str,
@@ -619,21 +681,22 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Result<Vec<TagInstruction>, DispatchError> {
         NullRuntimeHost::tag_instructions_for_activity(self, run_id, activity_name, input)
     }
-    fn explore_brief_for_activity(
+    fn notices_for_agent_input(
         &self,
         run_id: &str,
         activity_name: &str,
         input: &Value,
-    ) -> Option<ExploreBriefAdmission> {
-        NullRuntimeHost::explore_brief_for_activity(self, run_id, activity_name, input)
+    ) -> Option<orbit_types::workflow::FleetNoticeBrief> {
+        NullRuntimeHost::notices_for_agent_input(self, run_id, activity_name, input)
     }
     fn experiment_overlays_for_activity(
         &self,
         run_id: &str,
         activity_name: &str,
         input: &Value,
+        model: Option<&str>,
     ) -> Result<Vec<ExperimentActivityOverlay>, DispatchError> {
-        NullRuntimeHost::experiment_overlays_for_activity(self, run_id, activity_name, input)
+        NullRuntimeHost::experiment_overlays_for_activity(self, run_id, activity_name, input, model)
     }
     fn acquire_deferred_footprint(
         &self,
@@ -641,9 +704,6 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
         activity_name: &str,
     ) -> Result<(), DispatchError> {
         NullRuntimeHost::acquire_deferred_footprint(self, run_id, activity_name)
-    }
-    fn explore_delegation_available(&self) -> bool {
-        NullRuntimeHost::explore_delegation_available(self)
     }
     fn resolve_activity_tool_denials(
         &self,
@@ -660,6 +720,45 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Result<ResolvedActivityTools, DispatchError> {
         NullRuntimeHost::resolve_activity_tools(self, task_ids, baseline_tools)
     }
+    fn observe_auto_task_step(
+        &self,
+        run_id: &str,
+        request: &AutoTaskStepRequest,
+    ) -> Result<AutoTaskObservation, DispatchError> {
+        NullRuntimeHost::observe_auto_task_step(self, run_id, request)
+    }
+
+    fn checkpoint_auto_task_step(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        record: &AutoTaskStepRecord,
+    ) -> Result<(), DispatchError> {
+        NullRuntimeHost::checkpoint_auto_task_step(self, run_id, step_id, record)
+    }
+
+    fn admit_auto_task_step(
+        &self,
+        run_id: &str,
+        step_id: &str,
+    ) -> Result<AutoTaskAdmission, DispatchError> {
+        NullRuntimeHost::admit_auto_task_step(self, run_id, step_id)
+    }
+
+    fn checkpoint_parallel_branch(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        branch_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError> {
+        NullRuntimeHost::checkpoint_parallel_branch(self, run_id, step_id, branch_id, output)
+    }
+
+    fn park_job_run(&self, run_id: &str, park: &ParkedWait) -> Result<(), DispatchError> {
+        NullRuntimeHost::park_job_run(self, run_id, park)
+    }
+
     fn checkpoint_step(
         &self,
         run_id: &str,
@@ -667,6 +766,7 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
         step_id: &str,
         output: &Value,
         compound_outputs: &BTreeMap<String, Value>,
+        script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
     ) -> Result<(), DispatchError> {
         NullRuntimeHost::checkpoint_step(
             self,
@@ -675,7 +775,16 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
             step_id,
             output,
             compound_outputs,
+            script_outputs,
         )
+    }
+    fn checkpoint_skipped_step(
+        &self,
+        run_id: &str,
+        step_index: u32,
+        step_id: &str,
+    ) -> Result<(), DispatchError> {
+        NullRuntimeHost::checkpoint_skipped_step(self, run_id, step_index, step_id)
     }
     fn checkpoint_step_diagnostic(
         &self,
@@ -744,6 +853,16 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Result<FinalRecoveryApplied, OrbitError> {
         NullRuntimeHost::apply_final_recovery(self, run_id, application)
     }
+    fn persist_final_recovery_evidence(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        workspace: &std::path::Path,
+        evidence: &Value,
+    ) -> Result<(), OrbitError> {
+        NullRuntimeHost::persist_final_recovery_evidence(self, run_id, task_id, workspace, evidence)
+    }
+
     fn begin_rebase_recovery_attempt(
         &self,
         run_id: &str,

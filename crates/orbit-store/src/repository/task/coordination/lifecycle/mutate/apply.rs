@@ -7,8 +7,8 @@ use orbit_types::workflow::{ClaimFailureClass, ReviewGateHistoryNote};
 use super::super::super::TaskCommitBoundary;
 use super::super::super::landing::LandingStop;
 use super::super::codec::{
-    CLAIM, HANDOFF_SETTLEMENT, OWNER_BUSY_RELEASE_ALLOWANCE, RECEIPT, RELEASE_BUDGET,
-    RELEASE_BUDGET_WINDOW_HOURS, STATE,
+    CLAIM, HANDOFF_SETTLEMENT, LEAF_RUN_EVIDENCE, OWNER_BUSY_RELEASE_ALLOWANCE, RECEIPT,
+    RELEASE_BUDGET, RELEASE_BUDGET_WINDOW_HOURS, STATE,
 };
 use super::super::releases::release_budget_comment;
 use super::super::{ClaimAuthority, MutationReceipt, decode_state, encode, invalid, row};
@@ -59,6 +59,8 @@ impl TaskCommitBoundary {
         // A steering snapshot changes only the claim's own record, so it
         // writes no task history event.
         let mut history_event = true;
+        // System comments a landing completion hold writes beside its history.
+        let mut landing_comments: Vec<String> = Vec::new();
         let mut handoff_effects = ClaimCommitEffects::default();
         hold_step(DECISION_STEP, || -> Result<(), OrbitError> {
             match mutation {
@@ -137,6 +139,11 @@ impl TaskCommitBoundary {
                                 &auth.attribution,
                                 Utc::now().to_rfc3339(),
                             ));
+                            params.rows.extend(leaf_run_evidence_row(
+                                &claim,
+                                &state,
+                                value.evidence.leaf_run.as_ref(),
+                            )?);
                             params.status = Some(status);
                             release = true;
                         } else if status != expected_status {
@@ -205,7 +212,7 @@ impl TaskCommitBoundary {
                     }
                     // One host-qualified leaf cannot belong to two attempts, even after settlement.
                     if self
-                        .coordination_rows_mentioning(STATE, &run.run_id)?
+                        .lifecycle_rows_for_bound_run(&run.run_id)?
                         .iter()
                         .any(|r| {
                             decode_state(&r.payload_json)
@@ -313,6 +320,11 @@ impl TaskCommitBoundary {
                             .text(),
                         );
                         state.settlement = Some(settlement);
+                        params.rows.extend(leaf_run_evidence_row(
+                            &claim,
+                            &state,
+                            value.leaf_run.as_ref(),
+                        )?);
                         state.preserved_candidate =
                             self.preserve_candidate(&claim.task_id, value)?;
                         params.append_history.extend(Self::kept_candidate_entry(
@@ -351,10 +363,15 @@ impl TaskCommitBoundary {
                         failure => failure.clone(),
                     };
                     // [ORB-14257] A typed failure releases only when its class
-                    // does not block and the task's release budget allows it. A
-                    // provider usage limit is not counted [ORB-14695].
+                    // does not need an operator and the task's release budget
+                    // allows it. A provider usage limit is not counted [ORB-14695].
                     let blocked = match &failure {
-                        Some(failure) if failure.class.blocks() => Some(None),
+                        Some(failure)
+                            if failure.class.blocks()
+                                || failure.class.requires_operator_decision() =>
+                        {
+                            Some(None)
+                        }
                         Some(failure) if failure.budgeted() => {
                             let earlier = self.budgeted_releases(&claim.task_id, released_at)?;
                             (earlier.len() >= RELEASE_BUDGET).then(|| {
@@ -385,6 +402,11 @@ impl TaskCommitBoundary {
                     )
                     .text();
                     state.settlement = Some(settlement);
+                    params.rows.extend(leaf_run_evidence_row(
+                        &claim,
+                        &state,
+                        value.leaf_run.as_ref(),
+                    )?);
                     state.preserved_candidate = self.preserve_candidate(&claim.task_id, value)?;
                     params.append_history.extend(Self::kept_candidate_entry(
                         &claim,
@@ -395,7 +417,16 @@ impl TaskCommitBoundary {
                     if let Some(budget_comment) = blocked {
                         let exhausted = budget_comment.is_some();
                         evidence = ClaimEvidence {
-                            comment: budget_comment.or_else(|| value.comment.clone()),
+                            // Older followers may still describe this release as
+                            // returning to backlog. The owner's hold is authoritative.
+                            comment: budget_comment.or_else(|| {
+                                if failure.as_ref().is_some_and(|failure|
+                                    failure.class.requires_operator_decision()) {
+                                    Some(format!("Task held for an operator decision before another attempt: {reason}"))
+                                } else {
+                                    value.comment.clone()
+                                }
+                            }),
                             ..ClaimEvidence::default()
                         };
                         state.claim.phase = ExecutionClaimPhase::Failed;
@@ -443,6 +474,9 @@ impl TaskCommitBoundary {
                         // the command passes on a new base tip.
                         } else if let Some(hold) = &value.baseline_red {
                             params.status_note = Some(hold.text(reason));
+                            params.status_decision = Some(
+                                orbit_types::task::TaskDecision::BaselineRedHold(hold.clone()),
+                            );
                             state.last_event =
                                 orbit_types::workflow::BASELINE_RED_HOLD_EVENT.into();
                         // [ORB-15573] A release its leaf's provider refused is
@@ -480,12 +514,20 @@ impl TaskCommitBoundary {
                             ClaimRefusalKind::UnresolvedMergeIntent,
                         ));
                     }
-                    if !matches!(status, TaskStatus::Blocked | TaskStatus::Backlog)
-                        || reason.trim().is_empty()
+                    if reason.trim().is_empty() {
+                        return Err(invalid("recovery requires a reason"));
+                    }
+                    // The owner's lifecycle and completion gates chose the
+                    // target before this transaction; the store keeps the
+                    // invariants it can see: a fenced attempt never leaves
+                    // the task in progress or proposed, and `done` follows
+                    // only the review the claim pinned.
+                    if matches!(status, TaskStatus::InProgress | TaskStatus::Proposed)
+                        || (*status == TaskStatus::Done && expected_status != TaskStatus::Review)
                     {
-                        return Err(invalid(
-                            "recovery requires a reason and blocked or backlog target",
-                        ));
+                        return Err(invalid(&format!(
+                            "recovery cannot move a '{expected_status}' task to '{status}'"
+                        )));
                     }
                     self.revoke_handoff_authority(auth, reason, &mut params, &mut handoff_effects)?;
                     state.claim.phase = ExecutionClaimPhase::Revoked;
@@ -525,18 +567,14 @@ impl TaskCommitBoundary {
                     ) {
                         return Err(invalid("the cumulative base update is already reserved"));
                     }
-                    params
-                        .append_history
-                        .push(orbit_types::task::TaskHistoryEntry {
-                            at: Utc::now(),
-                            by: auth.machine_id.clone(),
-                            event: PR_BASE_UPDATE_RESERVED_EVENT.into(),
-                            note: Some(encode(request)?),
-                            from_status: None,
-                            to_status: None,
-                            operation_id: None,
-                            decision: None,
-                        });
+                    params.append_history.push(
+                        orbit_types::task::TaskHistoryEntry::new(
+                            Utc::now(),
+                            auth.machine_id.clone(),
+                            PR_BASE_UPDATE_RESERVED_EVENT,
+                        )
+                        .with_note(Some(encode(request)?)),
+                    );
                     state.last_event = "handoff_base_update_admitted".into();
                 }
                 ClaimMutation::RetryLanding(request) => {
@@ -591,7 +629,13 @@ impl TaskCommitBoundary {
                     }
                     if !matches!(
                         event.as_str(),
-                        "ci_check_rerun" | "ci_base_suspect" | "ci_check_rerun_reserved"
+                        "ci_check_rerun"
+                            | "ci_base_suspect"
+                            | "ci_check_rerun_reserved"
+                            | "ci_infrastructure_retry_backoff"
+                            | "ci_infrastructure_retry_exhausted"
+                            | orbit_types::workflow::CI_FAILURE_RECORDED_EVENT
+                            | orbit_types::workflow::CI_FAILURE_RECLASSIFIED_EVENT
                     ) {
                         return Err(invalid("unsupported handoff landing history event"));
                     }
@@ -599,18 +643,36 @@ impl TaskCommitBoundary {
                         return Err(invalid("handoff landing history requires a note"));
                     }
                     self.check_live_landing_attempt(auth, handoff_id)?;
-                    params
-                        .append_history
-                        .push(orbit_types::task::TaskHistoryEntry {
-                            at: Utc::now(),
-                            by: "system".into(),
-                            event: event.clone(),
-                            note: Some(note.clone()),
-                            from_status: None,
-                            to_status: None,
-                            operation_id: None,
-                            decision: None,
-                        });
+                    params.append_history.push(
+                        orbit_types::task::TaskHistoryEntry::new(
+                            Utc::now(),
+                            "system",
+                            event.clone(),
+                        )
+                        .with_note(Some(note.clone())),
+                    );
+                    history_event = false;
+                }
+                ClaimMutation::RecordLandingCompletionHold {
+                    handoff_id,
+                    history,
+                    comment,
+                } => {
+                    if !auth.operator
+                        || claim.phase != ExecutionClaimPhase::HandedOff
+                        || state.landing_invalidated
+                    {
+                        return Err(invalid("current operator landing context required"));
+                    }
+                    if history.event != orbit_types::workflow::COMPLETION_HELD_EVENT {
+                        return Err(invalid("unsupported landing completion hold event"));
+                    }
+                    if comment.trim().is_empty() {
+                        return Err(invalid("landing completion hold requires a comment"));
+                    }
+                    self.check_live_landing_attempt(auth, handoff_id)?;
+                    params.append_history.push(history.clone());
+                    landing_comments.push(comment.clone());
                     history_event = false;
                 }
                 ClaimMutation::CompleteLanding {
@@ -773,6 +835,7 @@ impl TaskCommitBoundary {
         state.age_seconds = None;
         params.status_event = history_event.then(|| state.last_event.clone());
         let result = ClaimMutationResult {
+            failure_revision: None,
             claim_id: claim.claim_id.clone(),
             phase: state.claim.phase,
             status: params.status.unwrap_or(expected_status),
@@ -802,6 +865,7 @@ impl TaskCommitBoundary {
                 .filter(|_| !auth.operator)
                 .map(|run| (claim.claim_id.clone(), run)),
             census: None,
+            observation_comments: landing_comments,
         };
         effects
             .replacements
@@ -828,11 +892,73 @@ impl TaskCommitBoundary {
             )
         })?;
         match outcome {
-            TaskCoordinationCommitOutcome::Committed(_) => Ok(ClaimMutationOutcome {
-                result: self.with_friction_result(result, receipt_id)?,
-                committed: true,
-            }),
+            TaskCoordinationCommitOutcome::Committed(_) => {
+                let result = if matches!(mutation, ClaimMutation::Fail(_)) {
+                    // The commit stamps the owner-measured failure revision on
+                    // the receipt, so the winner and a replay use one baseline.
+                    let receipt = self
+                        .coordination_row(RECEIPT, receipt_id)?
+                        .ok_or_else(|| invalid("committed claim receipt missing"))?;
+                    super::super::decode::<MutationReceipt>(&receipt.payload_json)?.result
+                } else {
+                    result
+                };
+                Ok(ClaimMutationOutcome {
+                    result: self.with_friction_result(result, receipt_id)?,
+                    committed: true,
+                })
+            }
             _ => Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim)),
         }
     }
+}
+
+/// [ORB-20906] The immutable evidence row a failure or release settlement
+/// publishes with its commit, when the follower captured its leaf's run
+/// record. The owner binds the report to the claim it holds: a report for any
+/// run but the claim's bound one is dropped, since a follower's report is
+/// evidence and never changes how the settlement applies.
+fn leaf_run_evidence_row(
+    claim: &ExecutionClaim,
+    state: &ClaimInspection,
+    report: Option<&LeafRunReport>,
+) -> Result<Option<TaskCoordinationRow>, OrbitError> {
+    let Some(report) = report else {
+        return Ok(None);
+    };
+    let Some(bound) = state.bound_run.as_ref() else {
+        return Ok(None);
+    };
+    if bound.run_id != report.run_id
+        || bound.machine_id != claim.executed_on.machine_id
+        || report.job_id.trim().is_empty()
+    {
+        orbit_common::tracing::warn!(
+            target: "orbit.store.claim_evidence",
+            claim_id = %claim.claim_id,
+            "a settlement's leaf run report names another run than the claim's bound leaf; it is not recorded",
+        );
+        return Ok(None);
+    }
+    let report = LeafRunReport {
+        root_cause: report
+            .root_cause
+            .clone()
+            .map(LeafRootCause::bounded)
+            .filter(|cause| !cause.is_empty()),
+        ..report.clone()
+    };
+    Ok(Some(row(
+        LEAF_RUN_EVIDENCE,
+        &claim.claim_id,
+        &LeafRunEvidence {
+            provenance: LeafEvidenceProvenance::Settlement,
+            recorded_at: Utc::now().to_rfc3339(),
+            claim_id: claim.claim_id.clone(),
+            task_id: claim.task_id.clone(),
+            machine_id: claim.executed_on.machine_id.clone(),
+            drain_run_id: claim.run_context.run_id.clone(),
+            report,
+        },
+    )?))
 }

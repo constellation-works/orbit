@@ -1,18 +1,17 @@
 ---
 title: Quickstart
-description: "Install Orbit, let the orbit-setup skill in your agent set up a repository, open the dashboard, and ship a first task to a pull request."
-sidebar:
-  order: 1
+description: "Install Orbit, set up a repository, and ship a first task to a pull request."
 ---
 
-Install Orbit, let your agent set up the repository, and ship a first task from
-the dashboard.
+Go from nothing to a first shipped task: install the CLI, let your agent set
+up the repository, then approve and ship one task from the dashboard.
 
 ## Before you begin
 
-- macOS or Linux, on x64 or arm64. On Windows, run Orbit inside WSL2.
-- Node 18 or newer, for the npm install.
-- At least one signed-in agent CLI, such as Claude Code or Codex.
+- macOS or Linux, on x64 or arm64. On Windows, use
+  [WSL2](/getting-started/install/#windows).
+- Node 18 or newer.
+- A signed-in agent CLI, such as Claude Code or Codex.
 - The GitHub CLI (`gh`), signed in, so Orbit can open pull requests.
 
 ## 1. Install the CLI
@@ -23,23 +22,26 @@ orbit init
 ```
 
 `orbit init` asks for a machine name and a task-ID prefix of 2–5 uppercase
-letters, such as `ABC`. The prefix is permanent on this machine. It also
-detects your agent CLIs, links Orbit's skills into your agents, and on Linux
-prepares the sandbox.
+letters, such as `ABC`. The prefix is permanent on this machine.
 
-## 2. Let your agent set up the repository
+[Install Orbit](/getting-started/install/) covers the agent plugin, unattended
+setup, and the Linux sandbox.
 
-:::tip[Recommended]
-Open your agent in the repository and ask it to **set up Orbit for this repo**.
-:::
+## 2. Set up the repository
 
-The `orbit-setup` skill registers the repository, connects your agent over
-MCP, and runs `orbit doctor`. It asks only for what it cannot infer, such as
-the branch pull requests should target. When it finishes, start a fresh agent
+Open your agent in the repository and ask it to **set up Orbit for this
+repo**. The `orbit-setup` skill registers the repository, connects your agent
+over MCP, and runs `orbit doctor`. When it finishes, start a fresh agent
 session so the Orbit tools load.
 
-To do it yourself, run `orbit workspace init --mcp` and `orbit doctor` in the
-repository. [Install Orbit](./install/#set-up-by-hand) explains each step.
+To do it yourself, run this in the repository:
+
+```bash
+orbit workspace init --mcp
+orbit doctor
+```
+
+[Set up by hand](/getting-started/install/#set-up-by-hand) explains each step.
 
 ## 3. Open the dashboard
 
@@ -47,74 +49,40 @@ repository. [Install Orbit](./install/#set-up-by-hand) explains each step.
 orbit web serve
 ```
 
-The dashboard opens at `http://127.0.0.1:7878` and serves every workspace on
-this machine. Keep it running in its own terminal.
-
-![The dashboard's Tasks view: tasks grouped by status, with Approve and Ship buttons, and the Drain card on the right.](../../../assets/dashboard/dashboard-tasks.png)
-
-| Section | What you do there |
-|---|---|
-| **Tasks** | Approve proposed tasks, ship backlog tasks, edit a task's details, and review finished work. |
-| **Runs** | Follow a run's steps and events, and cancel, resume, or replay it. |
-| **Health** | See what is failing now: incidents, policy denials, errors, and every recorded event. |
-| **Analytics** | Follow delivery trends: run durations, reliability, costly paths, and cost. |
-| **Automation** | Turn routines and auto-tasks on or off, file an auto-task now, and run a delivery window. |
-| **Settings** | Inspect and edit configuration and crews. |
-
-It listens on loopback only. To reach the dashboard on another machine over
-SSH, run `orbit web connect <ssh-host>`. See
-[Use the Dashboard](../how-to/dashboard/).
+The dashboard opens at `http://127.0.0.1:7878` and shows every workspace on
+this machine. Keep it running in its own terminal. It listens on loopback
+only; to open the dashboard of another machine, run
+`orbit web connect <ssh-host>`.
 
 ## 4. Ship your first task
 
-1. **Ask your agent for a small change**, such as documenting one function. It
-   files a task with acceptance criteria. The task appears in **Tasks** under
-   **Awaiting approval**.
+1. **Ask your agent for a small change**, such as documenting one function.
+   It files a task with acceptance criteria. The task appears in **Tasks**
+   under **Awaiting approval**.
 2. **Click Approve.** The task moves to the backlog.
-3. **Click Ship.** Orbit locks the task's context files and runs an agent in an
-   isolated worktree to plan, execute, and check the change. A second agent
-   reviews it only when review is turned on. Follow the run from **View run**.
+3. **Click Ship.** Orbit runs an agent in an isolated worktree to plan, make,
+   and check the change. Follow it from **View run**.
 4. **Review the pull request.** The run stops with the task in `review` and
-   the pull request open. Merge it on GitHub. Then click **Approve** on the
-   task, or let Orbit close it: a later `orbit run auto` delivery window
-   settles a task whose pull request has merged. See
-   [First Task](./first-task/#4-review-and-close-it) for both routes.
+   the pull request open. Merge it on GitHub, then click **Approve** on the
+   task to close it.
 
-Your agent can approve and ship for you when you tell it to. The dashboard
-shows the same task either way.
+![The Tasks view's status cards with Approve, View run and Ship actions, and the Tasks dock beside them.](../../../assets/dashboard/dashboard-tasks.png)
 
-:::note[Two gates stay yours]
-A new task waits in `proposed` until you approve it, and a ship run stops at
-`review` with the pull request open. Merging the pull request is your decision,
-unless you choose to
-[let runs merge](./workflows/#completing-work-with---complete). Closing the
-task can follow your merge, through Approve or settlement. Neither merges
-anything for you.
-:::
+Two gates stay yours: a new task waits until you approve it, and a ship run
+stops at `review` without merging. Your agent can approve and ship for you
+when you tell it to.
 
-Prefer the terminal? [First Task](./first-task/) walks through the same flow
-with `orbit task add`, `orbit task update --approve`, and `orbit run ship`.
+[First task](/getting-started/first-task/) walks through each step, what to do
+when a run fails, and the same flow
+[from the terminal](/getting-started/first-task/#from-the-terminal).
 
 ## Next steps
 
-Once one task has shipped, choose how much runs without you. Each option below
-also has a home in the dashboard.
-
-For more than a task or two, hand your agent a spec and ask it to orchestrate.
-The `orbit-orchestrate` skill files the tasks, queues them once you approve,
-runs a delivery window, and diagnoses any run that fails.
-
-<div class="orbit-card-grid orbit-card-grid-3">
-  <a class="orbit-card" href="../how-to/dashboard/">
-    <h3>Get more from the dashboard</h3>
-    <p>Edit tasks, read run traces, and reach a remote host over SSH.</p>
-  </a>
-  <a class="orbit-card" href="../how-to/continuous-delivery/">
-    <h3>Run a delivery window</h3>
-    <p>Drain an approved backlog for a set time, several tasks at once.</p>
-  </a>
-  <a class="orbit-card" href="../how-to/recurring-work/">
-    <h3>Schedule recurring work</h3>
-    <p>Run jobs on a schedule and let auto-tasks file routine chores.</p>
-  </a>
-</div>
+- [Delivery workflows](/getting-started/workflows/): hand your agent a spec,
+  drain a backlog, and let runs merge.
+- [Use the dashboard](/how-to/dashboard/): edit tasks, read run traces, and
+  reach a remote host.
+- [Run a delivery window](/how-to/continuous-delivery/): ship an approved
+  backlog for a set time, several tasks at once.
+- [Schedule recurring work](/how-to/recurring-work/): run jobs on a schedule
+  and let auto-tasks file routine chores.

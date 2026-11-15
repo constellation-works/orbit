@@ -303,8 +303,14 @@ impl TaskCommitBoundary {
     }
 
     /// Observation-only handle: no directory creation, lock files, or marker
-    /// writes. It still refuses a partition bound to a different coordination
-    /// journal, which only reads the marker.
+    /// writes on a settled partition. It still refuses a partition bound to
+    /// a different coordination journal, which only reads the marker.
+    ///
+    /// Recovery is fenced before exposure here too: an unsettled journal
+    /// row whose lease nobody holds (a dead lease, or one whose unsynced
+    /// name a host crash lost) is replayed when this handle may write, and
+    /// refused with a recovery-required error when it may not. Observation
+    /// never exposes the unapplied sidecars as settled.
     pub fn for_observation(
         store: Store,
         registry: TaskRegistryStore,
@@ -320,6 +326,20 @@ impl TaskCommitBoundary {
             lock_options: boundary_lock_options(),
         };
         boundary.verify_journal_binding()?;
+        if boundary.has_unowned_unsettled_commit()? {
+            if boundary.store.is_read_only() || boundary.registry.is_read_only()? {
+                return Err(OrbitError::Store(format!(
+                    "task partition '{}' has a committed decision awaiting recovery; \
+                     open it with a writable coordinated composition to replay it \
+                     before observing",
+                    boundary.workspace_id
+                )));
+            }
+            // Replay as the normal constructor does. A handle that cannot
+            // write (a read-only filesystem, say) fails here instead of
+            // exposing state the decision has not reached.
+            boundary.recover_unowned_commits()?;
+        }
         Ok(boundary)
     }
 
@@ -522,23 +542,42 @@ impl TaskCommitBoundary {
         self.enter_ordinary(|| self.store.task_coordination_rows(&self.workspace_id, kind))
     }
 
-    /// Dependent coordination rows of `kind` whose payload carries `value` as
-    /// a JSON string, settling an interrupted commit first. Every row with a
-    /// string field equal to `value` is among them, so a caller decodes only
-    /// these and keeps its exact matches instead of decoding every row of the
-    /// kind inside its section.
-    pub(super) fn coordination_rows_mentioning(
+    /// Lifecycle rows whose claim names `task_id`, settling an interrupted
+    /// commit first. The v90 task index narrows the read; callers still
+    /// re-check `claim.task_id` after decode. Row order is `row_id`.
+    pub(super) fn lifecycle_rows_for_claim_task(
         &self,
-        kind: &str,
-        value: &str,
+        task_id: &str,
     ) -> Result<Vec<crate::contracts::TaskCoordinationRow>, OrbitError> {
-        // Payloads are compact `serde_json` encodings, which escape a string
-        // the same way wherever it sits.
-        let needle =
-            serde_json::to_string(value).map_err(|error| OrbitError::Store(error.to_string()))?;
         self.enter_ordinary(|| {
             self.store
-                .task_coordination_rows_containing(&self.workspace_id, kind, &needle)
+                .lifecycle_rows_for_claim_task(&self.workspace_id, task_id)
+        })
+    }
+
+    /// Lifecycle rows whose claim was admitted by `run_id`, settling an
+    /// interrupted commit first. Callers re-check `claim.run_context.run_id`.
+    /// Row order is `row_id`.
+    pub(super) fn lifecycle_rows_for_claim_run(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<crate::contracts::TaskCoordinationRow>, OrbitError> {
+        self.enter_ordinary(|| {
+            self.store
+                .lifecycle_rows_for_claim_run(&self.workspace_id, run_id)
+        })
+    }
+
+    /// Lifecycle rows whose bound leaf run is `run_id`, settling an
+    /// interrupted commit first. Callers re-check the whole `bound_run`.
+    /// Row order is `row_id`.
+    pub(super) fn lifecycle_rows_for_bound_run(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<crate::contracts::TaskCoordinationRow>, OrbitError> {
+        self.enter_ordinary(|| {
+            self.store
+                .lifecycle_rows_for_bound_run(&self.workspace_id, run_id)
         })
     }
 

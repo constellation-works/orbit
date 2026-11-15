@@ -1,11 +1,11 @@
 ---
 type: runbook
-summary: Opt in, measure, and remove the host Rust compiler cache shared across Orbit worker worktrees, validate before/after builds with it off, and see why hosted CI caches only dependencies.
+summary: Manage the opt-in host Rust compiler cache and understand hosted dependency and content-verified workspace-output caches.
 tags: [operations, rust, cache, worktrees, sandbox, linux]
-paths: ["scripts/rustc-compiler-cache.sh", "scripts/compiler-cache.sh", "scripts/test-compiler-cache.sh", "scripts/test-compiler-cache-namespaces.sh", "scripts/bench-compiler-cache.sh", "scripts/cross-revision-check.sh", "scripts/test-cross-revision-check.sh", ".cargo/config.toml"]
+paths: ["scripts/rustc-compiler-cache.sh", "scripts/compiler-cache.sh", "scripts/test-compiler-cache.sh", "scripts/test-compiler-cache-namespaces.sh", "scripts/bench-compiler-cache.sh", "scripts/cross-revision-check.sh", "scripts/test-cross-revision-check.sh", "scripts/ci-workspace-cache.py", "scripts/test-ci-workspace-cache.py", ".cargo/config.toml", ".github/workflows/ci.yml"]
 related_features: [policy-sandbox, executors]
 related_artifacts: [ORB-11259, ORB-11755, ORB-11981]
-last_validated: 2026-10-29
+last_validated: 2026-11-12
 ---
 
 # Share Rust dependency compilation across worker worktrees
@@ -50,11 +50,36 @@ beside `shared-key`, so the root digest belongs in `prefix-key`. A root change
 invalidates both the exact key and its fallback prefix; even a comment change
 starts a new namespace. Unchanged root bytes keep the same namespace.
 
-The action additionally keys each archive on the installed compiler versions,
+The action additionally keys each dependency archive on the installed compiler versions,
 `Cargo.lock`, member manifests and the `CARGO*`/`RUST*` environment, and prunes
 `target/` to dependency artifacts before it saves.
-Workspace members are never cached: each run compiles them from the checkout,
-and Cargo's own fingerprints decide freshness. No source mtimes are rewritten.
+The separate Test build workspace-output cache retains `target/`, including
+workspace units and `target/.orbit-source-inputs.json`. Its namespace binds the
+runner OS, pinned compiler, Cargo manifests/lock/configuration, lint wrapper,
+workflow and source-manifest helper. Each protected-branch push saves a new
+SHA-keyed entry; PRs restore the newest compatible entry and never save one.
+The helper runs from the workflow-revision checkout at the run's `github.sha`.
+On a pull request that is the merge commit, so the PR's own copy runs in its
+own job, as its other CI code does. Only a protected-branch push writes the
+cache, and the helper it runs is that branch's.
+
+Before compilation, `ci-workspace-cache.py restore` hashes current regular
+tracked and non-ignored untracked files. Only equal bytes, size and file mode
+regain the source mtime recorded after the cached build. Changed or new inputs
+receive a fresh mtime even if their original timestamp was old. Deleted inputs
+remain absent. Links outside the checkout are never followed for rewriting,
+and an incompatible or malformed manifest fails before timestamps change.
+Cargo retains its compiler, feature, environment, dependency and missing-input
+checks; the folded Clippy build and every selected test target still run.
+`capture` records current inputs after a successful build. Each runner owns
+its extracted target directory; workers never share a mutable target.
+
+A cache miss performs the ordinary cold workspace build. The first deployment
+of a namespace needs a protected-branch producer before PRs can benefit. Source
+changes below core can invalidate most cached units, and the extra archive
+uses repository cache quota and download time. Measure those costs and cache
+hit/miss strata in the hosted handoff; local reuse timings do not establish
+the hosted budget. The dependency-only caches and seeders remain available.
 
 - **Who writes.** Every producer rust-cache step has
   `save-if: ${{ github.event_name == 'push' }}`. Only a push to `main` or
@@ -96,7 +121,8 @@ and Cargo's own fingerprints decide freshness. No source mtimes are rewritten.
   The same path covers a single-PR merge and a literal fast-forward. No cache
   deletion, permission expansion or extra validation is required. Hosted
   writer/reuse outcomes and rolling full Check p90 still need collection
-  after normal publication; local fixtures do not establish the <600 s goal.
+  after normal publication; local fixtures do not establish the at-most-400 s
+  p90 budget.
 - **Other Linux consumers.** The coverage workflow caches only registry/git
   data (`cache-targets: false`), so it holds no compiled profile artifacts.
   Desktop check/bundle caches use `desktop/`, whose root is a real package
@@ -112,7 +138,7 @@ and Cargo's own fingerprints decide freshness. No source mtimes are rewritten.
 - **Test build** sets `ORBIT_COMPILER_CACHE=0`. The repository wrapper
   (`.cargo/config.toml`) then execs `rustc` directly, and no sccache is
   installed.
-- **Check / Clippy / Test** installs the pinned sccache only because the
+- **CI guardrails** installs the pinned sccache because the
   guardrails' live enabled-cache namespace regression
   (`scripts/test-compiler-cache-namespaces.sh` with
   `ORBIT_COMPILER_CACHE_REQUIRE_NS=1`) needs a real binary. While it is
@@ -129,17 +155,21 @@ compiles `--lib --bins --tests --examples` with
 `CLIPPY_ARGS` on `__CLIPPY_HACKERY__`, which is how `cargo clippy` joins those
 arguments, so a space-separated value is one rustc argument and does not apply
 the flags. `scripts/with-test-build-lint.sh` holds that environment. The
-nextest listing and archive, the doctests and the Linux sandbox gate run
+nextest listing and archive and the Linux sandbox gate run
 through it too: Cargo fingerprints `RUSTC_WORKSPACE_WRAPPER` and the
 `CLIPPY_ARGS` value `clippy-driver` tracks, so under any other environment
-each would recompile every workspace member. `make ci-lint` still runs
+each would recompile every workspace member. Workspace doctests are disabled
+(`[lib] doctest = false`), so no doctest command runs;
+`scripts/check-doctest-fences.sh` statically fails any doc fence that rustdoc
+would run unless it is tagged `ignore`. `make ci-lint` still runs
 production Clippy and `cargo clippy --all-targets`. Keep the four native
 delivery gates (`make ci-fast`, `make ci-lint`, `make goldens`,
 `make ci-test-affected`) and the ordinary hosted required checks.
 
-### Why CI caches only dependencies
+### Earlier dependency-only measurements
 
-Measured on 2026-10-19 over the 100 successful `ci.yml` runs created from
+The dependency-only policy preceded the content-verified workspace layer.
+Its original measurements on 2026-10-19 covered the 100 successful `ci.yml` runs created from
 2026-10-18 17:13 to 2026-10-19 05:03 UTC (78 PR and 22 push runs):
 
 - **Where Test build time goes.** In full-mode PR runs the
@@ -168,7 +198,7 @@ Measured on 2026-10-19 over the 100 successful `ci.yml` runs created from
   `rustc - --print …` (`-`) and `rustc -vV` (`missing input`,
   `missing output_dir`). The heaviest units are test executables, which
   sccache never caches (see [When sccache is ineffective or slower](#when-sccache-is-ineffective-or-slower)).
-- **Why there is no workspace-member cache.** Caching the workspace's own
+- **Original workspace-member cache tradeoff.** Caching the workspace's own
   artifacts per `agent-main` tip would take about 0.5 GiB (zstd) of cache
   quota per push. A PR would restore it and reset the mtimes of files
   unchanged since that tip, so that Cargo keeps those units fresh. Simulated
@@ -308,7 +338,15 @@ On a control failure, the namespace script prints the stage, participant names
 and stderr before removing its temporary files. Each stream is limited to
 4096 payload bytes: oversized logs retain the first and last 2048 bytes, with
 an explicit omitted-byte count. The labels include original byte counts;
-successful peers retain their output and cache statistics too. Diagnostics
+successful peers retain their output and cache statistics too. The two
+shared-TCP stages also start their daemon with a per-stage
+`SCCACHE_ERROR_LOG` under the stage's `logs/` directory, which captures the
+daemon's stderr (panics and fatal errors). Do not add `SCCACHE_LOG` to the
+participants: with any `SCCACHE_LOG` level set, sccache 0.17.0 restored cache
+hits through the shared daemon's own mount namespace, so the sibling's rlib went
+missing (exit 101) on every run (ORB-23034). On failure the same report appends that server log as a
+`sccache-server-log` stream under the same 4096-byte bound, so an empty-log
+participant exit still names what the daemon saw. Diagnostics
 add no compilation or waits to a successful live run. The companion
 `scripts/test-compiler-cache.sh` drives deterministic failures through the namespace
 entrypoint with transport fixtures; those checks cover diagnostic bounds and
@@ -499,12 +537,9 @@ its incremental cache would be write-only. When a binding is configured, Orbit
 sets `CARGO_INCREMENTAL=0` on the validation child — required validation, host
 evidence, baseline reruns and recovery alike — replacing any inherited value.
 That is applied where the command is spawned
-([`workflow.validation_env.cargo_incremental`](../CONFIG.md#incremental-compilation)),
-not by this repository's Makefile. The default `false` keeps incremental off so
-sccache can cache the rustc invocations this checkout's wrapper forwards.
-`cargo_incremental = true` leaves `CARGO_INCREMENTAL` untouched; pinned sccache
-`0.17.0` then rejects those invocations, so turn the compiler cache off
-(`ORBIT_COMPILER_CACHE=0`) before opting in. An incremental directory already
+([incremental compilation](../CONFIG.md#incremental-compilation)),
+not by this repository's Makefile, and has no opt-out: keeping incremental off
+lets sccache cache the rustc invocations this checkout's wrapper forwards. An incremental directory already
 in a target is not deleted. Baseline results are keyed by schema version,
 currently 10. Schema 9 added the workspace output bindings to the versioned
 cache key so earlier results cannot certify the new execution contract; old
@@ -575,7 +610,7 @@ remap the provider agent cwd.
 
 | Workload | What sccache 0.17.0 does | What to do |
 | --- | --- | --- |
-| `cargo clippy` analysis (`clippy-driver`) | Tiny-fixture smoke: 0 cacheable compile requests; reasons include `missing output_dir` and `multiple input files`. That is the clippy-driver invocation, not every rustc the phase may spawn. Cargo chains this wrapper in front of `clippy-driver` the same way for the folded workspace test build, so its workspace members never hit ([Ordinary Linux CI](#why-ci-caches-only-dependencies)). | Do not advertise `cargo check` hits as caching clippy-driver itself. rustc dependency compilations on a representative graph may still reuse the disk cache during a Clippy run or the folded test build. Keep bounded `CARGO_BUILD_JOBS`. Opt out with `ORBIT_COMPILER_CACHE=0` if wrapper overhead is noise. |
+| `cargo clippy` analysis (`clippy-driver`) | Tiny-fixture smoke: 0 cacheable compile requests; reasons include `missing output_dir` and `multiple input files`. That is the clippy-driver invocation, not every rustc the phase may spawn. Cargo chains this wrapper in front of `clippy-driver` the same way for the folded workspace test build, so its workspace members never hit ([Ordinary Linux CI](#ordinary-linux-ci)). | Do not advertise `cargo check` hits as caching clippy-driver itself. rustc dependency compilations on a representative graph may still reuse the disk cache during a Clippy run or the folded test build. Keep bounded `CARGO_BUILD_JOBS`. Opt out with `ORBIT_COMPILER_CACHE=0` if wrapper overhead is noise. |
 | Incremental (`CARGO_INCREMENTAL=1` / `-C incremental`) | Pinned sccache `0.17.0` **rejects** the invocation (`incremental compilation is prohibited: Unset CARGO_INCREMENTAL to continue`) instead of compiling uncached. | Keep `CARGO_INCREMENTAL=0` on workers. To run incremental rustc, set `ORBIT_COMPILER_CACHE=0`. |
 | Cache cold fill | Extra wrapper/daemon/hash work; measured slower than uncached `ORBIT_COMPILER_CACHE=0` on the same crate | Expected. Judge effectiveness on a *warm* second worktree vs uncached, not vs cold fill. |
 | Tiny crates | Daemon startup can dominate wall time | Hits without a wall-clock drop are not a win. |
@@ -626,6 +661,7 @@ scripts/cross-revision-check.sh \
 | `--expect-baseline` / `--expect-candidate` | An unexpected failure reported as an ordinary arm result |
 | Per-arm marker required, sibling marker rejected | A stale or foreign test set passing as this revision's |
 | Read-only Git access (`rev-parse`, `archive`, `GIT_OPTIONAL_LOCKS=0`) | Writes to a managed read-only `.git`, or a mutated source checkout |
+| Git location, index and object overrides scrubbed on helper Git calls and arm commands | Inherited Git authority redirecting `--repo`, scratch-checkout validation or a producer's Git discovery to another repository |
 | Explicit and automatic workdirs refused inside the source checkout or Orbit state; only descendants of the declared `ORBIT_SCRATCH_DIR` are allowed beneath `.orbit/` | Scratch trees landing in the state being validated |
 
 In managed executors, use the injected `ORBIT_SCRATCH_DIR` and set `TMPDIR` to
@@ -635,6 +671,12 @@ root even when its checkout lives beneath `.orbit/state/worktrees`; it refuses
 the root itself, nested `.orbit` directories, sibling state paths and symlink
 or traversal escapes. `TMPDIR` alone does not authorize writing Orbit state.
 Both `--workdir` and automatic workdirs use these checks before creating output.
+
+`GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_INDEX_FILE`,
+`GIT_OBJECT_DIRECTORY` and `GIT_ALTERNATE_OBJECT_DIRECTORIES` are removed from
+each helper Git call and arm command. Revisions come from the explicit source
+checkout, scratch authority comes from its declared checkout, and Git commands
+inside an extract cannot inherit the caller's repository through these variables.
 
 The source selected by `--repo` is resolved to its entire Git checkout. That
 checkout remains immutable, including its own `.orbit/tmp`, even when declared
@@ -659,7 +701,9 @@ Limits worth stating in a validation summary:
 
 Regression fixtures for the helper — arm isolation, mtime normalization, cache
 opt-out, producer exit code through bounded output, read-only `.git`, and
-workdir containment (including managed scratch authority and protected TMPDIR)
+workdir containment (including managed scratch authority and protected TMPDIR),
+and inherited Git overrides against a sentinel repository whose HEAD, refs,
+index, config, objects and dirty worktree must remain unchanged
 — run in CI and locally:
 
 ```bash
@@ -681,27 +725,45 @@ scripts/bench-compiler-cache.sh
 ORBIT_COMPILER_CACHE_REQUIRE_NS=1 scripts/bench-compiler-cache.sh
 ```
 
-The benchmark requires Python 3 for path admission. Use a dedicated, exclusively
-owned `ORBIT_COMPILER_CACHE_BENCH_DIR`; do not modify it from another process
-while the benchmark runs. Before any build, daemon control, write or cleanup,
-the harness resolves parent components and symlink ancestors, including for
-paths that do not yet exist. `SCCACHE_DIR` must resolve strictly below that
-workdir, separate from generated source trees, targets, the installed binary,
-socket and output files. The workdir itself is never a cache reset destination.
-Escaping paths and cache aliases of reserved destinations are refused.
-An ordinary nested private cache, including an alias resolving inside the
-workdir, is accepted; the canonical path is used by resets and daemon controls.
-`ORBIT_COMPILER_CACHE_BENCH_RESULT` must also resolve below the workdir and stay
-separate from the cache and reserved destinations. Existing symlinks at reserved
-destinations or at the result file are refused. Source and target trees are
-replaced as directory entries before reuse so old symlinks within them cannot
-redirect extraction or target clearing. This admission check assumes exclusive
-ownership; it does not protect against concurrent filesystem changes.
+The benchmark requires Python 3 for path admission and ownership claiming.
+Use a dedicated one-run `ORBIT_COMPILER_CACHE_BENCH_DIR`; do not modify it
+from another process while the benchmark runs. Before the cleanup trap, any
+build, daemon control, write or transport, the harness resolves parent
+components and symlink ancestors, including for paths that do not yet exist,
+and claims the workdir: a missing workdir is created with an atomic `mkdir`,
+and a pre-existing workdir is claimed only while it contains no file at all
+(empty subdirectories and symlinks resolving inside the workdir, as in
+private cache layouts, are fine). Either way it writes an
+`.orbit-compiler-cache-bench-owner` marker with `O_EXCL` and a per-run token;
+a workdir that already holds a marker, a result, cache contents, an installed
+binary or any other file — for example an unrelated `a/operator.txt` or an
+`a-target` sentinel — is refused with every pre-existing byte unchanged.
+Delete a claimed workdir yourself before reusing its path. Every setup,
+tree/target reset, cache reset, isolated install, namespace handoff and the
+EXIT cleanup re-verify that marker and token; a missing or mismatched marker
+preserves the generated trees instead of deleting them. Signal exits
+(129/130/143 for HUP/INT/TERM) run the same verified cleanup. `SCCACHE_DIR`
+must resolve strictly below that workdir, separate from generated source
+trees, targets, the installed binary, socket and output files. The workdir
+itself is never a cache reset destination. Escaping paths and cache aliases
+of reserved destinations are refused. An ordinary nested private cache,
+including an alias resolving inside the workdir, is accepted; the canonical
+path is used by resets and daemon controls.
+`ORBIT_COMPILER_CACHE_BENCH_RESULT` must also resolve below the workdir and
+stay separate from the cache and reserved destinations; an existing result
+file is refused rather than truncated, and a new result is created with
+`noclobber`. Existing symlinks at reserved destinations or at the result
+file are refused. Source and target trees are replaced as directory entries
+before reuse so old symlinks within them cannot redirect extraction or
+target clearing. The claim does not protect against a process that modifies
+the workdir concurrently after the claim.
 
 The disposable public-script regression uses fake build/cache transports and
 a deletion recorder that never deletes. It covers parent and symlink escapes,
-literal external caches, workdir equality, cache/target overlap and private
-cache operation without compiling or starting daemons:
+literal external caches, workdir equality, cache/target overlap, refusal of
+a pre-existing unowned workdir (with `a`, `a-target` and cache sentinels
+verified unchanged and no recorded transport events) and private cache
+operation without compiling or starting daemons:
 
 ```bash
 python3 scripts/test-bench-compiler-cache.py

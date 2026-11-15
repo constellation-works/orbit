@@ -10,7 +10,7 @@ use super::super::super::super::input::input_string_field;
 use super::super::super::candidate_validate::candidate_validate;
 use super::super::super::freshness::{commit_sha, remote_branch_sha};
 use super::super::super::git::{
-    base_sync_mode_from_input, git_command_success, git_output, resolve_worktree_start_point,
+    base_sync_mode_from_input, git_output, resolve_worktree_start_point,
 };
 use super::super::super::push::push_batch_changes;
 use super::super::delivery::DeliveryPin;
@@ -66,10 +66,7 @@ pub(in crate::executor::automation::vcs::pr) fn publish_local_repair<H: RuntimeH
     let branch = git_output(workspace, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok();
     if local == authorized
         || branch.as_deref() != Some(head.as_str())
-        || !git_command_success(
-            workspace,
-            &["merge-base", "--is-ancestor", authorized, &local],
-        )?
+        || !crate::executor::automation::vcs::git::is_ancestor(workspace, authorized, &local)?
     {
         return Ok(LocalRepair::None);
     }

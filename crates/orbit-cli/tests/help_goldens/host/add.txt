@@ -24,4 +24,4 @@ Examples:
   orbit host add dk-server-2
   orbit host add daniel@10.0.0.7 --name build-box
 
-With only mcp-destinations.toml, this migrates every legacy host to hosts.toml. Adding a host already in the legacy file succeeds and reports the migration, preserving its SSH target and migrated name (--name applies only to a new host). Every retained legacy host must answer. A host already in hosts.toml still refuses with host_exists.
+A host already in hosts.toml refuses with host_exists.

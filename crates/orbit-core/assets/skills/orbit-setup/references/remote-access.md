@@ -20,6 +20,24 @@ non-PTY SSH connection to a destination Orbit. Federated mode combines the local
 host with every registered remote host into one tool surface. There is no
 `orbit mcp connect` command; use `serve --mode remote`.
 
+### Role and toolset selection
+
+Choose the role and additional toolsets as described in [MCP roles and
+toolsets](configuration.md#mcp-roles-and-toolsets). Both `serve` and `listen`
+read their defaults from this machine's global `machine.mcp.role` and
+`machine.mcp.toolsets` settings. Their `--role` and `--toolset` flags override
+the corresponding setting for that server. Remote mode forwards the selected
+role and toolsets to its destination; federated mode applies the selection to
+each destination. A directly launched server on another machine uses that
+machine's own global settings.
+
+This selection controls which tools MCP advertises and dispatches. It does not
+grant authority: even the `operator` role needs the separate `--operator`
+choice for operator-only capabilities. To inspect what a remote or federated
+client actually receives, initialize that MCP connection and call
+`tools/list`; `orbit tool list --role <role>` reports the built-in role
+baseline, not remote-specific or extra configured toolsets.
+
 For federation, register each remote host on the calling machine:
 
 ```bash
@@ -42,24 +60,20 @@ host whose `binary_version` or `protocol_fingerprint` differs from this
 machine's, and `orbit doctor` reports it in its `hosts` row.
 
 The doctor's `hosts` row warns on unreachable hosts, missing replica owners,
-legacy membership and version/protocol differences on other hosts. Invalid
+and version/protocol differences on other hosts. Invalid
 or conflicting host files, identity mismatch and version/protocol skew on a
 replica's owner are errors. Use `orbit host list` for live details, register
 missing owners, restore SSH reachability and deploy matching builds where
 needed. `host list` is a report and exits zero when the registry loads even
 if a host is down; doctor is the health gate.
 
-### Legacy migration (one release)
+### Retired destinations file
 
-An older `~/.orbit/mcp-destinations.toml` is still read while it is the only
-file. The first `orbit host add`, `rename` or `remove` migrates its rows (every
-retained row must answer; `remove` never contacts the row it drops) and deletes
-it, and `orbit host add <ssh-target of a listed host>` is the direct way to
-migrate. If both files exist every consumer refuses with
-`host_file_conflict`, naming each legacy row the host file lacks; delete the
-legacy file, then run the `orbit host add` the error names for each of them.
-Legacy rows contribute no task prefix until migrated. The next release drops
-the legacy reader and retains the both-files conflict check one release longer.
+`~/.orbit/mcp-destinations.toml` is no longer read. Its presence, alone or
+beside `hosts.toml`, fails every host-registry load with `host_file_conflict`;
+`orbit doctor` reports an error. Move it aside, run `orbit host add <ssh-target>`
+for each `ssh` row to register the hosts in `hosts.toml`, then delete the moved
+file. Automatic migration is no longer available.
 
 ### Registration failures and remedies
 
@@ -72,8 +86,7 @@ the legacy reader and retains the both-files conflict check one release longer.
 | `host_too_old` | Upgrade the remote to a build that reports its machine identity and task prefix, then add it again. |
 | `host_identity_mismatch` | Verify the SSH alias reaches the intended machine. If replacing a host deliberately, reconcile its dependents before removing and re-adding the entry. |
 | `host_in_use` | Inspect `orbit host show` and reconcile the named replica checkouts or pull drains before removal. `--force` deliberately leaves those dependents without a route. |
-| `legacy_host_unreachable` | Restore the named retained host, or remove a decommissioned legacy row with `orbit host remove <host>`; the removed row is not probed. |
-| `host_file_conflict` | Follow the migration diagnostic above; every consumer refuses while both files exist. |
+| `host_file_conflict` | Move the retired destinations file aside, re-register its hosts as described above, then delete it. |
 
 Routing and reachability errors have their own remedies in
 [tool-surface.md](../../orbit/references/tool-surface.md#routing-failures-and-remedies).
@@ -130,37 +143,6 @@ attempts among cooperating executors; a caller able to start a server can choose
 another machine's label, including locally from a managed agent context. It
 does not isolate mutually untrusted callers sharing that account.
 
-A destination upgraded from the older model may still carry
-`~/.orbit/mcp-callers.toml` or `~/.orbit/mcp-ssh-acceptance/`. Both are ignored:
-startup names them once in a warning, `orbit doctor` reports them, and deleting
-them is the whole migration. `orbit mcp callers` no longer exists.
-
-### Remote host-agent invocation
-
-Remote `orbit_agent_invoke` is admitted when the session holds `operator` — the
-same test as a local invocation, because the caller reached this machine through
-an SSH login that already lets it start any process it likes. Start the calling
-federated or remote-proxy server with `--operator` and the invocation works; an
-agent-served session is refused.
-
-The durable admission and the `trusted_host.execution_admitted` event record
-`caller_machine_id` for attribution. There is no identity proof or trust mode to
-check any more: there is only one.
-
-After changing the calling side's authority, close and recreate the MCP
-connection — a live session keeps the authority it was established with.
-
-A minimal smoke is one short, read-only invocation with an explicit destination
-workspace selector, checkout `cwd`, bounded timeout, and the configured crew.
-Ask it to report one harmless fact and explicitly not to modify files or start
-other work, then verify the run reaches a terminal state.
-
-Admission is accident resistance, not process isolation. The invoked provider
-runs outside Orbit's filesystem sandbox as the same operating-system user as the
-destination Orbit process and can access everything that user can. Keep the
-prompt read-only when that is the intent; a tool declaration does not confine
-the provider's own shell.
-
 ## Dashboard
 
 ```bash
@@ -183,6 +165,64 @@ The browser offers workspace selection, task detail and lifecycle controls,
 run/step inspection, routines, knowledge/frictions, audit, and metrics. Verify the
 selected workspace before any mutation; a dashboard aggregate or metric is not
 proof that a particular task or run succeeded.
+
+In the left rail, the **Workspace** picker is single-select. It lists the workspaces
+for the selected host, marks unavailable ones *(unavailable)* and leaves them
+unchosen, and offers **All workspaces** as its first option. Its button shows the
+chosen workspace's name, or **All workspaces** when none is chosen. Choose a
+workspace to open its board, or choose **All workspaces** for the aggregate view.
+
+In the Tasks list, the **Workspaces** chip sits beside **More** and appears only
+under **All workspaces** when the host has more than one active workspace. It is
+multi-select: check or uncheck workspaces, and the Tasks board then contains only
+the checked workspaces' tasks. Each task's workspace badge shows which workspace
+it belongs to. The chip reads **Workspaces** when every active workspace is
+checked, and **N workspaces** while the selection narrows the board; its tooltip
+lists the chosen names. Narrowing the checks to one workspace opens that
+workspace's board.
+
+Each Tasks row can show a task riskiness percentage: an estimate of whether a
+task of that size, once done, will later be named by a regression. The estimate
+uses task size alone, fitted on done tasks from the trailing 30 days. Before a
+diff exists, size is the declared path count; once a review candidate or landed
+diff resolves, size is the lines changed if a lines-based fit is available;
+otherwise the estimate falls back to the declared path count. The 30-day window
+and the minimum of five done tasks are fixed. A `~` before the percentage means some selectors
+name no path. If no estimate is available, the row has no risk part. Task detail
+shows the estimate's basis and size, plus how many recent done tasks of that
+size or larger regressed. When there is no estimate, detail gives one of four
+reasons: **no files**, **no paths**, **thin history**, or **unavailable**.
+Analytics uses this score. `@auto` effort instead uses configured bands based
+on complexity and declared files (or review diff lines), with the crew's
+configured effort as a fallback; it does not read the riskiness score. To verify
+the display, open one task with an estimate and one without; check each Tasks row and task detail
+for the percentage or the matching no-estimate state and reason. There is
+nothing to configure.
+
+Under **All workspaces**, each status section lists tasks workspace by workspace
+in Workspace-picker order, each workspace pill uses that workspace's colour, and
+paging continues in that order. There is nothing to configure: choose **All
+workspaces** to open the view. The **Workspaces** chip can narrow which
+workspaces appear; the remaining rows stay in picker order. To verify the order,
+open Tasks under **All workspaces** and confirm each status section keeps one
+workspace's rows together in picker order, and the next page continues in that
+same order. To verify the colours, open the **Workspaces** chip: each workspace
+pill matches its entry's colour in that list, which is the colour key. The rail
+Workspace picker has no workspace colours, so use it for order only.
+
+Under **All workspaces**, the Tasks dock adds a **Fleet** tab right after its
+**Drain** tab. Open it to see the **Fleet drains** pane, which
+lists drain rows across the registered hosts and their workspaces. The tab is
+present only while **All workspaces** is selected in the rail picker; choosing a
+single workspace removes it.
+
+The Tasks dock's **Drain** pane holds the **Auto-drain** card and, beside it, the
+quick-start card headed **Start a window**. When the target is a replica checkout,
+the heading and the toggle read **Start pulling on** followed by the host name. On
+narrow layouts (1000px wide or less), a live window folds the quick-start card
+behind **Start another window**, which expands the form. Under **All workspaces**,
+pick the target in the Auto-drain panel's **Drain workspace** and **Drain host**
+selects before starting a window.
 
 A visible dashboard with a workspace selected opens a change stream for that
 workspace; **All workspaces** has no single-workspace stream. In the Tasks tab,
@@ -254,80 +294,6 @@ Fetch Metadata protection. Anyone with access to the forwarded port can reach
 mutation endpoints with the server's application authority. Keep access within
 the intended operator boundary.
 
-### Browser sessions
-
-Browser sessions give a browser a cookie-backed credential for this host's
-dashboard. They are separate from the headless browser kit (`orbit browser-kit`),
-which renders UI checks for workers. Two global settings control them:
-
-| Key | Default | Bounds | Effect |
-|---|---|---|---|
-| `machine.web_terminal.enabled` | `false` | `true` or `false` | Enables browser-session credentials for the dashboard at startup. |
-| `machine.web_session.ttl` | `43200` (12 hours) | `1` to `604800` seconds | Lifetime of each browser session. |
-
-Set them in the global config and restart the dashboard. Both are read only at
-startup, so a running dashboard keeps its old values until it restarts:
-
-```bash
-orbit config set --global machine.web_terminal.enabled true
-orbit config set --global machine.web_session.ttl 3600
-orbit config get machine.web_terminal.enabled   # check the effective value
-```
-
-Enabling the setting does not grant operator capability and does not change the
-authorization of existing dashboard routes.
-
-Sessions and the startup key:
-
-- Sessions are held in memory. They end when the dashboard restarts, even if a
-  browser still holds its cookie. The dashboard keeps at most 1024 live
-  sessions; an exchange beyond that fails closed.
-- The host's private startup key is `~/.orbit/run/web-session.secret`, replaced
-  atomically with mode 0600 inside a 0700 directory. Orbit refuses insecure
-  existing permissions or symlinks there. This feature supports Unix hosts only.
-- `~/.orbit` is the machine-global Orbit home. `--root` and a workspace do not
-  relocate it, so the key does not move with a workspace.
-
-One-time dashboard URLs:
-
-```bash
-orbit web open            # print a one-time URL and open it in a browser
-orbit web open --no-open  # print the URL only
-```
-
-- Each URL carries a signed random ticket. A ticket is valid for five minutes
-  and one exchange. Run `orbit web open` again for a fresh URL rather than
-  reusing an old one.
-- The startup key stays on the host; the URL carries only the ticket. Treat the
-  printed URL as a credential: do not paste it into chat, task comments, shared
-  logs or screenshots.
-- The page removes the URL fragment from browser history immediately, then
-  exchanges the ticket at `POST /api/session`. The browser then holds a cookie
-  that is HttpOnly, SameSite=Strict and scoped to `/api`.
-- `orbit web serve` and `orbit web connect` print private URLs only to an
-  interactive terminal, so redirected service logs do not contain them.
-  `web connect` gets its ticket over authenticated SSH and uses the forwarded
-  local port. If ticket retrieval or the private browser launch fails, it warns,
-  keeps the tunnel connected and opens the plain dashboard URL unless
-  `--no-open` is given.
-- Existing dashboard routes remain available. Features that need a browser
-  session need a fresh ticket.
-
-Verify the feature is on:
-
-1. Confirm the setting with `orbit config get machine.web_terminal.enabled`.
-2. Probe the running dashboard on the dashboard host. Replace `<port>` with its
-   port (7878 by default). Only the status code is printed, so no credential is
-   exposed:
-
-   ```bash
-   curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:<port>/api/session
-   ```
-
-A dashboard without the setting answers `/api/session` with `404`. The setting is
-read only at startup, so if the config says `true` and the probe still returns
-`404`, restart the dashboard and probe again.
-
 ## TCP MCP
 
 ```bash
@@ -335,275 +301,12 @@ orbit mcp listen
 orbit mcp listen 0.0.0.0:7879 --allow-non-loopback
 ```
 
-Default is loopback port 7879. The socket authenticates no client; use a protected
-network path such as an SSH tunnel. Local processes can connect to loopback, and
-a browser page can send HTTP requests there; the listener rejects HTTP framing
-before its body reaches MCP dispatch. Non-loopback exposure is an explicit choice,
-not a remedy for a missing capability. SSH caller-policy configuration does not
-turn a raw TCP socket or dashboard into an authenticated per-user service.
-
-## Lease listener user and lease tokens
-
-Path leases let people who have no SSH login to the owner, and their agents,
-coordinate through a lease-only listener (`orbit lease listen`) with bearer
-**lease tokens**. Agents run as your Unix user,
-so anything your user can write, an agent can write too. The tokens, their
-store and the commands that mint them therefore belong to a dedicated system
-user, `orbit-lease` by convention, that you become through `sudo -u`.
-
-That boundary holds only if becoming `orbit-lease` (or root) takes a fresh
-authorization an agent cannot reuse. Password `sudo` caches a timestamp (15
-minutes by default) that a later `sudo -n` in the same terminal accepts, so an
-agent started there can mint tokens. Before relying on it, make sudoers
-root-owned with `timestamp_timeout=0` for every `sudo` your account can run, no
-`NOPASSWD`, no `!authenticate` and no askpass helper, and give your account no
-other run-as path (`su`, `doas`, `pkexec`, `systemd-run --uid`, setuid helpers,
-or a subuid range covering `orbit-lease`). Where the host cannot enforce that,
-tokens are only as safe as your sudo timestamp.
-
-Create the user, its Orbit home and its token store (Linux):
-
-```bash
-sudo useradd --system --create-home --home-dir /var/lib/orbit-lease \
-  --shell /usr/sbin/nologin orbit-lease
-sudo passwd -l orbit-lease
-sudo chmod 0700 /var/lib/orbit-lease
-sudo install -d -m 0700 -o orbit-lease -g orbit-lease /var/lib/orbit-lease/.orbit
-sudo install -m 0600 -o orbit-lease -g orbit-lease /dev/null \
-  /var/lib/orbit-lease/.orbit/lease-tokens.db
-```
-
-The home holds only the listener's configuration and `lease-tokens.db`: no
-workspaces and no provider or forge credentials. Orbit never creates the token
-store; root provisions it, empty, and Orbit adds its schema on first use. Give
-the account no authorized keys.
-
-The listener user runs a root-owned copy of `orbit`, never your
-`~/.cargo/bin/orbit`, which an agent could replace:
-
-```bash
-sudo install -m 0755 -o root -g root "$(command -v orbit)" /usr/local/bin/orbit
-```
-
-Repeat that install after each `orbit update`; the copy is updated separately.
-
-Mint, list and revoke tokens as the listener user. `-H` gives the command that
-user's home; the commands use only the token store in the running user's Orbit
-home.
-
-```bash
-sudo -H -u orbit-lease /usr/local/bin/orbit lease token create \
-  --principal alice --workspace ws_example
-sudo -H -u orbit-lease /usr/local/bin/orbit lease token create \
-  --principal alice/claude-code --class agent --workspace ws_example --expires 7d
-sudo -H -u orbit-lease /usr/local/bin/orbit lease token list
-sudo -H -u orbit-lease /usr/local/bin/orbit lease token revoke <token-id>
-```
-
-- `create` prints the `orbl_…` secret once; hand it to its holder over a
-  private channel. The store keeps only its SHA-256, and `list` never shows a
-  secret. `--workspace` scopes the token (comma-separate several).
-- Give each person one token and each of their agents its own, named under the
-  person (`alice/claude-code`, `--class agent`), so revoking one agent leaves
-  the others working.
-- Defaults: `--class human`, `--verbs lease` (which includes `read`),
-  `--max-priority` `high` for a human and `normal` for an agent, `--hard allow`,
-  `--expires 30d` (at most `365d`). The workspace's own `lease.hard` and
-  `lease.max_priority` still apply; the stricter wins.
-- Revocation and expiry take effect on the token's next use. The store audits
-  every mint, revocation and refused verification, never with a secret.
-
-The commands refuse to run:
-
-- as root, or in an agent context;
-- as any user whose Orbit home has no `lease-tokens.db`, such as your own,
-  with a message to run them as the listener user (they never create a store
-  there);
-- when the store or its directory is group- or world-accessible or owned by
-  another user;
-- when their executable, the Orbit home, or any directory above either can be
-  written by a user other than root or the running user. The message names the
-  path; fix its owner or mode.
-
-On macOS the same checks apply; create the user with your usual tooling.
-
-### Run the lease listener
-
-The listener serves `/healthz` and the lease routes under `/api/leases`,
-including notice polling and the SSE event stream, and nothing else, to token
-holders. It runs as `orbit-lease` and hands each
-authenticated operation to Orbit Web over the lease intake socket, so it never
-opens your Orbit store. Your dashboard stays loopback-only. Leave all of this
-unset unless the sudo prerequisite above holds on this host.
-
-1. As yourself, turn on the intake socket and restart Orbit Web. Your user
-   must be a member of `orbit-lease`'s primary group, and `orbit-lease` needs
-   search permission on every directory above `~/.orbit/run`:
-
-   ```bash
-   sudo usermod -aG orbit-lease "$USER"   # then log in again
-   orbit config set --global lease.intake.peer_user orbit-lease
-   orbit web serve                        # or restart its service; it prints the socket path
-   ```
-
-2. Write the listener's settings into its own Orbit home, which your user
-   cannot write:
-
-   ```bash
-   sudo install -m 0600 -o orbit-lease -g orbit-lease /dev/stdin \
-     /var/lib/orbit-lease/.orbit/config.toml <<'EOF'
-   [lease.listener]
-   bind = "100.64.0.5:7480"     # a tailnet or private address
-   intake_socket = "/home/<you>/.orbit/run/lease-intake.sock"
-   # Behind a TLS-terminating proxy instead:
-   # bind = "127.0.0.1:7480"
-   # behind_proxy = true
-   # trusted_proxy = ["127.0.0.1"]
-   # Native TLS instead (required outside loopback/tailnet without a proxy):
-   # bind = "0.0.0.0:7480"
-   # tls = { cert = "/var/lib/orbit-lease/tls/fullchain.pem", key = "/var/lib/orbit-lease/tls/key.pem" }
-   EOF
-   ```
-
-   Keys and defaults are in `orbit config keys` under `lease.listener.`.
-   Limits below are read from the listener user's global configuration,
-   validated at load and reset on restart. Put overrides in
-   `[lease.listener.limits]`; invalid values name the key. Defaults suit one
-   small-team listener process:
-
-   | Key under `lease.listener.limits` | Default | Range |
-   |---|---|---|
-   | `failed_auth` | 10 | 1–1000 |
-   | `failed_auth_window_seconds` | 300 | 1–86400 |
-   | `address_per_minute` | 120 | 1–100000 |
-   | `ipv6_prefix_len` | 64 | 0–128 |
-   | `token_reads_per_minute` | 60 | 1–100000 |
-   | `token_writes_per_minute` | 20 | 1–100000 |
-   | `max_streams_per_token` | 2 | 1–100 |
-   | `max_in_flight_per_token` | 8 | 1–1000 |
-   | `max_connections` | 64 | 1–10000 |
-   | `max_in_flight_requests` | 16 | 1–1000 |
-   | `max_body_bytes` | 65536 | 1–1048576 |
-   | `header_timeout_seconds` | 5 | 1–300 |
-   | `request_timeout_seconds` | 10 | 1–300 |
-   | `max_tracked_keys` | 4096 | 3–65536 |
-
-   All routes use the address budget before token lookup. A 401 or 403 also
-   counts against `failed_auth`; token reads (`GET` and `POST …/check`) and
-   writes have separate minute budgets that follow the token across networks.
-   IPv6 shares a /64 by default; IPv4-mapped addresses count as IPv4. Trusted
-   proxies must append the real client address; changing entries to its left
-   never gives a new budget. At the tracked-key cap, new addresses share a
-   conservative overflow bucket; new tokens share a separate one. Live
-   budgets are never evicted to admit new identities.
-
-   Rate limits return 429 with `Retry-After`, body limits 413, handler/body
-   timeouts 408 and concurrency limits 503. Connection limits include TLS
-   handshakes; both handshakes and HTTP headers have the header timeout.
-   Connections close after their response; headers allow at most 64 fields
-   and a 16 KiB parsing buffer. One extra bounded refusal lane can complete
-   TLS and return 503; further saturated TLS connections close immediately
-   (plain HTTP gets a best-effort 503). An open SSE notice stream
-   (`/api/leases/events`) holds its connection and global and token
-   concurrency, and counts toward `max_streams_per_token`, until it closes;
-   it closes at listener shutdown.
-
-   Refusals never reach the owner's store. The listener coalesces them by
-   canonical key, limit/reason and window in `lease_listener_limit_audit` in
-   its own `lease-tokens.db`, recording count and first/last times without
-   principals, secrets, paths or queries. First snapshots are prompt and
-   subsequent counts flush every second and at graceful shutdown; abrupt
-   termination can lose unflushed counts. Token administration retains its
-   `lease_token_audit` trail. Use one listener process to share these budgets.
-
-   For native TLS, provision a PEM certificate chain (leaf first) and its
-   matching unencrypted PEM key at those paths, readable by `orbit-lease`.
-   Keep the key private: `sudo chmod 0600 /var/lib/orbit-lease/tls/key.pem`
-   and `sudo chown orbit-lease:orbit-lease /var/lib/orbit-lease/tls/key.pem`.
-   The listener uses rustls with ring, supports TLS 1.2 and 1.3, and accepts
-   HTTPS only on a TLS-configured port. Missing, unreadable, invalid or
-   mismatched material, or any group/other key permissions, refuses startup
-   with a message naming `lease.listener.tls`.
-
-   Certificates and keys load once at startup. After renewal, restart the
-   listener with `sudo systemctl restart orbit-lease-listener`; SIGHUP does
-   not reload certificates. Use `https://<certificate-hostname>:7480/healthz`
-   and `https://<certificate-hostname>:7480/api/leases?workspace=ws_example`
-   in the checks below for native TLS, with your CA trusted by the client
-   (`curl --cacert /path/ca.pem` for a private CA).
-
-3. Run it from a systemd unit, `/etc/systemd/system/orbit-lease-listener.service`:
-
-   ```ini
-   [Unit]
-   Description=Orbit lease listener
-   After=network-online.target
-   Wants=network-online.target
-
-   [Service]
-   User=orbit-lease
-   Group=orbit-lease
-   Environment=HOME=/var/lib/orbit-lease
-   ExecStart=/usr/local/bin/orbit lease listen
-   Restart=on-failure
-   RestartSec=5
-   NoNewPrivileges=yes
-   PrivateTmp=yes
-   ProtectSystem=strict
-   ReadWritePaths=/var/lib/orbit-lease/.orbit
-
-   [Install]
-   WantedBy=multi-user.target
-   ```
-
-   ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now orbit-lease-listener
-   journalctl -u orbit-lease-listener -f
-   curl -s http://100.64.0.5:7480/healthz          # {"status":"ok"}
-   curl -s -H "Authorization: Bearer orbl_…" \
-     "http://100.64.0.5:7480/api/leases?workspace=ws_example"
-   # Follow notices; a reconnecting client sends Last-Event-ID instead of after.
-   curl -sN -H "Authorization: Bearer orbl_…" \
-     "http://100.64.0.5:7480/api/leases/events?workspace=ws_example&after=0"
-   ```
-
-   It runs the root-owned `/usr/local/bin/orbit`. After `orbit update`,
-   reinstall that copy and restart the unit; until then the listener and
-   Orbit Web refuse each other with a protocol-version message.
-
-`orbit lease listen` refuses to start, with a message naming the reason:
-
-- as root; as the user that owns the intake socket (that is you); or when the
-  executable, the listener's Orbit home or a directory above either is
-  writable by another user;
-- when `lease.listener.bind` is unset, when it is `0.0.0.0` or `::` without
-  native `tls` or `behind_proxy = true`, when `behind_proxy` is set without
-  `trusted_proxy`, or when `lease.listener.tls` names unusable material or
-  a key with group/other permissions.
-
-**Behind a proxy.** The listener believes `X-Forwarded-For` only from a peer
-in `trusted_proxy`, and takes the rightmost entry that is not a trusted proxy
-as the client; `Forwarded` is never read. So the proxy must append the address
-it received the connection from (nginx `$proxy_add_x_forwarded_for`) or
-overwrite the header with it (nginx `$remote_addr`). It must never pass a
-client's `X-Forwarded-For` through as the only entry, or clients choose their
-own address. A malformed entry is answered with 400, never replaced by the
-proxy's address.
-
-**What clients see.** No token, or an unknown, revoked or expired one: 401
-`{"error":"unauthorized"}`. A token without the verb or workspace: 403. A
-`principal` in a request is ignored; the token's is used. Requests are the
-same JSON as Orbit Web's `/api/leases` routes; add `?workspace=<id>` when a
-token names several workspaces.
-
-**Audit.** Granted and refused operations that reach Orbit are in your audit
-log as `lease.intake.<operation>`. Refusals that stop at the listener are rows
-in `lease_token_audit` in its `lease-tokens.db`, with remote address, route
-and reason, never a secret:
-
-```bash
-sudo -u orbit-lease sqlite3 /var/lib/orbit-lease/.orbit/lease-tokens.db \
-  "select at, event, reason, remote_address, route, token_id
-   from lease_token_audit order by audit_id desc limit 20"
-```
+Default is loopback port 7879. A connection is accepted only when the peer's
+user id is the server's. A different user is refused before any MCP message is
+read. A remote TCP peer has no local user id and is refused; reach the listener
+through an SSH tunnel as this user. Local same-user processes can connect to
+loopback, and a browser page can send HTTP requests there; the listener rejects
+HTTP framing before its body reaches MCP dispatch. Non-loopback exposure is an
+explicit choice, not a remedy for a missing capability, and it does not admit
+other users. SSH caller-policy configuration does not turn a raw TCP socket or
+dashboard into an authenticated per-user service.

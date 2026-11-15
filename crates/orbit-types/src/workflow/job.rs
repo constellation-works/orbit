@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
@@ -9,16 +8,110 @@ use serde_json::Value;
 use crate::identity::OrbitId;
 use crate::workflow::JobRunStateError;
 
-pub const fn default_job_max_active_runs() -> u32 {
-    1
+/// Shipped delivery leaf that publishes a task through a pull request.
+pub const TASK_PR_PIPELINE_JOB: &str = "task_pr_pipeline";
+
+/// Shipped delivery leaf that lands a task on the local base branch.
+pub const TASK_LOCAL_PIPELINE_JOB: &str = "task_local_pipeline";
+
+/// Claimed delivery leaf a pull drain runs to publish through a pull request.
+pub const TASK_CLAIMED_PR_PIPELINE_JOB: &str = "task_claimed_pr_pipeline";
+
+/// Claimed delivery leaf a pull drain runs to land on the local base branch.
+pub const TASK_CLAIMED_LOCAL_PIPELINE_JOB: &str = "task_claimed_local_pipeline";
+
+/// Shipped workspace auto drain job. Run records persist this string.
+pub const WORKSPACE_AUTO_PIPELINE_JOB: &str = "workspace_auto_pipeline";
+
+/// Shipped workspace pull drain job. Run records persist this string.
+pub const WORKSPACE_PULL_PIPELINE_JOB: &str = "workspace_pull_pipeline";
+
+/// Shipped task auto (ship) pipeline job. Run records persist this string.
+pub const TASK_AUTO_PIPELINE_JOB: &str = "task_auto_pipeline";
+
+/// Shipped task gate pipeline job. Run records persist this string.
+pub const TASK_GATE_PIPELINE_JOB: &str = "task_gate_pipeline";
+
+/// Shipped task pilot pipeline job. Run records persist this string.
+pub const TASK_PILOT_PIPELINE_JOB: &str = "task_pilot_pipeline";
+
+/// Shipped `implement_one` step id. Run records persist this string.
+pub const IMPLEMENT_ONE_STEP_ID: &str = "implement_one";
+
+/// Shipped `sync_base` step id. Run records persist this string.
+pub const SYNC_BASE_STEP_ID: &str = "sync_base";
+
+/// Shipped `complete_pr` step id. Run records persist this string.
+pub const COMPLETE_PR_STEP_ID: &str = "complete_pr";
+
+/// Shipped `complete_reviewed_pr` step id. Run records persist this string.
+pub const COMPLETE_REVIEWED_PR_STEP_ID: &str = "complete_reviewed_pr";
+
+/// Shipped `worktree_setup` step id. Run records persist this string.
+pub const WORKTREE_SETUP_STEP_ID: &str = "worktree_setup";
+
+/// Shipped `agent_implement` activity. Run records persist this string.
+pub const AGENT_IMPLEMENT_ACTIVITY: &str = "agent_implement";
+
+/// Shipped `agent_review_repair` activity. Run records persist this string.
+pub const AGENT_REVIEW_REPAIR_ACTIVITY: &str = "agent_review_repair";
+
+/// Shipped `pr_conflict_recovery` activity. Run records persist this string.
+pub const PR_CONFLICT_RECOVERY_ACTIVITY: &str = "pr_conflict_recovery";
+
+/// Shipped `step_failure_recovery` activity. Run records persist this string.
+pub const STEP_FAILURE_RECOVERY_ACTIVITY: &str = "step_failure_recovery";
+
+/// Shipped `task_pilot` activity. Run records persist this string.
+pub const TASK_PILOT_ACTIVITY: &str = "task_pilot";
+
+/// The drain jobs: the owner's workspace auto drain and a replica's pull drain.
+pub const DRAIN_JOBS: &[&str] = &[WORKSPACE_AUTO_PIPELINE_JOB, WORKSPACE_PULL_PIPELINE_JOB];
+
+/// Whether `job` is one of the drain jobs ([`DRAIN_JOBS`]).
+pub fn is_drain_job(job: &str) -> bool {
+    DRAIN_JOBS.contains(&job)
 }
 
-pub const fn default_max_iterations() -> u32 {
-    1
+/// Leaf definitions that only a claim may run; each claimed leaf is a whole
+/// delivery.
+pub const CLAIMED_DELIVERY_LEAF_JOBS: &[&str] = &[
+    TASK_CLAIMED_LOCAL_PIPELINE_JOB,
+    TASK_CLAIMED_PR_PIPELINE_JOB,
+];
+
+/// The four shipped delivery leaves: the PR and local leaves, owned or claimed.
+pub const DELIVERY_LEAF_JOBS: &[&str] = &[
+    TASK_PR_PIPELINE_JOB,
+    TASK_LOCAL_PIPELINE_JOB,
+    TASK_CLAIMED_PR_PIPELINE_JOB,
+    TASK_CLAIMED_LOCAL_PIPELINE_JOB,
+];
+
+/// Id prefix shared by claimed delivery leaves. Callers that historically
+/// matched claimed leaves by prefix keep doing so through this constant.
+pub const CLAIMED_DELIVERY_LEAF_PREFIX: &str = "task_claimed_";
+
+/// Whether `job` is one of the owner's delivery leaves (PR or local).
+pub fn is_owner_delivery_leaf_job(job: &str) -> bool {
+    job == TASK_PR_PIPELINE_JOB || job == TASK_LOCAL_PIPELINE_JOB
 }
 
-pub const fn default_retry_backoff_seconds() -> u64 {
-    10
+/// Whether `job` is exactly one of the claimed delivery leaves.
+pub fn is_claimed_delivery_leaf_job(job: &str) -> bool {
+    CLAIMED_DELIVERY_LEAF_JOBS.contains(&job)
+}
+
+/// Whether `job` is exactly one of the four shipped delivery leaves.
+pub fn is_delivery_leaf_job(job: &str) -> bool {
+    DELIVERY_LEAF_JOBS.contains(&job)
+}
+
+/// Whether `job` is an owner delivery leaf or carries the claimed-leaf id
+/// prefix ([`CLAIMED_DELIVERY_LEAF_PREFIX`]). Unlike [`is_delivery_leaf_job`]
+/// this admits any `task_claimed_*` id, which the source-repair paths rely on.
+pub fn is_delivery_leaf_job_by_claimed_prefix(job: &str) -> bool {
+    is_owner_delivery_leaf_job(job) || job.starts_with(CLAIMED_DELIVERY_LEAF_PREFIX)
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -103,6 +196,8 @@ pub enum JobRunState {
     Interrupted,
     /// Delivery ended awaiting external review evidence. Receipt starts a
     /// fresh review; this run is terminal and must not trigger failure recovery.
+    /// A host-manager stop (`operator_stopped`) is also this state: it is not
+    /// a product failure, and it can be resumed.
     Held,
 }
 
@@ -273,54 +368,6 @@ impl FromStr for JobRunState {
     }
 }
 
-/// Step execution condition.
-///
-/// Keyword shorthands (`always`, `on_success`, `on_failure`, `on_timeout`) are
-/// kept for backwards compatibility. Any other string is treated as an
-/// expression that is evaluated at runtime against the template context.
-///
-/// Expression syntax (after template resolution):
-///   `<lhs> == <rhs>`, `<lhs> != <rhs>`, combined with `&&` / `||`.
-///   `&&` binds tighter than `||`.
-///
-/// Example:
-///   `"{{steps.plan.state.status}} == success && {{steps.gate.output.match}} == true"`
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum StepCondition {
-    #[default]
-    Always,
-    OnSuccess,
-    OnFailure,
-    OnTimeout,
-    /// A runtime expression evaluated against the template context.
-    Expr(String),
-}
-
-impl Serialize for StepCondition {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self {
-            Self::Always => serializer.serialize_str("always"),
-            Self::OnSuccess => serializer.serialize_str("on_success"),
-            Self::OnFailure => serializer.serialize_str("on_failure"),
-            Self::OnTimeout => serializer.serialize_str("on_timeout"),
-            Self::Expr(expr) => serializer.serialize_str(expr),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for StepCondition {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(deserializer)?;
-        Ok(match s.as_str() {
-            "always" => Self::Always,
-            "on_success" => Self::OnSuccess,
-            "on_failure" => Self::OnFailure,
-            "on_timeout" => Self::OnTimeout,
-            _ => Self::Expr(s),
-        })
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentRunError {
     pub code: String,
@@ -341,96 +388,6 @@ pub struct AgentResponseEnvelope {
     #[serde(default)]
     #[serde(rename = "durationMs")]
     pub duration_ms: Option<u64>,
-}
-
-/// A single step within a job definition.
-///
-/// `Default::default()` matches serde defaults for all fields:
-/// - `retry_backoff_seconds` defaults to 10 (matching `#[serde(default = "default_retry_backoff_seconds")]`)
-/// - `timeout_seconds` defaults to 0; callers must set this explicitly
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct JobStep {
-    /// Optional step identifier for DAG execution. When any step in a job has
-    /// `upstream`, ALL steps must have an `id`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    /// Steps that must complete before this step can start. Empty means no
-    /// dependencies. When any step has `upstream`, DAG execution is used.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub upstream: Vec<String>,
-    pub target_type: JobTargetType,
-    pub target_id: OrbitId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_input: Option<Value>,
-    #[serde(default)]
-    pub agent_cli: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub executor: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    pub timeout_seconds: u64,
-    /// Additional env var names to pass through in hermetic mode, on top of the global allowlist.
-    #[serde(default)]
-    pub env_extra: Vec<String>,
-    /// Explicit env var key-value pairs injected into the step's environment.
-    /// Unlike `env_extra` (which passes names from the parent env), these set
-    /// fixed values regardless of what the parent env contains.  Entries here
-    /// override same-named vars from `env_extra` or the global allowlist.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub env_set: HashMap<String, String>,
-    /// Maximum number of total attempts (including the first). Zero means no retry.
-    #[serde(default)]
-    pub retry_max_attempts: u32,
-    /// Initial backoff delay in seconds before the first retry; doubles with each attempt.
-    #[serde(default = "default_retry_backoff_seconds")]
-    pub retry_backoff_seconds: u64,
-    #[serde(default)]
-    pub condition: StepCondition,
-    /// Rename output keys before merging into the next step's input.
-    /// Each entry maps `source_key -> target_key`. Unmapped keys pass through unchanged.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub output_map: HashMap<String, String>,
-}
-
-impl Default for JobStep {
-    fn default() -> Self {
-        Self {
-            id: None,
-            upstream: Vec::new(),
-            target_type: JobTargetType::default(),
-            target_id: OrbitId::default(),
-            default_input: None,
-            agent_cli: String::new(),
-            executor: None,
-            model: None,
-            timeout_seconds: 0,
-            env_extra: Vec::new(),
-            env_set: HashMap::new(),
-            retry_max_attempts: 0,
-            retry_backoff_seconds: default_retry_backoff_seconds(),
-            condition: StepCondition::Always,
-            output_map: HashMap::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Job {
-    pub job_id: OrbitId,
-    pub state: JobScheduleState,
-    #[serde(default)]
-    pub default_input: Option<Value>,
-    #[serde(default = "default_job_max_active_runs")]
-    pub max_active_runs: u32,
-    /// Maximum number of times the step sequence is executed. Defaults to 1
-    /// (single pass). Values > 1 enable loop semantics: after all steps
-    /// complete successfully, the sequence restarts from step 0 until
-    /// `max_iterations` is reached or a step outputs `loop_exit: true`.
-    #[serde(default = "default_max_iterations")]
-    pub max_iterations: u32,
-    pub steps: Vec<JobStep>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
 }
 
 /// How a job run was submitted [ORB-12255].
@@ -580,7 +537,28 @@ pub struct JobRunStep {
     pub agent_response_json: Option<Value>,
     pub state: JobRunState,
     pub error_code: Option<String>,
+    /// The typed step-failure code, parsed once where the step failure was
+    /// ingested. Absent on records written before the typed code existed;
+    /// those classify through the legacy marker fallback in
+    /// `is_owner_route_unavailable`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_code: Option<crate::workflow::StepFailureCode>,
     pub error_message: Option<String>,
+}
+
+impl JobRunStep {
+    /// The step's typed failure code: the recorded
+    /// [`StepFailureCode`](crate::workflow::StepFailureCode), or the
+    /// legacy string `error_code` parsed at this read boundary for a
+    /// record written before the typed field existed.
+    #[must_use]
+    pub fn typed_failure_code(&self) -> Option<crate::workflow::StepFailureCode> {
+        self.failure_code.clone().or_else(|| {
+            self.error_code
+                .as_deref()
+                .map(crate::workflow::StepFailureCode::parse)
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -602,8 +580,23 @@ pub struct KnowledgeRunMetrics {
     pub total_llm_input_tokens: u64,
 }
 
+/// Build of the Orbit process that admitted or started a job run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OrbitBuild {
+    /// Package version embedded at compilation.
+    pub version: String,
+    /// Full source commit embedded at compilation; absent for source archives without Git.
+    pub source_commit: Option<String>,
+    /// Source checkout had uncommitted changes when compiled; ancestry is inconclusive.
+    pub dirty: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct JobRun {
+    /// Build at admission, replaced by the executing process on first start.
+    /// Historical rows remain unknown; ordinary updates never rewrite this identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<OrbitBuild>,
     /// Immutable runtime identity at insertion; pre-existing rows remain unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub executed_on: Option<crate::task::ExecutionLocation>,
@@ -640,7 +633,7 @@ pub struct JobRun {
         skip_serializing_if = "Option::is_none"
     )]
     pub crew_model: Option<String>,
-    /// Step execution results; populated in-memory from step files, not stored in jrun.yaml.
+    /// Step execution results; populated in-memory from step files and never serialized.
     #[serde(skip)]
     pub steps: Vec<JobRunStep>,
 }
@@ -655,5 +648,13 @@ impl JobRun {
     /// fresh timestamp, and the incumbent's value stays authoritative.
     pub fn is_owned_by(&self, pid: u32, pid_start_time: Option<&str>) -> bool {
         self.pid == Some(pid) && self.pid_start_time.as_deref() == pid_start_time
+    }
+
+    /// When this run last moved: its finish, else its start, else its row's
+    /// creation. The Rust counterpart of the store's recency order.
+    pub fn recency_at(&self) -> DateTime<Utc> {
+        self.finished_at
+            .or(self.started_at)
+            .unwrap_or(self.created_at)
     }
 }

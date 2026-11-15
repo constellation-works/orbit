@@ -6,9 +6,12 @@ workspaces; the rest is periodic hygiene.
 ## Worktree garbage collection
 
 Implementation pipelines create worktrees; deterministic collection or filing
-jobs need not. Nothing reclaims them automatically unless
-you arrange it, so a workspace that ships on a schedule accumulates worktrees
-until the disk fills. **Enable this before, not after, scheduling ship traffic.**
+jobs need not. With the default seeding policy, a fresh workspace seeds the
+`worktree-gc` routine enabled, but automatic reclamation needs the host's Orbit
+scheduler clock installed and enabled. Without
+that clock, a workspace that ships on a schedule accumulates worktrees until the
+disk fills. **Make sure the host clock is running before, not after, scheduling
+ship traffic.**
 
 ```bash
 orbit gc worktrees                          # report only — the default is non-destructive
@@ -22,7 +25,7 @@ orbit gc worktrees --target-only --confirm  # delete target/ and keep the checko
 
 Collection is conservative: it reaps only worktrees whose associated task has
 settled to `done`, `rejected`, or `archived`, or that has been parked in
-`someday` for `worktree.parked_reclaim_after_hours` (default 336), counted from
+`someday` for 336 hours (14 days), counted from
 the status change. A parked worktree also stays while its worker or claim is
 live, while Git holds it locked, or while its run branch has commits that
 exist on no published ref and in no rescue patch
@@ -38,14 +41,15 @@ sweep sees that the patch file is gone. `recovery` in the
 report names which source. Kept terminal worktrees report `retained_bytes`, and
 `orbit run show <gc-run>` lists them with their reasons. Details:
 [worktree reclaim runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/worktree-reclaim.md).
-Run the report a few times before automating it, then enable the `worktree-gc`
-routine for hourly reclamation — [automation.md](automation.md).
+Run the report a few times before relying on scheduled reclamation. The default
+seeding policy seeds `worktree-gc` enabled for hourly collection; the host clock
+must also be running — [automation.md](automation.md).
 
 ### Workspace scratch
 
 The same `worktree_gc_pipeline` run also prunes the checkout's own
 `.orbit/tmp` (`ORBIT_SCRATCH_DIR`), where operators and
-`orbit.task.artifact.put` callers stage evidence, build output and CodeQL
+`orbit.task.artifact` action `put` callers stage evidence, build output and CodeQL
 databases. Artifacts are copied into the task store, so staged files are
 disposable once attached. A top-level entry is removed when its **newest mtime
 anywhere inside it** is older than `scratch_older_than_hours` (default `24`);
@@ -173,7 +177,6 @@ inexplicably. It has targeted repairs, each narrow on purpose:
 | `--fix-stale-locks` | Lock files whose recorded holder process is dead. |
 | `--fix-stale-task-locks` | Task reservations whose owner and task state are conclusively inactive. |
 | `--fix-stale-artifacts` | Retires deprecated skills, jobs, activities, auto-tasks, and routines that Orbit itself wrote. Locally modified ones are preserved, not deleted. |
-| `--fix-retired-activity-backends` | Removes known retired `spec.backend` values from agent-loop activities. |
 | `--fix-retired-config-keys` | Backs up each edited `config.toml` and removes retired or deprecated keys, first writing each deprecated key's translated value under its replacement key in the same layer while preserving explicit modern values. A second successful run writes nothing. Any legacy after-landing policy refuses before either config is changed or backed up; migrate it manually first. |
 | `--fix-automation-pins` | Deletes this Orbit root and workspace's own state-routine attempt pins that no consumer or live run still names. Legacy shared `refs/orbit/automation/<attempt>` pins and other roots' or workspaces' pins are retained and reported. Refuses while a routine sweep runs. |
 | `--fix-state-directory-permissions` | Restricts writable Orbit state directories to owner-only access, excluding run worktrees, Cargo target trees, and child symlinks (Unix only). |
@@ -202,6 +205,83 @@ only bytes it can prove it wrote; anything else it copies to
 Changing a routine's cadence, target, policy, or description is a real edit
 and is preserved and reported; a comment-only edit remains managed.
 
+## Retired features and their keys
+
+Orbit removes features across releases. A removed feature can leave configuration
+keys or an MCP toolset name behind; a removed command simply stops existing.
+Orbit still loads the leftover keys and toolset names, warns on every load and
+ignores them. Delete each leftover, then verify the load is clean. Keys that were
+only renamed or moved are translated on load and rewritten by
+`--fix-retired-config-keys`; this table lists removed features only.
+
+| Removed feature | Leftovers to delete | Replacement | Recognized until |
+|---|---|---|---|
+| Explorer and agent invocation | `[workflow.explore]` table; `workflow.purpose_crews.explorer`; `agent-invoke` in `machine.mcp.toolsets` and in any `--toolset`. `orbit run agent` and the `orbit.agent.invoke` tool are gone. Stored runs and experiment readouts stay readable. | None in Orbit: use task workflows or a provider CLI. | No date set; warns until a later release makes it an error |
+| Crew ladder | `[workflow.crew_ladder]` table. `orbit agents ladder` is gone. | Route each tier with `workflow.<tier>_complexity_crews`; compare crews with [experiments](configuration.md#experiments). | 2026-12-07 |
+| Regression-risk prompt marks | `[workflow.regression_risk]` table, including `record_sites` | None. Task riskiness scores use fixed defaults: a 30-day window and at least 5 done tasks. | 2026-12-07 |
+| Pilot explore brief | `[workflow.explore_brief]` table | None. Existing `explore-brief.json` artifacts stay readable. | 2026-12-07 |
+| Visual review | `[visual_review]` table; `workflow.purpose_crews.visual_review`. `orbit visual` and the `orbit.visual.*` tools are gone. | None. `mocks/` and `visual/` are ordinary artifact names now. | 2026-12-07 |
+| Crew-performance weighting | `workflow.crew_performance`, `crew_performance_strength`, `crew_performance_cap` and `crew_performance_window_days` | None for the weighting. The older `workflow.crew_performance_types` name is read as `workflow.task_types`; the repair rewrites it. | 2026-12-07 |
+| Weekly evolution pass | `resident.evolution.min_occurrences`, `min_distinct_cycles`, `min_distinct_mandates`, `min_cost_minutes` and `max_proposals` | None. `orbit evolution`, `orbit resident digest` and `resident.evolution.window_days` stay; nothing files proposal tasks automatically. | 2026-12-07 |
+| UX rules | `[ux_rules]` table | None. No routine or installed command runs the rules. | 2026-12-07 |
+| Finding verification | `review.verify_findings` | None. The task pilot's `finding_invalid` result and an implementer's `finding-invalid.json` still reject an invalid finding. | 2026-12-07 |
+| Agent scoreboard | `[scoring]` table (`scoring.enabled`) | None; nothing records scoreboard metrics. | 2026-11-12 (window closed; now an unknown key) |
+| Dashboard browser sessions | `[machine.web_terminal]` and `[machine.web_session]` tables; `machine.web_terminal.enabled`, `machine.web_session.ttl`. `orbit web open` is gone. | None for browser sessions. Open the dashboard URL directly; `orbit web serve --operator` still provides operator capability. | 2026-12-08 |
+| Routine publication attachments | `publication.routine_attachments`, `publication.routine_allow_unscanned_attachments` | None for the scheduled routine, which always omits attachments. Publish attachments by hand with `orbit task publication publish --attachments`. | 2026-12-08 |
+| Selective before-landing review | `[review.selective_before_landing]` table; `review.selective_before_landing.mode`, `risk_threshold`, `paths`, `unknown_risk` | Review before landing with `review.timing = "before_landing"` or `review.before_landing_hosts`. | 2026-12-08 |
+| Decision assistance | Global `[assistance]` table. `orbit decision assist` is gone. | None. | 2026-12-08 |
+| Path leases | `[lease]` table / `lease.*` keys. `orbit lease` and the `orbit.lease.*` tools are gone. | None. The lease machinery stays disabled. | 2026-12-08 |
+| Orchestrator scorecard | `orbit orchestrator`; `--role orchestrators` on `orbit agents scorecard` and `orbit agents show`; the orchestrator scorecard's MCP tool; the `/api/agents/orchestrators` endpoint; any link to the dashboard Orchestrators tab. | None for orchestrators. The dashboard Orchestrators tab is replaced by Rank, which ranks implementer models with `orbit agents rank`. For crew comparison, use [experiments](configuration.md#experiments). | No window stated; removed in 0.48.0. |
+| MCP tool-family names | Per-action tool names such as `orbit_friction_add`, `orbit_friction_update`, `orbit_task_artifact_get` and `orbit_task_artifact_put`, in scripts, prompts and MCP client allow-lists. Stored names in existing records migrate on upgrade, so there is nothing to delete there. | The family tool with an `action` field: `orbit_friction` with `add` or `update`, and `orbit_task_artifact` with `get` or `put`. See [tool surface](../../orbit/references/tool-surface.md). | No window stated; removed in 0.48.0. |
+| MCP task schema string forms | A bare string where a list is expected on `orbit_task_add`, `orbit_task_update` and `orbit_task_list`, such as in `acceptance_criteria` or `context_files`. | Send a JSON array for each list field, such as `acceptance_criteria`, `context_files` and `relations`. | No window stated; removed in 0.48.0. |
+| Per-call `model` input and task aliases | The `model` input on MCP task calls, which the MCP schema no longer lists; the `agent` alias of `orbit_task_list`; the `context` alias on `orbit_task_add` and `orbit_task_update`. Orbit still accepts a sent `model` as an unadvertised identity key, and the session's own identity takes precedence over it. | Identity comes from the session's crew configuration or the MCP client's `clientInfo`, not from the call. Use `context_files` in place of `context`. For `agent` on `orbit_task_list`, read the list's field names with `orbit tool show orbit.task.list`. | No window stated; removed in 0.48.0. |
+
+The `finding-verification`, `evolution-pass`, and `ux-rules` routines are retired,
+while `pilot-warning-triage` is retired via its `pilot_warnings_held` state
+trigger rather than its job. `orbit workspace sync` retires their seeded copies. A
+routine you wrote that targets one of the three removed jobs
+(`finding_verification_pipeline`, `evolution_pass_pipeline`,
+`ux_rules_pipeline`) loads as retired and never fires unless the workspace
+defines a job of the same name, which resolves first and stays active;
+otherwise remove it or retarget it. A routine on the retired
+`pilot_warnings_held` trigger loads as retired even though its
+`escalation_triage_pipeline` job still ships, so a cron routine targeting that
+job without the retired trigger stays active. Triage a
+task held on pilot warnings from the dashboard's Triage action.
+
+### Verify the cleanup
+
+1. List what still sets a retired key, with the file that sets it. The check
+   covers the global and workspace `config.toml`:
+
+   ```bash
+   orbit doctor --check retired-config-keys
+   ```
+
+2. Remove the leftover keys in one pass. It backs up each edited `config.toml`,
+   writes each translated replacement before removing the old key, and writes
+   nothing on a second run. It refuses while a legacy `after-landing` review
+   policy is set; migrate that first, as [Diagnose and repair](#diagnose-and-repair)
+   describes. The repair removes keys, not list entries, so delete
+   `agent-invoke` from `machine.mcp.toolsets` and from any `--toolset` argument
+   by hand.
+
+   ```bash
+   orbit doctor --fix-retired-config-keys
+   ```
+
+3. Confirm the load is clean and the removed commands are gone:
+
+   ```bash
+   orbit doctor --problems      # no retired-config-keys warning should appear
+   orbit config show --all      # loads with no deprecation warning
+   orbit agents --help          # `ladder` is not listed
+   orbit visual                 # reports an unrecognized subcommand
+   ```
+
+A key that stays past its recognized date becomes an unknown setting. The same
+`retired-config-keys` check reports it, so one check covers both states.
+
 ## Task locks
 
 ```bash
@@ -209,8 +289,9 @@ orbit task locks list                      # files held by active tasks and rese
 orbit task locks release <reservation_id> --confirm  # operator escape hatch
 ```
 
-The dashboard's **Locks held** card uses the same listing, including active
-reservations and distinct task counts. No-diff tasks hold no context locks;
+The listing also includes active reservations and distinct task counts. The
+Drain readiness groups name the holders blocking a waiting task. No-diff tasks
+hold no context locks;
 other holders use admission's canonical selectors and unlocked-path rules.
 Listing locks also expires old reservations and records their audit events.
 
@@ -224,12 +305,20 @@ for a reservation blocking a run is in
 ```bash
 orbit workspace sync --check --json   # no writes; exit 3 means pending changes
 orbit workspace sync --json           # converge managed defaults
+orbit workspace sync --all --json     # every workspace registered on this host
+orbit workspace sync --check --all    # preview all; writes nothing, exit 3 = pending
 orbit skill list
 orbit skill doctor
 orbit skill link                      # repair supported user skill symlinks
 ```
 
-Run sync from an initialized, registered checkout after upgrading the binary.
+Run sync from an initialized, registered checkout after upgrading the binary,
+or run `orbit workspace sync --all` once per host from any directory to converge
+every registered workspace. `--all` reports `synced`, `already current`,
+`skipped` or `failed` per workspace, keeps going past a failure (exit 1), and
+skips, never rewrites, a workspace a live drain or run holds; rerun it when the
+drain ends. It never reaches across hosts and cannot be combined with
+`--workspace`.
 It reconciles both host-global and workspace-local managed assets, including
 skill references, jobs, activities, routines, and auto-task definitions.
 Provenance distinguishes untouched shipped content from local edits. Read
@@ -240,7 +329,53 @@ catalog and update them deliberately.
 
 Sync updates managed files, not workspace ownership or task publication. The
 plugin skill bundle updates through its plugin distribution; global skill
-symlinks and a plugin installation are distinct delivery paths.
+symlinks and a plugin installation are distinct delivery paths. The `orbit skill`
+commands that inspect and repair the global skill links are in
+[Skill management](#skill-management).
+
+## Skill management
+
+`orbit skill` works with two separate things on a host:
+
+- **The catalog**: each shipped skill's files under the global Orbit root, by
+  default `~/.orbit/skills/` (`orbit`, `orbit-orchestrate` and `orbit-setup`).
+  `orbit workspace sync` reconciles these managed files and preserves local
+  edits. A missing catalog entry is a sync question, not a `link` one.
+- **The client links**: a symlink named after each shipped skill in
+  `~/.agents/skills/` and `~/.claude/skills/`, each pointing at its catalog
+  entry. Client CLIs discover skills through these links.
+
+The plugin skill bundle is a third delivery path that these commands do not
+touch; see [Managed resources and upgrades](#managed-resources-and-upgrades).
+
+| Subcommand | What it does | When to run it | How to verify |
+|---|---|---|---|
+| `orbit skill list` | Lists each installed skill with its ID, the first ten characters of its content hash, its tag count and its summary. | After an upgrade or sync, to confirm every shipped skill is installed. | The three shipped IDs appear, each with a hash. A hash that differs from the same skill on another host means the content differs. |
+| `orbit skill show <name>` | Prints one skill's `Path`, full `Content hash`, its SKILL.md behavioral contract and its `meta.json` (or `(none)`). | To read what a skill tells agents to do, or to confirm which file a catalog entry resolves to. | The output starts with `Skill: <name>`, and the `Content hash` begins with the HASH that `list` shows. An unknown name fails with `skill not found` and exit status 1. |
+| `orbit skill doctor [<name>]` | Without a name, checks each catalog skill and diagnoses dangling symlinks in existing client link directories. A dangling symlink in `~/.agents/skills/` or `~/.claude/skills/` is a `warning` that names its path. It does not report an expected client link that is absent. With a name, prints only that skill's findings. | After an upgrade, after an interrupted run, or to diagnose catalog problems and dangling client links. If a client cannot find a skill, also inspect the expected links under `~/.agents/skills/` and `~/.claude/skills/` or run `orbit skill link`. | A healthy doctor result ends with `All skills healthy.`, but only confirms the catalog checks and dangling-link checks it performs; it does not certify that every expected client link exists. With findings, the table lists them and `N issue(s) found.` goes to stderr. The exit status stays 0 for findings, so read the STATUS column. An unknown name fails with `no skill diagnostic named '<name>'` and exit status 1. |
+| `orbit skill link` | Creates the client links for each shipped skill in `~/.agents/skills/` and `~/.claude/skills/`. It replaces an existing link that points elsewhere or dangles, and does nothing when the links are current. It fails if a shipped skill's catalog entry is missing, and it never creates catalog entries. | When an expected client link is absent, a client stops listing Orbit skills, or `doctor` reports a dangling link. | It prints `Linked N skill(s) in:` with both directories, or `Skill symlinks are already up to date.` when nothing changed. Then `ls -l ~/.agents/skills ~/.claude/skills` shows each shipped skill as a symlink to `~/.orbit/skills/<name>`. `orbit skill doctor` can confirm there are no reported catalog problems or dangling links, but a healthy result alone does not confirm every expected client link exists. |
+| `orbit skill unlink` | Removes only the links that `link` creates: entries named after a shipped skill that point at its catalog entry. Plugin links, custom links, regular files and other symlinks stay in place, and a discovery `skills` directory left empty is removed. The catalog under `~/.orbit/skills/` is not changed. | When Orbit should stop offering the shipped skills to clients on this host, such as before moving to the plugin distribution or retiring the host. Clients stop finding them there until `orbit skill link` runs again. Confirm with the operator first, because it changes what clients load. | It prints `Removed N skill symlink(s).` or `No skill symlinks found to remove.`. Then `ls -l ~/.agents/skills ~/.claude/skills` shows no `orbit`-named links, and `orbit skill list` still lists the three skills. |
+
+### Repair a missing or broken client link
+
+1. Run `orbit skill doctor` to check the catalog and diagnose dangling links.
+   It does not report an expected client link that is absent, so a healthy
+   result does not prove every client can discover every shipped skill.
+2. If a client cannot find a skill, inspect the expected links under
+   `~/.agents/skills/` and `~/.claude/skills/`. Run `orbit skill link` to create
+   absent links or repair links for shipped skills that point elsewhere or
+   dangle.
+3. If a shipped skill's catalog entry is missing, `orbit skill link` fails, so
+   restore the catalog first with `orbit workspace sync` (see
+   [Managed resources and upgrades](#managed-resources-and-upgrades)), then
+   confirm with `orbit skill list` and run `orbit skill link` again.
+4. A dangling link named after something other than a shipped skill is not
+   Orbit's to remove. Delete it by hand, as the `doctor` message says.
+5. Verify expected links with `ls -l ~/.agents/skills ~/.claude/skills`, then
+   run `orbit skill doctor` to confirm it reports no catalog problems or
+   dangling links. Doctor still does not verify that all expected links exist.
+
+Do not use `unlink` as a repair: it removes the links that clients use.
 
 ## Removing or re-targeting a workspace
 
@@ -338,8 +473,18 @@ local build — use `--local-candidate` (below). `orbit update --check` checks r
 compatibility.
 
 Participating CLI/MCP processes hold a generation lock for their entire
-lifetime. The updater still requires exclusive admission and refuses while a
-participant is live. Ordinary v2 runtime admission instead compares store,
+lifetime. Admission depends on the update: for a staged local candidate, only
+a live long-lived participant that registered a resume capability the candidate
+resumes is admitted beside the updater and pinning waits for it to hand
+over — in this tree that is a non-remote stdio `mcp serve` whose stdin can be
+polled and whose capability is `mcp-stdio-v1` — and short-lived participants,
+including clock ticks and one-shot commands, are waited for; a live dashboard
+(`orbit web serve`), a drain (`orbit job run-pipeline-worker`), `orbit mcp listen`,
+an `mcp serve` that did not register a capability the candidate resumes, and a
+holder that never registered (a v1 binary or a sandboxed child that cannot write
+the Orbit root) still block the update and make it refuse before the installed
+executable is replaced. Without a candidate, a live long-lived participant still
+blocks. Do not kill an idle handover-capable client to make room. Ordinary v2 runtime admission instead compares store,
 layout and feature compatibility: compatible builds may run and apply additive
 migrations side by side despite different executable digests. A breaking newer
 writer records a pending switch and waits up to 120 seconds by default for
@@ -388,7 +533,7 @@ cargo build --release --locked -p orbit-cli
 C="$(pwd -P)/target/release/orbit"
 "$C" update --local-candidate "$C" --source-commit "$SHA" \
   --write-candidate-manifest ~/orbit-candidate-"$SHA".json
-# Quiesce clients, then run from the intended workspace for discovery/convergence.
+# Handover-capable clients need no quiescing; run from the intended workspace for discovery/convergence.
 cd "$WORKSPACE"
 "$C" update --local-candidate "$C" --candidate-manifest ~/orbit-candidate-"$SHA".json \
   --source-commit "$SHA" \
@@ -410,8 +555,17 @@ workspace, and use an isolated checkout as well as isolated `HOME` and install
 target for smoke checks. The JSON report's `workspace_root` and
 `admission_roots` show what was selected and held. The staged copy is what
 installs even if the candidate path changes, an equal version with a different
-digest replaces, and live MCP/dashboard/clock/drain clients make it refuse
-before anything changes — quiesce them, retry, then reconnect. Rerunning the
+digest replaces, and only a live long-lived client that registered a resume
+capability the candidate resumes is admitted beside it and hands over after the
+swap — in this tree that is a non-remote stdio `mcp serve` whose stdin can be
+polled and whose capability is `mcp-stdio-v1` — while short-lived clients,
+including clock ticks and one-shot commands, are waited for — do not
+quiesce idle handover-capable clients. A live dashboard (`orbit web serve`), a
+drain (`orbit job run-pipeline-worker`), `orbit mcp listen`, an `mcp serve` that
+did not register a capability the candidate resumes, and a holder that never
+registered (a v1 binary or a sandboxed child that cannot write the Orbit root)
+make it refuse before the installed executable is replaced; quiesce that holder,
+retry, then reconnect. Rerunning the
 same command is idempotent and finishes partial convergence; `needs_recovery`
 (exit 4) carries the exact retry command in `local_candidate.retry_command`.
 See the upgrades runbook for the full procedure.
@@ -441,6 +595,8 @@ orbit migrate               # inspect pending migrations without applying
 orbit migrate --confirm     # apply
 orbit migrate --backfill-diff-stats [--limit N]  # apply, then record diff stats for done tasks landed earlier
 orbit migrate --backfill-task-crews  # apply, then set task.crew from each task's latest delivery (run or claimed-leaf settlement)
+orbit migrate --backfill-dispatch-effort  # apply, then record the launch effort of agent invocations that predate dispatch identities
+orbit migrate --backfill-claimed-effort  # on a pull follower: apply, then report to the owner the effort and model of claimed leaves it settled without them
 orbit migrate --adopt-authority ~/.orbit  # record this home as the authority protecting a workspace that recorded none (stop its clients first)
 ```
 
@@ -448,6 +604,39 @@ Both ledgers — the SQLite schema and the workspace layout — auto-apply when 
 runtime opens, so most upgrades need nothing. The bare command and `--dry-run`
 are the only way to *see* what is pending without applying it, which is what you
 want before upgrading a machine that matters.
+
+Layout version 9 fences older Orbit clients that cannot preserve skipped-step
+checkpoint markers: older writers drop the marker, and older readers restore a
+skipped step's null as an output on resume, changing downstream template
+behavior. The layout fence protects the workspace; the marker field itself is
+not necessarily rejected by older binaries. Layout version 8 also protects
+script output files and parallel script-branch checkpoints. For a workspace
+used from multiple hosts, update every host that can open it before any host
+opens or migrates it to version 9; do this as one coordinated rollout and keep
+old clients stopped. See [Upgrading a workspace together](multi-host.md#upgrading-a-workspace-together)
+for the host-by-host order. On each host, `orbit --version` confirms the
+installed binary, while `orbit update --check` only reports available releases
+and does not verify layout compatibility. `orbit update` run inside an
+initialized workspace immediately runs `migrate --confirm` followed by
+`workspace sync` as post-replacement convergence, so during the coordinated
+rollout run the per-host updates from a directory that is not inside any
+initialized workspace (with no `--root` or `ORBIT_ROOT` override); the JSON
+report showing `"workspace_root": null` with both steps skipped confirms no
+migration ran yet. Use `orbit migrate` to inspect pending
+changes, then apply them with `orbit migrate --confirm` when needed. After the
+upgrade, use `orbit doctor` on each host and `orbit migrate` to confirm no
+migration remains pending.
+
+When Orbit reports that safe SQLite permission repair is unavailable, it
+refuses to change database permissions in place. Stop every process using that
+database first, including workers, MCP servers, timers, dashboards, and other
+Orbit commands. Locate the database and its existing `-wal` and `-shm` sidecars
+in the configured state root. While all users are stopped, restrict the main
+file and each existing sidecar to owner-only access: use `chmod 600` for
+writable state, or retain `chmod 400` for a read-only publication. Do not
+create sidecars that are absent. Check the actual files and their permissions,
+then restart Orbit and retry the command. Run `orbit doctor` and `orbit migrate`
+afterward to verify the state opens cleanly and no migration is pending.
 
 ## Audit events
 
@@ -468,15 +657,15 @@ The host store (`~/.orbit/orbit.db`) also keeps every run's audit events and
 pipeline state, and the commit decision of every task transition (the task
 commit journal). Each workspace keeps the blobs those events name under
 `.orbit/state/audit/blobs/`. Three commands bound them. Each only reports
-until you pass `--apply`:
+until you pass `--confirm`:
 
 ```bash
 orbit gc audit                        # rows and bytes past retention.audit_days, and unreferenced blobs
-orbit gc audit --apply                # delete them
+orbit gc audit --confirm              # delete them
 orbit gc runs                         # terminal runs past retention.runs_days that still keep pipeline state
-orbit gc runs --apply                 # drop that state; the run, its steps and summary stay
-orbit gc journal                      # applied commit journal rows past retention.journal_days
-orbit gc journal --apply              # delete them; unsettled rows and each task's newest stay
+orbit gc runs --confirm               # drop that state; the run, its steps and summary stay
+orbit gc journal                      # applied commit journal rows older than 14 days
+orbit gc journal --confirm            # delete them; unsettled rows and each task's newest stay
 orbit gc audit --older-than-days 30   # one-off window instead of the configured one
 ```
 
@@ -498,7 +687,7 @@ the same unregistered workspace ids. The same pass prunes the host's
 per-minute run and host resource history (`run_resource_minutes`,
 `host_resource_minutes`) and admission forecasts older than 30 days, whatever the
 run window, except the rows its counts keep at any age: each workspace, work class
-and complexity's newest `max(200, machine.auto_concurrency.profile_window)`
+and complexity's newest 200
 deliveries, the newest 10,000 forecasts, and host minutes from the oldest kept
 forecast onward. Auto-concurrency profiles and forecast accuracy keep working on
 those rows; older raw samples outside them are lost.
@@ -509,7 +698,7 @@ rollups. Task-store Codebase rankings, `orbit task flow` and friction stats keep
 working. See the retention runbook for each setting's history boundary.
 
 `gc journal` deletes applied task commit journal rows of this workspace, and of
-unregistered workspace ids, older than `retention.journal_days` (default 14).
+unregistered workspace ids, older than 14 days.
 Recovery replays only prepared and committed rows; an applied row is a decision
 already published to its task, kept only to diagnose recent transitions. So
 prepared, committed and aborted rows stay, and so does each task's newest
@@ -529,7 +718,7 @@ sqlite3 ~/.orbit/orbit.db 'VACUUM;'
 
 `orbit doctor` reports what audit and run retention could reclaim now
 (`store-retention`); it does not count journal rows. It warns
-when the store file is larger than `retention.store_warn_bytes` (default 1 GiB)
+when the store file is larger than 1 GiB
 and no store-gc routine is enabled, and it names the enable command. To run the
 audit and run sweeps daily, enable the seeded `store-gc` routine ([automation.md](automation.md)).
 On a replica checkout the same cron routine runs against that host's own store
@@ -595,18 +784,12 @@ The global JSONL trace at `~/.orbit/state/logs/orbit.jsonl` rotates from
 long-lived processes (`orbit mcp serve`, `orbit sweep`, `orbit web serve`)
 and when the active file exceeds its budget (one `metadata()` check on first
 write). Short-lived commands, including `orbit --help`, do not open the file
-or walk the log directory. Defaults: seven days of archives, a 500 MiB
-total budget, a 100 MiB active-file threshold. Tune in `config.toml`:
-
-```toml
-[runtime]
-log_retention_days = 7
-log_max_total_mb   = 500
-log_max_file_mb    = 100
-```
-
-Values are validated at load — zero is rejected, and `log_max_file_mb` may not
-exceed `log_max_total_mb`.
+or walk the log directory. These budgets are fixed in code: seven days of
+archives, a 500 MiB total budget, a 100 MiB active-file threshold. They are
+not tunable. The former `runtime.log_retention_days`,
+`runtime.log_max_total_mb` and `runtime.log_max_file_mb` keys are ignored
+when present (recognised only until 2026-12-08); delete them from
+`config.toml`.
 
 ```bash
 orbit log tail -n 120

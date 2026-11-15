@@ -154,6 +154,7 @@ fn resumed_fixture() -> Resumed {
     git(&checkout, &["commit", "-qm", "final-recovery repair"]);
     let repair = git(&checkout, &["rev-parse", "HEAD"]);
     let application = FinalRecoveryApplication {
+        fault: Default::default(),
         task_id: f.task.clone(),
         failed_step_id: "validate".into(),
         decision: FinalRecoveryDecision::Resume {
@@ -348,6 +349,7 @@ fn stopped_resumed_repair_refuses_unauthenticated_lineage() {
             s.final_recovery.as_mut().unwrap().decision = Some(FinalRecoveryDecision::Escalate {
                 diagnosis: "no".into(),
                 human_action: "no".into(),
+                summary: None,
             })
         }),
         ("no_repair", |s, _| {

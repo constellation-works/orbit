@@ -86,8 +86,6 @@ impl PullPeer for Peer {
                 schema_version: 1,
                 gates: None,
                 tag_instructions: None,
-                explore_brief: None,
-                visual_review: None,
                 experiments: Some(orbit_types::workflow::CapturedExperiments {
                     task_id: "task".into(),
                     assignments: Vec::new(),
@@ -382,6 +380,7 @@ fn request(jobs: &dyn JobRunStoreBackend) -> (PullDestination, AdmissionRequest)
             caller_before_pr: false,
             review_gate: false,
             selective_review: false,
+            visual_resolution: 0,
             run_context: AdmissionRunContext {
                 run_id: parent.run_id,
                 job_name: "workspace_auto_pipeline".into(),

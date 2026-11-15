@@ -12,7 +12,7 @@
 //! T20260418-2010.
 //!
 //! Usage:
-//!     cargo run -p orbit-common --example v2_asset_smoke
+//!     cargo run -p orbit-engine --example v2_asset_smoke
 //!
 //! Exits non-zero if any file fails to parse.
 
@@ -87,7 +87,7 @@ fn walk_yaml(dir: &Path) -> Vec<PathBuf> {
 }
 
 fn workspace_root() -> PathBuf {
-    // CARGO_MANIFEST_DIR points at the orbit-common crate; workspace root is two up.
+    // CARGO_MANIFEST_DIR points at the orbit-engine crate; workspace root is two up.
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest
         .parent()

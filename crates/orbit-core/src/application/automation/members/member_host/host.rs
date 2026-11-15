@@ -8,17 +8,14 @@ use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::JobRunTrigger;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::automation::members::{
-    MemberAssessment, MemberAttempt, MemberBatchEvidence, MemberEvidence, StateMember,
-    StateTriggerKind, bundle_crew,
+    MemberAttempt, MemberBatchEvidence, MemberEvidence, StateMember, StateTriggerKind, bundle_crew,
 };
 use serde_json::json;
 
 use super::super::super::pins;
 use super::super::Host;
 use crate::OrbitRuntime;
-use crate::application::task::blocked_recovery::block_triaged_at;
 use crate::application::task::escalation_triage_steps::{PilotWarningCandidacy, triaged_at};
-use crate::application::task::{TriageCandidacy, VERIFIABLE_STATUSES};
 
 impl MemberHost for Host<'_> {
     fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
@@ -27,7 +24,10 @@ impl MemberHost for Host<'_> {
         }
         // Pilot preparation and finding verification best-effort fetch;
         // incident consumers retain their local-only source contract.
-        let head = if self.trigger.kind != StateTriggerKind::ExecutionFailed {
+        let head = if !matches!(
+            self.trigger.kind,
+            StateTriggerKind::ExecutionFailed | StateTriggerKind::ResidentDue
+        ) {
             self.source().preparation_head(branch)?
         } else {
             self.source().local_head(branch)?
@@ -108,7 +108,8 @@ impl MemberHost for Host<'_> {
             | StateTriggerKind::FindingUnverified
             | StateTriggerKind::PilotWarningsHeld
             | StateTriggerKind::BlockEscalated
-            | StateTriggerKind::DecisionRequested => None,
+            | StateTriggerKind::DecisionRequested
+            | StateTriggerKind::ResidentDue => None,
         };
 
         Ok(keys
@@ -161,6 +162,7 @@ impl MemberHost for Host<'_> {
                 "escalation_triage"
             }
             StateTriggerKind::DecisionRequested => "decision_request",
+            StateTriggerKind::ResidentDue => "resident_cycle",
         };
 
         // Every batch member travels as an explicit task id. Finding
@@ -169,7 +171,7 @@ impl MemberHost for Host<'_> {
         // those ids by live `task.crew` and then by `max_partition_size`
         // [ORB-12746, ORB-16839].
         let task_ids = attempt.task_ids();
-        let mut input = json!({
+        let input = json!({
             "state_automation": attempt,
             "task_ids": task_ids,
             "source_revision": attempt.member.source.commit,
@@ -178,10 +180,6 @@ impl MemberHost for Host<'_> {
             "promotion_authorized": false,
             "automation_origin": origin,
         });
-        // One escalation job reads both subjects; the trigger names which.
-        if let Some(subject) = self.escalation_subject() {
-            input["subject"] = json!(subject);
-        }
         self.runtime
             .submit_automation_pipeline_run(
                 self.trigger.job_name(),
@@ -201,61 +199,11 @@ impl MemberHost for Host<'_> {
             return Ok(None);
         };
         self.runtime
-            .fresh_task_pilot_assessment(task_id, &member.fingerprint)
+            .task_pilot_preparation_assessment(task_id)
             .map_err(Into::into)
     }
 
-    /// An assessment accepted under `material_v1` hashed every task field and
-    /// the head it pinned, so it can only be checked by recomputing that hash
-    /// at the pinned revision [ORB-13638]. When it still matches, nothing
-    /// that contract covered has changed — in particular none of the default
-    /// material fields — and the task keeps its assessment instead of joining
-    /// a re-pilot wave on upgrade. Any doubt answers `false`; a failure to
-    /// recompute is logged, so a silent re-pilot wave has a cause on record.
-    fn carries_forward(&self, member: &StateMember, assessment: &MemberAssessment) -> bool {
-        if self.trigger.kind != StateTriggerKind::PreparationEligible {
-            return false;
-        }
-        match self.legacy_fingerprint(member, assessment) {
-            Ok(legacy) => legacy.as_ref() == Some(&assessment.resulting_fingerprint),
-            Err(error) => {
-                tracing::warn!(
-                    routine = self.routine,
-                    member = member.key,
-                    receipt = assessment.receipt_id,
-                    error = %error,
-                    "could not recompute the material_v1 fingerprint at the assessment's pinned \
-                     revision; the member is assessed again"
-                );
-                false
-            }
-        }
-    }
-
     fn release(&self, attempt: &MemberAttempt) {
-        if attempt.kind == StateTriggerKind::PreparationEligible {
-            match self.has_legacy_assessment(attempt) {
-                Ok(true) => {
-                    tracing::debug!(
-                        routine = self.routine,
-                        attempt = attempt.id,
-                        "keeping the retired attempt's pin for its material_v1 assessment"
-                    );
-                    return;
-                }
-                Ok(false) => {}
-                Err(error) => {
-                    tracing::warn!(
-                        routine = self.routine,
-                        attempt = attempt.id,
-                        error = %error,
-                        "could not determine whether the retired attempt's pin backs a material_v1 assessment; keeping it for doctor cleanup"
-                    );
-                    return;
-                }
-            }
-        }
-        self.pinned.borrow_mut().remove(&attempt.id);
         if let Err(error) = self
             .owner()
             .and_then(|owner| pins::release(&self.source(), &owner, attempt))
@@ -341,9 +289,10 @@ impl Host<'_> {
         match self.trigger.kind {
             StateTriggerKind::PreparationEligible => self.eligibility().statuses.clone(),
             StateTriggerKind::ExecutionFailed => vec![TaskStatus::Blocked],
-            StateTriggerKind::FindingUnverified => VERIFIABLE_STATUSES.to_vec(),
-            StateTriggerKind::PilotWarningsHeld => vec![TaskStatus::Proposed],
-            StateTriggerKind::BlockEscalated => vec![TaskStatus::Blocked],
+            // Retired: no member is ever observed.
+            StateTriggerKind::BlockEscalated
+            | StateTriggerKind::FindingUnverified
+            | StateTriggerKind::PilotWarningsHeld => Vec::new(),
             // An open request can hold a task at any gate: blocked
             // (block triage), backlog (pilot admission), proposed or
             // review (approvals).
@@ -352,6 +301,14 @@ impl Host<'_> {
                 TaskStatus::Backlog,
                 TaskStatus::Proposed,
                 TaskStatus::Review,
+            ],
+            // A mandate cycles while its assignment is open and not handed
+            // off; review, done, archived and rejected end its cycles.
+            StateTriggerKind::ResidentDue => vec![
+                TaskStatus::Proposed,
+                TaskStatus::Backlog,
+                TaskStatus::InProgress,
+                TaskStatus::Blocked,
             ],
         }
     }
@@ -366,33 +323,21 @@ impl Host<'_> {
     pub(super) fn escalation_subject(&self) -> Option<&'static str> {
         match self.trigger.kind {
             StateTriggerKind::PilotWarningsHeld => Some("pilot_warning"),
-            StateTriggerKind::BlockEscalated => Some("block"),
             StateTriggerKind::PreparationEligible
+            | StateTriggerKind::BlockEscalated
             | StateTriggerKind::ExecutionFailed
             | StateTriggerKind::FindingUnverified
-            | StateTriggerKind::DecisionRequested => None,
+            | StateTriggerKind::DecisionRequested
+            | StateTriggerKind::ResidentDue => None,
         }
     }
 
-    /// Whether `task` is still an escalation triage member at `now`, with
-    /// the fingerprint it would carry: the held assessment's receipt, or the
-    /// block episode.
-    pub(super) fn escalation_of(
-        &self,
-        task: &Task,
-        now: DateTime<Utc>,
-    ) -> Result<Escalation, OrbitError> {
-        Ok(match self.trigger.kind {
-            StateTriggerKind::BlockEscalated => {
-                match self.runtime.block_triage_candidacy_of(task, now)? {
-                    TriageCandidacy::Qualifies(episode) => Escalation::Qualifies(episode.key()),
-                    other => Escalation::Gone(format!("block_{}", other.as_str())),
-                }
-            }
-            _ => match self.runtime.pilot_warning_candidacy_of(task)? {
-                PilotWarningCandidacy::Qualifies(held) => Escalation::Qualifies(held.operation_id),
-                other => Escalation::Gone(format!("pilot_warning_{}", other.as_str())),
-            },
+    /// Whether `task` is still an escalation triage member, with the
+    /// fingerprint it would carry: the held assessment's receipt.
+    pub(super) fn escalation_of(&self, task: &Task) -> Result<Escalation, OrbitError> {
+        Ok(match self.runtime.pilot_warning_candidacy_of(task)? {
+            PilotWarningCandidacy::Qualifies(held) => Escalation::Qualifies(held.operation_id),
+            other => Escalation::Gone(format!("pilot_warning_{}", other.as_str())),
         })
     }
 
@@ -402,15 +347,12 @@ impl Host<'_> {
         history: &[TaskHistoryEntry],
         fingerprint: &str,
     ) -> Option<DateTime<Utc>> {
-        match self.trigger.kind {
-            StateTriggerKind::BlockEscalated => block_triaged_at(history, fingerprint),
-            _ => triaged_at(history, fingerprint),
-        }
+        triaged_at(history, fingerprint)
     }
 
     /// Settle an escalation triage attempt from the markers its triagers
-    /// recorded. A member whose assessment or block episode carries its
-    /// `pilot_warning_triaged` or `blocked_task_triaged` marker is applied;
+    /// recorded. A member whose assessment carries its `pilot_warning_triaged`
+    /// marker is applied;
     /// once the run stopped, one that no longer qualifies (an operator
     /// decided or touched it, the task moved on, was re-piloted or blocked
     /// again, or was deleted) is released, and one still qualifying without
@@ -462,7 +404,7 @@ impl Host<'_> {
             if !stopped {
                 return Ok(MemberOutcome::Pending);
             }
-            match self.escalation_of(&task, Utc::now())? {
+            match self.escalation_of(&task)? {
                 Escalation::Qualifies(fingerprint) if fingerprint == member.fingerprint => {
                     failed.insert(member.key.clone(), "no_triage_marker".into());
                 }
@@ -587,28 +529,12 @@ impl Host<'_> {
     }
 }
 
-/// A temporary hold diagnostic names every durable run the operator can inspect.
-pub(super) fn already_verifying(run_ids: &BTreeSet<String>) -> String {
-    format!(
-        "already_verifying: {}",
-        run_ids.iter().cloned().collect::<Vec<_>>().join(", ")
-    )
-}
-
 /// Whether a task is still an escalation triage member, and as what.
 pub(super) enum Escalation {
     /// It qualifies, with the fingerprint its member carries.
     Qualifies(String),
     /// It no longer qualifies, for this retirement reason.
     Gone(String),
-}
-
-/// A temporary hold diagnostic names every durable run the operator can inspect.
-pub(super) fn already_triaging(run_ids: &BTreeSet<String>) -> String {
-    format!(
-        "already_triaging: {}",
-        run_ids.iter().cloned().collect::<Vec<_>>().join(", ")
-    )
 }
 
 /// A temporary hold diagnostic names every durable run the operator can inspect.

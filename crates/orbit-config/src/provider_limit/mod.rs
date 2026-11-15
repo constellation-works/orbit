@@ -12,14 +12,13 @@ mod target;
 
 pub use budget::{ProviderLimitBudget, ProviderLimitBudgetUnit};
 pub use policy::{
-    CrewSelection, DEFAULT_PROVIDER_LIMIT_MAX_USED_PCT, DEFAULT_USAGE_PRESSURE_CAP,
-    DEFAULT_USAGE_PRESSURE_STRENGTH, ProviderLimitExplicitCrews, ProviderLimitPolicy,
-    ProviderLimitThreshold, UsagePressurePolicy,
+    CrewSelection, PROVIDER_LIMIT_MAX_USED_PCT, ProviderLimitExplicitCrews, ProviderLimitPolicy,
+    ProviderLimitThreshold, USAGE_PRESSURE_CAP, USAGE_PRESSURE_STRENGTH, UsagePressurePolicy,
 };
 pub use target::ProviderLimitTarget;
 
 pub(crate) use budget::{admit_budgets, validate_budget_crews};
 pub(crate) use policy::{
-    admit_crew_selection, admit_explicit_crews, admit_overrides, admit_usage_pressure_cap,
-    admit_usage_pressure_strength, validate_override_crews,
+    admit_crew_selection, admit_explicit_crews, admit_overrides, stored_provider_limit_override,
+    validate_override_crews,
 };

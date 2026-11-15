@@ -144,14 +144,6 @@ pub fn invocation_store_from_store(store: Store) -> Arc<dyn InvocationStoreBacke
     Arc::new(store)
 }
 
-/// Optional assistance ledger over the already-opened host store. Composition
-/// retains generation admission and schema compatibility on the original open.
-pub fn assistance_store_from_store(
-    store: Store,
-) -> Arc<dyn crate::contracts::assistance::AssistanceStoreBackend> {
-    Arc::new(store)
-}
-
 pub fn v2_audit_store(
     database: &std::path::Path,
 ) -> Result<Arc<dyn V2AuditStoreBackend>, orbit_common::OrbitError> {
@@ -195,9 +187,12 @@ pub struct CoordinatedWorkspaceBackends {
 /// Compose one workspace's task and reservation persistence over an
 /// observation-only commit boundary.
 ///
-/// Reads the same partition state as [`workspace_coordinated_backends`] and
-/// settles an interrupted commit the same way, but opening it initializes
-/// nothing: no partition directory, lock file, or journal marker. Used by a
+/// Reads the same partition state as [`workspace_coordinated_backends`], but
+/// opening it initializes nothing on a settled partition: no partition
+/// directory, lock file, or journal marker. When an unsettled journal row's
+/// lease nobody holds, a writable handle replays the decision before
+/// exposure and a read-only handle refuses with a recovery-required error;
+/// neither exposes unapplied sidecars as settled. Used by a
 /// read-only join of a foreign generation, a read-only command whose partition
 /// does not exist yet, and any open of an existing partition on storage the
 /// process cannot write.
@@ -314,4 +309,16 @@ pub fn review_store(
     store: Store,
 ) -> Result<Arc<dyn crate::contracts::ReviewStoreBackend>, orbit_common::OrbitError> {
     Ok(Arc::new(store))
+}
+
+/// Evolution ledger over the owning host's SQLite handle; every operation
+/// requires the runtime-bound workspace partition.
+pub fn evolution_store(store: Store) -> Arc<dyn crate::contracts::EvolutionStoreBackend> {
+    Arc::new(store)
+}
+
+/// Crew memory revisions and events over the owning host's SQLite handle;
+/// every operation names the runtime-bound workspace partition.
+pub fn crew_memory_store(store: Store) -> Arc<dyn crate::contracts::CrewMemoryStoreBackend> {
+    Arc::new(store)
 }

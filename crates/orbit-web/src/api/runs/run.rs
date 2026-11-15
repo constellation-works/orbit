@@ -1,7 +1,7 @@
 //! Single-run detail, cancel, and replay endpoints.
 
-use crate::state::{DashboardState, Ws};
-use axum::extract::{Path, Query, State};
+use crate::state::DashboardState;
+use axum::extract::{Path, Query, RawQuery, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_JOB_RUN};
@@ -13,20 +13,45 @@ use super::super::routines::{
     OperationsQuery, authorization_denied, authorized_caller, explicit_workspace,
 };
 use super::super::{OptionalJson, bad_request, blocking, map_runtime_error, validate_id};
-use super::detail::job_run_detail_to_json;
+use super::detail::{job_run_detail_to_json, recorded_run_detail_to_json};
+use super::locate::{
+    LocatedRun, RunLookupFailure, holding_runtime, locate_run, requested_workspace,
+};
 
-pub(in crate::api) async fn get_run(Ws(runtime): Ws, Path(id): Path<String>) -> Response {
+/// `GET /api/runs/:id`. The run is looked up in the requested workspace and
+/// then under every workspace id this host's store records it, so a link
+/// naming the wrong workspace, or a run recorded under a workspace since
+/// removed from the host, still opens. See [`super::locate`].
+pub(in crate::api) async fn get_run(
+    State(state): State<DashboardState>,
+    RawQuery(query): RawQuery,
+    Path(id): Path<String>,
+) -> Response {
     let id = match validate_id(&id) {
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
+    let requested = requested_workspace(query.as_deref());
     match blocking("get run", move || {
-        let run = runtime.show_job_run(&id)?;
-        Ok(job_run_detail_to_json(&runtime, &run))
+        Ok(
+            match locate_run(&state, requested.as_deref(), &id, |runtime, id| {
+                runtime.show_job_run_without_drain_leaf_settlement(id)
+            }) {
+                Ok(LocatedRun::Registered { runtime, run }) => {
+                    Ok(job_run_detail_to_json(&runtime, &run))
+                }
+                Ok(LocatedRun::Recorded { reader, recorded }) => {
+                    Ok(recorded_run_detail_to_json(&reader, &recorded))
+                }
+                Err(failure) => Err(failure),
+            },
+        )
     })
     .await
     {
-        Ok(value) => Json(value).into_response(),
+        Ok(Ok(value)) => Json(value).into_response(),
+        Ok(Err(RunLookupFailure::Response(response))) => *response,
+        Ok(Err(RunLookupFailure::Error(error))) => map_runtime_error(*error),
         Err(response) => *response,
     }
 }
@@ -47,8 +72,11 @@ pub(in crate::api) struct CancelRunBody {
     queued_only: bool,
 }
 
+/// `POST /api/runs/:id/cancel`. Acts on the registered runtime that holds the
+/// run, which need not be the requested workspace: see [`holding_runtime`].
 pub(in crate::api) async fn cancel_run_action(
-    Ws(runtime): Ws,
+    State(state): State<DashboardState>,
+    RawQuery(query): RawQuery,
     Path(id): Path<String>,
     OptionalJson(body): OptionalJson<CancelRunBody>,
 ) -> Response {
@@ -59,34 +87,39 @@ pub(in crate::api) async fn cancel_run_action(
     if body.queued_only && body.force {
         return bad_request("queued_only cannot be combined with force".to_string());
     }
+    let requested = requested_workspace(query.as_deref());
     match blocking("cancel run", move || {
-        Ok(if body.queued_only {
-            runtime.cancel_queued_job_run(
-                &id,
-                "dashboard",
-                "web",
-                body.reason.as_deref(),
-                body.block,
-            )
-        } else {
-            runtime.cancel_job_run_with_options_and_policy(
-                &id,
-                "dashboard",
-                "web",
-                body.reason.as_deref(),
-                body.force,
-                body.block,
-            )
+        Ok(match holding_runtime(&state, requested.as_deref(), &id) {
+            Ok(runtime) => Ok(if body.queued_only {
+                runtime.cancel_queued_job_run(
+                    &id,
+                    "dashboard",
+                    "web",
+                    body.reason.as_deref(),
+                    body.block,
+                )
+            } else {
+                runtime.cancel_job_run_with_options_and_policy(
+                    &id,
+                    "dashboard",
+                    "web",
+                    body.reason.as_deref(),
+                    body.force,
+                    body.block,
+                )
+            }),
+            Err(failure) => Err(failure),
         })
     })
     .await
     {
-        Ok(Ok(result)) => Json(result.to_json(JobRunCancelResultProfile::Http)).into_response(),
-        Ok(Err(orbit_core::OrbitError::JobValidation(msg)))
-        | Ok(Err(orbit_core::OrbitError::JobRunStateTransition(msg))) => {
+        Ok(Ok(Ok(result))) => Json(result.to_json(JobRunCancelResultProfile::Http)).into_response(),
+        Ok(Ok(Err(orbit_core::OrbitError::JobValidation(msg))))
+        | Ok(Ok(Err(orbit_core::OrbitError::JobRunStateTransition(msg)))) => {
             (StatusCode::CONFLICT, Json(json!({ "error": msg }))).into_response()
         }
-        Ok(Err(e)) => map_runtime_error(e),
+        Ok(Ok(Err(e))) => map_runtime_error(e),
+        Ok(Err(failure)) => failure.into_response(),
         Err(response) => *response,
     }
 }
@@ -98,9 +131,12 @@ pub(in crate::api) struct ReplayBody {
     claim_token: Option<String>,
 }
 
+/// `POST /api/runs/:id/replay`. The replay is submitted to the registered
+/// runtime that holds the source run, which need not be the requested
+/// workspace: see [`holding_runtime`].
 pub(in crate::api) async fn replay_run_action(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    RawQuery(raw_query): RawQuery,
     Path(id): Path<String>,
     Query(query): Query<OperationsQuery>,
     OptionalJson(body): OptionalJson<ReplayBody>,
@@ -117,7 +153,12 @@ pub(in crate::api) async fn replay_run_action(
     };
     let completion_authority =
         authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE, state.operator_session());
+    let requested = requested_workspace(raw_query.as_deref());
     match blocking("replay run", move || {
+        let runtime = match holding_runtime(&state, requested.as_deref(), &id) {
+            Ok(runtime) => runtime,
+            Err(failure) => return Ok(Err(failure)),
+        };
         let source = runtime.show_job_run(&id)?;
         if source
             .input
@@ -127,7 +168,7 @@ pub(in crate::api) async fn replay_run_action(
             == Some("done")
             && let Err(denial) = completion_authority
         {
-            return Ok(Err(denial));
+            return Ok(Ok(Err(denial)));
         }
         runtime
             .submit_replay_run(
@@ -136,16 +177,17 @@ pub(in crate::api) async fn replay_run_action(
                 body.claim_token.as_deref(),
                 JobRunTrigger::dashboard(),
             )
-            .map(Ok)
+            .map(|result| Ok(Ok(result)))
     })
     .await
     {
-        Ok(Ok(result)) => Json(json!({
+        Ok(Ok(Ok(result))) => Json(json!({
             "run_id": result.run_id,
             "state": if result.queued { "queued" } else { "submitted" },
         }))
         .into_response(),
-        Ok(Err(denial)) => authorization_denied(denial),
+        Ok(Ok(Err(denial))) => authorization_denied(denial),
+        Ok(Err(failure)) => failure.into_response(),
         Err(response) => *response,
     }
 }

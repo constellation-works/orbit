@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Args, ValueEnum};
 use orbit_core::OrbitRuntime;
-use orbit_core::bootstrap::task_migration::{ImportAction, ImportConflictPolicy};
+use orbit_core::application::task_bundle::migration::{ImportAction, ImportConflictPolicy};
 use serde_json::json;
 
 use crate::command::{CommandOut, Execute, Payload};

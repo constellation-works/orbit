@@ -1,10 +1,9 @@
 //! Registry-neutral seam for reads that span more than one workspace.
 //!
-//! Core owns no workspace catalog: `orbit-registry` sits above it in the crate
-//! graph. A federated read therefore needs a higher composition layer to answer
-//! two questions — *which checkouts does this scope cover* and *open a runtime
-//! for one of them* — while Core keeps ownership of fan-out, fusion,
-//! attribution, and degradation notes [ORB-11027].
+//! The runtime crate stays registry-neutral: its catalog seam lets the
+//! composition layer (`orbit-cmd`) resolve which checkouts a federated scope
+//! covers and open a runtime for each one. Core keeps ownership of fan-out,
+//! fusion, attribution, and degradation notes [ORB-11027].
 //!
 //! The seam mirrors [`RuntimeKernel::with_coordination_write_owner`]: a
 //! standalone runtime constructed without a catalog still works, and simply
@@ -77,11 +76,38 @@ pub struct FederatedWorkspaceTarget {
 /// worktree — degrades to a note on that workspace instead of failing the
 /// whole query.
 pub trait WorkspaceCatalog: Send + Sync {
+    /// Registered remote identities used to validate a local attention host filter.
+    /// The local host is supplied by the runtime; no network probe is performed.
+    fn attention_registered_hosts(
+        &self,
+    ) -> Result<Vec<orbit_types::tool::AttentionHost>, OrbitError> {
+        Ok(Vec::new())
+    }
+
+    /// Default `orbit doctor` workspace checks for one opened checkout, the
+    /// local `host_unhealthy` source. `None` means this catalog has no doctor
+    /// (an in-memory catalog), not that every check passed.
+    fn attention_doctor_checks(
+        &self,
+        _runtime: &RuntimeKernel,
+    ) -> Result<Option<Vec<orbit_types::tool::AttentionHealthCheck>>, OrbitError> {
+        Ok(None)
+    }
+
     /// Checkouts covered by `scope`, in a stable order.
     fn resolve_scope(
         &self,
         scope: &WorkspaceScope,
     ) -> Result<Vec<FederatedWorkspaceTarget>, OrbitError>;
+
+    /// Open for a derived read, without stale-run reconciliation or task repair.
+    /// In-memory catalogs may retain their ordinary no-maintenance open.
+    fn open_observational(
+        &self,
+        target: &FederatedWorkspaceTarget,
+    ) -> Result<RuntimeKernel, OrbitError> {
+        self.open(target)
+    }
 
     /// Open a runtime bound to one resolved target.
     fn open(&self, target: &FederatedWorkspaceTarget) -> Result<RuntimeKernel, OrbitError>;

@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Decisions
 owner: claude
-last_updated: 2026-10-28
+last_updated: 2026-11-10
 last_validated: 2026-10-28
 status: Draft
 feature: distributed-drain
@@ -204,8 +204,10 @@ top-tier crew*, read by crew selection and ignored by admission.
 
 - One admission path, one footprint rule (a task's own `context_files`), one leaf pipeline.
 - Large work is one leaf; its size shows up as slot time, not as special machinery.
-- `docs/design/resident-orchestrator/` is removed; its drain-window and slot-refill work lives on
-  in `workspace_auto_pipeline`.
+- The epic-owning resident-orchestrator design was removed; its drain-window and slot-refill work
+  lives on in `workspace_auto_pipeline`. [ORB-21229] rewrote the resident orchestrator from scratch
+  as coordination only (no worktree, no pinned drain slot, no admission path):
+  [resident-orchestrator](../resident-orchestrator/1_overview.md). This decision stands under it.
 - Cost: a big task no longer gets a stable, reattachable worktree across runs; a crash mid-epic
   restarts from the branch, like any other leaf.
 
@@ -404,7 +406,7 @@ handoff state; completion still requires explicit authorization and verified lan
 
 **Recorded:** 2026-10-04 · [ORB-13908], at Daniel's direction to run the [ORB-13989] reviewer model
 on claimed leaves, gated on the `review.before_pr` the claim captured ([ORB-13992], [ORB-13895]).
-**Code anchors:** `crates/orbit-store/src/repository/task/coordination/admission.rs::admission_refusal`,
+**Code anchors:** `crates/orbit-store/src/repository/task/coordination/admission/refusal.rs::admission_refusal`,
 `crates/orbit-store/src/driver/sqlite/job_run_store/pull.rs` (`CreateLeaf`, `claim_review_admission`),
 `crates/orbit-core/src/application/review/gate/context.rs::claimed_leaf_claim`,
 `crates/orbit-core/src/application/review/gate/settle.rs::handoff_evidence`,
@@ -758,7 +760,8 @@ claim. Reading the census never scans receipts.
 A candidate that only the requester can run sorts first within its band, ahead of higher
 priorities. Among the rest, fewer eligible executors sorts first within a priority. Band stays
 the outer key. Owner-local admission uses the same comparator, with the owner as the requester.
-`workflow.admission_affinity` (`band` | `priority` | `off`) bounds how far exclusivity reaches.
+`workflow.admission_affinity` (`band` | `priority` | `off`) bounded how far exclusivity reaches;
+[ORB-22808] removed the key and fixed the reach at `band`.
 The contract is the [executor census](./specs/task-pull.md#executor-census-and-affinity).
 
 The owner still holds ordering authority. Followers declare capability, as before, and the owner
@@ -784,6 +787,72 @@ work at a host ([Followers pull; the owner never places](#followers-pull-the-own
   against every live executor. That cost grows with backlog size × live executors, which is small
   today.
 
+## Held delivery leaves are handed back to the auto-fix drain pass
+
+**Recorded:** 2026-11-09 · [ORB-23809]
+**Code anchors:** `crates/orbit-core/src/application/job/pr_repair/held.rs::handed_back_hold`, `crates/orbit-core/src/application/job/pr_repair/adoption/verdict.rs::OrbitRuntime::repair_verdict`, `crates/orbit-core/src/application/job/resume/plan.rs`
+
+### Context
+
+An `--auto-fix` drain pass handed back only delivery leaves that ended `failed`, `timeout` or
+`interrupted`. A leaf that ended `held` with its pull request open left its task in `review`
+for good: orphan adoption continues only a base-chase hold and the clock only a forge-push hold.
+On 2026-11-09 three tasks sat in review for hours, held as
+`delivery_check_evidence_inconclusive`, `delivery_completion_budget_expired` and
+`delivery_evidence_stale`, whose documented next step was "the next auto-fix pass" or a fresh
+forge read. [ORB-23737] turns more in-review landing stops into
+`delivery_check_evidence_inconclusive` holds, which widened the gap.
+
+### Decision
+
+The out-of-run pass, and the dashboard's Fix PR, hand a held leaf back to its completion step
+through the same resume, rules and authority as a stopped one when its hold is one a fresh
+forge read can clear. Per code:
+
+| Code | Handed back | Why |
+|---|---|---|
+| `delivery_check_evidence_inconclusive` | yes | Its next step is the next auto-fix pass rereading the status. |
+| `delivery_completion_budget_expired` | yes | The forge is authoritative; completion reruns with a fresh budget. |
+| `delivery_evidence_stale` | yes | Completion re-reads its pins; one that still disagrees holds again. |
+| `delivery_requirements_unsatisfied` | yes | A gate that clears is visible to the next read. |
+| `delivery_base_checks_pending` | yes | The base's own result arrives with time. |
+| `delivery_forge_observation_unavailable` | yes | Its documented next step is a resume that reads the forge again. |
+| `delivery_check_runs_absent` | yes, once the unchanged head reports a required check run | Until then the pass lists it under the code and spends no hand-back or repair ledger. A queued workflow run is not this hold. |
+| `delivery_head_changed` | no | Another head than the one the run published; a new attempt adopts it. |
+| `delivery_repair_dispatched` | no | Needs a new head and a new delivery attempt. |
+| `delivery_pr_draft` | no | A person keeps the PR in draft; marking it ready is their decision. |
+| `delivery_pr_closed` | no | Nothing open to complete. |
+| `delivery_task_not_promotable` | no | The task's status is an operator decision. |
+| `delivery_landing_conflict` | no | Owner landing needs fresh validation and a new handoff. |
+| `base_chase_exhausted` | no | Orphan adoption already continues it. |
+| `delivery_origin_unavailable` | no | Backlog admission, no pull request. |
+| `delivery_check_repair_activity_absent` | no | Needs recovery configured and a new head. |
+| `delivery_landing_repair_requeue` | no | The claim already ended and the task returned to the backlog (or is blocked). Resuming the held run would land a revoked handoff. |
+| `delivery_visual_*` | no | Retired; nothing raises them. |
+
+A conflict or failed required check on the held PR is repaired through the per-PR ledger as
+for a stopped leaf. Without one, the hand-back repairs nothing, so it spends none of the
+ledger's budget and records `hold_code` (with a null `blocker`) in `pr_auto_fix_out_of_run`.
+Its own bound: a drain hands a held leaf back no earlier than 5 minutes after it held, doubled
+for each earlier hand-back of that PR for that code, and at most 3 times per PR, head and code.
+A waiting or spent lineage is listed under `auto_fix.skipped` with the hold code as `reason`.
+A `completion.hold` on the task skips it as `completion_held`. Fix PR skips the backoff, not
+the ceiling.
+
+### Consequences
+
+- Held tasks whose hold a forge read clears no longer wait for an operator, and the drain
+  summary, run history and reliability counts still count the source leaf as `held`.
+- No new authority: the resumed leaf keeps its own `completion`, and auto-fix repairs stay
+  under the ledger.
+- Cost: a lineage that keeps holding on the same head runs completion up to three more times
+  before a person is asked. Each costs a resume and forge reads, never an agent unless a
+  blocker appears.
+- Cost: the backoff counts earlier hand-backs of the PR for the code on any head, so after a
+  new head the wait starts longer than for a first hold.
+- Cost: a pass reads the forge for each held candidate past its backoff, including a spent one,
+  because the ceiling is per head and only the forge names the head.
+
 ## Task References
 
 - [ORB-12488] — authored this design folder for the pull-based multi-host drain.
@@ -803,5 +872,7 @@ work at a host ([Followers pull; the owner never places](#followers-pull-the-own
 - [ORB-13642] — made sandboxed claimed implementations hand off through structured output.
 - [ORB-13897] — added typed final-recovery decisions and the deterministic applier.
 - [ORB-13989] — made the before-PR reviewer repair findings in a second commit.
+- [ORB-21229] — rewrote the resident orchestrator as coordination only, under the epic-is-a-tag decision.
+- [ORB-23809] — handed held delivery leaves back to the auto-fix drain pass ([Held delivery leaves are handed back to the auto-fix drain pass](#held-delivery-leaves-are-handed-back-to-the-auto-fix-drain-pass)).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -6,6 +6,9 @@ pub(in super::super) enum Point {
     Discovered,
     /// Every lock is held and nothing has been read under them.
     Locked,
+    /// The pilot write committed, its locks are released, and an invalid
+    /// finding's rejection is about to run.
+    BeforeFindingRejection,
 }
 
 pub(in super::super) type Hook = Box<dyn FnMut(Point)>;
@@ -18,7 +21,7 @@ pub(in super::super) fn set(hook: Option<Hook>) {
     HOOK.with(|slot| *slot.borrow_mut() = hook);
 }
 
-pub(super) fn fire(point: Point) {
+pub(in super::super) fn fire(point: Point) {
     HOOK.with(|slot| {
         if let Some(hook) = slot.borrow_mut().as_mut() {
             hook(point);

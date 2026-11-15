@@ -25,9 +25,9 @@ use std::sync::{Arc, Mutex};
 
 /// One open delivery PR; records every close.
 #[derive(Clone)]
-struct Forge {
+pub(super) struct Forge {
     open: ForgePullRequest,
-    closed: Arc<Mutex<Vec<(u64, String)>>>,
+    pub(super) closed: Arc<Mutex<Vec<(u64, String)>>>,
 }
 
 impl TaskPrForge for Forge {
@@ -58,7 +58,7 @@ impl TaskPrForge for Forge {
 }
 
 /// A forge holding the fixture's PR 17 open, as Orbit authored it.
-fn delivery_forge(f: &Fixture) -> Forge {
+pub(super) fn delivery_forge(f: &Fixture) -> Forge {
     Forge {
         open: ForgePullRequest {
             number: 17,
@@ -118,7 +118,7 @@ pub(super) fn requeue(f: &Fixture, discard: bool) -> Result<Value, orbit_core::O
     )
 }
 
-fn status(f: &Fixture) -> TaskStatus {
+pub(super) fn status(f: &Fixture) -> TaskStatus {
     f.runtime.get_task(&f.task).unwrap().status
 }
 
@@ -302,6 +302,90 @@ fn requeue_keeps_the_published_owner_refusals() {
     assert_eq!(newer.job_id, "task_pr_pipeline");
     refused(&f, false, "newer execution");
     assert_eq!(status(&f), TaskStatus::Blocked);
+}
+
+/// A newer publication must not be silently associated with the old owner.
+fn requeue_refuses_a_newer_different_publication() {
+    for (pr, head) in [("18", "old-head"), ("17", "different-head")] {
+        let (f, _) = escalated_handoff_fixture(None, None);
+        let mut newer = f
+            .runtime
+            .insert_job_run(
+                "task_pr_pipeline",
+                1,
+                Utc::now(),
+                Some(json!({"task_ids":[f.task]})),
+                None,
+            )
+            .unwrap();
+        newer.state = JobRunState::Cancelled;
+        newer.finished_at = Some(Utc::now());
+        save_run(&f, &newer);
+        let state = orbit_types::workflow::PipelineState::new(
+            newer.run_id.clone(),
+            newer.job_id.clone(),
+            newer.input.clone().unwrap(),
+        );
+        f.runtime.write_run_state(&newer.run_id, &state).unwrap();
+        checkpoint(
+            &f,
+            &newer.run_id,
+            8,
+            "pr_open",
+            json!({"pr_number": pr, "head_sha": head}),
+        );
+        let message = refused(&f, false, "different newer publication");
+        assert!(message.contains("newer execution"), "{message}");
+    }
+}
+
+fn requeue_names_the_held_completion_resume() {
+    let (f, _) = escalated_handoff_fixture(None, None);
+    let mut newer = f
+        .runtime
+        .insert_job_run(
+            "task_pr_pipeline",
+            2,
+            Utc::now(),
+            Some(json!({"task_ids":[f.task]})),
+            None,
+        )
+        .unwrap();
+    newer.retry_source_run_id = Some(f.source.run_id.clone());
+    newer.state = JobRunState::Held;
+    newer.finished_at = Some(Utc::now());
+    save_run(&f, &newer);
+    let now = Utc::now();
+    f.runtime
+        .complete_job_run_step(
+            &newer.run_id,
+            &orbit_store::contracts::JobRunStepParams {
+                step_index: 9,
+                // Match the finalizer's appended Job diagnostic, rather than
+                // the completion activity's audit row.
+                target_type: orbit_types::workflow::JobTargetType::Job,
+                target_id: newer.job_id.clone(),
+                state: JobRunState::Held,
+                started_at: now,
+                finished_at: now,
+                duration_ms: None,
+                exit_code: None,
+                lock_wait_ms: None,
+                agent_response_json: None,
+                error_code: Some(
+                    orbit_types::workflow::DeliveryRefusal::CheckEvidenceInconclusive
+                        .error_code()
+                        .into(),
+                ),
+                error_message: Some("failed-job log unreadable".into()),
+            },
+        )
+        .unwrap();
+    let message = refused(&f, false, "held completion");
+    assert!(
+        message.contains(&format!("orbit job resume {}", newer.run_id)),
+        "{message}"
+    );
 }
 
 /// A discarded candidate is never resumed, and a changed specification is
@@ -533,7 +617,7 @@ fn a_human_word_on_a_transient_block_stands() {
 }
 
 /// History entries of `event` recorded by Orbit on the fixture task.
-fn recorded(f: &Fixture, event: &str) -> usize {
+pub(super) fn recorded(f: &Fixture, event: &str) -> usize {
     f.runtime
         .get_task_history(&f.task)
         .unwrap()
@@ -827,9 +911,61 @@ fn plain_status_update_refuses_changed_publication_and_discard_closes_it() {
         )
         .unwrap();
     let error = plain_refused(&f, "changed specification");
+    // ORB-20955 (observed on ORB-20867): the refusal must name the supported
+    // operator CLI discard route with the task id, not a top-level MCP field.
+    let expected_route = format!(
+        "orbit task update {} --status backlog --discard-candidate",
+        f.task
+    );
     assert!(
-        error.contains("--discard-candidate"),
-        "the mismatch offers its exit: {error}"
+        error.contains(&expected_route),
+        "ORB-20955: the mismatch names the supported operator route: {error}"
+    );
+    assert!(
+        error.contains("orbit.task.update MCP does not accept"),
+        "ORB-20955: the mismatch explains the MCP boundary: {error}"
+    );
+    assert!(
+        !error.contains("MCP: discard_candidate"),
+        "ORB-20955: the mismatch must not advertise an MCP field: {error}"
+    );
+    assert!(
+        !error.contains("discard_candidate=true"),
+        "ORB-20955: the mismatch must not advertise an MCP field: {error}"
+    );
+    // The ordinary MCP update surface still refuses a top-level discard
+    // field; only the operator CLI carries it.
+    let task_before = serde_json::to_value(f.runtime.get_task(&f.task).unwrap()).unwrap();
+    let history_before =
+        serde_json::to_value(f.runtime.get_task_history(&f.task).unwrap()).unwrap();
+    let mcp_discard_error = f
+        .runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": f.task, "workspace": f.repo, "status": "backlog",
+                "discard_candidate": true, "model": "claude"}),
+        )
+        .err()
+        .unwrap_or_else(|| panic!("ORB-20955: MCP unexpectedly accepted discard_candidate"))
+        .to_string();
+    assert!(
+        mcp_discard_error.contains("discard_candidate"),
+        "ORB-20955: the MCP refusal names the field: {mcp_discard_error}"
+    );
+    assert!(
+        mcp_discard_error.contains("unknown field")
+            || mcp_discard_error.contains("does not accept"),
+        "ORB-20955: the MCP refusal keeps the CLI-only contract: {mcp_discard_error}"
+    );
+    assert_eq!(
+        serde_json::to_value(f.runtime.get_task(&f.task).unwrap()).unwrap(),
+        task_before,
+        "ORB-20955: refused MCP discard changed the task"
+    );
+    assert_eq!(
+        serde_json::to_value(f.runtime.get_task_history(&f.task).unwrap()).unwrap(),
+        history_before,
+        "ORB-20955: refused MCP discard wrote history"
     );
     let forge = delivery_forge(&f);
     f.runtime = f
@@ -903,7 +1039,13 @@ fn a_backlog_return_that_selects_the_crew_keeps_the_candidate_resumable() {
         .unwrap();
     assert_eq!(status(&f), TaskStatus::Backlog);
     assert_eq!(
-        f.runtime.get_task(&f.task).unwrap().crew_source.as_deref(),
+        f.runtime
+            .get_task(&f.task)
+            .unwrap()
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("explicit")
     );
     assert_eq!(recorded(&f, "published_owner_requeued"), 1);
@@ -926,7 +1068,13 @@ fn a_backlog_return_that_redraws_the_crew_keeps_the_candidate_resumable() {
         )
         .unwrap();
     assert_eq!(
-        f.runtime.get_task(&f.task).unwrap().crew_source.as_deref(),
+        f.runtime
+            .get_task(&f.task)
+            .unwrap()
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("explicit")
     );
     f.runtime
@@ -943,15 +1091,144 @@ fn a_backlog_return_that_redraws_the_crew_keeps_the_candidate_resumable() {
     let task = f.runtime.get_task(&f.task).unwrap();
     assert_eq!(task.status, TaskStatus::Backlog);
     assert_ne!(
-        task.crew_source.as_deref(),
+        task.crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("explicit"),
         "the clear redrew the crew"
     );
     assert_next_run_resumes_the_published_candidate(&f);
 }
 
+/// Production never records a step as `failed`: the executor checkpoints
+/// completed steps only, so the step that failed has no `step_states` entry.
+/// The fixture records one by hand; this returns the run to the shape a real
+/// validate failure leaves, and names the failed step.
+fn forget_the_failed_step_state(f: &Fixture) -> String {
+    let mut state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    let failed = state
+        .failure_activity_checkpoint
+        .as_ref()
+        .unwrap()
+        .failed_step_id
+        .clone();
+    assert_eq!(failed, "validate", "the fixture fails at validation");
+    assert!(
+        state
+            .step_states
+            .remove(&step_index(f, &failed))
+            .is_some_and(|s| s == JobRunState::Failed),
+        "the fixture recorded the failed step by hand"
+    );
+    f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+    failed
+}
+
+/// Rewrite one field of the failure-handoff receipt a run persisted.
+fn tamper_receipt(f: &Fixture, key: &str, value: Value) {
+    let mut state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    state.failure_activity_checkpoint.as_mut().unwrap().output[key] = value;
+    f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+}
+
+/// The incident (ORB-21216): a run failed at `validate`, its failure handoff
+/// published a PR, and the task spec never changed, yet requeue refused the
+/// handoff because the failed step had no `failed` entry in `step_states`.
+fn requeue_resumes_a_validate_failure_handoff_whose_failed_step_has_no_recorded_state() {
+    let (f, _) = escalated_handoff_fixture(None, None);
+    forget_the_failed_step_state(&f);
+    let answer = requeue(&f, false).unwrap();
+    assert_eq!(answer["status"], "backlog");
+    assert_eq!(answer["resumes"]["pull_request"], "17");
+    assert_eq!(answer["resumes"]["head_sha"], f.head);
+    assert_next_run_resumes_the_published_candidate(&f);
+}
+
+/// The final-recovery decision's own `requeue` answer takes the same route.
+fn the_final_recovery_requeue_answer_resumes_a_validate_failure_handoff() {
+    let (f, _) = escalated_handoff_fixture(None, None);
+    forget_the_failed_step_state(&f);
+    let request = f
+        .runtime
+        .list_decision_requests(None, Some(&f.task), false)
+        .unwrap()
+        .pop()
+        .expect("the escalation opened a requeue decision");
+    f.runtime
+        .answer_decision_request_as_human(
+            &request.id,
+            "done",
+            None,
+            "human:operator".to_string(),
+            Some("cli".to_string()),
+        )
+        .unwrap();
+    assert_eq!(status(&f), TaskStatus::Backlog);
+    assert_eq!(recorded(&f, "published_owner_requeued"), 1);
+    assert_next_run_resumes_the_published_candidate(&f);
+}
+
+/// Each condition of the handoff check refuses under its own name, with
+/// nothing written.
+fn a_refused_handoff_names_the_condition_that_disagreed() {
+    let case = |name: &str, tamper: &dyn Fn(&Fixture), named: &str| {
+        let (f, _) = escalated_handoff_fixture(None, None);
+        forget_the_failed_step_state(&f);
+        tamper(&f);
+        let error = refused(&f, false, name);
+        assert!(error.contains(named), "{name}: {error}");
+        for other in [
+            "ownership disagrees",
+            "failed step disagrees",
+            "base disagrees",
+            "specification digest disagrees",
+        ] {
+            assert!(
+                other == named || !error.contains(other),
+                "{name} also names {other}: {error}"
+            );
+        }
+    };
+    case(
+        "ownership",
+        &|f| tamper_receipt(f, "checkpoint_owner", json!("jrun-another-owner")),
+        "ownership disagrees",
+    );
+    case(
+        "failed step",
+        &|f| {
+            let mut state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+            state
+                .step_states
+                .insert(step_index(f, "validate"), JobRunState::Success);
+            f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+        },
+        "failed step disagrees",
+    );
+    case(
+        "base",
+        &|f| tamper_receipt(f, "original_base_sha", json!("0".repeat(40))),
+        "base disagrees",
+    );
+    // Requeue's own spec check answers a stale digest first, so the handoff
+    // check's digest refusal is read through explicit source-repair inspection.
+    let (f, _) = escalated_handoff_fixture(None, None);
+    forget_the_failed_step_state(&f);
+    tamper_receipt(&f, "task_spec_digest", json!("0".repeat(64)));
+    let error = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", f.request("inspect"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("specification digest disagrees"), "{error}");
+}
+
 crate::scenario_table!(
     handoff_requeue_scenarios,
+    requeue_resumes_a_validate_failure_handoff_whose_failed_step_has_no_recorded_state,
+    the_final_recovery_requeue_answer_resumes_a_validate_failure_handoff,
+    a_refused_handoff_names_the_condition_that_disagreed,
     plain_status_update_resumes_the_failure_handoff_candidate,
     plain_status_update_refuses_changed_publication_and_discard_closes_it,
     plain_status_update_refuses_an_unbound_pull_request,
@@ -959,6 +1236,8 @@ crate::scenario_table!(
     a_backlog_return_that_redraws_the_crew_keeps_the_candidate_resumable,
     operator_requeue_resumes_the_failure_handoff_candidate_and_pull_request,
     requeue_keeps_the_published_owner_refusals,
+    requeue_refuses_a_newer_different_publication,
+    requeue_names_the_held_completion_resume,
     changed_or_discarded_candidates_are_refused_with_a_discard_exit,
     a_transient_infra_block_is_requeued_onto_its_candidate_after_the_probe,
     transient_requeues_are_bounded_per_publication,

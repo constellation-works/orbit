@@ -5,6 +5,7 @@ use orbit_core::{
     AuditEventFilter, AuditEventInsertParams, AuditEventStatus, FailureClass, FailureIncidentQuery,
     JobRunState, OrbitError,
 };
+use orbit_store::contracts::AuditInvocationFields;
 use serde_json::json;
 
 use super::support::{Fixture, isolated, json_ok, walk_audit_pages};
@@ -749,6 +750,103 @@ fn callable_failures_reconcile_raw_classified_and_denied_rows_with_events() {
     );
 }
 
+fn record_modeled(
+    fixture: &Fixture,
+    id: &str,
+    tool: &str,
+    status: AuditEventStatus,
+    role: &str,
+    session_model: Option<&str>,
+) {
+    let mut event = row(id, Some(tool), status);
+    event.role = role.into();
+    fixture
+        .runtime
+        .record_audit_event_with_invocation(
+            &event,
+            AuditInvocationFields {
+                session_model,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+fn tool_call_failures_break_down_by_session_model() {
+    isolated(
+        "audit::tool_call_failures_break_down_by_session_model",
+        || {
+            let fixture = Fixture::new();
+            use AuditEventStatus::{Failure, Success};
+            record_modeled(
+                &fixture,
+                "sol-fail",
+                "orbit.task.add",
+                Failure,
+                "unverified",
+                Some("gpt-6-sol"),
+            );
+            record_modeled(
+                &fixture,
+                "sol-ok",
+                "orbit.task.add",
+                Success,
+                "unverified",
+                Some("gpt-6-sol"),
+            );
+            record_modeled(
+                &fixture,
+                "client-fail",
+                "orbit.task.add",
+                Failure,
+                "unverified",
+                Some("orbit-mcp-roundtrip-test"),
+            );
+            // A row from before session_model existed groups by the role-derived
+            // actor family. `codex` is a family, so the model bucket is `codex`.
+            record_modeled(
+                &fixture,
+                "historical",
+                "orbit.task.show",
+                Failure,
+                "codex",
+                None,
+            );
+            let server = fixture.server(false);
+            let summary =
+                json_ok(server.get("/api/audit/summary?since=24h&workspace=ws_http_fixture"));
+            let by_tool = summary["tool_call_failures_by_tool"].as_array().unwrap();
+            let add = by_tool
+                .iter()
+                .find(|row| row["tool"] == "orbit.task.add")
+                .unwrap();
+            assert_eq!(add["failed"], 2, "per-tool rates stay unsplit: {add}");
+            assert_eq!(add["total"], 3);
+            let by_model = summary["tool_call_failures_by_model"]
+                .as_array()
+                .expect("model breakdown");
+            let find = |tool: &str, model: &str| {
+                by_model
+                    .iter()
+                    .find(|row| row["tool"] == tool && row["model"] == model)
+                    .unwrap_or_else(|| panic!("missing {tool} / {model} in {by_model:?}"))
+                    .clone()
+            };
+            let sol = find("orbit.task.add", "gpt-6-sol");
+            assert_eq!(sol["failed"], 1);
+            assert_eq!(sol["total"], 2);
+            assert_eq!(sol["rate"], json!(0.5));
+            let client = find("orbit.task.add", "orbit-mcp-roundtrip-test");
+            assert_eq!(client["failed"], 1);
+            assert_eq!(client["total"], 1);
+            let historical = find("orbit.task.show", "codex");
+            assert_eq!(historical["failed"], 1);
+            assert_eq!(historical["total"], 1);
+        },
+    );
+}
+
 #[test]
 fn inactive_tool_calls_are_denied_by_registry_and_audit_classifier() {
     isolated(
@@ -834,19 +932,68 @@ fn duration_ranking_excludes_unnamed_events_before_selecting_top_tools() {
 }
 
 #[test]
-fn dashboard_renders_callable_failure_counts_and_denial_only_tools() {
-    let result = std::process::Command::new("node")
-        .args([
-            "--experimental-vm-modules",
-            "tests/http_api/dashboard_audit.mjs",
-        ])
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("node is required for dashboard behavior tests");
-    assert!(
-        result.status.success(),
-        "dashboard audit behavior failed:\n{}\n{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
+fn zero_limit_returns_an_empty_page_with_and_without_predicates() {
+    isolated(
+        "audit::zero_limit_returns_an_empty_page_with_and_without_predicates",
+        || {
+            let fixture = Fixture::new();
+            // More than the 200-row HTTP maximum, so a fallthrough to the
+            // store's internal default is visible as more than one page.
+            for index in 0..250 {
+                fixture
+                    .runtime
+                    .record_audit_event(&row(
+                        &format!("zero-{index}"),
+                        Some("orbit.task.show"),
+                        AuditEventStatus::Success,
+                    ))
+                    .unwrap();
+            }
+            let server = fixture.server(false);
+            let response = server.get("/api/audit?workspace=ws_http_fixture&since=24h&limit=0");
+            assert!(
+                response.headers().get("x-audit-next-before").is_none(),
+                "an empty zero-limit page carries no resume cursor"
+            );
+            let plain = json_ok(response);
+            let plain = plain.as_array().unwrap();
+            assert!(
+                plain.is_empty(),
+                "limit=0 is an empty ordinary page, got {} rows",
+                plain.len()
+            );
+            // `q` is a Rust-side predicate, so this exercises the scan path;
+            // it must agree with the direct store window above.
+            let filtered = json_ok(
+                server.get("/api/audit?workspace=ws_http_fixture&since=24h&limit=0&q=codex"),
+            );
+            let filtered = filtered.as_array().unwrap();
+            assert!(
+                filtered.is_empty(),
+                "limit=0 with a Rust-side predicate is also empty, got {} rows",
+                filtered.len()
+            );
+            assert_eq!(
+                filtered.len(),
+                plain.len(),
+                "zero-limit pages are consistent with and without predicates"
+            );
+            let huge =
+                json_ok(server.get("/api/audit?workspace=ws_http_fixture&since=24h&limit=100000"));
+            assert_eq!(
+                huge.as_array().unwrap().len(),
+                200,
+                "a huge limit is still clamped to the HTTP maximum"
+            );
+            let omitted = json_ok(server.get("/api/audit?workspace=ws_http_fixture&since=24h"));
+            assert_eq!(
+                omitted.as_array().unwrap().len(),
+                50,
+                "an omitted limit keeps the default page"
+            );
+            let positive =
+                json_ok(server.get("/api/audit?workspace=ws_http_fixture&since=24h&limit=5"));
+            assert_eq!(positive.as_array().unwrap().len(), 5);
+        },
     );
 }

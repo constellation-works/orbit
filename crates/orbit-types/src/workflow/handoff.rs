@@ -6,10 +6,7 @@ use std::collections::BTreeSet;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    ReviewTiming, ReviewVerdict, SelectiveReviewReceipt, SelectiveReviewResult,
-    automation::SourceRevision,
-};
+use super::{ReviewTiming, ReviewVerdict, automation::SourceRevision};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -103,12 +100,12 @@ pub struct HandoffReviewEvidence {
 pub struct HandoffReview {
     pub policy: ReviewTiming,
     pub disposition: HandoffReviewDisposition,
-    /// The leaf gate's host-authored selective-selection receipt, when the
-    /// claim captured an active selective policy. The owner verifies its
-    /// policy digest and pinned base/head against the candidate; a
-    /// `not_required` receipt is selection evidence, never review evidence.
+    /// [ORB-22808] The selective-selection receipt an earlier leaf sent.
+    /// Selective review was removed: this build never sends one and the
+    /// owner ignores it. Kept until 2026-12-08 because this type denies
+    /// unknown fields, so such a handoff still parses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub selective_receipt: Option<SelectiveReviewReceipt>,
+    pub selective_receipt: Option<serde_json::Value>,
 }
 
 impl HandoffReview {
@@ -119,14 +116,6 @@ impl HandoffReview {
             disposition: HandoffReviewDisposition::NotRequired,
             selective_receipt: None,
         }
-    }
-
-    /// Whether this handoff carries a selective decision that no review
-    /// was required for its candidate.
-    pub fn selective_not_required(&self) -> bool {
-        self.selective_receipt
-            .as_ref()
-            .is_some_and(|receipt| receipt.result == SelectiveReviewResult::NotRequired)
     }
 
     /// The review evidence this handoff carries, before-PR or
@@ -179,11 +168,10 @@ pub struct TaskHandoff {
     /// accepts the handoff.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub regression_from: Vec<String>,
-    /// The capture of record (`visual/capture.json`) a `verify-mock-ui`
-    /// claim returns, already attached on the owner by the system writer.
-    /// The owner checks it, and every image it names, against the claim's
-    /// visual review contract (`visual_capture_mismatch`). Absent when the
-    /// claim captured no visual review contract.
+    /// [ORB-22807] Visual review was removed. A follower on an earlier build
+    /// may still name its capture or resolution bundle here for a claim an
+    /// earlier owner admitted; the owner accepts and ignores it. Delete the
+    /// field after 2026-12-07.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visual: Option<HandoffArtifactRef>,
 }
@@ -308,8 +296,9 @@ pub enum LandingAttemptState {
     Dispatched,
     /// Merged and completed against verified external evidence.
     Merged,
-    /// Stopped with durable evidence; an operator may retry a healthy authorized
-    /// handoff. A candidate repair needs fresh validation and a new handoff.
+    /// Stopped with durable evidence. The owner may automatically retry a cleared
+    /// waiting gate within its budget; an operator may explicitly retry a healthy
+    /// authorized handoff. Candidate repair needs validation and a new handoff.
     Stopped,
 }
 
@@ -334,6 +323,128 @@ pub struct LandingAttempt {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Discriminator of an [`OwnerLandingRefusal`]: its `kind` is always
+/// `owner_landing_refusal`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OwnerLandingRefusalKind {
+    OwnerLandingRefusal,
+}
+
+/// The bounded, redacted human reason of an [`OwnerLandingRefusal`], with
+/// the size of the text it was cut from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LandingRefusalReason {
+    pub value: String,
+    #[serde(default)]
+    pub original_chars: usize,
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+/// A waiting gate that can clear without changing an accepted candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LandingWaitGate {
+    /// The base's checks must finish successfully before landing resumes.
+    BaseChecksPending,
+    /// Required or owner-owed checks are still running on the candidate.
+    RequiredChecksPending,
+    /// Failed-job logs must become readable before the failure can be classified.
+    JobLogsUnavailable,
+}
+
+impl LandingWaitGate {
+    /// The delivery stop code recorded with an automatic retry reservation.
+    pub fn stop_code(self) -> &'static str {
+        match self {
+            Self::BaseChecksPending => "delivery_base_checks_pending",
+            Self::RequiredChecksPending => "delivery_requirements_unsatisfied",
+            Self::JobLogsUnavailable => "delivery_forge_observation_unavailable",
+        }
+    }
+}
+
+/// The diagnostic an owner landing stop records as its attempt's evidence.
+///
+/// Fields serialize in this declaration order, which is the stored byte
+/// order: keep it. The bounded observations no reader interprets stay
+/// opaque JSON; they default to `null` when older evidence omits them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OwnerLandingRefusal {
+    #[serde(default)]
+    pub schema_version: u32,
+    pub kind: OwnerLandingRefusalKind,
+    pub reason: LandingRefusalReason,
+    #[serde(default)]
+    pub repairable: bool,
+    /// Typed retry eligibility, separate from opaque diagnostic observations.
+    /// Older stops lacking this evidence remain available for explicit retry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_gate: Option<LandingWaitGate>,
+    #[serde(default)]
+    pub accepted: serde_json::Value,
+    #[serde(default)]
+    pub owner_owed: serde_json::Value,
+    #[serde(default)]
+    pub observation: serde_json::Value,
+    #[serde(default)]
+    pub workflow_prerequisites: serde_json::Value,
+    #[serde(default)]
+    pub emission_proof: serde_json::Value,
+    /// The engine sets this to `true` for every `StopForRequeue`. If the
+    /// landing repair budget is spent, the task is blocked while this evidence
+    /// stays on the attempt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requeue: Option<bool>,
+}
+
+/// [`LandingAttempt::evidence`] read once: the stored string stays opaque
+/// and byte-identical, and every reader decodes it through
+/// [`LandingStopEvidence::parse`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum LandingStopEvidence {
+    /// An `owner_landing_refusal` diagnostic with a non-blank reason.
+    OwnerRefusal(Box<OwnerLandingRefusal>),
+    /// A stop reason the engine recorded as a JSON string literal: `raw`
+    /// is the stored text, quotes included, and `decoded` its content.
+    JsonString { raw: String, decoded: String },
+    /// Anything else, shown as stored: older plain text, merge evidence,
+    /// other JSON, or a refusal whose reason is missing or blank.
+    Text(String),
+}
+
+impl LandingStopEvidence {
+    /// Decode one stored evidence string. Never fails: what is not a
+    /// readable refusal or JSON string stays [`LandingStopEvidence::Text`].
+    pub fn parse(evidence: &str) -> Self {
+        let raw = || evidence.to_string();
+        match serde_json::from_str::<serde_json::Value>(evidence) {
+            Err(_) => Self::Text(raw()),
+            Ok(serde_json::Value::String(decoded)) => Self::JsonString {
+                raw: raw(),
+                decoded,
+            },
+            Ok(value) => match serde_json::from_value::<OwnerLandingRefusal>(value) {
+                Ok(refusal) if !refusal.reason.value.trim().is_empty() => {
+                    Self::OwnerRefusal(Box::new(refusal))
+                }
+                _ => Self::Text(raw()),
+            },
+        }
+    }
+
+    /// The text status notes, revocation reasons, repair stop text and
+    /// blocked comments carry: a refusal's human reason, otherwise the
+    /// evidence exactly as stored.
+    pub fn operator_reason(&self) -> &str {
+        match self {
+            Self::OwnerRefusal(refusal) => &refusal.reason.value,
+            Self::JsonString { raw, .. } | Self::Text(raw) => raw,
+        }
+    }
+}
+
 /// [ORB-16890] Times a task returns to the backlog because its handed-off
 /// candidate fails its own required check at landing, after its one
 /// automatic repair leaf, before the next such stop blocks it.
@@ -354,6 +465,14 @@ pub const EXTERNAL_MERGE_SETTLED_EVENT: &str = "external_merge_settled";
 /// History event of an owner landing that waits for its base branch to
 /// recover from a failure inherited from it, before the landing deadline.
 pub const LANDING_WAITING_FOR_BASE_EVENT: &str = "landing_waiting_for_base";
+
+/// History event of the review watch that follows an owner-local delivery
+/// left in review with an open pull request (a dashboard ship, `orbit run
+/// ship` or a drain leaf, none of which hands off for landing). Its note is
+/// the JSON outcome: `state` (`passed`, `failed`, `conflicting`, `blocked`
+/// or `pending`), `pr_number`, `head_sha`, and for `failed` the landing's
+/// `classification` of the failed checks with its `detail`.
+pub const LANDING_CHECKS_OBSERVED_EVENT: &str = "landing_checks_observed";
 
 /// History event of the landing stop that found the task's landing repair
 /// budget spent and blocked it. Requeues before it no longer count.
@@ -442,6 +561,9 @@ pub struct FindingInvalidReport {
     pub task_id: String,
     pub run_id: String,
     pub tested_head: String,
+    /// The `task.finding_fingerprint` of the prompt this run judged: the
+    /// finding material the report rejects. A task edited since is not rejected.
+    pub finding_fingerprint: String,
     /// Why the defect as described does not exist at `tested_head`.
     pub reasoning: String,
     pub evidence: Vec<FindingInvalidCitation>,
@@ -476,7 +598,8 @@ pub struct NoDiffCheck {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AlreadyResolved {
-    /// `cargo test -p <crate> --test <target> [<filter>]` selectors.
+    /// `cargo test -p <crate> --test <target> [<filter>]` or
+    /// `cargo test -p <crate> --lib [<filter>]` selectors.
     pub selectors: Vec<String>,
 }
 
@@ -493,15 +616,17 @@ impl AlreadyResolved {
                 .map_err(|error| {
                     format!(
                         "`{ALREADY_RESOLVED_FIELD}` must be `{{\"selectors\": [\"cargo test -p \
-                         <crate> --test <target> [<filter>]\", ...]}}`: {error}"
+                         <crate> --test <target> [<filter>]\" or \"cargo test -p <crate> --lib \
+                         [<filter>]\", ...]}}`: {error}"
                     )
                 }),
         }
     }
 
-    /// Admit every selector as one integration test target in the closed
+    /// Admit every selector in the closed
     /// [`HostSandboxCommand`](super::HostSandboxCommand) grammar, since each
-    /// runs on the claim host outside any agent sandbox. An exact required
+    /// runs on the claim host outside any agent sandbox: one integration
+    /// `--test` target or the package's `--lib` unit tests. An exact required
     /// command is not a selector: validation already runs it, and it need not
     /// run a test.
     pub fn admit(&self) -> Result<Vec<super::HostSandboxCommand>, String> {
@@ -516,7 +641,8 @@ impl AlreadyResolved {
             let command = super::HostSandboxCommand::admit(selector, &[]).map_err(|refusal| {
                 format!(
                     "`{ALREADY_RESOLVED_FIELD}` selector `{selector}` is not admitted ({}): {}; \
-                     a selector is `cargo test -p <crate> --test <target> [<filter>]`",
+                     a selector is `cargo test -p <crate> --test <target> [<filter>]` or \
+                     `cargo test -p <crate> --lib [<filter>]`",
                     refusal.reason.as_str(),
                     refusal.detail
                 )
@@ -530,6 +656,74 @@ impl AlreadyResolved {
         }
         Ok(admitted)
     }
+}
+
+/// Whether `reported` is the scope [`already_landed_scope`] computes for
+/// `task` and `comments`, allowing only the owner's recording of the
+/// `regression_from` relations this handoff itself supplied.
+///
+/// A claimed leaf cannot write its task's relations, so it returns culprit
+/// task IDs in its handoff and the owner records them as `regression_from`
+/// relations when it accepts the handoff [ORB-24696]. Those recorded
+/// relations appear in the owner's current scope but not in the scope the
+/// leaf verified, and must not invalidate that verification. Every other
+/// difference — a removed, reordered or changed relation, a relation the
+/// handoff did not supply, or any other scope key — still does.
+pub fn already_landed_scope_matches(
+    reported: &serde_json::Value,
+    task: &crate::task::Task,
+    comments: &[crate::task::TaskComment],
+    supplied_regression_from: &[String],
+) -> bool {
+    let expected = already_landed_scope(task, comments);
+    if reported == &expected {
+        return true;
+    }
+    if supplied_regression_from.is_empty() {
+        return false;
+    }
+    let (Some(reported), Some(expected)) = (reported.as_object(), expected.as_object()) else {
+        return false;
+    };
+    if reported.len() != expected.len()
+        || reported
+            .iter()
+            .any(|(key, value)| key != "relations" && expected.get(key) != Some(value))
+    {
+        return false;
+    }
+    let (Some(reported_relations), Some(expected_relations)) = (
+        reported.get("relations").and_then(|value| value.as_array()),
+        expected.get("relations").and_then(|value| value.as_array()),
+    ) else {
+        return false;
+    };
+    // The reported relations must survive in order; every extra relation in
+    // the current scope must be a plain `regression_from` link (the exact
+    // shape the owner records on acceptance) to a supplied target.
+    let supplied: BTreeSet<&str> = supplied_regression_from
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let mut matched = 0;
+    for relation in expected_relations {
+        if reported_relations.get(matched) == Some(relation) {
+            matched += 1;
+            continue;
+        }
+        let plain_supplied = relation.as_object().is_some_and(|relation| {
+            relation.len() == 2
+                && relation.get("type").and_then(|value| value.as_str()) == Some("regression_from")
+                && relation
+                    .get("target")
+                    .and_then(|value| value.as_str())
+                    .is_some_and(|target| supplied.contains(target))
+        });
+        if !plain_supplied {
+            return false;
+        }
+    }
+    matched == reported_relations.len()
 }
 
 pub fn already_landed_scope(

@@ -177,6 +177,16 @@ pub trait ExperimentStoreBackend: Send + Sync {
         id_or_name: &str,
     ) -> Result<Option<ExperimentRecord>, OrbitError>;
 
+    /// Delete one experiment with its arms, events and assignment rows in one
+    /// immediate transaction, unless its stored revision is no longer
+    /// `expected_revision`. Returns whether it was deleted.
+    fn delete_experiment(
+        &self,
+        workspace_id: &str,
+        experiment_id: &str,
+        expected_revision: u32,
+    ) -> Result<bool, OrbitError>;
+
     /// The workspace's experiments, oldest first, optionally only those in
     /// `status`. Events are not loaded.
     fn experiment_records(

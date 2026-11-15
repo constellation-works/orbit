@@ -1,7 +1,8 @@
 ---
 type: design
 summary: "Spec: Output Modes and Sink Resolution"
-last_validated: 2026-10-26
+last_validated: 2026-11-04
+last_updated: 2026-11-04
 ---
 
 # Spec: Output Modes and Sink Resolution
@@ -25,6 +26,16 @@ The sink is resolved once at startup and answers every environment question. Not
 **Invariant:** `is_tty == false` implies `width == 0` and `color_allowed == false`. A non-terminal sink is never width-adapted or styled, regardless of what `COLUMNS` says.
 
 `width == 0` disables truncation rather than assuming 80. Assuming a width for a sink that has none produces silently truncated data in a file, which is worse than a long line.
+
+Diagnostic summary prose and table notices word-wrap to this width in terminal `table` mode, preserving explicit line breaks and indentation. The wrapper uses display columns and breaks between words; a token wider than an entire line is split to fit.
+
+`config show` carries each row's trailing-prose column alongside its text, so
+values and tags containing spaces retain their padded cells when descriptions
+wrap. Continuations align with the description column when it leaves at least
+24 columns; narrower terminals use a shallow hanging indent. When even the
+cells do not fit, the whole row wraps. Plain output keeps the complete rows.
+
+Verbatim text blocks and table rows retain their existing layout. Pipes, explicit `plain`, and machine-readable modes retain unwrapped prose and notice bytes.
 
 ## 2. Mode Resolution
 
@@ -64,6 +75,7 @@ Precedence, first match wins:
 
 - **stdout carries the payload and nothing else.** Progress, warnings, counts, empty-state prose, and diagnostics go to stderr, in every mode.
 - **Errors go to stderr.** In `json`/`ndjson` modes an error is a single JSON object on stderr using the existing `error_payload` shape (`error`, `code`, and the optional `did_you_mean` / `artifact_origin` / task-bundle fields); in other modes it is a plain message. Implemented in [ORB-10570]; the payload previously went to stdout, which is a **breaking change** for a script that parsed it there.
+- **Missing values name a recovery listing.** Missing tasks, runs, jobs, tools and workspace selectors point to their listing command. Omitting the run ID on an empty workspace reports that no runs exist. Only the `request_not_found` decision refusal omits the machine-code prefix from its plain message; other decision refusals include the prefix. JSON errors keep the stable `code` field. Explicit, more specific guidance takes precedence over a generic listing. MCP task refusals name `orbit.task.list`; run refusals name the agent-readable `orbit.task.show` delivery projection.
 - **Usage errors follow the same rule.** An argv clap rejects is reported before any matches exist, so the mode is resolved from argv lexically: the last `--format <mode>` / `--format=<mode>` whose value is a mode (rung 1), any `--json`/`--ops` token (rung 2), then `ORBIT_FORMAT` and the sink as usual; nothing after a bare `--` counts. In `json`/`ndjson` the error is `{"error": <clap's message>, "code": "usage_error"}` on stderr. A `--format` value that is not a mode — the invalid value being reported, or `audit export`'s own `--format csv` — is not a request, so it falls through to `ORBIT_FORMAT`. Help and version output, including the help clap prints in place of a missing subcommand, are never rewritten.
 - **Exit codes are load-bearing.** `0` success, `1` command failure (a missing record included — a missing task and a missing friction record are both `*_not_found`), `2` usage error. A command that printed an error object must not exit `0`.
 - **A broken pipe is not an error.** `EPIPE` on stdout exits `0` silently — `orbit task list | head` must not print a panic.
@@ -78,7 +90,7 @@ Precedence, first match wins:
 
 1. ~~Introduce the sink and the global `--format`; leave every command body untouched.~~ Done [ORB-10569].
 2. ~~Route the existing per-command `--json` branches through the resolver so precedence is centralized.~~ Done [ORB-10586]. That routing now reads the global `--json` and command-local `--ops` booleans from parsed matches at any level — the same walk `--format` uses — and passes them as `OutputSink::resolve`'s `legacy_json` rung. The individual output-only `json` fields are removed.
-3. ~~Convert command bodies to return payloads.~~ Done [ORB-10586] for the `Execute` signature; follow-up [ORB-11596] converted remaining record-output bodies that still forked on a command-local `--json` and wrote with `println!` / `CommandOutput::Silent`, so `--format json|ndjson` now projects those records through `output::render::emit`. Streams (`orbit log tail`) keep writing as they arrive and select JSONL vs the four-column view from `sink.mode()`, not from the local flag. [ORB-11622] converted `orbit workspace init` onto the same payload path. One remaining bypass has a separate owner and is not an omission: `orbit doctor --fix-*` repair counts ([ORB-11597]). Human-only confirmations that never had a structured document (for example `workspace remove`) still return `Silent`.
+3. ~~Convert command bodies to return payloads.~~ Done [ORB-10586] for the `Execute` signature; follow-up [ORB-11596] converted remaining record-output bodies that still forked on a command-local `--json` and wrote with `println!` / `CommandOutput::Silent`, so `--format json|ndjson` now projects those records through `output::render::emit`. Streams (`orbit log tail`) keep writing as they arrive and select JSONL vs the four-column view from `sink.mode()`, not from the local flag. [ORB-11622] converted `orbit workspace init` onto the same payload path. Doctor repair counts are also complete: [ORB-11597] moved the notices to stderr and added structured result rows. Non-record health/status trailers are also complete: [ORB-21576] moved them to stderr in every mode. Human-only confirmations that never had a structured document (for example `workspace remove`) still return `Silent`.
 4. ~~Once a command returns a payload, delete its inline table construction and let the renderer own it.~~ Done for every list and detail command [ORB-10586]. A command builds a `Table` and hands it back inside the payload; `Table::print` is gone, and `Table::emit` is called only by the renderer.
 5. ~~Move error output to stderr and audit exit codes.~~ Done [ORB-10570].
 
@@ -95,3 +107,15 @@ Steps 2–4 shipped together in [ORB-10586] and change three things for existing
 One deliberate deviation from §3, recorded here because it is a deviation: `--json` pretty-prints in every sink, while `--format json` pretty-prints only for a terminal. Every branch `--json` replaced called `print_pretty` unconditionally, and byte-identity for those invocations is an [Terminal Output Is a Rendering of a Structured Payload](../4_decisions.md#terminal-output-is-a-rendering-of-a-structured-payload) requirement, so the legacy rung keeps the bytes it had.
 
 The global shorthand replaces the redundant per-command fields and the registry-level switch that declared them. Streaming commands (`log tail`, `run logs --follow`) retain their JSONL behavior; their internal rendering booleans are derived from the sink, not parsed as separate flags.
+
+## Task References
+
+- [ORB-10569] — Introduce the output sink and global format selection.
+- [ORB-10570] — Gate color and width at the sink, convert audit tables, and move errors to stderr.
+- [ORB-10586] — Convert command bodies to payload returns and give the shared renderer stdout ownership.
+- [ORB-11596] — Convert remaining record-output commands onto shared payload rendering.
+- [ORB-11597] — Move doctor repair notices to stderr and include repair counts in structured result rows.
+- [ORB-11622] — Convert workspace initialization to shared payload rendering.
+- [ORB-21576] — Move non-record health/status trailers off stdout to stderr in every mode.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

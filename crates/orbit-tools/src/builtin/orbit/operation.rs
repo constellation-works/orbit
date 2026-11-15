@@ -20,8 +20,8 @@ use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::{
     Effect, NounSpec, OperationInput, OperationSpec, OperationVerb, ToolOnlyRegistration,
 };
-use orbit_common::protocol::tool_schema::tool_input_schema;
-use orbit_types::tool::{McpToolset, ToolParam, ToolSchema};
+use orbit_common::governance::tool_schema::tool_input_schema;
+use orbit_types::tool::{McpIdRouteDeclaration, ToolParam, ToolSchema};
 use serde_json::Value;
 
 use crate::{OrbitBuiltinAction, Tool, ToolContext, ToolExecutionKind, ToolRegistry};
@@ -135,6 +135,10 @@ where
         operation_tool_schema(self.0)
     }
 
+    fn declared_id_route(&self) -> McpIdRouteDeclaration {
+        self.0.id_route
+    }
+
     fn input_schema(&self) -> Option<Value> {
         let extend = self.0.verb.schema_extension()?;
         let mut schema = Value::Object(tool_input_schema(&self.schema()));
@@ -149,7 +153,16 @@ where
         }
     }
 
-    fn execute(&self, ctx: &ToolContext, mut input: Value) -> Result<Value, OrbitError> {
+    fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
+        self.execute_with_input_check(ctx, input, &|_| Ok(()))
+    }
+
+    fn execute_with_input_check(
+        &self,
+        ctx: &ToolContext,
+        mut input: Value,
+        check: &dyn Fn(&Value) -> Result<(), OrbitError>,
+    ) -> Result<Value, OrbitError> {
         if let Some(host) = ctx.orbit_host.as_deref() {
             host.prepare_operation_input(self.0.verb.into(), &mut input)?;
         }
@@ -157,7 +170,9 @@ where
             return served;
         }
         self.0.verb.normalize_input(&mut input);
-        let input = self.0.parse_input(input)?;
+        let input = self.0.parse_input_fields(input)?;
+        check(input.as_value())?;
+        self.0.require_input_fields(&input)?;
         if let Some(served) = self.0.verb.guarded_mode(ctx, &input) {
             return served;
         }
@@ -169,36 +184,16 @@ where
 }
 
 /// Register every operation a noun declares, under the exposure each declares.
+/// Each MCP operation's toolset comes from the builtin toolset table.
 pub(super) fn register_noun<V>(registry: &mut ToolRegistry, noun: &'static NounSpec<V>)
 where
     V: GuardedModes,
     OrbitBuiltinAction: From<V>,
 {
-    register_noun_in_toolset(registry, noun, McpToolset::Default);
-}
-
-/// Register a noun whose MCP tools `orbit mcp serve` advertises only when
-/// `toolset` is enabled. The toolset follows the noun, except that a
-/// decision channel's callbacks (the host-routed callback class, which only
-/// the bound channel plugin or the operator may call) join the
-/// decision-channel toolset whatever their noun's.
-pub(super) fn register_noun_in_toolset<V>(
-    registry: &mut ToolRegistry,
-    noun: &'static NounSpec<V>,
-    toolset: McpToolset,
-) where
-    V: GuardedModes,
-    OrbitBuiltinAction: From<V>,
-{
     for spec in noun.operations {
         let tool = OperationTool(spec);
-        let toolset = if crate::plugin::is_host_routed_callback_tool(spec.tool_name) {
-            McpToolset::DecisionChannel
-        } else {
-            toolset
-        };
         match spec.mcp_scope {
-            Some(scope) => registry.register_mcp_in_toolset(tool, scope, toolset),
+            Some(scope) => registry.register_mcp(tool, scope),
             None => match noun.tool_only_registration {
                 ToolOnlyRegistration::Active => registry.register(tool),
                 ToolOnlyRegistration::Inactive => registry.register_inactive(tool),

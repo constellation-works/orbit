@@ -94,7 +94,7 @@ pub struct DrainEntryAdmission {
     /// retained entry cannot disagree about it.
     pub claim_admission_refusal: Option<String>,
     /// The host shutdown pending when the decision was taken, however far
-    /// away it is. Inside `machine.host_shutdown_hold_minutes` the entry is
+    /// away it is. Inside the 180-minute hold the entry is
     /// admitted with a warning; a later schedule is reported and does not
     /// warn. A drain started during a hold still holds its own waves.
     pub host_shutdown: Option<ScheduledShutdown>,
@@ -159,14 +159,11 @@ impl crate::OrbitRuntime {
         // already being executed" is the more actionable of the two, and a
         // saturated host would otherwise mask it.
         if !task_ids.is_empty() {
-            let claims = self.inspect_execution_claims()?;
+            let claims = self.inspect_live_execution_claims()?;
             if let Some(claim) = claims
                 .iter()
                 .map(|inspection| &inspection.claim)
-                .find(|claim| {
-                    claim.phase.protects_footprint()
-                        && task_ids.iter().any(|task_id| task_id == &claim.task_id)
-                })
+                .find(|claim| task_ids.iter().any(|task_id| task_id == &claim.task_id))
             {
                 decision.refusal = Some(DrainEntryRefusal::Claimed {
                     task_id: claim.task_id.clone(),
@@ -304,7 +301,8 @@ impl crate::OrbitRuntime {
             caller_before_pr: ship.before_pr,
             // This binary's claimed PR leaves run the before-PR gate.
             review_gate: true,
-            selective_review: true,
+            selective_review: false,
+            visual_resolution: 0,
             run_context: AdmissionRunContext {
                 run_id: "entry-point".to_string(),
                 job_name: "entry-point".to_string(),

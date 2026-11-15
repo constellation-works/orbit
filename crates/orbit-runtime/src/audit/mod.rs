@@ -1,7 +1,7 @@
 //! Audit reads and writes owned by the runtime: the run audit trail
 //! projection, the run-events query its surfaces share, its CLI-invocation
 //! log profiles, the system-authored audit seam, and the coordination-hold
-//! audit events built on it, and the tag instructions and explore briefs a
+//! audit events built on it, and the tag instructions and experiment arms a
 //! run's activities received.
 
 pub(super) mod coordination;

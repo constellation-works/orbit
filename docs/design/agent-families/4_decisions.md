@@ -3,7 +3,7 @@ summary: "Agent Families — Decisions"
 type: design
 title: "Agent Families — Decisions"
 owner: grok
-last_updated: 2026-10-15
+last_updated: 2026-11-09
 last_validated: 2026-10-15
 status: Draft
 feature: agent-families
@@ -180,6 +180,20 @@ Agent availability is detected once during init using `DetectedAgents`, rendered
 - Runtime behavior is deterministic for a given config file, including hot config loads.
 - Cost: A user who installs or removes agent CLIs after init must edit or regenerate config instead of getting automatic runtime drift.
 
+## Pin the built-in Fable crew to Fable 5.2 and seed it in the xhard pool
+
+**Recorded:** 2026-11-10 · [ORB-23821]
+
+**Context.** The built-in `fable` crew used the Claude CLI's `fable` alias, on the reasoning of [Default Claude to opus/sonnet CLI aliases](#default-claude-to-opussonnet-cli-aliases-centralize-model-defaults-in-orbit-commonmodel_defaults) that an alias never drifts. Fable 5.2 was released on 2026-11-09. Claude CLI 2.1.318 and 2.1.319 still resolve `fable` to `claude-fable-5-1`; they serve `claude-fable-5-2` only when it is named, after an `unrecognized_model` notice on stderr. The `orbit init` seed also gave the xhard pool to `opus` (`["opus", "astra"]`, or `["opus"]` on a Claude-only host), the same crew that carries the hard pool.
+
+**Decision.** `CLAUDE_FABLE_MODEL` is the pinned id `claude-fable-5-2`. `opus`, `sonnet` and `haiku` stay on their aliases. The seeded xhard pool names `fable` where it named `opus`; opus keeps the hard pool, the default-crew role and its purpose pools. The price table gains a `claude-fable-5-2` row from the published rates.
+
+**Consequences.**
+- A config with no `[crews]` table, and every newly seeded one, runs the `fable` crew on Fable 5.2 whatever the installed CLI's alias says.
+- A pin does not follow later Fable releases: the next one needs an edit to the constant and a price row, as the Codex, Grok and Muse crews already do.
+- Existing configs are not rewritten. An operator who wants the change sets `crews.fable.model` and `workflow.xhard_complexity_crews` by hand.
+- A seeded xhard pool now costs Fable's rates ($8 / $40 per MTok) where it cost Opus's.
+
 ## Retire crew role slots and role-based model resolution
 
 **Recorded:** 2026-08-09 06:33:12.872319Z · [ORB-10620], [ORB-10621], [ORB-10622]
@@ -208,12 +222,26 @@ Crew configuration accepts flat `provider`/`model` only; the retired `backend` k
 ## Task References
 
 - ORB-00042: Onboard Grok (xAI) as a first-class supported agent family.
+- ORB-00043: Add Grok to agent_from_model, all_agent_families, and provider_from_model.
+- ORB-00044: Guard the dashboard diagnostics tab and stale knowledge panels in the aggregate view.
+- ORB-00045: Add Grok executor YAML and CLI runner support for backend: cli.
+- ORB-00046: Implement orbit mcp init/remove support for Grok Build (.grok/ config).
+- ORB-00049: Add Grok commit identity and update releasing and CI processes.
+- ORB-00050: Audit .grok/ for parity with the other family config directories and document onboarding.
+- ORB-00052: Scaffold docs/design/agent-families/ per CONVENTIONS.md.
 - ORB-00058: Introduce per-task crew override for agent model selection.
+- ORB-00071: Clarify crew lineup vs actual role execution in legacy model migration (archived).
 - ORB-00072: Make duel-plan agent pool and per-family model configurable via `[duel]`.
+- ORB-00079: Canonicalize duel model aliases before artifact validation (archived).
 - ORB-00080: Collapse agent identity to family; isolate model strings to invocation surface.
+- ORB-00154: Redesign the Scoreboard tab UX, which fragmented agent metrics across six stacked tables.
+- ORB-00347: Make default_crew and [duel].candidates dynamic from detected agents at orbit init.
+- ORB-10051: De-hardcode model names: default Claude to opus/sonnet aliases and centralize model defaults.
 - ORB-10130: Flatten each crew to one provider-model assignment.
+- ORB-10479: Restore the 18 design-doc ADRs whose allocation survived but whose body was lost.
 - ORB-10620: Reject legacy crew role sub-tables at config load.
+- ORB-10621: Route system-activity crews through configuration instead of the task's crew.
 - ORB-10622: Retire activity roles and role-based crew resolution.
-- ORB-10627: Remove the planning duel and its parallel model-selection path.
+- ORB-23821: Ship Fable 5.2 as a default crew and seed it in the xhard pool.
 
 Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

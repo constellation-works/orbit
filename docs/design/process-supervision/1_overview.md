@@ -1,8 +1,8 @@
 ---
 title: Process Supervision — Overview
 owner: claude
-last_updated: 2026-10-12
-last_validated: 2026-10-28
+last_updated: 2026-10-31
+last_validated: 2026-10-31
 status: Draft
 stage: shipped
 next: "—"
@@ -24,6 +24,8 @@ related_artifacts: [ORB-15722]
 > through the single supervisor in `orbit-common`. Long-lived plugin MCP
 > sessions share its `OwnedChild` ownership handle but keep their request loop.
 > The steps are kept as the record of how the supervisors converged.
+
+The doc remains `Draft`: the recorded migration task and implementation prove the code shipped, but neither that work nor the still-proposed standing rules in [4_decisions.md](./4_decisions.md) records owner approval of this design [ORB-15722].
 
 Orbit runs child processes that must not outlive their deadline, block on a
 full pipe, or leave descendants behind: Git, `gh`, `ps`, plugin backends,
@@ -83,11 +85,13 @@ capture policies and signal interception remain distinct on the shared superviso
 | Automation source commands, on the shared supervisor | [source/command.rs](../../../crates/orbit-core/src/application/automation/source/command.rs) | [ORB-15832] |
 | Owned process-group child handle | [process/owned_child.rs](../../../crates/orbit-common/src/process/owned_child.rs) | [ORB-15826], [ORB-15827] |
 | Caller inventory, capability matrix, target API, migration order | [2_design.md](./2_design.md) | [ORB-15722] |
+| Current caller inventory after source migration | [2_design.md §1.4](./2_design.md#14-build-and-source-supervisor-adapters) | [ORB-15917] |
 | Standing rules for supervision | [4_decisions.md](./4_decisions.md) | [ORB-15722] |
 
 ## Task References
 
 - [ORB-15722] — authored this design and filed the migration tasks.
+- [ORB-15917] — updated the caller inventory after source commands moved to shared supervision.
 - [ORB-15826] — step 1: adds the owned process-group child handle.
 - [ORB-15827] — step 2: holds every ad-hoc spawned child through that handle.
 - [ORB-15828] — step 3: moves exec's supervisor into `orbit-common`.

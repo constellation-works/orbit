@@ -26,18 +26,23 @@ fn advisory_findings_are_approved_and_reach_the_worker() {
     assert_eq!(workspace.record(&drain)["approved"], json!([task.id]));
     assert!(held_reason(&workspace.select(&drain), &task).is_none());
 
-    // The same durable comment is returned by task show and injected in the
-    // implementer's brief. Inspect its structured data, not its prose.
+    // Task show and the implementer's brief retain the same compact receipt.
+    // Its artifact keeps advisory findings accessible without spending the
+    // brief's comment budget on the full assessment.
     let shown = workspace
         .runtime
         .run_tool("orbit.task.show", json!({"id": task.id}))
         .unwrap();
-    let audit: Value = serde_json::from_str(
-        shown["comments"].as_array().unwrap().last().unwrap()["message"]
-            .as_str()
-            .unwrap(),
+    let comment = serde_json::from_value(
+        shown["comments"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone(),
     )
     .unwrap();
+    let audit = crate::task_pilot::pilot_audit(&workspace.runtime, &task.id, &comment);
     assert_eq!(audit["assessment"]["surface_warnings"], json!([surface]));
     assert_eq!(audit["assessment"]["utility_warnings"], json!([utility]));
     let context = RuntimeHost::task_context_for_agent_input(
@@ -48,12 +53,18 @@ fn advisory_findings_are_approved_and_reach_the_worker() {
     )
     .unwrap()
     .unwrap();
-    let worker_audit: Value = serde_json::from_str(
-        context["comments"].as_array().unwrap().last().unwrap()["message"]
-            .as_str()
-            .unwrap(),
+    let worker_comment = serde_json::from_value(
+        context["comments"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone(),
     )
     .unwrap();
+    assert_eq!(comment, worker_comment);
+    let worker_audit =
+        crate::task_pilot::pilot_audit(&workspace.runtime, &task.id, &worker_comment);
     assert_eq!(worker_audit["assessment"], audit["assessment"]);
 }
 
@@ -467,10 +478,242 @@ fn apply_authority(workspace: &Workspace, task: &Task, assessed: Value, sweep: b
     }
 }
 
+fn foreign_prerequisite_warning_hold_releases_after_completion() {
+    let workspace = Workspace::new();
+    // `review` is unfinished and is the one status that may move to `done`.
+    let foreign = workspace.foreign_task("foreign prerequisite", TaskStatus::Review);
+    let other_foreign =
+        workspace.foreign_task("still unfinished foreign prerequisite", TaskStatus::Backlog);
+    assert!(workspace.runtime.get_task(&foreign.id).is_err());
+    let task = workspace.task(
+        "foreign dependent",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let missing = workspace.task(
+        "missing dependent",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let still_held = workspace.task(
+        "unfinished foreign dependent",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    // No stored dependency edges: the prerequisites exist only in pilot prose.
+    assert!(
+        workspace
+            .runtime
+            .get_task(&task.id)
+            .unwrap()
+            .dependencies()
+            .is_empty()
+    );
+
+    let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
+    let selection = workspace.select(&drain);
+    let pilot = workspace.pilot_child(&drain, &selection["task_ids"]);
+    let held_assessment = |task: &Task, prerequisite: &str| {
+        let mut assessed = assessment(task);
+        assessed["blocked_by"] = json!([format!("Wait for {prerequisite} to land")]);
+        assessed
+    };
+    let applied = workspace
+        .pilot(
+            &drain,
+            &pilot,
+            vec![
+                held_assessment(&task, &foreign.id),
+                held_assessment(&missing, "ORB-999999999"),
+                held_assessment(&still_held, &other_foreign.id),
+            ],
+        )
+        .unwrap();
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    for decision in applied["drain_approval"].as_array().unwrap() {
+        assert_eq!(decision["classification"], "warnings", "{applied}");
+        assert_eq!(decision["decision"], "withhold", "{applied}");
+    }
+    for held_task in [&task, &missing, &still_held] {
+        assert_eq!(workspace.status(held_task), TaskStatus::Proposed);
+        let selection = workspace.select(&drain);
+        assert_eq!(
+            held_reason(&selection, held_task),
+            Some("warnings"),
+            "{selection}"
+        );
+        assert!(
+            !selection["task_ids"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(held_task.id)),
+            "{selection}"
+        );
+        let shown = workspace
+            .runtime
+            .run_tool("orbit.task.show", json!({"id": held_task.id}))
+            .unwrap();
+        assert_eq!(
+            shown["pilot_warnings"].as_array().unwrap().len(),
+            1,
+            "{shown}"
+        );
+        let triage = workspace.runtime.pilot_warning_candidates_json().unwrap();
+        assert!(
+            triage["qualifying"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|candidate| candidate["task_id"] == held_task.id.as_str()),
+            "{triage}"
+        );
+    }
+
+    // Completing the foreign prerequisite in its own workspace releases
+    // only that task's hold; missing and unfinished targets still hold.
+    workspace.complete_foreign_task(&foreign);
+    assert_eq!(
+        workspace
+            .runtime
+            .get_dependency_task(&foreign.id)
+            .unwrap()
+            .map(|done| done.status),
+        Some(TaskStatus::Done)
+    );
+    let shown = workspace
+        .runtime
+        .run_tool("orbit.task.show", json!({"id": task.id}))
+        .unwrap();
+    assert_eq!(shown["pilot_warnings"], json!([]), "{shown}");
+    let triage = workspace.runtime.pilot_warning_candidates_json().unwrap();
+    assert!(
+        !triage["qualifying"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|candidate| candidate["task_id"] == task.id.as_str()),
+        "{triage}"
+    );
+    let selection = workspace.select(&drain);
+    assert!(held_reason(&selection, &task).is_none(), "{selection}");
+    assert!(
+        selection["task_ids"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(task.id)),
+        "released hold is selected for a fresh pilot: {selection}"
+    );
+    for held_task in [&missing, &still_held] {
+        assert_eq!(
+            held_reason(&selection, held_task),
+            Some("warnings"),
+            "{selection}"
+        );
+        let shown = workspace
+            .runtime
+            .run_tool("orbit.task.show", json!({"id": held_task.id}))
+            .unwrap();
+        assert_eq!(
+            shown["pilot_warnings"].as_array().unwrap().len(),
+            1,
+            "{shown}"
+        );
+    }
+
+    // The subsequent pilot approves without any operator edit to the task.
+    let pilot = workspace.pilot_child(&drain, &selection["task_ids"]);
+    let applied = workspace
+        .pilot(&drain, &pilot, vec![assessment(&task)])
+        .unwrap();
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    assert_eq!(applied["drain_approval"][0]["approved"], true, "{applied}");
+    assert_eq!(workspace.status(&task), TaskStatus::Backlog);
+    assert_eq!(workspace.status(&missing), TaskStatus::Proposed);
+    assert_eq!(workspace.status(&still_held), TaskStatus::Proposed);
+}
+
+// The public pilot/apply and drain boundary must not dispatch work before
+// explicit start prerequisites have been cleared by a fresh assessment.
+fn explicit_start_prerequisites_hold_until_repilot_clears_them() {
+    let workspace = Workspace::new();
+    let mut params = Workspace::proposed_params(
+        "Wait for experiment",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    params.description =
+        "Do not start before 2099-12-01T00:00:00Z and the experiment verdict.".into();
+    let task = workspace.add(params);
+    let rejected_drain = workspace.drain();
+    let rejected_pilot = workspace.pilot_child(&rejected_drain, &json!([task.id]));
+    let mut malformed = assessment(&task);
+    malformed["start_prerequisites"] =
+        json!([{"evidence": "Experiment verdict is unresolved", "holds_promotion": false}]);
+    let rejected = workspace.pilot(&rejected_drain, &rejected_pilot, vec![malformed]);
+    assert!(
+        rejected.is_err() || rejected.as_ref().unwrap()["applied_count"] == 0,
+        "{rejected:?}"
+    );
+    assert_eq!(workspace.status(&task), TaskStatus::Proposed);
+    let drain = workspace.drain();
+    let pilot = workspace.pilot_child(&drain, &json!([task.id]));
+    let mut assessed = assessment(&task);
+    assessed["start_prerequisites"] = json!([
+        {"evidence": "Not before 2099-12-01T00:00:00Z"},
+        {"evidence": "Experiment verdict is unresolved"}
+    ]);
+    assessed["utility_warnings"] =
+        json!([{"text": "Implementation approach is discretionary", "holds_promotion": false}]);
+    let applied = workspace.pilot_ok(&drain, &pilot, vec![assessed]);
+    assert_eq!(
+        applied["drain_approval"][0]["decision"], "withhold",
+        "{applied}"
+    );
+    assert_eq!(workspace.status(&task), TaskStatus::Proposed);
+    let shown = workspace
+        .runtime
+        .run_tool("orbit.task.show", json!({"id": task.id}))
+        .unwrap();
+    let warnings = shown["pilot_warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 2, "{shown}");
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w["text"].as_str().unwrap().contains("2099-12-01T00:00:00Z"))
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w["text"].as_str().unwrap().contains("Experiment verdict"))
+    );
+    workspace.runtime.run_tool("orbit.task.update", json!({
+        "id": task.id, "description": "The operator lifted the start requirements.", "model": "codex"
+    })).unwrap();
+    let current = workspace.runtime.get_task(&task.id).unwrap();
+    let drain = workspace.drain();
+    let pilot = workspace.pilot_child(&drain, &json!([task.id]));
+    let mut assessed = assessment(&current);
+    assessed["start_prerequisites"] = json!([]);
+    assessed["utility_warnings"] =
+        json!([{"text": "Implementation approach is discretionary", "holds_promotion": false}]);
+    let applied = workspace.pilot_ok(&drain, &pilot, vec![assessed]);
+    assert_eq!(
+        applied["drain_approval"][0]["decision"], "promote",
+        "{applied}"
+    );
+    assert_eq!(workspace.status(&task), TaskStatus::Backlog);
+}
+
 crate::scenario_table!(
     advisory_promotion_scenarios,
+    explicit_start_prerequisites_hold_until_repilot_clears_them,
     advisory_findings_are_approved_and_reach_the_worker,
     both_promotion_authorities_keep_real_warning_holds,
     malformed_advisories_are_rejected_without_approval,
-    dependency_warnings_agree_across_promotion_projection_and_triage
+    dependency_warnings_agree_across_promotion_projection_and_triage,
+    foreign_prerequisite_warning_hold_releases_after_completion
 );

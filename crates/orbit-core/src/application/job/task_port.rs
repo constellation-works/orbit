@@ -1,11 +1,15 @@
 //! Job dispatch's side of the task-owned job port [ORB-17936].
 
+use std::collections::{BTreeMap, HashMap};
+
 use orbit_common::OrbitError;
-use orbit_types::identity::Crew;
-use orbit_types::task::{Task, TaskComplexity, TaskHistoryEntry};
+use orbit_types::identity::{AutoEffortChoice, Crew};
+use orbit_types::task::{
+    CrewSource, DecisionRequest, ExecutorOsLimit, Task, TaskComplexity, TaskHistoryEntry,
+};
 use orbit_types::workflow::{
-    HostValidationGates, JobRun, JobRunTrigger, PipelineState, RunDeliveryObservation, ShipMode,
-    SourceRepairBinding,
+    self, CrewPurpose, HostValidationGates, JobRun, JobRunTrigger, PipelineState,
+    RunDeliveryObservation, ShipMode, SourceRepairBinding,
 };
 use serde_json::{Value, json};
 
@@ -15,22 +19,20 @@ use super::pipeline::{PipelineSubmission, ROUTINE_DISPATCH_ORBIT_DIR_FIELD};
 use super::{RunOwnerLiveness, run_owner_liveness, running_run_has_verified_owner};
 use crate::OrbitRuntime;
 use crate::application::contracts::{
-    CreationCrewAssignment, CrewCandidate, CrewPoolDraw, InspectionPool, RetryKey,
+    AutoEffortSubject, CreationCrewAssignment, CrewCandidate, CrewPoolDraw, InspectionPool,
+    OwnerSourceIdentityRefusal, RetryKey,
 };
-use crate::application::task::TaskJobPort;
+use crate::application::task::{NativePublicationIdentity, TaskJobPort, TaskRow};
 
 impl TaskJobPort for OrbitRuntime {
     fn is_forecast_delivery_run(&self, run: &JobRun) -> bool {
         !matches!(
             run.job_id.as_str(),
-            "task_auto_pipeline"
-                | "task_gate_pipeline"
-                | "workspace_auto_pipeline"
-                | "workspace_pull_pipeline"
-        ) && (matches!(
-            run.job_id.as_str(),
-            "task_pr_pipeline" | "task_local_pipeline"
-        ) || super::claimed::CLAIMED_LEAF_JOBS.contains(&run.job_id.as_str())
+            workflow::TASK_AUTO_PIPELINE_JOB
+                | workflow::TASK_GATE_PIPELINE_JOB
+                | workflow::WORKSPACE_AUTO_PIPELINE_JOB
+                | workflow::WORKSPACE_PULL_PIPELINE_JOB
+        ) && (workflow::is_delivery_leaf_job(&run.job_id)
             || run
                 .input
                 .as_ref()
@@ -44,8 +46,8 @@ impl TaskJobPort for OrbitRuntime {
             self.automatic_delivery_ship_mode(),
         )?;
         Ok(match route.job_name.as_str() {
-            "task_pr_pipeline" => Some(ShipMode::Pr),
-            "task_local_pipeline" => Some(ShipMode::Local),
+            workflow::TASK_PR_PIPELINE_JOB => Some(ShipMode::Pr),
+            workflow::TASK_LOCAL_PIPELINE_JOB => Some(ShipMode::Local),
             _ => None,
         })
     }
@@ -55,6 +57,26 @@ impl TaskJobPort for OrbitRuntime {
         tool_name: &str,
     ) -> Result<Option<String>, OrbitError> {
         super::granted_tool_refusal(self, tool_name)
+    }
+
+    fn implementer_activity_name(&self) -> &'static str {
+        super::IMPLEMENTING_ACTIVITY
+    }
+
+    fn required_tool_implementer_disallow_list(&self) -> Result<Option<Vec<String>>, OrbitError> {
+        super::implementing_activity_disallow_list(self)
+    }
+
+    fn unliftable_implementer_requirement(
+        &self,
+        disallow_list: &[String],
+        tool_name: &str,
+    ) -> Option<String> {
+        super::unliftable_required_tool_error(
+            super::IMPLEMENTING_ACTIVITY,
+            disallow_list,
+            tool_name,
+        )
     }
 
     type CrewPools = CapturedCrewPools;
@@ -83,6 +105,14 @@ impl TaskJobPort for OrbitRuntime {
         random_crew_ticket()
     }
 
+    fn auto_effort_crew_choice(
+        &self,
+        crew: &Crew,
+        subject: &AutoEffortSubject,
+    ) -> AutoEffortChoice {
+        self.resolve_auto_effort(crew, Some(subject))
+    }
+
     fn seeded_crew_draw_tickets(
         &self,
         seed: String,
@@ -106,7 +136,7 @@ impl TaskJobPort for OrbitRuntime {
         self.unheld_task_crew_candidates(task, pools)
     }
 
-    fn recorded_crew_source(&self, task: &Task) -> Result<Option<String>, OrbitError> {
+    fn recorded_crew_source(&self, task: &Task) -> Result<Option<CrewSource>, OrbitError> {
         self.task_crew_source(task)
     }
 
@@ -166,6 +196,14 @@ impl TaskJobPort for OrbitRuntime {
         run_id: &str,
     ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
         self.published_owner_requeue_record(task, run_id)
+    }
+
+    fn published_requeue_identity_refusal(
+        &self,
+        task: &Task,
+        run_id: &str,
+    ) -> Result<Option<OwnerSourceIdentityRefusal>, OrbitError> {
+        self.published_owner_requeue_refusal(task, run_id)
     }
 
     fn failure_handoff_preservation(
@@ -235,5 +273,95 @@ impl TaskJobPort for OrbitRuntime {
         run_id: Option<&str>,
     ) -> Result<RunDeliveryObservation, OrbitError> {
         self.observe_task_delivery(task_id, run_id)
+    }
+
+    fn answer_script_grant_decision(
+        &self,
+        request: &DecisionRequest,
+        answer_id: &str,
+        actor_label: &str,
+        via: &str,
+    ) -> Result<(), OrbitError> {
+        self.apply_script_grant_answer(request, answer_id, actor_label, via)
+    }
+
+    fn decision_pilot_preflight(&self, task_id: &str) -> Result<(), String> {
+        self.check_decision_task_pilot(task_id)
+            .map_err(|error| error.to_string())
+    }
+
+    fn request_explicit_task_pilot(
+        &self,
+        task_id: &str,
+        actor: Option<&str>,
+        trigger: JobRunTrigger,
+    ) -> Result<(), String> {
+        self.submit_explicit_task_pilot(task_id, actor, trigger)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    fn native_publication_identity(
+        &self,
+        task: &Task,
+    ) -> Result<NativePublicationIdentity, OrbitError> {
+        let proof = self.desktop_native_publication_proof(task)?;
+        Ok(NativePublicationIdentity {
+            branch: proof.branch,
+            head: proof.head,
+            base_branch: proof.base_branch,
+            number: proof.number,
+            url: proof.url,
+        })
+    }
+
+    fn purpose_pool_members(
+        &self,
+        purpose: CrewPurpose,
+        inspection: bool,
+    ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError> {
+        self.purpose_pool_candidates(purpose, inspection)
+    }
+
+    fn resume_failed_run(
+        &self,
+        source_run_id: &str,
+        actor: Option<&str>,
+        claim_token: Option<&str>,
+    ) -> Result<String, OrbitError> {
+        self.submit_resume_run(source_run_id, actor, claim_token)
+            .map(|invoke| invoke.run_id)
+    }
+
+    fn live_pilot_run(&self, task_id: &str) -> Result<Option<String>, OrbitError> {
+        self.live_task_pilot_run(task_id)
+    }
+
+    fn claimed_leaf_candidates_before_holds(
+        &self,
+        task: &Task,
+        pools: &CapturedCrewPools,
+    ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
+        self.unheld_claimed_leaf_crew_candidates(task, pools)
+    }
+
+    fn stored_run_states_exact(
+        &self,
+        run_ids: &[String],
+    ) -> Result<HashMap<String, Option<PipelineState>>, OrbitError> {
+        self.read_run_states_exact(run_ids)
+    }
+
+    fn task_row_delivery_attention(&self, row: &TaskRow) -> Result<Option<Value>, OrbitError> {
+        self.delivery_attention(row)
+    }
+
+    fn host_os_wait_for_task(
+        &self,
+        task: &Task,
+        pools: &CapturedCrewPools,
+        limits: &BTreeMap<String, ExecutorOsLimit>,
+    ) -> Option<String> {
+        self.task_host_os_wait(task, pools, limits)
     }
 }

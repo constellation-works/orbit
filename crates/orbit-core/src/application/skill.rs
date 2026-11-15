@@ -10,6 +10,14 @@ use super::managed_assets::{
     ManagedAssetLayout, ManagedAssetReconciliation, reconcile_managed_assets,
 };
 
+/// The client skill-discovery directories under `base_root`.
+pub(crate) fn skill_link_roots(base_root: &Path) -> Vec<PathBuf> {
+    [".agents", ".claude"]
+        .into_iter()
+        .map(|dir| base_root.join(dir).join("skills"))
+        .collect()
+}
+
 /// Every shipped skill file, keyed by its path relative to the skills root.
 ///
 /// Skills are directory trees rather than single documents, so their managed
@@ -20,11 +28,15 @@ use super::managed_assets::{
 /// References load on demand and may link across the bundled skill trees. The
 /// ordering below groups each skill's files under its router, in the order its
 /// reference table presents them.
-pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 33] = [
+pub(crate) const DEFAULT_SKILL_FILES: &[(&str, &str)] = &[
     // Everyday task work: the router, then its references in table order.
     (
         "orbit/SKILL.md",
         include_str!("../../assets/skills/orbit/SKILL.md"),
+    ),
+    (
+        "orbit/references/attention.md",
+        include_str!("../../assets/skills/orbit/references/attention.md"),
     ),
     (
         "orbit/references/task-execution.md",
@@ -59,6 +71,14 @@ pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 33] = [
         include_str!("../../assets/skills/orbit/references/concepts.md"),
     ),
     (
+        "orbit/references/manager.md",
+        include_str!("../../assets/skills/orbit/references/manager.md"),
+    ),
+    (
+        "orbit/references/resident-cycle.md",
+        include_str!("../../assets/skills/orbit/references/resident-cycle.md"),
+    ),
+    (
         "orbit/references/setup/distributed-drain.md",
         include_str!("../../assets/skills/orbit/references/setup/distributed-drain.md"),
     ),
@@ -70,6 +90,10 @@ pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 33] = [
     (
         "orbit-orchestrate/references/loop.md",
         include_str!("../../assets/skills/orbit-orchestrate/references/loop.md"),
+    ),
+    (
+        "orbit-orchestrate/references/model-ranking.md",
+        include_str!("../../assets/skills/orbit-orchestrate/references/model-ranking.md"),
     ),
     (
         "orbit-orchestrate/references/authorization.md",
@@ -109,6 +133,10 @@ pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 33] = [
         include_str!("../../assets/skills/orbit-setup/references/first-run.md"),
     ),
     (
+        "orbit-setup/references/providers.md",
+        include_str!("../../assets/skills/orbit-setup/references/providers.md"),
+    ),
+    (
         "orbit-setup/references/workspace-tuning.md",
         include_str!("../../assets/skills/orbit-setup/references/workspace-tuning.md"),
     ),
@@ -125,8 +153,20 @@ pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 33] = [
         include_str!("../../assets/skills/orbit-setup/references/windows-wsl2.md"),
     ),
     (
+        "orbit-setup/references/macos.md",
+        include_str!("../../assets/skills/orbit-setup/references/macos.md"),
+    ),
+    (
+        "orbit-setup/references/browser-checks.md",
+        include_str!("../../assets/skills/orbit-setup/references/browser-checks.md"),
+    ),
+    (
         "orbit-setup/references/automation.md",
         include_str!("../../assets/skills/orbit-setup/references/automation.md"),
+    ),
+    (
+        "orbit-setup/references/crew-memory.md",
+        include_str!("../../assets/skills/orbit-setup/references/crew-memory.md"),
     ),
     (
         "orbit-setup/references/auto-tasks.md",
@@ -135,6 +175,10 @@ pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 33] = [
     (
         "orbit-setup/references/plugins.md",
         include_str!("../../assets/skills/orbit-setup/references/plugins.md"),
+    ),
+    (
+        "orbit-setup/references/applications.md",
+        include_str!("../../assets/skills/orbit-setup/references/applications.md"),
     ),
     (
         "orbit-setup/references/remote-access.md",
@@ -210,7 +254,7 @@ pub(crate) fn seed_default_skills(
         skills_root,
         "skill",
         ManagedAssetLayout::RelativePath,
-        &DEFAULT_SKILL_FILES,
+        DEFAULT_SKILL_FILES,
         overwrite,
         |_, content| {
             Ok(Cow::Owned(inject_skill_template_tokens(
@@ -316,9 +360,9 @@ impl OrbitRuntime {
             .collect();
         let global_root = self.global_root();
         if let Some(discovery_base) = global_root.parent() {
-            results.extend(doctor_client_skill_links(
-                &crate::bootstrap::init::skill_link_roots(discovery_base),
-            )?);
+            results.extend(doctor_client_skill_links(&skill_link_roots(
+                discovery_base,
+            ))?);
         }
         Ok(results)
     }

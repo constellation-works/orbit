@@ -307,10 +307,9 @@ fn closing_rescued_blocked_task_through_the_task_tool_succeeds_without_force_whi
     );
     let summary = "rescued work already landed by hand";
     let task_update = |capability, input: Value| {
-        runtime.run_tool_with_context_and_role(
+        runtime.run_tool_with_context(
             "orbit.task.update",
             input,
-            Role::Admin,
             ToolContext {
                 session_context: ToolSessionContext {
                     effective_capabilities: BTreeSet::from([capability]),
@@ -351,6 +350,34 @@ fn closing_rescued_blocked_task_through_the_task_tool_succeeds_without_force_whi
         );
     }
 
+    // A proposed pickup must report the approval that precedes a refused start.
+    let proposed = seed(
+        &runtime,
+        Seed {
+            title: "proposed candidate",
+            status: TaskStatus::Proposed,
+            context_files: Some(&["file:shared.txt"]),
+            ..Seed::default()
+        },
+    );
+    let refusal = task_update(
+        McpCapability::Agent,
+        json!({"id": proposed.id, "status": "in-progress", "plan": "Implement the work", "model": "claude"}),
+    )
+    .expect_err("an overlapping claim refuses the pickup");
+    assert_names_claim(&refusal, "a proposed pickup");
+    assert_eq!(
+        runtime.get_task(&proposed.id).unwrap().status,
+        TaskStatus::Backlog
+    );
+    let message = refusal.to_string();
+    assert!(
+        message.contains("approval was recorded")
+            && message.contains("backlog")
+            && message.contains("drain"),
+        "partial approval and recovery must be explicit: {message}"
+    );
+
     // A drain-side start of other work on the same files is refused too.
     let candidate = seed(
         &runtime,
@@ -388,6 +415,201 @@ fn closing_rescued_blocked_task_through_the_task_tool_succeeds_without_force_whi
             .iter()
             .any(|entry| entry.event == "started" || entry.event == "forced"),
         "a rescue close neither starts work nor overrides the lifecycle"
+    );
+}
+
+#[test]
+fn proposed_pickup_preserves_typed_store_error_when_start_write_fails_after_approval() {
+    if !isolated(
+        "dispatch_admission::reservation_grants::proposed_pickup_preserves_typed_store_error_when_start_write_fails_after_approval",
+    ) {
+        return;
+    }
+    let (_root, runtime, repo) = runtime();
+    std::fs::write(repo.join("shared.txt"), "fixture\n").unwrap();
+
+    let holder = seed(
+        &runtime,
+        Seed {
+            title: "claim holder",
+            status: TaskStatus::InProgress,
+            context_files: Some(&["file:shared.txt"]),
+            ..Seed::default()
+        },
+    );
+    let claim = ExecutionClaim {
+        claim_id: "claim-store-fixture".into(),
+        task_id: holder.id.clone(),
+        request_id: "req-store-fixture".into(),
+        executed_on: ExecutionLocation {
+            machine_id: "machine-1".into(),
+            machine_name: None,
+        },
+        run_context: AdmissionRunContext {
+            run_id: "jrun-store-fixture".into(),
+            job_name: "test-job".into(),
+            machine_name: None,
+        },
+        footprint: vec!["file:shared.txt".into()],
+        reservation_id: "res-store-fixture".into(),
+        reservation_expires_at: (Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
+        phase: ExecutionClaimPhase::Running,
+        repair: None,
+    };
+    let workspace_id = runtime.workspace_id().unwrap();
+    let connection = rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
+    connection
+        .execute(
+            "INSERT INTO task_coordination_rows(workspace_id, kind, row_id, payload_json, journal_id, created_at)
+             VALUES (?1, 'distributed-execution-claim-v1', ?2, ?3, 'fixture', ?4)",
+            rusqlite::params![
+                workspace_id,
+                claim.claim_id,
+                serde_json::to_string(&claim).unwrap(),
+                Utc::now().to_rfc3339()
+            ],
+        )
+        .unwrap();
+
+    let proposed = seed(
+        &runtime,
+        Seed {
+            title: "proposed store candidate",
+            status: TaskStatus::Proposed,
+            context_files: Some(&["file:shared.txt"]),
+            ..Seed::default()
+        },
+    );
+
+    // Unbind the checkout so the start write's footprint guard fails with a
+    // typed store error after the approval write has committed. The approval
+    // targets `backlog`, which needs no checkout, so it still lands.
+    let registry_path = runtime.global_root().join("tasks").join("index.sqlite");
+    let registry = rusqlite::Connection::open(&registry_path).unwrap();
+    assert_eq!(
+        registry
+            .execute(
+                "DELETE FROM workspace_checkout_bindings WHERE workspace_id = ?1",
+                rusqlite::params![workspace_id],
+            )
+            .unwrap(),
+        1,
+        "the fixture checkout binding must exist to unbind it"
+    );
+
+    let refusal = runtime
+        .start_task(&proposed.id, None, None)
+        .expect_err("a start write without a checkout binding is a typed store error");
+    assert!(
+        matches!(refusal, OrbitError::Store(_)),
+        "a non-InvalidInput post-approval failure must keep its variant: {refusal:?}"
+    );
+    assert!(
+        !refusal.is_lock_busy(),
+        "a store error is not lock-busy: {refusal:?}"
+    );
+    assert_eq!(
+        refusal.storage_layer(),
+        Some(orbit_common::StorageLayer::Store),
+        "the store class must survive the approval context: {refusal:?}"
+    );
+    let message = refusal.to_string();
+    assert!(
+        message.contains("claimed workspace checkout is unavailable"),
+        "the typed store cause must survive: {message}"
+    );
+    assert!(
+        message.contains("approval was recorded")
+            && message.contains("backlog")
+            && message.contains("drain"),
+        "partial approval and recovery must be explicit: {message}"
+    );
+    assert_eq!(
+        runtime.get_task(&proposed.id).unwrap().status,
+        TaskStatus::Backlog,
+        "the approval write commits before the typed start failure"
+    );
+}
+
+/// The deferred footprint a resumed published delivery takes before its first
+/// edit must outlive the whole resolved edit budget [ORB-23568]: the shipped
+/// 6h implement default and 12h `workflow.activity_timeouts` overrides, which
+/// the gate's 13h child dispatch wait already covers. At 4h a resumed run
+/// editing past its fourth hour lost its files mid-activity while the gate
+/// still considered the child live, so another task could reserve and edit
+/// the same footprint concurrently.
+#[test]
+fn deferred_footprint_reservation_outlives_the_resolved_edit_budget() {
+    const TEST: &str = "dispatch_admission::reservation_grants::deferred_footprint_reservation_outlives_the_resolved_edit_budget";
+    if !isolated(TEST) {
+        return;
+    }
+    let (_root, runtime, repo) = runtime();
+    std::fs::write(repo.join("shared.txt"), "fixture\n").unwrap();
+    let task = seed(
+        &runtime,
+        Seed {
+            context_files: Some(&["file:shared.txt"]),
+            ..Seed::default()
+        },
+    );
+    let run = running_run(
+        &runtime,
+        "task_pr_pipeline",
+        json!({"task_ids": [task.id], "footprint_deferred": true, "footprint_wait_seconds": 0}),
+    );
+    runtime
+        .acquire_deferred_footprint(&run, "agent_implement")
+        .expect("the leaf takes its deferred footprint through the dispatch boundary");
+    let locks = as_operator(&runtime, "orbit.task.locks", json!({}));
+    let reservation = locks["by_reservation"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["owner_run_id"] == run)
+        .unwrap_or_else(|| panic!("the leaf holds a file reservation: {locks}"));
+    assert_eq!(
+        reservation["files"],
+        json!(["file:shared.txt"]),
+        "{reservation}"
+    );
+    // The bounds the TTL must cover, read from the shipped declarations the
+    // gate already uses — never a copy of the constant under test.
+    let activity: serde_yaml::Value = serde_yaml::from_str(include_str!(
+        "../../../assets/activities/agent_implement.yaml"
+    ))
+    .expect("shipped implementation activity");
+    let shipped = activity["spec"]["wall_clock_timeout_seconds"]
+        .as_u64()
+        .expect("declared implement timeout");
+    let gate: serde_yaml::Value =
+        serde_yaml::from_str(include_str!("../../../assets/jobs/task_gate_pipeline.yaml"))
+            .expect("shipped gate pipeline");
+    let gate_wait = gate["spec"]["default_input"]["dispatch_timeout_seconds"]
+        .as_u64()
+        .expect("declared gate child wait");
+    let created: DateTime<Utc> = reservation["created_at"]
+        .as_str()
+        .expect("reservation creation time")
+        .parse()
+        .expect("rfc3339 creation time");
+    let expires: DateTime<Utc> = reservation["expires_at"]
+        .as_str()
+        .expect("reservation expiry time")
+        .parse()
+        .expect("rfc3339 expiry time");
+    let ttl = expires - created;
+    assert!(
+        ttl >= chrono::Duration::seconds(shipped as i64),
+        "ORB-23568: the deferred footprint must outlive the shipped {shipped}s implement budget, got {ttl}: {reservation}"
+    );
+    assert!(
+        ttl >= chrono::Duration::seconds(43200),
+        "ORB-23568: the deferred footprint must outlive the 43200s workflow.activity_timeouts maximum, got {ttl}: {reservation}"
+    );
+    assert!(
+        ttl >= chrono::Duration::seconds(gate_wait as i64 - 60),
+        "ORB-23568: the deferred footprint must cover the gate's {gate_wait}s child dispatch wait, got {ttl}: {reservation}"
     );
 }
 

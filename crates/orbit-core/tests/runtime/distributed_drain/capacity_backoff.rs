@@ -33,9 +33,17 @@ fn backed_off_until(pass: &Value, crew: &str) -> DateTime<Utc> {
 /// next failure in the window backs it off for twenty, and a drain restricted
 /// to `sol` says it admits again once that lifts.
 fn a_capacity_failure_backs_the_crew_off_until_a_time_and_it_runs_again_in_the_window() {
+    capacity_window("sol");
+}
+
+fn an_effort_qualified_allowlist_resumes_after_capacity_backoff() {
+    capacity_window("sol@high");
+}
+
+fn capacity_window(allowed: &str) {
     let pair = Pair::with_crews(&[Some("sol"), Some("sol"), Some("sol")]);
     let drain = pair
-        .run_drain_with_input(json!({"destination": pair.destination, "allowed_crews": ["sol"]}));
+        .run_drain_with_input(json!({"destination": pair.destination, "allowed_crews": [allowed]}));
     let first = pair.running_leaf(&drain, 1);
     let first_ended = Utc::now().trunc_subsecs(0) - Duration::minutes(15);
     pair.leaf_fails_at(&first, CAPACITY, first_ended);
@@ -172,6 +180,7 @@ fn a_backed_off_before_landing_reviewer_holds_requests_until_it_lifts() {
 crate::scenario_table!(
     a_capacity_failure_backs_the_crew_off_until_a_time_and_it_runs_again_in_the_window_scenarios,
     a_capacity_failure_backs_the_crew_off_until_a_time_and_it_runs_again_in_the_window,
+    an_effort_qualified_allowlist_resumes_after_capacity_backoff,
     repeated_capacity_failures_lengthen_the_backoff_up_to_its_cap,
     a_backed_off_before_landing_reviewer_holds_requests_until_it_lifts
 );

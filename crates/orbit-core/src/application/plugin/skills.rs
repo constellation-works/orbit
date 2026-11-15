@@ -23,7 +23,7 @@ use orbit_common::OrbitError;
 use orbit_common::fs::io::{create_dir_symlink, remove_path_if_exists};
 use orbit_tools::plugin::LoadedPlugin;
 
-use crate::bootstrap::init::skill_link_roots;
+use crate::application::skill::skill_link_roots;
 
 /// What linking did for one skill.
 #[derive(Debug, Clone, PartialEq, Eq)]

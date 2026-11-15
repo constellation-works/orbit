@@ -1,16 +1,22 @@
 use orbit_common::OrbitError;
 use orbit_config::ComplexityCrewPools;
 use orbit_store::contracts::JobRunQuery;
-use orbit_types::task::{Task, TaskComment, TaskComplexity, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{
+    CREW_ASSIGNED_EVENT, CREW_REDRAWN_EVENT, CrewAssignmentState, CrewSource,
+    RecordedCrewAssignment, RedrawReason, Task, TaskComment, TaskComplexity, TaskDecision,
+    TaskHistoryEntry, TaskStatus,
+};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::contracts::{PROVIDER_LIMIT_REASSIGNMENT_PREFIX, auto_task_minted};
+use crate::application::job::JobExperimentPort;
 use crate::application::task::provider_limit::ProviderLimit;
 use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
 use crate::runtime::engine::crew::{CrewAllowlist, enforce_crew_allowlist};
 use crate::runtime::run_input::non_empty;
 
+use super::auto_effort::task_auto_effort_subject;
 use super::draw::{
     DrawWeighting, auto_task_id, permitted_candidates, pools_from_input, weighted_candidates,
     weighted_draw,
@@ -51,7 +57,7 @@ impl AdmissionTaskWrites {
 /// A usage-pressure re-draw of the task's automatic crew [ORB-17770].
 struct UsagePressureRedraw {
     original: String,
-    source: String,
+    source: CrewSource,
     replacement: String,
     note: String,
 }
@@ -105,9 +111,10 @@ impl OrbitRuntime {
             task.status,
             TaskStatus::Proposed | TaskStatus::Backlog | TaskStatus::Someday
         ) || task.job_run_id.is_some()
-            || self.inspect_execution_claims()?.iter().any(|inspection| {
-                inspection.claim.task_id == task.id && inspection.claim.phase.protects_footprint()
-            })
+            || self
+                .inspect_task_execution_claims(&task.id)?
+                .iter()
+                .any(|inspection| inspection.claim.phase.protects_footprint())
         {
             return Ok(true);
         }
@@ -167,7 +174,6 @@ impl OrbitRuntime {
         if !POLICY_PIPELINES.contains(&job_name) {
             return Ok(None);
         }
-        self.install_experiment_capture(input)?;
         if resuming {
             return Ok(None);
         }
@@ -199,8 +205,15 @@ impl OrbitRuntime {
                 {
                     input["crew"] = selection["crew"].clone();
                     input[SELECTION_KEY] = selection.clone();
+                    if let Some(capture) = parent.get("experiment_capture") {
+                        input["experiment_capture"] = capture.clone();
+                    } else {
+                        self.install_job_experiment_capture(input)?;
+                    }
+                    self.install_job_experiment_memory(input)?;
                     return Ok(None);
                 }
+                self.install_job_experiment_capture(input)?;
                 self.capture_auto_task_selection(input, &task_id, random)
             }
             // A top-level submission — a drain, a ship wrapper, or an ordinary
@@ -209,6 +222,7 @@ impl OrbitRuntime {
             // multi-task or discovery run leaves each leaf to draw at its own
             // admission, so siblings stay independent.
             None => {
+                self.install_job_experiment_capture(input)?;
                 input[POOLS_KEY] = json!(self.capture_auto_crew_pools(input)?);
                 let Some(task_id) = auto_task_id(input).map(ToOwned::to_owned) else {
                     return Ok(None);
@@ -260,7 +274,8 @@ impl OrbitRuntime {
             .get("crew")
             .and_then(Value::as_str)
             .and_then(non_empty);
-        let (candidates, source) = self.auto_task_crew_candidates(task, &pools, explicit)?;
+        let (candidates, source, _) =
+            self.auto_task_crew_candidates(task, &pools, explicit, Some(allowlist))?;
         if let [only] = candidates.as_slice()
             && only.weight > 0
         {
@@ -295,7 +310,16 @@ impl OrbitRuntime {
     ) -> Result<AdmissionTaskWrites, OrbitError> {
         let pools = pools_from_input(input)?;
         let task_id = &task.id;
-        let experiment_pool = self.experiment_crew_pool(task_id)?;
+        let experiment_pool = if input
+            .get("crew")
+            .and_then(Value::as_str)
+            .and_then(non_empty)
+            .is_some()
+        {
+            None
+        } else {
+            self.job_experiment_crew_pool(task_id)?
+        };
         let allowlist = self.crew_allowlist_from_input(input)?;
         let explicit = input
             .get("crew")
@@ -306,16 +330,17 @@ impl OrbitRuntime {
         let planned = if explicit.is_none()
             && let Some(pool) = &experiment_pool
         {
-            let (mut members, _) = self
+            let (members, _) = self
                 .pool_member_candidates(&pool.entries, &pool.source, None)?
                 .ok_or_else(|| {
                     OrbitError::PolicyDenied(format!("{} has no runnable crew", pool.source))
                 })?;
+            let mut members =
+                self.reresolve_auto_candidates(members, &task_auto_effort_subject(task))?;
             weighted_candidates(
                 &mut members,
                 &self.provider_limit_policy().usage_pressure,
                 || self.usage_pressure_read(chrono::Utc::now()),
-                || None,
             );
             let members = permitted_candidates(members, &pool.source, allowlist.as_ref())?;
             Some(
@@ -334,66 +359,24 @@ impl OrbitRuntime {
         } else {
             None
         };
-        let (mut crews, mut source) = self.auto_task_crew_candidates(task, &pools, explicit)?;
-        // [verify-mock-ui §5.3] The implementer of a mock-driven task is
-        // drawn from the pool's image-capable crews (native image read,
-        // not `vision = false`) so it can use the `orbit visual capture`
-        // self-check. A draw already collapsed to the assigned member
-        // re-expands to its complexity pool when that member cannot read
-        // images and the pool has one that can. With no capable member
-        // the draw falls back to the unfiltered pool and the run's
-        // selection records `implementer_without_vision` below. An
-        // explicit run crew and an experiment pool are the caller's and
-        // the experiment's own draws, so neither is filtered here.
-        let mut implementer_without_vision = false;
-        if explicit.is_none()
-            && experiment_pool.is_none()
-            && orbit_types::task::has_verify_mock_ui_tag(&task.tags)
-        {
-            if let [only] = crews.as_slice()
-                && !self.can_read_images(&only.crew)?
-                && let Some((pool, pool_source)) =
-                    self.complexity_pool_candidates(task.complexity, &pools)?
-            {
-                let (capable, _) = self.partition_image_reading(pool.clone())?;
-                if !capable.is_empty() {
-                    crews = pool;
-                    source = pool_source;
-                }
-            }
-            let (filtered, filtered_source, without_vision) =
-                self.image_capable_implementer_candidates(&task.tags, crews, source)?;
-            crews = filtered;
-            source = filtered_source;
-            implementer_without_vision = without_vision;
-        }
-        // [ORB-17770] Weigh the narrowed pool by usage pressure and crew
-        // performance; an explicit run crew is the operator's call and has
-        // no draw to weigh. Performance never widens the pool: only the
-        // usage-pressure view above re-draws an assigned crew.
+        let (mut crews, mut source, mut reason) =
+            self.auto_task_crew_candidates(task, &pools, explicit, allowlist.as_ref())?;
+        // [ORB-17770] Weigh the narrowed pool by usage pressure; an
+        // explicit run crew is the operator's call and has no draw to weigh.
         let weighting = if explicit.is_none() {
             weighted_candidates(
                 &mut crews,
                 &self.provider_limit_policy().usage_pressure,
                 || self.usage_pressure_read(chrono::Utc::now()),
-                || {
-                    experiment_pool
-                        .is_none()
-                        .then(|| {
-                            self.crew_performance_read(
-                                task.complexity,
-                                &task.tags,
-                                &task.context_files,
-                            )
-                        })
-                        .flatten()
-                },
             )
         } else {
             None
         };
         if weighting.as_ref().is_some_and(DrawWeighting::pressured) {
             source = format!("{source}; usage pressure");
+            if reason.is_none() {
+                reason = Some(RedrawReason::UsagePressure);
+            }
         }
         let candidates = permitted_candidates(crews, &source, allowlist.as_ref())?;
         let selected = match planned.as_deref().and_then(|planned| {
@@ -424,6 +407,21 @@ impl OrbitRuntime {
                 replacement: selected.crew.name.clone(),
             });
         }
+        if reason == Some(RedrawReason::Allowlist)
+            && let Some(original) = task.crew.as_deref()
+            && original != selected.crew.name
+            && let Some(automatic) = self.task_crew_source(task)?
+        {
+            usage_pressure = Some(UsagePressureRedraw {
+                note: format!(
+                    "crew redrawn from {automatic} (`{original}`) to {automatic} (`{}`) at admission under the crew allowlist",
+                    selected.crew.name
+                ),
+                original: original.to_string(),
+                source: automatic,
+                replacement: selected.crew.name.clone(),
+            });
+        }
         let reassignment_write = match reassignment {
             Some(plan) if plan.original != selected.crew.name => Some(ProviderLimitWrite {
                 replacement: selected.crew.name.clone(),
@@ -441,7 +439,7 @@ impl OrbitRuntime {
         });
         let written = match &experiment_pool {
             Some(pool) => AdmittedCrewSource::experiment(&pool.experiment, &pool.arm),
-            None => AdmittedCrewSource::redraw(&source, explicit.is_some()),
+            None => AdmittedCrewSource::redraw_reason(reason.unwrap_or(RedrawReason::Pool)),
         };
         input[SELECTION_KEY] = json!({
             "task_id": task.id,
@@ -451,7 +449,7 @@ impl OrbitRuntime {
             // The odds this draw ran on, renormalised over the permitted
             // members, so `orbit run show` can explain the choice.
             // A weighted draw adds each member's `pressure` [ORB-17770]
-            // and `performance` factor, and the `effective_weight` it drew on.
+            // and the `effective_weight` it drew on.
             "eligible_pool": candidates
                 .iter()
                 .map(|candidate| match &weighting {
@@ -463,25 +461,44 @@ impl OrbitRuntime {
         if let Some(limit) = provider_limit {
             input[SELECTION_KEY]["provider_limit"] = json!(limit);
         }
-        // A `verify-mock-ui` implementer that cannot read images — an
-        // unfiltered pool fallback above, or an explicit/experiment crew
-        // without a native image read — is recorded on the run (§5.3), so
-        // the operator can see the self-check went unused.
-        if orbit_types::task::has_verify_mock_ui_tag(&task.tags)
-            && (implementer_without_vision || !self.can_read_images(&selected.crew)?)
-        {
-            input[SELECTION_KEY][super::draw::IMPLEMENTER_WITHOUT_VISION] = json!(true);
+        // A `<crew>@auto` member records how it resolved: the band or
+        // fallback, the signal, and whether the exploration share chose an
+        // effort other than the policy's. `crew` above is already resolved.
+        if let Some(choice) = &selected.auto_effort {
+            input[SELECTION_KEY]["auto_effort"] = json!(choice);
         }
         if let Some(pool) = experiment_pool {
             input[SELECTION_KEY]["experiment_overlay_digest"] = json!(pool.digest);
-            input[SELECTION_KEY]["performance_weighting"] = json!(false);
             if let Some(planned) = planned.filter(|planned| planned != &selected.crew.name) {
                 input[SELECTION_KEY]["deviation"] = json!({
                     "intended_crew": planned, "actual_crew": selected.crew.name, "reason": source,
                 });
             }
         }
+        if let Some(assignments) = input
+            .get("experiment_capture")
+            .and_then(|capture| capture.get("assignments"))
+            .and_then(Value::as_array)
+        {
+            let suppressed = assignments
+                .iter()
+                .filter(|entry| entry["live"] == false)
+                .map(|entry| {
+                    json!({
+                        "experiment": entry["experiment"], "arm": entry["arm"],
+                        "intended_overlay_digest": entry["digest"],
+                        "actual_crew": selected.crew.name,
+                        "reason": "treatment inactive or superseded by explicit crew",
+                    })
+                })
+                .collect::<Vec<_>>();
+            if !suppressed.is_empty() {
+                input[SELECTION_KEY]["experiment_suppressions"] = json!(suppressed);
+            }
+        }
         input["crew"] = json!(selected.crew.name);
+        // Crew memory follows the crew just drawn [crew memory §5.2].
+        self.install_job_experiment_memory(input)?;
         #[cfg(feature = "test-support")]
         super::selection_checkpoint::notify_crew_selection_checkpoint();
         Ok(AdmissionTaskWrites {
@@ -559,6 +576,8 @@ impl OrbitRuntime {
         let Some((pool, _)) = self.complexity_pool_candidates(Some(plan.complexity), pools)? else {
             return Ok(false);
         };
+        let pool = self
+            .reresolve_auto_candidates(pool, &task_auto_effort_subject(&self.get_task(task_id)?))?;
         let Some(replacement_candidate) = pool
             .iter()
             .find(|candidate| candidate.weight > 0 && candidate.crew.name == replacement)
@@ -589,10 +608,14 @@ impl OrbitRuntime {
             {
                 return Ok(());
             }
-            match self.inspect_execution_claims() {
-                Ok(claims) if claims.iter().any(|inspection| {
-                    inspection.claim.task_id == task_id && inspection.claim.phase.is_unsettled()
-                }) => return Ok(()),
+            match self.inspect_task_execution_claims(task_id) {
+                Ok(claims)
+                    if claims
+                        .iter()
+                        .any(|inspection| inspection.claim.phase.is_unsettled()) =>
+                {
+                    return Ok(());
+                }
                 Ok(_) => {}
                 Err(error) => {
                     tracing::warn!(task_id = %task_id, "could not read execution claims for provider-limit reassignment: {error}");
@@ -605,7 +628,7 @@ impl OrbitRuntime {
                 TaskRecordUpdateParams {
                     actor: SYSTEM_ACTOR_LABEL.to_string(),
                     crew: Some(Some(replacement.to_string())),
-                    crew_source: Some(Some(format!("pool:{}", plan.complexity.as_str()))),
+                    crew_source: Some(Some(CrewSource::Pool(plan.complexity))),
                     expected_status: Some(vec![current.status]),
                     append_comments: vec![TaskComment {
                         at: now,
@@ -616,7 +639,7 @@ impl OrbitRuntime {
                     append_history: vec![TaskHistoryEntry {
                         at: now,
                         by: SYSTEM_ACTOR_LABEL.to_string(),
-                        event: "crew_assigned".to_string(),
+                        event: CREW_ASSIGNED_EVENT.to_string(),
                         note: Some(format!(
                             "assigned crew `{replacement}` from pool:{} (provider-limit reassignment from `{}`: {})",
                             plan.complexity.as_str(),
@@ -626,7 +649,18 @@ impl OrbitRuntime {
                         from_status: None,
                         to_status: None,
                         operation_id: None,
-                        decision: None,
+                        decision: Some(TaskDecision::CrewAssignment(
+                            RecordedCrewAssignment::new(
+                                CrewAssignmentState::new(
+                                    current.crew.clone(),
+                                    current.crew_source.clone(),
+                                ),
+                                CrewAssignmentState::new(
+                                    Some(replacement.to_string()),
+                                    Some(CrewSource::Pool(plan.complexity)),
+                                ),
+                            ),
+                        )),
                     }],
                     ..Default::default()
                 },
@@ -693,7 +727,7 @@ impl OrbitRuntime {
         &self,
         task_id: &str,
         original: &str,
-        source: &str,
+        source: &CrewSource,
         replacement: &str,
         note: &str,
     ) -> Result<(), OrbitError> {
@@ -703,7 +737,7 @@ impl OrbitRuntime {
             .with_task_write_lock(task_id, &mut || {
                 let current = self.get_task(task_id)?;
                 if current.crew.as_deref() != Some(original)
-                    || self.task_crew_source(&current)?.as_deref() != Some(source)
+                    || self.task_crew_source(&current)?.as_ref() != Some(source)
                 {
                     return Ok(());
                 }
@@ -712,17 +746,30 @@ impl OrbitRuntime {
                     TaskRecordUpdateParams {
                         actor: SYSTEM_ACTOR_LABEL.to_string(),
                         crew: Some(Some(replacement.to_string())),
-                        crew_source: Some(Some(source.to_string())),
+                        crew_source: Some(Some(source.clone())),
                         expected_status: Some(vec![current.status]),
                         append_history: vec![TaskHistoryEntry {
                             at: now,
                             by: SYSTEM_ACTOR_LABEL.to_string(),
-                            event: "crew_redrawn".to_string(),
+                            event: CREW_REDRAWN_EVENT.to_string(),
                             note: Some(note.to_string()),
                             from_status: None,
                             to_status: None,
                             operation_id: None,
-                            decision: None,
+                            // The redraw keeps the source the guard above
+                            // read; only the crew moves.
+                            decision: Some(TaskDecision::CrewAssignment(
+                                RecordedCrewAssignment::new(
+                                    CrewAssignmentState::new(
+                                        Some(original.to_string()),
+                                        Some(source.clone()),
+                                    ),
+                                    CrewAssignmentState::new(
+                                        Some(replacement.to_string()),
+                                        Some(source.clone()),
+                                    ),
+                                ),
+                            )),
                         }],
                         ..Default::default()
                     },
@@ -736,7 +783,7 @@ impl OrbitRuntime {
 /// moved from and to, with the pressure that drew each one.
 fn usage_pressure_redraw_note(
     original: &str,
-    source: &str,
+    source: &CrewSource,
     replacement: &str,
     weighting: &DrawWeighting,
 ) -> String {
@@ -747,28 +794,10 @@ fn usage_pressure_redraw_note(
             |pressure| pressure.describe(now),
         )
     };
-    let mut note = format!(
+    format!(
         "crew redrawn from {source} (`{original}`) to {source} (`{replacement}`) at admission \
          under usage pressure: `{original}` {}, `{replacement}` {}",
         describe(original),
         describe(replacement),
-    );
-    // The re-draw names the performance factor only when it changed the
-    // tickets. A shadow factor is recorded on the run and left out of
-    // this note, because the draw did not use it.
-    if weighting.performance_applied()
-        && let Some((mode, _)) = weighting.performance_lens()
-    {
-        let performance = |crew: &str| {
-            weighting
-                .performance_description(crew)
-                .unwrap_or_else(|| "×1".to_string())
-        };
-        note.push_str(&format!(
-            "; crew performance {mode}: `{original}` {}, `{replacement}` {}",
-            performance(original),
-            performance(replacement),
-        ));
-    }
-    note
+    )
 }

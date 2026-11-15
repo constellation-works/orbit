@@ -2,7 +2,28 @@ use super::*;
 
 /// Read `<root>/plugin.yaml`, validate its structure, resolve schema `$ref`s
 /// inside the root, and locate the backend command.
+///
+/// This full loader also reads and validates every `spec.tests` golden
+/// (§5). Use it where goldens certify the tree: `orbit plugin validate`,
+/// `orbit plugin test` and the install flow.
 pub fn load_plugin_dir(root: &Path) -> Result<LoadedPlugin, PluginLoadError> {
+    load_plugin_dir_impl(root, true)
+}
+
+/// Load a plugin directory without reading its `spec.tests` goldens.
+///
+/// Identical to [`load_plugin_dir`] in every other load-time refusal
+/// (symlink walk, manifest structure, schema `$ref` resolution and
+/// compile, definitions patterns, config section), but `tests` is left
+/// empty: no golden pattern is resolved and no golden file is opened.
+/// Serving an installed plugin never reads `tests`, so the host load
+/// path uses this variant and does not pay the conformance-suite parse
+/// on every process start.
+pub fn load_plugin_dir_without_tests(root: &Path) -> Result<LoadedPlugin, PluginLoadError> {
+    load_plugin_dir_impl(root, false)
+}
+
+fn load_plugin_dir_impl(root: &Path, include_tests: bool) -> Result<LoadedPlugin, PluginLoadError> {
     let root = std::fs::canonicalize(root).map_err(|error| {
         PluginLoadError::io(
             format!("plugin root '{}': {error}", root.display()),
@@ -87,7 +108,11 @@ pub fn load_plugin_dir(root: &Path) -> Result<LoadedPlugin, PluginLoadError> {
     let definitions = resolve_plugin_definitions(&root, &manifest)?;
     let skills = resolve_skills(&root, &manifest)?;
     let (config_schema, config_defaults) = resolve_config_section(&root, &manifest)?;
-    let tests = resolve_tests(&root, &manifest)?;
+    let tests = if include_tests {
+        resolve_tests(&root, &manifest)?
+    } else {
+        Vec::new()
+    };
 
     Ok(LoadedPlugin {
         root,

@@ -34,7 +34,7 @@ impl Fixture {
     fn initialized(override_root: bool) -> Self {
         let temp = tempdir().expect("tempdir");
         let root = if override_root {
-            temp.path().join("scratch-root")
+            temp.path().join("repo/scratch-root")
         } else {
             temp.path().join("home/.orbit")
         };
@@ -89,6 +89,90 @@ impl Fixture {
             .args(args);
         command.assert()
     }
+}
+
+#[test]
+fn unknown_config_keys_offer_bounded_recovery_without_writes() {
+    if crate::isolated_test::run_in_child(
+        "config_set_root::unknown_config_keys_offer_bounded_recovery_without_writes",
+    ) {
+        return;
+    }
+    let fixture = Fixture::layered();
+    let root = fixture.root.to_string_lossy().into_owned();
+    let workspace = fixture.repo.join(".orbit/config.toml");
+    let before = (
+        fs::read(fixture.global_config()).unwrap(),
+        fs::read(&workspace).unwrap(),
+    );
+    for key in ["workflow.base_branc", "not_a_config_key"] {
+        for verb in ["get", "set"] {
+            for json in [true, false] {
+                let mut args = vec!["--root", &root, "config", verb, key];
+                if verb == "set" {
+                    args.extend(["x", "--global"]);
+                }
+                if json {
+                    args.push("--json");
+                }
+                let output = fixture.orbit(&args).failure().get_output().clone();
+                assert!(output.stdout.is_empty());
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if json {
+                    let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+                    assert_eq!(error["code"], "invalid_input");
+                    if key == "workflow.base_branc" {
+                        let suggestions = error["did_you_mean"].as_array().unwrap();
+                        assert_eq!(suggestions.first().unwrap(), "workflow.base_branch");
+                        assert!(suggestions.len() <= 3, "{error}");
+                    } else {
+                        assert!(error.get("did_you_mean").is_none(), "{error}");
+                    }
+                } else {
+                    assert!(stderr.contains("orbit config keys"), "{stderr}");
+                    if key == "workflow.base_branc" {
+                        assert!(stderr.contains("workflow.base_branch"), "{stderr}");
+                    }
+                }
+                assert_eq!(
+                    (
+                        fs::read(fixture.global_config()).unwrap(),
+                        fs::read(&workspace).unwrap(),
+                    ),
+                    before,
+                    "refused {args:?} must preserve both config layers"
+                );
+            }
+        }
+    }
+    fixture
+        .orbit(&["--root", &root, "config", "keys"])
+        .success();
+    fixture
+        .orbit(&[
+            "--root",
+            &root,
+            "config",
+            "set",
+            "workflow.base_branch",
+            "recovery-check",
+            "--global",
+        ])
+        .success();
+    let output = fixture
+        .orbit(&[
+            "--root",
+            &root,
+            "config",
+            "get",
+            "workflow.base_branch",
+            "--json",
+        ])
+        .success()
+        .get_output()
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["value"], "recovery-check");
 }
 
 #[test]
@@ -434,5 +518,73 @@ fn config_set_refusals_match_shared_admission_without_writes() {
                 "main",
             ])
             .failure();
+    }
+}
+
+#[test]
+fn selected_workspace_shared_root_is_one_config_layer() {
+    let fixture = Fixture::initialized_with_workspace();
+    let absolute = fixture.root.to_string_lossy().into_owned();
+    for root in ["scratch-root", absolute.as_str()] {
+        for scope in [false, true] {
+            let mut args = vec!["--root", root, "--workspace", "repo", "config", "show"];
+            if scope {
+                args.extend(["--scope", "global"]);
+            }
+            let output = fixture.orbit(&args).success();
+            let text = String::from_utf8_lossy(&output.get_output().stdout);
+            assert!(
+                text.contains("config-root-host"),
+                "identity missing: {text}"
+            );
+            if !scope {
+                assert!(!text.contains("→ workspace"), "duplicate layer: {text}");
+                assert!(
+                    !text.contains("do not inherit from global"),
+                    "false warning: {text}"
+                );
+            }
+            let mut args = vec![
+                "--root",
+                root,
+                "--workspace",
+                "repo",
+                "config",
+                "get",
+                "machine.name",
+            ];
+            if scope {
+                args.extend(["--scope", "global"]);
+            }
+            let output = fixture.orbit(&args).success();
+            assert!(
+                String::from_utf8_lossy(&output.get_output().stdout).contains("config-root-host")
+            );
+        }
+        for global in [false, true] {
+            let mut args = vec!["--root", root, "--workspace", "repo", "config", "path"];
+            if global {
+                args.push("--global");
+            }
+            fixture.orbit(&args).success();
+        }
+        let output = fixture
+            .orbit(&[
+                "--root",
+                root,
+                "--workspace",
+                "repo",
+                "config",
+                "set",
+                "execution.env.pass",
+                "true",
+            ])
+            .failure();
+        let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+        assert!(
+            stderr.contains("--global") && stderr.contains("workspace") && stderr.contains("layer"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("remove it"), "{stderr}");
     }
 }

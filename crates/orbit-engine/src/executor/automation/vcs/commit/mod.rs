@@ -1,5 +1,6 @@
 mod actions;
 mod already_landed;
+mod already_resolved;
 mod author;
 mod checkpoint;
 mod clean_tree;
@@ -12,6 +13,7 @@ mod message;
 mod no_diff;
 mod published_replay;
 mod recovery;
+mod regression;
 mod repair;
 mod scope;
 mod summary;

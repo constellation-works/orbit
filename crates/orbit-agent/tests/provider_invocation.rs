@@ -94,14 +94,6 @@ const CLI_CASES: &[CliCase] = &[
         model_flag: "--model",
         effort_flag: Some("--reasoning-effort"),
     },
-    CliCase {
-        provider: "mock",
-        binary: "mock-agent",
-        model: "",
-        emitted_model: "",
-        model_flag: "",
-        effort_flag: None,
-    },
 ];
 
 /// State/cache root overrides each provider owns. Shared XDG names belong
@@ -180,10 +172,9 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
                         (configured && case.effort_flag.is_some()).then_some(ReasoningEffort::High);
                     let cfg = cfg.with_reasoning_effort(effort).expect("supported effort");
                     let envelope = json!({"prompt": "private-prompt-sentinel with spaces\nand a second line", "input": {"provider": case.provider}});
-                    let (spec, _) = Agent::new(&cfg)
+                    let spec = Agent::new(&cfg)
                         .expect("public provider adapter")
                         .invoke(AgentRequest::activity(
-                            "fixture",
                             serde_json::to_vec(&envelope).unwrap(),
                         ))
                         .expect("invocation");
@@ -262,10 +253,8 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
                     } else {
                         stdin
                     };
-                    // The mock executor sends the bare envelope; every real CLI
-                    // provider prefixes the shared response contract.
                     assert!(
-                        case.provider == "mock" || prompt.contains("Never generate synthetic load"),
+                        prompt.contains("Never generate synthetic load"),
                         "{} prompt dropped the no-synthetic-load rule; a worker's CPU burners \
                          took a shared host to load 89.7 on 32 cores (ORB-15196)",
                         case.provider
@@ -405,4 +394,61 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
             }
         },
     );
+}
+
+#[test]
+fn continuity_resume_is_emitted_only_by_supporting_provider_adapters() {
+    let envelope = serde_json::json!({
+        "schemaVersion": 1,
+        "input": {"brief": {"cycle": "rcy-1", "mandate": {"goal": "ship"}}},
+    });
+    let envelope_bytes = serde_json::to_vec(&envelope).unwrap();
+
+    for (provider, command, expected_pair) in [
+        ("claude", "claude", Some(("--resume", "conv-live-42"))),
+        ("codex", "codex", Some(("resume", "conv-live-42"))),
+        ("gemini", "gemini", None),
+        ("copilot", "copilot", None),
+    ] {
+        assert_eq!(
+            orbit_agent::provider_supports_continuity(Provider::parse(provider).unwrap()),
+            expected_pair.is_some(),
+            "unexpected continuity support for {provider}"
+        );
+        let cfg = AgentConfig::from_provider_and_cli_config(
+            provider,
+            command,
+            Some("test-model"),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        let agent = Agent::new(&cfg).unwrap();
+        assert_eq!(agent.supports_continuity(), expected_pair.is_some());
+        let spec = agent
+            .invoke(
+                AgentRequest::activity(envelope_bytes.clone())
+                    .with_conversation_ref(Some("conv-live-42".to_string())),
+            )
+            .unwrap();
+        if let Some((flag, value)) = expected_pair {
+            assert!(
+                has_pair(&spec.args, flag, value),
+                "{provider} did not emit resume pair ({flag}, {value}) in {:?}",
+                spec.args
+            );
+        } else {
+            assert!(
+                !spec.args.iter().any(|arg| arg.contains("conv-live-42")),
+                "{provider} unexpectedly emitted conversation_ref in {:?}",
+                spec.args
+            );
+        }
+        let prompt = String::from_utf8(spec.stdin).unwrap();
+        let received: Value =
+            serde_json::from_str(prompt.lines().last().expect("stdin envelope")).unwrap();
+        assert_eq!(
+            received, envelope,
+            "{provider} did not preserve the brief envelope on stdin when resuming"
+        );
+    }
 }

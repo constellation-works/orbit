@@ -4,7 +4,7 @@
 //! the claim and the accepted handoff but never the leaf's run, which lives in
 //! the follower's job store. Completion reads the owner-held evidence for that
 //! exact host and run, takes the pull request's identity from the handoff (the
-//! task carries no PR reference), and reads it from the provider by number.
+//! legacy task may carry no PR reference), and reads it from the provider by number.
 //!
 //! A pull request that merged at a head other than the handed-off candidate
 //! completes only on an accepted review reconciliation of exactly that head.
@@ -31,6 +31,112 @@ use orbit_types::workflow::{
 
 const PR_URL: &str = "https://github.com/owner/repository/pull/42";
 const RECONCILE: &str = "orbit.task.reconcile_review";
+
+#[test]
+fn a_follower_handoff_records_its_pull_request_once() {
+    if !isolated(
+        module_path!(),
+        "a_follower_handoff_records_its_pull_request_once",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    *pair.wire.accept_handoffs.lock().unwrap() = true;
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let delivered = handoff(&pair.admission(&leaf));
+    pair.leaf_hands_off(&leaf);
+    let settled = pair.pass(&drain);
+    assert!(settled["error"].is_null(), "{settled}");
+    let expected = json!([{"system": "github-pr", "id": "42", "url": PR_URL}]);
+    assert_eq!(
+        pair.owner_task(&delivered.task_id)["external_refs"],
+        expected
+    );
+    pair.wire.accept(delivered.clone()).unwrap();
+    assert_eq!(
+        pair.owner_task(&delivered.task_id)["external_refs"],
+        expected
+    );
+}
+
+/// Model an older owner's isolated task bundle, before handoff acceptance
+/// recorded PR refs. Keep unrelated references for the repair to preserve.
+fn retain_legacy_missing_pr_ref(owner: &OrbitRuntime, task: &str) {
+    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+    let registry = TaskRegistryStore::open(&task_registry_path(&owner.global_root())).unwrap();
+    let path = registry
+        .canonical_task_bundle_path(&owner.workspace_id().unwrap(), task)
+        .unwrap()
+        .join("task.yaml");
+    let mut envelope: orbit_types::task::TaskEnvelopeV2 =
+        serde_yaml::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    envelope
+        .external_refs
+        .retain(|reference| reference.system != "github-pr");
+    std::fs::write(path, serde_yaml::to_string(&envelope).unwrap()).unwrap();
+}
+
+#[test]
+fn an_owner_repairs_a_legacy_missing_handoff_pr_ref_once() {
+    if !isolated(
+        module_path!(),
+        "an_owner_repairs_a_legacy_missing_handoff_pr_ref_once",
+    ) {
+        return;
+    }
+    let pair = Pair::new(1);
+    let owner = &pair.wire.owner;
+    let task = &pair.tasks[0];
+    let unrelated = orbit_types::task::ExternalRef::try_new(
+        "issue".into(),
+        "123".into(),
+        Some("https://example.com/issues/123".into()),
+    )
+    .unwrap();
+    owner
+        .apply_task_automation_update(
+            task,
+            orbit_engine::TaskAutomationUpdate {
+                external_refs: vec![unrelated.clone()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    *pair.wire.accept_handoffs.lock().unwrap() = true;
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    pair.leaf_hands_off(&leaf);
+    let settled = pair.pass(&drain);
+    assert!(settled["error"].is_null(), "{settled}");
+    retain_legacy_missing_pr_ref(owner, task);
+    let claims = owner.inspect_execution_claims().unwrap();
+    let requests = owner.landing_start_requests().unwrap();
+    assert_eq!(
+        owner.repair_missing_handoff_pr_refs().unwrap(),
+        vec![task.clone()]
+    );
+    assert_eq!(
+        owner.get_task(task).unwrap().external_refs,
+        vec![
+            unrelated,
+            orbit_types::task::ExternalRef::github_pr_with_url("42", Some(PR_URL)).unwrap()
+        ]
+    );
+    assert_eq!(owner.get_task(task).unwrap().status, TaskStatus::Review);
+    assert!(owner.repair_missing_handoff_pr_refs().unwrap().is_empty());
+    assert_eq!(owner.inspect_execution_claims().unwrap(), claims);
+    assert_eq!(owner.landing_start_requests().unwrap(), requests);
+    assert_eq!(
+        owner
+            .get_task_history(task)
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.event == "pull_request_ref_repaired")
+            .count(),
+        1
+    );
+}
 
 fn session(capability: McpCapability) -> ToolSessionContext {
     ToolSessionContext {
@@ -75,7 +181,8 @@ fn pull_request_is(state: &str, head: &str, base: &str, merge_commit: Option<&st
             "number": 42,
             "state": state,
             "mergedAt": if state == "MERGED" { json!("2026-10-05T06:50:00Z") } else { Value::Null },
-            "headRefName": "orbit/fixture",
+            "headRefName": std::fs::read_to_string(home().join("pr-branch"))
+                .unwrap_or_else(|_| "orbit/fixture".into()),
             "headRefOid": head,
             "baseRefName": base,
             "mergeCommit": merge_commit.map(|oid| json!({"oid": oid})),
@@ -264,6 +371,10 @@ enum Landing {
 /// commit unless the fixture squashes it). The owner requires `commands`,
 /// reviews on its `sol` crew, and has the shipped reconciliation job seeded.
 struct Delivery {
+    // Declared before `pair` so its Drop releases, reaps and observer-settles
+    // every substitute before the pair's TempDir root is removed, on success,
+    // refusal and unwind paths alike.
+    _workers: crate::worker_fixture::OwnedWorkers,
     pair: Pair,
     owner: OrbitRuntime,
     repo: PathBuf,
@@ -347,6 +458,14 @@ impl Delivery {
         assert!(settled["error"].is_null(), "{settled}");
         assert_eq!(pair.owner_status(&task), "review");
         let claim = pair.wire.owner.distributed_claim_console().unwrap()["claims"][0].clone();
+        std::fs::write(
+            home().join("pr-branch"),
+            claim["handoff"]["candidate"]["source_branch"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+
         let landing = claim["handoff"]["candidate"]["landing_branch"]
             .as_str()
             .unwrap()
@@ -437,11 +556,14 @@ impl Delivery {
         // Each submitted run executes in-process through `Self::execute`.
         // The substitute child test stands in for the detached worker until
         // then, so the supervisor
-        // never sees a worker that exited before its run started.
+        // never sees a worker that exited before its run started. The owned
+        // fixture records each substitute's (run, pid) handshake; the guard
+        // in `Self` releases and reaps it before the fixture root is removed.
         let started = pair._root.path().join("started-{run_id}");
-        crate::worker_fixture::install(&started, "created");
+        let workers = crate::worker_fixture::install_owned_workers(&started, repo.clone());
 
         Self {
+            _workers: workers,
             claim_id: claim["claim_id"].as_str().unwrap().to_string(),
             handoff_id: claim["handoff"]["handoff_id"].as_str().unwrap().to_string(),
             pair,
@@ -469,6 +591,7 @@ impl Delivery {
                 &expected,
                 "operator",
                 "merged by hand",
+                "operator-revoke",
                 "revoke",
             )
             .expect("revoke");
@@ -479,7 +602,7 @@ impl Delivery {
                 TaskStatus::Blocked,
                 "operator",
                 "landing stopped on a conflict; merged by hand",
-                "recover",
+                ("operator-recover", "recover"),
             )
             .expect("recover");
         back_to_review(&self.owner, &self.task, None);
@@ -602,10 +725,9 @@ impl Delivery {
     fn reconcile_on(&self, owner: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
         let mut input = input;
         input["id"] = json!(self.task);
-        owner.run_tool_with_context_and_role(
+        owner.run_tool_with_context(
             RECONCILE,
             input,
-            Role::Admin,
             ToolContext {
                 session_context: session(McpCapability::Operator),
                 ..ToolContext::default()
@@ -822,7 +944,57 @@ fn a_recovered_follower_delivery_completes_through_a_reconciled_merged_head() {
         shown["job_run_machine"]["machine_id"], FOLLOWER,
         "{shown:#}"
     );
-    assert_eq!(shown["external_refs"], json!([]), "{shown:#}");
+    retain_legacy_missing_pr_ref(owner, task);
+    assert_eq!(delivery.pair.owner_task(task)["external_refs"], json!([]));
+
+    // A legacy owner's task may have no PR reference. Even with history
+    // alone, the exact accepted handoff selects #42.
+    let without_history = delivery.snapshot(McpCapability::Operator).reviewed_head;
+    owner
+        .apply_task_automation_update(
+            task,
+            orbit_engine::TaskAutomationUpdate {
+                external_refs: vec![orbit_types::task::ExternalRef {
+                    system: "github-pr".into(),
+                    id: "7".into(),
+                    url: Some("https://github.com/owner/repository/pull/7".into()),
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        delivery.snapshot(McpCapability::Operator).reviewed_head,
+        without_history
+    );
+    owner
+        .apply_task_automation_update(
+            task,
+            orbit_engine::TaskAutomationUpdate {
+                external_refs: vec![orbit_types::task::ExternalRef {
+                    system: "github-pr".into(),
+                    id: "42".into(),
+                    url: Some(PR_URL.into()),
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let provider = std::fs::read(home().join("pr.json")).unwrap();
+    for branch in [json!("other-branch"), Value::Null] {
+        let mut wrong: Value = serde_json::from_slice(&provider).unwrap();
+        wrong["headRefName"] = branch;
+        std::fs::write(home().join("pr.json"), wrong.to_string()).unwrap();
+        assert!(
+            delivery
+                .snapshot(McpCapability::Operator)
+                .reviewed_head
+                .is_none(),
+            "a provider branch mismatch cannot identify the accepted foreign delivery"
+        );
+    }
+    std::fs::write(home().join("pr.json"), provider).unwrap();
 
     // An open pull request neither completes nor reconciles, and the head is
     // read by number: the stand-in provider refuses any listing.
@@ -906,17 +1078,24 @@ fn a_recovered_follower_delivery_completes_through_a_reconciled_merged_head() {
     // Agents can neither produce the evidence nor complete.
     let agent = session(McpCapability::Agent);
     let denied = owner
-        .run_tool_with_context_and_role(
+        .run_tool_with_context(
             RECONCILE,
             json!({"action": "submit", "id": task, "request_key": "agent"}),
-            Role::Admin,
             ToolContext {
                 session_context: agent.clone(),
                 ..ToolContext::default()
             },
         )
         .expect_err("an agent cannot reconcile its own delivery");
-    assert!(!denied.to_string().is_empty(), "recovered: {denied}");
+    assert!(
+        matches!(denied, OrbitError::CapabilityDenied(_)),
+        "recovered: the refusal is a capability denial, not another failure: {denied:?}"
+    );
+    assert_contains(
+        &denied.to_string(),
+        "requires the `operator` capability",
+        "recovered",
+    );
     assert!(
         !delivery
             .snapshot(McpCapability::Agent)
@@ -1115,7 +1294,21 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
     };
     // The merged head itself remediates nothing.
     let head = dispose(&delivery.head).expect_err("the head is not a remediation");
-    assert!(!head.to_string().is_empty(), "baseline");
+    assert!(
+        matches!(head, OrbitError::InvalidInput(_)),
+        "baseline: the refusal is a rejected input, not another failure: {head:?}"
+    );
+    for needle in [
+        "is already part of the merged head",
+        "cannot explain a failure of that head",
+    ] {
+        assert_contains(&head.to_string(), needle, "baseline");
+    }
+    assert_eq!(
+        delivery.status(&reconciliation)["outcome"],
+        "awaiting_disposition",
+        "baseline: the refused head-as-remediation leaves the disposition open"
+    );
 
     let unrelated = delivery.land("unrelated.txt", "unrelated\n", "Unrelated landing change");
     let failed_remediation = dispose(&unrelated)
@@ -2008,7 +2201,7 @@ fn a_same_named_owner_run_never_stands_in_for_a_follower_run() {
             TaskStatus::Blocked,
             "operator",
             "the follower went away",
-            "recover",
+            ("operator-recover", "recover"),
         )
         .expect("recover");
 
@@ -2194,10 +2387,9 @@ fn a_settled_follower_release_completes_on_current_review_evidence() {
     // Release evidence proves only stopped execution. It does not make a PR
     // reconciliation eligible without an accepted PR handoff.
     let reconciliation = owner
-        .run_tool_with_context_and_role(
+        .run_tool_with_context(
             RECONCILE,
             json!({"id": task, "action": "inspect"}),
-            Role::Admin,
             ToolContext {
                 session_context: operator.clone(),
                 ..ToolContext::default()

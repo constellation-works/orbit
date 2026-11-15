@@ -1,5 +1,6 @@
-//! The `orbit mcp serve` toolsets: which group of tools a definition is
-//! advertised in, and which groups one server enables.
+//! The `orbit mcp serve` toolsets and roles: which group of tools a
+//! definition is advertised in, which groups one server enables, and the
+//! named roles that bundle groups for one kind of session.
 
 use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
@@ -7,55 +8,171 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+use super::McpToolRules;
 use super::error::McpToolsetError;
 
-/// The toolset an MCP definition belongs to. Every server advertises
-/// [`McpToolset::Default`]; the others are opt-in per server. A toolset
-/// changes advertisement only: the tools stay registered and `orbit tool
-/// run`, activities and plugin callbacks reach them regardless.
+/// The toolset an MCP definition belongs to. Every tool belongs to exactly
+/// one. [`McpToolset::Core`] is always advertised; the
+/// [`McpToolset::DEFAULT_TIER`] toolsets are advertised when no role is
+/// configured; the others are opt-in per server. A toolset changes
+/// advertisement only: the tools stay registered and `orbit tool run`,
+/// activities and plugin callbacks reach them regardless.
 #[derive(
     Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash,
 )]
 #[serde(rename_all = "kebab-case")]
 pub enum McpToolset {
-    /// Always advertised.
+    /// Always advertised: workspace discovery.
     #[default]
-    Default,
-    /// Resource leases.
+    Core,
+    /// Task, artifact and friction reads.
+    TasksRead,
+    /// Task, artifact and friction writes.
+    TasksWrite,
+    /// Delivery repair verbs (requeue, review reset, handoff recovery, …).
+    TaskRepair,
+    /// Decision requests: list, show and raise.
+    Decisions,
+    /// Workflow run reads.
+    Runs,
+    /// Workflow dispatch: ship, auto, resume and pipeline invocation.
+    Dispatch,
+    /// Auto-tasks, routines and the condition-trigger explain.
+    Automation,
+    /// Codebase analytics reads.
+    Codebase,
+    /// Lexical search over tasks and frictions.
+    Search,
+    /// UI tools. Empty since `orbit.visual.capture` was removed
+    /// [ORB-22807]; kept so a server or role that names `ui` still loads.
+    Ui,
+    /// Command execution.
+    Exec,
+    /// Plugin and external tools.
+    Plugins,
+    /// Path-lease tools. Empty since the `orbit.lease.*` tools were removed
+    /// [ORB-22808]; kept so a server or role that names `leases` still loads.
     Leases,
     /// Experiment definitions, lifecycle and readouts.
     Experiments,
-    /// Agent and orchestrator scorecards and the crew ladder.
+    /// Agent scorecards.
     Analytics,
     /// A decision channel's own callbacks (submit and digest).
     DecisionChannel,
+    /// Fleet notices: post, close, list and show.
+    Notice,
+    /// Resident mandates: the authority grant, relay and control, show,
+    /// list, checkpoint, metrics and digest, and the evolution ledger.
+    Resident,
+    /// Tools no MCP server advertises: `orbit tool run` and managed
+    /// activities reach them. Naming it in a selection advertises nothing.
+    Local,
 }
 
 impl McpToolset {
+    /// The toolset ORB-20383 removed with `orbit.agent.invoke`. Selections
+    /// ignore it with a warning so stored `machine.mcp.toolsets` entries
+    /// keep resolving; no toolset replaces it.
+    pub const RETIRED_AGENT_INVOKE: &str = "agent-invoke";
+
+    /// Every retired toolset name a selection ignores.
+    pub const RETIRED_TOOLSETS: [&'static str; 1] = [Self::RETIRED_AGENT_INVOKE];
+
+    /// Migration note for the retired toolset, shared by every surface that
+    /// still accepts it.
+    pub const RETIRED_AGENT_INVOKE_NOTE: &str = "agent invocation (orbit.agent.invoke) was removed; remove 'agent-invoke' from the selection";
+
+    /// Whether `name` is a retired toolset selections ignore (trimmed, exact).
+    pub fn is_retired_toolset_name(name: &str) -> bool {
+        Self::RETIRED_TOOLSETS.contains(&name.trim())
+    }
+
     /// Every toolset, in declaration order.
-    pub const ALL: [Self; 5] = [
-        Self::Default,
+    pub const ALL: [Self; 20] = [
+        Self::Core,
+        Self::TasksRead,
+        Self::TasksWrite,
+        Self::TaskRepair,
+        Self::Decisions,
+        Self::Runs,
+        Self::Dispatch,
+        Self::Automation,
+        Self::Codebase,
+        Self::Search,
+        Self::Ui,
+        Self::Exec,
+        Self::Plugins,
         Self::Leases,
         Self::Experiments,
         Self::Analytics,
         Self::DecisionChannel,
+        Self::Notice,
+        Self::Resident,
+        Self::Local,
     ];
 
+    /// The default profile's toolsets beside [`McpToolset::Core`].
+    /// The selection name `default` stands for these toolsets.
+    pub const DEFAULT_TIER: [Self; 3] = [Self::TasksRead, Self::TasksWrite, Self::Search];
+
+    /// Every name a `machine.mcp.toolsets` entry takes: each toolset's
+    /// name in [`Self::ALL`] order, then `all` and `default` [ORB-22809].
+    pub const SELECTION_NAMES: [&'static str; 22] = {
+        let mut names = [""; 22];
+        let mut index = 0;
+        while index < Self::ALL.len() {
+            names[index] = Self::ALL[index].as_str();
+            index += 1;
+        }
+        names[20] = "all";
+        names[21] = "default";
+        names
+    };
+
     /// The name a selection uses.
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Default => "default",
+            Self::Core => "core",
+            Self::TasksRead => "tasks-read",
+            Self::TasksWrite => "tasks-write",
+            Self::TaskRepair => "task-repair",
+            Self::Decisions => "decisions",
+            Self::Runs => "runs",
+            Self::Dispatch => "dispatch",
+            Self::Automation => "automation",
+            Self::Codebase => "codebase",
+            Self::Search => "search",
+            Self::Ui => "ui",
+            Self::Exec => "exec",
+            Self::Plugins => "plugins",
             Self::Leases => "leases",
             Self::Experiments => "experiments",
             Self::Analytics => "analytics",
             Self::DecisionChannel => "decision-channel",
+            Self::Notice => "notice",
+            Self::Resident => "resident",
+            Self::Local => "local",
         }
+    }
+
+    /// Whether a server with no role advertises this toolset.
+    pub fn in_default_tier(self) -> bool {
+        self == Self::Core || Self::DEFAULT_TIER.contains(&self)
+    }
+
+    /// The roles whose surface includes this toolset, in declaration order.
+    pub fn roles(self) -> Vec<McpRole> {
+        McpRole::ALL
+            .into_iter()
+            .filter(|role| role.includes(self))
+            .collect()
     }
 
     fn known_names() -> String {
         Self::ALL
             .iter()
             .map(|toolset| toolset.as_str())
+            .chain(["default"])
             .collect::<Vec<_>>()
             .join(", ")
     }
@@ -71,6 +188,12 @@ impl FromStr for McpToolset {
     type Err = McpToolsetError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if Self::is_retired_toolset_name(value) {
+            return Err(McpToolsetError::Retired {
+                name: value.trim().to_string(),
+                note: Self::RETIRED_AGENT_INVOKE_NOTE,
+            });
+        }
         Self::ALL
             .into_iter()
             .find(|toolset| toolset.as_str() == value)
@@ -81,11 +204,151 @@ impl FromStr for McpToolset {
     }
 }
 
-/// The toolsets one MCP server advertises. [`McpToolset::Default`] is
-/// always enabled, so naming it adds nothing.
+/// A named set of toolsets for one kind of MCP session. A role limits what a
+/// server advertises and dispatches; it never grants authority, so an
+/// operator-only tool still needs operator capability under every role.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "kebab-case")]
+pub enum McpRole {
+    /// Operator workflows and recovery, alongside the core surface.
+    Operator,
+    /// A supervising manager: read-only task and run views, decisions
+    /// (attention), notices, resident mandates and search.
+    Manager,
+    /// The resident orchestrator's bounded cycle: task reads and writes, run
+    /// reads, dispatch, decisions, notices, its mandate and search.
+    Resident,
+    /// A managed agent, aligned with the managed activity baseline allowlist.
+    Agent,
+    /// Read-only views.
+    Reader,
+}
+
+impl McpRole {
+    /// Every role, in declaration order.
+    pub const ALL: [Self; 5] = [
+        Self::Operator,
+        Self::Manager,
+        Self::Resident,
+        Self::Agent,
+        Self::Reader,
+    ];
+
+    /// Every role's name, in [`Self::ALL`] order [ORB-22809].
+    pub const NAMES: [&'static str; 5] = {
+        let mut names = [""; 5];
+        let mut index = 0;
+        while index < Self::ALL.len() {
+            names[index] = Self::ALL[index].as_str();
+            index += 1;
+        }
+        names
+    };
+
+    /// The name `--role` and `machine.mcp.role` take.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Operator => "operator",
+            Self::Manager => "manager",
+            Self::Resident => "resident",
+            Self::Agent => "agent",
+            Self::Reader => "reader",
+        }
+    }
+
+    /// The toolsets this role serves beside [`McpToolset::Core`]. The one
+    /// place a role's surface is defined.
+    pub fn toolsets(self) -> &'static [McpToolset] {
+        use McpToolset as T;
+        match self {
+            Self::Operator => &[
+                T::TasksRead,
+                T::TasksWrite,
+                T::TaskRepair,
+                T::Decisions,
+                T::Runs,
+                T::Dispatch,
+                T::Automation,
+                T::Codebase,
+                T::Search,
+                T::Ui,
+                T::Exec,
+                T::Plugins,
+            ],
+            Self::Manager => &[
+                T::TasksRead,
+                T::Runs,
+                T::Decisions,
+                T::Notice,
+                T::Resident,
+                T::Search,
+            ],
+            Self::Resident => &[
+                T::TasksRead,
+                T::TasksWrite,
+                T::Runs,
+                T::Dispatch,
+                T::Decisions,
+                T::Notice,
+                T::Resident,
+                T::Search,
+            ],
+            Self::Agent => &[
+                T::TasksRead,
+                T::TasksWrite,
+                T::Decisions,
+                T::Codebase,
+                T::Search,
+                T::Ui,
+                T::Leases,
+                T::Notice,
+            ],
+            Self::Reader => &[T::TasksRead, T::Runs, T::Codebase, T::Search],
+        }
+    }
+
+    /// Whether this role's surface includes `toolset`.
+    pub fn includes(self, toolset: McpToolset) -> bool {
+        toolset == McpToolset::Core || self.toolsets().contains(&toolset)
+    }
+
+    fn known_names() -> String {
+        Self::ALL
+            .iter()
+            .map(|role| role.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+impl Display for McpRole {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for McpRole {
+    type Err = McpToolsetError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let value = value.trim();
+        Self::ALL
+            .into_iter()
+            .find(|role| role.as_str() == value)
+            .ok_or_else(|| McpToolsetError::UnknownRole {
+                name: value.to_string(),
+                known: Self::known_names(),
+            })
+    }
+}
+
+/// The toolsets one MCP server advertises, and the role they came from.
+/// [`McpToolset::Core`] is always enabled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpToolsetSelection {
     enabled: BTreeSet<McpToolset>,
+    role: Option<McpRole>,
+    explicit_tools: BTreeSet<String>,
 }
 
 impl Default for McpToolsetSelection {
@@ -95,10 +358,15 @@ impl Default for McpToolsetSelection {
 }
 
 impl McpToolsetSelection {
-    /// Only the default toolset.
+    /// The surface with no role: core and the default tier.
     pub fn default_only() -> Self {
         Self {
-            enabled: BTreeSet::from([McpToolset::Default]),
+            enabled: McpToolset::ALL
+                .into_iter()
+                .filter(|toolset| toolset.in_default_tier())
+                .collect(),
+            role: None,
+            explicit_tools: BTreeSet::new(),
         }
     }
 
@@ -106,49 +374,153 @@ impl McpToolsetSelection {
     pub fn all() -> Self {
         Self {
             enabled: McpToolset::ALL.into_iter().collect(),
+            role: None,
+            explicit_tools: BTreeSet::new(),
         }
     }
 
-    /// Parse toolset names; `all` enables every toolset.
+    /// Exactly the toolsets `role` serves.
+    pub fn for_role(role: McpRole) -> Self {
+        let mut enabled = BTreeSet::from([McpToolset::Core]);
+        enabled.extend(role.toolsets().iter().copied());
+        Self {
+            enabled,
+            role: Some(role),
+            explicit_tools: BTreeSet::new(),
+        }
+    }
+
+    /// Parse toolset names onto the no-role surface; `all` enables every
+    /// toolset and `default` the default tier.
     pub fn from_names<'a>(
         names: impl IntoIterator<Item = &'a str>,
     ) -> Result<Self, McpToolsetError> {
-        let mut selection = Self::default_only();
+        Self::default_only().with_names(names)
+    }
+
+    /// This selection with the named toolsets added; `all` adds every
+    /// toolset and `default` the default tier. The role is kept. A retired
+    /// toolset name is ignored so stored selections keep loading; callers
+    /// warn naming the removal.
+    pub fn with_names<'a>(
+        mut self,
+        names: impl IntoIterator<Item = &'a str>,
+    ) -> Result<Self, McpToolsetError> {
         for name in names {
             match name.trim() {
                 "" => return Err(McpToolsetError::EmptyEntry),
-                "all" => selection.enabled.extend(McpToolset::ALL),
+                name if name.starts_with("tool:") && name.len() > 5 => {
+                    self.explicit_tools.insert(name[5..].to_string());
+                }
+                "all" => self.enabled.extend(McpToolset::ALL),
+                "default" => self.enabled.extend(McpToolset::DEFAULT_TIER),
+                name if McpToolset::is_retired_toolset_name(name) => {}
                 name => {
-                    selection.enabled.insert(name.parse()?);
+                    self.enabled.insert(name.parse()?);
                 }
             }
         }
-        Ok(selection)
+        Ok(self)
     }
 
-    /// Parse one comma-separated selection, as `--toolset` takes it.
-    pub fn parse_list(raw: &str) -> Result<Self, McpToolsetError> {
-        Self::from_names(raw.split(','))
+    /// This selection with every toolset `other` enables added. The role is
+    /// kept.
+    pub fn union(mut self, other: &Self) -> Self {
+        self.enabled.extend(other.enabled.iter().copied());
+        self.explicit_tools
+            .extend(other.explicit_tools.iter().cloned());
+        self
     }
 
     /// Whether a definition in `toolset` is advertised.
     pub fn enables(&self, toolset: McpToolset) -> bool {
-        self.enabled.contains(&toolset)
+        toolset == McpToolset::Core || self.enabled.contains(&toolset)
     }
 
-    /// The selection as `--toolset` takes it, so a remote server can be
-    /// asked for the same one.
-    pub fn to_list(&self) -> String {
-        let opt_in = self
+    /// Whether a named definition is included by its toolset or an explicit grant.
+    pub fn enables_tool(&self, toolset: McpToolset, name: &str) -> bool {
+        self.enables(toolset) || self.grants_tool(name)
+    }
+
+    /// Whether a definition is advertised: its toolset or any of its
+    /// actions' toolsets is enabled, or a grant names it or one of its
+    /// actions (`tool:orbit.decision:list`).
+    pub fn enables_definition(&self, rules: &McpToolRules, name: &str) -> bool {
+        self.enables_tool(rules.toolset, name)
+            || rules
+                .action_toolsets
+                .iter()
+                .any(|(_, toolset)| self.enables(*toolset))
+            || self.explicit_tools.iter().any(|grant| {
+                grant
+                    .split_once(super::TOOL_ACTION_SEPARATOR)
+                    .is_some_and(|(family, _)| family == name)
+            })
+    }
+
+    /// Whether a call to `name` selecting `action` is served: the action's
+    /// toolset is enabled, or a grant names the tool or that action.
+    pub fn enables_call(&self, rules: &McpToolRules, name: &str, action: Option<&str>) -> bool {
+        if rules.action_toolsets.is_empty() {
+            return self.enables_tool(rules.toolset, name);
+        }
+        self.enables_tool(rules.toolset_for_action(action), name)
+            || action.is_some_and(|action| {
+                self.explicit_tools
+                    .contains(&format!("{name}{}{action}", super::TOOL_ACTION_SEPARATOR))
+            })
+    }
+
+    fn grants_tool(&self, name: &str) -> bool {
+        self.explicit_tools.contains(name)
+            || self.explicit_tools.iter().any(|pattern| {
+                pattern
+                    .strip_suffix('*')
+                    .is_some_and(|prefix| name.starts_with(prefix))
+            })
+    }
+
+    /// Whether every toolset is enabled, so nothing is withheld.
+    pub fn enables_all(&self) -> bool {
+        McpToolset::ALL
+            .into_iter()
+            .all(|toolset| self.enables(toolset))
+    }
+
+    /// The role this selection serves, when one was configured.
+    pub fn role(&self) -> Option<McpRole> {
+        self.role
+    }
+
+    /// The enabled toolsets, in declaration order.
+    pub fn toolsets(&self) -> impl Iterator<Item = McpToolset> + '_ {
+        self.enabled.iter().copied()
+    }
+
+    /// The selection as `--toolset` takes it beside `--role`, so a remote
+    /// server can be asked for the same one: the toolsets beyond the role,
+    /// or beyond the default tier without one. With no role and nothing
+    /// beyond the default tier this is `default`; with a role and nothing
+    /// beyond it, `None`.
+    pub fn to_list(&self) -> Option<String> {
+        let extra = self
             .enabled
             .iter()
-            .filter(|toolset| **toolset != McpToolset::Default)
-            .map(|toolset| toolset.as_str())
+            .filter(|toolset| match self.role {
+                Some(role) => !role.includes(**toolset),
+                None => !toolset.in_default_tier(),
+            })
+            .map(|toolset| toolset.as_str().to_string())
+            .chain(
+                self.explicit_tools
+                    .iter()
+                    .map(|name| format!("tool:{name}")),
+            )
             .collect::<Vec<_>>();
-        if opt_in.is_empty() {
-            McpToolset::Default.as_str().to_string()
-        } else {
-            opt_in.join(",")
+        match (extra.is_empty(), self.role) {
+            (false, _) => Some(extra.join(",")),
+            (true, None) => Some("default".to_string()),
+            (true, Some(_)) => None,
         }
     }
 }

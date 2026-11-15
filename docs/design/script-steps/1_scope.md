@@ -1,11 +1,11 @@
 ---
 title: "Scope: Script steps"
 owner: claude
-last_updated: 2026-10-30
-last_validated: 2026-10-30
+last_updated: 2026-11-06
+last_validated: 2026-11-06
 status: Draft
 stage: building
-next: "Phases 1-2 landed ([ORB-19983], [ORB-19985]); phase 3 (files, macOS profile) is not yet filed"
+next: "File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled)"
 feature: script-steps
 doc_role: scope
 type: design
@@ -15,13 +15,26 @@ tags: [script-steps, activity-job, routines, sandbox, grants, policy-sandbox]
 
 # Scope: Script steps
 
-Status: proposed; phases 1 and 2 (Phasing) have landed. Phase 1 ([ORB-19983]) added the `Script`
+Status: building; phases 1 to 5 (Phasing) have landed. Phase 1 ([ORB-19983]) added the `Script`
 manifest and its loader, `target: script:` parsing, the `script_grant` table and
 witness, `orbit script grant|revoke|list|show`, the governed rows and doctor
 findings. Phase 2 ([ORB-19985]) runs a granted step on Linux under
 `linux-bwrap-script-v1` (no network, `env_pass` or `files.inputs` yet), with the
-`script.execution` audit, `orbit run show` and `orbit script history`; other hosts
-refuse with `script_sandbox_unavailable`. This doc is the design deliverable of [ORB-19294]. It reverses the removal recorded in
+`script.execution` audit, `orbit run show` and `orbit script history`. [ORB-20866]
+added declared output files (`files.outputs`, §4 Files out) from phase 3, and
+[ORB-21297] added phase 3's Linux part: declared input files (`files.inputs`, §4
+Files in) and the `attach_script_files` action that attaches a step's output files
+to a task. [ORB-21298] completed phase 3: the `macos-sandbox-script-v1` profile, so
+macOS runs script steps (with no network), `RLIMIT_CPU` and `RLIMIT_NOFILE` on both
+platforms, the grant-time and pre-spawn root probes with TCC reporting, and the
+nested-sandbox refusal on macOS. Platforms other than Linux and macOS refuse with
+`script_sandbox_unavailable`. Phase 4
+([ORB-21299]) raises a `script_grant` decision request when a step is refused for a
+missing, stale or insufficient grant, applies a human or registered-channel answer as a
+digest-bound grant, and adds the dashboard Scripts view with its operator-only grant
+action. Phase 5 ([ORB-21301]) honours `network: https` and `network: any` grants and
+`env_pass` on Linux, and redacts each passed value from everything the run keeps.
+This doc is the design deliverable of [ORB-19294]. It reverses the removal recorded in
 [The v2 shell activity surface is removed, not sandboxed](../activity-job/4_decisions.md#the-v2-shell-activity-surface-is-removed-not-sandboxed)
 ([ORB-00374]) by taking the alternative that decision recorded and set aside:
 "retrofit the sandbox/policy/cwd pipeline". It also narrows the reach of
@@ -36,7 +49,8 @@ bullet was rechecked at `d10fae79b`).
 
 - **Job steps name catalog targets by prefix.** A job step's `target:` is a
   namespace-prefixed reference. At that commit only `activity:<name>` resolved
-  (`ACTIVITY_REF_PREFIX` and `resolve_ref`, `crates/orbit-engine/src/activity_job/catalog.rs`),
+  (`ACTIVITY_REF_PREFIX` in `crates/orbit-engine/src/activity_job/catalog/mod.rs`
+  and `resolve_ref` in `crates/orbit-engine/src/activity_job/catalog/resolve.rs`),
   and any other prefix was a load error (`ResolveError::UnknownRefKind`); phase 1
   ([ORB-19983]) added `script:` resolution alongside it. `TargetRef`
   (`crates/orbit-types/src/workflow/activity_job/job_v2.rs`) was made prefixed so that
@@ -90,7 +104,7 @@ bullet was rechecked at `d10fae79b`).
   `machine.worker_cpu_quota` is optional, and systemd may accept `CPUQuota=` without
   enforcing it when the CPU controller is not delegated. Under `warn` or `off`, a
   script may therefore run without worker-scope resource limits. macOS has no cgroup,
-  so workers there run uncontained; a tracked-tree watchdog is filed as [ORB-19251].
+  so workers there run uncontained; a tracked-tree watchdog was filed as [ORB-19251] and has since landed.
 - **Operator grants with a tamper-evident witness.** Plugin grants are host-local
   (SQLite `plugin_store`) and checked against a witness file under
   `~/.orbit/plugins/.grants/<ns>.json` that no agent or plugin profile can write
@@ -368,6 +382,28 @@ forged row has no matching witness.
    `orbit.decision.submit` can answer it. The request is superseded when the digest
    changes.
 
+   As landed in phase 4 ([ORB-21299]), a script step refused with `grant_missing`,
+   `grant_stale` or `grant_insufficient` raises the request itself, best-effort: the
+   refusal stands either way and its message names the request. A witness failure,
+   a sandbox gap or a changed interpreter raises nothing, since a grant would not
+   clear them. The request carries the script name, the digest it would grant (and
+   the refused grant's digest), the manifest and entry digests, the diff against the
+   last granted bytes (cut at 32 KiB), and the requested against granted capability
+   sets. A repeat refusal for the same digest and capability set reuses the open
+   request, and a newer request for the same script supersedes the older one.
+   Requests live on one `someday` holder task per script, titled
+   ``Script grant requests: `<name>` `` and tagged `script-grant`, which no agent
+   dispatches. The answers are `grant` and `reject`. A `grant` answer re-reads the
+   catalog: when the script's digest or requested capabilities no longer match the
+   binding, the answer is refused as superseded and nothing is written. Otherwise it
+   writes the grant with the answering human as grantor and `cli`, `dashboard` or
+   `decision-channel <name>` as provenance. The request is an Authority-tier
+   decision, so no precedent or model answer applies to it. A grant answer binds
+   the bytes in the workspace catalog (the primary checkout). A step that ran in a
+   worktree whose bytes differ from the catalog's is refused as superseded until
+   those bytes land. Phase 4 adds no tool to raise a `script_grant` request by hand;
+   the orbit-office proposal flow in §9.1 still needs one.
+
 `orbit.script.grant` and `orbit.script.revoke` are governed operations whose catalog
 rows have no Agent capability, so `classify_agent_tool_grant` makes them operator-only.
 Both are refused from an agent envelope and from a plugin callback session.
@@ -430,7 +466,7 @@ is no unsandboxed fallback and no `unsandboxed` grant in v1.
 | `.git` of the cwd tree | read only | So `git describe` and `git archive` work |
 | `.orbit/` of the workspace | none | Masked: no store, no config, no task bundles |
 | Step scratch: `home/`, `tmp/`, `in/`, `out/` | `in/` read, the rest read-write | `$HOME` and `$TMPDIR` point here; size-bounded |
-| Grant `read_roots` / `write_roots` | as granted | Absolute paths, canonicalized at grant, created before spawn as plugin write roots are |
+| Grant `read_roots` / `write_roots` | as granted | Absolute paths that must exist; probed at grant and again before every spawn (§9 item 5), and never created by Orbit |
 | Credential paths (`~/.ssh`, `~/.config/gh`, …) and the global root | none | The credential denies win over every grant |
 
 **Network.** `none` by default. On Linux the network namespace is unshared. On macOS
@@ -438,7 +474,9 @@ the profile uses `(deny network*)`.
 
 - **`https`** (Linux only). The host network is shared under a Landlock ruleset that
   allows outbound TCP to port 443 only. It is the build profile's fetch mode, and
-  needs Landlock ABI 4; an older kernel refuses.
+  needs Landlock ABI 4; an older kernel refuses with `script_sandbox_unavailable`.
+  The boundary is the TCP port, not the protocol: TLS isn't inspected, and UDP (DNS)
+  is not restricted.
 - **`any`** (Linux only). The network is shared with no rule. The grant command warns.
 - **macOS refuses both in v1.** A descendant that calls `setsid` escapes the
   process-group kill and would keep its network after the step ends. That is the same
@@ -451,16 +489,21 @@ the profile uses `(deny network*)`.
 - **Step context:** `ORBIT_SCRIPT_NAME`, `ORBIT_SCRIPT_DIGEST`, `ORBIT_SCRIPT_RUN_ID`,
   `ORBIT_SCRIPT_STEP_ID`, `ORBIT_SCRIPT_IN` and `ORBIT_SCRIPT_OUT`.
 - **Granted names:** each `env_pass` name, copied when the job's process has it. A
-  missing one is unset, never an empty string, and is recorded.
+  missing one is unset, never an empty string, and is recorded (`env_pass_unset` on the
+  `script_execution` entry, beside the passed names in `env_pass`). An `ORBIT_*` name
+  or a fixed name above is never copied, so a grant can't override the profile's values.
 
 No Orbit credential, claim token or provider key is passed. The script can't call
 `orbit` tools, because no `orbit_tools` inventory is mounted. Writes back to Orbit
 happen in a later deterministic step that reads the script's output.
 
 **Secrets.** They reach a script only through the grant's `env_pass` list, read from
-the environment of the process that runs the job. The captured log and any recorded
-argv go through the shared redaction, with each passed value registered as a literal
-to redact. A secret file, such as a backup tool's credentials, is reachable only when
+the environment of the process that runs the job. The captured log, the stdout that
+becomes `steps.<id>.output` and the recorded argv go through the shared redaction
+(`redact_secret_values_text`), with each passed value, and its JSON and Debug
+encodings, registered as a literal to redact, before they leave the host boundary. So
+the audit entry, `orbit run show` and `orbit script history` never hold a passed value.
+Declared output files are kept byte for byte and are not redacted (§4). A secret file, such as a backup tool's credentials, is reachable only when
 it is listed in `read_roots` and isn't under a credential-deny path. A dedicated
 `secret_files` grant is an open question.
 
@@ -485,21 +528,56 @@ it is listed in `read_roots` and isn't under a credential-deny path. A dedicated
   manager delegates the CPU controller; elsewhere it may be accepted but not enforced.
   Bubblewrap's `--unshare-pid` and `--die-with-parent` mean that killing the
   namespace's init kills every descendant, so on Linux nothing outlives the step.
+- **Process limits (both platforms).** Before exec, the sandbox wrapper sets the
+  per-process `RLIMIT_CPU` soft limit to the step's timeout rounded up to CPU seconds,
+  and its hard limit to that value plus 10 CPU seconds. Both are clamped to the
+  inherited hard limit, which can shorten or eliminate the grace. The soft limit
+  delivers `SIGXCPU` (whose default action terminates the process); the hard limit
+  delivers `SIGKILL`. A script can raise its CPU soft limit up to its hard limit.
+  This CPU-time grace is separate from the wall-clock timeout and termination grace
+  above. The wrapper also sets both soft and hard `RLIMIT_NOFILE` to 1024, clamped
+  to the inherited hard limit, so the script cannot raise it. The script and its
+  descendants inherit these limits. A script killed by `SIGXCPU` is a signal exit,
+  `Ok(success = false)`. `RLIMIT_NPROC` is per user and isn't used.
 - **Scratch size.** The scratch directory is size-bounded (`scratch_max_bytes`,
-  default 1 GiB), polled as the build directory is. A breach kills the step.
+  default 1 GiB), polled as the build directory is. A breach kills the step. On
+  macOS the copied inputs (§4 Files in) count against it: preparation first
+  rejects input sets whose regular-file sizes exceed the remaining cap after
+  existing scratch files, then checks every copied chunk against that budget
+  to catch source growth. Preparation has a separate deadline equal to the
+  step timeout, checked between directory entries and copy chunks; it does not
+  interrupt a filesystem call already in progress. A preparation refusal
+  starts no script; the running script still gets its full timeout.
+
+**macOS profile.** `macos-sandbox-script-v1` starts from the build profile's
+deny-default SBPL preamble and allows the paths of the table above: the runtime
+table, the recorded interpreters and read roots, the cwd tree (writable only for a
+run worktree) and its Git directories, the granted write roots and the scratch
+directory. SBPL's last match wins, so the order is the policy: the allows, then the
+masked trees (`.orbit/` and the global root) denied, then the scratch directory
+allowed again (it lives under the workspace state), then `snapshot/`, `in/` and the
+Git metadata made read-only, and the credential denies last. Seatbelt filters paths
+but cannot remount them, so the script sees the scratch directory at its host path
+(`$HOME`, `$TMPDIR`, `$ORBIT_SCRIPT_IN`, `$ORBIT_SCRIPT_OUT` and the entry argument
+name it), and declared inputs are copied into `in/` before spawn. `orbit doctor`
+reports the profile and these gaps in its `script-sandbox` row.
 
 **macOS gaps, stated.**
 
-- **No memory or task limits.** There is no cgroup. A script inherits whatever the
-  worker has, which today is nothing; [ORB-19251]'s tracked-tree watchdog would cover
-  the script's tree too. `RLIMIT_CPU` and `RLIMIT_NOFILE` are set, but `RLIMIT_NPROC`
-  is per user and isn't used. `strict` containment refuses a script step on macOS
-  until ORB-19251 decides whether the watchdog counts as containment.
+- **No kernel memory or task limits.** There is no cgroup. A script inherits whatever the
+  worker has; under `warn` the worker's [ORB-19251] watchdog applies to its tracked tree.
+  Only `RLIMIT_CPU` and `RLIMIT_NOFILE` apply. `strict` containment refuses every
+  script step on macOS (before the profile is probed), because the watchdog is not kernel
+  containment.
 - **Timeout escape.** Without a pid namespace, a descendant that calls `setsid`
   escapes the process-group kill. It stays under the Seatbelt profile, confined to the
   granted paths and with no network, but it can keep writing there after the step
   ends.
 - **No network** (above).
+- **Metadata stays visible.** The profile allows `stat` on ungranted paths, including
+  masked `.orbit/` files, so a script can learn that they exist even when it cannot
+  list a directory or read a file there. Credential-deny paths are an exception:
+  the final denies cover all file reads and writes, including metadata and `stat`.
 - **Privacy permissions (TCC).** These apply on top of the profile (§9.5).
 
 **Why.** Starting from the build profile means the script inherits a boundary that
@@ -541,26 +619,107 @@ unless the operator listed it.
 | Exit 0, stdout not JSON, over the cap, or failing `output_schema_json` | `Err(script_output_invalid)` | No (validation bypasses retry, as `RetrySpec` documents) |
 | Nonzero exit or killed by a signal | `Ok(success = false)`; `message` names the exit code or signal and the last stderr lines; `output` is `{exit_code, signal}` | Yes, per the step's `retry` |
 | `script_timeout`, scope memory or task breach | `Ok(success = false)` with the code | Yes |
-| Refusals: `grant_missing`, `grant_stale`, `grant_insufficient`, `interpreter_changed`, `script_sandbox_unavailable`, `script_root_unavailable`, `script_follower_refused` | `Err`, non-retryable | No; another attempt meets the same refusal |
+| Refusals: `grant_missing`, `grant_stale`, `grant_insufficient`, `interpreter_changed`, `script_sandbox_unavailable`, `script_root_unavailable`, `script_follower_refused`, `script_file_input_unavailable` | `Err`, non-retryable | No; another attempt meets the same refusal |
 
   The nonzero-exit row restores the `Ok(success = false)` leaf that ORB-00374 removed.
   The job executor still supports it: `StepOutcome.success`, parallel, fan-out and
   loop aggregation, and the retry loop are unchanged. Phase 2 adds the coverage of the
   audit-message path whose loss that decision recorded as a cost.
-- **Files in.** `files.inputs` lists `{from, as}`. `from` is templated and must
-  resolve physically inside the cwd tree or a granted `read_root`. Each one is
-  bind-mounted (Linux) or copied (macOS) read-only at `in/<as>`. A missing input
-  refuses the step before spawn.
-- **Files out.** After exit 0, Orbit collects regular files at the top level of
-  `out/`; symlinks and subdirectories are refused. The default caps are 8 files of at
-  most 1 MiB each, matching the task-artifact limit. The grant may raise them, up to
-  64 files of 64 MiB each. Files go to the run's artifact store under
-  `script/<step_id>/out/` and are exposed as `steps.<id>.files`: `[{name, path,
-  bytes, sha256}]`. Over-cap output fails the step (`script_outputs_over_cap`). It is
-  all or nothing, so a later step never sees part of a set.
+- **Files in.** Implemented on Linux ([ORB-21297]). `files.inputs` lists `{from, as}`.
+  `from` is templated against the step input like `args`, a relative path
+  resolves against the cwd, and the result must resolve physically (symlinks
+  followed) to a regular file or directory inside the cwd tree or a granted
+  `read_root`. Each one is bind-mounted (Linux) or copied ([ORB-21298], macOS)
+  read-only at `in/<as>`; a copy keeps symlinks as symlinks. `as` is a plain name, unique in the manifest. A missing
+  input, one that resolves anywhere else, one that is, contains or lies within a
+  masked tree (`.orbit/`, the global root) or a credential path, and a directory
+  holding an entry that is not a file, directory or symlink all refuse the step
+  before spawn with `script_file_input_unavailable`, naming the input. The binds
+  at `in/<as>` are not covered by the masks and credential denies, which apply at
+  host paths, so the overlap refusal stands in for them. Admission runs after the
+  grant checks and before the profile probe.
+  - **Record.** Each attempt's `script.execution` entry carries `input_files`:
+    `[{name, source, kind, bytes, sha256}]`, beside `output_files`. A file's
+    `sha256` is of its bytes; a directory's is a tree digest over every entry's
+    relative path, kind and content (`orbit.script.input-tree.v1`, at most 100,000
+    entries). The digest is taken at admission and the bind is made at spawn, so
+    the record states what the input was when admitted, not a lock on it.
+- **Files out.** Implemented ([ORB-20866]). A script opts in by declaring
+  `files.outputs` caps; a manifest without them keeps the JSON-only behavior and its
+  `out/` is discarded with the scratch. After exit 0 with valid stdout, Orbit collects
+  the regular files at the top level of the scratch `out/`. Names are ASCII letters,
+  digits, `.`, `_` and `-`, at most 128 bytes and never starting with `.`. A symlink, a
+  subdirectory, any other entry kind or an unsafe name rejects the whole set. Each file
+  is opened without following links and must be the inode the listing saw.
+  - **Caps.** The effective caps are the manifest's `max_files` and `max_file_bytes`,
+    which must sit within the grant. The grant defaults to 8 files of at most 1 MiB,
+    matching the task-artifact limit. The operator raises it at grant time with
+    `orbit script grant <name> --output-max-files <n> --output-max-file-bytes <b>`.
+    Hard ceilings are 64 files and 64 MiB per file. A set's total is bounded by
+    files × bytes and never exceeds 256 MiB. A manifest asking more than its grant
+    refuses before spawn with `grant_insufficient`, naming the flag to re-grant with.
+    Each grant states its limits again, so a re-grant without the flags returns to the
+    default and nothing widens a grant automatically.
+  - **Store.** Kept files are copied into a run-owned store in the workspace state
+    directory, `scripts/outputs/<run_id>/<set_id>/files/<name>`, with a
+    `producer.json` record of the set. The copy is staged and renamed in, so a set is
+    published whole or not at all. Bytes are copied exactly; the audit blob store,
+    which redacts text, is not used.
+  - **Exposure.** `steps.<id>.files` is `[{name, path, bytes, media_type, sha256}]`,
+    sorted by name. A template selects a file by name (`steps.render.files.shot.png.sha256`)
+    or index (`steps.render.files.0.path`). `media_type` comes from the extension
+    (`application/octet-stream` otherwise).
+  - **Failure.** Over-cap output, whether by count, file size or total, fails the step
+    with `script_outputs_over_cap`. Rejected entries fail it with
+    `script_outputs_invalid`, and a store write failure with
+    `script_outputs_unavailable`. All three are non-retryable, and the step exposes no
+    file. A nonzero exit, a timeout or invalid stdout collects nothing.
 
-`steps.<id>.files` is a second key beside `output` in the step map. It is persisted in
-the step record, so resume reseeds it the way it reseeds output.
+- **Attaching outputs to a task.** Implemented ([ORB-21297]). The deterministic
+  `attach_script_files` action (shipped activity of the same name) takes
+  `task_id`, `step` (a direct, earlier, successful script step of the same job),
+  optional `files` (names; all by default) and optional `path_prefix`. It reads
+  the set from the dispatching run's own checkpoint by step id, honours it only
+  through `verify_script_output_set`, then reads each file again from its store
+  path and attaches exactly those bytes, which must match the recorded size and
+  SHA-256. A changed file, a name outside the set, a file over the 1 MiB
+  task-artifact limit, a reserved artifact path, or a loop, fan-out or parallel
+  producer refuses the step, and nothing is attached.
+
+`steps.<id>.files` is a second key beside `output` in the step map. The set is
+checkpointed with the step in the run state (`script_output_sets`), and the
+`script.execution` audit records `output_set_id` and `output_files`. Resume reseeds
+the set only after checking it against the store: the set ID must match its
+descriptor and the pipeline key it backs, the producing run must be the resumed run
+or one of its `retry_source_run_id` ancestors, `producer.json` must match the
+checkpointed descriptor, each path must be the store path, and each file must
+re-hash to its recorded size and SHA-256. Any mismatch, including a missing file or
+a genuine set from an unrelated run of the workspace, refuses resume with
+`script_outputs_unavailable` instead of re-running the producer. A descriptor confers
+no authority without a matching producer record, so a forged path to a host file is
+refused. The same holds inside compound steps. A loop, fan-out or parallel step that
+completes checkpoints the sets behind every entry it exposed. A `parallel:` branch
+that succeeds before a sibling parks is checkpointed as a `script_branch` record
+holding its output, its exposed entries and their exact sets. On resume, the branch
+is restored only after every set verifies. A failed check refuses the whole block
+before any branch runs, and the branch is never re-run to replace a lost set. A
+branch whose scripts kept no files keeps its earlier checkpoint shape. A fan-out
+worker's sets stay in that worker's private pipeline and are not exposed to the
+parent.
+
+**Consumer interface.** A later step consumes a set only through the
+`steps.<id>.files` template key. The descriptor's fields are stable: `name`, `path`,
+`bytes`, `media_type` and `sha256`, with the set's `workspace_id`, `run_id`,
+`step_id` and `set_id` kept in the run state. Inside the producing run, the
+references are trusted because the engine wrote them from a verified store
+publication. Outside that run, a descriptor's JSON and digest are claims and not
+authority. A host-side consumer honours them only through
+`RuntimeHost::verify_script_output_set`, which checks the producer record and
+re-hashes the bytes. A consumer reads bytes from the store `path` and never from
+the producer's scratch or any other host path. A consumer that must fit a larger
+evidence set into the caps, for example by deduplicating content-identical files,
+does so in the producing script before it writes `out/`. Orbit never drops files to
+fit: an over-cap set fails whole.
 
 **Why.** JSON in and out is the shape every other step already speaks, so templates,
 `when:` guards and later steps need nothing new. Declared files cover what JSON can't,
@@ -639,7 +798,7 @@ the run, isn't kept with the run and can't be read from another host's dashboard
 | Talks to Orbit | Through `orbit_tools` callbacks | Never; later steps do |
 
 A plugin that only wraps one script, as `office.script-run` does, should become a
-script step once phase 4 ships.
+script step now that phase 4 has shipped.
 
 **Why.** It keeps one execution surface per kind of code. A plugin answers "share
 this tool", and a script step answers "run this chore here".
@@ -667,10 +826,15 @@ there. A host without a grant refuses with `grant_missing`.
   `https` grant: the step refuses with `script_sandbox_unavailable`. `orbit doctor`
   reports a `script sandbox` row (available, or the reason), and `orbit script grant`
   warns on such a host.
-- **Nested sandboxes.** Orbit probes the profile once before spawn. Seatbelt can't
-  nest (exit 71, `sandbox_apply: Operation not permitted`, as in [ORB-19224]), and
-  Bubblewrap inside another user namespace may be refused. Either way the step refuses
-  with `script_sandbox_unavailable`. It never runs under the outer profile instead.
+- **Nested sandboxes.** On macOS Orbit probes once per process before spawn. It
+  first asks the kernel whether the process already runs under Seatbelt and refuses
+  immediately if so, without launching a child. This catches even a permissive outer
+  profile under which a permissive nested profile could apply. Otherwise, it applies
+  a permissive profile to `/usr/bin/true` in a bounded child and classifies exit 71
+  with `sandbox_apply` in stderr as a refusal (as in [ORB-19224]). On Linux a process
+  whose PID 1 is `bwrap`, or a Flatpak sandbox, is refused. Either way the step
+  refuses with `script_sandbox_unavailable` and nothing runs. It never runs under
+  the outer profile instead.
 
 **Why.** A grant is consent on a host, for that host's files and network. Carrying it
 to another machine would run code where nobody approved it.
@@ -691,10 +855,26 @@ to another machine would run code where nobody approved it.
   job's load with `ResolveError::UnknownRefKind`, as `type: shell` fails today. A
   routine targeting the job reports a per-file load error and fires nothing. An older
   binary ignores `.orbit/resources/scripts/`.
-- **Persisted runs.** `script_execution` and `steps.<id>.files` are additive, optional
-  fields on the persisted step record, and readers tolerate their absence. An older
-  binary can't resume a run with a script step, because the job no longer loads, so the
-  run stays unresumable on that binary instead of running the step.
+- **Persisted runs.** `script_execution` (with `output_set_id` and `output_files`) and
+  the run state's `script_output_sets` are optional fields that this binary reads as
+  absent when missing. A JSON-only script writes neither, so its records keep their
+  earlier bytes. A binary from before script steps can't resume a run with a script
+  step, because the job no longer loads, so the run stays unresumable on that binary
+  instead of running the step.
+- **Older writers of kept output files.** A binary that runs script steps but predates
+  kept output files would drop `script_output_sets` on its next rewrite of the run
+  state, and would read a `script_branch` checkpoint as the branch's own output.
+  Skipping the empty fields does not protect a run once a set exists. So this binary
+  fences such writers instead of trusting them to retain the fields. A workspace it
+  opens is at workspace layout version 8 (`script-output-set-checkpoints`, a breaking
+  migration with no file change). A binary below layout 8 refuses to open the
+  workspace and names the migration. Upgrade admission compares layout ledgers, not
+  executable digests, so neither side joins beside the other. While an older
+  participant such as a configured stdio MCP server is live, this binary refuses
+  before it migrates or writes anything, and the layout stays at its earlier version.
+  It proceeds once that client is quiesced or handed over through the usual upgrade
+  handoff. An older participant that starts later is refused too, so no older writer
+  rewrites run state that may hold a set.
 - **Grants.** `script_grant` is a new host table added by an additive migration inside
   the release-gated compatibility window ([ORB-15732]). Old binaries never read it. A
   witness with an unknown `orbit.script.grant.v<N>` version refuses.
@@ -711,10 +891,11 @@ a binary that can't enforce its grant.
 |---|---|---|
 | `machine.script_timeout_max_seconds` | `3600` | Ceiling on any grant's `timeout_max_seconds` on this host |
 | `machine.script_scratch_max_bytes` | `1GiB` | Ceiling on any grant's scratch size |
-| `machine.script_output_files_max` | `64` × `64MiB` | Ceiling on any grant's output-file caps |
-| `machine.worker_containment` | (existing; defaults to `warn`) | `warn` permits uncontained worker/script fallbacks, with a Linux warning when a scope is unavailable (macOS launches uncontained without a warning); `off` skips worker scopes with a Linux warning; `strict` refuses a worker or script step whose required scope can't be created, and every script step on macOS (§3) |
+| `machine.worker_containment` | (existing; defaults to `warn`) | `warn` permits uncontained worker/script fallbacks, with a Linux warning when a scope is unavailable (on macOS a worker runs an in-worker watchdog instead, [ORB-19251], which is not kernel containment); `off` skips worker scopes with a Linux warning; `strict` refuses a worker or script step whose required scope can't be created, and every script step on macOS (§3) |
 
-Host keys, not workspace keys. Each grant's limits must sit at or below them.
+Host keys, not workspace keys. Each grant's limits must sit at or below them. Output-file
+caps have no key: their ceilings are fixed at 64 files, 64 MiB per file and 256 MiB per
+set (§4 Files out).
 
 ### Surfaces
 
@@ -725,7 +906,14 @@ Host keys, not workspace keys. Each grant's limits must sit at or below them.
 - **Doctor.** A `script sandbox` row, plus one finding per `stale` or `revoked` script
   that a job still references.
 - **Dashboard.** A Scripts view in the Automation area with grant state and diffs, and
-  the operator-only grant and revoke actions. The run view shows `script_execution`.
+  the operator-only grant and revoke actions. Phase 4 ([ORB-21299]) shipped the view
+  (`GET /api/scripts`) with each script's state (granted, stale with the commit
+  that changed it, ungranted, revoked), digests, requested against granted
+  capabilities, the open `script_grant` request and the diff, plus the grant action
+  (`POST /api/scripts/<name>/grant`). The grant action is bound to the digest the
+  operator reviewed and answers the open request when there is one. Revoke stays on
+  the CLI. Answering a `script_grant` request from the dashboard's decision
+  surface also takes an operator session. The run view shows `script_execution`.
 - **MCP.** `orbit.script.list` and `orbit.script.show` are read-only and grantable to
   agents. Grant and revoke are operator-only (§2).
 
@@ -777,13 +965,20 @@ The orbit-office orchestration ([ORB-19206]) asked for five decisions so that
 5. **File operations outside the workspace, on macOS.** *Decided.*
    - **Extra roots.** A grant lists them in `write_roots`, for example `~/Downloads`.
    - **Checked at grant.** The grant command checks each root: it must exist,
-     canonicalize, sit outside the credential denies, and pass a read and write probe
-     by the granting process. A failed root refuses the grant and names the path.
+     canonicalize, sit outside the credential denies, and pass a read probe (list the
+     directory, or open a file root) and, for a write root, a write probe (create and
+     remove a file) by the granting process. A failed root refuses the grant and names
+     the path. Built in [ORB-21298]; the dashboard and decision-channel grant routes
+     probe in the process that answers.
    - **Checked again at run.** Before spawn, the job's process repeats the probe. TCC
      attributes access to the responsible process, which is the clock's launchd agent
      or the binary it runs, not the terminal that granted. A denied or missing root
      refuses the step with `script_root_unavailable`, naming the path and, on macOS,
-     the privacy pane to grant it in. Nothing runs, so there is no partial run.
+     the privacy pane to grant it in (Files and Folders for `~/Desktop`,
+     `~/Documents` and `~/Downloads`, the volume panes under `/Volumes`, otherwise
+     Full Disk Access). Nothing runs, so there is no partial run. The probe runs
+     after the grant checks and before input admission and the profile probe, so the
+     refusal names the root on any host.
    - **Later denials.** A denial the script meets after the probe is the script's
      error, a nonzero exit.
    - **Inside a worker sandbox.** The step refuses with `script_sandbox_unavailable`
@@ -934,8 +1129,8 @@ A script that rewrites itself during a run changes nothing for that run (§2,
 - **The cwd tree is readable.** A script can read every file of the worktree or
   workspace root. That is narrower than the agent profile but wider than "only its
   inputs". A `cwd: none` mode is open question 5.
-- **macOS is weaker.** It has no memory or task limits, timeout descendants can escape
-  through `setsid`, it has no network modes, and TCC adds a second permission system
+- **macOS is weaker.** It has no kernel memory or task limits (the [ORB-19251] watchdog is
+  best-effort), timeout descendants can escape through `setsid`, it has no network modes, and TCC adds a second permission system
   (§3, §9.5).
 - **Secrets in env are visible to the whole tree.** Any process the script starts can
   read the passed variables. Redaction covers Orbit's logs, not what the script does
@@ -974,19 +1169,32 @@ A script that rewrites itself during a run changes nothing for that run (§2,
 
    It covers use cases A (without network) and C, and lands the decision record that
    supersedes ORB-00374's removal.
-3. **Files and macOS.** Not yet filed. This phase adds `files.inputs` and `files.outputs` with
-   `steps.<id>.files`, a deterministic action that attaches those files to a task as
-   artifacts, the `macos-sandbox-script-v1` profile, `RLIMIT_*` limits, the
-   root probes and TCC reporting, and nested-sandbox refusal. It covers use case B, and
-   orbit-office items 4 and 5.
-4. **Grant requests.** Not yet filed. This phase adds the `script_grant` decision request, answers
-   from registered channels (orbit-office item 1), and the dashboard Scripts view with
-   its grant action. `office.script-run` can then become a thin wrapper.
-5. **Network.** Not yet filed. `https` and `any` on Linux, with `env_pass` and the redaction of passed
-   values. It covers the off-site part of use case A.
+3. **Files and macOS.** Landed. Declared output files (`files.outputs` with
+   `steps.<id>.files`) in [ORB-20866]; declared input files (`files.inputs`,
+   read-only at `in/<as>` with their digests recorded) and the `attach_script_files`
+   action that attaches a step's output files to a task as artifacts in
+   [ORB-21297]; and in [ORB-21298] the `macos-sandbox-script-v1` profile (inputs
+   copied rather than bound, network refused), `RLIMIT_CPU` and `RLIMIT_NOFILE` on
+   both platforms, the root probes and TCC reporting, the nested-sandbox refusal on
+   macOS, `strict` refusing on macOS, and the `orbit doctor` `script-sandbox` row. It
+   covers use case B, and orbit-office items 4 and 5.
+4. **Grant requests.** Landed in [ORB-21299]. This phase adds the `script_grant`
+   decision request, raised automatically by a step refused for a missing, stale or
+   insufficient grant; answers from the CLI, the dashboard and registered channels
+   (orbit-office item 1); and the dashboard Scripts view with its grant action (§2).
+   An explicit raise surface for orbit-office proposals is not yet filed;
+   `office.script-run` becomes a thin wrapper once it lands.
+5. **Network.** Landed in [ORB-21301]. `https` (TCP port 443 under Landlock) and `any`
+   grants on Linux, with `env_pass` and the redaction of passed values from the log, the
+   step output and the recorded argv. A manifest asking for more network or `env_pass`
+   than its grant refuses with `grant_insufficient`; macOS still refuses network
+   (phase 6), and network grant expiry (open question 7) stays open. It covers the
+   off-site part of use case A.
 6. **Later.** Each of these is filed only when needed: a grant-time `prepare` (fetch)
    phase, plugin-store roots, routine `script:` sugar, and macOS network once
-   [ORB-19251] contains descendants.
+   a containment mechanism covers escaped descendants. [ORB-19251] landed as a tracked-tree
+   watchdog, which does not find a `setsid` escapee, so that trigger is not met and phase 6
+   stays unfiled.
 
 ## Open questions
 
@@ -1055,6 +1263,11 @@ A script that rewrites itself during a run changes nothing for that run (§2,
 - [ORB-19294] — designs script steps (this doc).
 - [ORB-19983] — phase 1: added script manifests, `target: script:` parsing, the grant store and `orbit script grant|revoke|list|show`; nothing executes.
 - [ORB-19985] — phase 2: Linux execution under `linux-bwrap-script-v1`, `script.execution` audit and `orbit script history`.
+- [ORB-21299] — phase 4: `script_grant` decision requests raised by refused steps, human and channel answers that write digest-bound grants, and the dashboard Scripts view.
+- [ORB-20866] — phase 3 part: declared output files kept as run-owned, digest-verified sets exposed as `steps.<id>.files`, with grant output caps.
+- [ORB-21297] — phase 3 part (Linux): declared `files.inputs` bound read-only at `in/<as>` and recorded with their SHA-256, and the `attach_script_files` action.
+- [ORB-21298] — phase 3 part (macOS): the `macos-sandbox-script-v1` profile, `RLIMIT_CPU` and `RLIMIT_NOFILE` on both platforms, grant-time and pre-spawn root probes with TCC reporting, nested-sandbox refusal, `strict` refusing on macOS, and the doctor `script-sandbox` row.
+- [ORB-21301] — phase 5 (Linux): `network: https` and `any` grants, `env_pass`, and redaction of passed values.
 - [ORB-00374] — removed the v2 `shell` activity instead of sandboxing it; this doc takes its retrofit alternative.
 - [ORB-00363] — found that the shell allowlist came from the YAML it guarded.
 - [ORB-11294] — restored `local_shell` as a deterministic action; the Bearing and

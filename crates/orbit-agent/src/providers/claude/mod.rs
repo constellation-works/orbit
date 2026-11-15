@@ -4,5 +4,6 @@ mod claude_runtime;
 
 pub(crate) use claude_output::{
     claude_long_prompt_requests, claude_usage_windows, project_claude_response,
+    recorded_claude_tool_calls,
 };
 pub(crate) use claude_runtime::ClaudeFactory;

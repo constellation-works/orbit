@@ -2,35 +2,40 @@ use std::path::Path;
 
 use orbit_common::text::floor_char_boundary;
 use orbit_engine::{DispatchError, WORKFLOW_RUN_FAILED_EVENT};
+use orbit_types::record::Notice;
 use orbit_types::task::{
     LIGHT_DELIVERY_TAGS, SKIP_VALIDATION_TAG, Task, TaskComment, TaskHistoryEntry,
     refuses_implementer_writes,
 };
-use orbit_types::workflow::ExploreBriefAdmission;
+use orbit_types::workflow::FleetNoticeBrief;
 use serde_json::Value;
 
 use orbit_common::fs::selector::canonical_selector_in_workspace;
 
 use crate::OrbitRuntime;
-use crate::application::task::context_workspace_root;
+use crate::application::notice::limits::{
+    BRIEF_BODY_CHARS, BRIEF_MAX_ITEMS, BRIEF_READ_TIMEOUT_MS,
+};
+use crate::application::task::{context_workspace_root, finding_fingerprint, is_review_finding};
 use crate::runtime::run_input::singular_task_id_from_input;
 
 /// Ceiling on the number of comments surfaced to an implementing agent.
 ///
 /// Comments are unbounded in principle (an orchestrator can post any number of
 /// refinements), but the envelope is a single JSON payload handed to an agent
-/// invocation. The newest comments are the ones that can supersede the
-/// description (see [ORB-11327]), so truncation must drop the oldest entries
-/// first and say so rather than silently dropping the entries that matter.
+/// invocation. Under either budget, the projection preserves non-pilot
+/// comments ahead of pilot assessments: it keeps the newest non-pilot
+/// comments and the latest pilot assessment's summary before omitting
+/// superseded pilot assessments ([ORB-23676]).
 const MAX_TASK_COMMENTS: usize = 20;
 
 /// Ceiling on the total size, in bytes, of the retained comment bodies.
 ///
-/// Applied after [`MAX_TASK_COMMENTS`] as a second, size-based cut: a handful
-/// of very long comments could still blow out the envelope even under the
-/// count cap. Comment creation accepts any non-empty message, so the last
-/// retained comment can exceed this on its own; the projection then cuts the
-/// body itself rather than shipping it whole (see [ORB-11338]).
+/// Applied after [`MAX_TASK_COMMENTS`] as a second, size-based budget. The
+/// projection fills it with newest non-pilot comments first, then the latest
+/// pilot assessment's summary; superseded pilot assessments are omitted rather
+/// than pushing those comments out. If the newest non-pilot comment alone
+/// exceeds the budget, its body is cut to fit (see [ORB-11338]).
 const MAX_TASK_COMMENTS_BYTES: usize = 16 * 1024;
 
 /// Marker appended to a comment body cut down to fit
@@ -69,6 +74,32 @@ pub(crate) fn associated_task_ids(input: &Value) -> Vec<String> {
     task_ids
 }
 
+/// Adapt one envelope load failure into a [`DispatchError`], preserving the
+/// owner-route typing of the underlying error: a claimed runtime that lost
+/// its owner while loading the task, its history or its comments fails as
+/// [`DispatchError::OwnerRouteUnavailable`], so step and final recovery skip
+/// repair and the terminal failure classifies as `owner_route` instead of
+/// blaming the candidate. Every other failure keeps the existing untyped
+/// `CliInvocationFailed` diagnostic verbatim.
+fn envelope_load_error(
+    task_id: &str,
+    subject: &str,
+    err: orbit_common::OrbitError,
+) -> DispatchError {
+    let message = format!("load task `{task_id}`{subject} for agent envelope: {err}");
+    if err
+        .step_failure_code()
+        .is_some_and(|code| code.is_owner_route_unavailable())
+    {
+        DispatchError::OwnerRouteUnavailable {
+            action: "task_context_for_agent_input".to_string(),
+            message,
+        }
+    } else {
+        DispatchError::CliInvocationFailed(message)
+    }
+}
+
 pub(crate) fn task_context_for_agent_input(
     runtime: &OrbitRuntime,
     run_id: &str,
@@ -78,21 +109,15 @@ pub(crate) fn task_context_for_agent_input(
     let Some(task_id) = singular_task_id_from_input(input) else {
         return Ok(None);
     };
-    let task = runtime.get_task(task_id).map_err(|err| {
-        DispatchError::CliInvocationFailed(format!(
-            "load task `{task_id}` for agent envelope: {err}"
-        ))
-    })?;
-    let task_history = runtime.get_task_history(task_id).map_err(|err| {
-        DispatchError::CliInvocationFailed(format!(
-            "load task `{task_id}` history for agent envelope: {err}"
-        ))
-    })?;
-    let comments = runtime.get_task_comments(task_id).map_err(|err| {
-        DispatchError::CliInvocationFailed(format!(
-            "load task `{task_id}` comments for agent envelope: {err}"
-        ))
-    })?;
+    let task = runtime
+        .get_task(task_id)
+        .map_err(|err| envelope_load_error(task_id, "", err))?;
+    let task_history = runtime
+        .get_task_history(task_id)
+        .map_err(|err| envelope_load_error(task_id, " history", err))?;
+    let comments = runtime
+        .get_task_comments(task_id)
+        .map_err(|err| envelope_load_error(task_id, " comments", err))?;
     let mut context = agent_task_context_json(
         &task,
         &task_history,
@@ -148,38 +173,157 @@ pub(crate) fn task_context_for_agent_input(
     Ok(Some(context))
 }
 
-/// The `regression_risk` section for the task `input` names, as the prompt
-/// `run_id` builds for `activity_name` shows it, or `None` when marks are
-/// off, no `file:` selector qualifies, or the input names no single task.
-/// Marks are advisory, so a scan that fails is logged and yields none rather
-/// than refusing the dispatch.
-pub(crate) fn regression_risk_for_agent_input(
+/// The `fleet_notices` brief for one prompt build, or `None` when no notice
+/// is open in scope. Notices are advisory, so the read runs under
+/// [`BRIEF_READ_TIMEOUT_MS`] on its own thread and any failure or timeout
+/// answers the `unavailable` block instead of refusing or delaying the
+/// dispatch. A claimed leaf
+/// reads through the worker binding's owner route as a host call to
+/// `orbit.notice.list`; every other run reads its owner's store.
+pub(crate) fn notices_for_agent_input(
     runtime: &OrbitRuntime,
-    run_id: &str,
-    activity_name: &str,
-    input: &Value,
-) -> Option<Value> {
-    let task_id = singular_task_id_from_input(input)?;
-    let section = runtime.get_task(task_id).and_then(|task| {
-        let selectors = envelope_context_files(&task, input, &runtime.paths().repo_root);
-        runtime.regression_risk_section(task_id, &selectors, run_id, activity_name)
+    _run_id: &str,
+    _activity_name: &str,
+    _input: &Value,
+) -> Option<FleetNoticeBrief> {
+    let read = {
+        let runtime = runtime.clone();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let spawned = std::thread::Builder::new()
+            .name("fleet-notice-brief".to_string())
+            .spawn(move || {
+                let _ = sender.send(read_open_notices_for_brief(&runtime));
+            });
+        match spawned {
+            Ok(_) => receiver.recv_timeout(std::time::Duration::from_millis(u64::from(
+                BRIEF_READ_TIMEOUT_MS,
+            ))),
+            Err(error) => {
+                return Some(unavailable_fleet_notice_brief(&format!(
+                    "notice read could not start: {error}"
+                )));
+            }
+        }
+    };
+    let notices = match read {
+        Ok(Ok(notices)) => notices,
+        Ok(Err(error)) => return Some(unavailable_fleet_notice_brief(&error.to_string())),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            return Some(unavailable_fleet_notice_brief("notice read timed out"));
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            return Some(unavailable_fleet_notice_brief("notice read failed"));
+        }
+    };
+    build_fleet_notice_brief(notices)
+}
+
+/// The effective-open notices a brief considers, before its bounds apply.
+fn read_open_notices_for_brief(
+    runtime: &OrbitRuntime,
+) -> Result<Vec<Notice>, orbit_common::OrbitError> {
+    if runtime.worker_invocation().is_some() {
+        let value = runtime.route_worker_host_tool(
+            "orbit.notice.list",
+            serde_json::json!({ "status": "open", "limit": 200 }),
+        )?;
+        let notices = value
+            .get("notices")
+            .cloned()
+            .unwrap_or(Value::Array(Vec::new()));
+        return serde_json::from_value(notices).map_err(|error| {
+            orbit_common::OrbitError::Store(format!("owner notice read response: {error}"))
+        });
+    }
+    Ok(runtime
+        .list_notices(&crate::application::notice::NoticeListFilter {
+            limit: Some(200),
+            ..Default::default()
+        })?
+        .notices)
+}
+
+/// Order, bound and quote `notices` as the `untrusted_data` block: kind,
+/// then reports descending, then newest update first, at most
+/// [`BRIEF_MAX_ITEMS`], each body cut to [`BRIEF_BODY_CHARS`] characters. No
+/// evidence and no field naming a tool or command reaches the brief.
+fn build_fleet_notice_brief(mut notices: Vec<Notice>) -> Option<FleetNoticeBrief> {
+    if notices.is_empty() {
+        return None;
+    }
+    notices.sort_by(|left, right| {
+        left.kind
+            .cmp(&right.kind)
+            .then_with(|| right.reports.count.cmp(&left.reports.count))
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+            .then_with(|| left.id.cmp(&right.id))
     });
-    section.unwrap_or_else(|error| {
-        tracing::warn!(%task_id, %run_id, %error, "regression risk: marks unavailable");
-        None
+    let total = notices.len();
+    notices.truncate(BRIEF_MAX_ITEMS as usize);
+    let omitted = u64::try_from(total - notices.len()).unwrap_or(u64::MAX);
+    let delivered = notices
+        .iter()
+        .map(|notice| format!("{}@{}", notice.id, notice.revision))
+        .collect::<Vec<_>>();
+    let entries = notices
+        .iter()
+        .map(|notice| {
+            let body_chars = notice.body.chars().count();
+            let limit = BRIEF_BODY_CHARS as usize;
+            let (body, body_truncated) = if body_chars > limit {
+                (notice.body.chars().take(limit).collect::<String>(), true)
+            } else {
+                (notice.body.clone(), false)
+            };
+            let mut entry = serde_json::json!({
+                "id": notice.id,
+                "revision": notice.revision,
+                "kind": notice.kind.as_str(),
+                "scope": notice.scope.as_str(),
+                "title": notice.title,
+                "body": body,
+                "body_truncated": body_truncated,
+                "author_class": notice.author.class.as_str(),
+                "reports": notice.reports.count,
+                "opened_at": notice.opened_at.to_rfc3339(),
+                "expires_at": notice.expires_at.to_rfc3339(),
+            });
+            if let Some(task_id) = &notice.author.task_id {
+                entry["author_task"] = Value::String(task_id.clone());
+            }
+            if let Some(linked) = &notice.linked_task {
+                let mut linked_task = serde_json::json!({ "id": linked.id });
+                if let Some(status) = &linked.status {
+                    linked_task["status"] = Value::String(status.clone());
+                }
+                entry["linked_task"] = linked_task;
+            }
+            entry
+        })
+        .collect::<Vec<_>>();
+    Some(FleetNoticeBrief {
+        block: serde_json::json!({
+            "trust": "untrusted_data",
+            "read_at": chrono::Utc::now().to_rfc3339(),
+            "omitted": omitted,
+            "notices": entries,
+        }),
+        notices: delivered,
+        omitted,
     })
 }
 
-/// What `activity_name` of `run_id` does with the explore brief of the task
-/// `input` names, or `None` when the input names no single task. The engine
-/// asks only for an activity that declares an `explore_brief_instruction`.
-pub(crate) fn explore_brief_for_agent_input(
-    runtime: &OrbitRuntime,
-    run_id: &str,
-    input: &Value,
-) -> Option<ExploreBriefAdmission> {
-    let task_id = singular_task_id_from_input(input)?;
-    Some(runtime.explore_brief_for_dispatch(run_id, task_id))
+/// The fail-open marker a failed or timed-out notice read leaves.
+fn unavailable_fleet_notice_brief(reason: &str) -> FleetNoticeBrief {
+    FleetNoticeBrief {
+        block: serde_json::json!({
+            "trust": "untrusted_data",
+            "unavailable": true,
+            "reason": reason.chars().take(200).collect::<String>(),
+        }),
+        notices: Vec::new(),
+        omitted: 0,
+    }
 }
 
 /// The required commands this invocation's pipeline runs itself on the final
@@ -244,6 +388,14 @@ fn agent_task_context_json(
         _ => serde_json::Map::new(),
     };
 
+    // An implementer's finding-invalid report echoes what it was given, so a
+    // verdict can only reject the material this prompt carried.
+    if is_review_finding(task) {
+        context.insert(
+            "finding_fingerprint".to_string(),
+            Value::String(finding_fingerprint(task)),
+        );
+    }
     if !task.execution_summary.trim().is_empty() {
         context.insert(
             "execution_summary".to_string(),
@@ -301,50 +453,93 @@ fn envelope_context_files(task: &Task, input: &Value, fallback_repo_root: &Path)
 /// The comment projection for one envelope: the retained comments plus what
 /// had to be cut to hold them to [`MAX_TASK_COMMENTS_BYTES`].
 struct BoundedTaskComments {
-    /// Retained comments, still in chronological order. The last body may have
-    /// been cut down; every other body is verbatim.
+    /// Retained comments, in chronological order. The newest non-pilot body may
+    /// have been cut down; a retained pilot comment is its summary line once
+    /// the budget forced a choice; every other body is verbatim.
     comments: Vec<TaskComment>,
-    /// How many oldest entries were dropped entirely.
+    /// How many comments were dropped entirely, superseded pilot passes
+    /// included.
     omitted_count: usize,
-    /// Whether the last retained body was cut down to fit the budget.
+    /// Whether a retained body was cut down to fit the budget.
     body_truncated: bool,
 }
 
-/// Keep the newest comments within [`MAX_TASK_COMMENTS`] and
-/// [`MAX_TASK_COMMENTS_BYTES`], dropping the oldest entries first so a
-/// superseding refinement never falls off the envelope.
+/// Hold the comments to [`MAX_TASK_COMMENTS`] and [`MAX_TASK_COMMENTS_BYTES`].
 ///
-/// Dropping entries cannot get under the byte budget once a single comment is
-/// left, and that comment is the newest — the one that can supersede the
-/// description — so it is kept and its body is cut instead ([ORB-11338]).
+/// Comments that already fit are returned untouched. Otherwise the budget is
+/// filled by author priority so a re-piloted task's assessment JSON cannot
+/// push steering and scope decisions out of the agent's context
+/// ([ORB-23676]):
+///
+/// 1. Non-pilot comments, newest first, so a superseding refinement never
+///    falls off the envelope.
+/// 2. Only the latest `task-pilot` comment, projected to its summary line.
+/// 3. Superseded `task-pilot` comments are dropped, and counted as omitted.
+///
+/// The output stays chronological. Dropping entries cannot get under the byte
+/// budget once a single comment is left, and the newest non-pilot comment is
+/// the one that can supersede the description, so when it alone exceeds the
+/// budget it is kept and its body is cut instead ([ORB-11338]).
 fn bounded_task_comments(comments: &[TaskComment]) -> BoundedTaskComments {
-    let count_start = comments.len().saturating_sub(MAX_TASK_COMMENTS);
-    let mut kept = &comments[count_start..];
-
-    while kept.len() > 1 {
-        let total_bytes: usize = kept.iter().map(|comment| comment.message.len()).sum();
-        if total_bytes <= MAX_TASK_COMMENTS_BYTES {
-            break;
-        }
-        kept = &kept[1..];
+    let total_bytes: usize = comments.iter().map(|comment| comment.message.len()).sum();
+    if comments.len() <= MAX_TASK_COMMENTS && total_bytes <= MAX_TASK_COMMENTS_BYTES {
+        return BoundedTaskComments {
+            comments: comments.to_vec(),
+            omitted_count: 0,
+            body_truncated: false,
+        };
     }
 
-    let omitted_count = comments.len() - kept.len();
-    let mut kept = kept.to_vec();
-    // Only reachable with one comment left: the loop above exits early once the
-    // retained window fits, so a longer window is already under budget.
-    let body_truncated = match kept.as_mut_slice() {
-        [only] if only.message.len() > MAX_TASK_COMMENTS_BYTES => {
-            only.message = truncate_comment_body(&only.message);
-            true
+    let mut kept: Vec<(usize, TaskComment)> = Vec::new();
+    let mut used_bytes = 0usize;
+    let mut body_truncated = false;
+    let mut pilot_body_replaced = false;
+    // Whether `comment` fits beside what is kept. The first kept comment is
+    // always admitted, cut down when it alone exceeds the byte budget.
+    let mut admit = |index: usize, mut comment: TaskComment, kept: &mut Vec<_>| -> bool {
+        if kept.len() == MAX_TASK_COMMENTS {
+            return false;
         }
-        _ => false,
+        if kept.is_empty() && comment.message.len() > MAX_TASK_COMMENTS_BYTES {
+            comment.message = truncate_comment_body(&comment.message);
+            body_truncated = true;
+        } else if used_bytes + comment.message.len() > MAX_TASK_COMMENTS_BYTES {
+            return false;
+        }
+        used_bytes += comment.message.len();
+        kept.push((index, comment));
+        true
     };
 
+    // Stop at the first non-pilot comment that does not fit, so the retained
+    // ones stay a contiguous newest window.
+    for (index, comment) in comments.iter().enumerate().rev() {
+        if !comment.is_task_pilot_comment() && !admit(index, comment.clone(), &mut kept) {
+            break;
+        }
+    }
+    // A short summary line may still fit after the non-pilot comments.
+    if let Some(index) = comments
+        .iter()
+        .rposition(TaskComment::is_task_pilot_comment)
+    {
+        let mut pilot = comments[index].clone();
+        let summary_replaced = if let Some(summary) = pilot.pilot_assessment_summary()
+            && pilot.message != summary
+        {
+            pilot.message = summary;
+            true
+        } else {
+            false
+        };
+        pilot_body_replaced = admit(index, pilot, &mut kept) && summary_replaced;
+    }
+    kept.sort_by_key(|(index, _)| *index);
+
     BoundedTaskComments {
-        comments: kept,
-        omitted_count,
-        body_truncated,
+        omitted_count: comments.len() - kept.len(),
+        comments: kept.into_iter().map(|(_, comment)| comment).collect(),
+        body_truncated: body_truncated || pilot_body_replaced,
     }
 }
 

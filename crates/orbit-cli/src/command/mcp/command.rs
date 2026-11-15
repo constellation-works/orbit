@@ -1,9 +1,10 @@
 use std::path::Path;
 
 use clap::{Args, Subcommand, ValueEnum};
+use orbit_common::security::child_env::ACTIVITY_MCP_TOOLSETS_ENV;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_mcp::{McpSessionAuthority, RemoteProxyArgs};
-use orbit_types::tool::McpToolsetSelection;
+use orbit_types::tool::{McpRole, McpToolset, McpToolsetSelection};
 
 use crate::command::{CommandOut, CommandOutput, Execute};
 
@@ -36,8 +37,8 @@ pub enum McpSubcommand {
     /// binding; remove the entry first to replace it with agent authority.
     /// `--federated` instead adds a separate client entry for the
     /// session-unbound mux and preserves the default v1 entry. For the
-    /// operator-authorized bootstrap integration (workflow dispatch,
-    /// `orbit.command.exec`), use `orbit workspace init --mcp` instead.
+    /// operator-authorized integration (workflow dispatch and
+    /// `orbit.command.exec`), pass `--operator` or use `orbit workspace init --mcp`.
     Init(InitArgs),
     /// Remove MCP client integration for the current workspace
     Remove(RemoveArgs),
@@ -51,10 +52,12 @@ pub enum McpSubcommand {
     ///
     /// Each accepted connection is an independent MCP session against the same
     /// server-local tool surface, resolved and audited exactly as a stdio session
-    /// is. The socket authenticates no client, so it binds loopback unless a
-    /// wider bind is asked for explicitly. Local processes can still connect to
-    /// loopback. HTTP requests, including those sent by browser pages, are
-    /// closed before their bodies can be dispatched as MCP messages.
+    /// is. The socket accepts a connection only when the peer's user id is the
+    /// server's. A different user is refused before any MCP message is read. It
+    /// binds loopback unless a wider bind is asked for explicitly. A remote TCP
+    /// peer has no local user id and is refused; reach the listener through an
+    /// SSH tunnel as this user. HTTP requests, including those sent by browser
+    /// pages, are closed before their bodies can be dispatched as MCP messages.
     ///
     /// `--workspace <selector>` binds every accepted session to that workspace
     /// by default, as `orbit mcp serve --workspace` does; a client that
@@ -66,10 +69,10 @@ pub enum McpSubcommand {
 impl Execute for McpSubcommand {
     fn execute(self, _runtime: &OrbitRuntime) -> CommandOut {
         match self {
-            // All MCP subcommands are dispatched runtime-free via main.rs's
-            // pattern match before runtime initialization. They reach this
-            // path only if invoked indirectly (currently never), so use the
-            // same runtime-less call chain for safety.
+            // All MCP subcommands are dispatched runtime-free by the operation
+            // registry (`RuntimeNeed::Forbidden`, `dispatch_mcp`) before runtime
+            // initialization. They reach this path only if invoked indirectly
+            // (currently never), so use the same runtime-less call chain for safety.
             Self::Init(args) => args.execute_without_runtime(None),
             Self::Remove(args) => args.execute_without_runtime(None),
             Self::Serve(args) => args.execute_without_runtime(None),
@@ -86,28 +89,27 @@ pub enum ServeMode {
     Remote,
     /// Present one stdio MCP surface over this machine's workspaces plus every
     /// host registered with `orbit host add`.
-    ///
-    /// Local workspaces are included automatically and need no host entry. This mode binds to no single workspace. It lists each destination's
-    /// workspaces as live descriptors, probing remotes on every call, and
-    /// includes remotes that are unreachable right now rather than hiding
-    /// them. Workspace-scoped tools take the host-qualified `selector` copied
-    /// from that list; a registered name, a bare `ws_*`, or `--workspace` is
-    /// not a federated selector.
     Federated,
 }
 
+/// Contract detail behind the `orbit mcp serve` flags lives in the installed
+/// Orbit skill; help keeps the safety rule and a pointer to it.
+const SERVE_CONTRACT_HELP: &str = "\
+Omit `--operator` for any server an agent launches: without it a session holds agent \
+capability only.\n\
+Mode, authority, workspace binding, attribution, role and toolset rules: installed Orbit \
+skill `references/tool-surface.md` (Serving MCP).";
+
 #[derive(Args)]
-#[command(about = "Serve the Orbit tool registry over Model Context Protocol")]
+#[command(
+    about = "Serve the Orbit tool registry over Model Context Protocol",
+    after_help = SERVE_CONTRACT_HELP
+)]
 pub struct ServeArgs {
-    /// Run as a client to other Orbit servers instead of serving this machine.
-    ///
-    /// `remote` proxies one chosen SSH destination and requires it as an
-    /// argument. `federated` includes this machine automatically and muxes
-    /// every host registered with `orbit host add`; it takes no argument.
+    /// Run as a client to other Orbit servers instead of serving this machine
     #[arg(long, value_name = "MODE")]
     pub mode: Option<ServeMode>,
-    /// SSH destination for `--mode remote`, such as a host, `user@host`, or a
-    /// configured alias.
+    /// SSH destination for `--mode remote`: a host, `user@host` or an alias
     #[arg(value_name = "SSH_HOST", requires = "mode")]
     pub ssh_host: Option<String>,
     /// Caller-chosen machine label forwarded by Orbit's SSH routes.
@@ -131,75 +133,19 @@ pub struct ServeArgs {
         requires = "remote_caller_machine_id"
     )]
     pub worker_host: bool,
-    /// Serve sessions with operator authority, so they may perform governed
-    /// operations such as dispatching a workflow or deleting a task.
-    ///
-    /// Omit this for any server an agent launches: without it a session holds
-    /// the agent capability only, and governed operations are refused. The flag
-    /// is the deliberate act — `ORBIT_OPERATOR` in this process's environment is
-    /// ignored on the MCP surface, so an operator shell cannot grant operator
-    /// authority to an agent's server by accident.
-    ///
-    /// With `--mode remote` or `--mode federated` it is also the operator
-    /// statement for every SSH destination this client opens: Orbit is a
-    /// single-user tool and an SSH login to a machine is ownership of it, so
-    /// the destination serves the authority this argv asks for. A client that
-    /// is itself running as an agent never propagates it.
+    /// Serve the operator profile with operator authority for governed operations
     #[arg(long)]
     pub operator: bool,
-    /// Bind this server's sessions to a registered workspace: a workspace
-    /// name, a logical workspace ID (`ws_*`), or an absolute registered
-    /// checkout path.
-    ///
-    /// Most MCP clients cannot announce `_meta.orbit.workspace` on their
-    /// initialize, so without this a workspace-scoped tool must repeat the
-    /// selector on every call. Local `orbit mcp init` and `orbit workspace
-    /// init --mcp` write this into the integrations they generate; a managed
-    /// child that launches `orbit mcp serve` without the flag still inherits
-    /// `ORBIT_WORKSPACE` from the trusted execution envelope. The federated
-    /// init path is session-unbound. A client that does announce a workspace,
-    /// and any explicit per-call `workspace`, still take precedence. The
-    /// selector is resolved against the accepting server's registry per call,
-    /// never from the server process cwd.
+    /// Bind sessions to a registered workspace: name, `ws_*` ID or checkout path
     #[arg(long, value_name = "SELECTOR", conflicts_with = "mode")]
     pub workspace: Option<String>,
-    /// Attribute tasks this session creates to a named orchestrator crew,
-    /// unless the call names one itself.
-    ///
-    /// Attribution only. Unlike `--operator` it grants nothing: a session
-    /// still holds exactly the capabilities it was served with, and the crew
-    /// named here neither selects the crew a task executes under nor the
-    /// model recorded for that execution. The name is resolved against the
-    /// crews of whichever workspace the call lands in, so an unconfigured
-    /// crew fails that call rather than quietly selecting another one.
-    ///
-    /// It applies only when a task is created, and only to that task: an
-    /// existing task's orchestrator is never rewritten from this default.
-    ///
-    /// Treat it as configuration, not as evidence of who is calling. A
-    /// long-lived MCP connection outlives a model switch in the client, so
-    /// pass `orchestrator` on the individual call, or restart the connection
-    /// with a new value, when the orchestrating crew actually changes.
+    /// Attribute tasks this session creates to a crew (attribution only)
     #[arg(long, value_name = "CREW")]
     pub orchestrator: Option<String>,
-    /// Advertise these opt-in toolsets beside the default one, as a
-    /// comma-separated list: `leases`, `experiments`, `analytics`,
-    /// `decision-channel`, or `all`.
-    ///
-    /// The default toolset (tasks, workflows and runs, automation, decision
-    /// list and show, codebase, friction, search, the UI and visual tools,
-    /// command execution and workspace discovery) is always advertised.
-    /// `leases` adds the lease tools; `experiments` the experiment tools;
-    /// `analytics` the agent and orchestrator scorecards and the crew
-    /// ladder; `decision-channel` a decision channel's submit and digest,
-    /// which only the bound channel plugin or the operator may call.
-    ///
-    /// Replaces the `machine.mcp.toolsets` host config for this server. A
-    /// toolset changes only what this server lists and dispatches: a call to a
-    /// tool outside it is refused with the toolset to enable, and `orbit tool
-    /// run`, activities and plugin callbacks reach every tool regardless.
-    /// `--mode remote` asks the destination for the same toolsets, and
-    /// `--mode federated` applies them to every destination.
+    /// Serve one role's toolsets: operator, manager, resident, agent or reader
+    #[arg(long, value_name = "ROLE")]
+    pub role: Option<String>,
+    /// Also advertise these comma-separated toolsets (`all` for every toolset)
     #[arg(long, value_name = "TOOLSETS")]
     pub toolset: Option<String>,
 }
@@ -243,7 +189,11 @@ impl ServeArgs {
                     ssh_host,
                     orchestrator: self.orchestrator,
                     authority: requested_authority(self.operator),
-                    toolsets: resolve_mcp_toolsets(&global_root, self.toolset.as_deref())?,
+                    toolsets: resolve_mcp_toolsets(
+                        &global_root,
+                        self.role.as_deref().or(self.operator.then_some("operator")),
+                        self.toolset.as_deref(),
+                    )?,
                 })?
             }
             Some(ServeMode::Federated) => {
@@ -253,7 +203,11 @@ impl ServeArgs {
                          '{ssh_host}'; register remote hosts with `orbit host add <ssh-target>`"
                     )));
                 }
-                let toolsets = resolve_mcp_toolsets(&global_root, self.toolset.as_deref())?;
+                let toolsets = resolve_mcp_toolsets(
+                    &global_root,
+                    self.role.as_deref().or(self.operator.then_some("operator")),
+                    self.toolset.as_deref(),
+                )?;
                 super::server::serve_mcp_federated_stdio(
                     global_root,
                     self.orchestrator,
@@ -263,12 +217,19 @@ impl ServeArgs {
             }
             None => {
                 // An Orbit SSH route (the mux, a worker or drain route) names
-                // no toolset: its caller filters, so this end serves them all.
-                let toolsets = if self.toolset.is_none() && self.remote_caller_machine_id.is_some()
+                // no role or toolset: its caller filters, so this end serves
+                // them all.
+                let toolsets = if self.toolset.is_none()
+                    && self.role.is_none()
+                    && self.remote_caller_machine_id.is_some()
                 {
                     McpToolsetSelection::all()
                 } else {
-                    resolve_mcp_toolsets(&global_root, self.toolset.as_deref())?
+                    resolve_mcp_toolsets(
+                        &global_root,
+                        self.role.as_deref().or(self.operator.then_some("operator")),
+                        self.toolset.as_deref(),
+                    )?
                 };
                 super::server::serve_mcp_stdio(
                     global_root,
@@ -289,41 +250,116 @@ impl ServeArgs {
     }
 }
 
-/// The toolsets a server advertises: `--toolset` when given, else the
-/// `machine.mcp.toolsets` host config, else the default toolset alone.
+/// The toolsets a server advertises: the role (`--role`, else the
+/// `machine.mcp.role` host config) or the default surface without one, plus
+/// the named toolsets (`--toolset`, else `machine.mcp.toolsets`). A managed
+/// run uses its dispatch stamp instead of host configuration.
 ///
-/// An unreadable host config falls back to the default toolset with a warning
-/// rather than refusing to serve: a toolset trims context, it grants nothing.
+/// An unreadable host config or stamp falls back without it, with a warning,
+/// rather than refusing to serve: a role or toolset trims context, it grants
+/// nothing. A malformed flag or config value is refused.
 pub(super) fn resolve_mcp_toolsets(
     global_root: &Path,
-    flag: Option<&str>,
+    role_flag: Option<&str>,
+    toolset_flag: Option<&str>,
 ) -> Result<McpToolsetSelection, OrbitError> {
-    if let Some(flag) = flag {
-        return McpToolsetSelection::parse_list(flag)
-            .map_err(|error| OrbitError::InvalidInput(format!("--toolset: {error}")));
-    }
-    let config =
-        orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(global_root));
-    match config {
-        Ok(config) => McpToolsetSelection::from_names(
-            config
-                .snapshot
-                .machine_mcp_toolsets
-                .iter()
-                .map(String::as_str),
-        )
-        .map_err(|error| {
-            OrbitError::InvalidInput(format!("{}: {error}", orbit_mcp::MCP_TOOLSETS_CONFIG_KEY))
-        }),
+    let Some(stamped) = std::env::var(ACTIVITY_MCP_TOOLSETS_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return configured_mcp_toolsets(global_root, role_flag, toolset_flag);
+    };
+    let selection = McpToolsetSelection::default_only();
+    match selection.clone().with_names(stamped.split(',')) {
+        Ok(stamped) => Ok(stamped),
         Err(error) => {
             tracing::warn!(
                 target: "orbit.mcp",
                 %error,
-                "could not read {}; serving the default MCP toolset",
-                orbit_mcp::MCP_TOOLSETS_CONFIG_KEY
+                "ignoring {ACTIVITY_MCP_TOOLSETS_ENV}"
             );
-            Ok(McpToolsetSelection::default_only())
+            Ok(selection)
         }
+    }
+}
+
+/// Warn once per retired `--toolset` entry, which [`McpToolsetSelection`]
+/// ignores so existing launch scripts keep serving the live surface.
+fn warn_retired_flagged_toolsets(names: &[&str]) {
+    for name in names {
+        if McpToolset::is_retired_toolset_name(name) {
+            tracing::warn!(
+                target: "orbit.mcp",
+                value = name.trim(),
+                note = McpToolset::RETIRED_AGENT_INVOKE_NOTE,
+                "--toolset entry 'agent-invoke' was removed and is ignored; remove it from the invocation",
+            );
+        }
+    }
+}
+
+fn configured_mcp_toolsets(
+    global_root: &Path,
+    role_flag: Option<&str>,
+    toolset_flag: Option<&str>,
+) -> Result<McpToolsetSelection, OrbitError> {
+    let flagged_role = role_flag
+        .map(|role| {
+            role.parse::<McpRole>()
+                .map_err(|error| OrbitError::InvalidInput(format!("--role: {error}")))
+        })
+        .transpose()?;
+    let flagged_toolsets = toolset_flag.map(|list| list.split(',').collect::<Vec<_>>());
+    let config = if flagged_role.is_some() && flagged_toolsets.is_some() {
+        None
+    } else {
+        match orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(
+            global_root,
+        )) {
+            Ok(config) => Some(config.snapshot),
+            Err(error) => {
+                tracing::warn!(
+                    target: "orbit.mcp",
+                    %error,
+                    "could not read {} or {}; serving without them",
+                    orbit_mcp::MCP_ROLE_CONFIG_KEY,
+                    orbit_mcp::MCP_TOOLSETS_CONFIG_KEY
+                );
+                None
+            }
+        }
+    };
+    let role = match flagged_role {
+        Some(role) => Some(role),
+        None => config
+            .as_ref()
+            .and_then(|config| config.machine_mcp_role.as_deref())
+            .map(|role| {
+                role.parse::<McpRole>().map_err(|error| {
+                    OrbitError::InvalidInput(format!("{}: {error}", orbit_mcp::MCP_ROLE_CONFIG_KEY))
+                })
+            })
+            .transpose()?,
+    };
+    let base = role.map_or_else(
+        McpToolsetSelection::default_only,
+        McpToolsetSelection::for_role,
+    );
+    match flagged_toolsets {
+        Some(names) => {
+            warn_retired_flagged_toolsets(&names);
+            base.with_names(names)
+                .map_err(|error| OrbitError::InvalidInput(format!("--toolset: {error}")))
+        }
+        None => base
+            .with_names(
+                config
+                    .iter()
+                    .flat_map(|config| config.machine_mcp_toolsets.iter().map(String::as_str)),
+            )
+            .map_err(|error| {
+                OrbitError::InvalidInput(format!("{}: {error}", orbit_mcp::MCP_TOOLSETS_CONFIG_KEY))
+            }),
     }
 }
 

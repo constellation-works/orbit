@@ -13,7 +13,8 @@
 //! so those items are not announced again when it returns, and the missing
 //! answer makes that count unavailable instead of adding zero.
 //! Fleet phases and holds are compared per workspace. Baseline-red task holds
-//! come from each available workspace's readiness snapshot, not fleet labels.
+//! come from the fleet row when it carries them complete, otherwise from each
+//! available workspace's readiness snapshot, not fleet labels.
 
 use std::collections::{HashMap, HashSet};
 
@@ -608,16 +609,21 @@ fn drain_snapshot(
                 .map(|label| Item::new(&host.name, id, label, label, &item.workspace))
                 .collect()
         });
-        let query = url::form_urlencoded::Serializer::new(String::new())
-            .append_pair("workspace", id)
-            .append_pair("limit", "500")
-            .finish();
-        let task_holds = get(&api_path(
-            host,
-            &format!("workflows/auto/readiness?{query}"),
-        ))
-        .as_ref()
-        .and_then(|body| task_holds(body, &item));
+        // A fleet row that carries the holds complete spares the second
+        // readiness snapshot; older hosts (no field) and truncated rows
+        // (`complete` false, so the observed-id set matters) fall back to it.
+        let task_holds = fleet_baseline_red_holds(row, &item).or_else(|| {
+            let query = url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("workspace", id)
+                .append_pair("limit", "500")
+                .finish();
+            get(&api_path(
+                host,
+                &format!("workflows/auto/readiness?{query}"),
+            ))
+            .as_ref()
+            .and_then(|body| task_holds(body, &item))
+        });
         workspaces.push(WorkspaceRead {
             item,
             phase: phase.to_string(),
@@ -628,6 +634,38 @@ fn drain_snapshot(
     Some(DrainRead {
         count: running_drains(body),
         workspaces,
+    })
+}
+
+/// Baseline-red holds carried by a fleet row. `Some` only when the field is
+/// present, well-formed and `complete`: an incomplete row omits tasks, so its
+/// held ids alone cannot clear remembered holds and the caller must fall back
+/// to the readiness read for the observed-id set. When complete, `observed`
+/// is unused by the partial-read rule, so it holds just the held ids.
+fn fleet_baseline_red_holds(row: &Value, workspace: &Item) -> Option<TaskHolds> {
+    let hold = row.get("baseline_red_hold")?;
+    if !hold.get("complete")?.as_bool()? {
+        return None;
+    }
+    let task_ids = hold.get("task_ids")?.as_array()?;
+    let mut observed = HashSet::new();
+    let mut items = Vec::new();
+    for task_id in task_ids {
+        let id = task_id.as_str().filter(|id| !id.is_empty())?;
+        if observed.insert(id.to_string()) {
+            items.push(Item::new(
+                &workspace.key.host,
+                &workspace.key.workspace,
+                id,
+                "Held until the base branch passes",
+                &workspace.workspace,
+            ));
+        }
+    }
+    Some(TaskHolds {
+        complete: true,
+        observed,
+        items,
     })
 }
 

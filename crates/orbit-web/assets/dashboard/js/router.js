@@ -20,10 +20,11 @@
 // Also exports parseHashRoute for symmetry (used only internally today).
 
 import { el, isAggregateView, renderPanelPlaceholder, getWindow, setWindow, setWorkspace, parseDashboardWindow, persistScopeToUrl, syncWindowSelectors, notifyScopeChange } from './common.js';
-import { renderRuns } from './runs.js';
-import { AGENT_ROLES } from './agents.js';
+import { adoptRunFiltersFromAddress, renderRuns } from './runs.js';
+import { AGENT_ROLES, adoptAgentsSpan, agentsSpan } from './agents.js';
 import { countViewsHashSuffix } from './metrics-running.js';
 import { initBackgroundNotifications, setDashboardTitle, startDashboardPolling } from './polling.js';
+import { topicOf } from './config-topics.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -51,11 +52,11 @@ const DIAG_SUBTABS = ["incidents", "doctor"];
 // Health › Incidents views: `#diagnostics/incidents[/events|/errors]`.
 const INCIDENTS_VIEWS = ["incidents", "events", "errors"];
 const ANALYTICS_SUBTABS = ["metrics", "reliability", "codebase", "resources", "forecast", "cost", "agents", "experiments"];
-// Analytics › Cost tabs: `#analytics/cost?tab=exploration`; no `tab` is Spend.
-const COST_TABS = ["spend", "exploration"];
+// Analytics › Cost defaults to Spend.
+const COST_TABS = ["spend"];
 // Analytics › Reliability views: `#analytics/reliability[/tools]`.
 const RELIABILITY_VIEWS = ["pipeline", "tools"];
-const OPERATIONS_SUBTABS = ["routines", "auto-tasks"];
+const OPERATIONS_SUBTABS = ["routines", "auto-tasks", "scripts"];
 const JOBS_SUBTABS = ["live", "history", "catalogue"];
 // Health views that replace the list panel with their own full-width <main>.
 const HEALTH_MAINS = {
@@ -94,11 +95,13 @@ export function destinationLabel(top) {
   return top === "run-detail" ? "Jobs › History" : RAIL_LABELS[top] || top;
 }
 
-// Rail destinations reopen their remembered view.
+// Rail destinations reopen their remembered view. A bare `tasks` reads as the
+// default status set, so Tasks routes to the list's own filter instead.
 function railRoute(ctx, tab) {
   if (tab === "diagnostics") return healthHash(ctx).slice(1);
   if (tab === "analytics") return analyticsSubtabRoute(ctx, ctx.getAnalyticsSubtab());
   if (tab === "jobs") return `jobs/${ctx.getJobsSubtab()}`;
+  if (tab === "tasks") return ctx.buildTasksFilterHash().slice(1);
   return tab;
 }
 
@@ -113,6 +116,7 @@ function analyticsSubtabRoute(ctx, sub) {
   if (sub === "codebase") return ctx.buildCodebaseHash().slice(1);
   if (sub === "reliability" && ctx.getReliabilityView() === "tools") return "analytics/reliability/tools";
   if (sub === "experiments" && ctx.experimentsRoute) return ctx.experimentsRoute();
+  if (sub === "forecast" && ctx.forecastTabRoute) return ctx.forecastTabRoute();
   return `analytics/${sub}`;
 }
 
@@ -135,11 +139,15 @@ function setCostTabView(tab) {
   }
 }
 
-function selectCostTab(ctx, tab) {
-  setCostTabView(tab);
+function rewriteAnalyticsHash(ctx) {
   const url = new URL(window.location.href);
   url.hash = analyticsHash(ctx, parseHashRoute(window.location.hash).query).replace(/^#/, "");
   if (url.href !== window.location.href) window.history.replaceState(null, "", url);
+}
+
+function selectCostTab(ctx, tab) {
+  setCostTabView(tab);
+  rewriteAnalyticsHash(ctx);
 }
 
 function wireCostTabs(ctx) {
@@ -180,9 +188,11 @@ function healthHash(ctx) {
   return `#${incidentsRoute(ctx, view)}?${windowQuery()}`;
 }
 
-/// The canonical hash of the Agents role on screen, with the shared window.
+/// The canonical hash of the Agents role on screen, with the shared window
+/// and the panel's own `span` (a count window such as `last500`, or a
+/// calendar one), so a reload or copied link reopens the same comparison.
 function agentsHash(ctx) {
-  return `#analytics/agents/${ctx.getAgentsRole()}?${windowQuery()}`;
+  return `#analytics/agents/${ctx.getAgentsRole()}?${windowQuery()}&span=${encodeURIComponent(agentsSpan())}`;
 }
 
 /// The canonical hash of the Analytics view on screen. Codebase has its own
@@ -210,12 +220,12 @@ function syncViewTabs(id, view, shown) {
     btn.setAttribute("aria-current", on ? "page" : "false");
   }
 }
-const KNOWLEDGE_SUBTABS = ["frictions"];
+const KNOWLEDGE_SUBTABS = ["frictions", "memory"];
 // ORB-12724: `effective` is the layered view; the two `*-file` views are the
 // `--scope` equivalents, and `keys` is the settable-key reference. `hosts` is
 // the serving host's registered remote hosts [ORB-14451].
-const CONFIG_SUBTABS = ["workflow", "execution", "review", "crews", "machine", "hosts", "all-keys"];
-const CONFIG_LEGACY_REDIRECTS = { effective: "workflow", "workspace-file": "all-keys", "global-file": "machine", system: "machine", keys: "all-keys" };
+const CONFIG_SUBTABS = ["workflow", "execution", "review", "crews", "machine", "hosts", "other"];
+const CONFIG_LEGACY_REDIRECTS = { effective: "workflow", "workspace-file": "other", "global-file": "machine", system: "machine", keys: "other", "all-keys": "other" };
 
 function parseHashRoute(raw) {
   const trimmed = String(raw || "").replace(/^#/, "");
@@ -228,6 +238,39 @@ function parseHashRoute(raw) {
 }
 
 let _routerCtx = null;
+
+// Origins belong to this document's session, not to a copied URL or a reload.
+// History state carries only a key; the labels stay in memory. Stamp after
+// normalization, which can replace an entry and clear its state.
+const routeSession = `${Date.now()}:${Math.random()}`;
+const routeEntries = new Map();
+let currentRouteEntry = null;
+
+function recordRouteEntry(label, fromAddress) {
+  const key = window.history.state?.orbitRouteEntry;
+  let entry = fromAddress ? routeEntries.get(key) : currentRouteEntry;
+  if (!entry) {
+    entry = {
+      key: `${routeSession}:${routeEntries.size}`,
+      originLabel: currentRouteEntry?.label || null,
+    };
+    routeEntries.set(entry.key, entry);
+  }
+  entry.label = label;
+  currentRouteEntry = entry;
+  window.history.replaceState({ ...window.history.state, orbitRouteEntry: entry.key }, "");
+}
+
+/// Name the previous dashboard entry, or History for an untracked deep link.
+export function runDetailBackLabel() {
+  return `← ${currentRouteEntry?.originLabel || "Jobs › History"}`;
+}
+
+/// Traverse one entry without adding history; deep links open History instead.
+export function returnFromRunDetail() {
+  if (currentRouteEntry?.originLabel) window.history.back();
+  else setActiveTab("jobs/history");
+}
 
 function getCtx() {
   if (!_routerCtx) {
@@ -325,7 +368,7 @@ function setAnalyticsSubtabImpl(ctx, name, view = ctx.getReliabilityView()) {
     btn.classList.toggle("active", btn.dataset.subtab === name);
   }
   syncViewTabs("reliability-views", view, name === "reliability");
-  syncViewTabs("agents-roles", typeof ctx.getAgentsRole === "function" ? ctx.getAgentsRole() : "orchestrators", name === "agents");
+  syncViewTabs("agents-roles", typeof ctx.getAgentsRole === "function" ? ctx.getAgentsRole() : "rank", name === "agents");
   for (const [key, mainId] of Object.entries(ANALYTICS_MAINS)) {
     const node = $(mainId);
     if (node) node.style.display = key === shown ? "grid" : "none";
@@ -336,7 +379,6 @@ function setAnalyticsSubtabImpl(ctx, name, view = ctx.getReliabilityView()) {
   // aggregate view; Cost is per-workspace and does not.
   if (name === "cost" && isAggregateView()) {
     renderPanelPlaceholder("scoreboard-orchestration");
-    renderPanelPlaceholder("scoreboard-exploration");
   }
   // Metrics, Pipeline, Resources and Forecast read as soon as they open, not on the next tick.
   if (shown === "metrics" && ctx.fetchMetrics) ctx.fetchMetrics();
@@ -366,6 +408,8 @@ function setOperationsSubtabImpl(ctx, name) {
   const autoTasks = $("operations-auto-tasks-main");
   if (routines) routines.hidden = name !== "routines";
   if (autoTasks) autoTasks.hidden = name !== "auto-tasks";
+  const scripts = $("operations-scripts-main");
+  if (scripts) scripts.hidden = name !== "scripts";
 }
 
 function setJobsSubtabImpl(ctx, name) {
@@ -393,10 +437,15 @@ function setKnowledgeSubtabImpl(ctx, name) {
     const node = $(id);
     if (node) node.style.display = show ? "" : "none";
   };
-  toggle("friction-stats", true);
-  toggle("friction-search", true);
-  toggle("frictions-body", true);
-  toggle("friction-detail-panel", true);
+  const memory = name === "memory";
+  const title = $("knowledge-title");
+  if (title) title.textContent = memory ? "Memory spaces" : "Knowledge";
+  toggle("friction-stats", !memory);
+  toggle("friction-controls", !memory);
+  toggle("frictions-body", !memory);
+  toggle("friction-detail-panel", !memory);
+  toggle("memory-body", memory);
+  toggle("memory-detail-panel", memory);
 }
 
 function setConfigSubtabImpl(ctx, name) {
@@ -405,6 +454,44 @@ function setConfigSubtabImpl(ctx, name) {
   ctx.setConfigSubtab(name);
   for (const btn of document.querySelectorAll("#config-subtabs .subtab")) {
     btn.classList.toggle("active", btn.dataset.subtab === name);
+  }
+}
+
+// Reveal an entry by scrolling only the rail's own scroll containers, never
+// the document: on Automation's document-height layout a native
+// scrollIntoView would also scroll the window to the rail entry.
+function scrollElementIntoRailView(element) {
+  if (!element) return;
+  for (let container = element.parentElement; container && container !== document.body; container = container.parentElement) {
+    const isRailContainer = container.classList?.contains("rail")
+      || container.classList?.contains("tabs")
+      || container.classList?.contains("rail-subtabs");
+    if (isRailContainer) {
+      const rect = element.getBoundingClientRect();
+      const box = container.getBoundingClientRect();
+      const style = getComputedStyle(container);
+      // Only a container that actually scrolls on an axis may move on it:
+      // on desktop the rail and destination column no longer scroll, so a
+      // reveal must never push a destination or the selectors out of view.
+      const canScrollY = (style.overflowY === "auto" || style.overflowY === "scroll")
+        && container.scrollHeight > container.clientHeight + 1;
+      const canScrollX = (style.overflowX === "auto" || style.overflowX === "scroll")
+        && container.scrollWidth > container.clientWidth + 1;
+      const padTop = parseFloat(style.scrollPaddingTop) || 0;
+      const padBottom = parseFloat(style.scrollPaddingBottom) || 0;
+      const padLeft = parseFloat(style.scrollPaddingLeft) || 0;
+      const padRight = parseFloat(style.scrollPaddingRight) || 0;
+      if (canScrollY) {
+        if (rect.top < box.top + padTop) container.scrollTop -= box.top + padTop - rect.top;
+        else if (rect.bottom > box.bottom - padBottom) container.scrollTop += rect.bottom - (box.bottom - padBottom);
+      }
+      if (canScrollX) {
+        const nextRect = element.getBoundingClientRect();
+        if (nextRect.left < box.left + padLeft) container.scrollLeft -= box.left + padLeft - nextRect.left;
+        else if (nextRect.right > box.right - padRight) container.scrollLeft += nextRect.right - (box.right - padRight);
+      }
+    }
+    if (container.classList?.contains("rail")) break;
   }
 }
 
@@ -418,12 +505,88 @@ function revealActiveRailSelection() {
   const foot = rail.querySelector(".rail-foot");
   rail.style.setProperty("--rail-foot-height", `${foot?.offsetHeight || 0}px`);
   const subtab = document.querySelector(".rail-subtabs:not(.dimmed) .subtab.active");
-  subtab?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  scrollElementIntoRailView(subtab);
   // On desktop the selected leaf takes precedence: revealing its parent can
   // scroll it back behind the foot. Phones keep both nested strips in view.
   if (!subtab || window.matchMedia("(max-width: 760px)").matches) {
-    tab.scrollIntoView({ block: "nearest", inline: "nearest" });
+    scrollElementIntoRailView(tab);
   }
+  for (const strip of document.querySelectorAll(".rail-subtabs:not(.dimmed)")) snapRailSubtabStrip(strip);
+  syncRailScrollCues();
+}
+
+// ORB-20479: on phones the destination and its views share one scrolling row.
+// Each scrolled strip fades only toward hidden content, so an edge-resting
+// label reads as overflow instead of a rendering glitch.
+function syncRailScrollCues() {
+  const phone = window.matchMedia("(max-width: 760px)").matches;
+  for (const strip of document.querySelectorAll(".rail .tabs, .rail .rail-subtabs")) {
+    if (phone) {
+      const canScroll = strip.scrollWidth > strip.clientWidth + 1;
+      strip.classList.toggle("has-overflow-start", canScroll && strip.scrollLeft > 1);
+      strip.classList.toggle("has-overflow-end", canScroll && strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 1);
+    } else if (strip.classList.contains("rail-subtabs")) {
+      // Desktop: the open destination's views scroll vertically on their own.
+      const canScroll = strip.scrollHeight > strip.clientHeight + 1;
+      strip.classList.toggle("has-overflow-start", canScroll && strip.scrollTop > 1);
+      strip.classList.toggle("has-overflow-end", canScroll && strip.scrollTop + strip.clientHeight < strip.scrollHeight - 1);
+    } else {
+      strip.classList.remove("has-overflow-start", "has-overflow-end");
+    }
+  }
+}
+
+// ORB-20479: after revealing the active view, hide any label the strip's left
+// edge cuts mid-word: scroll just past entries the edge already covers, so the
+// first visible label starts cleanly while the active view stays in sight. The
+// left fade then says the earlier views exist.
+function snapRailSubtabStrip(strip, focusedSubtab = null) {
+  if (!window.matchMedia("(max-width: 760px)").matches) return;
+  for (let guard = 0; guard < 16; guard += 1) {
+    if (strip.scrollWidth <= strip.clientWidth + 1) break;
+    const view = railStripVisibleSpan(strip);
+    const first = [...strip.querySelectorAll(".subtab")]
+      .find((btn) => btn.getBoundingClientRect().right > view.left + 0.5);
+    if (!first) break;
+    const rect = first.getBoundingClientRect();
+    if (rect.left >= view.left - 0.5) break;
+    // At the strip's end there is nowhere further to scroll: the fade cue
+    // carries the hidden views instead of a partial label pretending to fit.
+    const before = strip.scrollLeft;
+    if (first === focusedSubtab || (!focusedSubtab && first.classList.contains("active"))) {
+      strip.scrollLeft = Math.max(0, strip.scrollLeft + (rect.left - view.left));
+    } else {
+      const gap = parseFloat(getComputedStyle(strip).columnGap) || 0;
+      strip.scrollLeft += rect.right - view.left + gap;
+    }
+    if (strip.scrollLeft === before) break;
+  }
+  // ORB-20524: if the strip cannot scroll far enough, the outer row must
+  // still show the whole focused view.
+  if (focusedSubtab) {
+    const view = railStripVisibleSpan(strip);
+    const rect = focusedSubtab.getBoundingClientRect();
+    if (rect.left < view.left - 0.5 || rect.right > view.right + 0.5) {
+      scrollElementIntoRailView(focusedSubtab);
+    }
+  }
+}
+
+// ORB-20524: the strip's own box can extend past the phone's scrolled `#tabs`
+// row, so measure only the span every scrolling ancestor actually shows.
+function railStripVisibleSpan(strip) {
+  const box = strip.getBoundingClientRect();
+  let left = box.left;
+  let right = box.right;
+  for (let node = strip.parentElement; node && node !== document.body; node = node.parentElement) {
+    if (node.scrollWidth > node.clientWidth + 1 && getComputedStyle(node).overflowX !== "visible") {
+      const clip = node.getBoundingClientRect();
+      left = Math.max(left, clip.left);
+      right = Math.min(right, clip.right);
+    }
+    if (node.id === "tabs") break;
+  }
+  return { left, right };
 }
 
 function setActiveTabImpl(ctx, raw, opts = {}) {
@@ -433,29 +596,38 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   let head = segments[0] || "tasks";
   let legacyRoute = false;
   let dockView = query.get("dock") || query.get("dockMode") || query.get("panel");
-  if (["drain", "auto-drain"].includes(head) || (head === "operations" && segments[1] === "auto-drain") ||
-      (head === "tasks" && ["drain", "auto-drain", "log", "locks", "start"].includes(segments[1]))) {
-    dockView = ["log", "start", "locks"].includes(segments.at(-1)) ? segments.at(-1) : dockView || "drain";
+  // Retired panel pages open their Tasks dock tab, preserving scope and
+  // rewriting the address in place so Back never loops through a redirect.
+  if (head === "notices" || (head === "operations" && segments[1] === "residents")) {
+    dockView = head === "notices" ? "notices" : "residents";
     head = "tasks";
     segments.splice(0, segments.length, "tasks");
     legacyRoute = true;
   }
-  if (head === "tasks" && ["drain", "auto-drain", "start", "locks", "log"].includes(dockView)) {
-    dockView = dockView === "auto-drain" ? "drain" : dockView;
+  if (["drain", "auto-drain"].includes(head) || (head === "operations" && segments[1] === "auto-drain") ||
+      (head === "tasks" && ["drain", "fleet", "auto-drain", "log", "locks", "start", "notices", "residents"].includes(segments[1]))) {
+    dockView = ["log", "fleet", "start", "locks", "notices", "residents"].includes(segments.at(-1)) ? segments.at(-1) : dockView || "drain";
+    head = "tasks";
+    segments.splice(0, segments.length, "tasks");
+    legacyRoute = true;
+  }
+  if (head === "tasks" && ["drain", "fleet", "auto-drain", "start", "locks", "log", "notices", "residents"].includes(dockView)) {
+    dockView = ["auto-drain", "locks"].includes(dockView) ? "drain" : dockView;
     query.set("dock", dockView);
     query.delete("dockMode");
     query.delete("panel");
   } else dockView = null;
   // Old standalone Agents links normalize to Analytics › Agents in place.
   if (head === "agents") {
-    const role = AGENT_ROLES.includes(segments[1]) ? segments[1] : ctx.getAgentsRole();
+    const role = AGENT_ROLES.includes(segments[1]) || segments[1] === "orchestrators" ? segments[1] : ctx.getAgentsRole();
     head = "analytics";
     segments.splice(0, segments.length, "analytics", "agents", role);
     legacyRoute = true;
   }
-  // Analytics › Orchestrators became Analytics › Agents › Orchestrators.
-  if (head === "analytics" && segments[1] === "orchestrators") {
-    segments.splice(0, segments.length, "analytics", "agents", "orchestrators");
+  // Analytics › Orchestrators became Analytics › Agents › Orchestrators, and
+  // that role was retired: both links open Rank.
+  if (head === "analytics" && (segments[1] === "orchestrators" || (segments[1] === "agents" && segments[2] === "orchestrators"))) {
+    segments.splice(0, segments.length, "analytics", "agents", "rank");
     legacyRoute = true;
   }
   // A `#comment-<task>-<n>` fragment, as older copies of a comment link carry
@@ -573,6 +745,12 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   if (top === "jobs") {
     const sub = JOBS_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getJobsSubtab();
     adoptHashedWindow();
+    // The state and task or job id filters ride in the query string. A load,
+    // Back or Forward onto History shows what that entry's address names.
+    if (sub === "history") {
+      adoptRunFiltersFromAddress();
+      if (opts.fromAddress) routedHref = window.location.href;
+    }
     setJobsSubtabImpl(ctx, sub);
     hash = `#jobs/${sub}` + (sub === "history" ? `?${windowQuery()}` : "");
   } else if (top === "diagnostics") {
@@ -602,20 +780,25 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
       adoptHashedWindow();
     }
     if (sub === "experiments" && segments[1] && ctx.setExperimentId) {
-      // `#analytics/experiments[/<id>]`: the segment names one experiment; a
-      // malformed escape opens the list. A bare `#analytics` keeps the
-      // remembered view.
+      // `#analytics/experiments[/<id>[/trust|/setup]]`: the segments name
+      // one experiment and its tab; a malformed escape opens the list. A bare
+      // `#analytics` keeps the remembered view.
       let id = null;
       try {
         id = segments[2] ? decodeURIComponent(segments[2]) : null;
       } catch {
         id = null;
       }
-      ctx.setExperimentId(id);
+      ctx.setExperimentId(id, segments[3]);
     }
+    // `#analytics/forecast[/accuracy|/data-gaps]` names the backlog forecast's
+    // tab, `#analytics/forecast/resources[/accuracy|/decisions]` the resource
+    // forecast's; a bare `#analytics` keeps the remembered one.
+    if (sub === "forecast" && segments[1] && ctx.setForecastTab) ctx.setForecastTab(segments[2], segments[3]);
     setAnalyticsSubtabImpl(ctx, sub, view);
     setCostTabView(sub === "cost" ? query.get("tab") : null);
     if (sub === "agents") {
+      adoptAgentsSpan(query.get("span"));
       const role = AGENT_ROLES.includes(segments[2]) ? segments[2] : ctx.getAgentsRole();
       setAgentsRoleImpl(ctx, role);
     }
@@ -627,19 +810,51 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     if (query.get("step") != null) hash += `?step=${encodeURIComponent(query.get("step"))}`;
   } else if (top === "knowledge") {
     const sub = KNOWLEDGE_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getKnowledgeSubtab();
+    // `#knowledge/memory[/<key>|/proposals]`: the segment names the memory
+    // key or the proposals the detail shows; a bare `#knowledge` keeps the
+    // remembered one.
+    if (sub === "memory" && segments[1] && ctx.setMemorySelection) {
+      let key = null;
+      try {
+        key = segments[2] ? decodeURIComponent(segments.slice(2).join("/")) : null;
+      } catch {
+        key = null;
+      }
+      ctx.setMemorySelection(key);
+    }
+    // `#knowledge/frictions[/<id>]`: the segment names the friction the list
+    // and detail show. A bare `#knowledge/frictions` keeps the remembered one.
+    if (sub === "frictions" && segments[2] && ctx.setFrictionSelection) {
+      let id = null;
+      try {
+        id = decodeURIComponent(segments[2]);
+      } catch {
+        id = null;
+      }
+      ctx.setFrictionSelection(id);
+    }
     setKnowledgeSubtabImpl(ctx, sub);
-    hash = `#knowledge/${sub}`;
+    hash = sub === "memory" && ctx.memoryRoute ? `#${ctx.memoryRoute()}`
+      : sub === "frictions" && ctx.frictionRoute ? `#${ctx.frictionRoute()}`
+      : `#knowledge/${sub}`;
   } else if (top === "operations") {
     const sub = OPERATIONS_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getOperationsSubtab();
     setOperationsSubtabImpl(ctx, sub);
     hash = `#operations/${sub}`;
   } else if (top === "config") {
     if (CONFIG_LEGACY_REDIRECTS[segments[1]]) legacyRoute = true;
-    const sub = CONFIG_LEGACY_REDIRECTS[segments[1]] || (CONFIG_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getConfigSubtab());
+    let sub = CONFIG_LEGACY_REDIRECTS[segments[1]] || (CONFIG_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getConfigSubtab());
+    // A deep link naming a setting (?key=…) lands on the page that shows
+    // that setting now, not on the page the link was written for.
+    const linkedKey = query.get("key");
+    if (linkedKey) {
+      const topic = topicOf(linkedKey);
+      sub = CONFIG_SUBTABS.includes(topic) ? topic : "other";
+    }
     setConfigSubtabImpl(ctx, sub);
-    hash = `#config/${sub}`;
+    hash = `#config/${sub}` + (linkedKey ? `?key=${encodeURIComponent(linkedKey)}` : "");
   } else if (top === "tasks") {
-    // ORB-10874: the status chips and search box are represented in the hash
+    // The status chips are represented in the hash
     // (mirroring the audit tab) so they survive a reload or the browser's
     // back/forward navigation instead of resetting to the in-memory default.
     // `#tasks/<id>` is one task's full-page view; a malformed id falls back
@@ -673,7 +888,6 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     revealActiveRailSelection();
   }
   const hashChanged = window.location.hash !== hash;
-  const shouldUpdateHash = opts.updateHash !== false;
   // A bookmarked legacy hash is rewritten in place so the address bar and any
   // copied link name the current route, without a second hashchange — and so
   // Back does not land on the legacy hash and redirect forward again.
@@ -682,13 +896,28 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   // would land on the first and push again. So is a task page route the list
   // replaced (a malformed id).
   const taskLink = top === "tasks" && (query.has("open") || segments.length > 1);
-  const rewriteInPlace = hashChanged && (legacyRoute || opts.repairRoute || taskLink) && typeof window.history?.replaceState === "function";
+  const runLink = top === "run-detail" && query.has("run_id");
+  // The router reacting to an address (hashchange, popstate, first load) only
+  // normalizes it: the entry is rewritten in place, so Back never lands on a
+  // spelling the router would push forward from again. Only a navigation the
+  // operator made adds an entry.
+  const rewriteInPlace = hashChanged && (opts.fromAddress || legacyRoute || opts.repairRoute || taskLink || runLink) && typeof window.history?.replaceState === "function";
   if (rewriteInPlace) {
-    window.history.replaceState(null, "", hash);
-  } else if (hashChanged && shouldUpdateHash) {
+    window.history.replaceState(window.history.state, "", hash);
+    // The rewrite fires no event, so the address it wrote is routed already.
+    routedHref = window.location.href;
+  } else if (hashChanged) {
     window.location.hash = hash;
   }
-  if (opts.refresh !== false && (!hashChanged || !shouldUpdateHash || rewriteInPlace)) ctx.refreshDashboard();
+  // A hash assignment routes again through the address listener (which may
+  // even run during the assignment). Only that pass records the new entry,
+  // so the programmatic pass cannot overwrite its origin with the run itself.
+  if (!hashChanged || rewriteInPlace) {
+    recordRouteEntry(top === "run-detail" ? ctx.getRunId()
+      : top === "jobs" ? `Jobs › ${ctx.getJobsSubtab()[0].toUpperCase()}${ctx.getJobsSubtab().slice(1)}`
+      : destinationLabel(top), opts.fromAddress);
+  }
+  if (opts.refresh !== false && (!hashChanged || rewriteInPlace)) ctx.refreshDashboard();
 }
 
 function navigateToRunImpl(ctx, runId, workspaceId = null) {
@@ -709,6 +938,48 @@ function navigateToRunImpl(ctx, runId, workspaceId = null) {
 // can move it when the dock rewrites the hash without the router.
 let routedHref = null;
 
+// Touch scrolls the rail's row natively; a mouse drags it. A press that barely
+// moves stays a click, and a real drag swallows the click it ends on, so
+// scrolling never changes the route.
+function enableRailDragScroll(row) {
+  const threshold = 4;
+  row.addEventListener("pointerdown", (down) => {
+    if (down.pointerType !== "mouse" || down.button !== 0) return;
+    const inner = down.target.closest(".rail-subtabs");
+    const strip = inner && inner.scrollWidth > inner.clientWidth + 1 ? inner : row;
+    if (strip.scrollWidth <= strip.clientWidth + 1) return;
+    let startLeft = null;
+    const move = (event) => {
+      const moved = event.clientX - down.clientX;
+      if (startLeft === null) {
+        if (Math.abs(moved) < threshold) return;
+        // Read here, not on press: pressing a part-hidden entry focuses it,
+        // and that focus can already have scrolled the row.
+        startLeft = strip.scrollLeft;
+        row.classList.add("is-drag-scrolling");
+      }
+      strip.scrollLeft = startLeft - moved;
+    };
+    const end = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      if (startLeft === null) return;
+      row.classList.remove("is-drag-scrolling");
+      const swallow = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      };
+      row.addEventListener("click", swallow, { capture: true, once: true });
+      // A release off the row fires no click, so don't eat the next real one.
+      setTimeout(() => row.removeEventListener("click", swallow, { capture: true }), 0);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  });
+}
+
 function initTabsImpl(ctx) {
   // A late count on any preceding entry shifts the selection, even when the
   // destination itself keeps its width. Observe entries as well as the row so
@@ -718,7 +989,7 @@ function initTabsImpl(ctx) {
     revealActiveRailSelection();
     const focused = document.activeElement;
     if (focused?.matches(".rail .tab, .rail-subtabs .subtab")) {
-      focused.scrollIntoView({ block: "nearest", inline: "nearest" });
+      scrollElementIntoRailView(focused);
     }
   });
   for (const entry of document.querySelectorAll(".rail, .rail-foot, .rail .tabs, .rail .tab, .rail-subtabs .subtab")) {
@@ -733,24 +1004,51 @@ function initTabsImpl(ctx) {
   // Native focus scrolling can leave half a button outside the phone's
   // overflow row when its centre is already visible. Reveal the whole entry
   // on keyboard focus, without changing the route or moving focus elsewhere.
-  $("tabs")?.addEventListener("focusin", (event) => {
-    if (event.target.matches('.tab, .subtab')) {
-      event.target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  document.querySelector(".topbar")?.addEventListener("focusin", (event) => {
+    if (event.target.matches("button:focus-visible, a:focus-visible")) {
+      event.target.scrollIntoView({ block: "nearest", inline: "nearest" });
     }
   });
-  for (const tab of document.querySelectorAll(".tab")) {
+  $("tabs")?.addEventListener("focusin", (event) => {
+    if (event.target.matches('.tab, .subtab')) {
+      scrollElementIntoRailView(event.target);
+      // ORB-20479: keyboard scrolling can rest a sub-view strip mid-label;
+      // snap the edge back to an item start and refresh the overflow fades.
+      // ORB-20524: a pointer press focuses before its click lands; snapping
+      // then would move the button away, so the route's reveal snaps instead.
+      const strip = event.target.closest(".rail-subtabs");
+      if (strip && event.target.matches(":focus-visible")) snapRailSubtabStrip(strip, event.target);
+      syncRailScrollCues();
+    }
+  });
+  // ORB-20479: keep the overflow fades truthful while the user scrolls.
+  for (const strip of document.querySelectorAll(".rail .tabs, .rail .rail-subtabs")) {
+    strip.addEventListener("scroll", () => syncRailScrollCues(), { passive: true });
+  }
+  if ($("tabs")) enableRailDragScroll($("tabs"));
+  for (const tab of document.querySelectorAll(".tab[data-tab]")) {
     tab.addEventListener("click", (event) => {
       if (tab.dataset.tab === "jobs" && event.target?.closest?.("#rail-count-jobs")) {
         setActiveTabImpl(ctx, "jobs/live", { refresh: false });
         return;
       }
-      // The denial badge opens Health › Incidents › Events filtered to
-      // denials for the window it counted; the Health label keeps the view
-      // already on screen.
-      const denials = event.target && event.target.closest && event.target.closest("#rail-count-denials");
-      if (denials && denials.dataset.route && tab.dataset.tab === "diagnostics") {
-        setActiveTabImpl(ctx, denials.dataset.route, { refresh: false });
+      // The failing-jobs pill opens the catalogue, where the badge names the job.
+      if (event.target?.closest?.("#rail-count-jobs-failing")) {
+        setActiveTabImpl(ctx, "jobs/catalogue", { refresh: false });
         return;
+      }
+      // ORB-22755: leaving a dock route through the Tasks item drops only the
+      // dock param, so the list keeps its filters like the removed Back control did.
+      if (tab.dataset.tab === "tasks") {
+        const { query: currentQuery } = parseHashRoute(window.location.hash);
+        if (currentQuery.has("dock") || currentQuery.has("dockMode") || currentQuery.has("panel")) {
+          currentQuery.delete("dock");
+          currentQuery.delete("dockMode");
+          currentQuery.delete("panel");
+          const rest = currentQuery.toString();
+          setActiveTabImpl(ctx, rest ? `tasks?${rest}` : "tasks", { refresh: false });
+          return;
+        }
       }
       setActiveTabImpl(ctx, railRoute(ctx, tab.dataset.tab), { refresh: false });
     });
@@ -772,6 +1070,10 @@ function initTabsImpl(ctx) {
     );
   }
   wireCostTabs(ctx);
+  // A Forecast or experiment tab switch is a view change too: it rewrites the
+  // hash in place.
+  ctx.onForecastTabPick?.(() => rewriteAnalyticsHash(ctx));
+  ctx.onExperimentTabPick?.(() => rewriteAnalyticsHash(ctx));
   for (const btn of document.querySelectorAll("#agents-roles .subtab")) {
     btn.addEventListener("click", () =>
       setActiveTabImpl(ctx, `analytics/agents/${btn.dataset.view}`, { refresh: false }),
@@ -789,13 +1091,10 @@ function initTabsImpl(ctx) {
       const path = `runs/${encodeURIComponent(ctx.getRunId() || "")}` +
         (ctx.getRunSubtab() !== "steps" ? `/${ctx.getRunSubtab()}` : "");
       setActiveTabImpl(ctx, path, { refresh: false });
-      ctx.refreshDashboard();
     });
   }
   for (const btn of document.querySelectorAll("#knowledge-subtabs .subtab")) {
-    btn.addEventListener("click", () =>
-      setActiveTabImpl(ctx, `knowledge/${btn.dataset.subtab}`, { refresh: false }),
-    );
+    btn.addEventListener("click", () => setActiveTabImpl(ctx, `knowledge/${btn.dataset.subtab}`));
   }
   for (const btn of document.querySelectorAll("#jobs-subtabs .subtab")) {
     btn.addEventListener("click", () =>
@@ -810,7 +1109,6 @@ function initTabsImpl(ctx) {
   for (const btn of document.querySelectorAll("#config-subtabs .subtab")) {
     btn.addEventListener("click", () => {
       setActiveTabImpl(ctx, `config/${btn.dataset.subtab}`, { refresh: false });
-      ctx.refreshDashboard();
     });
   }
   // Back and Forward fire popstate, then hashchange when the fragment differs.
@@ -820,13 +1118,13 @@ function initTabsImpl(ctx) {
   const routeFromLocation = () => {
     if (window.location.href === routedHref) return;
     routedHref = window.location.href;
-    setActiveTabImpl(ctx, window.location.hash);
+    setActiveTabImpl(ctx, window.location.hash, { fromAddress: true });
   };
   window.addEventListener("hashchange", routeFromLocation);
   window.addEventListener("popstate", routeFromLocation);
   setActiveTabImpl(ctx, window.location.hash || "tasks", {
     refresh: false,
-    updateHash: false,
+    fromAddress: true,
   });
   initBackgroundNotifications();
   startDashboardPolling(() => ctx.refreshDashboard({ poll: true }));

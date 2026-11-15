@@ -1,6 +1,6 @@
 //! Host-local effective OS readouts, derived without changing task records.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_types::task::{ExecutorOsLimit, HostOs, Task, TaskOsRequirement};
@@ -14,15 +14,24 @@ use crate::application::host_labels::{FleetLabelHost, label_placement_wait};
 /// census are read once, rather than once per task.
 pub struct TaskOsReadout {
     crews: BTreeMap<String, Result<String, String>>,
+    /// Human crews (`kind = "human"`): operator work with no executor, so no
+    /// executor OS constraint applies to a task that names one.
+    human_crews: BTreeSet<String>,
     limits: BTreeMap<String, ExecutorOsLimit>,
     fleet: Vec<FleetLabelHost>,
+    tag_label_requirements: orbit_types::task::TagLabelRequirements,
 }
 
 impl TaskOsReadout {
     /// Capture the current host's crew registry and executor OS declarations.
     pub fn new(runtime: &OrbitRuntime) -> Result<Self, OrbitError> {
-        let crews = runtime
-            .configured_crew_registry_projection()
+        let registry = runtime.configured_crew_registry_projection();
+        let human_crews = registry
+            .human_crews
+            .iter()
+            .map(|crew| crew.name.clone())
+            .collect();
+        let crews = registry
             .crews
             .into_iter()
             .map(|crew| {
@@ -35,8 +44,10 @@ impl TaskOsReadout {
             .collect();
         Ok(Self {
             crews,
+            human_crews,
             limits: runtime.executor_host_os_limits()?,
             fleet: runtime.fleet_label_hosts(),
+            tag_label_requirements: runtime.tag_label_requirements().clone(),
         })
     }
 
@@ -54,8 +65,11 @@ impl TaskOsReadout {
             .map(str::trim)
             .filter(|name| !name.is_empty());
         let mut effective = tags.clone();
-        if let Some(name) = crew {
-            let canonical = match self.crews.get(&name.to_ascii_lowercase()) {
+        // A human crew has no executor, so only the task's own OS tags bind it.
+        let agent_crew = crew.filter(|name| !self.human_crews.contains(*name));
+        if let Some(name) = agent_crew {
+            let base = orbit_types::identity::crew_reference_base(name).to_ascii_lowercase();
+            let canonical = match self.crews.get(&base) {
                 Some(Ok(name)) => name,
                 unresolved => {
                     source["crew"] = json!(name);
@@ -135,7 +149,10 @@ impl TaskOsReadout {
     /// Why `task` waits for a host carrying its `requires_labels`, while no
     /// live host carries them all, or `None`.
     pub fn placement_wait(&self, task: &Task) -> Option<String> {
-        label_placement_wait(task, &self.fleet)
+        let required = self
+            .tag_label_requirements
+            .required_labels(&task.tags, &task.requires_labels);
+        label_placement_wait(task, &required, &self.fleet)
     }
 
     /// Replace any tags-only base enrichment with this host's derived value,

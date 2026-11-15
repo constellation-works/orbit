@@ -3,6 +3,7 @@
 //! stall, recent fires with their upstream chain, and `self` (§9, §11).
 
 use std::collections::{BTreeMap, HashMap};
+use std::ops::ControlFlow;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_automation::condition::{ConditionCarrier, self_facts};
@@ -14,8 +15,10 @@ use orbit_types::workflow::automation::{
 use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule, RoutineDefinition};
 use serde::Serialize;
 
-use super::{ConditionDefinition, condition_consumer, condition_refusal};
+use super::{ConditionDefinition, condition_consumer, condition_refusal, facts};
 use crate::OrbitRuntime;
+use crate::application::automation::AutomationAutoTaskPort;
+use crate::application::automation::consumer_states;
 
 /// Most fires and subjects one status lists.
 const LISTED: usize = 20;
@@ -130,7 +133,32 @@ pub struct ConditionSelfView {
     pub last_minted: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_minted_task: Option<String>,
+    /// Whether the definition declares a completion contract, so it has an
+    /// accepted-result history that `last_succeeded_at` reads.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub completion_contract: bool,
+    /// When the contract last accepted a result; absent when none yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_succeeded_at: Option<DateTime<Utc>>,
+    /// Why the accepted-result history could not be read, when it could not.
+    /// Unreadable is not "never succeeded".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_succeeded_unavailable: Option<String>,
     pub fires_24h: i64,
+}
+
+/// One `auto_tasks['<name>']` history the condition reads, as the next pass
+/// reads it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConditionAcceptedHistoryView {
+    /// When the named auto-task's completion contract last accepted a result;
+    /// absent when its readable history holds none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_succeeded_at: Option<DateTime<Utc>>,
+    /// Why the history is unavailable (no such definition, no completion
+    /// contract, or unreadable). Unavailable is not "never succeeded".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable: Option<String>,
 }
 
 /// A condition definition's durable state, projected.
@@ -163,6 +191,9 @@ pub struct ConditionStatus {
     pub skip_counts: BTreeMap<String, u64>,
     #[serde(rename = "self")]
     pub self_view: ConditionSelfView,
+    /// The named auto-task histories the condition reads, by name.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub auto_tasks: BTreeMap<String, ConditionAcceptedHistoryView>,
     /// Newest first, with each fire's upstream chain.
     pub recent_fires: Vec<ConditionFireView>,
     /// Holding, waiting and fired subjects first.
@@ -196,7 +227,8 @@ pub(crate) fn condition_status(
             last_fire: None,
             last_skip: None,
             skip_counts: BTreeMap::new(),
-            self_view: self_view(None, now),
+            self_view: self_view(runtime, definition, None, now),
+            auto_tasks: named_history_view(runtime, definition),
             recent_fires: Vec::new(),
             subjects: Vec::new(),
         });
@@ -255,7 +287,8 @@ pub(crate) fn condition_status(
         last_fire: recent_fires.first().cloned(),
         last_skip: state.last_skip.clone(),
         skip_counts: state.skip_counts.clone(),
-        self_view: self_view(Some(&state), now),
+        self_view: self_view(runtime, definition, Some(&state), now),
+        auto_tasks: named_history_view(runtime, definition),
         recent_fires,
         subjects: subjects.into_iter().take(LISTED).collect(),
     })
@@ -303,7 +336,7 @@ impl From<ConditionStatus> for ConditionListing {
 impl OrbitRuntime {
     /// The list projection of a routine's condition, `None` for any other
     /// trigger.
-    pub fn routine_condition_listing(
+    pub(crate) fn routine_condition_listing(
         &self,
         definition: &RoutineDefinition,
     ) -> Result<Option<ConditionListing>, OrbitError> {
@@ -314,7 +347,7 @@ impl OrbitRuntime {
 
     /// The list projection of an auto-task's condition, `None` for any
     /// other schedule.
-    pub fn auto_task_condition_listing(
+    pub(crate) fn auto_task_condition_listing(
         &self,
         definition: &AutoTaskDefinition,
     ) -> Result<Option<ConditionListing>, OrbitError> {
@@ -344,14 +377,54 @@ fn count(
         .count()
 }
 
-fn self_view(state: Option<&ConditionState>, now: DateTime<Utc>) -> ConditionSelfView {
-    let facts = self_facts(state, now);
+fn self_view(
+    runtime: &OrbitRuntime,
+    definition: &ConditionDefinition<'_>,
+    state: Option<&ConditionState>,
+    now: DateTime<Utc>,
+) -> ConditionSelfView {
+    let facts = facts::with_accepted_history(
+        runtime,
+        definition.target.auto_task(),
+        self_facts(state, now),
+    );
     ConditionSelfView {
+        completion_contract: definition
+            .target
+            .auto_task()
+            .is_some_and(|definition| definition.completion.is_some()),
+        last_succeeded_at: facts.last_succeeded_at,
+        last_succeeded_unavailable: facts.last_succeeded_unreadable,
         last_fired: facts.last_fired,
         last_minted: facts.last_minted,
         last_minted_task: facts.last_minted_task,
         fires_24h: facts.fires_24h,
     }
+}
+
+/// The `auto_tasks['<name>']` histories the condition reads, from the same
+/// read the pass and explain use. A condition that does not load reads none.
+fn named_history_view(
+    runtime: &OrbitRuntime,
+    definition: &ConditionDefinition<'_>,
+) -> BTreeMap<String, ConditionAcceptedHistoryView> {
+    let Ok(checked) =
+        orbit_automation::condition::check_condition(definition.condition, definition.carrier)
+    else {
+        return BTreeMap::new();
+    };
+    facts::named_accepted_history(runtime, &checked.reads.auto_task_histories)
+        .into_iter()
+        .map(|(name, history)| {
+            (
+                name,
+                ConditionAcceptedHistoryView {
+                    last_succeeded_at: history.last_succeeded_at,
+                    unavailable: history.unavailable,
+                },
+            )
+        })
+        .collect()
 }
 
 /// Every fire this workspace's condition consumers record, by ID.
@@ -364,20 +437,19 @@ fn fire_index(runtime: &OrbitRuntime) -> Result<FireIndex, OrbitError> {
     let prefix = format!("{machine}/{}/", runtime.workspace_id()?);
     let store = runtime.automation_store()?;
     let mut index = HashMap::new();
-    let mut after: Option<String> = None;
-    loop {
-        let page = store.condition_states_page(&prefix, after.as_deref(), 100)?;
-        let Some(last) = page.last() else {
-            break;
-        };
-        after = Some(last.consumer.clone());
-        for state in page {
-            let trigger = trigger_of(&state.consumer);
-            for fire in state.fires {
-                index.insert(fire.fire_id.clone(), (trigger.clone(), fire));
-            }
-        }
-    }
+    let _: ControlFlow<std::convert::Infallible> =
+        consumer_states::for_each_workspace_consumer_state(
+            &prefix,
+            |after, limit| store.condition_states_page(&prefix, after, limit),
+            |state| &state.consumer,
+            |state| {
+                let trigger = trigger_of(&state.consumer);
+                for fire in state.fires {
+                    index.insert(fire.fire_id.clone(), (trigger.clone(), fire));
+                }
+                Ok(ControlFlow::Continue(()))
+            },
+        )?;
     Ok(index)
 }
 
@@ -558,10 +630,10 @@ impl OrbitRuntime {
                 }))
             }
             ConditionCarrier::AutoTask => {
-                let Some((_, path)) = self.auto_task_read_source(name)? else {
+                let Some(path) = self.auto_task_discovery_path(name)? else {
                     return Ok(None);
                 };
-                let definition = self.auto_task_show(name)?.ok_or_else(|| {
+                let definition = self.validated_auto_task_definition(name)?.ok_or_else(|| {
                     OrbitError::InvalidInput(format!("auto-task '{name}' is no longer defined"))
                 })?;
                 Ok(Some(LoadedCarrier {

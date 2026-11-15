@@ -106,12 +106,14 @@ fn list(value: Value, filter: StateFilter) -> CommandOut {
             let enabled = row["effective_enabled"].as_bool() == Some(true);
             (!filter.enabled_only || enabled) && (!filter.disabled_only || !enabled)
         })
-        .map(with_listing_markers)
         .collect();
 
     let mut table = Table::new(vec![
         Column::new("NAME").fixed(),
-        Column::new("STATE").fixed().filtered(true),
+        Column::new("STATE")
+            .fixed()
+            .keep_when_uniform(true)
+            .filtered(filter.enabled_only || filter.disabled_only),
         Column::new("SCHEDULE").fixed(),
         Column::new("TITLE"),
     ])
@@ -193,18 +195,6 @@ fn condition_notice(name: &str, condition: &Value) -> String {
     line
 }
 
-/// The tool marks only an inactive or skipped definition; the CLI record
-/// always carries the markers.
-fn with_listing_markers(mut record: Value) -> Value {
-    if let Some(object) = record.as_object_mut() {
-        object
-            .entry("plugin_inactive")
-            .or_insert(Value::Bool(false));
-        object.entry("skipped_reason").or_insert(Value::Null);
-    }
-    record
-}
-
 fn state_label(record: &Value) -> &'static str {
     if is_plugin_inactive(record) {
         "inactive"
@@ -222,7 +212,8 @@ fn is_plugin_inactive(record: &Value) -> bool {
 }
 
 fn show(value: Value) -> CommandOut {
-    let mut doc = with_listing_markers(value);
+    let mut doc = orbit_core::application::auto_tasks::projection::AutoTaskListingProfile::Cli
+        .project_auto_task_tool_document(value);
     if let Some(object) = doc.as_object_mut() {
         object.entry("inactive_plugin").or_insert(Value::Null);
     }
@@ -231,8 +222,6 @@ fn show(value: Value) -> CommandOut {
         "inactive"
     } else if doc["enabled"].as_bool() == Some(true) {
         "enabled"
-    } else if doc["effective_enabled"].as_bool() == Some(true) {
-        "enabled by the deprecated operation.review_policy = after-landing"
     } else {
         "disabled"
     };
@@ -266,6 +255,14 @@ fn show(value: Value) -> CommandOut {
     let _ = writeln!(out, "  schedule: {}", schedule_summary(&doc["schedule"]));
     let _ = writeln!(out, "  dedupe: {}", text(&doc, "dedupe"));
     let _ = writeln!(out, "  template: {}", text(&doc["template"], "title"));
+    let granted_tools = strings(&doc["granted_tools"]);
+    if !granted_tools.is_empty() {
+        let _ = writeln!(
+            out,
+            "  granted tools (operator grant, copied to minted tasks): {}",
+            granted_tools.join(", ")
+        );
+    }
     if let Some(note) = doc["crew_overridden"].as_str() {
         let _ = writeln!(out, "  crew: {note}");
     }
@@ -281,6 +278,17 @@ fn show(value: Value) -> CommandOut {
         let _ = writeln!(
             out,
             "  skip_unless_blocked_candidates: mint only when a block episode awaits triage"
+        );
+    }
+    if let Some(completion) = doc.get("completion").filter(|value| !value.is_null()) {
+        let _ = writeln!(
+            out,
+            "  completion: {} judged by script {} (form {}, evidence {}, max age {} minutes)",
+            text(completion, "contract"),
+            text(completion, "adapter"),
+            text(completion, "form"),
+            text(completion, "evidence_artifact"),
+            completion["max_age_minutes"]
         );
     }
     if let Some(skip) = doc
@@ -371,6 +379,7 @@ fn settings_fields(settings: &Value) -> Vec<&'static str> {
         ("priority", "template.priority"),
         ("complexity", "template.complexity"),
         ("tags", "template.tags"),
+        ("granted_tools", "granted_tools"),
     ]
     .into_iter()
     .filter(|(key, _)| settings.get(key).is_some_and(|value| !value.is_null()))

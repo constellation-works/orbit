@@ -86,10 +86,8 @@ fn bounded_dependency_failure_authenticates_and_reruns_once() {
                             }
                         );
                     }
-                    let mut input = fx.complete_ungated_input();
-                    input["auto_fix"] = json!(true);
-                    input["completion"] = json!("review");
-                    let result = complete_with_logical_clock(&host, &input);
+                    let claimed = claimed(&fx, &host);
+                    let result = land_claimed_retry(&claimed);
                     assert!(result.is_ok(), "raw={raw}: {result:?}");
                     assert_eq!(
                         fx.forge_lines("retry-sends"),
@@ -107,6 +105,27 @@ fn bounded_dependency_failure_authenticates_and_reruns_once() {
             }
         },
     );
+}
+
+/// Prepared unchanged-workflow fixture, built once per child. Rows only read
+/// `ci.rerun_plan`, so each one copies this seed and then applies its own
+/// log or provider-metadata edit.
+fn prepared_workflow_fixture(row: &Path) -> (Fixture, DeliveryHost, Value) {
+    thread_local! {
+        static TEMPLATE: std::cell::RefCell<Option<Fixture>> = const { std::cell::RefCell::new(None) };
+    }
+    TEMPLATE.with(|slot| {
+        let mut template = slot.borrow_mut();
+        let seed = template.get_or_insert_with(|| fixture_with_source(row, WORKFLOW).0);
+        let fx = seed.copy_to(row);
+        let path = fx.forge.join("retry-config.json");
+        let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        config["workspace"] = json!(fx.repo);
+        fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+        let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+        let request = json!({"workspace_path":fx.repo,"pr":"42","head_sha":fx.candidate,"head_branch":BRANCH,"base_branch":BASE,"accepted_base":fx.base_sha,"run_id":700,"roots":[CiRerunRoot {job_id:1000,check:"CI / test".into(),classification:"flaky".into(),signature:"error: source failure at src/stable:<n>:<n>".into()}],"deadline_ms":9_999_999_999_999_u64});
+        (fx, host, request)
+    })
 }
 
 #[test]
@@ -149,13 +168,23 @@ fn bounded_retry_keeps_refusal_boundaries() {
                     {
                         continue;
                     }
+                    // These rows change provider job metadata, not the log, so the
+                    // column-display pass repeats the raw pass.
+                    if !raw && matches!(case, "multiple_steps" | "unknown_step" | "unknown_outcome")
+                    {
+                        continue;
+                    }
                     in_fresh_row(sandbox, |row| {
                         let source = match case {
                         "ambiguous_source" => WORKFLOW.replace("  independent:\n    name: independent", "  independent:\n    name: test"),
                         "duplicate_script" => WORKFLOW.replace("        run: echo tests", "        run: echo tests\n      - name: Other tests\n        run: echo tests"),
                         _ => WORKFLOW.to_string(),
                     };
-                        let (fx, host, request) = fixture_with_source(row, &source);
+                        let (fx, host, request) = if source == WORKFLOW {
+                            prepared_workflow_fixture(row)
+                        } else {
+                            fixture_with_source(row, &source)
+                        };
                         bounded_logs(&fx, raw);
                         let root = fx.forge.join("retry-log-1000");
                         let waiter = fx.forge.join("retry-log-1001");
@@ -301,6 +330,18 @@ fn bounded_nextest_retry_observes_results_and_never_resends_unknown_replies() {
                         ),
                     )
                     .unwrap();
+                    // Runner failure still takes the one bounded retry. A
+                    // later source failure goes straight to auto-fix, even
+                    // when its signature differs from the original attempt.
+                    fs::write(
+                        &path,
+                        fs::read_to_string(&path).unwrap().replace(
+                            "error: source failure",
+                            "error: source failure; TLS handshake timeout",
+                        ),
+                    )
+                    .unwrap();
+                    request["roots"][0]["classification"] = json!("transient");
                     request["roots"][0]["signature"] = json!(
                         orbit_engine::ci_log_signature::error_signature(
                             &fs::read_to_string(&path).unwrap(),
@@ -310,7 +351,13 @@ fn bounded_nextest_retry_observes_results_and_never_resends_unknown_replies() {
                     );
                     let plan = run_private_vcs_operation("ci.rerun_plan", &request).unwrap();
                     assert!(plan["plan"]["authentication"]["logs"][0]["proof"]["failure_regions"]["byte_ranges"].is_array());
-                    fs::copy(&path, fx.forge.join("retry-log-1010")).unwrap();
+                    fs::write(
+                        fx.forge.join("retry-log-1010"),
+                        fs::read_to_string(&path)
+                            .unwrap()
+                            .replace("; TLS handshake timeout", ""),
+                    )
+                    .unwrap();
                     fs::copy(
                         fx.forge.join("retry-log-1001"),
                         fx.forge.join("retry-log-1011"),
@@ -339,7 +386,7 @@ fn bounded_nextest_retry_observes_results_and_never_resends_unknown_replies() {
                     let result = complete_with_logical_clock(&host, &input);
                     if case == "pass" {
                         assert!(result.is_ok(), "{result:?}");
-                    } else if case == "repeat" {
+                    } else if matches!(case, "repeat" | "different_signature") {
                         let error = result.expect_err(case);
                         assert!(
                             orbit_types::workflow::is_pr_auto_fix_check_repair(&error.to_string()),

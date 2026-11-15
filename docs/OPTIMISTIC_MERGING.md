@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Optimistic Merging: Orbit's preferred delivery mode. Merge fast, review after landing, keep the queue draining"
-last_validated: 2026-10-29
+last_validated: 2026-11-05
 tags: [delivery, review, throughput, scheduling, philosophy]
 related_features: [review-gate, auto-tasks, routines, activity-job, distributed-drain]
 ---
@@ -38,9 +38,9 @@ Optimistic merging moves control earlier, to admission, rather than removing it.
 
 From [Orbit Positioning](POSITIONING.md):
 
-- Every change starts as a task, and its `task_id` is in the commit message, so intent stays traceable.
+- Every managed change starts as a task, and its `task_id` is in the commit message, so intent stays traceable.
 - Inspectable audit records cover commands, workflow runs, and captured provider/tool activity; the [auditability design](design/auditability/1_overview.md) describes coverage limits. When auditability conflicts with speed, ergonomics or features, auditability wins.
-- Execution is sandboxed by default, uses the operator's own credentials, and reports token and wall-clock cost.
+- Execution is sandboxed by default on supported platforms, uses the operator's own credentials, and reports token and wall-clock cost.
 
 ## Other review modes
 
@@ -52,7 +52,7 @@ Optimistic merging is the preferred default, not the only option. Operators who 
 | Before landing (supported when a pre-landing gate is wanted) | `review.timing = "before_landing"` | The PR opens first; only the head the review settled is merged. |
 | Before PR (deprecated) | `review.timing = "before_pr"` | A fresh reviewer fixes findings before the PR is opened. Deprecated but still honoured with a bounded warning; new gates use `off` or `before_landing`. |
 
-The legacy `operation.review_policy` values (`after-landing`, `before-pr`, `none`) and the `review.before_pr` and `review.before_landing` booleans are still accepted with a deprecation warning, and `review.timing = "before_pr"` (and `"before-pr"`) is itself deprecated but still honoured with a bounded warning naming the deciding key/request and source. New configuration uses `review.timing = "off"` or `"before_landing"` and the `delivery-code-review` auto-task flag; new run requests use `--review before-landing`. Before-PR and before-landing review hold a task's declared footprint for the length of the review, which is the throughput cost described above. This staged deprecation (shipped) is ORB-20087's prerequisite; removal of accepted `before_pr` input and internal before-PR handlers is deferred to that later separately scoped task.
+The legacy `operation.review_policy` values (`after-landing`, `before-pr`, `none`) and the `review.before_pr` and `review.before_landing` booleans are still accepted with a deprecation warning, and `review.timing = "before_pr"` (and `"before-pr"`) is itself deprecated but still honoured with a bounded warning naming the deciding key/request and source. New configuration uses `review.timing = "off"` or `"before_landing"` and the `delivery-code-review` auto-task flag; new run requests use `--review before-landing`. Before-PR and before-landing review hold a task's declared footprint for the length of the review, which is the throughput cost described above. The staged deprecation preceded ORB-20087; selective before-landing review was subsequently removed, while accepted `before_pr` input and historical handlers remain.
 
 ## Decision lens
 

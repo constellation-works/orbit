@@ -5,9 +5,10 @@ use orbit_types::task::{ArtifactPresentation, Task, TaskArtifact, artifact_prese
 use serde_json::{Map, Value};
 
 use crate::OrbitRuntime;
+use crate::application::task::task_fields_response_json_projected_hydrated;
 use crate::application::task::{
-    TaskLintReport, task_fields_response_json, task_record_json, task_reference_status_index,
-    task_show_json,
+    TaskLintReport, TaskRow, task_fields_response_json_projected, task_record_json,
+    task_reference_status_index, task_show_json,
 };
 
 pub(super) fn serialize_task(runtime: &OrbitRuntime, task: &Task) -> Result<Value, OrbitError> {
@@ -21,11 +22,10 @@ pub(super) fn serialize_task(runtime: &OrbitRuntime, task: &Task) -> Result<Valu
 /// only when they apply.
 pub(super) fn serialize_task_show(
     runtime: &OrbitRuntime,
-    task: &Task,
+    row: &TaskRow,
 ) -> Result<Value, OrbitError> {
-    let status_by_id = task_reference_status_index(runtime, task)?;
-    let row = runtime.task_row_with_sidecars(task.clone())?;
-    task_show_json(runtime, &row, &status_by_id).map(Value::Object)
+    let status_by_id = task_reference_status_index(runtime, &row.task)?;
+    task_show_json(runtime, row, &status_by_id).map(Value::Object)
 }
 
 pub(super) fn serialize_task_lint_report(report: &TaskLintReport) -> Result<Value, OrbitError> {
@@ -36,8 +36,27 @@ pub(super) fn task_fields_to_json(
     runtime: &OrbitRuntime,
     task: &Task,
     fields: &[String],
+    keyed_single: bool,
 ) -> Result<Value, OrbitError> {
-    task_fields_response_json(runtime, task, fields)
+    task_fields_response_json_projected(runtime, task, fields, keyed_single)
+}
+
+/// [`task_fields_to_json`] over the row `orbit.task.show` already hydrated,
+/// so its sidecar fields do not re-read the store.
+pub(super) fn task_fields_to_json_from_row(
+    runtime: &OrbitRuntime,
+    row: &TaskRow,
+    fields: &[String],
+    keyed_single: bool,
+) -> Result<Value, OrbitError> {
+    task_fields_response_json_projected_hydrated(
+        runtime,
+        &row.task,
+        Some(row),
+        fields,
+        keyed_single,
+        None,
+    )
 }
 
 pub(super) fn serialize_error(label: &'static str) -> impl FnOnce(serde_json::Error) -> OrbitError {

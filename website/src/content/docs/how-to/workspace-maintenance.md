@@ -1,149 +1,171 @@
 ---
 title: Maintain and remove workspaces
-description: "Inspect bindings and ship mode, synchronize shipped defaults while preserving local edits, inspect migrations, rebind source remotes, and safely remove or tear down registered workspaces."
-sidebar:
-  order: 7
+description: "Inspect a workspace, sync shipped defaults after an upgrade, apply migrations, rebind a moved Git remote, and remove or tear down a workspace."
 ---
 
-After [installing Orbit](../../getting-started/install/) and registering a workspace with `orbit workspace init`, you maintain the workspace as your codebase evolves and Orbit releases updates.
-
-This guide covers everyday workspace maintenance: inspecting bindings and ship mode, synchronizing shipped defaults after upgrading the CLI, inspecting schema and layout migrations, safely updating repository remotes, and choosing between deregistering a checkout and tearing down its artifacts.
+Keep a registered workspace current as Orbit and your repository change:
+check its binding, pick up new defaults after an upgrade, follow a moved Git
+remote, and retire it when you are done.
 
 ## Inspect bindings and ship mode
 
-To inspect the current checkout's registered workspace binding:
-
 ```bash
-orbit workspace show
+orbit workspace show     # this checkout
+orbit workspace list     # registered workspaces; --all adds replica checkouts
 ```
 
-This displays the logical workspace name and ID (`ws_*`), checkout path, local role (`owner` or `replica`), ship mode (`pr` or `local`), and the configured base branch. To inspect all registered workspaces across the machine, run `orbit workspace list`.
+`show` prints the workspace name and `ws_*` ID, the checkout path, its role
+(`owner` or `replica`), its ship mode (`pr` or `local`) and the base branch.
 
-### Change the delivery ship mode
+### Change the ship mode
 
-Workspaces deliver completed tasks by opening a pull request (`pr`) or merging directly into the local base branch (`local`). You can inspect or change this setting without re-running initialization:
-
-```bash
-orbit workspace ship-mode
-orbit workspace ship-mode local
-orbit workspace ship-mode pr
-```
-
-Passing a mode updates the workspace registry entry directly and reports the previous mode. Managed defaults and configuration files remain untouched. To target a different workspace by name or ID, pass `--workspace`:
+A workspace delivers a finished task by opening a pull request (`pr`) or by
+merging into the local base branch (`local`).
 
 ```bash
-orbit --workspace my-project workspace ship-mode local
+orbit workspace ship-mode          # print the current mode
+orbit workspace ship-mode local    # change it
+orbit --workspace my-project workspace ship-mode pr
 ```
 
-### Validate or reassert checkout roles
+Changing the mode reports the previous one and touches no configuration file.
 
-In multi-machine environments, one checkout acts as the `owner` while checkouts on follower machines act as `replica` checkouts. To validate or update a checkout's declared role:
+### Reassert a checkout's role
+
+In a [multi-machine setup](/how-to/distributed-drain/), one checkout is the
+`owner` and the others are `replica` checkouts.
 
 ```bash
 orbit workspace role my-project owner
 orbit workspace role my-project replica --owner hm_abcdef0123456789
 ```
 
-Declaring a `replica` requires `--owner` with the stable machine ID of the owner host. Declaring an `owner` rejects `--owner`. Orbit validates the declaration before saving to prevent invalid configurations, such as claiming the owner role on a non-owner machine.
+A replica requires `--owner` with the owner's machine ID. An owner rejects
+it. Orbit validates the declaration before it saves.
 
 ## Synchronize shipped defaults
 
-When you upgrade the Orbit binary (see [Stay current](../../getting-started/install/#stay-current)), newer releases may include updated routine definitions, executors, policies, or prompt templates.
-
-`orbit workspace sync` converges your workspace's managed artifacts on the defaults shipped by the installed binary while preserving your local edits:
-
-```bash
-orbit workspace sync
-```
-
-### Convergence and local edits
-
-- **Preserves local modifications:** Managed files that you have customized are preserved. The sync report classifies actions by scope and outcome, highlighting items marked `Preserved` or `BindingDrift`.
-- **Reconciles gitignore:** Sync updates the managed `.orbit/` block in the repository's `.gitignore` in place to keep workspace state untracked. Sync never runs `git` commands on your behalf; if `.orbit/` files were already tracked before initialization, run `orbit doctor` to identify them, then run `git rm -r --cached .orbit`.
-- **Authority and scope:** Sync requires an initialized and registered workspace as well as an initialized machine identity. It refuses to run in unregistered directories.
-
-### Preview pending convergence
-
-To inspect what sync would change without modifying files:
+A new Orbit release can ship updated routines, executors, policies and prompt
+templates. After you [upgrade](/getting-started/install/#stay-current), run
+sync once on each host:
 
 ```bash
-orbit workspace sync --check
+orbit workspace sync --all
 ```
 
-`--check` reports pending updates and exits with status `0` if the workspace is up to date, or status `3` if convergence changes are pending. This status code makes `--check` suitable for pre-flight scripts and CI checks.
+Sync brings every workspace registered on this host, replicas included, up to
+the installed binary's defaults. It keeps managed files you have edited and
+reports them as preserved. Without `--all`, it syncs the current checkout
+only. `--all` works from any directory and cannot be combined with
+`--workspace`.
+
+To see what would change without writing anything:
+
+```bash
+orbit workspace sync --check          # exit 3 when changes are pending
+orbit workspace sync --check --all
+```
+
+With `--all`, the output has one line per workspace:
+
+| Status | Meaning |
+|---|---|
+| `synced` | Changes were applied; the line lists them. |
+| `pending` | With `--check` only: a sync would apply changes. |
+| `already current` | Nothing to apply. |
+| `skipped` | Left untouched, with the reason: a missing checkout or `.orbit/` directory, a path that is not a Git checkout, a data root shared with an earlier workspace, or a live drain or run. |
+| `failed` | Sync raised an error; the line carries it. |
+
+One failure does not stop the rest. The command exits 1 if any workspace
+failed, and 3 under `--check` when changes are pending and none failed.
+`--json` prints the same records under `workspaces`, with a `summary` of
+counts.
+
+### If a workspace is skipped for a live run
+
+Sync does not rewrite a workspace while a drain or run is using it, and no
+flag overrides that. When the drain or run ends, run
+`orbit workspace sync --all` again. `--check` only reads, so it never skips
+for a live run.
+
+### If `.orbit/` files are tracked by Git
+
+Sync maintains an `.orbit/` block in the repository's `.gitignore`, but it
+never runs `git` for you. If `orbit doctor` reports tracked `.orbit/` files,
+run `git rm -r --cached .orbit`.
+
+`orbit doctor` also raises a `workspace-convergence` warning that names any
+workspace behind the installed binary's defaults.
 
 ## Inspect and apply migrations
 
-Orbit manages two versioned migration ledgers: the SQLite store schema (inside `orbit.db` and task stores) and the workspace layout in `.orbit/`.
-
-Both ledgers auto-apply whenever an Orbit command opens the runtime. To inspect pending migrations without applying them, run `orbit migrate` or `orbit migrate --dry-run`:
+Orbit versions two things: the SQLite store schema and the workspace layout
+in `.orbit/`. Pending migrations apply automatically when an Orbit command
+opens the workspace, so you rarely run them yourself.
 
 ```bash
-orbit migrate
+orbit migrate              # list pending migrations; nonzero exit if any
+orbit migrate --confirm    # apply them
 ```
-
-`migrate` without `--confirm` connects without opening a runtime, listing the current and supported versions for both components:
 
 ```text
 COMPONENT         CURRENT  SUPPORTED
-workspace layout  1        1
-store schema      1        1
+workspace layout  9        9
+store schema      86       86
 
-workspace: /path/to/repo/.orbit (orbit 0.32.0)
+workspace: /path/to/repo/.orbit (orbit 0.45.1)
 
 Workspace is up to date.
 ```
 
-If migrations are pending, `orbit migrate` lists them and exits with a nonzero status. To apply them explicitly:
+### If a newer Orbit migrated the workspace
 
-```bash
-orbit migrate --confirm
-```
+When every newer migration is additive, an older binary opens the workspace
+read-only: read commands work and writes are refused. Otherwise commands
+refuse to open it. Upgrade Orbit in both cases.
 
 ### Adopt a workspace that recorded no authority
 
-A workspace layout migration runs only under the generation authority whose clients use the workspace: the home directory, `--root` or `ORBIT_ROOT` they run under. A workspace records that authority when it is first created. A workspace last opened by an older Orbit, or a data directory used as its own `--root`, may record none. Every pending layout migration then refuses with `it has recorded no generation authority`, whichever authority runs it.
+A workspace records the home directory or `--root` its clients run under,
+and layout migrations run only under that authority. A workspace last opened
+by an older Orbit, or a data directory used as its own `--root`, may have
+recorded none. Every pending layout migration then refuses with
+`it has recorded no generation authority`.
 
-To adopt such a workspace, stop every Orbit process that uses it under any home or root: MCP sessions, the dashboard, drains and the clock. Then, under the authority those clients use, name that authority explicitly:
+Stop every Orbit process that uses the workspace: MCP sessions, the
+dashboard, drains and the clock. Then name the authority those clients use:
 
 ```bash
 orbit migrate --adopt-authority ~/.orbit
 orbit --root /srv/orbit migrate --adopt-authority /srv/orbit   # a data directory used as its own root
 ```
 
-The authority must have registered the checkout or be the workspace data directory. Adoption refuses, changing nothing, while a long-lived client of that authority, or of any other authority known to have opened the workspace, is still running. It also refuses when the workspace already records a different authority. Re-running an adoption that already landed changes nothing. Afterwards, `orbit migrate --confirm` applies the pending migration under the recorded authority, still waiting for its incompatible clients to exit.
+Adoption refuses, and changes nothing, while a long-lived client of the
+workspace is still running or when the workspace already records a different
+authority. Afterwards, `orbit migrate --confirm` applies the pending
+migration.
 
 ### Repair historical crew attribution
 
-Tasks admitted by recent Orbit releases record the crew their delivery selected, and analytics that group by crew read that stored value. Tasks admitted before the write-back landed carry a stale or missing crew. `orbit migrate --backfill-task-crews` repairs them in place. Run it once, on the owner's checkout, after upgrading.
-
-To inspect what a task currently records, show the task and its delivery runs:
-
-```bash
-orbit task show <id>
-orbit run history --task <id>
-```
-
-`task show` reports the stored crew in its `Execution Crew` row; `run history` lists the delivery runs the repair would copy from. To target a workspace other than the current checkout, add `--workspace`:
+Analytics that group by crew read the crew stored on each task. Tasks
+admitted before Orbit recorded the crew their delivery selected carry a
+stale or missing value. Repair them once, on the owner's checkout, after
+upgrading:
 
 ```bash
+orbit migrate --backfill-task-crews
 orbit migrate --backfill-task-crews --workspace my-project
 ```
 
-`--workspace` accepts a registered name, a `ws_*` ID, or an absolute checkout path. The backfill applies pending migrations first, exactly like `--confirm`: it opens the runtime, so unlike plain `orbit migrate` or `--dry-run` there is no inspection-only preview of the repair.
+The command applies pending migrations first and has no preview. For each
+task, it copies the crew from the task's latest delivery: the latest local
+run, or a newer settlement from a pull drain. It leaves a task alone when:
 
-For each task, the backfill copies the crew from the newer of two sources: the latest local delivery run's crew selection (or, for work a claimed leaf executed, the selection frozen in pipeline state), and the latest claimed-leaf settlement's recorded crew. A run and a settlement stamped alike keep the run. Terminal tasks are included, since analytics read them.
-
-A task is left alone when any of these hold:
-
-- It has no delivery crew selection to copy from.
-- Its latest local run was cancelled before implementing, so its crew never ran — unless a claimed-leaf settlement is newer than that run.
-- Its stored crew already matches the delivery's crew.
-- Its crew was explicitly assigned after the delivery ran; a newer explicit choice stands over an older delivery.
-
-Each change sets `crew_source` to `backfill:admission` and appends a `crew_assigned` history entry naming the previous and new crew. Running the backfill again changes nothing.
-
-The report names the workspace, how many tasks it examined (`examined`), how many changed (`changed`), and each change. `examined` counts tasks with a delivery crew selection to copy, plus tasks whose latest local run was cancelled before implementing: a cancelled latest run is counted whether or not it recorded a crew selection, and the backfill then leaves the task unchanged unless a claimed-leaf settlement is newer (as above). The summary line keeps the CLI's `tasks with a delivery crew selection` wording, but its count includes those cancelled tasks:
+- it has no delivery to copy from;
+- its latest local run was cancelled before implementing, and no settlement
+  is newer;
+- its stored crew already matches;
+- you assigned its crew explicitly after the delivery ran.
 
 ```text
 task crew backfill in workspace ws_0123456789abcdef: 2 changed of 9 tasks with a delivery crew selection
@@ -151,128 +173,118 @@ task crew backfill in workspace ws_0123456789abcdef: 2 changed of 9 tasks with a
   ABC-2: day-crew -> night-shift
 ```
 
-`(none)` means the task had no recorded crew. `--json` carries the same report under `task_crew_backfill` with `workspace`, `examined`, `changed`, and `tasks` (`task_id`, `from`, `to` per change), where `examined` uses the same count described above.
+`--json` carries the same report under `task_crew_backfill`. Each change
+appends a `crew_assigned` entry to the task's history; there is no other
+undo. Running it again changes nothing. Deliveries recorded only on another
+host are not repaired from here.
 
-This is a different repair from `--backfill-diff-stats`, which records landed line counts for done tasks and takes `--limit`. The two flags cannot be combined with each other, and neither combines with `--dry-run`; `--limit` only applies to the diff-stats backfill. There is no built-in undo for the crew repair beyond the per-task history entries it appends, and only runs and settlements visible in this workspace's store count: deliveries whose records live on another host are not repaired from here.
+To see what a task records before you run it, use `orbit task show <id>`
+(the `Execution Crew` row) and `orbit run history --task <id>`.
 
-### Forward compatibility and upgrades
+`--backfill-diff-stats` is a separate repair: it records landed line counts
+for done tasks, up to `--limit` per run. The backfill flags cannot be
+combined with each other or with `--dry-run`.
 
-If a workspace was created or migrated by a newer Orbit binary:
-- **Additive migrations:** If all newer migrations are additive, Orbit opens the workspace in a read-only forward-compatible mode. Read-only commands work, but write commands are refused until you upgrade Orbit.
-- **Incompatible migrations:** If newer migrations are not forward-compatible, commands refuse to open the workspace. Upgrade your Orbit CLI binary to continue.
+### Repair historical dispatch effort
 
-Before major upgrades, consider taking a snapshot of your workspace state as described in [Back up and move Orbit state](../state-and-backup/):
+Agent scorecards group work by model and reasoning effort. Invocations that
+finished before Orbit recorded the effort show as `@ effort unknown`.
+Recover it from each invocation's audited launch command:
 
 ```bash
-cp -a .orbit .orbit.bak
+orbit migrate --backfill-dispatch-effort --workspace my-project
 ```
+
+Run it on each host, against that host's own store, after upgrading. It
+applies pending migrations first, and running it again changes nothing. The
+report counts what it recorded, by effort, and what it left unknown.
+
+An invocation stays `effort unknown` when no launch matches it or its
+matching launches disagree. Effort is never guessed from crew
+configuration; only a unit dispatched under an explicit `<crew>@<effort>`
+label shows that effort. A launch with no effort flag is recorded as the
+provider default.
+
+Runs that another machine executed for a [pull drain](/how-to/distributed-drain/)
+are not in the owner's store. On each follower, after
+`--backfill-dispatch-effort` there, send them to the owner:
+
+```bash
+orbit migrate --backfill-claimed-effort --workspace my-project
+```
+
+The owner records an effort only for claims that follower ran and never
+replaces one it already holds.
 
 ## Rebind a moved source Git remote
 
-When you transfer a repository to a new organization, rename it on your forge, or change its remote URL, update the registered source identity so task publication, PR delivery, and checkout tracking continue to function.
+When you transfer or rename the repository on your forge, update the source
+identity Orbit registered, so pull request delivery and task publication
+keep working. Orbit accepts a portable Git URL: no credentials, local paths
+or remote aliases.
 
-Orbit identifies the source repository using a portable Git URL and refuses credentials, local filesystem paths, and remote aliases.
-
-### Rebinding workflow
-
-Follow these steps to rebind the remote:
-
-1. **Inspect and record the current remote:**
-   ```bash
-   orbit workspace source-remote show --json
-   ```
-   Save the reported URL in case you need to roll back.
-
-2. **Validate the rebind with a dry run:**
-   ```bash
-   orbit workspace source-remote rebind --remote git@github.com:example/new-repo.git --dry-run --json
-   ```
-   This confirms that the URL is valid and computes the new repository identity without changing the registry.
-
-3. **Apply the rebind in the registry:**
-   ```bash
-   orbit workspace source-remote rebind --remote git@github.com:example/new-repo.git
-   ```
-
-4. **Update the checkout's Git origin:**
-   Updating the Orbit registry does not change your Git configuration. Update your checkout's remote separately:
-   ```bash
-   git remote set-url origin git@github.com:example/new-repo.git
-   ```
-   Then verify the updated identity:
-   ```bash
-   orbit workspace source-remote show
-   ```
-
-5. **Rollback if needed:**
-   To undo the transition, rebind back to the saved original URL using `orbit workspace source-remote rebind --remote <OLD_URL>`.
-
-:::caution[Recreate publication bindings]
-If this workspace uses task publication, existing publication bindings must be removed and recreated explicitly with `orbit workspace publication remove` and `orbit workspace publication bind`. Orbit never rewrites publication lineages or remote snapshot histories automatically. See [Publish and restore tasks](../task-publication/).
+:::caution[Remove a publication binding first]
+If the workspace uses [task publication](/how-to/task-publication/), the
+rebind refuses, even with `--dry-run`, while a publication binding exists.
+Save the output of `orbit workspace publication show --json`, then run
+`orbit workspace publication remove --confirm`. After the source rebind, run
+`orbit workspace publication rebind` with a new publication ID and an empty
+branch. Orbit never rewrites old snapshots.
 :::
+
+```bash
+# 1. Save the current remote in case you need to roll back.
+orbit workspace source-remote show --json
+
+# 2. Validate without changing the registry.
+orbit workspace source-remote rebind --remote git@github.com:example/new-repo.git --dry-run --json
+
+# 3. Apply.
+orbit workspace source-remote rebind --remote git@github.com:example/new-repo.git
+
+# 4. Orbit does not touch your Git configuration. Update origin yourself, then verify.
+git remote set-url origin git@github.com:example/new-repo.git
+orbit workspace source-remote show
+```
+
+To roll back, rebind to the URL you saved in step 1.
 
 ## Remove or tear down a workspace
 
-When you retire a project or move work to another machine, Orbit provides two distinct commands to unregister or delete workspace state: `orbit workspace remove` and `orbit workspace teardown`.
+| | `orbit workspace remove <workspace>` | `orbit workspace teardown <workspace> --confirm` |
+|---|---|---|
+| Registration | Removed | Removed |
+| `.orbit/` in the checkout | Kept | Deleted |
+| Tasks in `~/.orbit/tasks/` | Kept | Deleted |
+| Orbit's skill links in `.agents/skills/` and `.claude/skills/` | Kept | Deleted |
+| Confirmation | None; acts immediately | Requires `--confirm` |
 
-| Action | Command | Confirmation | Local `.orbit/` | Global task store |
-|---|---|---|---|---|
-| **Deregistration** | `orbit workspace remove <WORKSPACE>` | None (immediate) | Preserved | Retained for doctor recovery |
-| **Teardown** | `orbit workspace teardown <WORKSPACE>` | Requires `--confirm` | Deleted | Deleted |
+`<workspace>` is a name, a `ws_*` ID or an absolute checkout path.
 
 ### Deregister with remove
-
-`orbit workspace remove` deregisters the workspace from `~/.orbit/workspaces.json`:
 
 ```bash
 orbit workspace remove my-project
 ```
 
-- **Arguments and safety:** Takes only the workspace selector (name, `ws_*` ID, or absolute checkout path). It has no `--confirm` flag and does not provide an interactive preview prompt.
-- **Local files preserved:** The `.orbit/` directory in your checkout is left untouched.
-- **Task store retained:** The global task-store partition under `~/.orbit/tasks/` is preserved as checkout evidence so `orbit doctor` can classify it. If unarchived task bundles remain, the command reports the partition path and notes:
-  ```text
-  left task-store partition /home/user/.orbit/tasks/workspaces/ws_... (12 task bundle(s));
-  the task-registry workspace binding is retained as checkout evidence so `orbit doctor` can classify it.
-  Reclaim with `orbit doctor --fix-orphan-task-stores --confirm`.
-  ```
-
-Use `remove` when you want to unregister a checkout without losing task history or local settings.
+Use `remove` to unregister a checkout and keep its task history and
+settings. If task bundles remain, the command prints the path of the
+task-store partition it left. Reclaim it later with
+`orbit doctor --fix-orphan-task-stores --confirm`.
 
 ### Delete artifacts with teardown
 
-`orbit workspace teardown` completely removes Orbit artifacts associated with a workspace:
-
 ```bash
-orbit workspace teardown my-project
+orbit workspace teardown my-project             # print the plan; change nothing
+orbit workspace teardown my-project --confirm   # delete
 ```
 
-Because teardown is destructive, Orbit enforces strict safety checks:
-- **Safety refusals:** Teardown refuses if the current working directory belongs to a different registered checkout, preventing accidental deletion of the wrong project. It also refuses the global `~/.orbit/` directory and any data path not ending in `.orbit`.
-- **Preview without confirmation:** Running teardown without `--confirm` prints the resolved plan and exits without making changes:
-  ```text
-  teardown is destructive. Resolved target:
-  workspace:     my-project (ws_0123456789abcdef)
-  repo root:     /path/to/my-project
-  orbit dir:     /path/to/my-project/.orbit
-  task stores:   1 partition(s)
-  Pass --confirm to proceed.
-  ```
+Without `--confirm`, teardown prints the workspace, repository root, `.orbit`
+directory and task stores it would delete, then exits.
 
-To execute the teardown:
+Teardown refuses when your current directory belongs to a different
+registered checkout. It also refuses the global `~/.orbit/` directory. If it
+is interrupted, run the same command again.
 
-```bash
-orbit workspace teardown my-project --confirm
-```
-
-When confirmed, teardown executes in order:
-1. Deletes the task-store partition bound to the checkout from `~/.orbit/tasks/`.
-2. Removes Orbit-owned skill links from `.agents/skills/` and `.claude/skills/`.
-3. Deletes the checkout's `.orbit/` directory.
-4. Deregisters the workspace from `~/.orbit/workspaces.json` last. Persisting deregistration only after deletions succeed ensures that any interrupted operation remains retryable with the same selector.
-
-## Next steps
-
-- [Install Orbit](../../getting-started/install/): Install the CLI and learn how binary updates apply to existing environments.
-- [Back up and move Orbit state](../state-and-backup/): Protect authoritative machine identity, databases, and task bundles.
-- [Publish and restore tasks](../task-publication/): Snapshot task backlogs to a dedicated Git repository.
+To keep the tasks, [export them](/how-to/state-and-backup/#export-tasks-to-an-archive)
+before you tear down.

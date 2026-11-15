@@ -13,7 +13,6 @@
 //! operator repair rather than handed a guessed or inherited scope.
 
 use orbit_common::OrbitError;
-use orbit_types::record::OrbitEvent;
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 
 use super::TaskRecordUpdateParams;
@@ -78,7 +77,7 @@ impl OrbitRuntime {
     /// earlier prune removed and recorded ([ORB-12490]).
     ///
     /// `statuses` narrows the sweep; empty means
-    /// [`CONTEXT_REPAIR_SWEEP_STATUSES`]. With `restore`, each recorded
+    /// `CONTEXT_REPAIR_SWEEP_STATUSES`. With `restore`, each recorded
     /// restoration is written; without it the sweep only plans.
     ///
     /// Nothing here deletes a declaration. The sweep that used to drop
@@ -146,14 +145,12 @@ impl OrbitRuntime {
         id: &str,
     ) -> Result<(Task, ContextFileRestoration), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        let mut outcome: Option<(Task, ContextFileRestoration)> = None;
-        self.stores().tasks().with_task_write_lock(id, &mut || {
+        self.with_task_write_locked(id, || {
             let task = self.get_task(id)?;
             let history = self.get_task_history(id)?;
             let restoration = self.compute_context_file_restore(&task, &history);
             if restoration.restored.is_empty() {
-                outcome = Some((task, restoration));
-                return Ok(());
+                return Ok((task, restoration));
             }
 
             let mut context_files = task.context_files.clone();
@@ -161,35 +158,22 @@ impl OrbitRuntime {
             let actor = self.actor().resolve_write_label(None, None)?;
             let history_entry =
                 context_files_restored_history_entry(actor.as_str(), &restoration.restored);
-            let updated = self.with_mutation(|| {
-                let updated = self.stores().task_records().update(
-                    id,
-                    TaskRecordUpdateParams {
-                        actor: actor.clone(),
-                        context_files: Some(context_files.clone()),
-                        append_history: vec![history_entry.clone()],
-                        ..Default::default()
-                    },
-                )?;
-                Ok((
-                    updated.clone(),
-                    OrbitEvent::TaskUpdated { id: id.to_string() },
-                ))
-            })?;
-            outcome = Some((
+            let updated = self.stores().task_records().update(
+                id,
+                TaskRecordUpdateParams {
+                    actor: actor.clone(),
+                    context_files: Some(context_files.clone()),
+                    append_history: vec![history_entry.clone()],
+                    ..Default::default()
+                },
+            )?;
+            Ok((
                 updated,
                 ContextFileRestoration {
                     applied: true,
                     ..restoration
                 },
-            ));
-            Ok(())
-        })?;
-
-        outcome.ok_or_else(|| {
-            OrbitError::Execution(
-                "context restore body did not run under the task lock".to_string(),
-            )
+            ))
         })
     }
 

@@ -6,10 +6,13 @@ Options:
       --role <ROLE>
           The agent role to score
           
-          [possible values: orchestrators, implementers, reviewers, pilots]
+          [possible values: implementers, reviewers, pilots]
 
       --crew <CREW>
-          The row's crew, or the orchestrator name tasks record
+          The row's crew
+
+      --effort <EFFORT>
+          The row's recorded effort; optional when the crew and model name one row
 
       --model <MODEL>
           The row's model; optional when the crew has one row
@@ -24,6 +27,15 @@ Options:
           Units of work a row needs before it is ranked
           
           [default: 10]
+
+      --execution <EXECUTION>
+          Which implementer tasks to count: managed, all or interactive
+          
+          [default: managed]
+          [possible values: managed, all, interactive]
+
+      --until <UNTIL>
+          End the window at this instant or duration ago (for example 30d)
 
   -h, --help
           Print help (see a summary with '-h')

@@ -14,7 +14,7 @@
 //! whose units is judged (no gate settlement, and no filed finding with a
 //! verdict or a terminal task) is unjudged: no score, no rank.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_types::task::{DefectSeverity, TaskComplexity};
@@ -22,12 +22,19 @@ use orbit_types::workflow::ReviewVerdict;
 use serde_json::{Value, json};
 
 use super::RoleSpec;
-use crate::application::agents::attribution::{Owner, row_key};
+use crate::application::agents::attribution::Owner;
+use crate::application::agents::effort::{
+    MainActivity, MainInvocationUnit, ModelEffortKey, main_effort_with_source,
+    main_invocation_effort, model_effort_key,
+};
 use crate::application::agents::facts::{
     Finding, FindingState, RejectOutcome, Review, TaskFacts, filing_attempt,
 };
-use crate::application::agents::score::{Occurrence, RowInput, Stat, Tally, Term, number};
-use crate::application::agents::{AgentFacts, AgentRole, Problem};
+use crate::application::agents::score::{
+    Occurrence, RowInput, Stat, Tally, Term, number, sample_units,
+};
+use crate::application::agents::{AgentFacts, AgentRole, ExecutionScope, Problem, WindowBounds};
+use crate::application::statistics;
 use crate::application::task::FindingVerdict;
 
 pub(super) const ROLE: RoleSpec = RoleSpec {
@@ -49,7 +56,7 @@ const TERMS: &[Term] = &[
         key: "findings_held",
         label: "Findings that held",
         weight: 1.0,
-        definition: "Findings repaired by the reviewer whose fixes passed owner revalidation, open findings on a reject whose next implementation run changed a path the finding cites, findings a review job filed that finding verification CONFIRMED or, with no verification verdict, whose task landed, and mock comparison findings (purpose visual_review) their in-line verifier CONFIRMED; each weighted by severity: critical 8, high 4, medium 2, low 1, nit 0.25. A CONFIRMED finding scores at the severity verification rated; an unverified landed finding at the highest severity rated on its own regression_from links, else low; a review gate finding at the reviewer's own. A filed finding whose task is still open is not judged yet.",
+        definition: "Findings repaired by the reviewer whose fixes passed owner revalidation, open findings on a reject whose next implementation run changed a path the finding cites, and findings a review job filed that finding verification CONFIRMED or, with no verification verdict, whose task landed; each weighted by severity: critical 8, high 4, medium 2, low 1, nit 0.25. A CONFIRMED finding scores at the severity verification rated; an unverified landed finding at the highest severity rated on its own regression_from links, else low; a review gate finding at the reviewer's own. A filed finding whose task is still open is not judged yet.",
         group: "credit",
     },
     Term {
@@ -63,7 +70,7 @@ const TERMS: &[Term] = &[
         key: "rejected_findings",
         label: "Rejected findings",
         weight: -1.0,
-        definition: "Findings closed by an authorized decision (Disposed), findings a review job filed as tasks that finding verification REJECTED, and mock comparison findings (purpose visual_review) their in-line verifier REJECTED. A filed finding whose task was rejected or archived without landing and without a verification verdict costs nothing: task records carry no typed reason that tells a wrong finding from a duplicate, won't-fix or superseded one, so every such drop is neutral.",
+        definition: "Findings closed by an authorized decision (Disposed), and findings a review job filed as tasks that finding verification REJECTED. A filed finding whose task was rejected or archived without landing and without a verification verdict costs nothing: task records carry no typed reason that tells a wrong finding from a duplicate, won't-fix or superseded one, so every such drop is neutral.",
         group: "problem",
     },
     Term {
@@ -141,6 +148,7 @@ impl Outcome {
 #[derive(Default)]
 struct Row<'a> {
     units: usize,
+    unit_ids: BTreeSet<String>,
     /// Whether any unit has been judged: a gate settlement, a filed finding
     /// with a verdict or a terminal task, or a charge.
     judged: bool,
@@ -148,6 +156,9 @@ struct Row<'a> {
     without_model: usize,
     review_jobs: usize,
     tallies: BTreeMap<&'static str, Tally<'a>>,
+    crews: BTreeSet<String>,
+    /// The row's units by the source that decided their effort.
+    effort_sources: BTreeMap<&'static str, usize>,
     outcomes: BTreeMap<&'static str, usize>,
     /// Each review gate settlement's tier and whether its verdict passed.
     verdicts: Vec<(&'static str, bool)>,
@@ -155,7 +166,16 @@ struct Row<'a> {
 }
 
 impl<'a> Row<'a> {
-    fn unit(&mut self, at: DateTime<Utc>, model: Option<&str>, lookback: DateTime<Utc>) {
+    fn unit(
+        &mut self,
+        id: String,
+        at: DateTime<Utc>,
+        model: Option<&str>,
+        lookback: DateTime<Utc>,
+    ) {
+        if !self.unit_ids.insert(id) {
+            return;
+        }
         self.units += 1;
         if at >= lookback {
             self.provisional += 1;
@@ -165,11 +185,18 @@ impl<'a> Row<'a> {
         }
     }
 
-    fn add(&mut self, key: &'static str, task: &'a TaskFacts, count: f64, occurrence: Occurrence) {
+    fn add(
+        &mut self,
+        key: &'static str,
+        task: &'a TaskFacts,
+        unit: &str,
+        count: f64,
+        occurrence: Occurrence,
+    ) {
         self.tallies
             .entry(key)
             .or_default()
-            .add(task, count, Some(occurrence));
+            .add(task, unit, count, Some(occurrence));
     }
 
     fn outcome(&mut self, outcome: Outcome) {
@@ -178,8 +205,13 @@ impl<'a> Row<'a> {
 }
 
 /// One row per reviewer crew and model with a review settled, or a review
-/// job attempt started, since `since`.
-fn rows(facts: &AgentFacts, since: DateTime<Utc>, _min_support: usize) -> Vec<RowInput<'_>> {
+/// job attempt started, in the window.
+fn rows(
+    facts: &AgentFacts,
+    window: WindowBounds,
+    _min_support: usize,
+    _execution: ExecutionScope,
+) -> Vec<RowInput<'_>> {
     let lookback = facts.computed_at - Duration::days(MISS_LOOKBACK_DAYS);
     let by_id: HashMap<&str, &TaskFacts> = facts
         .tasks
@@ -199,21 +231,54 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>, _min_support: usize) -> Vec<Ro
         }
     }
 
-    let mut rows: BTreeMap<(String, String), Row<'_>> = BTreeMap::new();
+    let mut rows: BTreeMap<ModelEffortKey, Row<'_>> = BTreeMap::new();
     for task in &facts.tasks {
-        for review in task.reviews.iter().filter(|review| review.at >= since) {
+        for review in task
+            .reviews
+            .iter()
+            .filter(|review| window.admits(review.at))
+        {
             let runner = &review.reviewer;
+            let run_id = task
+                .attempt_at(review.at)
+                .and_then(|index| task.attempts[index].runner.run_id.clone());
+            let (effort, source) = main_effort_with_source(
+                facts,
+                MainInvocationUnit {
+                    run_id: run_id.as_deref(),
+                    activity: MainActivity::Review,
+                    task_id: Some(&task.id),
+                    model: runner.model.as_deref(),
+                    activity_id: review.activity_id.as_deref(),
+                    after: task
+                        .reviews
+                        .iter()
+                        .filter(|earlier| earlier.at < review.at)
+                        .map(|earlier| earlier.at)
+                        .max(),
+                    until: Some(review.at),
+                    reported: None,
+                    crew: runner.crew.as_deref(),
+                },
+            );
             let row = rows
-                .entry(row_key(runner.crew.as_deref(), runner.model.as_deref()))
+                .entry(model_effort_key(runner.model.as_deref(), effort))
                 .or_default();
-            row.unit(review.at, runner.model.as_deref(), lookback);
+            if let Some(crew) = &runner.crew {
+                row.crews.insert(crew.clone());
+            }
+            *row.effort_sources.entry(source.as_str()).or_default() += 1;
+            let unit_id = review_unit_id(&task.id, &review.attempt_id);
+            row.unit(
+                unit_id.clone(),
+                review.at,
+                runner.model.as_deref(),
+                lookback,
+            );
             row.judged = true;
             row.verdicts
                 .push((tier(task.complexity), review.verdict.passed()));
             row.seconds.extend(review.seconds);
-            let run_id = task
-                .attempt_at(review.at)
-                .and_then(|index| task.attempts[index].runner.run_id.clone());
             let occurrence = |detail: String| Occurrence {
                 at: review.at,
                 detail: format!("review attempt {}: {detail}", review.attempt_id),
@@ -224,6 +289,7 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>, _min_support: usize) -> Vec<Ro
                 row.add(
                     "findings_held",
                     task,
+                    &unit_id,
                     severity_weight(&finding.severity),
                     occurrence(finding.line.clone()),
                 );
@@ -235,6 +301,7 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>, _min_support: usize) -> Vec<Ro
                 row.add(
                     "fixes_held",
                     task,
+                    &unit_id,
                     1.0,
                     occurrence("fixes passed owner revalidation".to_string()),
                 );
@@ -265,14 +332,41 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>, _min_support: usize) -> Vec<Ro
     }
     for ((filer, index), findings) in jobs {
         let attempt = &by_id[filer].attempts[index];
-        if attempt.start < since {
+        if !window.admits(attempt.start) {
             continue;
         }
         let runner = &attempt.runner;
+        // The filing task itself ran as a task executor, so its filing
+        // unit counts under that executor invocation; a gate review in
+        // the same run is an independent reviewer's work.
+        let (effort, source) = main_effort_with_source(
+            facts,
+            MainInvocationUnit {
+                run_id: runner.run_id.as_deref(),
+                activity: MainActivity::ReviewJob,
+                task_id: Some(filer),
+                model: runner.model.as_deref(),
+                activity_id: None,
+                after: None,
+                until: None,
+                reported: runner.reported_effort.as_ref(),
+                crew: runner.crew.as_deref(),
+            },
+        );
         let row = rows
-            .entry(row_key(runner.crew.as_deref(), runner.model.as_deref()))
+            .entry(model_effort_key(runner.model.as_deref(), effort))
             .or_default();
-        row.unit(attempt.start, runner.model.as_deref(), lookback);
+        if let Some(crew) = &runner.crew {
+            row.crews.insert(crew.clone());
+        }
+        *row.effort_sources.entry(source.as_str()).or_default() += 1;
+        let unit_id = review_job_unit_id(filer, index);
+        row.unit(
+            unit_id.clone(),
+            attempt.start,
+            runner.model.as_deref(),
+            lookback,
+        );
         row.review_jobs += 1;
         let (mut held, mut rejected) = (0, 0);
         for task in findings {
@@ -311,6 +405,7 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>, _min_support: usize) -> Vec<Ro
             row.add(
                 "findings_held",
                 task,
+                &unit_id,
                 weight,
                 Occurrence {
                     at,
@@ -326,53 +421,8 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>, _min_support: usize) -> Vec<Ro
         });
     }
 
-    // Mock comparison reviews count under purpose `visual_review`
-    // (§11.4): one unit per recorded review, judged by its in-line
-    // verification verdicts.
-    for task in &facts.tasks {
-        let Some(visual) = &task.visual_review else {
-            continue;
-        };
-        if visual.at < since {
-            continue;
-        }
-        let row = rows
-            .entry(row_key(visual.reviewer_crew.as_deref(), None))
-            .or_default();
-        row.unit(visual.at, None, lookback);
-        let (mut held, mut rejected) = (0, 0);
-        for (verdict, severity, title) in &visual.findings {
-            row.judged = true;
-            let occurrence = Occurrence {
-                at: visual.at,
-                detail: format!("visual review (purpose visual_review): {title}"),
-                run_id: None,
-            };
-            match verdict {
-                FindingVerdict::Confirmed => {
-                    held += 1;
-                    row.add("findings_held", task, severity_weight(severity), occurrence);
-                }
-                FindingVerdict::Rejected => {
-                    rejected += 1;
-                    row.add(
-                        "rejected_findings",
-                        task,
-                        severity_weight(severity),
-                        occurrence,
-                    );
-                }
-            }
-        }
-        row.outcome(match (held, rejected) {
-            (1.., _) => Outcome::Caught,
-            (0, 1..) => Outcome::FalseAlarm,
-            _ => Outcome::Unresolved,
-        });
-    }
-
     for charge in facts.charges.iter().filter(|charge| {
-        charge.owner == Owner::Role(AgentRole::Reviewers) && charge.anchor >= since
+        charge.owner == Owner::Role(AgentRole::Reviewers) && window.admits(charge.anchor)
     }) {
         let key = match charge.problem {
             Problem::DisposedFinding | Problem::RejectedFinding => "rejected_findings",
@@ -385,13 +435,62 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>, _min_support: usize) -> Vec<Ro
         let Some(task) = by_id.get(charge.task_id.as_str()) else {
             continue;
         };
+        // A rejected finding's penalty shares the filing unit's executor
+        // population; every other charge is a gate reviewer's own work.
+        let activity = match charge.problem {
+            Problem::RejectedFinding => MainActivity::ReviewJob,
+            _ => MainActivity::Review,
+        };
+        let effort = main_invocation_effort(
+            facts,
+            MainInvocationUnit {
+                run_id: charge.run_id.as_deref(),
+                activity,
+                task_id: Some(&charge.task_id),
+                model: charge.model.as_deref(),
+                activity_id: charge.activity_id.as_deref(),
+                after: charge.after,
+                until: charge
+                    .activity_id
+                    .as_ref()
+                    .filter(|_| matches!(activity, MainActivity::Review))
+                    .map(|_| charge.anchor),
+                reported: charge.reported_effort.as_ref(),
+                crew: charge.crew.as_deref(),
+            },
+        );
         let row = rows
-            .entry(row_key(charge.crew.as_deref(), charge.model.as_deref()))
+            .entry(model_effort_key(charge.model.as_deref(), effort))
             .or_default();
+        if let Some(crew) = &charge.crew {
+            row.crews.insert(crew.clone());
+        }
         row.judged = true;
+        let unit_id = if matches!(activity, MainActivity::ReviewJob) {
+            filing_attempt(&by_id, task)
+                .map(|(filer, index)| review_job_unit_id(&filer.id, index))
+                .unwrap_or_else(|| review_job_unit_id(&charge.task_id, usize::MAX))
+        } else {
+            let review = task
+                .reviews
+                .iter()
+                .find(|review| {
+                    review.at == charge.anchor && review.activity_id == charge.activity_id
+                })
+                .or_else(|| {
+                    task.reviews
+                        .iter()
+                        .find(|review| review.at == charge.anchor)
+                });
+            review.map_or_else(
+                || review_unit_id(&charge.task_id, &charge.anchor.to_rfc3339()),
+                |review| review_unit_id(&charge.task_id, &review.attempt_id),
+            )
+        };
         row.add(
             key,
             task,
+            &unit_id,
             charge.severity_weight(),
             Occurrence {
                 at: charge.at,
@@ -410,14 +509,25 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>, _min_support: usize) -> Vec<Ro
         .zip(comparisons)
         .map(|((key, row), peers)| {
             let stats = stats(&row, peers);
+            let crews: Vec<String> = row.crews.iter().cloned().collect();
+            let sample_units = sample_units(row.unit_ids.iter().cloned(), TERMS, &row.tallies);
             RowInput {
+                escaped_regressions_fallback: None,
                 denominators: BTreeMap::new(),
-                crew: key.0,
-                model: key.1,
+                crew: crews
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| crate::application::agents::CREW_UNKNOWN.to_string()),
+                crews,
+                effort_sources: row.effort_sources,
+                model: key.0,
+                effort: key.1,
                 units: row.units,
                 runs_without_model: row.without_model,
                 provisional: Some(row.provisional),
                 tallies: row.tallies,
+                sample_units,
+                exposure_units: Vec::new(),
                 expected: None,
                 reviewed_units: None,
                 unjudged: !row.judged,
@@ -425,6 +535,14 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>, _min_support: usize) -> Vec<Ro
             }
         })
         .collect()
+}
+
+fn review_unit_id(task_id: &str, attempt_id: &str) -> String {
+    format!("review:{task_id}:{attempt_id}")
+}
+
+fn review_job_unit_id(filer_id: &str, attempt_index: usize) -> String {
+    format!("review-job:{filer_id}:{attempt_index}")
 }
 
 /// The findings of `review` that held: fixes that passed owner revalidation,
@@ -462,7 +580,7 @@ fn tier(complexity: Option<TaskComplexity>) -> &'static str {
 }
 
 /// Each row's passed and total review gate settlements on one tier.
-type TierCounts<'k> = BTreeMap<&'k (String, String), (usize, usize)>;
+type TierCounts<'k> = BTreeMap<&'k ModelEffortKey, (usize, usize)>;
 
 /// Every row's review gate verdicts by tier, to compare a row's accept rate
 /// with the other reviewers' on the same tiers.
@@ -479,7 +597,7 @@ struct PeerComparison {
 }
 
 impl<'k> PeerRates<'k> {
-    fn new(rows: &'k BTreeMap<(String, String), Row<'_>>) -> Self {
+    fn new(rows: &'k BTreeMap<ModelEffortKey, Row<'_>>) -> Self {
         let mut tiers: BTreeMap<&'static str, TierCounts<'k>> = BTreeMap::new();
         for (key, row) in rows {
             for (tier, passed) in &row.verdicts {
@@ -493,7 +611,7 @@ impl<'k> PeerRates<'k> {
 
     fn compare(
         &self,
-        key: &(String, String),
+        key: &ModelEffortKey,
         verdicts: &[(&'static str, bool)],
     ) -> Option<PeerComparison> {
         let (mut compared, mut passed, mut expected) = (0.0, 0.0, 0.0);
@@ -543,6 +661,16 @@ fn stats(row: &Row<'_>, peers: Option<PeerComparison>) -> Vec<Stat> {
                 Value::Null
             },
         ),
+        // The rate `accepts_often` compares: reviews on tiers any other
+        // reviewer also judged. Tiers with no peer verdict are left out, so
+        // this can differ from `accept_rate`.
+        stat(
+            "compared_accept_rate",
+            "Accept rate on tiers peers also reviewed (%)",
+            peers
+                .as_ref()
+                .map_or(Value::Null, |peers| percent(peers.observed)),
+        ),
         stat(
             "peer_accept_rate",
             "Peers' accept rate on the same tiers (%)",
@@ -566,23 +694,12 @@ fn stats(row: &Row<'_>, peers: Option<PeerComparison>) -> Vec<Stat> {
             json!(row.outcomes.get(key).copied().unwrap_or(0)),
         ));
     }
-    stats.push(stat(
-        "median_review_minutes",
-        "Median review minutes",
-        median(&row.seconds).map_or(Value::Null, |seconds| number(seconds / 60.0)),
-    ));
+    stats.push(stat("median_review_minutes", "Median review minutes", {
+        // Fresh buffer: median sorts in place, and this row keeps its seconds.
+        let mut seconds: Vec<f64> = row.seconds.iter().map(|seconds| *seconds as f64).collect();
+        statistics::median(&mut seconds).map_or(Value::Null, |seconds| number(seconds / 60.0))
+    }));
     stats
-}
-
-fn median(values: &[u64]) -> Option<f64> {
-    let mut sorted = values.to_vec();
-    sorted.sort_unstable();
-    let middle = sorted.len() / 2;
-    match sorted.len() {
-        0 => None,
-        len if len % 2 == 1 => Some(sorted[middle] as f64),
-        _ => Some((sorted[middle - 1] + sorted[middle]) as f64 / 2.0),
-    }
 }
 
 fn stat(key: &'static str, label: &'static str, value: Value) -> Stat {

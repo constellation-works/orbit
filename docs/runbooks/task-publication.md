@@ -16,7 +16,11 @@ under the same authority.
 
 Task publication is an explicit, task-only durability channel. It does not back up audit
 events, run history, claims, reservations, configuration, machine identity, or runtime caches.
-No task mutation publishes automatically, and v1 seeds no publication routine. Keep the
+No task mutation publishes automatically. `orbit workspace init` seeds the weekly
+`task-publication-<workspace>` routine disabled, and `orbit workspace sync` adds it to
+existing workspaces disabled. After reviewing the bound repository, credentials, and
+attachment policy, opt in by setting `enabled: true` in
+`.orbit/routines/task_publication.yaml`; it runs Sundays at 04:47 host-local time. Keep the
 global-root and database backups described in [Inventory and Protect Orbit State](./state-and-backup.md).
 
 ## Prerequisites and safety

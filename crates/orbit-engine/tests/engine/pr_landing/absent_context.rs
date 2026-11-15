@@ -38,6 +38,16 @@ fn setup_with_context(sandbox: &Path, source: &str, context: &str) -> (Fixture, 
     ] {
         fs::write(fx.forge.join(name), value).unwrap();
     }
+    install_refresh_provider(sandbox, &fx.forge, context);
+    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+    (fx, host)
+}
+
+/// The substitute provider, bound to `forge`. A newly written image is primed
+/// once so the host's first-exec assessment (ORB-15293) is not on the timed
+/// path. `handoff_land` with `max_wait_seconds: 0` still reads PR status under
+/// the 15s default process budget.
+fn install_refresh_provider(sandbox: &Path, forge: &Path, context: &str) {
     let provider = sandbox.join("bin/gh");
     fs::write(
         &provider,
@@ -46,21 +56,38 @@ fn setup_with_context(sandbox: &Path, source: &str, context: &str) -> (Fixture, 
                 .join("tests/engine/pr_landing/fixtures/base-refresh-forge.sh"),
         )
         .unwrap()
-        .replace("__FORGE__", path_str(&fx.forge))
+        .replace("__FORGE__", path_str(forge))
         .replace("Protected (rust)", context),
     )
     .unwrap();
-    // `handoff_land` with `max_wait_seconds: 0` reads PR status under the 15s
-    // default process budget (`landing/run.rs` skips the recovery deadline, and
-    // `Deadline::remaining` still clamps a passed deadline to that budget).
-    // The first exec of this image is the host-wide assessment queue
-    // (`test_env::prime_executable`, ORB-15293). Land it here, before that read.
     fs::set_permissions(&provider, fs::Permissions::from_mode(0o755)).unwrap();
     let mut prime = Command::new(&provider);
     prime.arg("__prime__");
     test_env::prime_executable(&mut prime);
-    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
-    (fx, host)
+}
+
+/// `setup` for the unchanged [`NEW`] source, built once per child. Rows that
+/// only add a forge control file copy this seed instead of replaying its git
+/// preparation.
+fn copied_new_setup(sandbox: &Path) -> (Fixture, DeliveryHost) {
+    thread_local! {
+        static TEMPLATE: std::cell::RefCell<Option<Fixture>> = const { std::cell::RefCell::new(None) };
+    }
+    TEMPLATE.with(|slot| {
+        let mut template = slot.borrow_mut();
+        let seed =
+            template.get_or_insert_with(|| setup_with_context(sandbox, NEW, "Protected (rust)").0);
+        let fx = seed.copy_to(sandbox);
+        let remote = fx.forge.join("orbit/test.git");
+        fs::write(fx.forge.join("remote"), path_str(&remote)).unwrap();
+        git(
+            &fx.repo,
+            &["remote", "set-url", "origin", path_str(&remote)],
+        );
+        install_refresh_provider(sandbox, &fx.forge, "Protected (rust)");
+        let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+        (fx, host)
+    })
 }
 
 #[test]
@@ -253,10 +280,12 @@ pub(super) fn accepted_landing(fx: &Fixture, host: DeliveryHost) -> AcceptedLand
             handoff_id: "accepted-fixture".into(),
             task_id: TASK_ID.into(),
             claim_id: "fixture-claim".into(),
+            producing_run_id: "run-1".into(),
             workspace_path: fx.repo.clone(),
             unresolved_merge_intent: None,
             owed_hosted_checks: vec!["Protected (rust)".into()],
             automatic_repair_spent: false,
+            owner_distributed_completion_done: false,
             candidate: orbit_types::workflow::handoff::HandoffCandidate {
                 repository: "orbit/test".into(),
                 source_branch: BRANCH.into(),
@@ -306,6 +335,50 @@ fn absent_context_refreshes_an_accepted_handoff_without_changing_acceptance() {
                 updates.last().unwrap().step,
                 orbit_engine::HandoffLandingStep::Complete
             ));
+        },
+    );
+}
+
+/// [ORB-20615] The accepted landing merges a mergeable head whose required
+/// check was skipped and never failed on it, as branch protection does. A
+/// skipped rerun of a check that failed on that head still refuses.
+#[test]
+fn regression_never_failed_skipped_required_check_lands_accepted_handoff() {
+    isolated(
+        "absent_context::regression_never_failed_skipped_required_check_lands_accepted_handoff",
+        |sandbox| {
+            for (case, failed, lands) in [
+                ("never_failed", "", true),
+                ("failed_then_skipped", "Protected (rust)\n", false),
+            ] {
+                in_fresh_row(sandbox, |row| {
+                    let (fx, host) = setup(row, NEW);
+                    let mut host = accepted_landing(&fx, host);
+                    // An owed hosted check needs an explicit success; this
+                    // case is about branch-protection required checks only.
+                    host.context.owed_hosted_checks.clear();
+                    // Already current with its base, so no refresh re-gates it.
+                    fs::write(fx.forge.join("base-applied"), "current").unwrap();
+                    fs::write(fx.forge.join("required-skipped"), "").unwrap();
+                    fs::write(fx.forge.join("failed-history"), failed).unwrap();
+                    let landed = execute_deterministic_action(
+                        &host,
+                        "handoff_land",
+                        &json!({}),
+                        &json!({"handoff_id":"accepted-fixture","run_id":RUN_ID,"max_wait_seconds":30}),
+                        false,
+                        &HashMap::new(),
+                        None,
+                    );
+                    let merged = fs::read_to_string(fx.forge.join("mutations"))
+                        .unwrap_or_default()
+                        .contains("merge");
+                    assert_eq!(merged, lands, "{case}: {landed:?}");
+                    if lands {
+                        assert_eq!(landed.unwrap()["phase"], "landed", "{case}");
+                    }
+                });
+            }
         },
     );
 }
@@ -516,7 +589,11 @@ fn unsupported_or_unproven_emission_never_updates_or_repairs() {
                         "wrong_event" => NEW.replace("pull_request:", "push:"),
                         _ => NEW.into(),
                     };
-                    let (fx, host) = setup(row, &source);
+                    let (fx, host) = if source == NEW {
+                        copied_new_setup(row)
+                    } else {
+                        setup(row, &source)
+                    };
                     if matches!(case, "legacy-pending" | "legacy-failed") {
                         fs::write(
                             fx.forge.join("legacy-state"),
@@ -989,6 +1066,40 @@ fn live_pr_gate_emission_contract_and_push_only_platform_workflows() {
                     "update\nmerge\n"
                 );
             });
+            // A job behind the full scope gate may also need sibling jobs
+            // that are behind that same gate and need nothing else. `peers`
+            // adds five such jobs; `need` appends to a job's `needs`.
+            let peers = |source: &mut Value| {
+                for id in ["peer-1", "peer-2", "peer-3", "peer-4", "peer-5"] {
+                    source["jobs"][id] = json!({
+                        "needs": source["jobs"]["ci"]["needs"],
+                        "if": source["jobs"]["ci"]["if"],
+                        "runs-on": "ubuntu-latest",
+                        "steps": [{"run": "true"}],
+                    });
+                }
+            };
+            let need = |source: &mut Value, job: &str, siblings: &[&str]| {
+                source["jobs"][job]["needs"]
+                    .as_array_mut()
+                    .unwrap()
+                    .extend(siblings.iter().map(|sibling| json!(sibling)));
+            };
+            // One job needs a single sibling and `ci` needs four: both report
+            // under their own names whatever the siblings do, so the missing
+            // check is still proven and repaired by one update.
+            in_fresh_row(sandbox, |row| {
+                let mut source = ci();
+                peers(&mut source);
+                need(&mut source, "peer-5", &["peer-1"]);
+                need(&mut source, "ci", &["peer-1", "peer-2", "peer-3", "peer-4"]);
+                let (fx, result) = full(row, &source);
+                result.unwrap_or_else(|error| panic!("sibling needs: {error}"));
+                assert_eq!(
+                    fs::read_to_string(fx.forge.join("mutations")).unwrap(),
+                    "update\nmerge\n"
+                );
+            });
             for case in [
                 "scope_script",
                 "scope_output",
@@ -997,6 +1108,28 @@ fn live_pr_gate_emission_contract_and_push_only_platform_workflows() {
                 "scope_step",
                 "always",
                 "needs",
+                "sibling_unknown",
+                "sibling_self",
+                "sibling_repeated",
+                "sibling_other_shape",
+                "sibling_chained",
+                "sibling_excess",
+                "sibling_docs_dependent",
+                "sibling_dependent_condition",
+                "stale_open_fallback",
+                "stale_closed_fallback",
+                "stale_event_fallback",
+                "unknown_condition",
+                "scope_unknown_condition",
+                "count_output",
+                "scope_count",
+                "live_endpoint",
+                "live_output",
+                "live_shell",
+                "live_environment",
+                "conditional_live_step",
+                "extra_live_step",
+                "count_injection",
             ] {
                 in_fresh_row(sandbox, |row| {
                     let mut source = ci();
@@ -1030,18 +1163,124 @@ fn live_pr_gate_emission_contract_and_push_only_platform_workflows() {
                                     .replace(" }}", " && always() }}")
                             )
                         }
-                        _ => {
+                        "needs" => {
                             source["jobs"]["ci"]["needs"]
                                 .as_array_mut()
                                 .unwrap()
                                 .push(json!("docs"));
+                        }
+                        "sibling_unknown" => need(&mut source, "ci", &["absent"]),
+                        "sibling_self" => need(&mut source, "ci", &["ci"]),
+                        "sibling_repeated" => {
+                            peers(&mut source);
+                            need(&mut source, "ci", &["peer-1", "peer-1"]);
+                        }
+                        // An unconditional job is admitted by itself, but it is
+                        // not behind the dependent's gate.
+                        "sibling_other_shape" => {
+                            peers(&mut source);
+                            let peer = source["jobs"]["peer-1"].as_object_mut().unwrap();
+                            peer.remove("needs");
+                            peer.remove("if");
+                            need(&mut source, "ci", &["peer-1"]);
+                        }
+                        "sibling_chained" => {
+                            peers(&mut source);
+                            need(&mut source, "peer-1", &["peer-2"]);
+                            need(&mut source, "ci", &["peer-1"]);
+                        }
+                        "sibling_excess" => {
+                            peers(&mut source);
+                            need(
+                                &mut source,
+                                "ci",
+                                &["peer-1", "peer-2", "peer-3", "peer-4", "peer-5"],
+                            );
+                        }
+                        "sibling_docs_dependent" => {
+                            peers(&mut source);
+                            need(&mut source, "docs", &["peer-1"]);
+                        }
+                        "sibling_dependent_condition" => {
+                            peers(&mut source);
+                            need(&mut source, "ci", &["peer-1"]);
+                            source["jobs"]["ci"]["if"] = json!(
+                                source["jobs"]["ci"]["if"]
+                                    .as_str()
+                                    .unwrap()
+                                    .replace(" }}", " && github.actor == 'owner' }}")
+                            );
+                        }
+                        "unknown_condition" | "scope_unknown_condition" => {
+                            let job = if case == "unknown_condition" {
+                                "ci"
+                            } else {
+                                "scope"
+                            };
+                            source["jobs"][job]["if"] = json!(
+                                source["jobs"][job]["if"]
+                                    .as_str()
+                                    .unwrap()
+                                    .replace(" || needs.pr-state.outputs.state == 'unknown'", "")
+                            );
+                        }
+                        "count_output" => {
+                            source["jobs"]["pr-state"]["outputs"]["changed_files"] =
+                                json!("${{ steps.foreign.outputs.changed_files }}");
+                        }
+                        "scope_count" => {
+                            scope["steps"][1]["env"]["PR_CHANGED_FILES"] =
+                                json!("${{ github.event.pull_request.changed_files }}");
+                        }
+                        "live_output" => {
+                            source["jobs"]["pr-state"]["outputs"]["state"] =
+                                json!("${{ steps.foreign.outputs.state }}");
+                        }
+                        "extra_live_step" => {
+                            source["jobs"]["pr-state"]["steps"]
+                                .as_array_mut()
+                                .unwrap()
+                                .push(json!({"run": "echo state=closed >> \"$GITHUB_OUTPUT\""}));
+                        }
+                        _ => {
+                            let step = &mut source["jobs"]["pr-state"]["steps"][0];
+                            match case {
+                                "live_shell" => step["shell"] = json!("python"),
+                                "live_environment" => {
+                                    step["env"]["GH_REPO"] = json!("foreign/repository")
+                                }
+                                "conditional_live_step" => step["if"] = json!(false),
+                                _ => {
+                                    let (from, to) = match case {
+                                        "stale_open_fallback" => {
+                                            ("'state=unknown'", "'state=open'")
+                                        }
+                                        "stale_closed_fallback" => {
+                                            ("'state=unknown'", "'state=closed'")
+                                        }
+                                        "stale_event_fallback" => (
+                                            "'state=unknown'",
+                                            "'state=${{ github.event.pull_request.state }}'",
+                                        ),
+                                        "live_endpoint" => ("/pulls/", "/issues/"),
+                                        "count_injection" => ("== \"number\"", "== \"string\""),
+                                        _ => panic!("unknown case: {case}"),
+                                    };
+                                    let command = step["run"].as_str().unwrap();
+                                    assert!(
+                                        command.contains(from),
+                                        "counterfactual must change the workflow: {case}"
+                                    );
+                                    step["run"] = json!(command.replace(from, to));
+                                }
+                            }
                         }
                     }
                     let (fx, result) = full(row, &source);
                     assert!(result.is_err(), "{case}");
                     assert!(
                         !fx.forge.join("mutations").exists(),
-                        "unknown change-scope semantics cannot update: {case}"
+                        "unknown live-state or change-scope semantics cannot update: {case}"
                     );
                 });
             }
@@ -1294,7 +1533,7 @@ pub(crate) fn adopted_policy_cases(cases: &[&str]) {
                     &host,
                     "handoff_land",
                     &json!({}),
-                    &json!({"handoff_id":"accepted-fixture","run_id":RUN_ID,"max_wait_seconds":0}),
+                    &json!({"handoff_id":"accepted-fixture","run_id":RUN_ID,"max_wait_seconds":30}),
                     false,
                     &HashMap::new(),
                     None,

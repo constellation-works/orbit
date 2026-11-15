@@ -2,23 +2,11 @@
 
 use std::fs;
 use std::io;
-use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use crate::OrbitError;
 
 use super::errors::sqlite_path_error;
-
-/// Leading bytes of every SQLite database file.
-const DATABASE_MAGIC: &[u8] = b"SQLite format 3\0";
-
-/// Bytes of the database header this module reads: through offsets 18 and 19,
-/// the write and read file-format versions.
-const DATABASE_HEADER_BYTES: u64 = 20;
-
-/// File-format version recorded at offsets 18 and 19 while a database is in
-/// WAL mode. Rollback-journal databases record `1`.
-const WAL_FILE_FORMAT: u8 = 2;
 
 /// Resolve a SQLite file path through its existing parent and reject traversal
 /// and final-component symlinks before any SQLite or database-file permission
@@ -96,11 +84,21 @@ pub fn create_private_dir_all(path: &Path) -> Result<(), OrbitError> {
 }
 
 pub(super) fn prepare_private_database_file(path: &Path) -> Result<(), OrbitError> {
-    match crate::fs::io::create_new_private_file(path) {
-        Ok(file) => {
-            drop(file);
-            Ok(())
+    // Existing databases take only the metadata/private-permission path. Do
+    // not stage and fsync a new inode on every ordinary connection open.
+    match fs::symlink_metadata(path) {
+        Ok(_) => {
+            return crate::fs::io::set_private_file_permissions(path)
+                .map_err(|error| sqlite_path_error("harden", path, error));
         }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(sqlite_path_error("inspect", path, error)),
+    }
+    // Close the staging data descriptor before publishing this inode at the
+    // database path. A concurrent constructor can only open the published
+    // path after that close; the losing publication never replaces its inode.
+    match crate::fs::io::write_new_private_text(path, "") {
+        Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
             crate::fs::io::set_private_file_permissions(path)
                 .map_err(|error| sqlite_path_error("harden", path, error))
@@ -110,7 +108,7 @@ pub(super) fn prepare_private_database_file(path: &Path) -> Result<(), OrbitErro
 }
 
 /// Restrict the database and its existing sidecars to owner-only access
-/// through no-follow descriptors; see
+/// through no-follow path-only handles where supported; see
 /// [`crate::fs::io::set_private_file_permissions`].
 pub(super) fn harden_sqlite_files(path: &Path) -> Result<(), OrbitError> {
     harden_existing_file(path)?;
@@ -138,45 +136,16 @@ pub(super) fn harden_read_only_sqlite_files(path: &Path) -> Result<(), OrbitErro
 
 #[cfg(unix)]
 fn harden_existing_read_only_file(path: &Path) -> Result<(), OrbitError> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let file = match open_read_no_follow(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(sqlite_path_error("inspect", path, error)),
-    };
-
-    let owner_only_mode = file
-        .metadata()
-        .map_err(|error| sqlite_path_error("inspect", path, error))?
-        .permissions()
-        .mode()
-        & 0o700;
-    file.set_permissions(fs::Permissions::from_mode(owner_only_mode))
-        .map_err(|error| sqlite_path_error("harden", path, error))
+    match crate::fs::io::set_read_only_private_file_permissions(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(sqlite_path_error("harden", path, error)),
+    }
 }
 
 #[cfg(not(unix))]
 fn harden_existing_read_only_file(_path: &Path) -> Result<(), OrbitError> {
     Ok(())
-}
-
-/// Open a database or sidecar file for reading without traversing a final
-/// symlink, so inspection stays inside the directory
-/// [`validated_sqlite_path`] resolved.
-#[cfg(unix)]
-pub(super) fn open_read_no_follow(path: &Path) -> io::Result<fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-}
-
-#[cfg(not(unix))]
-pub(super) fn open_read_no_follow(path: &Path) -> io::Result<fs::File> {
-    fs::File::open(path)
 }
 
 pub(super) fn sqlite_sidecar_paths(path: &Path) -> [PathBuf; 2] {
@@ -194,6 +163,9 @@ pub(super) fn sqlite_sidecar_paths(path: &Path) -> [PathBuf; 2] {
 pub(super) fn sidecar_metadata(path: &Path) -> Result<Option<fs::Metadata>, OrbitError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_file() => Ok(Some(metadata)),
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(OrbitError::InvalidInput(
+            format!("SQLite sidecar must not be a symlink: {}", path.display()),
+        )),
         Ok(_) => Err(OrbitError::InvalidInput(format!(
             "SQLite sidecar must be a regular file: {}",
             path.display()
@@ -207,28 +179,4 @@ fn path_with_suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut value = path.as_os_str().to_os_string();
     value.push(suffix);
     PathBuf::from(value)
-}
-
-/// Whether the database file records WAL mode in its header.
-///
-/// A missing or truncated file, and any file that does not carry the SQLite
-/// magic, is reported as not WAL: there are no committed WAL frames to miss,
-/// and SQLite gives a better diagnosis of the file itself than this check
-/// could.
-pub(super) fn database_uses_wal(path: &Path) -> Result<bool, OrbitError> {
-    let file = match open_read_no_follow(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(sqlite_path_error("inspect", path, error)),
-    };
-
-    let mut header = Vec::with_capacity(DATABASE_HEADER_BYTES as usize);
-    file.take(DATABASE_HEADER_BYTES)
-        .read_to_end(&mut header)
-        .map_err(|error| sqlite_path_error("read the header of", path, error))?;
-    if header.len() < DATABASE_HEADER_BYTES as usize || !header.starts_with(DATABASE_MAGIC) {
-        return Ok(false);
-    }
-
-    Ok(header[18] == WAL_FILE_FORMAT || header[19] == WAL_FILE_FORMAT)
 }

@@ -64,6 +64,7 @@ pub(crate) enum StateAccess {
 /// Runtime builder. Global root provides activities, jobs, executors, policies,
 /// config, global skills, and SQLite. Shared root provides existing workspace
 /// state. Local root is carried for per-worktree artifact phases.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_context_from_roots(
     global_root: &Path,
     workspace_root: &Path,
@@ -72,6 +73,7 @@ pub(crate) fn build_context_from_roots(
     runtime_config: &ResolvedConfig,
     _host_lifetime: HostLifetime,
     access: StateAccess,
+    task_prefix: Option<&str>,
 ) -> Result<OrbitContext, OrbitError> {
     let write_free = access == StateAccess::WriteFree;
     let persistence = &runtime_config.persistence;
@@ -100,7 +102,14 @@ pub(crate) fn build_context_from_roots(
         global_root.to_path_buf(),
     );
 
-    let coordinated = build_v2_task_backends(global_root, &paths, binding, store.clone(), access)?;
+    let coordinated = build_v2_task_backends(
+        global_root,
+        &paths,
+        binding,
+        store.clone(),
+        access,
+        task_prefix,
+    )?;
     let task_backends = coordinated.task;
     let task_reservation_store = coordinated.reservation;
     let configured = read_workspace_config_optional(&paths.orbit_dir)?;
@@ -112,34 +121,6 @@ pub(crate) fn build_context_from_roots(
                 .map(|config| config.workspace_id.clone())
         })
         .unwrap_or_else(|| UNBOUND_DATA_DIR_PARTITION_ID.to_string());
-    let import_report = if write_free || configured.is_none() {
-        orbit_store::workflow::legacy_state::ImportReport::skipped()
-    } else {
-        match orbit_store::workflow::legacy_state::import_legacy_v2_state(
-            &store,
-            &paths.orbit_dir,
-            &workspace_id,
-        ) {
-            Ok(report) => report,
-            Err(error) if error.is_readonly_or_access_failure() => {
-                tracing::warn!(
-                    target: "orbit.core.bootstrap",
-                    root = %paths.orbit_dir.display(),
-                    error = %error,
-                    "skipped incidental legacy-state import persistence"
-                );
-                orbit_store::workflow::legacy_state::ImportReport::skipped()
-            }
-            Err(error) => return Err(error),
-        }
-    };
-    if import_report.skipped_records() {
-        tracing::warn!(
-            workspace_id = %workspace_id,
-            audit_events_skipped = import_report.audit_events_skipped,
-            "skipped malformed legacy state records during SQLite import",
-        );
-    }
     let lexical_index = if write_free {
         LexicalIndex::open_read_only(&persistence.semantic_db)?
     } else {
@@ -256,21 +237,17 @@ pub(crate) fn build_context_from_roots(
 
     let execution_env_policy = runtime_config.execution_env.clone();
     let codex_execution_policy = runtime_config.codex_execution.clone();
-    let proc_spawn_max_timeout_ms = u64::from(
-        runtime_config
-            .snapshot
-            .execution_proc_spawn_max_timeout_minutes,
-    ) * 60_000;
-    let agent_stall_minutes = runtime_config.snapshot.execution_agent_stall_minutes;
     let persistence = runtime_config.persistence.clone();
     let actor = ActorIdentity::from_env();
-    let automation_stall_window_minutes = runtime_config.automation_stall_window_minutes;
     // Config owns PR settings as plain data; Core is the composition layer
     // that translates them into the execution engine's shape.
     let pr_config = PrConfig {
         task_url_template: runtime_config.pr.task_url_template.clone(),
-        close_superseded: runtime_config.pr.close_on_terminal,
+        close_superseded: orbit_types::workflow::PR_CLOSE_ON_TERMINAL,
         delivery_authors: runtime_config.pr.delivery_authors.clone(),
+        ci_infrastructure_signatures: runtime_config.pr.ci_infrastructure_signatures.clone(),
+        ci_infrastructure_retry: runtime_config.pr.ci_infrastructure_retry,
+        ci_handoff_steps: runtime_config.pr.ci_handoff_steps.clone(),
         conventions: runtime_config.pr.conventions.clone(),
     };
     let workflow_base_branch = runtime_config.workflow_base_branch.clone();
@@ -282,29 +259,23 @@ pub(crate) fn build_context_from_roots(
         .snapshot
         .workflow_distributed_completion
         .clone();
-    let admission_affinity = runtime_config.snapshot.admission_affinity();
-    // Config admitted the mode's spelling; Core translates it into the exec
-    // layer's policy, as it does for PR settings above.
-    let shell_probe = runtime_config.snapshot.shell_probe();
+    // Config admitted the PATH entries and output variables; the probe,
+    // PATH mode and CARGO_INCREMENTAL handling are fixed [ORB-22808].
     let validation_env = orbit_exec::ValidationEnvPolicy {
-        login_shell: shell_probe.probes(),
-        interactive: shell_probe.interactive(),
+        login_shell: orbit_exec::VALIDATION_LOGIN_SHELL,
+        interactive: orbit_exec::VALIDATION_INTERACTIVE_PROBE,
         path: runtime_config.snapshot.workflow_validation_env_path.clone(),
         build_output_env: runtime_config
             .snapshot
             .workflow_validation_env_build_output_env
             .clone(),
-        cargo_incremental: runtime_config
-            .snapshot
-            .workflow_validation_env_cargo_incremental,
-        path_mode: orbit_exec::ValidationPathMode::parse(
-            &runtime_config.snapshot.workflow_validation_env_path_mode,
-        )
-        .unwrap_or_default(),
+        cargo_incremental: orbit_exec::VALIDATION_CARGO_INCREMENTAL,
+        path_mode: orbit_exec::VALIDATION_PATH_MODE,
     };
     let crews = runtime_config.crews.clone();
     let default_crew = runtime_config.default_crew.clone();
     let operation = runtime_config.operation.clone();
+    let lease_policy = crate::task::locks::LeasePolicy::admit(&paths.orbit_dir);
 
     Ok(OrbitContext::new(
         paths,
@@ -328,20 +299,10 @@ pub(crate) fn build_context_from_roots(
             PolicyEngine::from_def(&active_policy)?,
             execution_env_policy,
             codex_execution_policy,
-            proc_spawn_max_timeout_ms,
-            agent_stall_minutes,
         ),
         OrbitRuntimeSettings::new(
             persistence,
             actor,
-            automation_stall_window_minutes,
-            runtime_config
-                .snapshot
-                .publication_routine_attachments
-                .clone(),
-            runtime_config
-                .snapshot
-                .publication_routine_allow_unscanned_attachments,
             pr_config,
             runtime_config.pr.clone(),
             workflow_base_branch,
@@ -351,14 +312,15 @@ pub(crate) fn build_context_from_roots(
             runtime_config.snapshot.review_baseline_commands.clone(),
             validation_env,
             workflow_distributed_completion,
-            admission_affinity,
             runtime_config.snapshot.task_pilot_freshness(),
             crews,
+            runtime_config.human_crews.clone(),
             default_crew,
             runtime_config.complexity_crews.clone(),
             runtime_config.snapshot.final_recovery_crews().to_vec(),
             runtime_config.snapshot.purpose_crews(),
             runtime_config.snapshot.type_complexity_crews(),
+            runtime_config.snapshot.auto_effort(),
             runtime_config.snapshot.provider_limit_policy(),
             operation,
             runtime_config.snapshot.worker_containment(),
@@ -367,14 +329,12 @@ pub(crate) fn build_context_from_roots(
                 .machine()
                 .task_prefix
                 .unwrap_or_else(|| "ORB".to_string()),
-            runtime_config.snapshot.host_shutdown_hold_minutes(),
             runtime_config.snapshot.worktree_reclaim.clone(),
             runtime_config.snapshot.worktree_reclaim_below_free_mib,
-            runtime_config.snapshot.worktree_parked_reclaim_after_hours,
             runtime_config.snapshot.mid_run_steering(),
             runtime_config.tag_instructions.clone(),
             runtime_config.review_skip_tags.clone(),
-            runtime_config.visual_review.clone(),
+            runtime_config.snapshot.workflow_tag_requires_labels.clone(),
             crate::task::locks::UnlockedContextPaths::new(
                 &runtime_config.snapshot.workflow_unlocked_context_paths,
             )?,
@@ -384,10 +344,12 @@ pub(crate) fn build_context_from_roots(
                 .workflow_unlocked_path_validation_commands
                 .clone(),
             runtime_config.snapshot.workflow_generated_paths.clone(),
+            runtime_config.snapshot.workflow_activity_timeouts.clone(),
             runtime_config
                 .snapshot
                 .workflow_light_delivery_paths
                 .clone(),
+            runtime_config.snapshot.completion_hold.clone(),
             (
                 orbit_common::fs::path_filter::PathFilter::new(
                     "workflow.test_paths",
@@ -397,17 +359,16 @@ pub(crate) fn build_context_from_roots(
                     "workflow.non_code_paths",
                     &runtime_config.snapshot.workflow_non_code_paths,
                 )?,
+                orbit_common::fs::path_filter::PathFilter::new(
+                    "workflow.non_reviewable_paths",
+                    &runtime_config.snapshot.workflow_non_reviewable_paths,
+                )?,
             ),
-            runtime_config.snapshot.regression_risk(),
-            runtime_config.snapshot.explore(),
-            runtime_config.snapshot.explore_brief(),
-            runtime_config.snapshot.crew_performance_types().to_vec(),
-            runtime_config.snapshot.crew_performance(),
-            runtime_config.snapshot.crew_performance_window_days(),
+            runtime_config.snapshot.task_types().to_vec(),
+            runtime_config.snapshot.regression_layers().to_vec(),
             runtime_config.snapshot.decision_channel_enabled,
-            crate::task::locks::LeasePolicy::admit(&runtime_config.snapshot)?,
+            lease_policy,
             runtime_config.snapshot.experiments(),
-            runtime_config.snapshot.crew_ladder(),
             runtime_config.snapshot.machine_labels.clone(),
         ),
     ))
@@ -431,6 +392,7 @@ fn build_v2_task_backends(
     runtime_binding: Option<&WorkspaceRuntimeBinding>,
     store: Store,
     access: StateAccess,
+    task_prefix: Option<&str>,
 ) -> Result<CoordinatedWorkspaceBackends, OrbitError> {
     let write_free = access == StateAccess::WriteFree;
     let registry = if write_free {
@@ -438,6 +400,15 @@ fn build_v2_task_backends(
     } else {
         TaskRegistryStore::open(&task_registry_path(global_root))?
     };
+    // Composition hands in the machine's task prefix. Apply it on this handle
+    // instead of opening the registry only to project the prefix. Read-only
+    // and write-free opens do not project one: a read must not adopt a prefix,
+    // and a foreign-generation join has no writable registry handle.
+    if access == StateAccess::Write
+        && let Some(task_prefix) = task_prefix
+    {
+        registry.set_task_prefix(task_prefix)?;
+    }
     let config = read_workspace_config_optional(&paths.orbit_dir)?;
     // Several registered repositories may intentionally share one explicit
     // Orbit root. That root has only one compatibility config.yaml and cannot

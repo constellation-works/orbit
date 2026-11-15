@@ -81,8 +81,8 @@ pub(super) fn apply_invocations_ts_index(conn: &Connection) -> Result<(), OrbitE
 /// v36 `invocation_workspace_scope`: record the workspace each invocation
 /// belongs to.
 ///
-/// Run ids are minted per workspace, so two workspaces submitting in the same
-/// minute hold the same id and an invocation keyed by `job_run_id` alone was
+/// Run ids were minted per workspace, so two workspaces submitting in the same
+/// minute could hold the same id and an invocation keyed by `job_run_id` alone was
 /// read by both. The backfill attributes a legacy row only when exactly one
 /// workspace ever held its run id (`job_run_id_allocations`, plus `job_runs`);
 /// an ambiguous or orphaned row stays `NULL` and no workspace-scoped read
@@ -264,4 +264,38 @@ pub(super) fn apply_invocation_long_prompt_requests(conn: &Connection) -> Result
         return Ok(());
     }
     add_column_if_missing(conn, "invocations", "long_prompt_requests_json", "TEXT")
+}
+
+/// Cover reliability's workspace/time filter and both invocation projections.
+/// Index-only and additive: existing writers and readers remain compatible.
+pub(super) fn apply_invocation_reliability_window_index(
+    conn: &Connection,
+) -> Result<(), OrbitError> {
+    if !table_has_column(conn, "invocations", "workspace_id")? {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_invocations_reliability_window
+         ON invocations(workspace_id, ts, job_run_id, activity_id);",
+    )
+    .map_err(sqlite_store_error)
+}
+
+/// v83 `invocation_tool_calls_incomplete` [ORB-20572]: whether the provider's
+/// stdout outgrew the bounded capture, so the invocation's recorded tool calls
+/// are only the suffix that survived it.
+///
+/// A defaulted column only: an older binary keeps inserting without it and its
+/// rows read as complete, as does every row recorded before this migration,
+/// whose truncation was never recorded.
+pub(super) fn apply_invocation_tool_calls_incomplete(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_exists(conn, "invocations")? {
+        return Ok(());
+    }
+    add_column_if_missing(
+        conn,
+        "invocations",
+        "tool_calls_incomplete",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
 }

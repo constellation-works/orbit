@@ -61,3 +61,29 @@ impl FromStr for AgentFamily {
         }
     }
 }
+
+/// Map a lower-cased model identifier prefix to its agent family.
+pub(crate) fn agent_family_from_model_prefix(model: &str) -> Option<AgentFamily> {
+    if model.starts_with("claude-")
+        || model.starts_with("opus")
+        || model.starts_with("sonnet")
+        || model.starts_with("fable")
+    {
+        return Some(AgentFamily::Claude);
+    }
+    if model.starts_with("gpt-") || model.starts_with("o1") || model.starts_with("o3") {
+        return Some(AgentFamily::Codex);
+    }
+    if model.starts_with("gemini-") {
+        return Some(AgentFamily::Gemini);
+    }
+    // Grok (xAI) family — covers grok-4, grok-3, and grok3* short names
+    if model.starts_with("grok-") || model.starts_with("grok3") {
+        return Some(AgentFamily::Grok);
+    }
+    if model.starts_with("muse-") {
+        return Some(AgentFamily::Muse);
+    }
+
+    None
+}

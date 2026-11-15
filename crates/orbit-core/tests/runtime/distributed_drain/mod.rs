@@ -38,7 +38,6 @@ use orbit_store::contracts::{
     JobRunStoreBackend, LocalPullAdmission, LocalPullMutation, LocalPullPhase, SettlementRefusal,
 };
 use orbit_tools::{DrainOwnerTransport, OwnerCoordinator, ToolContext};
-use orbit_types::policy::Role;
 use orbit_types::task::TaskArtifact;
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 use orbit_types::workflow::automation::SourceRevision;
@@ -47,8 +46,9 @@ use orbit_types::workflow::handoff::{
     HandoffValidationLog, TaskHandoff,
 };
 use orbit_types::workflow::{
-    ExecutorDef, ExecutorType, FinalRecoveryCheckpoint, FinalRecoveryDecision, FinalRecoveryKey,
-    JobRunState, JobTargetType, PipelineState, ReviewTiming,
+    ExecutorDef, ExecutorType, FinalRecoveryCheckpoint, FinalRecoveryCheckpointOutcome,
+    FinalRecoveryDecision, FinalRecoveryKey, JobRunState, JobTargetType, PipelineState,
+    ReviewTiming,
 };
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use serde_json::{Value, json};
@@ -65,6 +65,7 @@ mod browser_kit;
 mod cancel;
 mod candidate_carry;
 mod capacity_backoff;
+mod claim_recovery_target;
 #[cfg(unix)]
 mod claimed_held_pull_request;
 #[cfg(unix)]
@@ -76,6 +77,7 @@ mod claimed_review;
 mod claimed_steering;
 mod claimed_tag_instructions;
 mod desktop_completion;
+mod experiment_admission;
 mod failure_class;
 mod flaky_validation;
 #[cfg(unix)]
@@ -86,8 +88,8 @@ mod host_os_executor;
 mod interrupted_review;
 mod landing_attribution;
 mod landing_repair;
+mod late_effort;
 mod metadata;
-mod mock_pull;
 mod no_diff;
 mod ordering;
 #[cfg(unix)]
@@ -101,6 +103,7 @@ mod provider_limit;
 mod rebased_landing;
 mod receipt_retention;
 mod recovery;
+mod recovery_evidence;
 mod regression_attribution;
 mod requeue;
 mod scheduled;
@@ -109,7 +112,6 @@ mod settlement_review;
 mod single_pass;
 mod unavailable_hold;
 mod usage_pressure;
-mod visual_capture;
 mod waiting;
 mod window_extension;
 #[cfg(unix)]
@@ -215,6 +217,16 @@ struct Wire {
     /// while it keeps the claim, as an owner whose configuration cannot
     /// accept a handoff does.
     refuse_settle: Mutex<Option<String>>,
+    /// When set, a settlement reaches the owner naming this leaf run report
+    /// in place of the one its follower sent [ORB-20906].
+    leaf_run_override: Mutex<Option<Value>>,
+    /// An older owner fixture: its internal drain route predates the late
+    /// effort report and refuses it unread, as a server whose build does not
+    /// know the operation does [ORB-24115].
+    predates_late_effort: Mutex<bool>,
+    /// When set, the owner answers a late effort report with this structured
+    /// JSON-RPC refusal (code, message) instead of handling it.
+    late_effort_rpc_refusal: Mutex<Option<(i64, String)>>,
     /// Send handoffs to the real owner observation path.
     observe_handoffs: Mutex<bool>,
     /// When set, the owner accepts a handoff into its claim journal, with
@@ -329,7 +341,15 @@ impl Wire {
 }
 
 impl DrainOwnerTransport for Wire {
-    fn call(&self, _selector: &str, name: &str, input: Value) -> Result<Value, OrbitError> {
+    fn call(&self, _selector: &str, name: &str, mut input: Value) -> Result<Value, OrbitError> {
+        if name == "orbit.drain.claim.settle"
+            && let Some(report) = self.leaf_run_override.lock().unwrap().clone()
+            && let Some(evidence) = input["settlement"]
+                .as_object_mut()
+                .and_then(|settlement| settlement.values_mut().next())
+        {
+            evidence["leaf_run"] = report;
+        }
         self.calls
             .lock()
             .unwrap()
@@ -343,6 +363,24 @@ impl DrainOwnerTransport for Wire {
         if *self.unreachable.lock().unwrap() {
             return Err(OrbitError::UnreachableDestination(
                 "ssh: connect to host owner port 22: Connection timed out".into(),
+            ));
+        }
+        if name == "orbit.drain.claim.effort" && *self.predates_late_effort.lock().unwrap() {
+            // `DestinationSession` preserves the legacy server's actual
+            // JSON-RPC invalid-params reply as structured data.
+            return Err(OrbitError::json_rpc_refusal(
+                OWNER,
+                "orbit/internal/drain/call",
+                &json!({"code": -32602, "message": "unknown internal drain operation"}),
+            ));
+        }
+        if name == "orbit.drain.claim.effort"
+            && let Some((code, message)) = self.late_effort_rpc_refusal.lock().unwrap().clone()
+        {
+            return Err(OrbitError::json_rpc_refusal(
+                OWNER,
+                "orbit/internal/drain/call",
+                &json!({"code": code, "message": message}),
             ));
         }
         if name == "orbit.drain.claim.settle" {
@@ -392,10 +430,9 @@ impl DrainOwnerTransport for Wire {
             effective_capabilities: BTreeSet::from([McpCapability::Agent]),
             ..ToolSessionContext::default()
         };
-        let mut answer = self.owner.run_tool_with_context_and_role(
+        let mut answer = self.owner.run_tool_with_context(
             name,
             input,
-            Role::Admin,
             ToolContext {
                 session_context: session,
                 ..ToolContext::default()
@@ -735,6 +772,9 @@ impl Pair {
             fingerprint: Mutex::default(),
             gateless: Mutex::default(),
             refuse_settle: Mutex::default(),
+            leaf_run_override: Mutex::default(),
+            predates_late_effort: Mutex::default(),
+            late_effort_rpc_refusal: Mutex::default(),
             observe_handoffs: Mutex::default(),
             accept_handoffs: Mutex::default(),
             local: Mutex::default(),
@@ -779,6 +819,39 @@ impl Pair {
     /// recorded, then the run terminal, with no settlement of its own.
     fn leaf_fails_with(&self, leaf: &str, error: &str) {
         self.leaf_fails_at(leaf, error, Utc::now());
+    }
+
+    /// [`Self::leaf_fails_with`] recording the typed step-failure code a
+    /// new step record carries beside its message.
+    fn leaf_fails_with_code(
+        &self,
+        leaf: &str,
+        error: &str,
+        code: &orbit_types::workflow::StepFailureCode,
+    ) {
+        let now = Utc::now();
+        self.follower_jobs
+            .complete_job_run_step(
+                leaf,
+                &JobRunStepParams {
+                    lock_wait_ms: None,
+                    step_index: 0,
+                    target_type: JobTargetType::Activity,
+                    target_id: "implement_one".into(),
+                    started_at: now,
+                    finished_at: now,
+                    duration_ms: None,
+                    exit_code: Some(1),
+                    agent_response_json: None,
+                    state: JobRunState::Failed,
+                    error_code: Some(code.as_str().to_string()),
+                    error_message: Some(error.into()),
+                },
+            )
+            .expect("failed step");
+        self.follower_jobs
+            .finalize_job_run(leaf, JobRunState::Failed, now, None)
+            .expect("leaf failed");
     }
 
     /// [`Self::leaf_fails_with`], the leaf ending at `now`.

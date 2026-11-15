@@ -9,6 +9,10 @@ Work through the authoritative task record and leave verifiable results.
 Read only the reference needed for the current action; this is not a reading
 checklist. An injected task snapshot is your starting context.
 
+## Operator attention
+
+Start an orchestrator or on-call inspection with `orbit attention --json` or the read-only `orbit.attention` tool. Task-level kinds report pilot warnings and holds, human-waiting blocks, open decisions and settled reviews; runtime kinds report failed or stuck runs and possibly stale claims (Operator capability required); `ci_red` reports a red base branch and `friction_untriaged` lists open friction records; `host_unhealthy` reports failing doctor checks and, across registered hosts, hosts that cannot be read. Read `degraded` before interpreting an empty result. See [Attention](references/attention.md) for filters, local scopes, suggested actions and the delta cursor.
+
 ## Connect and act
 
 - With MCP, discover its tools. In a managed activity, use the injected task
@@ -19,9 +23,9 @@ checklist. An injected task snapshot is your starting context.
   intended host and use that registered workspace. Never substitute another
   host or shadow store.
 - Use registered tools: MCP `orbit_task_show`, or the installed CLI's
-  `orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>"}'`.
-  Include your agent family in `model` where supported. Use `fields` for compact
-  reads. The advertised schema decides which inputs and tools are available.
+  `orbit tool run orbit.task.show --input '{"id":"<task-id>"}'`.
+  Provenance comes from the session, not a `model` argument. Use `fields` for
+  compact reads. The advertised schema decides which inputs and tools are available.
 - Update task state through tools, not files under `.orbit/`. Creating a task
   does not authorize dispatch or completion. In a managed activity, implement
   the assigned work; the pipeline owns delivery and lifecycle transitions.
@@ -41,8 +45,8 @@ checklist. An injected task snapshot is your starting context.
 
 ## Desktop navigation
 
-When the connected client advertises `orbit_ui_open` / `orbit_ui_inspect`, use
-those read-only entrypoints to open the control center or a selected task/run.
+When the connected client advertises `orbit_ui`, use its read-only `open` and
+`inspect` actions to open the control center or a selected task/run.
 Discover workspaces first and copy the exact returned selector; pass `workspace`
 and public `id` together, with `kind: run` for a run. Keep ordinary task tools
 available when the client cannot render the UI.
@@ -67,8 +71,11 @@ plugin or passing protocol test alone does not prove rendering/context delivery.
 | Find prior tasks or frictions | [Search](references/search.md) |
 | Run and interpret task-flow analytics | [Task-flow analytics](references/concepts.md#task-flow-analytics) |
 | Record a concrete recurring obstacle | [Friction](references/friction.md) |
+| Record and inspect repeated capability costs | [Evolution records](references/tool-surface.md#evolution-records) |
 | Resolve tool transport, permissions or workspace routing | [Tool surface](references/tool-surface.md) |
 | Understand Orbit nouns | [Concepts](references/concepts.md) |
+| Act as a manager for resident mandates | [Manager](references/manager.md) |
+| Run one resident cycle for a mandate | [Resident cycle](references/resident-cycle.md) |
 | Single-owner distributed drain setup or claimed-attempt recovery | [Distributed drain](references/setup/distributed-drain.md) |
 
 For dispatch, backlog supervision and failed runs, use
@@ -83,8 +90,42 @@ starting `proposed`, `someday`, or `blocked` work also needs authorization.
 `done` is reachable only from `review` and needs completion evidence. The
 lifecycle table does not reopen `done` or `archived`; file a regression as a
 new task with a `regression_from` relation. Only an operator's
-`orbit task update <id> --status <status> --force` restores them, and
-`orbit task archive <id>` is that table's move to `archived` (`done` and
-`rejected` are not sources). `rejected` returns to `backlog` or
+`orbit task update <id> --status <status> --force` restores them.
+`orbit task archive <id>` and the UI archive action are not table moves:
+they archive a task in any status, including `done` and `rejected`,
+through internal authority. The transition table governs `task update
+--status` instead, which refuses an off-table move to `archived`.
+`rejected` returns to `backlog` or
 `in-progress`. Follow supported transitions and the assigned workflow; agents
-have no lifecycle force override.
+have no lifecycle force override. A task assigned to a human crew
+(`[crews.<name>] kind = "human"`) is operator work: the operator's own
+`orbit task update --status` or dashboard status control sets any status from
+`proposed` to `done` with no plan, review, evidence or `--force`, and task
+history records it as a `forced` entry naming the human-crew bypass. Agents and
+MCP stay on the normal lifecycle for that task, and leaving `done` or
+`archived` still needs `--force`.
+
+When you need a person to choose between known options, such as a sign-off, a
+price or a policy fork, raise `orbit.decision` action `raise` on a human-crew task you
+filed instead of writing a free-text human task: a question, two to four options
+(one-line label and consequence, exactly one `recommended`), and a `topic` when
+a corpus rule should be able to match the request exactly. The operator answers,
+or a current corpus rule the operator marked `auto` answers an exact topic or
+rule id and records that answer as precedent. Either way the answer is in the
+task's history, completes the task and unblocks its `blocked_by` dependents.
+Free text stays for open-ended asks. Raw decision history is not authority.
+Only a merged `current` rule may be cited, and only while its review date has
+not passed and its `depends_on` digests still match. A stale or superseded
+rule is not cited and does not answer. You cannot set `auto`. An answer that
+changes lasting behaviour or policy must be carried into the doc, config or
+code that owns it, in the PR of the task it unblocks.
+Details: [Tool surface](references/tool-surface.md#raising-a-decision).
+
+When you work a task directly in an interactive session instead of through a
+drain, set its `context_files` to the files the work will touch as you claim
+it, and keep them current as the change grows. Drains schedule around a
+task's `context_files`, so an interactive claim without them collides with
+queued work.
+Set the task's `crew` to the registered crew that actually does the work
+(for example `opus`), replacing whatever filing assigned. Crew analytics
+attribute outcomes by that field.

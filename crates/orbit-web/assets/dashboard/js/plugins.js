@@ -107,10 +107,7 @@ function pluginCard(plugin) {
   card.appendChild(pluginEnablement(plugin));
   if (changeErrors.has(plugin.name)) card.appendChild(el('p', { class: 'plugin-change-error', text: changeErrors.get(plugin.name) }));
   const tools = plugin.tools || [];
-  if (tools.length) {
-    card.appendChild(el('div', { class: 'plugin-tools' }, tools.map(tool =>
-      el('span', { class: `plugin-chip ${tool.active ? '' : 'plugin-chip-idle'}`, title: `${tool.execution_kind} · MCP ${tool.advertised_name || 'not advertised'}`, text: tool.name }))));
-  }
+  if (tools.length) card.appendChild(toolInventory(plugin, tools));
   // The manifest refuses non-http(s) links at validation; this is the second
   // half of that rule, for a record written before it or by a hand-edited store.
   const links = (plugin.links || []).filter(link => isHttpUrl(link.url));
@@ -125,6 +122,69 @@ function pluginCard(plugin) {
   }
   for (const panel of plugin.panels || []) card.appendChild(panelNode(plugin, panel));
   return card;
+}
+
+const toolChip = tool =>
+  el('span', { class: `plugin-chip ${tool.active ? '' : 'plugin-chip-idle'}`, title: `${tool.execution_kind} · MCP ${tool.advertised_name || 'not advertised'}`, text: tool.name });
+
+// A plugin can expose dozens of tools. Past TOOL_PREVIEW the card shows the
+// first few, a filter, and a toggle that reveals the rest inside a bounded,
+// scrollable list, so one plugin cannot push its neighbours out of reach.
+// Disclosure and filter state live in `toolViews`, keyed by plugin name,
+// because a metadata change rebuilds the card.
+const TOOL_PREVIEW = 8;
+const toolViews = new Map();
+let toolListSeq = 0;
+
+function toolInventory(plugin, tools) {
+  if (tools.length <= TOOL_PREVIEW) return el('div', { class: 'plugin-tools' }, tools.map(toolChip));
+  const view = toolViews.get(plugin.name) || { expanded: false, query: '' };
+  toolViews.set(plugin.name, view);
+  const listId = `plugin-tools-${toolListSeq++}`;
+  const list = el('div', { class: 'plugin-tools', id: listId, role: 'group', 'aria-label': `${plugin.name} tools` });
+  const status = el('span', { class: 'plugin-tools-status', role: 'status' });
+  const filter = el('input', { class: 'plugin-tools-filter', type: 'search', 'aria-label': `Filter ${plugin.name} tools` });
+  filter.placeholder = 'Filter tools';
+  filter.value = view.query;
+  filter.autocomplete = 'off';
+  const toggle = el('button', { class: 'plugin-tools-toggle', type: 'button', 'aria-controls': listId });
+
+  const paint = () => {
+    const query = view.query.trim().toLowerCase();
+    const matches = query
+      ? tools.filter(tool => `${tool.name} ${tool.advertised_name || ''}`.toLowerCase().includes(query))
+      : tools;
+    const shown = view.expanded ? matches : matches.slice(0, TOOL_PREVIEW);
+    list.replaceChildren(...shown.map(toolChip));
+    // A scrollable region must be keyboard-focusable to be scrolled.
+    list.classList.toggle('plugin-tools-scroll', view.expanded);
+    if (view.expanded) list.tabIndex = 0;
+    else list.removeAttribute('tabindex');
+    toggle.setAttribute('aria-expanded', String(view.expanded));
+    toggle.textContent = view.expanded ? 'Show fewer' : `Show all ${tools.length} tools`;
+    status.textContent = query
+      ? `${matches.length} of ${tools.length} tools match`
+      : view.expanded ? `${tools.length} tools` : `${shown.length} of ${tools.length} tools`;
+  };
+  filter.addEventListener('input', () => {
+    view.query = filter.value;
+    // Matches beyond the preview must be visible, so filtering opens the list.
+    if (view.query.trim()) view.expanded = true;
+    paint();
+  });
+  toggle.addEventListener('click', () => {
+    view.expanded = !view.expanded;
+    if (!view.expanded) {
+      view.query = '';
+      filter.value = '';
+    }
+    paint();
+  });
+  paint();
+  return el('div', { class: 'plugin-tool-inventory' }, [
+    el('div', { class: 'plugin-tools-bar' }, [filter, toggle, status]),
+    list,
+  ]);
 }
 
 // Compare SemVer precedence, including release candidates; build metadata

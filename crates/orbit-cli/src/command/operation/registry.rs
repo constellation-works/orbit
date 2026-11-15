@@ -7,6 +7,30 @@ impl Commands {
     /// that keeps new CLI commands from silently inheriting policy defaults.
     pub fn operation(&self) -> CommandOperation {
         match self {
+            Commands::Application(command) => {
+                use super::super::application::ApplicationSubcommand;
+                let (subcommand, id) = match &command.command {
+                    ApplicationSubcommand::Consent(_) => ("consent", None),
+                    ApplicationSubcommand::Rotate(args) => {
+                        ("rotate", Some(args.consent_id.as_str()))
+                    }
+                    ApplicationSubcommand::Revoke(args) => {
+                        ("revoke", Some(args.consent_id.as_str()))
+                    }
+                };
+                CommandOperation::new(
+                    RuntimeNeed::Required,
+                    Some(admin_meta(
+                        "application",
+                        Some(subcommand),
+                        Some("application_consent"),
+                        id,
+                    )),
+                    None,
+                    runtime_dispatch!(Application),
+                )
+                .governed_when(true, "application", subcommand)
+            }
             Commands::Init(_) => CommandOperation::new(
                 RuntimeNeed::Forbidden,
                 Some(admin_meta("init", None, Some("config"), None)),
@@ -72,6 +96,9 @@ impl Commands {
                     ConfigSubcommand::Set(_) => "set",
                     ConfigSubcommand::Keys(_) => "keys",
                     ConfigSubcommand::Path(_) => "path",
+                    ConfigSubcommand::BrowserKit(command) => {
+                        return browser_kit_operation(command);
+                    }
                 };
                 CommandOperation::new(
                     RuntimeNeed::Required,
@@ -102,27 +129,7 @@ impl Commands {
                     dispatch_host,
                 )
             }
-            Commands::BrowserKit(command) => {
-                use super::super::browser_kit::BrowserKitSubcommand;
-                let subcommand = match &command.command {
-                    BrowserKitSubcommand::Status(_) => "status",
-                    BrowserKitSubcommand::Install(_) => "install",
-                    BrowserKitSubcommand::Verify(_) => "verify",
-                    BrowserKitSubcommand::Remove(_) => "remove",
-                };
-                CommandOperation::new(
-                    // The kit belongs to the host user; no workspace is opened.
-                    RuntimeNeed::Forbidden,
-                    Some(admin_meta(
-                        "browser-kit",
-                        Some(subcommand),
-                        Some("installation"),
-                        None,
-                    )),
-                    None,
-                    dispatch_browser_kit,
-                )
-            }
+            Commands::BrowserKit(command) => browser_kit_operation(command),
             Commands::Migrate(command) => CommandOperation::new(
                 if command.applies() {
                     RuntimeNeed::Required
@@ -145,12 +152,6 @@ impl Commands {
             Commands::Run(command) => {
                 use super::super::run::RunSubcommand;
                 let (subcommand, target_type, target_id, runtime_need) = match &command.command {
-                    RunSubcommand::Agent(_) => (
-                        "agent",
-                        Some("workflow"),
-                        Some("agent_invoke"),
-                        RuntimeNeed::Required,
-                    ),
                     RunSubcommand::Auto(_) => (
                         "auto",
                         Some("workflow"),
@@ -217,6 +218,12 @@ impl Commands {
                         None,
                         observation_runtime_need(args.no_reconcile),
                     ),
+                    RunSubcommand::SettlementsHydrate(_) => (
+                        "settlements-hydrate",
+                        Some("execution_claim"),
+                        None,
+                        RuntimeNeed::ReadOnly,
+                    ),
                     RunSubcommand::Cancel(args) => (
                         "cancel",
                         Some("job_run"),
@@ -260,9 +267,9 @@ impl Commands {
                     GcTarget::Deployments(args) => {
                         ("deployments", args.confirm, RuntimeNeed::ReadOnly)
                     }
-                    GcTarget::Audit(args) => ("audit", args.apply, RuntimeNeed::Required),
-                    GcTarget::Runs(args) => ("runs", args.apply, RuntimeNeed::Required),
-                    GcTarget::Journal(args) => ("journal", args.apply, RuntimeNeed::Required),
+                    GcTarget::Audit(args) => ("audit", args.confirm, RuntimeNeed::Required),
+                    GcTarget::Runs(args) => ("runs", args.confirm, RuntimeNeed::Required),
+                    GcTarget::Journal(args) => ("journal", args.confirm, RuntimeNeed::Required),
                 };
                 CommandOperation::new(
                     runtime_need,
@@ -312,24 +319,36 @@ impl Commands {
             ),
             Commands::Routine(command) => {
                 use super::super::routine::RoutineSubcommand;
-                let subcommand = match &command.command {
-                    RoutineSubcommand::List(_) => "list",
-                    RoutineSubcommand::Show(_) => "show",
-                    RoutineSubcommand::Pause(_) => "pause",
-                    RoutineSubcommand::Resume(_) => "resume",
-                    RoutineSubcommand::Init(_) => "init",
+                // The two governed verbs open a runtime so the authorization
+                // chokepoint can decide and audit; the rest stay runtime-free.
+                let (subcommand, target_id, toggle) = match &command.command {
+                    RoutineSubcommand::List(_) => ("list", None, None),
+                    RoutineSubcommand::Show(_) => ("show", None, None),
+                    RoutineSubcommand::Pause(_) => ("pause", None, None),
+                    RoutineSubcommand::Resume(_) => ("resume", None, None),
+                    RoutineSubcommand::Init(_) => ("init", None, None),
+                    RoutineSubcommand::Enable(args) => {
+                        ("enable", Some(args.name.as_str()), Some("enable"))
+                    }
+                    RoutineSubcommand::Disable(args) => {
+                        ("disable", Some(args.name.as_str()), Some("disable"))
+                    }
                 };
-                CommandOperation::new(
-                    RuntimeNeed::Forbidden,
-                    Some(admin_meta(
-                        "routine",
-                        Some(subcommand),
-                        Some("routine"),
-                        None,
-                    )),
-                    None,
-                    dispatch_routine,
-                )
+                let runtime_need = if toggle.is_some() {
+                    RuntimeNeed::Required
+                } else {
+                    RuntimeNeed::Forbidden
+                };
+                let mut meta = admin_meta("routine", Some(subcommand), Some("routine"), target_id);
+                // Carry the requested state like the dashboard toggle's audit row.
+                meta.arguments_json = toggle
+                    .map(|verb| serde_json::json!({ "enabled": verb == "enable" }).to_string());
+                let mut operation =
+                    CommandOperation::new(runtime_need, Some(meta), None, dispatch_routine);
+                if let Some(toggle) = toggle {
+                    operation = operation.governed_when(true, "routine", toggle);
+                }
+                operation
             }
             Commands::Script(command) => {
                 use super::super::script::ScriptSubcommand;
@@ -459,26 +478,6 @@ impl Commands {
             // ADR-0209 bearing 1 [ORB-10358]: friction is registry-driven, so
             // runtime need and audit metadata derive from its spec. A new
             // friction verb needs no edit here.
-            Commands::Lease(command) => {
-                use super::super::lease::LeaseSubcommand;
-                match &command.command {
-                    LeaseSubcommand::Operation(invocation) => {
-                        registry_operation(invocation, runtime_dispatch!(Lease))
-                    }
-                    // Token and listen commands run as the lease listener user
-                    // against its own token store, which audits mints,
-                    // revocations and refusals itself. They open no workspace,
-                    // so no Orbit audit row is written.
-                    LeaseSubcommand::Token(_) | LeaseSubcommand::Listen(_) => {
-                        CommandOperation::new(
-                            RuntimeNeed::Forbidden,
-                            None,
-                            None,
-                            dispatch_lease_listener_user,
-                        )
-                    }
-                }
-            }
             Commands::Friction(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Friction))
             }
@@ -488,9 +487,14 @@ impl Commands {
             // dispatch; the handler applies it as a human write.
             Commands::Decision(command) => {
                 use orbit_common::governance::decision::DecisionVerb;
-                let answers = command.command.spec.verb == DecisionVerb::Answer;
+                let (governed, subcommand) = match command.command.spec.verb {
+                    DecisionVerb::Answer => (true, "answer"),
+                    DecisionVerb::Reverse => (true, "reverse"),
+                    DecisionVerb::RuleAuto => (true, "rule-auto"),
+                    _ => (false, "answer"),
+                };
                 registry_operation(&command.command, runtime_dispatch!(Decision))
-                    .governed_when(answers, "decision", "answer")
+                    .governed_when(governed, "decision", subcommand)
             }
             Commands::Audit(command) => {
                 use super::super::audit::AuditSubcommand;
@@ -502,23 +506,34 @@ impl Commands {
                 CommandOperation::new(RuntimeNeed::Required, None, None, runtime_dispatch!(Audit))
                     .governed_when(prunes, "audit", "prune")
             }
+            // Fleet notices are registry-driven like friction.
+            Commands::Notice(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Notice))
+            }
+            // Resident mandates are registry-driven like notices.
+            Commands::Evolution(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Evolution))
+            }
+            Commands::Resident(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Resident))
+            }
+            // Crew memory is registry-driven like experiments.
+            Commands::Memory(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Memory))
+            }
             // Experiments are registry-driven like friction.
             Commands::Experiment(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Experiment))
             }
             // Codebase analytics is registry-driven like friction.
+            Commands::Attention(command) => {
+                let mut operation =
+                    registry_operation(&command.query, runtime_dispatch!(Attention));
+                operation.runtime_need = RuntimeNeed::HostReadOnly;
+                operation
+            }
             Commands::Codebase(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Codebase))
-            }
-            // The crew ladder report is registry-driven like codebase.
-            Commands::Crew(command) => {
-                registry_operation(&command.command, runtime_dispatch!(Crew))
-            }
-            // Visual capture is registry-driven like codebase; its Write
-            // effect (serving the checkout and writing captures) makes its
-            // runtime need required through the registry operation.
-            Commands::Visual(command) => {
-                registry_operation(&command.command, runtime_dispatch!(Visual))
             }
             // The agent scorecards are registry-driven like codebase.
             Commands::Agents(command) => {
@@ -527,6 +542,27 @@ impl Commands {
                     AgentsSubcommand::Operation(invocation) => {
                         registry_operation(invocation, runtime_dispatch!(Agents))
                     }
+                    // The ranking reads the scan; calibration writes the
+                    // workspace's season file and audits as an admin action.
+                    AgentsSubcommand::Rank(args) => match &args.action {
+                        None => CommandOperation::new(
+                            RuntimeNeed::ReadOnly,
+                            None,
+                            None,
+                            runtime_dispatch!(Agents),
+                        ),
+                        Some(_) => CommandOperation::new(
+                            RuntimeNeed::Required,
+                            Some(admin_meta(
+                                "agents",
+                                Some("rank-calibrate"),
+                                Some("rank_season"),
+                                None,
+                            )),
+                            None,
+                            runtime_dispatch!(Agents),
+                        ),
+                    },
                     // The probe submits one canary run per crew, so it opens
                     // the full runtime and audits as an admin action.
                     AgentsSubcommand::VisionProbe(_) => CommandOperation::new(
@@ -541,10 +577,6 @@ impl Commands {
                         runtime_dispatch!(Agents),
                     ),
                 }
-            }
-            // The deprecated orchestrator aliases are registry-driven too.
-            Commands::Orchestrator(command) => {
-                registry_operation(&command.command, runtime_dispatch!(Orchestrator))
             }
             Commands::Log(_) => CommandOperation::new(
                 RuntimeNeed::Required,
@@ -753,7 +785,6 @@ impl Commands {
                 let subcommand = match &command.command {
                     WebSubcommand::Serve(_) => "serve",
                     WebSubcommand::Connect(_) => "connect",
-                    WebSubcommand::Open(_) => "open",
                 };
                 CommandOperation::new(
                     RuntimeNeed::Forbidden,

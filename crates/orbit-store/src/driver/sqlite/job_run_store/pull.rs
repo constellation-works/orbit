@@ -6,7 +6,7 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::{
-    JobRun, JobRunState, PipelineState, REVIEW_ADMISSION_KEY, ReviewAdmission, ReviewTiming,
+    self, JobRun, JobRunState, PipelineState, REVIEW_ADMISSION_KEY, ReviewAdmission, ReviewTiming,
     RunIdRole,
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -167,6 +167,72 @@ pub(super) fn unsettled(
     workspace: &str,
 ) -> Result<Vec<LocalPullAdmission>, OrbitError> {
     store.with_read_connection(|conn| holding_records(conn, workspace))
+}
+
+/// Settled leaf run ids that may still have rebuildable output, in admission
+/// order.
+///
+/// `leaf_run_id IS NOT NULL` is the cheap column test that skips idle polls
+/// and refused requests without parsing their JSON: only a claim that created
+/// a leaf has one. The phase and the reclaim marker live in the record, so
+/// the returned id is `json_extract` of that record and a row already marked
+/// complete is left out. Nothing here deserializes an admission.
+pub(super) fn pending_build_reclaim_leaves(
+    store: &Store,
+    workspace: &str,
+) -> Result<Vec<String>, OrbitError> {
+    store.with_read_connection(|conn| {
+        let mut stmt = conn
+            .prepare(
+                "SELECT json_extract(record_json,'$.leaf_run_id') FROM local_pull_admissions \
+                 WHERE workspace_id=?1 AND leaf_run_id IS NOT NULL \
+                 AND json_extract(record_json,'$.phase')='settled' \
+                 AND json_extract(record_json,'$.leaf_run_id') IS NOT NULL \
+                 AND json_extract(record_json,'$.build_output_reclaim_complete') IS NOT 1 \
+                 ORDER BY rowid",
+            )
+            .map_err(sqlite_store_error)?;
+        let ids = stmt
+            .query_map([workspace], |row| row.get::<_, String>(0))
+            .map_err(sqlite_store_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sqlite_store_error)?;
+        Ok(ids)
+    })
+}
+
+/// Record that `leaf_run_id`'s settled claim has no reclaimable build output
+/// left. A missing or not-yet-settled admission is left unchanged.
+pub(super) fn note_build_output_clear(
+    store: &Store,
+    workspace: &str,
+    leaf_run_id: &str,
+) -> Result<(), OrbitError> {
+    store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+        let conn = tx.connection();
+        let Some(mut record) = conn
+            .query_row(
+                "SELECT record_json FROM local_pull_admissions \
+                 WHERE workspace_id=?1 AND leaf_run_id=?2",
+                params![workspace, leaf_run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(sqlite_store_error)?
+            .map(decode)
+            .transpose()?
+        else {
+            return Ok(());
+        };
+        if record.phase != LocalPullPhase::Settled
+            || record.leaf_run_id.as_deref() != Some(leaf_run_id)
+            || record.build_output_reclaim_complete
+        {
+            return Ok(());
+        }
+        record.build_output_reclaim_complete = true;
+        write(conn, workspace, &record)
+    })
 }
 
 /// `run_id`'s most recent settled claims against `destination` that failed
@@ -358,7 +424,7 @@ fn occupancy(
     let reviewing = active
         .iter()
         .filter(|(_, job, state)| {
-            job == CLAIMED_PR_PIPELINE
+            job == workflow::TASK_CLAIMED_PR_PIPELINE_JOB
                 && state
                     .as_deref()
                     .and_then(|raw| serde_json::from_str::<PipelineState>(raw).ok())
@@ -458,8 +524,8 @@ pub(super) fn drain_occupancy(
 /// bypass the lifecycle the claim exists to enforce.
 fn pipeline(request: &AdmissionRequest) -> Result<&'static str, OrbitError> {
     match request.ship.mode.as_str() {
-        "pr" => Ok(CLAIMED_PR_PIPELINE),
-        "local" => Ok(CLAIMED_LOCAL_PIPELINE),
+        "pr" => Ok(workflow::TASK_CLAIMED_PR_PIPELINE_JOB),
+        "local" => Ok(workflow::TASK_CLAIMED_LOCAL_PIPELINE_JOB),
         _ => Err(invalid("unsupported pulled leaf mode")),
     }
 }
@@ -482,8 +548,6 @@ fn claim_review_admission(
         } else if request.ship.before_pr {
             ReviewTiming::BeforePr
         } else {
-            // A selective-only contract: the leaf gate evaluates the
-            // captured policy at its open PR's pinned head.
             ReviewTiming::None
         },
         timing_source: CLAIM_SOURCE.into(),
@@ -495,7 +559,7 @@ fn claim_review_admission(
         required_validation_commands: review.required_validation_commands.clone(),
         baseline_commands: review.baseline_commands.clone(),
         host_evidence: review.host_evidence.clone(),
-        selective_before_landing: review.selective_before_landing.clone(),
+        selective_before_landing: None,
         captured_at: now,
     })
 }
@@ -520,9 +584,6 @@ fn claim_repair_input(repair: &ClaimRepair) -> serde_json::Value {
     })
 }
 
-pub(crate) const CLAIMED_PR_PIPELINE: &str = "task_claimed_pr_pipeline";
-pub(crate) const CLAIMED_LOCAL_PIPELINE: &str = "task_claimed_local_pipeline";
-
 /// The loose-leaf wrapper the legacy drain dispatches. It occupies a slot on
 /// behalf of the leaf beneath it, so it is only counted while nothing beneath
 /// it is.
@@ -531,10 +592,7 @@ const LEGACY_WRAPPER_PIPELINE: &str = "task_auto_pipeline";
 /// Every leaf definition that occupies one drain slot: the legacy pair a
 /// non-pulled drain still dispatches, and the claimed pair a pulled one does.
 fn is_leaf_pipeline(job: &str) -> bool {
-    matches!(
-        job,
-        "task_pr_pipeline" | "task_local_pipeline" | CLAIMED_PR_PIPELINE | CLAIMED_LOCAL_PIPELINE
-    )
+    workflow::is_delivery_leaf_job(job)
 }
 
 pub(super) fn allocate(
@@ -569,15 +627,6 @@ pub(super) fn allocate(
         return Err(invalid(
             "an owner with review.timing = before_pr or before_landing admits only a PR leaf \
              that runs the review gate",
-        ));
-    }
-    if request.ship.selective_policy().is_some()
-        && !(request.selective_review && request.review_gate && request.ship.mode == "pr")
-    {
-        return Err(invalid(
-            "an owner with an active selective before-landing policy admits only a PR leaf \
-             that declares selective-review capability; an older executor is refused rather \
-             than allowed to drop the policy",
         ));
     }
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
@@ -617,6 +666,7 @@ pub(super) fn allocate(
             settlement: None,
             refusal: None,
             settlement_refusal: None,
+            build_output_reclaim_complete: false,
         };
         write(conn, workspace, &record)?;
         prune_terminal_rows(conn, workspace)?;
@@ -660,7 +710,7 @@ pub(super) fn mutate(
                 if record.phase != LocalPullPhase::Claimed { return Err(invalid("leaf creation requires a persisted claim")); }
                 let claim = record.receipt.as_ref().and_then(|r| r.claim.as_ref()).ok_or_else(|| invalid("claim missing"))?;
                 let now = Utc::now();
-                let run_id = next_run_id_conn(conn, workspace, RunIdRole::Child, now)?;
+                let run_id = next_run_id_conn(conn, RunIdRole::Child, now)?;
                 let job = pipeline(&record.request)?;
                 // The claimed task lives in the owner's store, not this one, so
                 // the leaf carries the owner's snapshot of it. Crew resolution
@@ -671,7 +721,7 @@ pub(super) fn mutate(
                 // [ORB-17773] `crew_source` and `complexity` ride the
                 // snapshot so the follower can re-draw an automatic
                 // assignment under its own usage pressure.
-                let mut input = serde_json::json!({"task_ids": [claim.task_id], "base_branch": record.request.ship.base_branch, "base_sync": if job == CLAIMED_LOCAL_PIPELINE {"local"} else {"remote"}, "claimed_task": {"id": task.id, "crew": task.crew, "crew_source": task.crew_source, "complexity": task.complexity}});
+                let mut input = serde_json::json!({"task_ids": [claim.task_id], "base_branch": record.request.ship.base_branch, "base_sync": if job == workflow::TASK_CLAIMED_LOCAL_PIPELINE_JOB {"local"} else {"remote"}, "claimed_task": {"id": task.id, "crew": task.crew, "crew_source": task.crew_source, "complexity": task.complexity}});
                 input["experiment_capture"] = serde_json::to_value(record.receipt.as_ref().and_then(|receipt| receipt.experiments.as_ref())).map_err(|error| OrbitError::Store(format!("serialize experiment capture: {error}")))?;
                 // Carry the profile key already chosen by admission into the
                 // queued leaf. The host forecast then exchanges its reservation
@@ -704,7 +754,7 @@ pub(super) fn mutate(
                 if let (Some(repair), Some(object)) = (&claim.repair, input.as_object_mut()) {
                     object.insert(CLAIM_REPAIR_KEY.into(), claim_repair_input(repair));
                 }
-                let run = JobRun { run_id: run_id.clone(), job_id: job.into(), attempt: 1, state: JobRunState::Pending, scheduled_at: now, started_at: None, finished_at: None, duration_ms: None, created_at: now, pid: None, pid_start_time: None, input: Some(input.clone()), retry_source_run_id: None, knowledge_metrics: None, resolved_crew: None, crew_model: None, steps: vec![], executed_on: Some(claim.executed_on.clone()) };
+                let run = JobRun { build: Some(orbit_common::process::build::current_orbit_build()), run_id: run_id.clone(), job_id: job.into(), attempt: 1, state: JobRunState::Pending, scheduled_at: now, started_at: None, finished_at: None, duration_ms: None, created_at: now, pid: None, pid_start_time: None, input: Some(input.clone()), retry_source_run_id: None, knowledge_metrics: None, resolved_crew: None, crew_model: None, steps: vec![], executed_on: Some(claim.executed_on.clone()) };
                 let state = PipelineState::new(run_id.clone(), job.into(), input);
                 upsert_job_run_for_workspace_conn(conn, workspace, &run, Some(&state))?;
                 record.leaf_run_id = Some(run_id);

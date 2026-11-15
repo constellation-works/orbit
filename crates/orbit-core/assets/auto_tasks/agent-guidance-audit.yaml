@@ -23,7 +23,7 @@ template:
       `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["agent-guidance-audit","no-diff-expected","auto-task:agent-guidance-audit"],"limit":1,"model":"<agent-family>"}'`.
       The tag filter is AND. That provenance tag is carried only by a task
       minted from this definition. Fetch the artifact with
-      `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"agent-guidance-audit.json","model":"<agent-family>"}'`.
+      `orbit tool run orbit.task.artifact --input '{"action":"get","id":"<id>","path":"agent-guidance-audit.json","model":"<agent-family>"}'`.
       List artifacts first with
       `orbit tool run orbit.task.show --input '{"id":"<id>","field":"artifacts","model":"<agent-family>"}'`
       and skip a get when the path is absent.
@@ -171,7 +171,7 @@ template:
     ## Handoff
 
     Write `.orbit/tmp/agent-guidance-audit.json` and attach it with
-    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/agent-guidance-audit.json","path":"agent-guidance-audit.json","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this task ID>","source_path":".orbit/tmp/agent-guidance-audit.json","path":"agent-guidance-audit.json","model":"<agent-family>"}'`.
     The document contains:
 
     - `schema_version` 1 and `pinned_sha` (the full 40-character SHA).
@@ -201,8 +201,8 @@ template:
   required_tools:
   - orbit.search
   - orbit.task.add
-  - orbit.task.artifact.get
-  - orbit.task.artifact.put
+  - orbit.task.artifact:get
+  - orbit.task.artifact:put
   - orbit.task.list
   - orbit.task.show
   - orbit.task.update

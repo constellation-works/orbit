@@ -27,9 +27,7 @@ use std::path::{Component, Path, PathBuf};
 use orbit_common::OrbitError;
 use serde::Serialize;
 
-use super::super::git::{
-    git_command_success, git_output, git_output_with_env, git_run_bytes, git_success,
-};
+use super::super::git::{git_output, git_output_with_env, git_run_bytes, git_success};
 use super::super::operations::CANDIDATE_REF_PREFIX;
 
 /// The store's directory under the owning checkout.
@@ -81,7 +79,7 @@ pub(super) fn candidate_snapshot(worktree: &Path) -> Result<CandidateSnapshot, S
         // A single-tree recovery cannot preserve two versions of a staged
         // path, even when another working edit makes the snapshot nonempty.
         let staged = index_changed_paths(worktree, &head)?;
-        if !staged.is_empty() && !staged.is_disjoint(&index_changed_paths(worktree, &tree)?) {
+        if snapshot_drops_staged(worktree, &staged, &tree)? {
             return Err(OrbitError::Execution(
                 "staged paths differ from the working candidate; a single-tree recovery cannot preserve both versions"
                     .to_string(),
@@ -111,9 +109,27 @@ pub(super) fn candidate_snapshot(worktree: &Path) -> Result<CandidateSnapshot, S
     snapshot.map_err(|error| format!("candidate snapshot refused: {error}"))
 }
 
+/// Whether `staged_against_head` includes a path whose real index entry also
+/// differs from `tree`. One tree cannot recover both versions. An empty
+/// staged set is not a conflict, and the tree is not compared: that is the
+/// short-circuit worktree GC used before this helper existed.
+pub(in crate::executor::automation::vcs) fn snapshot_drops_staged(
+    worktree: &Path,
+    staged_against_head: &BTreeSet<Vec<u8>>,
+    tree: &str,
+) -> Result<bool, OrbitError> {
+    if staged_against_head.is_empty() {
+        return Ok(false);
+    }
+    Ok(!staged_against_head.is_disjoint(&index_changed_paths(worktree, tree)?))
+}
+
 /// Paths whose real index entries differ from a tree. NUL-delimited bytes
 /// preserve arbitrary Git path names, and disabling renames checks both ends.
-fn index_changed_paths(worktree: &Path, tree: &str) -> Result<BTreeSet<Vec<u8>>, OrbitError> {
+pub(in crate::executor::automation::vcs) fn index_changed_paths(
+    worktree: &Path,
+    tree: &str,
+) -> Result<BTreeSet<Vec<u8>>, OrbitError> {
     let diff = git_run_bytes(
         worktree,
         &[
@@ -211,11 +227,8 @@ pub(super) fn committed_recovery(
     }
     let contains_head = |recovery: &WorktreeGcRecovery| {
         recovery.commit == head
-            || git_command_success(
-                worktree,
-                &["merge-base", "--is-ancestor", &head, &recovery.commit],
-            )
-            .unwrap_or(false)
+            || crate::executor::automation::vcs::git::is_ancestor(worktree, &head, &recovery.commit)
+                .unwrap_or(false)
     };
     if let Some(recovery) = origin_run_refs(worktree, branch, task_ids, run_id)
         .unwrap_or_default()

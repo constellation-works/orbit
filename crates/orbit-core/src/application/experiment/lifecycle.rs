@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_common::security::token;
 use orbit_store::contracts::{
     ExperimentArmRow, ExperimentEventRow, ExperimentRecord, ExperimentRow,
     ExperimentStoreBackend as _, ExperimentWrite, ExperimentWriteOutcome,
@@ -15,8 +16,9 @@ use orbit_store::contracts::{
 use serde_json::{Value, json};
 
 use super::definition::{
-    ArmDefinition, ExperimentOverlay, parse_arms, parse_guardrails, parse_population,
-    validate_handle, validate_metric,
+    ArmDefinition, ExperimentOverlay, experiment_metric_is_review_derived,
+    experiment_metric_is_step_local, experiment_metric_names, parse_arms, parse_guardrails,
+    parse_population, require_lines_changed_guardrail, validate_handle, validate_metric,
 };
 use super::view::ExperimentView;
 use crate::OrbitRuntime;
@@ -87,7 +89,7 @@ impl OrbitRuntime {
             guardrails_json: "{}".into(),
             min_sample_per_arm: None,
             max_days: None,
-            salt: random_hex(16)?,
+            salt: experiment_random_hex(16)?,
             mode: "shadow".into(),
             status: DRAFT.into(),
             segment: 0,
@@ -134,7 +136,7 @@ impl OrbitRuntime {
     }
 
     /// Copy an experiment's definition into a new draft named `name`.
-    pub fn clone_experiment(
+    pub(crate) fn clone_experiment(
         &self,
         id_or_name: &str,
         name: &str,
@@ -146,7 +148,7 @@ impl OrbitRuntime {
         let experiment = ExperimentRow {
             id: String::new(),
             name: name.to_string(),
-            salt: random_hex(16)?,
+            salt: experiment_random_hex(16)?,
             status: DRAFT.into(),
             segment: 0,
             concluded_arm: None,
@@ -200,15 +202,28 @@ impl OrbitRuntime {
                 }
                 let settings = self.experiment_settings();
                 let overlays = validate_startable(&record, &settings.config_keys)?;
+                // Crew memory is gated on its own key too, read live so a
+                // disable takes effect at once.
+                if let Some((arm, _)) = overlays
+                    .iter()
+                    .find(|(_, overlay)| overlay.memory.is_some())
+                    && !self.current_crew_memory_enabled()
+                {
+                    return Err(OrbitError::PolicyDenied(format!(
+                        "experiment `{}` cannot start: arm `{arm}` delivers crew memory, and crew memory is disabled in this workspace (`crew_memory.enabled` is false)",
+                        current.name
+                    )));
+                }
                 self.validate_experiment_overlays(&current.name, &overlays)?;
                 self.validate_experiment_crews(&current.name, &overlays)?;
-                running_limit = Some(settings.max_running);
+                running_limit = Some(super::EXPERIMENTS_MAX_RUNNING);
                 experiment.status = RUNNING.into();
                 experiment.segment = 1;
-                (
-                    "started",
-                    json!({ "segment": 1, "weights": weights(&record.arms) }),
-                )
+                let mut detail = json!({ "segment": 1, "weights": weights(&record.arms) });
+                if let Some(warning) = self.review_derived_start_warning(current) {
+                    detail["warnings"] = json!([warning]);
+                }
+                ("started", detail)
             }
             ExperimentChange::Pause => {
                 require_status(current, &[RUNNING], "pause")?;
@@ -217,7 +232,7 @@ impl OrbitRuntime {
             }
             ExperimentChange::Resume => {
                 require_status(current, &[PAUSED], "resume")?;
-                running_limit = Some(self.experiment_settings().max_running);
+                running_limit = Some(super::EXPERIMENTS_MAX_RUNNING);
                 experiment.status = RUNNING.into();
                 ("resumed", json!({}))
             }
@@ -277,13 +292,75 @@ impl OrbitRuntime {
         self.write_change(&record, experiment, arms, kind, detail, by, running_limit)
     }
 
+    /// Delete a finished experiment that never applied a treatment, with its
+    /// arms, events and assignments.
+    ///
+    /// Only a draft, concluded or abandoned experiment qualifies, and only
+    /// when deleting it cannot orphan a reference: a live arm assignment
+    /// changed a task's run and is cited from `task.crew` and run captures,
+    /// and a conclusion with an arm filed a promotion task that names it.
+    /// Shadow assignments applied nothing. The event log goes with the
+    /// experiment, so the deletion itself is logged here.
+    pub fn delete_experiment(
+        &self,
+        id_or_name: &str,
+        by: ExperimentActor,
+    ) -> Result<Value, OrbitError> {
+        let record = self.experiment_record(id_or_name)?;
+        let current = &record.experiment;
+        require_status(current, &[DRAFT, CONCLUDED, ABANDONED], "delete")?;
+        if let Some(arm) = &current.concluded_arm {
+            return Err(OrbitError::InvalidInput(format!(
+                "cannot delete experiment `{}`: it concluded with arm `{arm}`, and its promotion task names it",
+                current.name
+            )));
+        }
+        let store = self.sqlite_store()?;
+        let workspace = self.workspace_id()?;
+        let applied = store
+            .experiment_assignments(&workspace, &current.id)?
+            .into_iter()
+            .filter(|assignment| assignment.arm.is_some())
+            .count();
+        if current.mode == "live" && applied > 0 {
+            return Err(OrbitError::InvalidInput(format!(
+                "cannot delete experiment `{}`: it ran live and assigned {applied} task(s) to arms, whose crews and runs cite it",
+                current.name
+            )));
+        }
+        if !store.delete_experiment(&workspace, &current.id, current.revision)? {
+            return Err(OrbitError::InvalidInput(format!(
+                "experiment `{}` changed while this delete was prepared; show it and retry",
+                current.name
+            )));
+        }
+        tracing::info!(
+            experiment = %current.id,
+            name = %current.name,
+            mode = %current.mode,
+            status = %current.status,
+            created_by = %current.created_by,
+            actor = %by.actor,
+            reason = by.reason.as_deref().unwrap_or_default(),
+            "experiment deleted"
+        );
+        Ok(json!({
+            "deleted": current.id,
+            "name": current.name,
+            "mode": current.mode,
+            "status": current.status,
+            "created_by": current.created_by,
+            "assignments": applied,
+        }))
+    }
+
     /// The experiment whose id, or else whose name, is `id_or_name`.
     pub fn experiment_view(&self, id_or_name: &str) -> Result<ExperimentView, OrbitError> {
         ExperimentView::from_record(self.experiment_record(id_or_name)?)
     }
 
     /// The workspace's experiments, oldest first.
-    pub fn experiment_views(
+    pub(crate) fn experiment_views(
         &self,
         status: Option<&str>,
     ) -> Result<Vec<ExperimentView>, OrbitError> {
@@ -299,6 +376,28 @@ impl OrbitRuntime {
             .into_iter()
             .map(ExperimentView::from_record)
             .collect()
+    }
+
+    /// The start warning for a review-derived primary metric in a workspace
+    /// whose effective review policy runs no review gate. A warning only: a
+    /// drain can add a review layer for its window (`run auto --review`), so
+    /// the policy at start does not settle whether tasks get settlements.
+    fn review_derived_start_warning(&self, experiment: &ExperimentRow) -> Option<String> {
+        let metric = experiment
+            .primary_metric
+            .as_deref()
+            .filter(|metric| experiment_metric_is_review_derived(metric))?;
+        let policy = self.operation_policy();
+        let timing = policy.review_timing();
+        if timing != orbit_config::ReviewTimingSetting::Off
+            || !policy.review_before_landing_hosts.value.is_empty()
+        {
+            return None;
+        }
+        Some(format!(
+            "primary metric `{metric}` is review-derived, but this workspace runs no review gate (review.timing = \"{}\"), so no enrolled task has a review gate settlement and `{metric}` will be unmeasured on every settled task; a drain can add a review layer for its window (run auto --review)",
+            timing.as_str()
+        ))
     }
 
     fn experiment_record(&self, id_or_name: &str) -> Result<ExperimentRecord, OrbitError> {
@@ -319,7 +418,7 @@ impl OrbitRuntime {
     ) -> Result<ExperimentView, OrbitError> {
         // A fresh random id; a collision reads as stale and draws again.
         for _ in 0..3 {
-            experiment.id = format!("exp-{}", random_hex(8)?);
+            experiment.id = format!("exp-{}", experiment_random_hex(8)?);
             let event = event_row(&experiment, None, kind, detail.clone(), &by);
             let write = ExperimentWrite {
                 experiment: experiment.clone(),
@@ -340,7 +439,10 @@ impl OrbitRuntime {
         ))
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one revision write carries the row, optional arms, audit event and running cap in a single call"
+    )]
     fn write_change(
         &self,
         record: &ExperimentRecord,
@@ -371,7 +473,7 @@ impl OrbitRuntime {
             ))),
             ExperimentWriteOutcome::RunningLimitReached { running } => {
                 Err(OrbitError::PolicyDenied(format!(
-                    "experiment `{}` cannot run: {running} experiment(s) already running and `experiments.max_running` is {}. Conclude, pause or abandon one first",
+                    "experiment `{}` cannot run: {running} experiment(s) already running and at most {} may run at once. Conclude, pause or abandon one first",
                     current.name,
                     running_limit.unwrap_or(running),
                 )))
@@ -453,6 +555,9 @@ fn apply_definition(
     }
     if let Some(metric) = input.primary_metric {
         validate_metric("primary_metric", &metric)?;
+        if experiment_metric_is_step_local(&metric) {
+            return Err(OrbitError::InvalidInput(step_local_primary_detail(&metric)));
+        }
         experiment.primary_metric = Some(metric);
     }
     if let Some(value) = input.guardrails {
@@ -472,6 +577,10 @@ fn apply_definition(
         }
         experiment.mode = mode;
     }
+    require_lines_changed_guardrail(
+        experiment.primary_metric.as_deref(),
+        &experiment.guardrails_json,
+    )?;
     Ok(())
 }
 
@@ -496,6 +605,17 @@ fn arm_row(position: usize, arm: ArmDefinition) -> ExperimentArmRow {
 
 fn position_u32(position: usize) -> u32 {
     u32::try_from(position).unwrap_or(u32::MAX)
+}
+
+/// The refusal detail for a step-local primary metric, naming the whole-task
+/// alternatives. Definition writes and the start precondition share it so a
+/// legacy draft points at the same fix.
+fn step_local_primary_detail(metric: &str) -> String {
+    let alternatives = experiment_metric_names()
+        .filter(|name| !experiment_metric_is_step_local(name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("primary metric `{metric}` is step-local; choose a whole-task metric: {alternatives}")
 }
 
 /// Whether a draft is complete enough to start, short of the checks that
@@ -523,9 +643,18 @@ fn validate_startable(
     if let Some(arm) = record.arms.iter().find(|arm| arm.weight == 0) {
         return Err(refuse(format!("arm `{}` has weight 0", arm.name)));
     }
-    if record.experiment.primary_metric.is_none() {
-        return Err(refuse("it has no primary metric".into()));
+    match record.experiment.primary_metric.as_deref() {
+        None => return Err(refuse("it has no primary metric".into())),
+        Some(metric) if experiment_metric_is_step_local(metric) => {
+            return Err(refuse(step_local_primary_detail(metric)));
+        }
+        Some(_) => {}
     }
+    require_lines_changed_guardrail(
+        record.experiment.primary_metric.as_deref(),
+        &record.experiment.guardrails_json,
+    )
+    .map_err(|error| refuse(error.to_string()))?;
     let mut overlays = Vec::with_capacity(record.arms.len());
     for arm in &record.arms {
         validate_handle("arm name", &arm.name).map_err(|error| refuse(error.to_string()))?;
@@ -677,14 +806,8 @@ fn event_row(
     }
 }
 
-fn random_hex(chars: usize) -> Result<String, OrbitError> {
-    let mut bytes = vec![0_u8; chars.div_ceil(2)];
-    getrandom::fill(&mut bytes)
-        .map_err(|error| OrbitError::Execution(format!("draw experiment randomness: {error}")))?;
-    let mut hex = bytes
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+fn experiment_random_hex(chars: usize) -> Result<String, OrbitError> {
+    let mut hex = token::random_hex(chars.div_ceil(2))?;
     hex.truncate(chars);
     Ok(hex)
 }

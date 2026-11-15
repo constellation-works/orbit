@@ -7,6 +7,7 @@ use orbit_common::storage::sqlite::{
 use orbit_common::{OrbitError, StorageLayer};
 use rusqlite::{Connection, OpenFlags};
 
+use super::change_stamps::TaskChangeStamps;
 use super::index_snapshot::TaskIndexSnapshots;
 use super::schema::{assert_readable_schema, migrate_writable};
 use crate::driver::sqlite::read_pool::{ReadGuard, ReadPool};
@@ -33,6 +34,7 @@ fn workspaces_dir_of(path: &Path) -> PathBuf {
 #[derive(Clone)]
 pub struct TaskRegistryStore {
     pub(super) index_snapshots: Arc<TaskIndexSnapshots>,
+    pub(super) change_stamps: Arc<TaskChangeStamps>,
     /// The single writer connection. Every mutating statement and every
     /// transaction serializes here; reads go through [`Self::read`].
     pub(super) conn: Arc<Mutex<Connection>>,
@@ -109,6 +111,7 @@ impl TaskRegistryStore {
 
         Ok(Self {
             index_snapshots: Arc::new(TaskIndexSnapshots::new(path)),
+            change_stamps: Arc::new(TaskChangeStamps::new(path)),
             conn: Arc::new(Mutex::new(conn)),
             readers: (!read_only).then(|| Arc::new(ReadPool::new(path.to_path_buf()))),
             workspaces_dir,
@@ -133,6 +136,7 @@ impl TaskRegistryStore {
         let readable = assert_readable_schema(&conn, path)?;
         Ok(Self {
             index_snapshots: Arc::new(TaskIndexSnapshots::new(path)),
+            change_stamps: Arc::new(TaskChangeStamps::new(path)),
             conn: Arc::new(Mutex::new(conn)),
             readers: None,
             workspaces_dir,

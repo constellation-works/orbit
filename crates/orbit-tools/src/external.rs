@@ -6,7 +6,7 @@ use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
 
-use crate::builtin::proc::spawn::enforce_program_allowlist;
+use crate::program_policy::enforce_program_allowlist;
 use crate::{TIMEOUT_DEFAULT_MS, Tool, ToolContext, upsert_env};
 
 const EXTERNAL_TOOL_TIMEOUT_OVERRIDE_ENV: &str = "ORBIT_EXTERNAL_TOOL_TIMEOUT_MS";

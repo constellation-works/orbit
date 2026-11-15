@@ -15,6 +15,7 @@
 
 use chrono::{Duration, Utc};
 use orbit_common::OrbitError;
+use orbit_common::security::token;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
@@ -64,7 +65,7 @@ impl Store {
             }
 
             let claim_id = super::unique_row_id(CLAIM_ID_PREFIX);
-            let claim_token = mint_claim_token();
+            let claim_token = mint_claim_token()?;
             let expires_at =
                 (Utc::now() + Duration::seconds(params.ttl_seconds as i64)).to_rfc3339();
             let diagnostics = diagnostics_json(
@@ -159,10 +160,11 @@ impl Store {
                 });
             };
 
-            let token_matches = params
-                .claim_token
-                .as_deref()
-                .is_some_and(|presented| existing.claim_token.as_deref() == Some(presented));
+            let token_matches = params.claim_token.as_deref().is_some_and(|presented| {
+                existing.claim_token.as_deref().is_some_and(|stored| {
+                    token::constant_time_eq(stored.as_bytes(), presented.as_bytes())
+                })
+            });
             if !token_matches && !params.force {
                 return Ok(WorkspaceClaimReleaseResult {
                     released: false,
@@ -201,7 +203,10 @@ impl Store {
                  WHERE {}
                    AND reservation_id = ?3
                    AND released_at IS NULL",
-                reservation_scope_clause(TaskReservationScope::WorkspaceClaim),
+                reservation_scope_clause(
+                    TaskReservationScope::WorkspaceClaim,
+                    params.workspace_id.as_deref(),
+                ),
             );
             let affected = tx
                 .tx
@@ -277,10 +282,11 @@ impl Store {
                 &now,
             )?;
             let token_matches = active.as_ref().is_some_and(|active| {
-                params
-                    .claim_token
-                    .as_deref()
-                    .is_some_and(|presented| active.claim_token.as_deref() == Some(presented))
+                params.claim_token.as_deref().is_some_and(|presented| {
+                    active.claim_token.as_deref().is_some_and(|stored| {
+                        token::constant_time_eq(stored.as_bytes(), presented.as_bytes())
+                    })
+                })
             });
             Ok(WorkspaceClaimCheckResult {
                 claim: active.map(|active| active.holder),
@@ -313,7 +319,7 @@ fn load_active_claim(
            AND expires_at > ?3
          ORDER BY created_at ASC, reservation_id ASC
          LIMIT 1",
-        reservation_scope_clause(TaskReservationScope::WorkspaceClaim),
+        reservation_scope_clause(TaskReservationScope::WorkspaceClaim, workspace_id),
     );
     let row = tx
         .tx
@@ -383,29 +389,7 @@ fn parse_diagnostics(raw: Option<&str>) -> (Option<String>, Option<String>) {
     (field("machine_id"), field("session_id"))
 }
 
-/// Mint a bearer token for a freshly acquired claim.
-///
-/// `RandomState` is seeded from the OS, which is the entropy source available
-/// here without taking a new dependency. The claim is an accident guard in the
-/// same sense as the capability model — every agent on the box runs as the same
-/// OS user and can bypass Orbit entirely — so the bar is "not guessable by a
-/// contender", not "resistant to an attacker with the database".
-fn mint_claim_token() -> String {
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
-
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    let mut seed = Vec::with_capacity(32);
-    for salt in 0..2u64 {
-        let mut hasher = RandomState::new().build_hasher();
-        hasher.write_u128(nanos);
-        hasher.write_u32(std::process::id());
-        hasher.write_u64(salt);
-        seed.extend_from_slice(&hasher.finish().to_le_bytes());
-    }
-    seed.extend_from_slice(&nanos.to_le_bytes());
-    format!("wsclaim-{}", blake3::hash(&seed).to_hex())
+/// Mint a bearer token for a freshly acquired claim from the OS random source.
+fn mint_claim_token() -> Result<String, OrbitError> {
+    Ok(format!("wsclaim-{}", token::random_hex(32)?))
 }

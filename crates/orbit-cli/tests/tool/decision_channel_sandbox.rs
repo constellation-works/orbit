@@ -9,7 +9,6 @@
 //! the nested `orbit tool run orbit.decision.*` itself, and the host that
 //! spawned it answers the call.
 #![cfg(target_os = "linux")]
-#![allow(missing_docs, clippy::expect_used, clippy::unwrap_used)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};

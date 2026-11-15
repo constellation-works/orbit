@@ -1,14 +1,15 @@
 //! Operator submission of one explicit escalation triage run.
 //!
 //! The dashboard's "Triage" action and `orbit run job
-//! escalation_triage_pipeline --input 'task_ids=["<id>"]'` (with
-//! `--input 'subject="block"'` for a blocked task) are the same submission:
+//! escalation_triage_pipeline --input 'task_ids=["<id>"]'` are the same
+//! submission:
 //! this module only adds the eligibility readout an operator surface shows
 //! and the refusals it wants *before* a run exists, each typed so the
 //! surface can name the reason. Eligibility is the pipeline's own
-//! candidacy — [`pilot_warning_candidacy`] for a held pilot assessment and
-//! [`triage_candidacy`] for a block episode — plus a live triage run
-//! already holding the task and a replica checkout. The pipeline's prepare
+//! candidacy — [`pilot_warning_candidacy`] for a held pilot assessment —
+//! plus a live triage run already holding the task and a replica checkout.
+//! A blocked task is not triaged: final recovery decides it and opens its
+//! decision card. The pipeline's prepare
 //! step repeats the candidacy and holder checks against current state, so
 //! a race between the preflight and the run still settles safely there.
 //! Triage only proposes: the submission itself never approves, promotes,
@@ -16,7 +17,6 @@
 
 use std::fmt;
 
-use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::TaskStatus;
@@ -27,8 +27,7 @@ use super::PipelineInvokeResult;
 use crate::OrbitRuntime;
 use crate::application::contracts::ESCALATION_TRIAGE_JOB;
 use crate::application::task::{
-    PilotWarningCandidacy, TaskAutomationPort, TaskRow, TriageCandidacy, pilot_warning_candidacy,
-    triage_candidacy,
+    PilotWarningCandidacy, TaskAutomationPort, TaskRow, pilot_warning_candidacy,
 };
 
 /// Bound on the live triage runs scanned for one task; non-terminal runs are
@@ -39,15 +38,15 @@ const TRIAGE_SCAN_LIMIT: usize = 50;
 /// was created.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EscalationTriageRefusal {
-    /// The task is neither `proposed` nor `blocked`, so neither triage
-    /// subject reads it.
+    /// The task is not `proposed`, so the pilot-warning triage does not read
+    /// it; a blocked task is decided by final recovery.
     UnsupportedStatus {
         /// The refused task.
         task_id: String,
         /// Its current status.
         status: TaskStatus,
     },
-    /// The task's assessment or block episode does not currently qualify;
+    /// The task's pilot assessment does not currently qualify;
     /// `reason` is the candidacy's stable token and `detail` its words.
     NotEligible {
         /// The refused task.
@@ -101,7 +100,8 @@ impl fmt::Display for EscalationTriageRefusal {
             Self::UnsupportedStatus { task_id, status } => write!(
                 f,
                 "escalation triage refuses {task_id} (status {status}); only a proposed task \
-                 held by pilot warnings or a blocked task may be triaged"
+                 held by pilot warnings may be triaged, and a blocked task is decided by \
+                 final recovery"
             ),
             Self::NotEligible {
                 task_id, detail, ..
@@ -158,16 +158,31 @@ struct BaseEligibility {
 
 impl OrbitRuntime {
     /// `row`'s escalation triage eligibility as the dashboard detail serves
-    /// it, or `None` when no Triage action is shown: the task is neither a
-    /// `proposed` task whose latest pilot assessment holds on warnings nor
-    /// a `blocked` task. A blocked task always carries the readout, so a
-    /// disabled action can name its reason.
+    /// it, or `None` when no Triage action is shown: the task is not a
+    /// `proposed` task whose latest pilot assessment holds on warnings.
     pub fn escalation_triage_eligibility_json(
         &self,
         row: &TaskRow,
     ) -> Result<Option<Value>, OrbitError> {
-        let Some(base) = self.base_eligibility(row) else {
-            return Ok(None);
+        let base = match self.base_eligibility(row) {
+            Ok(Some(base)) => base,
+            Ok(None) => return Ok(None),
+            // A comment store failure is not "not warning-held". The detail
+            // stays up; submit still propagates the error.
+            Err(error) => {
+                tracing::warn!(
+                    task_id = %row.task.id,
+                    error = %error,
+                    "pilot comments unreadable for escalation triage eligibility",
+                );
+                return Ok(Some(json!({
+                    "available": false,
+                    "subject": "pilot_warning",
+                    "reason": "comments_unreadable",
+                    "detail": format!("the task's pilot comments could not be read: {error}"),
+                    "run_id": Value::Null,
+                })));
+            }
         };
         // A live-run scan that cannot be read disables the action with its
         // reason rather than failing the detail read; the endpoint still
@@ -232,7 +247,7 @@ impl OrbitRuntime {
         }
         let row = self.get_task_row(task_id)?;
         let task = &row.task;
-        let Some(base) = self.base_eligibility(&row) else {
+        let Some(base) = self.base_eligibility(&row)? else {
             return Err(EscalationTriageSubmitError::Refused(match task.status {
                 // A proposed task with no held warnings: the readout hides
                 // the action, and the endpoint names the candidacy.
@@ -275,44 +290,31 @@ impl OrbitRuntime {
         )?)
     }
 
-    /// The candidacy half of eligibility: `None` when no action is shown.
-    fn base_eligibility(&self, row: &TaskRow) -> Option<BaseEligibility> {
+    /// The candidacy half of eligibility: `Ok(None)` when no action is shown.
+    /// An unreadable pilot comment is an error, not a missing hold.
+    fn base_eligibility(&self, row: &TaskRow) -> Result<Option<BaseEligibility>, OrbitError> {
         let task = &row.task;
         match task.status {
             TaskStatus::Proposed => {
+                let comments = self.resolve_task_pilot_comments(&task.id, &row.comments)?;
                 let candidacy =
-                    pilot_warning_candidacy(task, &row.comments, &row.history, &|id: &str| {
+                    pilot_warning_candidacy(task, &comments, &row.history, &|id: &str| {
                         matches!(
                             self.get_task(id),
                             Ok(found) if found.status == TaskStatus::Done
                         )
                     });
                 match candidacy {
-                    PilotWarningCandidacy::NotHeld => None,
-                    other => Some(BaseEligibility {
+                    PilotWarningCandidacy::NotHeld => Ok(None),
+                    other => Ok(Some(BaseEligibility {
                         subject: "pilot_warning",
                         available: matches!(other, PilotWarningCandidacy::Qualifies(_)),
                         reason: other.as_str().to_string(),
                         detail: other.detail(),
-                    }),
+                    })),
                 }
             }
-            TaskStatus::Blocked => {
-                let candidacy = triage_candidacy(
-                    task,
-                    &row.history,
-                    &row.comments,
-                    &row.artifacts,
-                    Utc::now(),
-                );
-                Some(BaseEligibility {
-                    subject: "block",
-                    available: matches!(candidacy, TriageCandidacy::Qualifies(_)),
-                    reason: candidacy.as_str().to_string(),
-                    detail: candidacy.detail(),
-                })
-            }
-            _ => None,
+            _ => Ok(None),
         }
     }
 

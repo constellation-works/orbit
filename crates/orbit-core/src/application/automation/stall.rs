@@ -19,6 +19,7 @@
 //! read can miss when two evaluations race; the store repeats that lookup
 //! and the insert in one immediate transaction so both resolve to one id.
 
+use super::consumer_states;
 use crate::OrbitRuntime;
 use chrono::{DateTime, Utc};
 use orbit_automation::delivery::adopt::AdoptionReport;
@@ -28,6 +29,7 @@ use orbit_store::contracts::{FrictionAddParams, FrictionListFilter};
 use orbit_types::record::FrictionStatus;
 use orbit_types::workflow::automation::recovery::AutomationStall;
 use std::fmt::Write as _;
+use std::ops::ControlFlow;
 
 /// Tag every automation stall record carries.
 const AUTOMATION_TAG: &str = "automation";
@@ -35,8 +37,6 @@ const AUTOMATION_TAG: &str = "automation";
 const DIVERGENCE_TAG: &str = "history-diverged";
 /// Last-resort tag when a workspace's vocabulary knows none of the others.
 const FALLBACK_TAG: &str = "other";
-/// Bound on each page of consumer states read for a complete stall report.
-const CONSUMER_PAGE_LIMIT: usize = 100;
 
 /// One stalled consumer on this host, as reported by `orbit doctor`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,30 +189,23 @@ pub fn stalled_consumers(runtime: &OrbitRuntime) -> Result<Vec<StalledConsumer>,
     let prefix = format!("{machine}/{}/", runtime.workspace_id()?);
 
     let store = runtime.automation_store()?;
-    let mut after: Option<String> = None;
     let mut stalled = Vec::new();
-    loop {
-        let page = store.automation_states_page(&prefix, after.as_deref(), CONSUMER_PAGE_LIMIT)?;
-        if page.is_empty() {
-            return Ok(stalled);
-        }
-        for state in page {
-            if !state.consumer.starts_with(&prefix)
-                || after.as_ref().is_some_and(|key| state.consumer <= *key)
-            {
-                return Err(OrbitError::Store(
-                    "automation state page is outside its prefix or not strictly ordered".into(),
-                ));
-            }
-            after = Some(state.consumer.clone());
-            if let Some(stall) = state.stall {
-                stalled.push(StalledConsumer {
-                    consumer: state.consumer,
-                    stall,
-                });
-            }
-        }
-    }
+    let _: ControlFlow<std::convert::Infallible> =
+        consumer_states::for_each_workspace_consumer_state(
+            &prefix,
+            |after, limit| store.automation_states_page(&prefix, after, limit),
+            |state| &state.consumer,
+            |state| {
+                if let Some(stall) = state.stall {
+                    stalled.push(StalledConsumer {
+                        consumer: state.consumer,
+                        stall,
+                    });
+                }
+                Ok(ControlFlow::Continue(()))
+            },
+        )?;
+    Ok(stalled)
 }
 
 /// The stable substring that identifies this divergence across consumers,

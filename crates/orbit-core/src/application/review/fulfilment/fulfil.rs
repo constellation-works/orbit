@@ -14,7 +14,9 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use super::super::evidence::{evidence_artifact_path, route_evidence_findings};
+use super::super::evidence::{
+    canonical_requirements, evidence_artifact_path, route_evidence_findings,
+};
 use super::codeql::admitted_codeql_args;
 use crate::OrbitRuntime;
 use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskUpdateParams, recovery_checkout_path};
@@ -132,10 +134,12 @@ impl OrbitRuntime {
     ) -> Result<Vec<EvidenceRun>, (FulfilmentRefusal, String)> {
         // Persisted holds can predate review admission's path guards. Refuse
         // unsafe locators before running any candidate-controlled script.
-        for requirement in &hold.requirements {
-            fulfilment_artifact_paths(&requirement.artifact)
-                .map_err(|error| (FulfilmentRefusal::ArtifactNotAllowed, error.to_string()))?;
-        }
+        canonical_requirements(&hold.requirements).ok_or_else(|| {
+            (
+                FulfilmentRefusal::ArtifactNotAllowed,
+                "external evidence result and log paths must be distinct and valid".to_string(),
+            )
+        })?;
         if let Some((refusal, reason)) = self.fulfilment_owner_refusal() {
             return Err((refusal, reason));
         }

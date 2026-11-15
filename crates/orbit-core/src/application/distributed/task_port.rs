@@ -10,4 +10,8 @@ impl TaskDistributedPort for OrbitRuntime {
     fn pilot_assessment_crew(&self, state: &PipelineState) -> Option<String> {
         pilot_run_crew(state)
     }
+
+    fn external_merge_completion_authority(&self) -> Option<String> {
+        self.owner_completion_authority()
+    }
 }

@@ -53,6 +53,12 @@ def load_json(path: Path, label: str) -> dict[str, Any] | None:
     except json.JSONDecodeError as exc:
         errors.append(f"{label} is not valid JSON: {exc}")
         return None
+    except UnicodeDecodeError as exc:
+        errors.append(f"{label} is not valid JSON: {exc}")
+        return None
+    except OSError as exc:
+        errors.append(f"{label} cannot be read: {exc}")
+        return None
     if not isinstance(payload, dict):
         errors.append(f"{label} must contain a JSON object")
         return None
@@ -96,7 +102,10 @@ def optional_https(payload: dict[str, Any], key: str, label: str) -> None:
     value = payload.get(key)
     if value is None:
         return
-    parsed = urlparse(value) if isinstance(value, str) else None
+    try:
+        parsed = urlparse(value) if isinstance(value, str) else None
+    except ValueError:
+        parsed = None
     if parsed is None or parsed.scheme != "https" or not parsed.netloc:
         errors.append(f"{label}.{key} must be an absolute https:// URL")
 
@@ -117,7 +126,10 @@ def reject_user_specific_paths(value: Any, path: str) -> None:
     if isinstance(value, str):
         if "CLAUDE_PROJECT_DIR" in value:
             errors.append(f"{path} must not reference CLAUDE_PROJECT_DIR")
-        if str(Path.home()) in value:
+        # HOME=/ makes Path.home() the filesystem root, which is a substring
+        # of every slash-containing value, including the @orbit-tools/cli pin.
+        home = str(Path.home())
+        if home not in {"", "/"} and home in value:
             errors.append(f"{path} must not embed a user-specific absolute home path")
         return
     if isinstance(value, list):
@@ -134,7 +146,11 @@ def validate_skill_frontmatter(skill_dir: Path) -> None:
     if not skill_path.is_file():
         errors.append(f"skill {skill_dir.name} is missing SKILL.md")
         return
-    text = skill_path.read_text(encoding="utf-8")
+    try:
+        text = skill_path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError) as exc:
+        errors.append(f"skill {skill_dir.name} SKILL.md cannot be read: {exc}")
+        return
     if not text.startswith("---\n"):
         errors.append(f"skill {skill_dir.name} must start with YAML frontmatter")
         return
@@ -197,6 +213,8 @@ if manifest is not None:
         errors.append("plugin.json.mcpServers must be a non-empty object for Orbit")
     else:
         reject_user_specific_paths(mcp_servers, "plugin.json.mcpServers")
+        if not isinstance(mcp_servers.get("orbit"), dict):
+            errors.append("plugin.json.mcpServers.orbit must be an object")
         for server_name, server in mcp_servers.items():
             if not isinstance(server_name, str) or not server_name.strip():
                 errors.append("plugin.json.mcpServers keys must be non-empty strings")
@@ -207,16 +225,22 @@ if manifest is not None:
             if not isinstance(command, str) or not command.strip():
                 errors.append(f"plugin.json.mcpServers.{server_name}.command must be non-empty")
             args = server.get("args")
-            if args is not None and (
-                not isinstance(args, list)
-                or not all(isinstance(arg, str) and arg.strip() for arg in args)
-            ):
-                errors.append(f"plugin.json.mcpServers.{server_name}.args must be an array of strings")
+            # Orbit's launch args are required. Another server may omit args.
+            args_required = server_name == "orbit" or args is not None
+            args_well_formed = (
+                isinstance(args, list)
+                and all(isinstance(arg, str) and arg.strip() for arg in args)
+            )
+            if args_required and not args_well_formed:
+                errors.append(
+                    f"plugin.json.mcpServers.{server_name}.args must be an array of strings"
+                )
             elif (
-                version is not None
-                and server_name == "orbit"
+                server_name == "orbit"
+                and version is not None
                 and isinstance(command, str)
-                and isinstance(args, list)
+                and command.strip()
+                and args_well_formed
             ):
                 expected_args = ["-y", f"@orbit-tools/cli@{version}", "mcp", "serve"]
                 stale = any(

@@ -8,7 +8,8 @@
 
 use chrono::{DateTime, Duration, SubsecRound, Utc};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{OrbitRuntime, ShipMode, TaskComplexity, TaskStatus, WorkspaceRuntimeBinding};
+use orbit_core::runtime::WorkspaceRuntimeBinding;
+use orbit_core::{OrbitRuntime, ShipMode, TaskComplexity, TaskStatus};
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::{JobRunState, JobRunTrigger};
 use serde_json::{Value, json};
@@ -472,7 +473,11 @@ fn a_purpose_assignment_redraws_within_its_pool_when_its_provider_is_limited() {
     let created = fx.filed_task(None, &["baseline-red-repair"], "file:purpose.txt");
     assert_eq!(created.crew.as_deref(), Some("opus"), "{created:?}");
     assert_eq!(
-        created.crew_source.as_deref(),
+        created
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("purpose:baseline_red_repair"),
         "{created:?}"
     );
@@ -527,7 +532,14 @@ fn a_purpose_assignment_redraws_within_its_pool_when_its_provider_is_limited() {
 
     // An explicit crew on a purpose-tagged task is still a pin.
     let explicit = fx.filed_task(Some("opus"), &["baseline-red-repair"], "file:explicit.txt");
-    assert_eq!(explicit.crew_source.as_deref(), Some("explicit"));
+    assert_eq!(
+        explicit
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("explicit")
+    );
     let entry = fx.readiness(&explicit.id);
     assert_eq!(entry["eligible"], false, "{entry}");
     assert_eq!(entry["reason"], "provider_limit", "{entry}");
@@ -698,7 +710,14 @@ fn an_auto_task_explicit_crew_is_reassigned_when_its_provider_is_limited() {
         &["auto-task:ux-review-ui"],
         "file:auto-reassigned.txt",
     );
-    assert_eq!(created.crew_source.as_deref(), Some("explicit"));
+    assert_eq!(
+        created
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("explicit")
+    );
     let task = created.id.clone();
     fx.read_claude(93.0, false, Utc::now() + Duration::hours(2));
 
@@ -711,7 +730,11 @@ fn an_auto_task_explicit_crew_is_reassigned_when_its_provider_is_limited() {
     let stored = runtime.get_task(&task).unwrap();
     assert_eq!(stored.crew.as_deref(), Some("sol"), "{stored:?}");
     assert_eq!(
-        stored.crew_source.as_deref(),
+        stored
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("pool:hard"),
         "{stored:?}"
     );
@@ -803,7 +826,11 @@ fn an_auto_task_explicit_crew_is_reassigned_when_its_provider_is_limited() {
         "{stored:?}"
     );
     assert_eq!(
-        stored.crew_source.as_deref(),
+        stored
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("redraw:provider_limit"),
         "{stored:?}"
     );
@@ -954,9 +981,195 @@ fn muse_windows_gate_admission_and_remain_visible_with_gating_off() {
     );
 }
 
+// A creation-time purpose draw excluded by a later drain allowlist must be
+// redrawn from that purpose pool, while explicit and disjoint crews wait.
+fn allowlist_redraws_a_purpose_assignment() {
+    substitute_worker();
+    let config =
+        |pool: &str| purpose_limit_config(pool, "").replace("baseline_red_repair =", "review =");
+    let fx = Fixture::new(&config(r#"["opus"]"#));
+    let task = fx
+        .runtime()
+        .add_task(TaskAddParams {
+            title: "Review fixture".into(),
+            description: "Review a delivery.".into(),
+            acceptance_criteria: vec!["Reviewed.".into()],
+            plan: "Review.".into(),
+            complexity: TaskComplexity::Hard,
+            context_files: vec!["dir:.".into()],
+            task_type: Some(orbit_core::TaskType::Chore),
+            status: Some(TaskStatus::Backlog),
+            crew: Some("opus".into()),
+            crew_source: Some("workflow.purpose_crews.review".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(task.crew.as_deref(), Some("opus"));
+    assert_eq!(
+        task.crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("workflow.purpose_crews.review")
+    );
+    let explicit = fx.filed_task(
+        Some("opus"),
+        &["crew-purpose:review"],
+        "file:explicit-review.txt",
+    );
+    fx.configure(&config(r#"["opus:1", "sol:3", "luna:1"]"#));
+    assert_eq!(
+        fx.readiness_allowing(&task.id, &["sol", "luna"])["eligible"],
+        true
+    );
+    assert_eq!(
+        fx.readiness_allowing(&explicit.id, &["sol"])["reason"],
+        "crew_not_allowed"
+    );
+    assert_eq!(
+        fx.readiness_allowing(&task.id, &["flash"])["reason"],
+        "crew_not_allowed"
+    );
+    let admitted =
+        fx.replay_admission(json!({"task_ids": [task.id], "allowed_crews": ["sol", "luna"]}));
+    assert!(
+        admitted["crew"] == "sol" || admitted["crew"] == "luna",
+        "{admitted}"
+    );
+    assert_eq!(
+        admitted["crew_selection"]["eligible_pool"],
+        json!([{"name":"luna","weight":1}, {"name":"sol","weight":3}])
+    );
+    let updated = fx.runtime().get_task(&task.id).unwrap();
+    assert_eq!(updated.crew.as_deref(), admitted["crew"].as_str());
+    assert_eq!(
+        updated
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("workflow.purpose_crews.review")
+    );
+}
+
+/// A host's exhausted provider must not receive a creation-time pool draw,
+/// including when it is the pool's only member. Admission can retry later.
+fn creation_pool_draws_skip_provider_limited_crews() {
+    use chrono::{Duration, Utc};
+    use orbit_types::task::TaskComplexity;
+    use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
+
+    for (route, tags, source) in [
+        ("medium_complexity_crews = POOL", vec![], "pool:medium"),
+        (
+            "[workflow.purpose_crews]\nbaseline_red_repair = POOL",
+            vec!["crew-purpose:baseline_red_repair".to_string()],
+            "purpose:baseline_red_repair",
+        ),
+        (
+            "[[workflow.task_types]]\nname = \"repair\"\ntags = [\"repair\"]\n\
+             [workflow.type_complexity_crews.repair]\nmedium = POOL",
+            vec!["repair".to_string()],
+            "type:repair/medium",
+        ),
+    ] {
+        let fx = Fixture::new(&config("[]", ""));
+        let root = &fx.root;
+        let workspace = root.path().join("repo/.orbit");
+        let configure = |pool: &str| {
+            std::fs::write(
+                workspace.join("config.toml"),
+                format!(
+                    "[workflow]\ndefault_crew = \"orchestration\"\ncrew_selection = \"static\"\n{}\n\
+                     [crews.implementer]\nprovider = \"antigravity\"\nmodel = \"flash-model\"\n\
+                     [crews.orchestration]\nprovider = \"codex\"\nmodel = \"available-model\"\n",
+                    route.replace("POOL", pool)
+                ),
+            )
+            .expect("write pool configuration");
+            OrbitRuntime::from_roots(&root.path().join("global"), &workspace)
+                .expect("reload runtime")
+        };
+        let runtime = configure("[\"implementer\"]");
+        let mut reading = ProviderLimitObservation {
+            provider: "antigravity".into(),
+            account: None,
+            model: None,
+            window: None,
+            exhausted: true,
+            source: ProviderLimitSource::Error,
+            resets_at: Some(Utc::now() + Duration::days(1)),
+            used_percent: None,
+            window_minutes: None,
+            gating: true,
+            partial: false,
+            observed_at: Utc::now(),
+            run_id: None,
+            crew: Some("implementer".into()),
+            detail: "Individual quota reached".into(),
+        };
+        runtime
+            .record_provider_limit(&reading)
+            .expect("record quota");
+        let add = |runtime: &OrbitRuntime, crew| {
+            runtime
+                .add_task(TaskAddParams {
+                    title: "Creation provider limit fixture".into(),
+                    complexity: TaskComplexity::Medium,
+                    tags: tags.clone(),
+                    crew,
+                    ..Default::default()
+                })
+                .expect("creation succeeds while providers are limited")
+        };
+        let waiting = add(&runtime, None);
+        assert_eq!(waiting.crew, None, "{source}: a wholly limited pool waits");
+        assert_eq!(waiting.crew_source, None);
+
+        let runtime = configure("[\"implementer:100\", \"orchestration:1\"]");
+        let available = add(&runtime, None);
+        assert_eq!(available.crew.as_deref(), Some("orchestration"), "{source}");
+        assert_eq!(
+            available
+                .crew_source
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some(source)
+        );
+        let pinned = add(&runtime, Some("implementer".into()));
+        assert_eq!(pinned.crew.as_deref(), Some("implementer"));
+        assert_eq!(
+            pinned
+                .crew_source
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("explicit")
+        );
+
+        reading.resets_at = Some(Utc::now() - Duration::minutes(1));
+        runtime
+            .record_provider_limit(&reading)
+            .expect("reset quota");
+        let runtime = configure("[\"implementer\"]");
+        let reset = add(&runtime, None);
+        assert_eq!(reset.crew.as_deref(), Some("implementer"));
+        assert_eq!(
+            reset
+                .crew_source
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some(source)
+        );
+    }
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_task_waits_on_an_exhausted_provider_until_the_reset_scenarios,
+    creation_pool_draws_skip_provider_limited_crews,
     a_task_waits_on_an_exhausted_provider_until_the_reset,
     live_provider_policy_reloads_and_keeps_the_last_good_config,
     an_explicit_crew_waits_unless_the_policy_draws_from_its_pool,
@@ -964,6 +1177,7 @@ crate::scenario_table!(
     an_off_override_leaves_an_exhausted_provider_eligible,
     muse_windows_gate_admission_and_remain_visible_with_gating_off,
     a_recorded_antigravity_quota_keeps_low_complexity_work_off_its_crew_until_the_reset,
+    allowlist_redraws_a_purpose_assignment,
     a_purpose_assignment_redraws_within_its_pool_when_its_provider_is_limited,
     an_auto_task_explicit_crew_is_reassigned_when_its_provider_is_limited
 );

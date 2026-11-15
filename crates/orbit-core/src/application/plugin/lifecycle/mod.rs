@@ -15,7 +15,9 @@ pub use enable::{
 pub(super) use enable::{
     apply_enabled_contributions, resolve_consented_programs, unrequested_grant_warnings,
 };
-pub use migrate::{PluginMigrateRequest, migrate_plugin_sidecars};
+pub use migrate::{
+    PluginMigrateRequest, SidecarManifest, load_sidecar_manifest, migrate_plugin_sidecars,
+};
 pub(super) use record::{installed_plugin, verified_install_path};
 #[cfg(test)]
 pub(super) use remove::FAIL_TREE_DELETE;

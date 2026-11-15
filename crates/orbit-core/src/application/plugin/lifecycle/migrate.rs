@@ -4,7 +4,10 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
-use orbit_tools::plugin::{load_sidecar_manifest, migrate_sidecars};
+use orbit_tools::plugin::migrate_sidecars;
+/// The v1 sidecar contract, shared with `orbit tool add` so both commands
+/// read, validate and refuse the same files.
+pub use orbit_tools::plugin::{SidecarManifest, load_sidecar_manifest};
 use orbit_types::plugin::{MANIFEST_FILE_NAME, plugin_root_in};
 
 /// What `orbit plugin migrate` was asked to fold together.

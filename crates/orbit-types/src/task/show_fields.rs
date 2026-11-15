@@ -16,21 +16,25 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value, json};
 
 use crate::task::{
-    ArtifactManifestFileV2, Task, TaskOsRequirement, TaskStatus, resolve_task_dependencies,
-    resolve_task_relations, task_readiness_json,
+    ArtifactManifestFileV2, GITHUB_PR_EXTERNAL_REF_SYSTEM, LazyTaskReferenceIndex, Task,
+    TaskOsRequirement, TaskStatus, project_task_relations_lazily, resolve_task_dependencies_lazily,
+    task_readiness_json,
 };
 
-/// String-literal CSV of [`TASK_SHOW_PROJECTION_FIELDS`], for `concat!` in
-/// clap help and other const contexts.
-#[macro_export]
-macro_rules! task_show_projection_fields_csv {
-    () => {
-        "id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, granted_tools, requires_labels, not_before, started_at, scheduled_hold, plan, execution_summary, context_files, created_by, created_by_model, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, placement_wait, experiments, readiness, pilot_warnings, open_decisions, orchestrator, orchestrator_model, orchestrator_model_source, origin, rule_fingerprint, created_at, updated_at, comments, history, artifacts"
+/// Defines the authoritative `orbit.task.show` `--fields` / `fields` / `field`
+/// vocabulary and its comma-separated form from one name list, so the two can
+/// no longer drift.
+macro_rules! define_task_show_projection_fields {
+    ($first:literal $(, $rest:literal)* $(,)?) => {
+        /// Authoritative `orbit.task.show` `--fields` / `fields` / `field` vocabulary.
+        pub const TASK_SHOW_PROJECTION_FIELDS: &[&str] = &[$first $(, $rest)*];
+        /// Comma-separated form of [`TASK_SHOW_PROJECTION_FIELDS`].
+        pub const TASK_SHOW_PROJECTION_FIELDS_CSV: &str =
+            concat!($first $(, ", ", $rest)*);
     };
 }
 
-/// Authoritative `orbit.task.show` `--fields` / `fields` / `field` vocabulary.
-pub const TASK_SHOW_PROJECTION_FIELDS: &[&str] = &[
+define_task_show_projection_fields!(
     "id",
     "parent_id",
     "title",
@@ -73,6 +77,8 @@ pub const TASK_SHOW_PROJECTION_FIELDS: &[&str] = &[
     "readiness",
     "pilot_warnings",
     "open_decisions",
+    "final_recovery",
+    "completion_hold",
     "orchestrator",
     "orchestrator_model",
     "orchestrator_model_source",
@@ -83,7 +89,7 @@ pub const TASK_SHOW_PROJECTION_FIELDS: &[&str] = &[
     "comments",
     "history",
     "artifacts",
-];
+);
 
 /// Stable top-level keys of the base task JSON, in output order.
 ///
@@ -128,9 +134,6 @@ pub const TASK_SHOW_PUBLIC_DTO_FIELDS: &[&str] = &[
     "updated_at",
 ];
 
-/// Comma-separated form of [`TASK_SHOW_PROJECTION_FIELDS`].
-pub const TASK_SHOW_PROJECTION_FIELDS_CSV: &str = crate::task_show_projection_fields_csv!();
-
 /// The `orbit.task.show` selector that answers with the task's delivery
 /// observation instead of a record projection. It is not a task field: it
 /// reads the run that delivered the task and combines with no other field.
@@ -143,7 +146,20 @@ pub fn is_task_show_projection_field(name: &str) -> bool {
 
 /// Actionable error for a name that is not in the vocabulary.
 pub fn unknown_task_show_field_message(name: &str) -> String {
-    format!("unknown field selector `{name}`. Valid values: {TASK_SHOW_PROJECTION_FIELDS_CSV}")
+    let message =
+        format!("unknown field selector `{name}`. Valid values: {TASK_SHOW_PROJECTION_FIELDS_CSV}");
+    match name {
+        "final_validation_commands" => format!(
+            "{message}. Read `final_validation_commands` only from the injected execution envelope as `task.final_validation_commands`; it is absent when empty and is not an `orbit.task.show` field."
+        ),
+        "blocked_by" => format!(
+            "{message}. Use `dependencies`, `resolved_dependencies` or `relations` instead."
+        ),
+        "warnings" => format!(
+            "{message}. `warnings` is optional write-response metadata, not a task field, and is absent when empty. To receive it, omit `fields` on the original valid `orbit.task.add` or `orbit.task.update` request: an unprojected object response carries any warnings. Do not replay a write that succeeded or whose outcome is unknown; check with `orbit.task.show` first."
+        ),
+        _ => message,
+    }
 }
 
 /// Whether the task status refuses the writes an implementer must make.
@@ -171,6 +187,33 @@ pub fn task_os_requirement_json(task: &Task) -> Option<Value> {
             "source": {"tags": requirement.any_of.iter().map(|os| os.tag()).collect::<Vec<_>>()},
         })
     })
+}
+
+/// `external_refs` in the order `orbit task show` presents them: the latest
+/// recorded `github-pr` first, so the task's current delivery is the one the
+/// record reports. Storage appends (`push_external_ref_if_missing`), so the
+/// last recorded pull request is the current one; a requeued task that opened
+/// a fresh pull request would otherwise keep reporting the closed earlier one
+/// first. Non-PR refs follow the pull requests in their recorded order.
+///
+/// Every surface that serves a task record reads this order through
+/// [`task_show_record_field_json`], so list rows, projections and compact write
+/// responses agree with show.
+pub fn ordered_external_refs_for_show(
+    refs: &[crate::task::ExternalRef],
+) -> Vec<crate::task::ExternalRef> {
+    let mut prs: Vec<crate::task::ExternalRef> = refs
+        .iter()
+        .filter(|reference| reference.system == GITHUB_PR_EXTERNAL_REF_SYSTEM)
+        .cloned()
+        .collect();
+    prs.reverse();
+    let others: Vec<crate::task::ExternalRef> = refs
+        .iter()
+        .filter(|reference| reference.system != GITHUB_PR_EXTERNAL_REF_SYSTEM)
+        .cloned()
+        .collect();
+    prs.into_iter().chain(others).collect()
 }
 
 /// JSON for a Task-local (non-sidecar) projection field.
@@ -206,7 +249,7 @@ pub fn task_show_record_field_json(task: &Task, field: &str) -> Option<Value> {
         "priority" => Some(json!(task.priority.to_string())),
         "complexity" => Some(json!(task.complexity.map(|value| value.to_string()))),
         "pr_status" => Some(json!(task.pr_status)),
-        "external_refs" => Some(json!(task.external_refs)),
+        "external_refs" => Some(json!(ordered_external_refs_for_show(&task.external_refs))),
         "source_task_id" => Some(json!(task.source_task_id())),
         "job_run_id" => Some(json!(task.job_run_id)),
         "job_run_machine" => Some(json!(task.job_run_machine)),
@@ -234,23 +277,24 @@ pub fn task_show_reference_field_json(
     field: &str,
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Option<Value> {
-    match field {
-        "resolved_dependencies" => Some(json!(task_dependency_labels(task, status_by_id))),
-        "relations" => Some(json!(resolve_task_relations(task, status_by_id))),
-        _ => None,
-    }
+    reference_field_json(task, field, &LazyTaskReferenceIndex::new(status_by_id))
 }
 
-/// The `resolved_dependencies` labels: each dependency with the status
-/// `status_by_id` gives it.
-pub fn task_dependency_labels(
+fn reference_field_json(
     task: &Task,
-    status_by_id: &BTreeMap<String, TaskStatus>,
-) -> Vec<String> {
-    resolve_task_dependencies(task, status_by_id)
-        .into_iter()
-        .map(|dependency| dependency.label())
-        .collect()
+    field: &str,
+    reference_index: &LazyTaskReferenceIndex<'_>,
+) -> Option<Value> {
+    match field {
+        "resolved_dependencies" => Some(json!(
+            resolve_task_dependencies_lazily(task, reference_index)
+                .into_iter()
+                .map(|dependency| dependency.label())
+                .collect::<Vec<_>>()
+        )),
+        "relations" => Some(json!(project_task_relations_lazily(task, reference_index))),
+        _ => None,
+    }
 }
 
 /// The base task JSON every read surface shares: CLI `--json`, the tool host
@@ -266,13 +310,16 @@ pub fn task_base_json(
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Map<String, Value> {
     let mut object = Map::new();
+    // Both reference fields share one prefix index, built only if a target
+    // needs it: building it scans the whole status snapshot.
+    let reference_index = LazyTaskReferenceIndex::new(status_by_id);
     for &field in TASK_SHOW_PUBLIC_DTO_FIELDS {
         let value = match field {
             // Stored crew provenance; part of the record but not yet a
             // `--fields` selector.
             "crew_source" => json!(task.crew_source),
             _ => task_show_record_field_json(task, field)
-                .or_else(|| task_show_reference_field_json(task, field, status_by_id))
+                .or_else(|| reference_field_json(task, field, &reference_index))
                 .unwrap_or(Value::Null),
         };
         object.insert(field.to_string(), value);

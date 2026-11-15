@@ -26,7 +26,10 @@ import sys
 from datetime import datetime
 
 CHECK = "Check / Clippy / Test"
-AWAITED = ("Test build", "Test shard 1/3", "Test shard 2/3", "Test shard 3/3")
+# Jobs the Check job awaits (.github/workflows/ci.yml), including both guardrails jobs.
+AWAITED = ("Test build", "Test shard 1/3", "Test shard 2/3", "Test shard 3/3", "Test extra partition",
+           "Test partition 2", *(f"Test partition {k}" for k in range(6, 13)),
+           "CI guardrails", "CI QA guardrails")
 
 
 def parse_time(value):
@@ -62,7 +65,7 @@ def summarise_run(run):
     check = jobs.get(CHECK, {})
     conclusion = check.get("conclusion")
     duration = job_duration(check) if check else None
-    executed = conclusion not in (None, "skipped", "cancelled") and duration is not None and duration > 0
+    executed = conclusion not in (None, "skipped", "cancelled") and duration is not None
     last = None
     last_completed = None
     for name in AWAITED:
@@ -104,7 +107,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--limit", type=int, default=20,
                         help="latest completed PR CI runs to read (default 20)")
-    parser.add_argument("--budget-seconds", type=float, default=600)
+    parser.add_argument("--budget-seconds", type=float, default=400)
     parser.add_argument("--from-json", help="replay a saved run list instead of calling gh")
     args = parser.parse_args()
 

@@ -1,8 +1,9 @@
 // Routine-definition and host clock operations [ORB-10875].
 
-import { captureWorkspaceVisit, el, fetchJson, getWorkspace, isAggregateView, postJson, relativeTime } from './common.js';
+import { captureWorkspaceVisit, el, fetchJson, isAggregateView, postJson, relativeTime } from './common.js';
 import { conditionStateLabel, renderAutomation } from './automation.js';
-import { closeEditors, editorObserved, isOpen, openEditor, routineDraft, routineTriggerEditor, scheduleEditButton } from './schedule-editor.js';
+import { createRoutineCatalogue, resetRoutineCatalogue } from './operations-routines-catalogue.js';
+import { closeRoutineEditors, routineEditButton, routineEditorElement } from './operations-routines-editor.js';
 
 import {
   $,
@@ -16,16 +17,13 @@ import {
   cronText,
   durationText,
   explainUnavailable,
-  feedback,
   field,
   inactivePluginGroup,
   inactivePluginToggle,
   nextEvaluationText,
   operationCell,
-  operationColumns,
   operationDetails,
   operationFact,
-  operationGroup,
   operationSwitch,
   operationsState,
   outcomeDot,
@@ -51,15 +49,19 @@ export function configureOperationsRoutines(callbacks) {
 
 let routineFailureRequest = 0;
 // The operator's unapplied cadence choice, held outside the rebuilt <select>
-// so a background refresh cannot revert it. Host-scoped, like the clock itself.
-let pendingCadenceSeconds = null;
-const TIMELINE_ROWS = 4;
+// so a background refresh cannot revert it. Keyed by host (machine_name), like
+// the clock itself: a draft made on one host never shows on another, while a
+// workspace switch on the same host keeps it.
+const pendingCadenceByHost = new Map();
+let timelineResizeObserver = null;
+let observedTimelineBody = null;
 
 // ---------------------------------------------------------------------------
 // Routines
 registerOperationsReset(() => {
-  closeEditors("routine");
-  updateRoutineFailureBadge([]);
+  closeRoutineEditors();
+  resetRoutineCatalogue();
+  resetRoutineFailureBadge();
 });
 
 function routineButton(payload, routine) {
@@ -131,6 +133,38 @@ function cronFieldMatcher(field, min, max) {
   return (value) => accepted.has(value);
 }
 
+const cronZoneFormatters = new Map();
+const CRON_WEEKDAYS = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+// Wall-clock fields of an instant in the host's IANA zone, or null when this
+// browser cannot resolve that zone. Seasonal offsets come from Intl, so a
+// window crossing a DST change is read in the offset in force at each minute,
+// not the host's current offset.
+function cronLocalParts(at, zoneName) {
+  if (!zoneName) return null;
+  try {
+    let formatter = cronZoneFormatters.get(zoneName);
+    if (!formatter) {
+      formatter = new Intl.DateTimeFormat("en-US", {
+        timeZone: zoneName, hourCycle: "h23",
+        year: "numeric", month: "numeric", day: "numeric",
+        hour: "numeric", minute: "numeric", weekday: "short",
+      });
+      cronZoneFormatters.set(zoneName, formatter);
+    }
+    const parts = {};
+    for (const part of formatter.formatToParts(new Date(at))) parts[part.type] = part.value;
+    const weekday = CRON_WEEKDAYS[parts.weekday];
+    if (weekday === undefined) return null;
+    return {
+      minute: Number(parts.minute), hour: Number(parts.hour) % 24,
+      date: Number(parts.day), month: Number(parts.month), weekday,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // Every fire of a cron routine from its next slot to the end of the window.
 // The server names only the next slot; the rest are the minutes after it that
 // the cron expression matches, read in the host's cron zone. A zone-sensitive
@@ -142,21 +176,82 @@ function routineFireTimes(routine, first, until) {
     cronFieldMatcher(fields[0], 0, 59), cronFieldMatcher(fields[1], 0, 23), cronFieldMatcher(fields[2], 1, 31),
     cronFieldMatcher(fields[3], 1, 12), cronFieldMatcher(fields[4], 0, 7),
   ];
+  const zoneName = operationsState.hostCronZone?.name || null;
+  const zoned = zoneName ? cronLocalParts(first, zoneName) : null;
   const offset = Number(operationsState.hostCronZone?.offset_seconds);
-  if (matchers.includes(null) || (!Number.isFinite(offset) && fields.slice(1).some((f) => f !== "*"))) return [first];
+  if (matchers.includes(null) || (!zoned && !Number.isFinite(offset) && fields.slice(1).some((f) => f !== "*"))) return [first];
   const [minute, hour, dom, month, dow] = matchers;
   const zoneOffset = Number.isFinite(offset) ? offset * 1000 : 0;
   const times = [first];
   for (let at = Math.floor(first / 60_000) * 60_000 + 60_000; at <= until; at += 60_000) {
-    const local = new Date(at + zoneOffset);
-    const weekday = local.getUTCDay();
+    const local = zoned ? cronLocalParts(at, zoneName) : null;
+    const fieldsAt = local || (() => {
+      const shifted = new Date(at + zoneOffset);
+      return {
+        minute: shifted.getUTCMinutes(), hour: shifted.getUTCHours(),
+        date: shifted.getUTCDate(), month: shifted.getUTCMonth() + 1, weekday: shifted.getUTCDay(),
+      };
+    })();
+    if (!fieldsAt) continue;
+    const weekday = fieldsAt.weekday;
     // Day-of-month and day-of-week combine with OR unless one is a wildcard.
     const days = fields[2] !== "*" && fields[4] !== "*"
-      ? dom(local.getUTCDate()) || dow(weekday) || (weekday === 0 && dow(7))
-      : dom(local.getUTCDate()) && (dow(weekday) || (weekday === 0 && dow(7)));
-    if (minute(local.getUTCMinutes()) && hour(local.getUTCHours()) && month(local.getUTCMonth() + 1) && days) times.push(at);
+      ? dom(fieldsAt.date) || dow(weekday) || (weekday === 0 && dow(7))
+      : dom(fieldsAt.date) && (dow(weekday) || (weekday === 0 && dow(7)));
+    if (minute(fieldsAt.minute) && hour(fieldsAt.hour) && month(fieldsAt.month) && days) times.push(at);
   }
   return times;
+}
+
+// Measure the real label boxes after rendering; their font metrics and track width vary by viewport.
+function layoutRoutineTimelineLabels(track) {
+  const width = track.clientWidth;
+  if (width <= 0) return;
+
+  const labels = Array.from(track.querySelectorAll(".operation-timeline-label"));
+  for (const label of labels) label.style.maxWidth = `${width}px`;
+
+  const placements = labels.map((label) => {
+    const tick = label.closest(".operation-timeline-tick");
+    const tickPosition = ((Number.parseFloat(tick.style.left) || 0) / 100) * width;
+    const labelWidth = label.getBoundingClientRect().width;
+    const center = Math.min(width - labelWidth / 2, Math.max(labelWidth / 2, tickPosition));
+    return { label, labelWidth, labelHeight: label.getBoundingClientRect().height, tickPosition, center };
+  }).sort((a, b) => a.center - b.center);
+
+  const rows = [];
+  for (const placement of placements) {
+    const left = placement.center - placement.labelWidth / 2;
+    const right = placement.center + placement.labelWidth / 2;
+    let row = rows.findIndex((placed) => placed.intervals.every((interval) => right + 4 <= interval.left || interval.right + 4 <= left));
+    if (row < 0) row = rows.push({ intervals: [], placements: [], height: 0 }) - 1;
+    rows[row].intervals.push({ left, right });
+    rows[row].placements.push(placement);
+    rows[row].height = Math.max(rows[row].height, placement.labelHeight);
+    placement.label.style.marginTop = "";
+    placement.label.style.transform = `translateX(${placement.center - placement.tickPosition}px)`;
+  }
+
+  let rowTop = 0;
+  for (const row of rows) {
+    for (const placement of row.placements) placement.label.style.marginTop = `${rowTop}px`;
+    rowTop += row.height + 4;
+  }
+  track.style.height = `${Math.max(39, 18 + rowTop)}px`;
+  track.dataset.labelLayoutWidth = String(width);
+}
+
+function watchRoutineTimelineSize(track) {
+  const body = $("routines-body");
+  if (typeof ResizeObserver === "function" && body && observedTimelineBody !== body) {
+    timelineResizeObserver ||= new ResizeObserver(() => {
+      const current = body.querySelector(".operation-timeline-track");
+      if (current) layoutRoutineTimelineLabels(current);
+    });
+    timelineResizeObserver.observe(body);
+    observedTimelineBody = body;
+  }
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => layoutRoutineTimelineLabels(track));
 }
 
 // The next hour as a strip: where each routine's slots land, with paused
@@ -187,35 +282,21 @@ function routineTimeline(routines, now = Date.now()) {
   ]));
   const track = el("div", { class: "operation-timeline-track" });
   track.appendChild(el("div", { class: "operation-timeline-axis" }));
-  // Labels are stacked into rows so two routines due in the same minute
-  // stay legible: each label takes the first row where it does not overlap
-  // the previous label in that row (width estimated from the name length).
-  // A routine's later slots reuse its first slot's row and carry no label of
-  // their own, so a frequent routine marks every slot without repeating its name.
-  const rowEnds = [];
-  const routineRows = new Map();
-  let rows = 0;
+  // Label rows are assigned from their rendered pixel widths after the track
+  // enters the DOM. Repeated fires keep their tick marks but do not add labels.
   due.forEach(({ routine, at, repeat }) => {
     const pct = Math.min(100, Math.max(0, ((at - now) / horizon) * 100));
-    let row = routineRows.get(routine.name);
-    if (!repeat || row === undefined) {
-      const halfWidth = routine.name.length * 0.42;
-      row = rowEnds.findIndex((end) => end <= pct - halfWidth);
-      if (row < 0) row = Math.min(rowEnds.length, TIMELINE_ROWS - 1);
-      rowEnds[row] = pct + halfWidth;
-      routineRows.set(routine.name, row);
-    }
-    rows = Math.max(rows, row + 1);
     const fires = routine.enabled && routine.effective !== false;
-    const tick = el("div", { class: `operation-timeline-tick ${fires ? "fires" : "skipped"} row-${row}` }, [
+    const label = repeat ? null : el("span", { class: "operation-timeline-label mono", text: routine.name });
+    const tick = el("div", { class: `operation-timeline-tick ${fires ? "fires" : "skipped"}` }, [
       el("span", { class: "operation-timeline-mark" }),
-      repeat ? null : el("span", { class: "operation-timeline-label mono", text: routine.name }),
+      label,
     ]);
     tick.style.left = `${pct}%`;
     tick.title = `${routine.name} · ${clockHm(at)}${fires ? "" : " · paused"}`;
     track.appendChild(tick);
   });
-  track.className = `operation-timeline-track rows-${Math.max(rows, 1)}`;
+  watchRoutineTimelineSize(track);
   strip.appendChild(track);
   return strip;
 }
@@ -235,21 +316,54 @@ export function scopedRoutines(payload) {
   return workspace ? (payload.routines || []).filter(routine => routine.source === workspace) : [];
 }
 
-export function updateRoutineFailureBadge(routines) {
-  routineFailureRequest += 1;
+// The last successfully read failing list for the current host/workspace
+// visit, or null when no read has succeeded since the last scope reset. A
+// failed read consults it: unknown must not read as "no failing routines".
+let knownFailingRoutines = null;
+
+function paintRoutineFailureBadge(failures, { unavailable = false } = {}) {
   const node = $("rail-count-routine-failures");
   if (!node) return;
-  const failures = failingRoutines(routines);
-  node.hidden = failures.length === 0;
-  node.textContent = failures.length ? `${failures.length} routine${failures.length === 1 ? "" : "s"}` : "";
-  node.title = failures.length
-    ? `${failures.map(routine => `${routine.name}: ${routineFailureText(routine)}`).join("; ")}. See Automation › Routines.`
-    : "";
+  node.hidden = failures.length === 0 && !unavailable;
+  node.dataset.stale = unavailable ? "true" : "false";
+  if (failures.length) {
+    node.textContent = `${failures.length} routine${failures.length === 1 ? "" : "s"}${unavailable ? " (stale)" : ""}`;
+    node.title = `${failures.map(routine => `${routine.name}: ${routineFailureText(routine)}`).join("; ")}. ${unavailable ? "The latest refresh failed, so this is the last known state. " : ""}See Automation › Routines.`;
+  } else if (unavailable) {
+    node.textContent = "routines ?";
+    node.title = "Routine failure status is unavailable: the read failed. It retries on the next refresh.";
+  } else {
+    node.textContent = "";
+    node.title = "";
+  }
+}
+
+// A successful payload (or a scope reset): paint it and remember it.
+export function updateRoutineFailureBadge(routines) {
+  routineFailureRequest += 1;
+  knownFailingRoutines = failingRoutines(routines);
+  paintRoutineFailureBadge(knownFailingRoutines);
+}
+
+// A host/workspace switch forgets the prior scope entirely: nothing is known
+// about the new one until a read succeeds.
+function resetRoutineFailureBadge() {
+  routineFailureRequest += 1;
+  knownFailingRoutines = null;
+  paintRoutineFailureBadge([]);
+}
+
+// A failed read observes nothing. Keep the last known warning and mark it
+// stale; with no prior read for this scope show the status as unavailable.
+// A last known empty list stays hidden, as for the Jobs pill.
+function markRoutineFailuresUnavailable() {
+  if (knownFailingRoutines && knownFailingRoutines.length === 0) return;
+  paintRoutineFailureBadge(knownFailingRoutines || [], { unavailable: true });
 }
 
 // Keep Health's warning visible from every tab, including before Routines is
 // opened. A reply from an earlier host/workspace visit must not restore it.
-export async function peekRoutineFailures() {
+export async function peekRoutineFailures(read = null) {
   if (isAggregateView() || !selectedWorkspaceName()) {
     updateRoutineFailureBadge([]);
     return;
@@ -257,10 +371,10 @@ export async function peekRoutineFailures() {
   const visit = captureWorkspaceVisit();
   const request = ++routineFailureRequest;
   try {
-    const payload = await fetchJson("/api/routines");
+    const payload = await (read || fetchJson("/api/routines"));
     if (visit.isCurrent() && request === routineFailureRequest) updateRoutineFailureBadge(scopedRoutines(payload));
   } catch (_) {
-    if (visit.isCurrent() && request === routineFailureRequest) updateRoutineFailureBadge([]);
+    if (visit.isCurrent() && request === routineFailureRequest) markRoutineFailuresUnavailable();
   }
 }
 
@@ -289,49 +403,6 @@ function routineFailureSummary(routines) {
   ]);
 }
 
-// The schedule column's edit affordance and, while open, the trigger editor.
-function routineEditKey(routine) {
-  return `routine-trigger:${getWorkspace()}:${routine.name}`;
-}
-
-function routineEditButton(payload, routine) {
-  const key = routineEditKey(routine);
-  return scheduleEditButton({
-    key,
-    label: `${routine.name} trigger`,
-    reason: controlReason(payload, "routine_trigger"),
-    onOpen: () => {
-      openEditor(key, "routine", routineDraft(routine.trigger), { source: routine.source, target: routine.target, trigger: routine.trigger });
-      if (routinesRenderOperations) routinesRenderOperations(operationsState.lastOperations || payload, { force: true });
-    },
-  });
-}
-
-function routineEditor(payload, routine) {
-  const key = routineEditKey(routine);
-  if (!isOpen(key)) return null;
-  const selection = selectionSnapshot();
-  return routineTriggerEditor({
-    key,
-    routine,
-    cronPreview: cronText,
-    save: (trigger) => {
-      const observed = editorObserved(key) || { source: routine.source, target: routine.target, trigger: routine.trigger };
-      return postJson("/api/routines/trigger", {
-        name: routine.name, source: observed.source, target: observed.target,
-        machine_name: payload.machine_name, expected_trigger: observed.trigger, trigger,
-      }).then((result) => {
-        if (selection.current()) feedback("routine-operation-feedback", "success", `${result.message}: ${routine.name}.`);
-        return result;
-      });
-    },
-    onClose: (saved) => {
-      if (saved) routinesFetchOperations().catch(() => {});
-      else if (operationsState.lastOperations && routinesRenderOperations) routinesRenderOperations(operationsState.lastOperations, { force: true });
-    },
-  });
-}
-
 function routineRow(payload, routine, workspaceId) {
   const fire = routine.last_fire;
   const state = routineState(routine);
@@ -349,10 +420,13 @@ function routineRow(payload, routine, workspaceId) {
       el("span", { class: "operation-cell-main", text: routineScheduleText(routine) }),
       condition ? el("span", { class: "operation-cell-sub", text: conditionStateLabel(condition) }) : null,
     ]
-    : [
-      el("span", { class: "operation-cell-main", text: cronText(routine.cron) }),
-      routine.cron && cronText(routine.cron) !== routine.cron ? el("span", { class: "operation-cell-sub mono", text: routine.cron }) : null,
-    ];
+    : (() => {
+      const cadenceLabel = cronText(routine.cron, nextAt);
+      return [
+        el("span", { class: "operation-cell-main", text: cadenceLabel }),
+        routine.cron && cadenceLabel !== routine.cron ? el("span", { class: "operation-cell-sub mono", text: routine.cron }) : null,
+      ];
+    })();
   const lastRun = fire
     ? [
       el("span", { class: "operation-cell-main operation-outcome" }, [
@@ -376,7 +450,7 @@ function routineRow(payload, routine, workspaceId) {
         identity,
         el("span", { class: "operation-cell-sub" }, [el("span", { text: "runs " }), jobLink(routine.target)]),
       ], "operation-cell-identity"),
-      operationCell("Cadence", [...cadence, routineEditButton(payload, routine)]),
+      operationCell("Cadence", [...cadence, routineEditButton({ payload, routine, onOpened: () => { if (routinesRenderOperations) routinesRenderOperations(operationsState.lastOperations || payload, { force: true }); } })]),
       routine.enabled
         ? whenCell("Next fire", nextAt, { fallback: nextEvaluationText(routine.next_evaluation, routine.next_due, routine.trigger) })
         : operationCell("Next fire", [el("span", { class: "operation-cell-main muted", text: nextAt ? `would be ${clockHm(nextAt)}` : "Paused" })]),
@@ -396,13 +470,17 @@ function routineRow(payload, routine, workspaceId) {
       routine.description ? el("p", { class: "operation-description", text: routine.description }) : null,
     ]),
   );
-  const editor = routineEditor(payload, routine);
+  const editor = routineEditorElement({ payload, routine, nextAt: routineNextAt(routine), onClose: (saved) => {
+      if (saved) routinesFetchOperations().catch(() => {});
+      else if (operationsState.lastOperations && routinesRenderOperations) routinesRenderOperations(operationsState.lastOperations, { force: true });
+    } });
   if (editor) card.insertBefore(editor, card.lastChild);
   return card;
 }
 
-
 export function renderRoutineRows(payload, body, { workspace, workspaceId, routines, inactive, ownerOnly }) {
+  const focused = body.contains(document.activeElement) ? document.activeElement?.dataset?.routineFocus : null;
+  const selection = focused === "filter" ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
   body.textContent = "";
   if (!workspace) {
     body.appendChild(el("div", { class: "operations-readonly-note", text: `All-workspace mode is read-only. Select one workspace; this machine is already resolved as ${payload.machine_name}.` }));
@@ -412,22 +490,7 @@ export function renderRoutineRows(payload, body, { workspace, workspaceId, routi
   } else if (routines.length) {
     const warning = routineFailureSummary(routines);
     if (warning) body.appendChild(warning);
-    body.appendChild(routineTimeline(routines));
-    const active = routines.filter((routine) => routine.enabled);
-    const paused = routines.filter((routine) => !routine.enabled);
-    const columns = ["", "Routine", "Cadence", "Next fire", "Last run"];
-    if (active.length) {
-      const group = operationGroup("active", "Active", active.length, "enabled and delivered by the host clock");
-      group.appendChild(operationColumns(columns));
-      for (const routine of active) group.appendChild(routineRow(payload, routine, workspaceId));
-      body.appendChild(group);
-    }
-    if (paused.length) {
-      const group = operationGroup("paused", "Paused", paused.length, "enabled: false in the definition file · slots are skipped, not queued");
-      group.appendChild(operationColumns(columns));
-      for (const routine of paused) group.appendChild(routineRow(payload, routine, workspaceId));
-      body.appendChild(group);
-    }
+    body.appendChild(createRoutineCatalogue({ payload, routines, workspaceId, renderRow: routineRow, renderTimeline: routineTimeline, routineState, failingRoutines }));
   }
   if (inactive.length) {
     body.appendChild(inactivePluginGroup(inactive.map((routine) => ({ name: routine.name, detail: routine.target, reason: routine.reason })), "fires"));
@@ -441,6 +504,11 @@ export function renderRoutineRows(payload, body, { workspace, workspaceId, routi
   if (workspace) {
     const toggle = inactivePluginToggle(payload.inactive_plugin_counts?.[workspace] || 0);
     if (toggle) body.appendChild(toggle);
+  }
+  if (focused) {
+    const control = body.querySelector(`[data-routine-focus="${focused}"]`);
+    control?.focus({ preventScroll: true });
+    if (selection) control?.setSelectionRange(...selection);
   }
 }
 
@@ -496,11 +564,19 @@ export function renderClock(payload) {
     unavailable ? "Clock unavailable" : (active ? "Pause clock" : "Enable clock"),
   ));
   // A cadence the operator picked but has not applied yet outlives this render;
-  // it clears once the host reports that value as configured, whoever applied it.
-  if (pendingCadenceSeconds === clock.configured_cadence_seconds) pendingCadenceSeconds = null;
+  // it clears once its own host reports that value as configured, whoever
+  // applied it. Another host's draft is neither shown nor applied here.
+  const cadenceHost = payload.machine_name || "";
+  let pendingCadenceSeconds = pendingCadenceByHost.get(cadenceHost) ?? null;
+  if (pendingCadenceSeconds === clock.configured_cadence_seconds) {
+    pendingCadenceByHost.delete(cadenceHost);
+    pendingCadenceSeconds = null;
+  }
   const selectedCadence = pendingCadenceSeconds ?? clock.configured_cadence_seconds;
   const cadence = el("select", { class: "operation-cadence", title: "Clock cadence" });
-  for (const seconds of [60, 300, 900, 1800, 3600]) {
+  const cadences = new Set([60, 300, 900, 1800, 3600]);
+  if (Number.isFinite(selectedCadence)) cadences.add(selectedCadence);
+  for (const seconds of [...cadences].sort((a, b) => a - b)) {
     const option = el("option", { text: seconds === 60 ? "Every minute" : `Every ${seconds / 60} minutes` });
     option.value = String(seconds);
     option.selected = seconds === selectedCadence;
@@ -515,6 +591,7 @@ export function renderClock(payload) {
   syncApplyState(selectedCadence);
   cadence.addEventListener("change", () => {
     pendingCadenceSeconds = Number(cadence.value);
+    pendingCadenceByHost.set(cadenceHost, pendingCadenceSeconds);
     syncApplyState(pendingCadenceSeconds);
   });
   apply.addEventListener("click", () => {

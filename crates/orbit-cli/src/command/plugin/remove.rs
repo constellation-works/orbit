@@ -1,17 +1,17 @@
 use clap::Args;
+use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::PluginRemoveOptions;
-use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::json;
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, Execute, Payload, require_confirmation};
 
 #[derive(Args)]
 pub struct PluginRemoveArgs {
     /// Plugin namespace
     pub name: String,
     /// Confirm permanent removal of the plugin install
-    #[arg(long)]
-    pub yes: bool,
+    #[arg(long, visible_alias = "yes")]
+    pub confirm: bool,
     /// Remove only this host's record of the plugin, leaving every installed
     /// file in place. Clears a record whose install path this host refuses,
     /// without deleting the path it names
@@ -24,12 +24,7 @@ pub struct PluginRemoveArgs {
 
 impl Execute for PluginRemoveArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        if !self.yes {
-            return Err(OrbitError::InvalidInput(format!(
-                "removing plugin '{}' is irreversible; pass --yes to proceed",
-                self.name
-            )));
-        }
+        require_confirmation(self.confirm, &format!("removing plugin '{}'", self.name))?;
         let state_dir = runtime.global_root().join("state/plugins").join(&self.name);
         runtime.remove_plugin(
             &self.name,

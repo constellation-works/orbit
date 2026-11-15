@@ -20,13 +20,14 @@ use super::commit::{
     commit_reviewer_repairs_in, reviewer_repair_identity, stage_everything, staged_paths,
 };
 use super::git::{
-    BaseSyncMode, git_command_success, git_failure_error, git_output, git_output_raw,
-    git_run_bytes, git_success, git_timeout_error, resolve_worktree_start_point,
+    BaseSyncMode, git_failure_error, git_output, git_output_raw, git_run_bytes, git_success,
+    git_timeout_error, resolve_worktree_start_point,
 };
 pub use super::host_evidence::{HostEvidenceRun, run_host_sandbox_test};
 pub use super::interrupted_review::{
-    INTERRUPTED_REVIEW_KEY, PreservedReviewRepair, ReviewInFlight, carry_interrupted_review,
-    interrupted_review_ref, preserve_interrupted_review, review_in_flight,
+    INTERRUPTED_REVIEW_KEY, PreservedRescueCandidate, PreservedReviewRepair, RESCUE_CANDIDATE_KEY,
+    ReviewInFlight, carry_interrupted_review, interrupted_review_ref, preserve_interrupted_review,
+    preserve_rescue_candidate, rescue_candidate_ref, review_in_flight,
 };
 pub use super::scratch_target::{
     ScratchHostTarget, ScratchHostTargetLease, lease_scratch_host_target,
@@ -174,15 +175,20 @@ pub fn uncommitted_paths(workspace_path: &Path) -> Result<Vec<String>, OrbitErro
         };
         // A rename or copy is followed by a second NUL-terminated field holding
         // the source path, which belongs to the record before it rather than
-        // starting a new record.
-        if matches!(index_state, 'R' | 'C') {
-            let _ = fields.next();
-        }
+        // starting a new record. Both names changed, so both are reported.
+        let source = if matches!(index_state, 'R' | 'C') {
+            fields.next().filter(|source| !source.is_empty())
+        } else {
+            None
+        };
         let Some(path) = entry.get(3..) else {
             continue;
         };
         if !path.is_empty() {
             paths.push(path.to_string());
+        }
+        if let Some(source) = source {
+            paths.push(source.to_string());
         }
     }
     paths.sort();
@@ -253,7 +259,7 @@ pub fn review_repair_at_head(
 
 /// Paths `commit` changed against its first parent, reported the way
 /// [`uncommitted_paths`] reports them before the commit: a rename or copy
-/// by its destination only.
+/// by both its source and destination.
 pub fn committed_paths(workspace_path: &Path, commit: &str) -> Result<Vec<String>, OrbitError> {
     let raw = git_output_raw(
         workspace_path,
@@ -271,9 +277,12 @@ pub fn committed_paths(workspace_path: &Path, commit: &str) -> Result<Vec<String
     let mut paths = Vec::new();
     let mut fields = raw.split('\0').filter(|field| !field.is_empty());
     while let Some(status) = fields.next() {
-        // A rename or copy names its source before the destination.
-        if status.starts_with(['R', 'C']) {
-            let _ = fields.next();
+        // A rename or copy names its source before the destination; both
+        // names changed, so both are reported.
+        if status.starts_with(['R', 'C'])
+            && let Some(source) = fields.next()
+        {
+            paths.push(source.to_string());
         }
         if let Some(path) = fields.next() {
             paths.push(path.to_string());
@@ -282,86 +291,6 @@ pub fn committed_paths(workspace_path: &Path, commit: &str) -> Result<Vec<String
     paths.sort();
     paths.dedup();
     Ok(paths)
-}
-
-/// One changed entry's old and new paths; either side is absent for an
-/// addition or a deletion.
-pub type ChangedPathPair = (Option<String>, Option<String>);
-
-/// Every entry of the complete `base..head` diff as `(old_path, new_path)`:
-/// deletions carry only an old path, additions only a new one, and
-/// renames/copies both, so a rename away from a path still names it.
-/// Binary, mode-only, symlink and gitlink entries appear like any other.
-/// Rename detection is on; disabling it would report the equivalent
-/// delete/add pair. Paths are Git's recorded names, never resolved
-/// through candidate symlinks.
-pub fn changed_path_pairs(
-    workspace_path: &Path,
-    base: &str,
-    head: &str,
-) -> Result<Vec<ChangedPathPair>, OrbitError> {
-    let raw = git_output_raw(
-        workspace_path,
-        &[
-            "diff",
-            "--name-status",
-            "-z",
-            "-M",
-            "-C",
-            "--end-of-options",
-            base,
-            head,
-        ],
-    )?;
-    let mut pairs = Vec::new();
-    let mut fields = raw.split('\0').filter(|field| !field.is_empty());
-    while let Some(status) = fields.next() {
-        let pair = match status.chars().next() {
-            Some('R' | 'C') => {
-                let old = fields.next().map(ToString::to_string);
-                let new = fields.next().map(ToString::to_string);
-                (old, new)
-            }
-            Some('A') => (None, fields.next().map(ToString::to_string)),
-            Some('D') => (fields.next().map(ToString::to_string), None),
-            _ => {
-                let path = fields.next().map(ToString::to_string);
-                (path.clone(), path)
-            }
-        };
-        pairs.push(pair);
-    }
-    Ok(pairs)
-}
-
-/// Insertions plus deletions of the complete `base..head` diff, the
-/// `diff_lines` risk basis. Binary entries contribute no counted lines,
-/// as Git reports none for them.
-pub fn diff_lines_between(
-    workspace_path: &Path,
-    base: &str,
-    head: &str,
-) -> Result<u64, OrbitError> {
-    let raw = git_output_raw(
-        workspace_path,
-        &["diff", "--numstat", "-z", "--end-of-options", base, head],
-    )?;
-    let mut total: u64 = 0;
-    for entry in raw.split('\0').filter(|entry| !entry.is_empty()) {
-        // `<added>\t<deleted>\t<path>`; a rename's path field is empty and
-        // its two names follow as their own NUL fields, which parse to no
-        // numbers and add nothing.
-        let mut fields = entry.split('\t');
-        let (Some(added), Some(deleted)) = (fields.next(), fields.next()) else {
-            continue;
-        };
-        for count in [added, deleted] {
-            if let Ok(count) = count.parse::<u64>() {
-                total = total.saturating_add(count);
-            }
-        }
-    }
-    Ok(total)
 }
 
 /// [ORB-14632] Whether the repository-relative `path` differs between
@@ -439,16 +368,7 @@ pub fn contains_commit(
     ancestor: &str,
     descendant: &str,
 ) -> Result<bool, OrbitError> {
-    git_command_success(
-        workspace_path,
-        &[
-            "merge-base",
-            "--is-ancestor",
-            "--end-of-options",
-            ancestor,
-            descendant,
-        ],
-    )
+    crate::executor::automation::vcs::git::is_ancestor(workspace_path, ancestor, descendant)
 }
 
 /// Publish a held candidate `commit` on `origin` as

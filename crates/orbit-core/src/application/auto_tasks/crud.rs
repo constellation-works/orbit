@@ -22,6 +22,7 @@
 //! a single in-scope name, a real `auto_tasks` directory, and a regular
 //! definition file, checked before any definition bytes are read.
 
+use std::cell::RefCell;
 use std::path::{Component, Path, PathBuf};
 
 use orbit_automation::auto_tasks::settings::load_settings_table;
@@ -39,8 +40,43 @@ use crate::OrbitRuntime;
 
 use super::loader::{AutoTaskCollection, auto_tasks_dir, collect_auto_tasks, definition_path};
 use super::schedule::validate_schedule;
+use super::schedule_edit::{admit_schedule, stage_schedule};
 use super::scheduler::mint_task;
 use super::state::cursor_state_path;
+
+thread_local! {
+    /// Write label an application executor records around one ordinary
+    /// auto-task create or edit. Absent, those writes keep the process actor.
+    static RECORDED_WRITE_ACTOR: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Restores the previous recorded write actor when dropped.
+#[must_use]
+pub(crate) struct RecordedWriteActor {
+    previous: Option<String>,
+}
+
+impl Drop for RecordedWriteActor {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        RECORDED_WRITE_ACTOR.with(|slot| *slot.borrow_mut() = previous);
+    }
+}
+
+/// Record `actor` as the auto-task write label on this thread until the
+/// guard drops. Application consent runs the ordinary handlers, which
+/// otherwise stamp the process actor.
+pub(crate) fn record_write_actor(actor: String) -> RecordedWriteActor {
+    let previous = RECORDED_WRITE_ACTOR.with(|slot| slot.borrow_mut().replace(actor));
+    RecordedWriteActor { previous }
+}
+
+fn write_actor(runtime: &OrbitRuntime) -> Result<String, OrbitError> {
+    if let Some(actor) = RECORDED_WRITE_ACTOR.with(|slot| slot.borrow().clone()) {
+        return Ok(actor);
+    }
+    runtime.actor().resolve_write_label(None, None)
+}
 
 /// Parameters for creating a definition.
 #[derive(Debug, Clone)]
@@ -63,6 +99,10 @@ pub struct AutoTaskUpdateParams {
     pub dedupe: Option<DedupePolicy>,
     pub template: Option<AutoTaskTemplatePatch>,
     pub enabled: Option<bool>,
+    /// Replacement operator grant for minted tasks; an empty list clears it.
+    /// The tool chokepoint admits a caller that supplies it only under
+    /// operator authority.
+    pub granted_tools: Option<Vec<String>>,
 }
 
 /// Present-field template patch, merged with the latest definition under the
@@ -159,24 +199,6 @@ fn in_scope_lookup_name(name: &str) -> bool {
     }
 }
 
-/// New schedules cannot select the retired QA coverage. Loading a definition
-/// that already names it stays allowed, so a not-yet-refreshed workspace copy
-/// does not fail every clock tick.
-fn reject_retired_delivery_coverage(schedule: &AutoTaskSchedule) -> Result<(), OrbitError> {
-    if let AutoTaskSchedule::Deliveries {
-        deliveries_landed, ..
-    } = schedule
-        && deliveries_landed.coverage
-            == orbit_types::workflow::automation::CoverageClass::IntegratedQaV1
-    {
-        return Err(OrbitError::InvalidInput(
-            "coverage `integrated_qa_v1` is retired; delivery triggers use `landed_code_review_v1`"
-                .into(),
-        ));
-    }
-    Ok(())
-}
-
 /// The fail-closed rule for one discovery pass: an error only when nothing
 /// loaded, each skipped file logged either way.
 pub(crate) fn require_loaded(collection: &AutoTaskCollection) -> Result<(), OrbitError> {
@@ -217,16 +239,28 @@ impl OrbitRuntime {
     /// with the other definition writers. Settings failures publish no file.
     pub fn auto_task_add(
         &self,
+        params: AutoTaskAddParams,
+    ) -> Result<AutoTaskDefinition, OrbitError> {
+        self.auto_task_add_with_operator_grant(params, Vec::new())
+    }
+
+    /// [`Self::auto_task_add`] for a definition whose minted tasks carry
+    /// `granted_tools`. The tool chokepoint admits a caller that supplies a
+    /// grant only under operator authority; nothing else may call this with
+    /// one.
+    pub fn auto_task_add_with_operator_grant(
+        &self,
         mut params: AutoTaskAddParams,
+        granted_tools: Vec<String>,
     ) -> Result<AutoTaskDefinition, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let state_path = cursor_state_path(&self.paths().state_dir);
         with_exclusive_file_lock(&state_path, "auto-task cursor", || {
-            reject_retired_delivery_coverage(&params.schedule)?;
+            admit_schedule(&params.schedule)?;
             params.template.required_tools =
                 normalize_required_tools(params.template.required_tools);
             let now = chrono::Utc::now().to_rfc3339();
-            let actor = self.actor().resolve_write_label(None, None)?;
+            let actor = write_actor(self)?;
             let definition = AutoTaskDefinition {
                 schema_version: AUTO_TASK_SCHEMA_VERSION,
                 name: params.name,
@@ -245,12 +279,16 @@ impl OrbitRuntime {
                 // the workspace owns, not through the create surfaces.
                 skip_if_unchanged: None,
                 skip_unless_blocked_candidates: false,
+                // Like the preconditions above: declared in the workspace's YAML.
+                completion: None,
+                granted_tools: normalize_required_tools(granted_tools),
                 created_by: Some(actor.clone()),
                 created_at: now.clone(),
                 updated_by: Some(actor),
                 updated_at: now,
             };
             self.validate_auto_task(&definition)?;
+            self.validate_granted_tools(&definition.granted_tools)?;
 
             let collection = self.validated_auto_tasks(&definition.name)?;
             let path = definition_path(&self.paths().local_dir, &definition.name);
@@ -323,6 +361,14 @@ impl OrbitRuntime {
         let raw = std::fs::read_to_string(path)
             .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
         let mut definition = orbit_common::protocol::yaml::parse_auto_task_yaml(&raw)?;
+        // A definition written before tool families reads with family
+        // actions; mint, sync and the upgrade pass rewrite the file
+        // [ORB-23552].
+        if let Some(required_tools) =
+            orbit_types::tool::family_action_tool_names(&definition.template.required_tools)
+        {
+            definition.template.required_tools = required_tools;
+        }
         if definition.name != name {
             return Err(OrbitError::InvalidInput(format!(
                 "auto-task file stem '{name}' does not match definition name '{}'",
@@ -352,13 +398,14 @@ impl OrbitRuntime {
                 || params.dedupe.is_some()
                 || params.template.is_some()
                 || params.enabled.is_some()
+                || params.granted_tools.is_some()
             {
                 return Err(OrbitError::InvalidInput(
                     "waive_batch cannot be combined with a definition edit".into(),
                 ));
             }
             let consumer = crate::application::automation::consumer_key(self, "auto-task", name)?;
-            let actor = self.actor().resolve_write_label(None, None)?;
+            let actor = write_actor(self)?;
             orbit_automation::delivery::waive(
                 self.automation_store()?.as_ref(),
                 &consumer,
@@ -371,15 +418,21 @@ impl OrbitRuntime {
         }
 
         if let Some(schedule) = &params.schedule {
-            reject_retired_delivery_coverage(schedule)?;
+            admit_schedule(schedule)?;
+        }
+        // Checked when the grant changes, never on an unrelated edit: a tool
+        // that later became unavailable must not block the kill-switch. Mint
+        // checks the stored grant again.
+        if let Some(granted_tools) = &params.granted_tools {
+            self.validate_granted_tools(granted_tools)?;
         }
 
-        self.edit_auto_task(name, |definition| {
+        self.try_edit_auto_task(name, |definition| {
             if let Some(description) = params.description {
                 definition.description = description;
             }
             if let Some(schedule) = params.schedule {
-                definition.schedule = schedule;
+                stage_schedule(definition, None, schedule)?;
             }
             if let Some(dedupe) = params.dedupe {
                 definition.dedupe = dedupe;
@@ -390,6 +443,10 @@ impl OrbitRuntime {
             if let Some(enabled) = params.enabled {
                 definition.enabled = enabled;
             }
+            if let Some(granted_tools) = params.granted_tools {
+                definition.granted_tools = normalize_required_tools(granted_tools);
+            }
+            Ok(())
         })
     }
 
@@ -408,29 +465,6 @@ impl OrbitRuntime {
             Err(error) if waived => Ok(vec![error.to_string()]),
             Err(error) => Err(error),
         }
-    }
-
-    /// Compare and replace the schedule while holding the scheduler cursor
-    /// lock: the schedule half of [`Self::auto_task_update`], with the same
-    /// coverage and definition validation, for a caller that must not
-    /// overwrite a schedule it did not observe.
-    pub fn auto_task_set_schedule_checked(
-        &self,
-        name: &str,
-        expected: &AutoTaskSchedule,
-        schedule: AutoTaskSchedule,
-    ) -> Result<AutoTaskDefinition, OrbitError> {
-        self.ensure_coordination_task_write_permitted()?;
-        reject_retired_delivery_coverage(&schedule)?;
-        self.try_edit_auto_task(name, |definition| {
-            if &definition.schedule != expected {
-                return Err(OrbitError::InvalidInput(
-                    "auto-task schedule changed; refresh before retrying".into(),
-                ));
-            }
-            definition.schedule = schedule;
-            Ok(())
-        })
     }
 
     /// Mint one task from a definition on demand — the manual counterpart to a
@@ -458,6 +492,9 @@ impl OrbitRuntime {
     /// definitions exposed by read fallback do not become mint authority.
     pub fn auto_task_mint(&self, name: &str) -> Result<Task, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
+        // A definition that still names pre-family tools is rewritten before
+        // it mints [ORB-23552].
+        self.heal_local_auto_task_tool_names_best_effort();
         // Fail closed before admission. This copy is not mint authority: a
         // concurrent delete can remove the file before the lock is held.
         let preloaded = self.require_local_auto_task(name)?;
@@ -544,18 +581,31 @@ impl OrbitRuntime {
         &self,
         name: &str,
     ) -> Result<AutoTaskDefinition, OrbitError> {
-        let loaded = self
+        self.find_validated_auto_task(name)?
+            .ok_or_else(|| OrbitError::InvalidInput(format!("no such auto-task '{name}'")))
+    }
+
+    /// The validated definition of `name`, or `None` when no definition of
+    /// that name exists. A definition stored at a non-canonical path is an
+    /// error, as in [`Self::require_validated_auto_task`].
+    pub(super) fn find_validated_auto_task(
+        &self,
+        name: &str,
+    ) -> Result<Option<AutoTaskDefinition>, OrbitError> {
+        let Some(loaded) = self
             .validated_auto_tasks(name)?
             .definitions
             .into_iter()
             .find(|loaded| loaded.definition.name == name)
-            .ok_or_else(|| OrbitError::InvalidInput(format!("no such auto-task '{name}'")))?;
+        else {
+            return Ok(None);
+        };
         if !self.is_canonical_definition_path(&loaded.path, name) {
             return Err(OrbitError::InvalidInput(format!(
                 "auto-task '{name}' must be stored at its canonical .yaml path before editing"
             )));
         }
-        Ok(loaded.definition)
+        Ok(Some(loaded.definition))
     }
 
     /// Whether `loaded` is exactly `<local_dir>/auto_tasks/<name>.yaml`.
@@ -615,17 +665,6 @@ impl OrbitRuntime {
     /// patches the latest committed definition, so neither drops the other's
     /// change. Like manual mint, this never loads or saves the cursor, so a
     /// malformed cursor cannot block the kill-switch.
-    fn edit_auto_task(
-        &self,
-        name: &str,
-        edit: impl FnOnce(&mut AutoTaskDefinition),
-    ) -> Result<AutoTaskDefinition, OrbitError> {
-        self.try_edit_auto_task(name, |definition| {
-            edit(definition);
-            Ok(())
-        })
-    }
-
     pub(super) fn try_edit_auto_task(
         &self,
         name: &str,
@@ -636,7 +675,7 @@ impl OrbitRuntime {
             let mut definition = self.require_validated_auto_task(name)?;
             let before = definition.clone();
             edit(&mut definition)?;
-            definition.updated_by = Some(self.actor().resolve_write_label(None, None)?);
+            definition.updated_by = Some(write_actor(self)?);
             definition.updated_at = chrono::Utc::now().to_rfc3339();
             self.validate_auto_task(&definition)?;
             self.refuse_condition_enable_storm(&before, &definition)?;

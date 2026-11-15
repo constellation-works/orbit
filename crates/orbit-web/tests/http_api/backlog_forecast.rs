@@ -536,7 +536,7 @@ fn completed_delivery(
     id
 }
 
-fn comment(fixture: &Fixture, id: &str) {
+pub(super) fn comment_on_task(fixture: &Fixture, id: &str) {
     history(fixture)
         .update_task_history(
             id,
@@ -625,6 +625,11 @@ fn terminal_comments_preserve_completion_history_and_calibration() {
                 1.0
             );
             assert_eq!(calibration["forecasts"][0]["scored_whole"], true);
+            // Drain actual 1.0h against a 1.0h p50: a zero log residual.
+            assert_eq!(
+                calibration["forecasts"][0]["residual"]["time_to_drain_hours"],
+                0.0
+            );
             // A model-1 forecast is scored under its own version, never
             // blended into the current model's hit rates.
             assert_eq!(calibration["model_version"], before["model_version"]);
@@ -636,7 +641,7 @@ fn terminal_comments_preserve_completion_history_and_calibration() {
             );
 
             for id in [&recent, &old] {
-                comment(&fixture, id);
+                comment_on_task(&fixture, id);
                 // The old helper keeps its documented updated_at semantics.
                 let rows = fixture
                     .runtime
@@ -796,6 +801,564 @@ fn arrivals_preserve_missing_metrics_without_losing_duration() {
             }
         },
     );
+}
+
+#[test]
+fn thin_metric_support_is_disclosed_and_counted() {
+    isolated(
+        "backlog_forecast::thin_metric_support_is_disclosed_and_counted",
+        || {
+            // One measured delivery among five: the pool has five time samples,
+            // but only one measured token and cost sample [ORB-21948].
+            let fixture = Fixture::new();
+            let at = Utc::now() - Duration::days(1);
+            completed_delivery(
+                &fixture,
+                at,
+                TaskComplexity::Medium,
+                "gpt-6.1-sol",
+                Some(1.0),
+                1,
+            );
+            for _ in 0..4 {
+                completed_delivery(
+                    &fixture,
+                    at,
+                    TaskComplexity::Medium,
+                    "unpriced-fixture-model",
+                    None,
+                    1,
+                );
+            }
+            let queued = backlog_task(&fixture, "Thin metric work", &["file:thin.rs"], &[], &[]);
+            let server = fixture.server(false);
+            let forecast = initial_work_forecast_baseline(json_ok(server.get(ENDPOINT)));
+            let row = prediction(&forecast, &queued);
+            assert_eq!(row["token_samples"], 1, "{row}");
+            assert_eq!(row["cost_samples"], 1, "{row}");
+            assert_eq!(row["thin_tokens"], true, "{row}");
+            assert_eq!(row["thin_cost"], true, "{row}");
+            // One measured sample gives p50 == p90 by construction.
+            assert_eq!(row["tokens"]["p50"], row["tokens"]["p90"], "{row}");
+            assert_eq!(row["usd"]["p50"], row["usd"]["p90"], "{row}");
+            assert_eq!(
+                forecast["coverage"]["thin_tokens"], 1,
+                "{}",
+                forecast["coverage"]
+            );
+            assert_eq!(
+                forecast["coverage"]["thin_cost"], 1,
+                "{}",
+                forecast["coverage"]
+            );
+            assert_eq!(forecast["coverage"]["uncosted"], 0);
+            assert_eq!(forecast["coverage"]["uncovered_model"], 0);
+            assert_eq!(forecast["inputs"]["min_metric_samples"], 5);
+            let stored = fixture.runtime.backlog_forecasts(10).unwrap();
+            assert_eq!(stored.len(), 1);
+            let stored_tasks: Value = serde_json::from_str(&stored[0].tasks_json).unwrap();
+            let stored_row = stored_tasks
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["id"] == queued)
+                .unwrap();
+            assert_eq!(stored_row["token_samples"], 1, "{stored_row}");
+            assert_eq!(stored_row["cost_samples"], 1, "{stored_row}");
+            assert_eq!(stored_row["thin_tokens"], true, "{stored_row}");
+            assert_eq!(stored_row["thin_cost"], true, "{stored_row}");
+
+            // Ample measured samples keep ranges with no thin marking.
+            let fixture = Fixture::new();
+            one_hour_history(&fixture);
+            let queued = backlog_task(&fixture, "Ample metric work", &["file:ample.rs"], &[], &[]);
+            let server = fixture.server(false);
+            let forecast = initial_work_forecast_baseline(json_ok(server.get(ENDPOINT)));
+            let row = prediction(&forecast, &queued);
+            assert_eq!(row["token_samples"], 5, "{row}");
+            assert_eq!(row["cost_samples"], 5, "{row}");
+            assert_eq!(row["thin_tokens"], false, "{row}");
+            assert_eq!(row["thin_cost"], false, "{row}");
+            assert!(row["tokens"]["p50"].as_f64().unwrap() > 0.0, "{row}");
+            assert!(row["usd"]["p50"].as_f64().unwrap() > 0.0, "{row}");
+            assert_eq!(forecast["coverage"]["thin_tokens"], 0);
+            assert_eq!(forecast["coverage"]["thin_cost"], 0);
+        },
+    );
+}
+
+/// `filings` tasks filed this week, a one-hour no-diff delivery as the only
+/// history, and one task in the backlog.
+fn busy_arrivals_fixture(fixture: &Fixture, filings: usize) {
+    let donor = completed_delivery(
+        fixture,
+        Utc::now() - Duration::days(2),
+        TaskComplexity::Medium,
+        "gpt-6.1-sol",
+        Some(1.0),
+        1,
+    );
+    super::backlog_rework::edit_task(fixture, &donor, |task| {
+        task.tags.push("no-diff-expected".into())
+    });
+    for _ in 0..filings {
+        fixture
+            .runtime
+            .add_task(TaskAddParams {
+                title: "Recent filing".into(),
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    let queued = fixture
+        .runtime
+        .add_task(TaskAddParams {
+            title: "Initial work".into(),
+            complexity: TaskComplexity::Medium,
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .unwrap();
+    super::backlog_rework::edit_task(fixture, &queued.id.to_string(), |task| {
+        task.tags.push("no-diff-expected".into())
+    });
+}
+
+#[test]
+fn arrivals_past_the_generation_bound_report_the_cut_and_withhold_totals() {
+    isolated(
+        "backlog_forecast::arrivals_past_the_generation_bound_report_the_cut_and_withhold_totals",
+        || {
+            let fixture = Fixture::new();
+            busy_arrivals_fixture(&fixture, 200);
+            // A starting backlog keeps the single slot busy until arrivals
+            // accumulate; with one queued task the queue can empty before
+            // the bound on a lucky early gap between filings.
+            for _ in 0..32 {
+                fixture
+                    .runtime
+                    .add_task(TaskAddParams {
+                        title: "Initial work".into(),
+                        complexity: TaskComplexity::Medium,
+                        status: Some(TaskStatus::Backlog),
+                        ..Default::default()
+                    })
+                    .unwrap();
+            }
+            // Over 28 one-hour filings a day at concurrency 1 arrive faster
+            // than the single slot drains them, so no run drains before the
+            // stream's limit. Which bound ends the run must not depend on
+            // host speed: the production budget starts before history loads,
+            // so a loaded host can spend it first and report compute_budget.
+            // This read uses a budget no host reaches and a test generation
+            // bound of 256, as the drain test below does; a short budget is
+            // read afterwards.
+            let server = fixture.server_with_envs(
+                false,
+                &[
+                    (
+                        orbit_core::test_support::BACKLOG_FORECAST_COMPUTE_BUDGET_ENV,
+                        "3600000".as_ref(),
+                    ),
+                    (
+                        orbit_core::test_support::BACKLOG_FORECAST_MAX_GENERATED_ENV,
+                        "256".as_ref(),
+                    ),
+                ],
+            );
+            let cut = json_ok(server.get(&format!("{ENDPOINT}&concurrency=1&arrivals=on")));
+            drop(server);
+            assert!(cut["arrivals"]["per_day"]["total"].as_f64().unwrap() >= 28.0);
+            assert_eq!(cut["inputs"]["iterations"], 1000);
+            let forecast = &cut["forecast"];
+            assert_eq!(
+                forecast["simulation_cut"]["reason"], "generated_limit",
+                "{forecast}"
+            );
+            assert_eq!(forecast["simulation_cut"]["generated_limit"], 256);
+            assert_eq!(
+                forecast["simulation_cut"]["iterations_completed"], 0,
+                "{forecast}"
+            );
+            assert_eq!(forecast["unavailable"]["simulation_cut"], true);
+            assert_eq!(forecast["simulation_truncated"], 1);
+            assert!(
+                forecast.get("pre_regression_baseline").is_none(),
+                "{forecast}"
+            );
+            let unknown = json!({"p50": null, "p90": null});
+            for metric in [
+                "time_to_drain_hours",
+                "tokens",
+                "usd",
+                "effective_parallelism",
+                "critical_path_hours",
+            ] {
+                assert_eq!(forecast[metric], unknown, "{metric}");
+            }
+            for metric in ["work_hours", "tokens", "usd"] {
+                assert_eq!(forecast["arrival_work"][metric], unknown, "{metric}");
+            }
+            assert!(forecast["drain_probability"].is_null(), "{forecast}");
+
+            // A short substituted budget cuts this read deterministically:
+            // with the production generation bound the stream cannot reach
+            // its limit before the deadline, so the run is cut by the budget
+            // and its totals are withheld.
+            let server = fixture.server_with_envs(
+                false,
+                &[(
+                    orbit_core::test_support::BACKLOG_FORECAST_COMPUTE_BUDGET_ENV,
+                    "2000".as_ref(),
+                )],
+            );
+            let started = std::time::Instant::now();
+            let read = json_ok(server.get(&format!("{ENDPOINT}&concurrency=1&arrivals=on")));
+            let elapsed = started.elapsed();
+            assert!(
+                elapsed < std::time::Duration::from_secs(12),
+                "a 2s budget plus the 10s margin must bound this read: {elapsed:?}"
+            );
+            let forecast = &read["forecast"];
+            assert_eq!(
+                forecast["simulation_cut"]["reason"], "compute_budget",
+                "{forecast}"
+            );
+            assert_eq!(forecast["simulation_cut"]["compute_budget_seconds"], 2);
+            // Iterations completed before the deadline vary with host
+            // speed; the cut and withheld totals are the guarantee here.
+            assert_eq!(forecast["unavailable"]["simulation_cut"], true);
+            assert!(
+                forecast.get("pre_regression_baseline").is_none(),
+                "{forecast}"
+            );
+            let unknown = json!({"p50": null, "p90": null});
+            for metric in ["time_to_drain_hours", "tokens", "usd"] {
+                assert_eq!(forecast[metric], unknown, "{metric}");
+            }
+            assert!(forecast["drain_probability"].is_null(), "{forecast}");
+        },
+    );
+}
+
+#[test]
+fn arrivals_past_the_compute_budget_report_the_cut_and_withhold_totals() {
+    isolated(
+        "backlog_forecast::arrivals_past_the_compute_budget_report_the_cut_and_withhold_totals",
+        || {
+            let fixture = Fixture::new();
+            busy_arrivals_fixture(&fixture, 850);
+            // A spent budget cuts before the first iteration whatever the
+            // host's speed.
+            let server = fixture.server_with_envs(
+                false,
+                &[(
+                    orbit_core::test_support::BACKLOG_FORECAST_COMPUTE_BUDGET_ENV,
+                    "0".as_ref(),
+                )],
+            );
+            let cut = json_ok(server.get(&format!("{ENDPOINT}&concurrency=64&arrivals=on")));
+            let forecast = &cut["forecast"];
+            assert_eq!(
+                forecast["simulation_cut"]["reason"], "compute_budget",
+                "{forecast}"
+            );
+            assert_eq!(forecast["simulation_cut"]["iterations_completed"], 0);
+            assert_eq!(forecast["simulation_cut"]["compute_budget_seconds"], 0);
+            assert_eq!(forecast["unavailable"]["simulation_cut"], true);
+            // The bound that cut the run is the budget, not the generation limit.
+            assert_eq!(forecast["simulation_truncated"], 0);
+            assert!(
+                forecast.get("pre_regression_baseline").is_none(),
+                "{forecast}"
+            );
+            let unknown = json!({"p50": null, "p90": null});
+            for metric in ["time_to_drain_hours", "tokens", "usd"] {
+                assert_eq!(forecast[metric], unknown, "{metric}");
+            }
+            assert!(forecast["drain_probability"].is_null(), "{forecast}");
+        },
+    );
+}
+
+#[test]
+fn arrivals_draining_before_the_generation_bound_stay_complete() {
+    isolated(
+        "backlog_forecast::arrivals_draining_before_the_generation_bound_stay_complete",
+        || {
+            let fixture = Fixture::new();
+            busy_arrivals_fixture(&fixture, 60);
+            // The simulation costs well over the production wall-time budget
+            // on a host slowed by instrumentation, so this checks completion
+            // under a budget no host reaches and a test generation bound of
+            // 256; the budget's own cut is checked by the test above.
+            let server = fixture.server_with_envs(
+                false,
+                &[
+                    (
+                        orbit_core::test_support::BACKLOG_FORECAST_COMPUTE_BUDGET_ENV,
+                        "3600000".as_ref(),
+                    ),
+                    (
+                        orbit_core::test_support::BACKLOG_FORECAST_MAX_GENERATED_ENV,
+                        "256".as_ref(),
+                    ),
+                ],
+            );
+            // Over 90 days this rate files past the limit, yet every run
+            // drains long before using that many filings.
+            let complete = json_ok(server.get(&format!("{ENDPOINT}&concurrency=64&arrivals=on")));
+            assert!(complete["arrivals"]["per_day"]["total"].as_f64().unwrap() > 8.5);
+            let forecast = &complete["forecast"];
+            assert!(forecast.get("simulation_cut").is_none(), "{forecast}");
+            assert!(forecast["unavailable"].get("simulation_cut").is_none());
+            assert_eq!(forecast["simulation_truncated"], 0);
+            // This one-delivery history supports no regression estimate, so
+            // the initial-work baseline carries the scenario's figures.
+            let baseline = &forecast["pre_regression_baseline"];
+            assert_eq!(baseline["drain_probability"], 1.0, "{forecast}");
+            assert!(
+                baseline["time_to_drain_hours"]["p90"].as_f64().is_some(),
+                "{forecast}"
+            );
+        },
+    );
+}
+
+/// The furthest apart two back-to-back forecast scans may be. Each live
+/// forecast builds its own riskiness model from a fresh wall-clock scan, so
+/// the two `observed_through` instants differ by the requests' own compute
+/// time — one second across the F2026-11-097 CI run. The semantic remainder
+/// must still match exactly, so this bound only recognizes same-test scans;
+/// it matches the cross-scan skew the
+/// `forecast_riskiness_preserves_observation_timestamps` regression allows.
+const NO_ARRIVALS_SCAN_SKEW_SECONDS: i64 = 3600;
+
+/// One riskiness observation window read from a forecast prediction.
+struct RiskinessScanWindow {
+    since: DateTime<Utc>,
+    observed_through: DateTime<Utc>,
+    window_days: u64,
+}
+
+/// Validate every `task_predictions[].riskiness` observation window in
+/// `forecast` and remove `since`/`observed_through` from it, returning the
+/// removed windows. The windows keep their exact RFC3339 instants (never
+/// date-only: ORB-22032) and must each span `window_days`.
+fn strip_riskiness_scan_windows(
+    forecast: &mut Value,
+    side: &str,
+) -> Result<Vec<RiskinessScanWindow>, String> {
+    if !forecast
+        .get("task_predictions")
+        .is_some_and(|predictions| predictions.is_array())
+    {
+        return Err(format!(
+            "{side} forecast has no task_predictions array: {forecast}"
+        ));
+    }
+    let rows = forecast
+        .get_mut("task_predictions")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| format!("{side} forecast has no task_predictions array"))?;
+    let mut windows = Vec::with_capacity(rows.len());
+    for row in rows.iter_mut() {
+        let id = row.get("id").unwrap_or(&Value::Null).clone();
+        let row_context = row.to_string();
+        let riskiness = row
+            .get_mut("riskiness")
+            .ok_or_else(|| format!("{side} prediction {id} has no riskiness: {row_context}"))?;
+        let context = riskiness.to_string();
+        let object = riskiness.as_object_mut().ok_or_else(|| {
+            format!("{side} prediction {id} riskiness is not an object: {row_context}")
+        })?;
+        let raw = ["since", "observed_through"]
+            .into_iter()
+            .map(|field| {
+                object
+                    .get(field)
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        format!(
+                            "{side} prediction {id} riskiness.{field} is not a string: {context}"
+                        )
+                    })
+                    .map(|raw| (field, raw))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut instants = Vec::with_capacity(2);
+        for (field, text) in raw {
+            if !text.contains('T') {
+                return Err(format!(
+                    "{side} prediction {id} riskiness.{field} must retain the RFC3339 instant, \
+                     not a date-only string ({text}): {context}"
+                ));
+            }
+            let instant = DateTime::parse_from_rfc3339(text)
+                .map_err(|_| {
+                    format!(
+                        "{side} prediction {id} riskiness.{field} must parse as RFC3339 ({text}): \
+                         {context}"
+                    )
+                })?
+                .with_timezone(&Utc);
+            instants.push(instant);
+        }
+        let since = instants[0];
+        let observed_through = instants[1];
+        if since >= observed_through {
+            return Err(format!(
+                "{side} prediction {id} observation window must advance: {context}"
+            ));
+        }
+        let window_days = object
+            .get("window_days")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                format!("{side} prediction {id} riskiness has no window_days: {context}")
+            })?;
+        let span_hours = (observed_through - since).num_seconds() as f64 / 3600.0;
+        if (span_hours - window_days as f64 * 24.0).abs() >= 1.0 {
+            return Err(format!(
+                "{side} prediction {id} riskiness window must span window_days ({window_days}): \
+                 {context}"
+            ));
+        }
+        object.remove("since");
+        object.remove("observed_through");
+        windows.push(RiskinessScanWindow {
+            since,
+            observed_through,
+            window_days,
+        });
+    }
+    Ok(windows)
+}
+
+/// Compare the no-arrivals (`off`) and arrivals-on (`on`) forecasts for
+/// semantic equality, tolerating only independently sampled riskiness scan
+/// instants. Every estimate, probability, cohort/prediction identity and
+/// completeness field must match exactly; the excluded `since`/
+/// `observed_through` pairs must each be an exact RFC3339 window from the
+/// same estimator, sampled within same-test skew (F2026-11-097).
+/// Returns the number of riskiness windows compared.
+fn compare_no_arrivals_forecasts(off: &Value, on: &Value) -> Result<usize, String> {
+    let mut off = off.clone();
+    let mut on = on.clone();
+    let off_windows = strip_riskiness_scan_windows(&mut off, "off")?;
+    let on_windows = strip_riskiness_scan_windows(&mut on, "on")?;
+    if off_windows.len() != on_windows.len() {
+        return Err(format!(
+            "off and on forecasts compare {} and {} riskiness windows",
+            off_windows.len(),
+            on_windows.len()
+        ));
+    }
+    if off != on {
+        return Err(format!("semantic forecast difference: off: {off} on: {on}"));
+    }
+    for (index, (off_window, on_window)) in off_windows.iter().zip(&on_windows).enumerate() {
+        if off_window.window_days != on_window.window_days {
+            return Err(format!(
+                "prediction {index} compares window_days {} against {}",
+                off_window.window_days, on_window.window_days
+            ));
+        }
+        for (field, off_instant, on_instant) in [
+            ("since", off_window.since, on_window.since),
+            (
+                "observed_through",
+                off_window.observed_through,
+                on_window.observed_through,
+            ),
+        ] {
+            let skew = (off_instant - on_instant).num_seconds().abs();
+            if skew >= NO_ARRIVALS_SCAN_SKEW_SECONDS {
+                return Err(format!(
+                    "prediction {index} {field} scans are {skew}s apart, beyond same-test skew"
+                ));
+            }
+        }
+    }
+    Ok(off_windows.len())
+}
+
+#[test]
+fn arrivals_on_with_no_recorded_arrivals_keeps_the_no_arrivals_forecast() {
+    isolated(
+        "backlog_forecast::arrivals_on_with_no_recorded_arrivals_keeps_the_no_arrivals_forecast",
+        || {
+            let fixture = Fixture::new();
+            let at = Utc::now() - Duration::days(20);
+            completed_work(&fixture, at, TaskComplexity::Medium, 2);
+            let queued = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Initial work".into(),
+                    complexity: TaskComplexity::Medium,
+                    status: Some(TaskStatus::Backlog),
+                    ..Default::default()
+                })
+                .unwrap();
+            super::backlog_rework::edit_task(&fixture, &queued.id.to_string(), |task| {
+                task.created_at = at;
+            });
+            let server = fixture.server(false);
+            let off = json_ok(server.get(&format!("{ENDPOINT}&concurrency=1&refresh=1")));
+            let on = json_ok(server.get(&format!("{ENDPOINT}&concurrency=1&arrivals=on")));
+            assert_eq!(on["arrivals"]["per_day"]["total"], 0.0);
+            assert_eq!(on["inputs"]["arrivals"], true);
+            let compared = compare_no_arrivals_forecasts(&off["forecast"], &on["forecast"])
+                .unwrap_or_else(|diff| {
+                    panic!(
+                        "arrivals=on with zero arrivals must preserve the no-arrivals forecast: \
+                         {diff}"
+                    )
+                });
+            assert!(
+                compared > 0,
+                "the comparison must exercise at least one sampled riskiness window: {}",
+                on["forecast"]["task_predictions"]
+            );
+            assert!(on["forecast"].get("simulation_cut").is_none());
+        },
+    );
+}
+
+/// A completed delivery of `hours` with provider cost equal to those hours.
+pub(super) fn completed_work(
+    fixture: &Fixture,
+    at: DateTime<Utc>,
+    complexity: TaskComplexity,
+    hours: u64,
+) -> String {
+    completed_delivery(
+        fixture,
+        at,
+        complexity,
+        "gpt-6.1-sol",
+        Some(hours as f64),
+        hours,
+    )
+}
+
+/// Move a [`completed_delivery`] invocation's end to `at`. Duration is unchanged.
+pub(super) fn retimestamp_invocation(fixture: &Fixture, id: &str, at: DateTime<Utc>) {
+    fixture
+        .runtime
+        .sqlite_store()
+        .unwrap()
+        .with_transaction(|tx| {
+            tx.connection()
+                .execute(
+                    "UPDATE invocations SET ts = ?1 WHERE job_run_id = ?2",
+                    (at.to_rfc3339(), format!("delivery-{id}")),
+                )
+                .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+            Ok(())
+        })
+        .unwrap();
 }
 
 /// Five identical one-hour medium deliveries, so every draw is one hour.

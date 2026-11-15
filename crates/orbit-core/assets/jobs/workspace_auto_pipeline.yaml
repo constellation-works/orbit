@@ -16,11 +16,32 @@
 #   individual child finishes. It used to wait on the entire fan-out before
 #   re-listing, which meant one slow leaf held every other slot closed for as
 #   long as it ran, and nothing that arrived in the meantime could start.
-# - The cost of detaching is that this run no longer observes its leaves'
-#   outcomes and no longer cascades cancellation to them; each child records
-#   its own result and is durably linked either way. A terminal leaf was
-#   already explicitly not a failure of this sequencer
-#   (`allow_non_success: true`).
+# - The cost of detaching is that this sequencer does not fail itself when a
+#   leaf ends, and it does not cascade cancellation to a detached leaf. Each
+#   child records its own result. Each admission pass writes that terminal
+#   status onto the child's dispatch. A leaf that ends after the last pass
+#   (a window that expired while it ran, or every leaf of a single-tick
+#   drain) is recorded by the next reconciling read of this run, such as
+#   `orbit run show`, so a finished leaf is not left `submitted`
+#   [ORB-23198]. A terminal leaf was already explicitly not a failure of this
+#   sequencer (`allow_non_success: true`).
+# - Load-failure hold [ORB-22892]: `classify_workspace_auto_tasks` also
+#   excludes a task whose own leaf of this drain ended `failed` before any
+#   activity step started. A failed leaf's run record keeps only a
+#   job-targeted diagnostic step (or none) whether it failed at load or
+#   after real work, so the hold reads the audit trail: it applies only
+#   when that trail has no started activity step (`step_started` with a
+#   step id). That is a bad job/activity definition, invalid catalog
+#   entry, retired declaration or unresolvable script manifest. Such a
+#   failure changes nothing on the task, so re-admitting it would only
+#   repeat the same deterministic failure every iteration. The pass
+#   reports each held task as `leaf_load_failed` in its deferred list and
+#   in `leaf_load_failed_holds`, naming the leaf run and the load error.
+#   The hold lasts for the rest of this drain, lifts when the task is
+#   updated after the failure, and never applies to a leaf whose audit
+#   shows an activity step started (a transient or post-step failure keeps
+#   ordinary re-admission, whatever the run record's diagnostic step and
+#   however long the leaf ran) or to a different drain.
 #
 # `--approve-proposed` [ORB-14117]
 # - Opt-in through `approve_proposed`. When no pilot of this drain is live, an
@@ -36,6 +57,13 @@
 #   it approved and admits those tasks in the same pass. Only one pilot runs
 #   at a time, and a task it carries is held as `pilot_running`, so nothing is
 #   piloted twice.
+# - A fresh assessment from an explicit or routine pilot is approved on the
+#   selecting pass without another provider call. A stale one, or one with a
+#   holding warning, stays proposed and is not selected again. A task another
+#   pilot is assessing is held as `pilot_running` until it ends. The drain's own
+#   child still pilots a task again when that child's assessment found the
+#   task had changed. Targeted task ids and promotion authority are not a new
+#   pilot request.
 # - An idle iteration does not sleep while the pilot is live: it waits on the
 #   pilot itself, bounded by the poll interval, so a finished pilot's
 #   approvals are admitted at once and freed slots are still refilled. Nor
@@ -47,8 +75,11 @@
 # - Approval is the task-pilot apply boundary's decision, not this file's:
 #   it verifies the authority record against this run, refuses any
 #   duplicate, already-landed, conflict or warning finding, and approves
-#   through the ordinary approve transition. Held tasks stay proposed and are
-#   not piloted again until they change. `allowed_crews` and the complexity
+#   through the ordinary approve transition. Held tasks stay proposed. A hold
+#   this drain's own pilot recorded is not piloted again until the task
+#   changes; a fresh explicit or routine assessment is approved without
+#   another pilot, and a stale one stays proposed until a new explicit
+#   assessment. `allowed_crews` and the complexity
 #   pools still decide what gets admitted.
 # - Without the flag the selection step returns no candidates and reports no
 #   pilot, so the pilot, record and wait steps are skipped.

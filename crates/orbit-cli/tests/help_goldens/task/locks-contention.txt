@@ -33,5 +33,5 @@ two tasks inside one group are often compatible and merely linked through
 a third.
 
 Surfaces are the ones conflict admission reserves: declared selectors,
-pruned of paths that no longer exist. A task declaring nothing locks
-nothing and is counted apart.
+including valid ones whose target no longer exists. A task declaring
+nothing locks nothing and is counted apart.

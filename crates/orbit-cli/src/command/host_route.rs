@@ -12,20 +12,21 @@ use std::path::{Path, PathBuf};
 
 use orbit_cmd::hosts::{self, HostWorkspaceRoute, TaskIdRoute};
 use orbit_common::governance::authorization::{CallerCapabilities, CallerEnvelope};
+use orbit_common::governance::notice::NoticeVerb;
 use orbit_common::governance::task::TaskVerb;
-use orbit_core::application::task::{TaskArtifactRead, TaskListResultPolicy};
+use orbit_core::application::task::TaskArtifactRead;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_mcp::McpSessionAuthority;
 use orbit_mcp::federated::{MachineQualifiedSelector, is_id_routed_tool};
 use orbit_registry::hosts::HostEntry;
 use orbit_registry::{MachineIdentityState, inspect_machine_identity};
-use orbit_types::tool::{McpCapability, ToolSessionContext};
+use orbit_types::tool::{McpCapability, ToolSessionContext, tool_family, tool_operation_name};
 use serde_json::{Map, Value, json};
 
 use super::run::RunSubcommand;
 use super::task::TaskInvocation;
 use super::task::TaskSubcommand;
-use super::tool::ToolSubcommand;
+use super::tool::{self, ToolSubcommand};
 use super::{Cli, CommandOut, Commands, Payload};
 
 /// What the preflight decided.
@@ -44,6 +45,42 @@ pub(crate) fn preflight(cli: &mut Cli) -> Result<Preflight, OrbitError> {
         return Ok(Preflight::Local);
     }
     let global_root = orbit_core::runtime::resolve_global_root()?;
+    // Plugin callbacks cannot use the host's SSH credentials. Refuse before
+    // discovery as well as delivery, using the same root that authenticates
+    // local callback sessions. Resolving --host can itself attempt SSH.
+    if let Commands::Tool(tool) = &cli.command
+        && let ToolSubcommand::Run(args) = &tool.command
+        && let Some(selector) = workspace_value(cli)?
+    {
+        let destination = if let Some(host) = host.as_deref()
+            && hosts::host_ssh_target(&global_root, host)?.is_some()
+        {
+            Some(format!("--host {host} --workspace {selector}"))
+        } else if hosts::selector_remote_host(&global_root, &selector)?.is_some() {
+            Some(selector)
+        } else {
+            None
+        };
+        if let Some(destination) = destination {
+            let callback_root = orbit_core::runtime::resolve_generation_root(cli.root.as_deref())?;
+            orbit_core::adapter::command::refuse_plugin_child_remote_callback(
+                &callback_root,
+                &args.name,
+                &destination,
+            )?;
+        }
+    }
+    if let Commands::Tool(tool) = &cli.command
+        && let ToolSubcommand::Run(args) = &tool.command
+        && let Some(selector) = workspace_value(cli)?
+    {
+        let callback_root = orbit_core::runtime::resolve_generation_root(cli.root.as_deref())?;
+        orbit_cmd::registry_runtime::refuse_cli_callback_workspace(
+            &callback_root,
+            &args.name,
+            &selector,
+        )?;
+    }
     // A claimed worker's calls follow its owner binding, never a prefix.
     if OrbitRuntime::current_worker_invocation(&global_root)?.is_some() {
         if host.is_some() {
@@ -79,6 +116,12 @@ pub(crate) fn preflight(cli: &mut Cli) -> Result<Preflight, OrbitError> {
         }
         return Ok(Preflight::Local);
     }
+    if matches!(&cli.command, Commands::Notice(_)) {
+        return notice_preflight(cli, &global_root);
+    }
+    if let Commands::Attention(attention) = &cli.command {
+        return attention_preflight(cli, attention, &global_root);
+    }
     if let Some(host) = host {
         let value = workspace_value(cli)?.ok_or_else(|| {
             OrbitError::InvalidInput(
@@ -108,8 +151,154 @@ pub(crate) fn preflight(cli: &mut Cli) -> Result<Preflight, OrbitError> {
     }
     match hosts::route_task_id(&global_root, &task_id)? {
         TaskIdRoute::Local => Ok(Preflight::Local),
-        TaskIdRoute::Remote(holder) => deliver(cli, &global_root, &holder, None),
+        TaskIdRoute::Remote(holder) => {
+            if let Commands::Tool(tool) = &cli.command
+                && let ToolSubcommand::Run(args) = &tool.command
+            {
+                let callback_root =
+                    orbit_core::runtime::resolve_generation_root(cli.root.as_deref())?;
+                orbit_core::adapter::command::refuse_plugin_child_remote_callback(
+                    &callback_root,
+                    &args.name,
+                    &task_id,
+                )?;
+            }
+            deliver(cli, &global_root, &holder, None)
+        }
     }
+}
+
+/// `orbit notice …` routing: a host-qualified `--workspace` selector names
+/// the owner the call belongs to, exactly as for a task tool, and a
+/// workspace-less `list` on a host with registered hosts aggregates every
+/// owner through the federated client. Anything else runs locally, as
+/// before. (`--host` is a notice flag of its own — the machines a
+/// maintenance notice concerns — so the selector is the owner address.)
+fn notice_preflight(cli: &mut Cli, global_root: &Path) -> Result<Preflight, OrbitError> {
+    if let Some(selector) = workspace_value(cli)? {
+        if let Some(holder) = hosts::selector_remote_host(global_root, &selector)? {
+            return deliver(cli, global_root, &holder, Some(selector));
+        }
+        if let Ok(qualified) = selector.parse::<MachineQualifiedSelector>() {
+            // The selector names a host, and no remote holder answered for
+            // it: it is this machine (rewrite to the local `ws_*` the
+            // bootstrap resolves) or a host this machine does not know.
+            let local = matches!(
+                inspect_machine_identity(global_root)?,
+                MachineIdentityState::Present(identity) if identity.id == qualified.machine_id()
+            );
+            if !local {
+                return Err(OrbitError::UnknownSelector(selector));
+            }
+            cli.workspace = Some(qualified.workspace_id().to_string());
+        }
+        return Ok(Preflight::Local);
+    }
+    let Commands::Notice(notice) = &cli.command else {
+        return Ok(Preflight::Local);
+    };
+    if notice.command.spec.verb != NoticeVerb::List || !workspace_less(cli)? {
+        return Ok(Preflight::Local);
+    }
+    if orbit_mcp::federated::load_destinations(global_root)?.is_empty() {
+        return Ok(Preflight::Local);
+    }
+    let input = Value::Object(notice.command.input.clone());
+    deliver_notice_aggregate(
+        global_root,
+        notice.command.spec.tool_name,
+        input,
+        AggregateRender::Notice(NoticeVerb::List),
+    )
+}
+
+/// `orbit attention` on a host with registered hosts: an explicit scope
+/// (`--all`, `--host`, `--workspace`) or a call from outside any workspace
+/// fans out through the federated client, whose aggregator reads every
+/// in-scope host and applies the cursor and limit once. A bare call inside a
+/// workspace, `--root`, or a host with no registered hosts stays local.
+fn attention_preflight(
+    cli: &Cli,
+    attention: &super::attention::AttentionCommand,
+    global_root: &Path,
+) -> Result<Preflight, OrbitError> {
+    if explicit_root(cli) || orbit_mcp::federated::load_destinations(global_root)?.is_empty() {
+        return Ok(Preflight::Local);
+    }
+    let input = &attention.query.input;
+    let scoped = input.get("all") == Some(&Value::Bool(true))
+        || input.contains_key("host")
+        || input.contains_key("workspace");
+    if !scoped && !workspace_less(cli)? {
+        return Ok(Preflight::Local);
+    }
+    if matches!(
+        inspect_machine_identity(global_root)?,
+        MachineIdentityState::Absent
+    ) {
+        return Err(OrbitError::InvalidInput(
+            "this machine has no [machine] identity yet; run `orbit init` first".into(),
+        ));
+    }
+    let client =
+        super::mcp::federated_aggregate_client(global_root.to_path_buf(), caller_authority())?;
+    let answer = orbit_mcp::McpHost::call_tool(
+        &client,
+        attention.query.spec.tool_name,
+        Value::Object(input.clone()),
+        ToolSessionContext::default(),
+    );
+    Ok(Preflight::Remote(
+        answer.and_then(super::attention::render_attention_envelope),
+    ))
+}
+
+/// Whether this invocation names no workspace at all: no selector, no
+/// explicit root, and no initialized workspace discoverable from the cwd.
+fn workspace_less(cli: &Cli) -> Result<bool, OrbitError> {
+    if workspace_value(cli)?.is_some() || explicit_root(cli) {
+        return Ok(false);
+    }
+    let cwd = std::env::current_dir()?;
+    Ok(
+        orbit_cmd::registry_runtime::RegisteredRuntimeFactory::try_resolve_initialized_cwd_roots(
+            &cwd,
+        )?
+        .is_none(),
+    )
+}
+
+/// How a workspace-less notice list's merged answer renders.
+enum AggregateRender {
+    Notice(NoticeVerb),
+    ToolRun(tool::ToolRunShape),
+}
+
+/// Deliver a workspace-less `orbit.notice.list` to the federated client,
+/// whose mux fans out one aggregate read per owner and merges them. The
+/// client composes this machine in-process beside the SSH remotes, so
+/// the local owner is read like any other instead of degraded.
+fn deliver_notice_aggregate(
+    global_root: &Path,
+    name: &str,
+    input: Value,
+    render: AggregateRender,
+) -> Result<Preflight, OrbitError> {
+    if matches!(
+        inspect_machine_identity(global_root)?,
+        MachineIdentityState::Absent
+    ) {
+        return Err(OrbitError::InvalidInput(
+            "this machine has no [machine] identity yet; run `orbit init` first".into(),
+        ));
+    }
+    let authority = caller_authority_for_declared_model(input_declared_model(&input).as_deref());
+    let client = super::mcp::federated_aggregate_client(global_root.to_path_buf(), authority)?;
+    let answer = orbit_mcp::McpHost::call_tool(&client, name, input, ToolSessionContext::default());
+    Ok(Preflight::Remote(answer.and_then(|value| match render {
+        AggregateRender::Notice(verb) => Ok(super::notice::render_notice(verb, value).into()),
+        AggregateRender::ToolRun(shape) => shape.render_tool_run_output(value),
+    })))
 }
 
 /// A non-id call (`orbit tool run` of any tool) whose selector names a
@@ -118,8 +307,25 @@ fn deliver_by_selector(cli: &Cli, global_root: &Path) -> Result<Preflight, Orbit
     let Commands::Tool(tool) = &cli.command else {
         return Ok(Preflight::Local);
     };
-    if !matches!(tool.command, ToolSubcommand::Run(_)) {
+    let ToolSubcommand::Run(args) = &tool.command else {
         return Ok(Preflight::Local);
+    };
+    // A workspace-less notice list aggregates every owner, as the CLI verb
+    // does; inside a workspace it stays the local workspace's list.
+    if args.name == "orbit.notice.list"
+        && !args.dry_run
+        && workspace_less(cli)?
+        && !orbit_mcp::federated::load_destinations(global_root)?.is_empty()
+    {
+        let mut input = args.prepare_tool_run_input()?;
+        carry_declared_model(args.agent.as_deref(), args.model.as_deref(), &mut input);
+        let shape = args.prepare_tool_run_shape(&mut input)?;
+        return deliver_notice_aggregate(
+            global_root,
+            &args.name,
+            input,
+            AggregateRender::ToolRun(shape),
+        );
     }
     let Some(selector) = workspace_value(cli)? else {
         return Ok(Preflight::Local);
@@ -141,6 +347,7 @@ fn may_route(cli: &Cli) -> bool {
                 })
         }
         Commands::Tool(tool) => matches!(tool.command, ToolSubcommand::Run(_)),
+        Commands::Notice(_) | Commands::Attention(_) => true,
         Commands::Run(run) => {
             matches!(&run.command, RunSubcommand::Auto(auto) if auto.pull.is_some())
         }
@@ -197,13 +404,22 @@ fn routed_task_id(command: &Commands) -> Result<Option<String>, OrbitError> {
     Ok(match command {
         Commands::Task(task) => routed_command_id(&task.command).map(ToOwned::to_owned),
         Commands::Tool(tool) => match &tool.command {
-            ToolSubcommand::Run(args) if is_id_routed_tool(&args.name) => args
-                .parsed_input()?
-                .get("id")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|id| !id.is_empty())
-                .map(ToOwned::to_owned),
+            // A family names its operation in the input.
+            ToolSubcommand::Run(args)
+                if is_id_routed_tool(&args.name) || tool_family(&args.name).is_some() =>
+            {
+                let input = args.parsed_input()?;
+                if is_id_routed_tool(tool_operation_name(&args.name, &input)) {
+                    input
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|id| !id.is_empty())
+                        .map(ToOwned::to_owned)
+                } else {
+                    None
+                }
+            }
             _ => None,
         },
         _ => None,
@@ -253,13 +469,69 @@ fn set_workspace_value(cli: &mut Cli, selector: String) -> Result<(), OrbitError
 /// The authority a routed call asks for: an operator only when this process
 /// resolves as one and declares no agent. An agent never propagates
 /// `--operator`; the destination's own rules decide the rest.
-fn caller_authority() -> McpSessionAuthority {
+pub(crate) fn caller_authority() -> McpSessionAuthority {
     let envelope = CallerEnvelope::from_process_env(&ToolSessionContext::default());
     let caller = CallerCapabilities::resolve(&envelope);
     if caller.grants().contains(&McpCapability::Operator) && !envelope.agent_declared {
         McpSessionAuthority::Operator
     } else {
         McpSessionAuthority::Agent
+    }
+}
+
+/// A non-empty identity value, trimmed.
+fn trimmed_identity(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// The `model` a tool input already declares, if any.
+fn input_declared_model(input: &Value) -> Option<String> {
+    trimmed_identity(input.get("model").and_then(Value::as_str))
+}
+
+/// The model a routed `orbit tool run` declares, in the local path's order:
+/// the tool input's own `model` first, then `--model`, then the deprecated
+/// `--agent`, then `ORBIT_AGENT_MODEL`, then `ORBIT_AGENT_NAME`. Only one
+/// value is ever forwarded, so an input `model` is never duplicated by a
+/// conflicting flag value.
+fn declared_tool_run_model(
+    agent: Option<&str>,
+    model: Option<&str>,
+    input: &Value,
+) -> Option<String> {
+    input_declared_model(input)
+        .or_else(|| trimmed_identity(model))
+        .or_else(|| trimmed_identity(agent))
+        .or_else(|| trimmed_identity(std::env::var("ORBIT_AGENT_MODEL").ok().as_deref()))
+        .or_else(|| trimmed_identity(std::env::var("ORBIT_AGENT_NAME").ok().as_deref()))
+}
+
+/// Carry a routed `orbit tool run`'s declared model in its forwarded input,
+/// as the tool boundary's one identity key. An input that already declares
+/// a model is forwarded unchanged.
+fn carry_declared_model(agent: Option<&str>, model: Option<&str>, input: &mut Value) {
+    if input_declared_model(input).is_some() {
+        return;
+    }
+    let Some(declared) = declared_tool_run_model(agent, model, input) else {
+        return;
+    };
+    if let Some(object) = input.as_object_mut() {
+        object.insert("model".into(), Value::String(declared));
+    }
+}
+
+/// The authority for a routed call whose forwarded input declares a model:
+/// never Operator, exactly as a local agent call is attributed. A call
+/// that declares none keeps the caller's own authority.
+fn caller_authority_for_declared_model(declared: Option<&str>) -> McpSessionAuthority {
+    if trimmed_identity(declared).is_some() {
+        McpSessionAuthority::Agent
+    } else {
+        caller_authority()
     }
 }
 
@@ -271,28 +543,33 @@ struct RoutedCall {
 }
 
 enum Render {
-    TaskShow {
-        fields: Vec<String>,
-    },
-    TaskWrite {
-        verb: &'static str,
-    },
-    ArtifactGet {
-        out: Option<PathBuf>,
-    },
+    TaskShow { fields: Vec<String> },
+    TaskWrite { verb: &'static str },
+    ArtifactGet { out: Option<PathBuf> },
+    Notice { verb: NoticeVerb },
     ReviewReset,
     Requeue,
     Reconcile,
-    ToolRun {
-        full: bool,
-        fields: Vec<String>,
-        bare_field: bool,
-        list_policy: TaskListResultPolicy,
-    },
+    Pilot,
+    ToolRun(tool::ToolRunShape),
 }
 
 fn routed_call(cli: &Cli, holder: &HostEntry) -> Result<RoutedCall, OrbitError> {
     match &cli.command {
+        Commands::Notice(notice) => {
+            let invocation = &notice.command;
+            let mut input = invocation.input.clone();
+            if invocation.spec.verb == NoticeVerb::Post {
+                super::notice::post_cli_input(&mut input)?;
+            }
+            Ok(RoutedCall {
+                name: invocation.spec.tool_name.into(),
+                input: Value::Object(input),
+                render: Render::Notice {
+                    verb: invocation.spec.verb,
+                },
+            })
+        }
         Commands::Task(task) => task_call(&task.command, holder),
         Commands::Tool(tool) => match &tool.command {
             ToolSubcommand::Run(args) => {
@@ -303,27 +580,13 @@ fn routed_call(cli: &Cli, holder: &HostEntry) -> Result<RoutedCall, OrbitError> 
                         holder.name, holder.ssh, args.name
                     )));
                 }
-                let mut input = args.parsed_input()?;
-                super::tool::request_write_sidecars_from_cli_fields(
-                    &args.name,
-                    &mut input,
-                    &args.fields,
-                )?;
-                let bare_field = super::tool::answers_with_bare_field(&args.name, &input)?;
-                let list_policy = TaskListResultPolicy::for_call(
-                    &args.name,
-                    &input,
-                    super::tool::task_list_result_profile(args.full, &args.fields),
-                );
+                let mut input = args.prepare_tool_run_input()?;
+                carry_declared_model(args.agent.as_deref(), args.model.as_deref(), &mut input);
+                let shape = args.prepare_tool_run_shape(&mut input)?;
                 Ok(RoutedCall {
                     name: args.name.clone(),
                     input,
-                    render: Render::ToolRun {
-                        full: args.full,
-                        fields: args.fields.clone(),
-                        bare_field,
-                        list_policy,
-                    },
+                    render: Render::ToolRun(shape),
                 })
             }
             _ => Err(not_routable()),
@@ -412,6 +675,11 @@ fn task_call(command: &TaskSubcommand, holder: &HostEntry) -> Result<RoutedCall,
                 input: without_host(&invocation.input),
                 render: Render::Reconcile,
             },
+            TaskVerb::Repilot => RoutedCall {
+                name: invocation.spec.tool_name.into(),
+                input: without_host(&invocation.input),
+                render: Render::Pilot,
+            },
             TaskVerb::Requeue => RoutedCall {
                 name: invocation.spec.tool_name.into(),
                 input: without_host(&invocation.input),
@@ -463,7 +731,9 @@ fn deliver(
             ));
         }
     };
-    let client = hosts::routed_client(global_root, &caller, caller_authority())?;
+    let authority =
+        caller_authority_for_declared_model(input_declared_model(&call.input).as_deref());
+    let client = hosts::routed_client(global_root, &caller, authority)?;
     let mut input = call.input;
     if let Some(selector) = selector
         && let Some(object) = input.as_object_mut()
@@ -472,9 +742,9 @@ fn deliver(
     }
     let answer =
         orbit_mcp::McpHost::call_tool(&client, &call.name, input, ToolSessionContext::default());
-    Ok(Preflight::Remote(answer.and_then(|value| {
-        render(&call.name, call.render, value, holder)
-    })))
+    Ok(Preflight::Remote(
+        answer.and_then(|value| render(call.render, value, holder)),
+    ))
 }
 
 fn host_json(holder: &HostEntry) -> Value {
@@ -489,11 +759,14 @@ fn with_host(mut value: Value, holder: &HostEntry) -> Value {
     value
 }
 
-fn render(name: &str, render: Render, value: Value, holder: &HostEntry) -> CommandOut {
+fn render(render: Render, value: Value, holder: &HostEntry) -> CommandOut {
     match render {
+        Render::Notice { verb } => Ok(super::notice::render_notice(verb, value).into()),
         Render::TaskShow { fields } => {
-            // MCP structuredContent wraps arrays and scalars in objects. Undo
-            // only those envelopes for a bare single-field projection.
+            // The CLI's single-field JSON is the bare value. A current host
+            // keys a `fields` projection by field name, so unwrap that key;
+            // an older host's bare answer reaches here as MCP
+            // structuredContent's `items`/`value` envelope, so undo that too.
             let value = if matches!(fields.as_slice(), [field] if field != "terminal")
                 && value.as_object().is_some_and(|object| object.len() == 1)
             {
@@ -505,6 +778,7 @@ fn render(name: &str, render: Render, value: Value, holder: &HostEntry) -> Comma
                             .get("value")
                             .filter(|value| !value.is_object() && !value.is_array())
                     })
+                    .or_else(|| fields.first().and_then(|field| value.get(field)))
                     .cloned()
                     .unwrap_or(value)
             } else {
@@ -541,26 +815,12 @@ fn render(name: &str, render: Render, value: Value, holder: &HostEntry) -> Comma
             let text = super::task::operation::requeue_text(&value);
             Ok(Payload::detail(with_host(value, holder), text).into())
         }
+        Render::Pilot => Ok(Payload::document(with_host(value, holder)).into()),
         Render::Reconcile => {
             let text = super::task::reconcile_review::reconciliation_text(&value);
             Ok(Payload::detail(with_host(value, holder), text).into())
         }
-        Render::ToolRun {
-            full,
-            fields,
-            bare_field,
-            list_policy,
-        } => {
-            let shaped = super::tool::shape_tool_output(
-                name,
-                value,
-                &list_policy,
-                full,
-                &fields,
-                bare_field,
-            )?;
-            Ok(Payload::document(shaped).into())
-        }
+        Render::ToolRun(shape) => shape.render_tool_run_output(value),
     }
 }
 
@@ -622,6 +882,12 @@ fn task_summary(task: &Value, holder: &HostEntry) -> String {
         lines.push(format!(
             "Final Recovery: {}",
             super::task::final_recovery_text(record)
+        ));
+    }
+    if let Some(hold) = task.get("completion_hold") {
+        lines.push(format!(
+            "Completion Hold: {}",
+            super::task::completion_hold_text(hold)
         ));
     }
     if let Some(owed) = task.get("owed_criteria") {

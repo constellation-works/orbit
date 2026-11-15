@@ -7,10 +7,11 @@ use std::time::{Duration, Instant};
 
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{JobRun, JobRunState, TaskStatus};
+use orbit_types::workflow::{ActivityCrewDraw, FINAL_RECOVERY_CREWS_KEY, PipelineState};
 use reqwest::blocking::Response;
 use serde_json::{Value, json};
 
-use super::support::{Fixture, Server, isolated};
+use super::support::{Fixture, Server, isolated, json_ok};
 
 const WS: &str = "?workspace=ws_http_fixture";
 /// Bounds every stream read: a notice is due within one scan interval.
@@ -120,7 +121,17 @@ fn change_stream_notices_other_process_writes_and_resumes_after_reconnect() {
                     ..TaskAddParams::default()
                 })
                 .unwrap();
-            let server = fixture.server(false);
+            let server = fixture.server_with_envs(
+                false,
+                &[
+                    ("ORBIT_TEST_EVENTS_SCAN_INTERVAL_MS", "75".as_ref()),
+                    (
+                        "ORBIT_TEST_EVENTS_HOST_RESOURCES_INTERVAL_MS",
+                        "75".as_ref(),
+                    ),
+                    ("ORBIT_TEST_EVENTS_DRAIN_RECHECK_INTERVAL_MS", "75".as_ref()),
+                ],
+            );
             let mut stream = open(&server, None);
 
             // Connect: the drain phase, then the host sample, both level state.
@@ -163,6 +174,60 @@ fn change_stream_notices_other_process_writes_and_resumes_after_reconnect() {
             if !seen.iter().any(idle) {
                 await_notice(&mut stream, "idle", idle);
             }
+
+            // Inline recovery changes the task decoration while its delivery
+            // run stays running and the task record is untouched.
+            let mut recovery_run = fixture.seed_run(
+                "jrun-events-recovery",
+                "task_pr_pipeline",
+                JobRunState::Running,
+            );
+            let mut state = orbit_types::workflow::PipelineState::new(
+                recovery_run.run_id.clone(),
+                recovery_run.job_id.clone(),
+                json!({"task_id": task.id}),
+            );
+            fixture
+                .runtime
+                .write_run_state(&recovery_run.run_id, &state)
+                .unwrap();
+            await_notice(&mut stream, "delivery before recovery", |n| {
+                kind(n) == "run" && n["id"] == recovery_run.run_id.as_str()
+            });
+            state.final_recovery = Some(
+                serde_json::from_value(json!({
+                    "key": {"run_id": recovery_run.run_id, "attempt": 1},
+                    "failed_step_id": "implement_bundle", "task_id": task.id,
+                    "admitted_at": chrono::Utc::now()
+                }))
+                .unwrap(),
+            );
+            fixture
+                .runtime
+                .write_run_state(&recovery_run.run_id, &state)
+                .unwrap();
+            await_notice(&mut stream, "recovery started", |n| {
+                kind(n) == "task" && n["id"] == task.id.as_str()
+            });
+            state.final_recovery.as_mut().unwrap().decision =
+                Some(orbit_types::workflow::FinalRecoveryDecision::Resume {
+                    step_id: "implement_bundle".into(),
+                    rationale: "Continue repaired work".into(),
+                });
+            fixture
+                .runtime
+                .write_run_state(&recovery_run.run_id, &state)
+                .unwrap();
+            await_notice(&mut stream, "recovery ended", |n| {
+                kind(n) == "task" && n["id"] == task.id.as_str()
+            });
+            recovery_run.state = JobRunState::Success;
+            fixture.save_run(&recovery_run);
+            await_notice(&mut stream, "delivery after recovery", |n| {
+                kind(n) == "run"
+                    && n["id"] == recovery_run.run_id.as_str()
+                    && n["state"] == "success"
+            });
 
             // A remote pull's capability row is not a local run. Its arrival
             // and expiry must invalidate readiness even while phase stays idle.
@@ -226,6 +291,152 @@ fn change_stream_notices_other_process_writes_and_resumes_after_reconnect() {
             }
         },
     );
+}
+
+/// The list page and each change-stream scan call `active_task_triage_map`.
+/// ORB-20709 read every active run's pipeline state on that path (no test
+/// covered the cost). One page must be one exact batch read. A checkpoint the
+/// single-run read would reject must neither bind the run from its submitted
+/// input nor fail the page: triage is decoration (ORB-20745).
+#[test]
+fn active_triage_scan_reads_run_state_once_and_skips_a_bad_checkpoint() {
+    isolated(
+        "events::active_triage_scan_reads_run_state_once_and_skips_a_bad_checkpoint",
+        || {
+            let fixture = Fixture::new();
+            let task = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Watched task".into(),
+                    description: "Triage reads are batched.".into(),
+                    status: Some(TaskStatus::Backlog),
+                    ..TaskAddParams::default()
+                })
+                .unwrap();
+            let mut expected = Vec::new();
+            for index in 0..3 {
+                let run_id = format!("jrun-triage-batch-{index}");
+                let mut run = fixture.seed_run(
+                    &run_id,
+                    "blocked_task_recovery_pipeline",
+                    JobRunState::Running,
+                );
+                run.input = Some(json!({"task_id": task.id}));
+                fixture.save_run(&run);
+                let mut state = PipelineState::new(
+                    run_id.clone(),
+                    run.job_id.clone(),
+                    run.input.clone().unwrap(),
+                );
+                state.activity_crew_draws.insert(
+                    FINAL_RECOVERY_CREWS_KEY.into(),
+                    ActivityCrewDraw {
+                        crew: "recoverer".into(),
+                        source: "fixture".into(),
+                        eligible_pool: vec![],
+                        auto_effort: None,
+                    },
+                );
+                state.step_states.insert(0, JobRunState::Success);
+                state.step_outputs.insert(
+                    0,
+                    json!({"proceed": true, "recovery": {"task_id": task.id}}),
+                );
+                fixture.runtime.write_run_state(&run_id, &state).unwrap();
+                expected.push(json!({"run_id": run_id, "crew": "recoverer"}));
+            }
+            let server = fixture.counted_run_state_server();
+            let list_path = "/api/tasks?workspace=ws_http_fixture";
+            let detail_path = format!("/api/tasks/{}?workspace=ws_http_fixture", task.id);
+
+            let before = fixture.run_state_trace().len();
+            let page = json_ok(server.get(list_path));
+            let list_reads = &fixture.run_state_trace()[before..];
+            assert_eq!(
+                list_reads.len(),
+                1,
+                "ORB-20709 read each active run's pipeline state; one list page must be one batch read: {list_reads:?}"
+            );
+            assert_eq!(list_reads[0]["span"]["name"], "read_job_run_states_exact");
+            assert_eq!(
+                span_run_count(&list_reads[0]),
+                3,
+                "the batch covers every active run, not one query per run: {list_reads:?}"
+            );
+            let row = page["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["id"] == task.id.as_str())
+                .unwrap();
+            assert_eq!(row["active_triage"], json!(expected), "list bindings");
+
+            let before = fixture.run_state_trace().len();
+            let detail = json_ok(server.get(&detail_path));
+            let detail_reads = &fixture.run_state_trace()[before..];
+            assert_eq!(
+                detail_reads.len(),
+                1,
+                "one detail read is one batch read: {detail_reads:?}"
+            );
+            assert_eq!(span_run_count(&detail_reads[0]), 3);
+            assert_eq!(detail["active_triage"], json!(expected), "detail bindings");
+
+            // ORB-21825: a list bundling that detail scanned the active runs
+            // once for its rows and again for the detail. The detail borrows
+            // the page's bindings, so the bundled request is one batch read.
+            let before = fixture.run_state_trace().len();
+            let bundled = json_ok(server.get(&format!("{list_path}&detail={}", task.id)));
+            let bundled_reads = &fixture.run_state_trace()[before..];
+            assert_eq!(
+                bundled_reads.len(),
+                1,
+                "a bundled detail reuses the page's active-run read: {bundled_reads:?}"
+            );
+            assert_eq!(
+                bundled["detail"]["active_triage"],
+                json!(expected),
+                "bundled detail bindings"
+            );
+
+            let connection = rusqlite::Connection::open(fixture.global.join("orbit.db")).unwrap();
+            assert_eq!(
+                connection
+                    .execute(
+                        "UPDATE job_run_states SET pipeline_state_json = '{' \
+                         WHERE run_id = 'jrun-triage-batch-0'",
+                        [],
+                    )
+                    .unwrap(),
+                1
+            );
+            // The unreadable checkpoint leaves the page and the detail readable
+            // and binds nothing: the run is not bound from its submitted input.
+            let page = json_ok(server.get(list_path));
+            let row = page["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["id"] == task.id.as_str())
+                .unwrap();
+            assert!(
+                row["active_triage"].is_null(),
+                "list must not bind a bad checkpoint from submitted input: {row}"
+            );
+            let detail = json_ok(server.get(&detail_path));
+            assert!(
+                detail["active_triage"].is_null(),
+                "detail must not bind a bad checkpoint from submitted input: {detail}"
+            );
+        },
+    );
+}
+
+fn span_run_count(event: &Value) -> u64 {
+    event["fields"]["run_count"]
+        .as_u64()
+        .or_else(|| event["span"]["run_count"].as_u64())
+        .unwrap_or_else(|| panic!("run_count missing from {event}"))
 }
 
 #[test]

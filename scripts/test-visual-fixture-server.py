@@ -1,0 +1,1264 @@
+#!/usr/bin/env python3
+"""Exercise dashboard fixture setup through the real CLI and its failure boundary."""
+import errno
+import hashlib
+import json
+import os
+from pathlib import Path
+import shlex
+import shutil
+import signal
+import socket
+import subprocess
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import unittest
+
+ROOT = Path(__file__).resolve().parent.parent
+SCRIPT = ROOT / "scripts/visual-fixture-server.sh"
+SEED = ROOT / "crates/orbit-web/visual/fixtures/busy-workspace.json"
+REMOTE_SEED = ROOT / "crates/orbit-web/visual/fixtures/remote-host-workspaces.json"
+SCRATCH = ROOT / ".orbit/tmp"
+LOG_STREAM_PATH = "/api/log/stream"
+# Shipped native gate. One more established stream is refused; sequential
+# disconnects past this count must still be admitted. The permit drops on the
+# stream's next idle poll, at most one second after the upstream is destroyed.
+NATIVE_LOG_STREAM_CAP = 8
+PERMIT_RELEASE_DEADLINE_S = 3
+SEQUENTIAL_LOG_STREAMS = NATIVE_LOG_STREAM_CAP + 3
+
+
+def fixture_git_env():
+    """Build every fixture Git child without inherited locators or config."""
+    return {
+        "PATH": os.environ.get("PATH", os.defpath),
+        "HOME": str(SCRATCH), "XDG_CONFIG_HOME": str(SCRATCH),
+        "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_ATTR_NOSYSTEM": "1", "GIT_OPTIONAL_LOCKS": "0",
+    }
+
+
+class VisualFixtureServerTest(unittest.TestCase):
+    def test_git_setup_and_provenance_ignore_inherited_authority(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+            root = Path(tmp)
+            sentinel = root / "sentinel"
+            sentinel.mkdir()
+            clean = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+            clean.update(HOME=tmp, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+            def git(*args):
+                return subprocess.run(["git", *args], cwd=sentinel, env=clean,
+                                      check=True, capture_output=True, text=True).stdout.strip()
+            git("init", "-q")
+            (sentinel / "sentinel").write_text("preserve these bytes\n")
+            git("add", ".")
+            git("-c", "user.name=sentinel", "-c", "user.email=sentinel@example.invalid",
+                "commit", "-qm", "sentinel")
+            before = {str(path.relative_to(sentinel)): path.read_bytes()
+                      for path in sentinel.rglob("*") if path.is_file()}
+            locators = {
+                "GIT_DIR": str(sentinel / ".git"), "GIT_WORK_TREE": str(sentinel),
+                "GIT_COMMON_DIR": str(sentinel / ".git"),
+                "GIT_INDEX_FILE": str(sentinel / ".git/index"),
+                "GIT_OBJECT_DIRECTORY": str(sentinel / ".git/objects"),
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(sentinel / ".git/objects"),
+                "GIT_CONFIG_GLOBAL": str(sentinel / ".git/config"),
+                "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "init.defaultBranch",
+                "GIT_CONFIG_VALUE_0": "hostile-branch",
+            }
+            # Re-execute the helper: hostile environment never enters the test
+            # runner, and even an unfixed helper can only damage this sentinel.
+            probe = (
+                "import importlib.util, pathlib, sys; "
+                "spec=importlib.util.spec_from_file_location('fixture', sys.argv[1]); "
+                "m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m); "
+                "case=m.VisualFixtureServerTest(); repo=pathlib.Path(sys.argv[2]); "
+                "case._mini_checkout(repo); print(case._head(repo))"
+            )
+            for index, hostile in enumerate(({"GIT_DIR": locators["GIT_DIR"]},
+                                             {"GIT_COMMON_DIR": locators["GIT_COMMON_DIR"]}, locators)):
+                with self.subTest(locators=list(hostile)):
+                    repo = root / f"repo-{index}"
+                    env = {**clean, **hostile}
+                    result = subprocess.run([os.sys.executable, "-c", probe, __file__, str(repo)],
+                                            env=env, capture_output=True, text=True, timeout=30)
+                    after = {str(path.relative_to(sentinel)): path.read_bytes()
+                             for path in sentinel.rglob("*") if path.is_file()}
+                    self.assertEqual(after, before, "fixture Git modified sentinel repository bytes")
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertTrue((repo / ".git/HEAD").is_file())
+                    self.assertNotIn("hostile-branch", (repo / ".git/HEAD").read_text())
+                    expected = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                                              env=clean, check=True, capture_output=True, text=True).stdout.strip()
+                    self.assertEqual(result.stdout.strip(), expected)
+                    launch = root / f"launch-{index}"
+                    launch.mkdir()
+                    wrapper, record = self._stale_backend(launch, "present", fixture_cli=True)
+                    launch_env = {**self._fixture_env(str(launch), wrapper, record, "present"), **hostile}
+                    server, output, diagnostics = self._start(
+                        repo / "scripts/visual-fixture-server.sh", ["remote-host-workspaces:empty"], repo, launch_env)
+                    try:
+                        self.assertIn("ORBIT_VISUAL_URL=", output, diagnostics)
+                        protocol = self._protocol(output)
+                        provenance = json.loads(Path(protocol["ORBIT_VISUAL_PROVENANCE"]).read_text())
+                        self.assertEqual(provenance["source_revision"], expected)
+                        self.assertFalse(provenance["source_dirty"])
+                        fixture = next(launch.glob("visual-fixture-remote-host-workspaces-*"))
+                        for workspace in (fixture / "work", fixture / "work-extra-1"):
+                            self.assertTrue((workspace / ".git/HEAD").is_file(), workspace)
+                        # Launch the front directly too: the shell's scrub
+                        # must not conceal a broken gitText child boundary.
+                        direct = launch / "direct"
+                        direct.mkdir()
+                        (repo / "dirty-marker").write_text("uncommitted source\n")
+                        front_launcher = direct / "front"
+                        front_launcher.write_text(
+                            "#!/bin/sh\nexec node " + shlex.quote(str(repo / "scripts/visual-fixture-front.mjs")) + "\n")
+                        front_launcher.chmod(0o755)
+                        front_env = {
+                            **launch_env, "ORBIT_SCRATCH_DIR": str(direct),
+                            "ORBIT_FIXTURE_REPO": str(repo),
+                            "ORBIT_FIXTURE_UPSTREAM": self._backend_url(launch),
+                            "ORBIT_FIXTURE_BACKEND": str(wrapper),
+                            "ORBIT_FIXTURE_PROVENANCE": str(direct / "provenance.json"),
+                        }
+                        front, front_output, front_diagnostics = self._start(front_launcher, [], repo, front_env)
+                        try:
+                            self.assertIn("ORBIT_VISUAL_URL=", front_output, front_diagnostics)
+                            identity = json.loads((direct / "provenance.json").read_text())
+                            self.assertEqual(identity["source_revision"], expected)
+                            self.assertTrue(identity["source_dirty"])
+                        finally:
+                            self._stop(front)
+                    finally:
+                        self._stop(server)
+                    self.assertEqual({str(path.relative_to(sentinel)): path.read_bytes()
+                                      for path in sentinel.rglob("*") if path.is_file()}, before)
+
+    def test_dot_segments_never_proxy_candidate_static_bytes(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+            repo = self._mini_checkout(Path(tmp) / "repo")
+            wrapper, record = self._stale_backend(Path(tmp), "present", fixture_cli=True)
+            server, output, diagnostics = self._start(
+                repo / "scripts/visual-fixture-server.sh", ["experiments"], repo,
+                self._fixture_env(tmp, wrapper, record, "present"))
+            try:
+                self.assertIn("ORBIT_VISUAL_URL=", output, diagnostics)
+                url = self._protocol(output)["ORBIT_VISUAL_URL"]
+                for target in ("/./static/app.js", "/%2e/static/app.js", "/static/./app.js",
+                               "/static/%2E/app.js", "/./", "/%2e/", "/%73tatic/app.js",
+                               "/static%2fapp.js"):
+                    with self.subTest(target=target):
+                        status, body = self._raw_request(url, target)
+                        self.assertEqual(status, 200, body)
+                        self.assertNotIn(b"STALE-EMBEDDED-ASSET", body)
+                        self.assertIn(b"CANDIDATE-JS-MARKER" if "app.js" in target else b"Candidate", body)
+                self.assertNotIn("GET /static", record.read_text())
+                self.assertNotIn("GET / ", record.read_text())
+                for target in ("/static/../scripts/visual-fixture-server.sh", "/%2e%2e/private",
+                               "/.%2e/private", "/%2f%2flocalhost/private", "/static/%5capp.js",
+                               "/static/%00app.js", "/static/%ZZ", "/.%2fstatic/app.js",
+                               "/%2e%2fstatic/app.js", "/static%2f.%2fapp.js"):
+                    status, body = self._raw_request(url, target)
+                    self.assertEqual(status, 400, (target, body))
+                    self.assertNotIn(b"STALE-EMBEDDED-ASSET", body)
+                status, body = self._raw_request(url, "/./static/missing.js")
+                self.assertEqual(status, 404, body)
+                status, body = self._raw_request(url, "/./api/tasks?next=//example.invalid/x&keep=%2e")
+                self.assertEqual(status, 200, body)
+                self.assertIn("GET /api/tasks?next=//example.invalid/x&keep=%2e\n", record.read_text())
+                status, body = self._raw_request(url, "/%2e/api/diagnostics/experiments/exp-visual-fixture")
+                self.assertEqual(status, 200, body)
+                self.assertEqual(json.loads(body)["id"], "exp-visual-fixture")
+            finally:
+                self._stop(server)
+
+    def test_seed_readback_and_runner_protocol(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+            env = {**os.environ, "ORBIT_SCRATCH_DIR": tmp}
+            with open(Path(tmp) / "stdout", "w+") as stdout, open(Path(tmp) / "stderr", "w+") as stderr:
+                server = subprocess.Popen([str(SCRIPT), "busy-workspace"], cwd=ROOT, env=env,
+                                          stdout=stdout, stderr=stderr, start_new_session=True)
+                try:
+                    deadline = time.monotonic() + 90
+                    output = ""
+                    while time.monotonic() < deadline:
+                        stdout.seek(0)
+                        output = stdout.read()
+                        if "ORBIT_VISUAL_TASK=" in output or server.poll() is not None:
+                            break
+                        time.sleep(0.1)
+                    stderr.seek(0)
+                    diagnostics = stderr.read()
+                    self.assertIn("ORBIT_VISUAL_URL=http://127.0.0.1:", output, diagnostics)
+                    fixture = next(Path(tmp).glob("visual-fixture-busy-workspace-*"))
+                    env["HOME"] = str(fixture / "home")
+                    orbit = env.get("ORBIT_VISUAL_ORBIT", "orbit")
+                    result = subprocess.run([orbit, "--root", str(fixture / "root"), "--json", "task", "list"],
+                                            cwd=fixture / "work", env=env, capture_output=True, text=True, check=True)
+                    actual = {task["title"]: task["status"] for task in json.loads(result.stdout)}
+                    expected = {task["title"]: task["status"] for task in json.loads(SEED.read_text())["tasks"]}
+                    self.assertEqual(actual, expected)
+                    first_id = (fixture / "task-ids").read_text().splitlines()[0]
+                    self.assertIn(f"ORBIT_VISUAL_TASK={first_id}\n", output)
+                finally:
+                    if server.poll() is None:
+                        os.killpg(server.pid, signal.SIGTERM)
+                    server.wait(timeout=15)
+
+    def test_remote_host_and_second_workspace_seed(self):
+        # AC1: a seed declaring one remote host and two workspaces makes
+        # /api/hosts carry the remote row (front-only, the backend's own
+        # list has none) and /api/workspaces list both workspaces, so the
+        # dashboard builds the rail host picker and the workspace picker
+        # (app.js only builds the latter when the owned list exceeds one).
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+            env = {**os.environ, "ORBIT_SCRATCH_DIR": tmp}
+            server, output, diagnostics = self._start(SCRIPT, ["remote-host-workspaces"], ROOT, env)
+            try:
+                self.assertIn("ORBIT_VISUAL_URL=http://127.0.0.1:", output, diagnostics)
+                url = self._protocol(output)["ORBIT_VISUAL_URL"]
+                declared = json.loads(REMOTE_SEED.read_text())
+                self.assertEqual(len(declared["hosts"]), 1)
+                self.assertEqual(len(declared["workspaces"]), 2)
+                for route in ("/api/hosts?probe=false", "/api/hosts"):
+                    status, _, body = self._fetch(url, route)
+                    self.assertEqual(status, 200, body[:200])
+                    payload = json.loads(body)
+                    hosts = payload["hosts"]
+                    self.assertTrue(hosts[0]["local"], hosts)
+                    remote = [row for row in hosts if not row["local"]]
+                    self.assertEqual(len(remote), 1, hosts)
+                    self.assertEqual(remote[0]["name"], declared["hosts"][0]["name"])
+                    self.assertEqual(remote[0]["machine_id"], declared["hosts"][0]["machine_id"])
+                    self.assertEqual(remote[0]["ssh"], declared["hosts"][0]["ssh"])
+                    self.assertEqual(remote[0]["reachable"], declared["hosts"][0]["reachable"])
+                    self.assertEqual(remote[0]["error"]["code"], "unreachable_destination")
+                status, _, body = self._fetch(url, "/api/workspaces")
+                self.assertEqual(status, 200, body[:200])
+                workspaces = json.loads(body)
+                self.assertEqual(len(workspaces), 2, workspaces)
+                self.assertEqual(
+                    [row["name"] for row in workspaces],
+                    [row["name"] for row in declared["workspaces"]],
+                )
+                self.assertTrue(all(row["status"] == "active" for row in workspaces), workspaces)
+            finally:
+                self._stop(server)
+
+    def test_fixture_hosts_served_with_stub_backend(self):
+        # The front synthesises the serving-host row when the backend
+        # cannot give a JSON host list (the stale stub backend), so the
+        # seeded remote still reaches the picker in mini-checkout runs.
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+            repo = self._mini_checkout(Path(tmp) / "repo")
+            wrapper, record = self._stale_backend(Path(tmp), "present")
+            env = self._fixture_env(tmp, wrapper, record, "present")
+            server, output, diagnostics = self._start(
+                repo / "scripts/visual-fixture-server.sh", ["remote-host-workspaces"], repo, env,
+            )
+            try:
+                self.assertIn("ORBIT_VISUAL_URL=http://127.0.0.1:", output, diagnostics)
+                url = self._protocol(output)["ORBIT_VISUAL_URL"]
+                status, _, body = self._fetch(url, "/api/hosts?probe=false")
+                self.assertEqual(status, 200, body[:200])
+                hosts = json.loads(body)["hosts"]
+                self.assertTrue(hosts[0]["local"], hosts)
+                remote = [row for row in hosts if not row["local"]]
+                self.assertEqual([row["name"] for row in remote], ["fixture-remote"], hosts)
+            finally:
+                self._stop(server)
+
+    def test_faketime_launch_uses_frozen_absolute_timestamp(self):
+        # Launch-boundary regression for ORB-20505: the script used to run
+        # `faketime -f "$scratch/faketime.rc"` and write "@<epoch>" there.
+        # `-f` passes its argument directly as FAKETIME (no file is read),
+        # so a pathname is rejected, and "@..." is a running clock.
+        # A stub faketime first on PATH records argv/env and execs the
+        # real orbit; it does not emulate libfaketime.
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        for frozen_env, expected in (
+            (None, "2026-01-01 12:00:00"),
+            ("2027-06-15T08:30:00Z", "2027-06-15 08:30:00"),
+        ):
+            with self.subTest(frozen=frozen_env or "default"), tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+                stub_bin = Path(tmp) / "stub-bin"
+                stub_bin.mkdir()
+                record = Path(tmp) / "faketime.argv"
+                stub = stub_bin / "faketime"
+                stub.write_text(
+                    "#!/bin/sh\n"
+                    "printf '%s\\n' \"$@\" > \"$FAKETIME_STUB_RECORD\"\n"
+                    "printf 'FAKETIME_DONT_FAKE_MONOTONIC=%s\\nTZ=%s\\n' "
+                    "\"${FAKETIME_DONT_FAKE_MONOTONIC:-}\" \"${TZ:-}\" "
+                    "> \"$FAKETIME_STUB_RECORD.env\"\n"
+                    "while [ $# -gt 0 ]; do\n"
+                    "  case \"$1\" in\n"
+                    "    -f) shift 2; break ;;\n"
+                    "    --exclude-monotonic) shift ;;\n"
+                    "    *) break ;;\n"
+                    "  esac\n"
+                    "done\n"
+                    "exec \"$@\"\n"
+                )
+                stub.chmod(0o755)
+                env = {
+                    **os.environ,
+                    "ORBIT_SCRATCH_DIR": tmp,
+                    "FAKETIME_STUB_RECORD": str(record),
+                    "PATH": str(stub_bin) + os.pathsep + os.environ.get("PATH", ""),
+                }
+                if frozen_env is None:
+                    env.pop("ORBIT_VISUAL_FROZEN_INSTANT", None)
+                else:
+                    env["ORBIT_VISUAL_FROZEN_INSTANT"] = frozen_env
+                with open(Path(tmp) / "stdout", "w+") as stdout, open(Path(tmp) / "stderr", "w+") as stderr:
+                    server = subprocess.Popen([str(SCRIPT), "busy-workspace"], cwd=ROOT, env=env,
+                                              stdout=stdout, stderr=stderr, start_new_session=True)
+                    try:
+                        deadline = time.monotonic() + 90
+                        output = ""
+                        while time.monotonic() < deadline:
+                            stdout.seek(0)
+                            output = stdout.read()
+                            if "ORBIT_VISUAL_URL=" in output or server.poll() is not None:
+                                break
+                            time.sleep(0.1)
+                        stderr.seek(0)
+                        diagnostics = stderr.read()
+                        self.assertIn("ORBIT_VISUAL_URL=http://127.0.0.1:", output, diagnostics)
+                        self.assertIn("server_clock=faketime", diagnostics)
+                        argv = record.read_text().splitlines()
+                        self.assertGreaterEqual(len(argv), 3, argv)
+                        self.assertEqual(argv[0], "-f", argv)
+                        self.assertEqual(argv[1], expected, argv)
+                        self.assertRegex(argv[1], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+                        self.assertNotIn("/", argv[1], argv)
+                        self.assertFalse(argv[1].startswith("@"), argv)
+                        # Remaining argv is the real orbit serve command.
+                        self.assertIn("web", argv)
+                        self.assertIn("serve", argv)
+                        recorded_env = (Path(str(record) + ".env")).read_text()
+                        self.assertIn("FAKETIME_DONT_FAKE_MONOTONIC=1", recorded_env)
+                        self.assertIn("TZ=UTC", recorded_env)
+                    finally:
+                        if server.poll() is None:
+                            os.killpg(server.pid, signal.SIGTERM)
+                        server.wait(timeout=15)
+
+    def test_seed_failure_never_announces_readiness(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        for operation, response in (
+            ("task add", 'echo "injected add failure" >&2; exit 9'),
+            ("task update", 'echo "injected update failure" >&2; exit 9'),
+            ("task show", "printf '%s\\n' '{\"status\":\"wrong\"}'; exit 0"),
+        ):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+                wrapper = Path(tmp) / "orbit-fail"
+                wrapper.write_text(f'#!/bin/sh\ncase " $* " in *" {operation} "*) {response};; esac\nexec orbit "$@"\n')
+                wrapper.chmod(0o755)
+                result = subprocess.run([str(SCRIPT), "busy-workspace"], cwd=ROOT,
+                                        env={**os.environ, "ORBIT_SCRATCH_DIR": tmp, "ORBIT_VISUAL_ORBIT": str(wrapper)},
+                                        capture_output=True, text=True, timeout=90)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("expected proposed, got wrong" if operation == "task show" else "injected", result.stderr)
+                self.assertNotIn("ORBIT_VISUAL_URL=", result.stdout)
+
+    def test_candidate_assets_ignore_stale_embedded_backend(self):
+        # The previous fixture announced the backend's own URL, so a binary
+        # that embeds STALE-EMBEDDED-ASSET was what the browser rendered while
+        # metadata still named the checkout. The front must serve the checkout
+        # change, keep backend identity separate, and answer overlays itself.
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+            repo = self._mini_checkout(Path(tmp) / "repo")
+            wrapper, record = self._stale_backend(Path(tmp), "present")
+            env = self._fixture_env(tmp, wrapper, record, "present")
+            server, output, diagnostics = self._start(repo / "scripts/visual-fixture-server.sh", ["experiments"], repo, env)
+            try:
+                self.assertIn("ORBIT_VISUAL_URL=http://127.0.0.1:", output, diagnostics)
+                protocol = self._protocol(output)
+                url = protocol["ORBIT_VISUAL_URL"]
+                status, headers, body = self._fetch(url, "/static/dashboard.css")
+                self.assertEqual(status, 200, body)
+                self.assertNotIn(b"STALE-EMBEDDED-ASSET", body)
+                self.assertIn(b"color: rgb(1, 2, 3)", body)
+                self.assertLess(body.index(b"color: rgb(1, 2, 3)"), body.index(b"outline-color: rgb(4, 5, 6)"))
+                self.assertIn("default-src 'self'", headers.get("Content-Security-Policy", ""))
+                self.assertTrue(headers.get("Content-Type", "").startswith("text/css"))
+                js_status, js_headers, js_body = self._fetch(url, "/static/app.js")
+                self.assertEqual(js_status, 200)
+                self.assertIn(b"CANDIDATE-JS-MARKER", js_body)
+                self.assertNotIn(b"STALE-EMBEDDED-ASSET", js_body)
+                self.assertTrue(js_headers.get("Content-Type", "").startswith("application/javascript"))
+                missing_status, _, missing_body = self._fetch(url, "/static/not-declared.js")
+                self.assertEqual(missing_status, 404, missing_body)
+                self.assertIn(b"candidate asset missing", missing_body)
+                self.assertNotIn(b"STALE-EMBEDDED-ASSET", missing_body)
+                for escaped in ("/static/../scripts/visual-fixture-server.sh", "/%2e%2e/scripts/visual-fixture-server.sh"):
+                    escape_status, _, escape_body = self._fetch(url, escaped)
+                    self.assertEqual(escape_status, 400, escape_body)
+                    self.assertNotIn(b"STALE-EMBEDDED-ASSET", escape_body)
+                    self.assertNotIn(b"#!/bin/sh", escape_body)
+                experiment_status, _, experiment_body = self._fetch(url, "/api/diagnostics/experiments/exp-visual-fixture")
+                self.assertEqual(experiment_status, 200, experiment_body)
+                self.assertEqual(json.loads(experiment_body)["id"], "exp-visual-fixture")
+                scorecard_status, _, scorecard_body = self._fetch(url, "/api/agents/implementers/scorecard")
+                self.assertIn(b"STALE-EMBEDDED-ASSET", scorecard_body)
+                self.assertEqual(scorecard_status, 200)
+                provenance = json.loads(Path(protocol["ORBIT_VISUAL_PROVENANCE"]).read_text())
+                self.assertEqual(provenance["source_revision"], self._head(repo))
+                self.assertFalse(provenance["static_backend_identity_compared"])
+                self.assertFalse(provenance["api_compatibility"]["schema_compared"])
+                self.assertTrue(provenance["api_compatibility"]["established"])
+                self.assertEqual(provenance["backend"]["version"], "stub-backend 0")
+                self.assertNotEqual(provenance["assets"]["combined_sha256"], provenance["backend"]["sha256"])
+                self.assertEqual(provenance["renderer"]["sha256"], self._sha256(repo / "scripts/visual-fixture-front.mjs"))
+                self.assertEqual(protocol["ORBIT_VISUAL_SOURCE"], provenance["source_revision"])
+                self.assertEqual(protocol["ORBIT_VISUAL_ASSETS_SHA256"], provenance["assets"]["combined_sha256"])
+                self.assertIn("/api/tasks", provenance["api_compatibility"]["paths"])
+                stale_log = record.read_text()
+                self.assertNotIn("GET /static", stale_log)
+                self.assertNotIn("GET / ", stale_log)
+                style = self._browser(url, Path(tmp) / "shots", title_color="rgb(1, 2, 3)")
+                self.assertEqual(style["color"], "rgb(1, 2, 3)")
+                self.assertNotEqual(style["stale"], "stale")
+                self.assertEqual(style["marker"], "CANDIDATE-JS-MARKER")
+                self._copy_shots(Path(tmp) / "shots", "fixture-candidate")
+            finally:
+                self._stop(server)
+            self._assert_port_closed(url)
+
+    def test_missing_or_unreadable_candidate_asset_refuses_readiness(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        for case in ("missing", "unreadable"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+                repo = self._mini_checkout(Path(tmp) / "repo", asset_case=case)
+                result = subprocess.run(
+                    [str(repo / "scripts/visual-fixture-server.sh"), "experiments"],
+                    cwd=repo,
+                    env={**os.environ, "ORBIT_SCRATCH_DIR": tmp, "ORBIT_FIXTURE_REPO": str(repo)},
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("candidate asset", result.stderr)
+                self.assertNotIn("ORBIT_VISUAL_URL=", result.stdout)
+                if case == "unreadable":
+                    os.chmod(repo / "crates/orbit-web/assets/dashboard/css/app.css", 0o644)
+
+    def test_absent_api_route_refuses_readiness(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        probe = "orbit-fixture-probe"
+        paths = ["/api/tasks", f"/api/runs/{probe}", f"/api/on/{probe}/tasks"]
+        paths += [f"/api/tasks/{probe}{suffix}" for suffix in (
+            "", "/comments", "/archive", "/approve", "/reject", "/pilot", "/triage",
+            "/requeue", "/settle-merged", "/auto-fix", "/pilot-admission", "/post-deploy",
+            f"/artifacts/{probe}",
+        )]
+        unused = f"/api/tasks/{probe}/backend-only"
+        paths.append(unused)
+        for missing in paths:
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+                repo = self._mini_checkout(Path(tmp) / "repo")
+                mode = "absent:" + missing
+                wrapper, record = self._stale_backend(Path(tmp), mode, fixture_cli=True)
+                server, output, diagnostics = self._start(
+                    repo / "scripts/visual-fixture-server.sh", ["experiments:empty"], repo,
+                    self._fixture_env(tmp, wrapper, record, mode))
+                try:
+                    if missing == unused:
+                        self.assertIn("ORBIT_VISUAL_URL=", output, diagnostics)
+                        protocol = self._protocol(output)
+                        provenance = json.loads(Path(protocol["ORBIT_VISUAL_PROVENANCE"]).read_text())
+                        discovered = provenance["api_compatibility"]["paths"]
+                        self.assertTrue(set(paths[:-1]).issubset(discovered), discovered)
+                        self.assertNotIn(unused, discovered)
+                        self.assertNotIn("OPTIONS " + unused + "\n", record.read_text())
+                        continue
+                    self.assertNotIn("ORBIT_VISUAL_URL=", output, missing)
+                    self.assertIsNotNone(server.poll(), diagnostics)
+                    self.assertNotEqual(server.returncode, 0, diagnostics)
+                    self.assertIn("source/API compatibility not established", diagnostics)
+                    self.assertIn(missing + " (404)", diagnostics)
+                    self.assertIn("OPTIONS " + missing + "\n", record.read_text())
+                finally:
+                    self._stop(server)
+
+    def test_front_rejects_untrusted_authority_before_all_routes(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+            tmp_path = Path(tmp)
+            repo = self._mini_checkout(tmp_path / "repo")
+            wrapper, record = self._stale_backend(tmp_path, "present", fixture_cli=True)
+            server, output, diagnostics = self._start(
+                repo / "scripts/visual-fixture-server.sh", ["experiments"], repo,
+                self._fixture_env(tmp, wrapper, record, "present"),
+            )
+            try:
+                self.assertIn("ORBIT_VISUAL_URL=", output, diagnostics)
+                url = self._protocol(output)["ORBIT_VISUAL_URL"]
+                host = urllib.parse.urlsplit(url).netloc
+                before = record.read_text()
+                bad_headers = [
+                    "Host: attacker.invalid\r\nOrigin: https://attacker.invalid\r\n",
+                    "", "Host: attacker.invalid\r\n", "Host: localhost:bad\r\n",
+                    f"Host: {host}\r\nHost: {host}\r\n",
+                    f"Host: {host}\r\nOrigin: http://attacker.invalid\r\n",
+                    f"Host: {host}\r\nOrigin: {url}\r\nOrigin: {url}\r\n",
+                    f"Host: {host}\r\nSec-Fetch-Site: cross-site\r\n",
+                ]
+                for route in ("/", "/static/app.js", "/api/diagnostics/experiments/exp-visual-fixture", "/api/hosts", "/api/probe"):
+                    for headers in bad_headers:
+                        status, _ = self._raw_request(url, route, headers=headers)
+                        self.assertIn(status, (400, 403), (route, headers, status))
+                for headers in (f"Host: {host}\r\n", f"Host: {host}\r\nOrigin: http://attacker.invalid\r\n"):
+                    status, _ = self._raw_request(url, "/api/probe", method="POST", headers=headers)
+                    self.assertEqual(status, 403)
+                self.assertEqual(record.read_text(), before)
+                status, _ = self._raw_request(url, "/api/probe", method="POST", headers=f"Host: {host}\r\nOrigin: {url}\r\n")
+                self.assertEqual(status, 200)
+                self.assertIn("POST /api/probe\n", record.read_text())
+            finally:
+                self._stop(server)
+
+    def test_proxied_requests_stay_on_validated_upstream_origin(self):
+        # AC2: binding the front to 127.0.0.1 does not confine its outbound
+        # proxy. A network-path or absolute-form request target used to
+        # resolve to another origin. Two private loopback servers prove the
+        # repaired front refuses those targets before dispatch and still
+        # forwards an ordinary origin-form API path and query.
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+            tmp_path = Path(tmp)
+            repo = self._mini_checkout(tmp_path / "repo")
+            wrapper, record = self._stale_backend(tmp_path, "present", fixture_cli=True)
+            decoy_script = tmp_path / "decoy.mjs"
+            decoy_record = tmp_path / "decoy.record"
+            decoy_script.write_text(
+                "import http from 'node:http';\n"
+                "import fs from 'node:fs';\n"
+                "const record = process.env.DECOY_RECORD;\n"
+                "fs.writeFileSync(record, '');\n"
+                "http.createServer((req, res) => {\n"
+                "  fs.appendFileSync(record, req.method + ' ' + req.url + '\\n');\n"
+                "  res.writeHead(200, {'content-type': 'text/plain'});\n"
+                "  res.end('DECOY-REACHED');\n"
+                "}).listen(0, '127.0.0.1', function () {\n"
+                "  console.log('http://127.0.0.1:' + this.address().port);\n"
+                "});\n"
+            )
+            decoy = subprocess.Popen(
+                ["node", str(decoy_script)],
+                cwd=tmp_path,
+                env={**os.environ, "DECOY_RECORD": str(decoy_record)},
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
+            try:
+                decoy_line = decoy.stdout.readline().strip()
+                self.assertTrue(decoy_line.startswith("http://127.0.0.1:"), decoy_line)
+                decoy_port = decoy_line.rsplit(":", 1)[1]
+                env = self._fixture_env(tmp, wrapper, record, "present")
+                server, output, diagnostics = self._start(
+                    repo / "scripts/visual-fixture-server.sh", ["experiments"], repo, env,
+                )
+                try:
+                    self.assertIn("ORBIT_VISUAL_URL=http://127.0.0.1:", output, diagnostics)
+                    url = self._protocol(output)["ORBIT_VISUAL_URL"]
+                    attacks = [
+                        f"//127.0.0.1:{decoy_port}/marker-net",
+                        f"http://127.0.0.1:{decoy_port}/marker-abs",
+                        f"https://127.0.0.1:{decoy_port}/marker-tls",
+                        f"///127.0.0.1:{decoy_port}/marker-slash",
+                        "/" + "\\" + f"127.0.0.1:{decoy_port}/marker-bs",
+                    ]
+                    for target in attacks:
+                        status, body = self._raw_request(url, target)
+                        self.assertEqual(status, 400, (target, status, body))
+                        self.assertIn(b"not confined", body)
+                        self.assertNotIn(b"DECOY-REACHED", body)
+                        self.assertNotIn(b"STALE-EMBEDDED-ASSET", body)
+                    kept_status, _, kept_body = self._fetch(url, "/api/tasks?probe=kept")
+                    self.assertEqual(kept_status, 200, kept_body)
+                    self.assertIn(b"STALE-EMBEDDED-ASSET", kept_body)
+                    self.assertNotIn(b"DECOY-REACHED", kept_body)
+                    query_target = f"/api/tasks?next=//127.0.0.1:{decoy_port}/marker-query"
+                    query_status, _, query_body = self._fetch(url, query_target)
+                    self.assertEqual(query_status, 200, query_body)
+                    self.assertIn(b"STALE-EMBEDDED-ASSET", query_body)
+                    self.assertNotIn(b"DECOY-REACHED", query_body)
+                    overlay_status, _, overlay_body = self._fetch(
+                        url, "/api/diagnostics/experiments/exp-visual-fixture",
+                    )
+                    self.assertEqual(overlay_status, 200, overlay_body)
+                    self.assertEqual(json.loads(overlay_body)["id"], "exp-visual-fixture")
+                    self.assertNotIn(b"DECOY-REACHED", overlay_body)
+                    decoy_hits = decoy_record.read_text()
+                    self.assertEqual(decoy_hits, "", decoy_hits)
+                    intended = record.read_text()
+                    self.assertIn("GET /api/tasks?probe=kept\n", intended)
+                    self.assertIn(f"GET {query_target}\n", intended)
+                    for marker in ("marker-net", "marker-abs", "marker-tls", "marker-slash", "marker-bs"):
+                        self.assertNotIn(marker, intended, intended)
+                        self.assertNotIn(marker, decoy_hits)
+                finally:
+                    self._stop(server)
+            finally:
+                if decoy.poll() is None:
+                    os.killpg(decoy.pid, signal.SIGTERM)
+                decoy.wait(timeout=15)
+                decoy.stdout.close()
+                decoy.stderr.close()
+
+    def test_admitted_checkout_assets_with_separate_backend_identity(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+            wrapper, record = self._stale_backend(Path(tmp), "present")
+            env = self._fixture_env(tmp, wrapper, record, "present")
+            server, output, diagnostics = self._start(SCRIPT, ["implementers-scorecard"], ROOT, env)
+            try:
+                self.assertIn("ORBIT_VISUAL_URL=http://127.0.0.1:", output, diagnostics)
+                protocol = self._protocol(output)
+                url = protocol["ORBIT_VISUAL_URL"]
+                status, headers, body = self._fetch(url, "/static/dashboard.css")
+                self.assertEqual(status, 200, diagnostics)
+                self.assertEqual(body, self._declared_bytes("/static/dashboard.css"))
+                self.assertNotIn(b"STALE-EMBEDDED-ASSET", body)
+                self.assertIn("default-src 'self'", headers.get("Content-Security-Policy", ""))
+                font_status, font_headers, font_body = self._fetch(url, "/static/fonts/geist-latin.woff2")
+                self.assertEqual(font_status, 200)
+                self.assertEqual(font_body, (ROOT / "crates/orbit-web/assets/dashboard/fonts/geist-latin.woff2").read_bytes())
+                self.assertEqual(font_headers.get("Content-Type"), "font/woff2")
+                card_status, _, card_body = self._fetch(url, "/api/agents/implementers/scorecard?window=last500")
+                self.assertEqual(card_status, 200, card_body[:200])
+                card = json.loads(card_body)
+                self.assertEqual(card["status"], "ok")
+                self.assertEqual(card["window"], "last500")
+                self.assertNotIn(b"STALE-EMBEDDED-ASSET", card_body)
+                provenance = json.loads(Path(protocol["ORBIT_VISUAL_PROVENANCE"]).read_text())
+                self.assertEqual(provenance["source_revision"], self._head(ROOT))
+                # The field records the admitted checkout, including a dirty
+                # worktree. A clean tree is not required for the identity split.
+                porcelain = subprocess.run(
+                    ["git", "-C", str(ROOT), "status", "--porcelain"],
+                    check=True, capture_output=True, text=True,
+                    env=fixture_git_env(),
+                ).stdout
+                self.assertEqual(provenance["source_dirty"], bool(porcelain.strip()))
+                self.assertFalse(provenance["static_backend_identity_compared"])
+                self.assertFalse(provenance["api_compatibility"]["schema_compared"])
+                self.assertGreater(provenance["api_compatibility"]["probed"], 20)
+                self.assertIn("/api/hosts", provenance["api_compatibility"]["paths"])
+                self.assertEqual(provenance["backend"]["version"], "stub-backend 0")
+                self.assertNotEqual(provenance["backend"]["sha256"], provenance["assets"]["combined_sha256"])
+                self.assertNotIn("GET /static", record.read_text())
+                style = self._browser(url, Path(tmp) / "shots", css_var="#0b0d10")
+                self.assertEqual(style["bg"], "#0b0d10")
+                self.assertNotEqual(style["stale"], "stale")
+                self._copy_shots(Path(tmp) / "shots", "fixture-checkout")
+                evidence = SCRATCH / "evidence"
+                evidence.mkdir(parents=True, exist_ok=True)
+                (evidence / "fixture-provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
+            finally:
+                self._stop(server)
+
+    def test_log_stream_disconnect_releases_upstream_permit(self):
+        # The front used to leave the upstream /api/log/stream open after the
+        # downstream client closed, including before response headers. The
+        # native gate allows eight streams; the ninth then stayed 503. This
+        # runs the shipped front against the real isolated backend.
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        orbit = shutil.which("orbit")
+        self.assertIsNotNone(orbit, "orbit on PATH is the isolated native backend")
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+            env = {**os.environ, "ORBIT_SCRATCH_DIR": tmp, "ORBIT_VISUAL_ORBIT": orbit}
+            env.pop("STALE_RECORD", None)
+            env.pop("STALE_MODE", None)
+            server, output, diagnostics = self._start(SCRIPT, ["busy-workspace"], ROOT, env)
+            holders = []
+            front_url = None
+            backend_url = None
+            try:
+                self.assertIn("ORBIT_VISUAL_URL=http://127.0.0.1:", output, diagnostics)
+                protocol = self._protocol(output)
+                front_url = protocol["ORBIT_VISUAL_URL"]
+                backend_url = self._backend_url(tmp)
+                self.assertNotEqual(front_url, backend_url)
+                provenance = json.loads(Path(protocol["ORBIT_VISUAL_PROVENANCE"]).read_text())
+                self.assertNotEqual(provenance["backend"]["version"], "stub-backend 0", provenance["backend"])
+                self.assertNotIn("stale-server", provenance["backend"].get("resolved_path") or "")
+                for url in (backend_url, front_url):
+                    status, _, body = self._fetch(url, "/healthz")
+                    self.assertEqual(status, 200, (url, body[:200]))
+                self._exercise_log_stream_lifecycle(backend_url, holders)
+                self._exercise_log_stream_lifecycle(front_url, holders)
+                status, _, body = self._fetch(front_url, "/healthz")
+                self.assertEqual(status, 200, body[:200])
+            finally:
+                for sock in holders:
+                    self._close_socket(sock)
+                holders.clear()
+                self._stop(server)
+            self._assert_port_closed(front_url)
+            self._assert_port_closed(backend_url)
+
+    def _mini_checkout(self, repo, asset_case="present"):
+        script_dir = repo / "scripts"
+        helper_dir = repo / "crates/orbit-web/src/tests"
+        asset_dir = repo / "crates/orbit-web/assets/dashboard"
+        css_dir = asset_dir / "css"
+        fixture_dir = repo / "crates/orbit-web/visual/fixtures"
+        for directory in (script_dir, helper_dir, css_dir, fixture_dir, repo / "crates/orbit-web/src"):
+            directory.mkdir(parents=True, exist_ok=True)
+        shutil.copy(SCRIPT, script_dir / "visual-fixture-server.sh")
+        shutil.copy(ROOT / "scripts/visual-fixture-front.mjs", script_dir / "visual-fixture-front.mjs")
+        shutil.copy(ROOT / "crates/orbit-web/src/tests/dashboard_static.mjs", helper_dir / "dashboard_static.mjs")
+        (script_dir / "visual-fixture-server.sh").chmod(0o755)
+        (repo / "crates/orbit-web/src/lib.rs").write_text(
+            'pub(crate) const DASHBOARD_CSS: &str = concat!(\n'
+            '    include_str!("../assets/dashboard/css/base.css"),\n'
+            '    include_str!("../assets/dashboard/css/app.css"),\n'
+            ');\n'
+        )
+        (repo / "crates/orbit-web/src/assets.rs").write_text(
+            'pub(super) const DASHBOARD_CSP: &str = concat!(\n'
+            '    "default-src \'self\'; ",\n'
+            '    "script-src \'self\'"\n'
+            ');\n'
+            'pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[\n'
+            '    ("/", HTML, include_bytes!("../assets/dashboard/index.html")),\n'
+            '    ("/static/dashboard.css", CSS, DASHBOARD_CSS.as_bytes()),\n'
+            '    ("/static/app.js", JS, include_bytes!("../assets/dashboard/app.js")),\n'
+            '];\n'
+        )
+        (asset_dir / "index.html").write_text(
+            '<!doctype html><html><head><link rel="stylesheet" href="/static/dashboard.css"></head>'
+            '<body><h1 id="title" class="title">Candidate</h1><script src="/static/app.js"></script></body></html>\n'
+        )
+        (css_dir / "base.css").write_text(".title { color: rgb(1, 2, 3); }\n")
+        app_css = css_dir / "app.css"
+        if asset_case != "missing":
+            app_css.write_text(".title { outline-color: rgb(4, 5, 6); }\n")
+        (asset_dir / "app.js").write_text(
+            'fetch("/api/tasks");\n'
+            'globalThis.CANDIDATE_JS = "CANDIDATE-JS-MARKER";\n'
+        )
+        # Miniature source/route inventory mirrors every task helper shape.
+        # These files are discovery inputs, never loaded as a UI or DOM stub.
+        js_dir = asset_dir / "js"
+        js_dir.mkdir()
+        sources = {
+            "request-paths.js": 'fetch(`/api/runs/${encodeURIComponent(run.id)}`);\n'
+                                'fetch(`/api/on/${encodeURIComponent(host)}/tasks`);\n',
+            "task-shared.js": 'export function taskMutationPath(task, suffix = "") {\n'
+                              '  return taskWorkspacePath(task, `/api/tasks/${encodeURIComponent(task.id)}${suffix}`);\n}\n',
+            "task-actions.js": 'taskMutationPath(task, "/comments"); taskMutationPath(task, "/archive");\n'
+                               'taskMutationPath(task, `/${kind}`); runAction(task, "approve"); runAction(task, "reject");\n',
+            "task-agent-actions.js": 'taskMutationPath(task, "/pilot"); taskMutationPath(task, "/triage");\n'
+                                     'let suffix; if (settled) suffix = "/settle-merged"; else suffix = "/requeue";\n'
+                                     'taskMutationPath(task, suffix); taskMutationPath(task, "/auto-fix");\n',
+            "task-evidence.js": 'taskShared.taskMutationPath(task, `/artifacts/${encodedPath}`);\n',
+            "task-readiness.js": 'let suffix; if (pilot) suffix = "/pilot-admission"; else suffix = "/post-deploy";\n'
+                                 'taskShared.taskMutationPath(task, suffix); taskShared.taskMutationPath(current);\n',
+            "task-quick-actions.js": 'visit.path(kind === "ship" ? taskWorkspacePath(task, "/api/workflows/ship") : taskMutationPath(task, "/approve"));\n',
+            "task-data.js": 'fetchJson(taskMutationPath(task));\n',
+            "task-nav.js": 'fetchJson(taskMutationPath(previous));\n',
+            "task-fields.js": 'visit.path(taskMutationPath(currentTask));\n',
+            "task-status-controls.js": 'visit.path(taskMutationPath(task));\n',
+        }
+        for name, source in sources.items():
+            (js_dir / name).write_text(source)
+        task_suffixes = ("", "/comments", "/archive", "/approve", "/reject", "/pilot", "/triage",
+                         "/requeue", "/settle-merged", "/auto-fix", "/pilot-admission", "/post-deploy",
+                         "/artifacts/{*path}")
+        routes = ["/tasks", "/runs/{id}", "/on/{host}/{*path}", "/workflows/ship"]
+        routes += ["/tasks/{id}" + suffix for suffix in task_suffixes]
+        # A backend-only route is deliberately not a candidate request.
+        routes.append("/tasks/{id}/backend-only")
+        (repo / "crates/orbit-web/src/routes.rs").write_text(
+            "\n".join(f'.route("{route}", handler)' for route in routes))
+        shutil.copy(REMOTE_SEED, fixture_dir / "remote-host-workspaces.json")
+        (fixture_dir / "experiments.json").write_text(json.dumps({
+            "tasks": [{"title": "Fixture experiment task", "complexity": "low", "status": "proposed"}],
+            "experiment": {"id": "exp-visual-fixture", "name": "Fixture"},
+            "readout": {"verdict": {"state": "collecting"}},
+        }))
+        subprocess.run(["git", "init", "-q"], cwd=repo, env=fixture_git_env(), check=True)
+        commit = ["git", "-c", "user.email=fixture@example.com", "-c", "user.name=fixture"]
+        subprocess.run([*commit, "add", "."], cwd=repo, env=fixture_git_env(), check=True)
+        subprocess.run([*commit, "commit", "-q", "-m", "fixture"], cwd=repo, env=fixture_git_env(), check=True)
+        if asset_case == "unreadable":
+            app_css.chmod(0)
+        return repo
+
+    def _stale_backend(self, directory, mode, fixture_cli=False):
+        record = Path(directory) / "stale.record"
+        server = Path(directory) / "stale-server.mjs"
+        server.write_text(
+            "import http from 'node:http';\n"
+            "import fs from 'node:fs';\n"
+            "const record = process.env.STALE_RECORD;\n"
+            "const mode = process.env.STALE_MODE || 'present';\n"
+            "fs.writeFileSync(record, '');\n"
+            "http.createServer((req, res) => {\n"
+            "  fs.appendFileSync(record, req.method + ' ' + req.url + '\\n');\n"
+            "  if (req.method === 'OPTIONS') {\n"
+            "    const status = mode === 'absent' || mode === 'absent:' + req.url ? 404 : 405;\n"
+            "    res.writeHead(status, {'content-type': 'text/plain', 'allow': 'GET'});\n"
+            "    res.end(status === 404 ? 'missing' : 'method');\n"
+            "    return;\n"
+            "  }\n"
+            "  res.writeHead(200, {'content-type': 'text/css'});\n"
+            "  res.end('STALE-EMBEDDED-ASSET\\n:root{--stale-marker:stale}\\n');\n"
+            "}).listen(0, '127.0.0.1', function () {\n"
+            "  console.log('Dashboard listening on http://127.0.0.1:' + this.address().port);\n"
+            "});\n"
+        )
+        if fixture_cli:
+            # The containment regressions need only shell setup and raw HTTP;
+            # never invoke a managed/live Orbit CLI or install a package.
+            real = Path(directory) / "seed-cli.mjs"
+            real.write_text(
+                "#!/usr/bin/env node\n"
+                "import fs from 'node:fs';\n"
+                "import path from 'node:path';\n"
+                "const args = process.argv.slice(2);\n"
+                "const root = args[args.indexOf('--root') + 1];\n"
+                "if (args.includes('init') && !args.includes('workspace')) {\n"
+                "  fs.mkdirSync(root, {recursive:true});\n"
+                "  fs.writeFileSync(path.join(root, 'config.toml'), 'default_crew = \\\"fixture\\\"\\n');\n"
+                "} else if (args.includes('workspace') && args.includes('init')) {\n"
+                "} else if (args.includes('task') && args.includes('add')) {\n"
+                "  console.log(JSON.stringify({id:'FIX-1'}));\n"
+                "} else if (args.includes('task') && args.includes('show')) {\n"
+                "  console.log(JSON.stringify({status:'proposed'}));\n"
+                "} else { throw new Error('unexpected fixture CLI args: ' + args); }\n"
+            )
+            real.chmod(0o755)
+            real = str(real)
+        else:
+            real = shutil.which("orbit")
+            self.assertIsNotNone(real, "orbit on PATH is the CLI half of the disposable backend")
+        wrapper = Path(directory) / "orbit-stub"
+        wrapper.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"--version\" ]; then\n"
+            "  printf '%s\\n' 'stub-backend 0'\n"
+            "  exit 0\n"
+            "fi\n"
+            "prev=\n"
+            "for arg in \"$@\"; do\n"
+            "  if [ \"$prev\" = \"web\" ] && [ \"$arg\" = \"serve\" ]; then\n"
+            f"    exec node {shlex.quote(str(server))}\n"
+            "  fi\n"
+            "  prev=$arg\n"
+            "done\n"
+            f"exec {shlex.quote(real)} \"$@\"\n"
+        )
+        wrapper.chmod(0o755)
+        return wrapper, record
+
+    def _fixture_env(self, tmp, wrapper, record, mode):
+        return {
+            **os.environ,
+            "ORBIT_SCRATCH_DIR": tmp,
+            "ORBIT_VISUAL_ORBIT": str(wrapper),
+            "STALE_RECORD": str(record),
+            "STALE_MODE": mode,
+        }
+
+    def _start(self, script, args, cwd, env):
+        stdout_path = Path(env["ORBIT_SCRATCH_DIR"]) / "stdout"
+        stderr_path = Path(env["ORBIT_SCRATCH_DIR"]) / "stderr"
+        stdout = open(stdout_path, "w+")
+        stderr = open(stderr_path, "w+")
+        server = subprocess.Popen([str(script), *args], cwd=cwd, env=env, stdout=stdout, stderr=stderr, start_new_session=True)
+        deadline = time.monotonic() + 90
+        output = ""
+        while time.monotonic() < deadline:
+            stdout.seek(0)
+            output = stdout.read()
+            if "ORBIT_VISUAL_URL=" in output or server.poll() is not None:
+                break
+            time.sleep(0.1)
+        stderr.seek(0)
+        diagnostics = stderr.read()
+        stdout.close()
+        stderr.close()
+        return server, output, diagnostics
+
+    def _stop(self, server):
+        if server.poll() is None:
+            os.killpg(server.pid, signal.SIGTERM)
+        server.wait(timeout=15)
+
+    def _protocol(self, output):
+        values = {}
+        for line in output.splitlines():
+            if line.startswith("ORBIT_VISUAL_") and "=" in line:
+                key, value = line.split("=", 1)
+                values[key] = value
+        return values
+
+    def _raw_request(self, url, request_target, method="GET", headers=None):
+        parsed = urllib.parse.urlsplit(url)
+        if headers is None:
+            headers = f"Host: {parsed.hostname}:{parsed.port}\r\n"
+        payload = (
+            f"{method} {request_target} HTTP/1.1\r\n"
+            f"{headers}"
+            "Connection: close\r\n"
+            "\r\n"
+        ).encode("ascii")
+        with socket.create_connection((parsed.hostname, parsed.port), timeout=5) as sock:
+            sock.sendall(payload)
+            chunks = []
+            while True:
+                data = sock.recv(4096)
+                if not data:
+                    break
+                chunks.append(data)
+        raw = b"".join(chunks)
+        head, _, body = raw.partition(b"\r\n\r\n")
+        line = head.split(b"\r\n", 1)[0]
+        self.assertTrue(line.startswith(b"HTTP/1.1 "), raw[:300])
+        return int(line.split()[1]), body
+
+    def _fetch(self, url, route):
+        request = urllib.request.Request(url + route, method="GET")
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return response.status, response.headers, response.read()
+        except urllib.error.HTTPError as error:
+            try:
+                return error.code, error.headers, error.read()
+            finally:
+                error.close()
+
+    def _head(self, repo):
+        return subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True,
+            env=fixture_git_env(),
+        ).stdout.strip()
+
+    def _sha256(self, path):
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def _declared_bytes(self, pathname):
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e",
+             "import { dashboardDeclaredAsset } from './crates/orbit-web/src/tests/dashboard_static.mjs';"
+             "process.stdout.write(dashboardDeclaredAsset(process.argv[1]).data);",
+             pathname],
+            cwd=ROOT, check=True, capture_output=True,
+        )
+        return result.stdout
+
+    def _browser(self, url, shot_dir, title_color="", css_var=""):
+        shot_dir.mkdir(parents=True, exist_ok=True)
+        module = os.environ.get("PLAYWRIGHT_MODULE")
+        self.assertTrue(module, "PLAYWRIGHT_MODULE is required for fixture browser evidence")
+        script = Path(shot_dir) / "check.mjs"
+        script.write_text(
+            "import { pathToFileURL } from 'node:url';\n"
+            "const { chromium } = await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE).href);\n"
+            "const url = process.argv[2];\n"
+            "const shotDir = process.argv[3];\n"
+            "const browser = await chromium.launch();\n"
+            "const measure = async (width, name) => {\n"
+            "  const page = await browser.newPage({ viewport: { width, height: width === 375 ? 812 : 900 }, deviceScaleFactor: 1, colorScheme: 'dark', reducedMotion: 'reduce' });\n"
+            "  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });\n"
+            "  const style = await page.evaluate(() => {\n"
+            "    const title = document.querySelector('#title');\n"
+            "    return {\n"
+            "      color: title ? getComputedStyle(title).color : '',\n"
+            "      bg: getComputedStyle(document.documentElement).getPropertyValue('--bg').trim(),\n"
+            "      stale: getComputedStyle(document.documentElement).getPropertyValue('--stale-marker').trim(),\n"
+            "      marker: globalThis.CANDIDATE_JS || '',\n"
+            "    };\n"
+            "  });\n"
+            "  await page.screenshot({ path: shotDir + '/' + name + '.jpg', type: 'jpeg', quality: 60 });\n"
+            "  await page.close();\n"
+            "  return style;\n"
+            "};\n"
+            "const desktop = await measure(1440, 'dark-1440');\n"
+            "const phone = await measure(375, 'dark-375');\n"
+            "await browser.close();\n"
+            "if (desktop.color !== phone.color || desktop.bg !== phone.bg || desktop.marker !== phone.marker) {\n"
+            "  console.error('viewport style diverged');\n"
+            "  process.exit(2);\n"
+            "}\n"
+            "process.stdout.write(JSON.stringify(desktop));\n"
+        )
+        result = subprocess.run(
+            ["node", str(script), url, str(shot_dir)],
+            check=False, capture_output=True, text=True,
+            env=os.environ,
+            timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        style = json.loads(result.stdout)
+        if title_color:
+            self.assertEqual(style["color"], title_color)
+        if css_var:
+            self.assertEqual(style["bg"], css_var)
+        return style
+
+    def _copy_shots(self, shot_dir, stem):
+        evidence = SCRATCH / "evidence"
+        evidence.mkdir(parents=True, exist_ok=True)
+        for name in ("dark-1440.jpg", "dark-375.jpg"):
+            target = evidence / f"{stem}-{name}"
+            shutil.copy(shot_dir / name, target)
+
+    def _exercise_log_stream_lifecycle(self, url, holders):
+        held = self._established_log_streams(url, NATIVE_LOG_STREAM_CAP)
+        holders.extend(held)
+        refused_status, refused = self._one_log_stream(url)
+        self.assertEqual(refused_status, 503, (url, refused[:400]))
+        self.assertIn(b"log stream concurrency limit reached", refused)
+        for sock in held:
+            self._close_socket(sock)
+            holders.remove(sock)
+        self._abandon_log_stream_before_headers(url)
+        for index in range(1, SEQUENTIAL_LOG_STREAMS):
+            status, detail = self._admit_log_stream(url)
+            self.assertEqual(status, 200, (url, index, status, detail[:400]))
+            self.assertIn(b"text/event-stream", detail.lower())
+
+    def _established_log_streams(self, url, count):
+        deadline = time.monotonic() + PERMIT_RELEASE_DEADLINE_S
+        while True:
+            holders = []
+            refusal = None
+            for _ in range(count):
+                status, detail, sock = self._take_log_stream(url)
+                if status != 200:
+                    refusal = (status, detail[:400])
+                    break
+                holders.append(sock)
+            if refusal is None:
+                return holders
+            for sock in holders:
+                self._close_socket(sock)
+            if time.monotonic() >= deadline:
+                self.fail(f"{url} admitted fewer than {count} log streams: {refusal!r}")
+            time.sleep(0.05)
+
+    def _admit_log_stream(self, url):
+        deadline = time.monotonic() + PERMIT_RELEASE_DEADLINE_S
+        status, detail = 0, b""
+        while True:
+            status, detail, sock = self._take_log_stream(url)
+            self._close_socket(sock)
+            if status == 200 or status != 503 or time.monotonic() >= deadline:
+                return status, detail
+            time.sleep(0.05)
+
+    def _one_log_stream(self, url):
+        status, detail, sock = self._take_log_stream(url)
+        self._close_socket(sock)
+        return status, detail
+
+    def _abandon_log_stream_before_headers(self, url):
+        parsed = urllib.parse.urlsplit(url)
+        sock = socket.create_connection((parsed.hostname, parsed.port), timeout=5)
+        try:
+            sock.settimeout(5)
+            host = f"{parsed.hostname}:{parsed.port}"
+            sock.sendall(
+                f"GET {LOG_STREAM_PATH} HTTP/1.1\r\n"
+                f"Host: {host}\r\n"
+                "Accept: text/event-stream\r\n"
+                "\r\n".encode("ascii")
+            )
+        finally:
+            # Close without reading so the response may not have been written
+            # yet. FIN follows the request bytes; a reset would drop them.
+            self._close_socket(sock)
+
+    def _take_log_stream(self, url):
+        parsed = urllib.parse.urlsplit(url)
+        sock = socket.create_connection((parsed.hostname, parsed.port), timeout=5)
+        sock.settimeout(5)
+        host = f"{parsed.hostname}:{parsed.port}"
+        try:
+            sock.sendall(
+                f"GET {LOG_STREAM_PATH} HTTP/1.1\r\n"
+                f"Host: {host}\r\n"
+                "Accept: text/event-stream\r\n"
+                "\r\n".encode("ascii")
+            )
+            data = self._recv_until(sock, b"\r\n\r\n")
+            status = self._http_status(data)
+            if status != 200:
+                data = self._read_remaining_body(sock, data)
+                self._close_socket(sock)
+                return status, data, None
+            return status, data, sock
+        except Exception:
+            self._close_socket(sock)
+            raise
+
+    def _recv_until(self, sock, marker):
+        data = b""
+        while marker not in data:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+            if len(data) > 65536:
+                break
+        return data
+
+    def _http_status(self, data):
+        line = data.split(b"\r\n", 1)[0]
+        parts = line.split()
+        self.assertGreaterEqual(len(parts), 2, data[:300])
+        self.assertTrue(parts[0].startswith(b"HTTP/1."), data[:300])
+        return int(parts[1])
+
+    def _read_remaining_body(self, sock, data):
+        head, sep, body = data.partition(b"\r\n\r\n")
+        if not sep:
+            return data
+        length = None
+        for line in head.split(b"\r\n")[1:]:
+            if line.lower().startswith(b"content-length:"):
+                length = int(line.split(b":", 1)[1].strip())
+                break
+        if length is None:
+            return data
+        while len(body) < length:
+            chunk = sock.recv(length - len(body))
+            if not chunk:
+                break
+            body += chunk
+        return head + sep + body
+
+    def _close_socket(self, sock):
+        if sock is None:
+            return
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+    def _backend_url(self, scratch):
+        logs = sorted(Path(scratch).glob("visual-fixture-*/server.log"))
+        self.assertEqual(len(logs), 1, [str(path) for path in logs])
+        text = logs[0].read_text(errors="replace")
+        marker = "http://127.0.0.1:"
+        start = text.find(marker)
+        self.assertNotEqual(start, -1, text[-800:])
+        end = start + len(marker)
+        while end < len(text) and text[end].isdigit():
+            end += 1
+        self.assertGreater(end, start + len(marker), text[start:start + 80])
+        return text[start:end]
+
+    def test_port_closed_rejects_live_error_and_timeout_and_accepts_refusal(self):
+        # Native transport regression: a live error response or a silent
+        # listener is not closure; only a refused connection is.
+        import http.server
+        import threading
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            status = 503
+
+            def do_GET(self):
+                self.send_response(type(self).status)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        for status in (503, 404):
+            Handler.status = status
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with self.assertRaises(AssertionError, msg=f"live HTTP {status} passed as closed"):
+                    self._assert_port_closed(f"http://127.0.0.1:{server.server_address[1]}/")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+        listener = socket.socket()
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(5)
+        held = []
+
+        def hold_connections():
+            while True:
+                try:
+                    conn, _ = listener.accept()
+                except OSError:
+                    return
+                held.append(conn)
+
+        holder = threading.Thread(target=hold_connections, daemon=True)
+        holder.start()
+        try:
+            with self.assertRaises(AssertionError, msg="timed-out listener passed as closed"):
+                self._assert_port_closed(f"http://127.0.0.1:{listener.getsockname()[1]}/")
+        finally:
+            listener.close()
+            for conn in held:
+                self._close_socket(conn)
+
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        refused_port = probe.getsockname()[1]
+        probe.close()
+        self._assert_port_closed(f"http://127.0.0.1:{refused_port}/")
+
+    def _assert_port_closed(self, url):
+        # Only a transport-level refusal proves the listener is gone. An
+        # HTTP response (even 404/503) or a timeout means a server may
+        # still be listening, so both fail instead of passing as closed.
+        deadline = time.monotonic() + 5
+        last = "no response"
+        while time.monotonic() < deadline:
+            try:
+                with urllib.request.urlopen(url, timeout=1) as response:
+                    last = f"HTTP {response.status}"
+            except urllib.error.HTTPError as error:
+                last = f"HTTP {error.code}"
+                error.close()
+            except urllib.error.URLError as error:
+                reason = error.reason
+                if isinstance(reason, ConnectionRefusedError) or getattr(reason, "errno", None) == errno.ECONNREFUSED:
+                    return
+                last = f"unverified ({reason!r})"
+            except (TimeoutError, socket.timeout):
+                last = "unverified (timeout)"
+            except ConnectionRefusedError:
+                return
+            except OSError as error:
+                if error.errno == errno.ECONNREFUSED:
+                    return
+                last = f"unverified ({error!r})"
+            time.sleep(0.1)
+        self.fail(f"port not closed ({last}): {url}")
+
+
+if __name__ == "__main__":
+    unittest.main()

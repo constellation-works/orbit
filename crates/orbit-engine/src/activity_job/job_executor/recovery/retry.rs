@@ -5,6 +5,7 @@ use super::input::bind_recovery_context;
 use super::*;
 use crate::executor::automation::vcs::RecoveryCommitRefusal;
 use orbit_types::workflow::AgentBlocker;
+use orbit_types::workflow::{PR_CONFLICT_RECOVERY_ACTIVITY, STEP_FAILURE_RECOVERY_ACTIVITY};
 
 /// Most `pr_conflict_recovery` rounds one failing step gets [ORB-14332].
 ///
@@ -40,6 +41,15 @@ impl StepFailure {
         }
     }
 
+    /// The typed step-failure code parsed once at ingestion, when the
+    /// failure declared one.
+    pub(super) fn failure_code(&self) -> Option<orbit_types::workflow::StepFailureCode> {
+        match self {
+            Self::Error(error) => error.step_failure_code(),
+            Self::Outcome(outcome) => outcome.failure_code.clone(),
+        }
+    }
+
     /// Hand the original failure back unchanged when recovery is absent,
     /// refused, or fails.
     fn into_result(self) -> Result<StepOutcome, DispatchError> {
@@ -65,6 +75,7 @@ impl StepFailure {
                 success: false,
                 output: outcome.output,
                 message: Some(message),
+                failure_code: outcome.failure_code,
             }),
         }
     }
@@ -85,6 +96,7 @@ impl StepFailure {
                 success: false,
                 output: outcome.output,
                 message: Some(message),
+                failure_code: outcome.failure_code,
             }),
         }
     }
@@ -98,71 +110,31 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
     max_attempts: u32,
 ) -> Result<StepOutcome, DispatchError> {
     // An admitted `--auto-fix` check repair carries hosted job logs as its
-    // evidence, which may quote any marker below; only its own marker
-    // decides it.
-    let check_repair = orbit_types::workflow::is_pr_auto_fix_check_repair(&failure.diagnostic());
-    let stops = |marked: bool| marked && !check_repair;
-    // Signing in requires the operator; a repair agent cannot make this
-    // provider usable, nor give its selected model capacity [ORB-14149] or
-    // its account usage [ORB-14695], and the post-recovery attempt would
-    // rerun the same model. Preserve the marker for claimed-leaf settlement.
-    if stops(orbit_types::workflow::is_provider_unavailable(
-        None,
-        Some(&failure.diagnostic()),
-    )) {
-        return failure.into_result();
-    }
-    // [ORB-14266] Nor can it get past the provider's content policy: the
-    // repair agent and the rerun would send the same task to the same filter.
-    if stops(orbit_types::workflow::is_provider_refusal(
-        None,
-        Some(&failure.diagnostic()),
-    )) {
-        return failure.into_result();
-    }
-    // [ORB-13987] Nor can it install a tool required validation could not
-    // find; repairing the candidate would only spend the recovery budget.
-    if stops(orbit_types::workflow::is_validation_environment_failure(
-        None,
-        Some(&failure.diagnostic()),
-    )) {
-        return failure.into_result();
-    }
-    // [ORB-14260] Nor can it reach a claimed task's owner when the step's
-    // own coordinator could not: its sandbox masks the same credentials.
-    // Preserve the marker for claimed-leaf settlement.
-    if stops(orbit_types::workflow::is_owner_route_unavailable(
-        None,
-        Some(&failure.diagnostic()),
-    )) {
-        return failure.into_result();
-    }
-    // [ORB-14258] Nor can it fix a required command the base itself fails;
-    // the task is held until the command passes on a new base instead.
-    if stops(orbit_types::workflow::is_baseline_red_failure(
-        None,
-        Some(&failure.diagnostic()),
-    )) {
-        return failure.into_result();
-    }
-    // [ORB-14269] Nor can it clear a blocker the implementer already declared.
-    // Another agent would only spend the recovery budget the stop was meant
-    // to avoid.
-    if stops(orbit_types::workflow::is_task_blocked_by_agent(
-        None,
-        Some(&failure.diagnostic()),
-    )) {
-        return failure.into_result();
-    }
-    // Nor can it run `orbit` while an upgrade refuses the step's agents; the
-    // step runs again once the upgrade settles.
-    if stops(orbit_types::workflow::is_upgrade_pending(
-        None,
-        Some(&failure.diagnostic()),
-    )) {
+    // evidence, which may quote any unrepairable marker; only its own
+    // marker decides it.
+    let diagnostic = failure.diagnostic();
+    let check_repair = orbit_types::workflow::is_pr_auto_fix_check_repair(&diagnostic);
+    // No class in the one unrepairable table can be repaired by an agent:
+    // it cannot make a provider usable, give its selected model capacity
+    // or its account usage, get past its content policy, install a tool
+    // required validation could not find, reach a claimed task's owner,
+    // record the owner approval the step waits on, fix a required command
+    // the base itself fails, clear a blocker already declared, or run
+    // `orbit` while an upgrade refuses the step's agents. Preserve the
+    // marker for claimed-leaf settlement.
+    if !check_repair
+        && super::unrepairable_failure(failure.failure_code().as_ref(), Some(&diagnostic)).is_some()
+    {
         return failure.into_result();
     }
     let Some(declared) = recovery_activity_for_step(step, ctx) else {
+        // The watcher writes this handoff only after admitting an in-budget
+        // repair. A step and job with no declared recovery cannot run it, so
+        // the run holds here just as it does for a declared conflict leaf
+        // with no `step_failure_recovery` below.
+        if check_repair {
+            return hold_absent_check_repair(failure);
+        }
         return failure.into_result();
     };
 
@@ -181,6 +153,12 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
             orbit_types::workflow::is_pr_auto_fix_check_repair(&failure.diagnostic());
         let recovery = match check_repair_route(&declared, ctx, check_repair) {
             Some(recovery) => recovery,
+            // The watcher writes this handoff only after admitting an
+            // in-budget repair. A job with no `step_failure_recovery` cannot
+            // run it, so the run holds instead of recording the handoff as
+            // the terminal step failure. The watcher's exhausted-budget stop
+            // is not this handoff and still fails on the ordinary path.
+            None if check_repair => return hold_absent_check_repair(failure),
             None => return failure.into_result(),
         };
         let recovery_model = match attempt_recovery_activity(
@@ -192,6 +170,13 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
             max_attempts,
         ) {
             RecoveryAdmission::Retry(model) => model,
+            // The watcher admitted this in-budget repair and the recovery ran,
+            // but it did not repair the head or admit a retry. Recording the
+            // handoff as the terminal step failure would fail a run still
+            // inside its repair budget, so it holds instead.
+            RecoveryAdmission::Original if check_repair => {
+                return hold_unrepaired_check_repair(failure);
+            }
             RecoveryAdmission::Original => return failure.into_result(),
             RecoveryAdmission::Blocked(blocker) => return failure.into_blocked(&blocker),
         };
@@ -203,7 +188,16 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
                 .map_err(|error| RecoveryCommitRefusal::Uncommittable(error.to_string()))
                 .and_then(|()| {
                     if check_repair {
-                        super::check_scope::bind(ctx, step, &failure.diagnostic(), &mut bound)?;
+                        // A no-edit repair wrote no scope record: nothing
+                        // to commit. The retry below reruns completion on
+                        // the unchanged head, where the watcher reruns the
+                        // failed checks once (recorded by `bind`).
+                        if matches!(
+                            super::check_scope::bind(ctx, step, &failure.diagnostic(), &mut bound)?,
+                            super::check_scope::CheckScopeBind::NoEdit
+                        ) {
+                            return Ok(());
+                        }
                     }
                     // A reviewed head's check repair is re-reviewed before
                     // the completion step publishes it.
@@ -246,8 +240,8 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
 }
 
 /// The recovery a failure goes to. An `--auto-fix` check repair, which the
-/// conflict leaf cannot address, goes to the job's `step_failure_recovery`;
-/// a job without one routes it nowhere.
+/// conflict leaf cannot address, goes to the job's `step_failure_recovery`.
+/// A job without one routes it nowhere; the caller holds that handoff.
 fn check_repair_route(
     declared: &ResolvedRecoveryActivity,
     ctx: &ExecCtx<'_>,
@@ -257,6 +251,56 @@ fn check_repair_route(
         return ctx.check_repair_activity.clone();
     }
     Some(declared.clone())
+}
+
+/// Hold an admitted check repair the job cannot route.
+///
+/// The original handoff stays in the message, including its attempt counter,
+/// so a reader can see the repair was still inside its budget.
+fn hold_absent_check_repair(failure: StepFailure) -> Result<StepOutcome, DispatchError> {
+    let diagnostic = failure.diagnostic();
+    Err(DispatchError::DeliveryRefused {
+        action: check_repair_hold_action(&failure),
+        refusal: orbit_types::workflow::DeliveryRefusal::CheckRepairActivityAbsent,
+        message: format!(
+            "admitted check repair has no step_failure_recovery on this job; the run holds \
+             and no repair agent runs. The admission remains recorded and spends one repair \
+             attempt; adding recovery and retrying the same head holds again as \
+             delivery_repair_dispatched. Configure step_failure_recovery for future heads, \
+             repair and publish a new head, then start a new delivery attempt. \
+             Further repairs require remaining per-PR budget. {diagnostic}"
+        ),
+    })
+}
+
+/// Hold an admitted check repair whose recovery ran and did not repair.
+///
+/// The recovery activity returned an unsuccessful outcome (or its decision
+/// admitted no retry), so the head is unrepaired. The admission stays recorded
+/// as a dispatched repair for the head and the run is still inside its budget;
+/// the original handoff, with its attempt counter, stays in the message.
+fn hold_unrepaired_check_repair(failure: StepFailure) -> Result<StepOutcome, DispatchError> {
+    let diagnostic = failure.diagnostic();
+    Err(DispatchError::DeliveryRefused {
+        action: check_repair_hold_action(&failure),
+        refusal: orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+        message: format!(
+            "admitted check repair ran step_failure_recovery and it did not repair the head; \
+             the run holds. The admission remains recorded and spends one repair attempt; \
+             retrying the same head holds again as delivery_repair_dispatched. Inspect the \
+             recovery attempt, repair and publish a new head, then start a new delivery \
+             attempt. Further repairs require remaining per-PR budget. {diagnostic}"
+        ),
+    })
+}
+
+fn check_repair_hold_action(failure: &StepFailure) -> String {
+    match failure {
+        StepFailure::Error(DispatchError::DeterministicActionFailed { action, .. }) => {
+            action.clone()
+        }
+        _ => "pr_complete".to_string(),
+    }
 }
 
 /// How the post-recovery attempt of a failed step ended.
@@ -293,6 +337,12 @@ fn post_recovery_attempt(
         // candidate, which final recovery settles.
         Err(error @ DispatchError::CandidateAbsorbed { .. }) => {
             ("absorbed", Some(error.to_string()))
+        }
+        // A typed stop the retry met is attributed as the stop it is, as a
+        // direct one is on `step.finished`.
+        Err(DispatchError::ReviewEvidenceHold(_)) => ("held", None),
+        Err(error @ DispatchError::ChildRunCancelled { .. }) => {
+            ("cancelled", Some(error.to_string()))
         }
         Err(error) => ("error", Some(error.to_string())),
     };
@@ -339,6 +389,47 @@ fn post_recovery_attempt(
             message: format!("{message}; original error before recovery: {original}"),
         })),
         Err(hold @ DispatchError::ForgeUnavailableHold(_)) => PostRecovery::Settled(Err(hold)),
+        // [ORB-14313] A settled review awaiting named evidence holds the run
+        // whether the first attempt or the retry after recovery reached it:
+        // neither final recovery nor the failure handoff may run for it.
+        Err(hold @ DispatchError::ReviewEvidenceHold(_)) => PostRecovery::Settled(Err(hold)),
+        // [ORB-15202] Nor for a child the retry found cancelled: an
+        // operator's cancel is not a parent failure. The original error
+        // stays on the message for diagnosis.
+        Err(DispatchError::ChildRunCancelled { message }) => {
+            PostRecovery::Settled(Err(DispatchError::ChildRunCancelled {
+                message: format!("{message}; original error before recovery: {original}"),
+            }))
+        }
+        // [ORB-23470] A post-recovery owner-route failure keeps its typed
+        // variant, as an initial one does: final recovery must skip it and
+        // core must classify a claimed leaf as `owner_route`, not as a
+        // candidate failure. The original diagnostic stays on the message.
+        Err(DispatchError::OwnerRouteUnavailable { action, message }) => {
+            PostRecovery::Settled(Err(DispatchError::OwnerRouteUnavailable {
+                action,
+                message: format!("{message}; original error before recovery: {original}"),
+            }))
+        }
+        // The unsuccessful-outcome form of the same failure: keep the
+        // outcome shape (and its typed code) so `execute` records
+        // `owner_route_unavailable` instead of a code-less `JobExecution`.
+        Ok(failed)
+            if failed
+                .failure_code
+                .as_ref()
+                .is_some_and(|code| code.is_owner_route_unavailable()) =>
+        {
+            PostRecovery::Settled(Ok(StepOutcome {
+                success: false,
+                output: failed.output,
+                message: Some(format!(
+                    "post-recovery attempt {outcome}: {}; original error before recovery: {original}",
+                    error_message.unwrap_or_else(|| "no diagnostic".to_string()),
+                )),
+                failure_code: failed.failure_code,
+            }))
+        }
         Err(DispatchError::CandidateAbsorbed { candidate, .. }) => {
             PostRecovery::Settled(Err(DispatchError::CandidateAbsorbed {
                 candidate,

@@ -4,21 +4,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_common::model_defaults::{
-    ANTIGRAVITY_ARGON_MODEL, ANTIGRAVITY_DEFAULT_MODEL, CLAUDE_DEFAULT_STRONG, CLAUDE_DEFAULT_WEAK,
-    CLAUDE_FABLE_MODEL, CLAUDE_HAIKU_MODEL, CODEX_ASTRA_MODEL, CODEX_LUNA_MODEL, CODEX_SOL_MODEL,
-    CODEX_TERRA_MODEL, COPILOT_DEFAULT_MODEL, GROK_DEFAULT_MODEL, MUSE_DEFAULT_MODEL,
-    MUSE_WONDER_FULL_MODEL, MUSE_WONDER_MODEL,
-};
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{
-    Crew, CrewAssignment, CrewEnvVar, ReasoningEffort, validate_antigravity_model,
+    AGENT_CREW_KIND, Crew, CrewAssignment, CrewEnvVar, HUMAN_CREW_KIND, HumanCrew, ReasoningEffort,
+    human_crew_refusal, validate_antigravity_model,
 };
 use orbit_types::task::HostOs;
 use orbit_types::workflow::activity_job::Provider;
 
 use super::compatibility::{reject_retired_crew_backend, reject_retired_crew_provider};
 use super::config::ResolvedConfig;
+use crate::crew_defaults::builtin_default_crews;
 use crate::crew_pools::reject_unpoolable_crew_name_in_config;
 use crate::raw::RawCrewEntry;
 
@@ -141,50 +137,15 @@ impl ResolvedConfig {
         let key = "workflow.default_crew";
         self.default_crew
             .as_deref()
-            .and_then(|name| self.crews.get(name))
+            .and_then(|name| orbit_types::identity::find_crew(name, &self.crews))
             .filter(|crew| !crew.enabled)
             .map(|crew| DisabledLaneCrew {
                 key,
-                crew: crew.name.clone(),
+                crew: crew.base_name().to_string(),
             })
             .into_iter()
             .collect()
     }
-}
-
-pub(crate) fn default_crews() -> BTreeMap<String, Crew> {
-    let mut crews = BTreeMap::new();
-    for (name, model, provider) in [
-        ("opus", CLAUDE_DEFAULT_STRONG, "claude"),
-        ("sonnet", CLAUDE_DEFAULT_WEAK, "claude"),
-        ("haiku", CLAUDE_HAIKU_MODEL, "claude"),
-        ("fable", CLAUDE_FABLE_MODEL, "claude"),
-        ("sol", CODEX_SOL_MODEL, "codex"),
-        ("terra", CODEX_TERRA_MODEL, "codex"),
-        ("luna", CODEX_LUNA_MODEL, "codex"),
-        ("astra", CODEX_ASTRA_MODEL, "codex"),
-        ("gemini-flash", ANTIGRAVITY_DEFAULT_MODEL, "antigravity"),
-        ("argon", ANTIGRAVITY_ARGON_MODEL, "antigravity"),
-        ("grok", GROK_DEFAULT_MODEL, "grok"),
-        ("copilot", COPILOT_DEFAULT_MODEL, "copilot"),
-        ("muse-spark", MUSE_DEFAULT_MODEL, "muse"),
-        ("muse-wonder", MUSE_WONDER_MODEL, "muse"),
-        ("muse-wonder-full", MUSE_WONDER_FULL_MODEL, "muse"),
-    ] {
-        crews.insert(
-            name.to_string(),
-            Crew {
-                name: name.to_string(),
-                assignment: crew_assignment(model, provider),
-                description: None,
-                tags: Vec::new(),
-                enabled: true,
-                env: Vec::new(),
-                vision: true,
-            },
-        );
-    }
-    crews
 }
 
 /// Host operating systems `provider`'s executor declares, when it declares any.
@@ -209,13 +170,6 @@ pub fn executor_host_os<'a>(
         .map(|(_, hosts)| hosts)
 }
 
-fn crew_assignment(model: &str, provider: &str) -> CrewAssignment {
-    CrewAssignment {
-        model: model.to_string(),
-        provider: provider.to_string(),
-        effort: None,
-    }
-}
 /// `crew_field_path` names the file that supplied `[crews.<name>].<field>`,
 /// which a layered load can only know per field after the merge.
 pub(crate) fn crews_from_raw(
@@ -224,18 +178,17 @@ pub(crate) fn crews_from_raw(
     crew_field_path: &dyn Fn(&str, &str) -> PathBuf,
 ) -> Result<(BTreeMap<String, Crew>, Vec<IgnoredCrewProperty>), OrbitError> {
     let Some(raw_crews) = raw else {
-        return Ok((default_crews(), Vec::new()));
+        return Ok((builtin_default_crews(), Vec::new()));
     };
     let mut crews = BTreeMap::new();
     let mut ignored = Vec::new();
+    let mut human_tables = 0;
     for (name, entry) in raw_crews {
-        let trimmed = name.trim();
-        if trimmed.is_empty() {
-            return Err(OrbitError::InvalidInput(
-                "[crews] names must not be empty".to_string(),
-            ));
+        let trimmed = admitted_crew_table_name(name, config_path)?;
+        if crew_table_is_human(trimmed, entry)? {
+            human_tables += 1;
+            continue;
         }
-        reject_unpoolable_crew_name_in_config(trimmed, "[crews]", config_path)?;
         let crew = Crew {
             name: trimmed.to_string(),
             assignment: crew_assignment_from_raw(trimmed, entry, crew_field_path, &mut ignored)?,
@@ -251,7 +204,135 @@ pub(crate) fn crews_from_raw(
             )));
         }
     }
+    // Human crews are not agent crews. A `[crews]` table that declares only
+    // human crews keeps the built-in agent crews, as an absent table does, so
+    // `orbit init` seeding the operator's crew never empties the registry.
+    if crews.is_empty() && human_tables > 0 {
+        return Ok((builtin_default_crews(), ignored));
+    }
     Ok((crews, ignored))
+}
+
+/// The `[crews.<name>] kind = "human"` tables, admitted. A human crew sets
+/// only `kind`, `description` and `tags`; any agent property (`provider`,
+/// `model`, `effort`, `env`, `vision`, `backend`, `enabled` or a retired role
+/// table) fails the load naming the crew, so a half-converted agent crew is
+/// never silently dropped from dispatch.
+pub(crate) fn human_crews_from_raw(
+    raw: Option<&BTreeMap<String, RawCrewEntry>>,
+    config_path: &Path,
+) -> Result<BTreeMap<String, HumanCrew>, OrbitError> {
+    let mut human_crews = BTreeMap::new();
+    for (name, entry) in raw.into_iter().flatten() {
+        let trimmed = admitted_crew_table_name(name, config_path)?;
+        if !crew_table_is_human(trimmed, entry)? {
+            continue;
+        }
+        let agent_properties = [
+            ("provider", entry.provider.is_some()),
+            ("model", entry.model.is_some()),
+            ("effort", entry.effort.is_some()),
+            ("env", entry.env.is_some()),
+            ("vision", entry.vision.is_some()),
+            ("enabled", entry.enabled.is_some()),
+            ("backend", entry.backend.is_some()),
+            (
+                "planner/implementer/reviewer",
+                entry.planner.is_some() || entry.implementer.is_some() || entry.reviewer.is_some(),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(property, set)| set.then_some(property))
+        .collect::<Vec<_>>();
+        if !agent_properties.is_empty() {
+            return Err(OrbitError::InvalidInput(format!(
+                "[crews.{trimmed}] is a human crew (kind = \"{HUMAN_CREW_KIND}\") and must not \
+                 set {}; a human crew names an operator, so it takes only description and tags. \
+                 Remove those keys, or drop `kind` to make it an agent crew",
+                agent_properties.join(", ")
+            )));
+        }
+        let crew = HumanCrew {
+            name: trimmed.to_string(),
+            description: normalized_crew_description(entry.description.as_deref()),
+            tags: normalized_crew_tags(&entry.tags),
+        };
+        if human_crews.insert(trimmed.to_string(), crew).is_some() {
+            return Err(OrbitError::InvalidInput(format!(
+                "[crews] contains duplicate name '{trimmed}' after whitespace normalization"
+            )));
+        }
+    }
+    Ok(human_crews)
+}
+
+/// Refuse a human crew whose name an agent crew also answers to. Only the
+/// built-in agent crews can collide, when a `[crews]` table that declares only
+/// human crews keeps them: two tables cannot share one name.
+pub(crate) fn reject_human_crew_name_collisions(
+    crews: &BTreeMap<String, Crew>,
+    human_crews: &BTreeMap<String, HumanCrew>,
+) -> Result<(), OrbitError> {
+    match human_crews.keys().find(|name| crews.contains_key(*name)) {
+        Some(name) => Err(OrbitError::InvalidInput(format!(
+            "[crews.{name}] is a human crew, but '{name}' is also a built-in agent crew; rename \
+             the human crew"
+        ))),
+        None => Ok(()),
+    }
+}
+
+/// Rewrite an admission refusal that failed because a pool, default or review
+/// crew named a human crew, which the agent registry does not hold, into the
+/// human-crew refusal. Any other error passes through unchanged.
+pub(crate) fn explain_human_crew_reference(
+    error: OrbitError,
+    human_crews: &BTreeMap<String, HumanCrew>,
+) -> OrbitError {
+    let message = match &error {
+        OrbitError::InvalidInput(message) | OrbitError::InvalidInputDiagnostic { message, .. } => {
+            message.clone()
+        }
+        _ => return error,
+    };
+    for name in human_crews.keys() {
+        let undefined = format!("crew '{name}' is not defined in [crews.*]");
+        if let Some((subject, _)) = message.split_once(&undefined) {
+            let subject = subject.trim_end_matches([':', ' ']);
+            let subject = if subject.is_empty() {
+                "configuration"
+            } else {
+                subject
+            };
+            return OrbitError::InvalidInput(human_crew_refusal(subject, name));
+        }
+    }
+    error
+}
+
+fn admitted_crew_table_name<'a>(name: &'a str, config_path: &Path) -> Result<&'a str, OrbitError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(OrbitError::InvalidInput(
+            "[crews] names must not be empty".to_string(),
+        ));
+    }
+    reject_unpoolable_crew_name_in_config(trimmed, "[crews]", config_path)?;
+    Ok(trimmed)
+}
+
+/// Whether `[crews.<crew>]` declares a human crew. `kind` is `agent` (the
+/// default) or `human`; anything else fails the load.
+fn crew_table_is_human(crew: &str, entry: &RawCrewEntry) -> Result<bool, OrbitError> {
+    match entry.kind.as_deref().map(str::trim) {
+        None => Ok(false),
+        Some(kind) if kind == AGENT_CREW_KIND => Ok(false),
+        Some(kind) if kind == HUMAN_CREW_KIND => Ok(true),
+        Some(other) => Err(OrbitError::InvalidInput(format!(
+            "[crews.{crew}].kind = '{other}' is not a crew kind; expected '{AGENT_CREW_KIND}' \
+             (the default) or '{HUMAN_CREW_KIND}'"
+        ))),
+    }
 }
 
 /// `[crews.<name>] env`, parsed. An entry that is not `NAME` or
@@ -389,16 +470,7 @@ fn crew_effort_from_raw(
 }
 
 fn effort_accepted_values(provider: &str, model: Option<&str>) -> &'static str {
-    match provider {
-        "antigravity" => "low, medium, high",
-        "grok" => match model.map(str::trim).filter(|model| !model.is_empty()) {
-            Some("grok-4.7" | "grok-4.6") => "low, medium, high, xhigh",
-            Some("grok-4.5") => "low, medium, high",
-            _ => "omit the key",
-        },
-        "claude" | "codex" | "muse" => ReasoningEffort::VALUES,
-        _ => "omit the key",
-    }
+    ReasoningEffort::accepted_for_provider_model(provider, model)
 }
 
 fn ignore_optional_crew_property(

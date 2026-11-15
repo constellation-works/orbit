@@ -339,6 +339,7 @@ fn reject_self_match(
         board: BoardFacts::default(),
         tasks: BTreeMap::new(),
         self_facts: SelfFacts::default(),
+        auto_tasks: BTreeMap::new(),
     };
     let evaluator = ConditionEvaluator::new(&facts);
     if evaluator.truth(&checked.when, Some(&base)) != Truth::True {
@@ -363,8 +364,5 @@ fn reject_self_match(
 
 /// A value's persisted spelling, as the condition schema reads it.
 fn persisted_name<T: serde::Serialize>(value: &T) -> String {
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_default()
+    orbit_common::protocol::serde_string_label(value).unwrap_or_default()
 }

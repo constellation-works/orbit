@@ -1,9 +1,10 @@
 use std::collections::BTreeSet;
 
+use super::index::IndexUsable;
 use super::*;
 use crate::contracts::{
-    TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskPage,
-    TaskResidualFilter, TaskRow,
+    TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskListHydration,
+    TaskPage, TaskResidualFilter, TaskRow,
 };
 use orbit_types::task::satisfy_completed_archived_dependencies;
 
@@ -31,16 +32,22 @@ impl TaskV2Store {
     }
 
     /// Informational read: never enter coordination, settle pending writes,
-    /// repair the index or persist freshness proofs. A stale index falls back
-    /// to the same strict bundle scan, without publishing a repair.
+    /// repair the index or persist freshness proofs. Index rows that disagree
+    /// with an envelope no writer holds are read from their bundles and merged
+    /// with the rest of the index ([`Self::indexed_candidates_with_stale`]);
+    /// an incomplete index falls back to the same strict bundle scan, without
+    /// publishing a repair.
     pub(crate) fn observe_task_candidates(
         &self,
         filter: &TaskListFilter,
         limit: usize,
     ) -> Result<TaskCandidates, OrbitError> {
         let filter = filter.normalized();
-        if let Some(unsettled) = self.validate_index_with_proofs(false)? {
-            return self.indexed_candidates(&filter, limit, unsettled);
+        if let Some(usable) = self.observe_index_tolerating_stale()? {
+            if usable.stale.is_empty() {
+                return self.indexed_candidates(&filter, limit, usable.unsettled);
+            }
+            return self.indexed_candidates_with_stale(&filter, limit, usable);
         }
         let envelopes = self
             .bundle_store
@@ -109,6 +116,45 @@ impl TaskV2Store {
                 total: selection.total,
                 total_without_cursor,
             });
+        }
+        Ok(select_candidates(envelopes, filter, limit))
+    }
+
+    /// Selection over an index that a freshness scan accepted apart from
+    /// `usable.stale` rows. The index answers every other task (in-flight
+    /// ones left out, as in [`Self::indexed_candidates`]); each stale task is
+    /// read from its bundle with the bundle scan's checks, so a stale row can
+    /// neither drop nor add a task. The merged envelopes then take the bundle
+    /// scan's in-memory filter, order, count and bound, giving the answer
+    /// that scan would give without reading every other bundle.
+    fn indexed_candidates_with_stale(
+        &self,
+        filter: &TaskListFilter,
+        limit: usize,
+        usable: IndexUsable,
+    ) -> Result<TaskCandidates, OrbitError> {
+        if filter.statuses.as_ref().is_some_and(Vec::is_empty) {
+            return Ok(TaskCandidates::default());
+        }
+        let unbounded = filter.without_cursor();
+        let mut excluded = usable.unsettled;
+        excluded.extend(usable.stale.iter().cloned());
+        let selection = self.registry.indexed_task_selection(
+            &self.workspace_id,
+            &unbounded.index_filter(excluded),
+            filter.terminal_last,
+            None,
+        )?;
+        let mut envelopes = Vec::with_capacity(selection.rows.len() + usable.stale.len());
+        for row in &selection.rows {
+            if let Some(envelope) = self.selected_envelope(&row.task_id)? {
+                envelopes.push(envelope);
+            }
+        }
+        for task_id in &usable.stale {
+            if let Some(bundle) = self.bundle_store.read_bundle_if_settled(task_id)? {
+                envelopes.push(bundle.envelope);
+            }
         }
         Ok(select_candidates(envelopes, filter, limit))
     }
@@ -204,6 +250,7 @@ impl TaskV2Store {
         filter: &TaskListFilter,
         limit: usize,
         residual: TaskResidualFilter<'_>,
+        hydration: TaskListHydration,
     ) -> Result<TaskPage, OrbitError> {
         let filter = filter.normalized();
         let selection_filter = if residual.is_some() {
@@ -239,7 +286,47 @@ impl TaskV2Store {
             if items.len() >= limit {
                 break;
             }
+            if hydration == TaskListHydration::EnvelopeOnly {
+                // Compact page: the candidate envelope is the whole row.
+                // No bundle read, so no body documents or sidecars, and a
+                // task a concurrent writer holds still lists from the
+                // envelope selection already validated.
+                let task = Self::metadata_task(&candidate);
+                if residual.is_none_or(|matches| matches(&task, &status_by_id)) {
+                    items.push(TaskRow {
+                        task,
+                        comments: Vec::new(),
+                        history: Vec::new(),
+                        artifacts: Vec::new(),
+                    });
+                }
+                continue;
+            }
+            // A settled bundle with a provable freshness stamp may serve
+            // its remembered row; anything else is read exactly as before.
+            // The stamp is taken before any read below, so it labels that
+            // read or something older, never something newer.
+            let stamp = match self.bundle_store.settled_bundle_dir(&candidate.id) {
+                Ok(Some(bundle_dir)) => {
+                    super::bundle_stamp::task_bundle_freshness_stamp(&bundle_dir)
+                }
+                _ => None,
+            };
+            if let Some(stamp) = &stamp
+                && let Some((envelope, row)) = self.row_cache.cached_row(&candidate.id, stamp)
+            {
+                if envelope != candidate {
+                    // An update raced selection. One strict scan re-evaluates
+                    // filters before the limit; no stale row escapes.
+                    return self.scan_task_page(&filter, limit, residual);
+                }
+                if residual.is_none_or(|matches| matches(&row.task, &status_by_id)) {
+                    items.push(row);
+                }
+                continue;
+            }
             let Some(bundle) = self.bundle_store.read_bundle_if_settled(&candidate.id)? else {
+                self.row_cache.forget(&candidate.id);
                 continue;
             };
             if bundle.envelope != candidate {
@@ -247,7 +334,12 @@ impl TaskV2Store {
                 // before the limit; no retry loop or stale selected row escapes.
                 return self.scan_task_page(&filter, limit, residual);
             }
+            let envelope = bundle.envelope.clone();
             let row = self.row_from_bundle(bundle)?;
+            if let Some(stamp) = stamp {
+                self.row_cache
+                    .remember(&candidate.id, stamp, envelope, row.clone());
+            }
             if residual.is_none_or(|matches| matches(&row.task, &status_by_id)) {
                 items.push(row);
             }
@@ -289,9 +381,8 @@ impl TaskV2Store {
                 items.push(row);
             }
         }
-        sort_listing(
+        filter.sort_task_listing(
             &mut items,
-            filter,
             |row| row.task.not_before,
             |row| &row.task.created_at,
             |row| &row.task.id,
@@ -357,6 +448,15 @@ impl TaskV2Store {
         Ok(status_by_id)
     }
 
+    pub(crate) fn get_task_row_uncached(&self, id: &str) -> Result<Option<TaskRow>, OrbitError> {
+        orbit_types::task::validate_orb_task_id(id)?;
+        self.ensure_recovered()?;
+        let Some(bundle) = self.bundle_store.read_bundle_if_settled(id)? else {
+            return Ok(None);
+        };
+        self.row_from_bundle(bundle).map(Some)
+    }
+
     pub(crate) fn get_task_row(
         &self,
         id: &str,
@@ -364,17 +464,41 @@ impl TaskV2Store {
     ) -> Result<Option<TaskRow>, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
         self.ensure_recovered()?;
-        let bundle = if list_read {
-            self.bundle_store.read_bundle_if_settled(id)?
-        } else {
-            match self.bundle_store.read_bundle(id) {
-                Ok(bundle) => Some(bundle),
-                Err(OrbitError::NotFound {
-                    kind: NotFoundKind::Task,
-                    ..
-                }) => None,
-                Err(error) => return Err(error),
+        if list_read {
+            // Listed rows serve observational listings. A readiness snapshot
+            // reads one per backlog task on every request, so this path
+            // reuses the freshness-stamped row cache a hydrated page uses.
+            // The stamp is taken before the read it labels, and a bundle
+            // that is not settled is never served from the cache.
+            let stamp = match self.bundle_store.settled_bundle_dir(id) {
+                Ok(Some(bundle_dir)) => {
+                    super::bundle_stamp::task_bundle_freshness_stamp(&bundle_dir)
+                }
+                _ => None,
+            };
+            if let Some(stamp) = &stamp
+                && let Some((_, row)) = self.row_cache.cached_row(id, stamp)
+            {
+                return Ok(Some(row));
             }
+            let Some(bundle) = self.bundle_store.read_bundle_if_settled(id)? else {
+                self.row_cache.forget(id);
+                return Ok(None);
+            };
+            let envelope = bundle.envelope.clone();
+            let row = self.row_from_bundle(bundle)?;
+            if let Some(stamp) = stamp {
+                self.row_cache.remember(id, stamp, envelope, row.clone());
+            }
+            return Ok(Some(row));
+        }
+        let bundle = match self.bundle_store.read_bundle(id) {
+            Ok(bundle) => Some(bundle),
+            Err(OrbitError::NotFound {
+                kind: NotFoundKind::Task,
+                ..
+            }) => None,
+            Err(error) => return Err(error),
         };
         bundle
             .map(|bundle| self.row_from_bundle(bundle))
@@ -405,7 +529,7 @@ impl TaskV2Store {
         Ok(envelopes)
     }
 
-    fn row_from_bundle(&self, mut bundle: TaskBundleV2) -> Result<TaskRow, OrbitError> {
+    pub(crate) fn row_from_bundle(&self, mut bundle: TaskBundleV2) -> Result<TaskRow, OrbitError> {
         let comments = std::mem::take(&mut bundle.comments)
             .into_iter()
             .map(super::sidecars::task_comment_from_row)
@@ -418,7 +542,7 @@ impl TaskV2Store {
             .unwrap_or_default();
         artifacts.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(TaskRow {
-            task: self.task_from_bundle(bundle)?,
+            task: super::task_from_bundle(bundle),
             comments,
             history,
             artifacts,
@@ -433,47 +557,5 @@ fn select_candidates(
     filter: &TaskListFilter,
     limit: usize,
 ) -> TaskCandidates {
-    let unbounded = filter.without_cursor();
-    let mut items = envelopes
-        .into_iter()
-        .filter(|task| unbounded.matches(task))
-        .collect::<Vec<_>>();
-    sort_listing(
-        &mut items,
-        filter,
-        |task| task.not_before,
-        |task| &task.created_at,
-        |task| &task.id,
-        |task| task.status,
-    );
-    let total_without_cursor = items.len();
-    if filter.scan_before.is_some() {
-        items.retain(|task| filter.matches_cursor(task));
-    }
-    let total = items.len();
-    items.truncate(limit);
-    TaskCandidates {
-        items,
-        total,
-        total_without_cursor,
-    }
-}
-
-/// Canonical listing order — newest first, task ID ascending for ties — and,
-/// with `terminal_last`, the status-aware partition: tasks in a terminal
-/// status move behind the rest while each partition keeps that order.
-fn sort_listing<T>(
-    items: &mut [T],
-    filter: &TaskListFilter,
-    not_before: impl Fn(&T) -> Option<chrono::DateTime<Utc>>,
-    created_at: impl Fn(&T) -> &chrono::DateTime<Utc>,
-    id: impl Fn(&T) -> &str,
-    status: impl Fn(&T) -> TaskStatus,
-) {
-    sort_by_created_desc_id_asc(items, created_at, id);
-    if filter.scheduled_after.is_some() {
-        items.sort_by_key(not_before);
-    } else if filter.terminal_last {
-        items.sort_by_key(|item| status(item).is_terminal());
-    }
+    filter.select_owned_snapshot(envelopes, limit)
 }

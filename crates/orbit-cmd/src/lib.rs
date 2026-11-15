@@ -3,6 +3,10 @@
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(
+    not(any(test, feature = "test-release-api-base")),
+    deny(clippy::disallowed_methods)
+)]
 //! Command-layer surfaces extracted from `orbit-core` [ORB-10016].
 //!
 //! Each module owns one CLI-facing command group whose implementation is a
@@ -25,33 +29,30 @@ orbit_common::isolate_test_process!();
 
 pub mod agent_rules;
 pub mod browser_kit;
-mod diagnostics;
 mod doctor;
 pub mod hosts;
 pub mod log_format;
 pub mod mcp_clients;
 mod migrate;
 mod registry;
+pub mod service_environment;
 mod task;
 pub use registry::{routines as registry_routines, runtime as registry_runtime};
 pub use task::{owner as task_owner, store as task_store};
 pub mod update;
 mod workspace_catalog;
+pub mod workspace_removal;
 
 #[cfg(test)]
 mod tests;
 
-pub use diagnostics::DiagnosticsCommands;
 pub use doctor::{
     DoctorCommands, DoctorProbe, OrphanTaskStoreRemoval, RetiredConfigKeyRepair,
     WorkspaceDoctorResult, WorkspaceDoctorStatus, doctor_report_probes, doctor_row_json,
-    provider_limit_findings, run_doctor_report,
+    misplaced_plugin_enablement_row, provider_limit_findings, run_doctor_report,
 };
 pub use migrate::{MigrateCommands, MigrateStatus, migrate_dry_run_at};
-pub use task_store::{
-    bound_partition_id, checkout_task_store_partitions, remove_checkout_task_stores,
-    retain_task_store_on_catalog_remove, task_store_partition_path,
-};
+pub use task_store::{bound_partition_id, remove_checkout_task_stores, task_store_partition_path};
 
 mod worker_coordination;
 

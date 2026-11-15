@@ -1,9 +1,9 @@
 ---
 title: "Scope: Distributions and workspace presets"
 owner: claude
-last_updated: 2026-10-28
-last_validated: 2026-10-28
-status: Accepted
+last_updated: 2026-11-08
+last_validated: 2026-11-08
+status: Implemented
 stage: shipped
 next: "—"
 feature: distributions
@@ -22,9 +22,15 @@ unbuilt are called out separately below.
 Bearing: The [plugin standard](../plugins/1_scope.md) lets a package add tools, CLI groups,
 panels, routines, auto-tasks, activities, jobs and skills from one manifest. Plugin-seeded
 definitions land disabled and become active only through an operator act. Orbit also ships
-11 default routines and 25 default auto-tasks: 36 defaults in total. By default it seeds all
-36 into each workspace; `crew_performance_refresh` is seeded enabled and the others are
-disabled. A distribution can narrow the Orbit defaults its workspace carries and choose
+8 default routines and 19 default auto-tasks: 27 defaults in total. By default it seeds all
+27 into each workspace. The routines `worktree-gc`, `task-pilot` and
+`crew_memory_dream` are seeded enabled; `crew_memory_dream` does nothing until
+`crew_memory.enabled` is set and a memory experiment is running. Other shipped routines are
+seeded disabled. Among auto-tasks, `host-health` ([ORB-21596]) alone is seeded enabled; other
+shipped auto-tasks are seeded disabled. The routine
+`crew_performance_refresh` ([ORB-17816]), once seeded enabled,
+was retired in [ORB-22804]. Seeded definitions carry managed
+provenance and digest-based retirement ([ORB-10800]). A distribution can narrow the Orbit defaults its workspace carries and choose
 which of its already-seeded plugin definitions to enable with a preset.
 
 ## Problem
@@ -76,7 +82,7 @@ an install story of its own.
 
 ### Seeding policy
 
-The `seeding.routines` and `seeding.auto_tasks` workspace configuration keys choose which
+[ORB-19186] implemented the seeding policy, presets and their workspace surfaces. The `seeding.routines` and `seeding.auto_tasks` workspace configuration keys choose which
 Orbit-shipped defaults are seeded. Each accepts `"all"` (the default), `"none"`, or a TOML
 array of shipped names:
 
@@ -103,8 +109,7 @@ routines, a list policy is the durable per-name opt-out; there is no separate ro
 delete record.
 
 `orbit workspace show` reports the effective policies and applied preset. `orbit doctor`
-does not report an excluded default as missing; it warns if crew performance uses a
-snapshot while `crew_performance_refresh` is excluded. See [Configuration](../../CONFIG.md)
+does not report an excluded default as missing. See [Configuration](../../CONFIG.md)
 for the operator-facing reference.
 
 ### Workspace presets
@@ -126,7 +131,7 @@ routines = ["office-daily-digest"]
 auto_tasks = []
 
 [config]
-"pr.draft" = true
+"pr.labels" = ["office"]
 ```
 
 `orbit workspace init --preset <file>` applies it to a new or an existing workspace:
@@ -212,7 +217,9 @@ These ideas appeared in earlier proposals but are not current behavior or requir
 ## Task References
 
 - [ORB-10800] — gave seeded definitions managed provenance and digest-based retirement.
-- [ORB-17816] — added `crew_performance_refresh`, the one default seeded enabled.
+- [ORB-17816] — added `crew_performance_refresh`, the one default routine seeded enabled.
+- [ORB-22804] — retired `crew_performance_refresh` with crew-performance weighting.
 - [ORB-19186] — implemented the seeding policy, presets and their workspace surfaces.
+- [ORB-21596] — shipped the host-health auto-task enabled by default.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-10-30
-last_validated: 2026-10-29
+last_updated: 2026-11-08
+last_validated: 2026-11-08
 status: Accepted
 feature: auto-tasks
 doc_role: design
@@ -11,7 +11,7 @@ summary: Current implementation of the auto-task record, due-math, host-local cu
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-web/src/api/auto_tasks.rs", "crates/orbit-web/assets/dashboard/js/operations-auto-tasks.js"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315, ORB-11730, ORB-12665, ORB-12698, ORB-13422, ORB-15327]
+related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315, ORB-11730, ORB-12665, ORB-12698, ORB-13422, ORB-15327, ORB-20704]
 ---
 
 # Auto-tasks — Design
@@ -33,21 +33,43 @@ semantics remain current.
 `AutoTaskDefinition` (`crates/orbit-types/src/workflow/auto_task/definition.rs`) is a
 `deny_unknown_fields` struct: `schemaVersion`, `name`, `description`, `enabled`,
 `schedule`, `template`, `dedupe`, the optional `skip_if_unchanged` (§4b) and
-`skip_unless_blocked_candidates` (§4c) preconditions, and
+`skip_unless_blocked_candidates` (§4c) preconditions, the optional `completion`
+contract a job step requires ([auto-task steps](../activity-job/specs/auto-task-step.md#phase-3-as-built)), and
 provenance (`created_by/at`, `updated_by/at`). `schedule` is an untagged enum
 — exactly one of `{ cron: "…" }`, `{ every_minutes: N }`,
 `{ deliveries_landed: { … } }`, or `{ condition: { … } }`. A `condition` fires once per subject edge on the workspace owner; the other forms take an optional `when` guard ([condition triggers](../condition-triggers/1_scope.md)). Delivery schedules use source evaluation and
 durable coverage state rather than time-slot due-math. `template` carries `title`, `description`,
 `acceptance_criteria`, `task_type`, `tags`, `priority`, optional `complexity`,
 `crew`, optional `required_tools` and `context_files`, and `status` (default `backlog`).
+At mint time, `backlog` becomes `proposed` unless the normalized minted tags
+include `no-diff-expected`; explicit non-backlog statuses are preserved.
+This applies to bundled and workspace-forked definitions without re-seeding.
+No-diff tasks retain their configured or default status and pilot path.
+The creation history records the effective initial status under `system`,
+and the task's `auto-task:<name>` tag identifies its source definition.
+See [the initial-status decision](4_decisions.md#implementation-auto-tasks-enter-proposed-at-mint-time).
 Context selectors are copied unchanged into minted tasks. Diff-producing
 chores must declare a scope in their YAML template; otherwise admission holds
 them for task-pilot. Older definitions without selectors remain readable.
-`comment-hygiene` (§4e) is the deliberate exception: its batch is known only
+`doc-duties` declares a bounded template footprint (`dir:docs` plus the
+tracked top-level `README.md` and `CONTRIBUTING.md`). Its brief assigns
+batch selection to the executing worker, which drops generated indexes,
+archives and records the repository identifies as historical, including
+paths on the repository's link-check or doc-index exclusion list. The task
+pilot keeps that template footprint. It does not replace the bound with a
+guessed batch, and it does not add a selector that names a document the
+brief excludes. A directory bound the brief declares as the lock is kept
+even when some files under it are excluded from the batch: the worker
+applies that exclusion at selection time. Repository-specific exclusion
+lists stay in the brief's referenced lists and repository guidance. The
+pilot rule names no repository path.
+`comment-hygiene` (§4e) has a selector-free template: its batch is known only
 after selection, so it mints selector-free as `proposed` and its footprint
 is prepared before admission — the task pilot or an operator persists the
 selected selectors and the task is approved to `backlog` — rather than
-entering a drain as selector-free backlog work.
+entering a drain as selector-free backlog work. Preparation there follows
+the brief's selection steps, including its exclusion rule, and persists
+only the selected `file:` selectors.
 An explicit complexity must be an
 assessed `low`, `medium`, `hard`, or `xhard` value and is copied to every minted task.
 The bundled defaults all carry reviewed explicit assessments. Legacy and custom
@@ -81,8 +103,8 @@ the inspected YAML is never implicit. A logical `--workspace` name or `ws_*`
 ID issued from a cwd that is **not** a Git-linked worktree of that workspace
 still opens the registered primary checkout. Direct CLI calls from a Git-linked
 worktree still use that worktree's `local_root` for candidate inspection and
-local definition edits. A managed job run's `orbit.auto_task.add` and
-`orbit.auto_task.update` (including an `enabled` change) tool calls are instead
+local definition edits. A managed job run's `orbit.auto_task` action `add` and
+`orbit.auto_task` action `update` (including an `enabled` change) tool calls are instead
 brokered to the owning host process. The host checks the worker's workspace
 binding and runs CRUD with its registered checkout as `local_root`. Before
 writing, CRUD rejects loader errors, including a file stem/name mismatch. The
@@ -172,7 +194,7 @@ definition minted nothing — `orbit auto-task show <name>` renders it under
 `cursor`, and the dashboard carries it on `last_evaluation.last_skip`. A fire
 clears it.
 
-`orbit.auto_task.list` projects the same cursor into a bounded `last_fire`
+`orbit.auto_task` action `list` projects the same cursor into a bounded `last_fire`
 [ORB-19112]:
 `{ kind: "fired", at, task_id, task_status }` for a fire,
 `{ kind: "skipped", at, skip_reason }` for the latest precondition skip, or
@@ -290,19 +312,19 @@ chore of a later sweep can shadow the last decided sweep.
 `skip_unless_blocked_candidates: true` is the second mint-time precondition,
 evaluated after `skip_if_unchanged` on `Fire` only. The host's
 `probe_blocked_candidates` reads every blocked task and applies the
-blocked-task triage's candidate rule (`triage_candidacy` in
+the block-episode candidate rule (`triage_candidacy` in
 `crates/orbit-core/src/application/task/blocked_recovery/triage.rs`): the
 latest transition into `blocked` is one episode, and it qualifies when its
-final-recovery decision escalated, or when it has none and is older than the
-backstop's 72 hours, unless a human set or touched it or it was already
-triaged. `None` skips like `Unchanged` — the slot is not consumed, the skip is
+claimed leaf requires an operator-resolved external prerequisite, its final-recovery
+decision escalated, or it has no decision and is older than the backstop's 72 hours, unless a human set or touched it or it was already
+triaged (final recovery decides blocked tasks now, but the rule still names the episodes nothing has settled). `None` skips like `Unchanged` — the slot is not consumed, the skip is
 recorded as `last_skip` with reason `no_blocked_candidates` and a `detail`
 naming how many blocked tasks were read, and the tick report says the same.
 `Qualifying` mints. A probe error or `Unknown` **fails open**: the definition
 mints and the tick report's reason says the precondition was inconclusive. No
 shipped default carries it any more: the retired `blocked-task-triage` default
-did, and the seeded `blocked_task_triage` routine's `block_escalated` trigger
-now applies the same rule ([automation triggers §6.2](../automation-triggers/2_design.md#62-escalated-blocks-block_escalated)).
+did, and final recovery now decides blocked tasks
+([automation triggers §6.2](../automation-triggers/2_design.md#62-retired-escalated-blocks-block_escalated)).
 
 The host tick calls `run_auto_task_scheduler_at` directly for every registered
 owner checkout after routine evaluation and under the host sweep lock. The pass
@@ -358,7 +380,10 @@ review is deliberately not the steady state: one run fans the whole tree out
 as one area chore per 25,000-line area in a single mint (about 55 area chores
 on a 1.3M-line tree), which floods the backlog, while the `code-review`
 rotation already provides steady whole-tree coverage a little at a time. The
-snapshot stays available for the moments a complete, single-SHA reading of
+coordinator therefore files at most 24 area chores per run, hardest areas and
+least recently reviewed first, and records the remainder as `deferred` for the
+next run: runs that filed 48 to 71 areas at once had about half archived
+unread, while runs of 9 to 11 completed every area. The snapshot stays available for the moments a complete, single-SHA reading of
 the entire tree is worth that fan-out.
 
 ### 4e. `comment-hygiene`: the doc-duties ledger over code comments
@@ -397,7 +422,9 @@ the definition itself is proven by loading and seeding it through the
 existing loader.
 
 Unlike `doc-duties`, which locks `dir:docs` plus the tracked top-level
-`README.md` and `CONTRIBUTING.md`, `comment-hygiene` declares no
+`README.md` and `CONTRIBUTING.md` and keeps that bound through task-pilot
+preparation (the worker selects the batch inside it, and the pilot does
+not name a document the brief excludes), `comment-hygiene` declares no
 `context_files` and mints as `proposed`: a selector-free instance is not a
 backlog drain candidate, so it never becomes the unknown-footprint
 whole-tree holder that stalls unrelated editing work, with or without a
@@ -422,70 +449,13 @@ at most two per run, `spawned_from` the hygiene task — never fixed in place,
 so each delivery stays a trivially reviewable comment-only change through
 normal validation and CI.
 
-### 4f. `design-sync`: design judgment alongside mechanical doc checks
+### 4f. Former defaults kept workspace-local
 
-The bundled `design-sync` default [ORB-18557] is disabled until enabled,
-runs every 720 minutes, uses `medium` complexity and `skip_if_open`, and
-mints a backlog chore tagged `design-sync` and `docs` with `dir:docs` as
-its footprint. It reads `docs/design/CONVENTIONS.md` before selecting work;
-repositories without it get a successful no-edit, no-filing no-op. No
-workspace identity, crew name or task ID is baked into its body, and its
-integration-branch placeholder is rendered by the same seeding path as
-the other defaults. `doc-duties` keeps its shipped mechanical checks and
-low complexity.
-
-Each run selects at most three feature folders, task-status changes since
-their previous ledger date first, then oldest reconciliation date with
-entry-doc `last_validated` and git-date fallbacks. Related tasks come from
-citations, separate path/slug/tag searches and verified relations, with each
-candidate confirmed through task records. Reconciliation checks stage,
-status, next, phase/slice citations, stale implementation prose and Task
-References against those records and the pinned checkout. A done task does
-not establish integration-branch delivery, and implementation never
-establishes owner approval of a Draft design. Historical decisions retain
-their reasoning and metadata; only links and Task References are corrected.
-
-The task corrects drift without changing design intent. An unexplained
-design/code divergence gets a cited open task or a proposed bug with the
-doc section, code location at HEAD, evidence, honest complexity, selectors
-for only the files its fix would modify, and a `spawned_from` relation.
-At most three tasks are filed per run, counting deprecation or archival
-follow-ups; these operations are never performed by the reconciliation
-itself. Frontmatter edits regenerate the repository's index. Fully checked
-features alone may advance an existing `last_validated` key.
-
-Every run attaches `design-sync-ledger.json` (schema version 1), including
-clean runs and repositories without conventions. Its `features` rows record
-selection order, changed-since-ledger, outcome, stage/status transitions,
-whether next changed, cited tasks and divergence tasks. Its cumulative
-`state` carries every other feature's date and outcome forward unchanged.
-The next run reads the newest completed design-sync chore's artifact, never
-its summary prose; missing ledgers and unverified evidence are explicit.
-Clean runs follow the workspace's validated no-diff evidence requirements.
-
-### 4g. `workflow-health-audit`: jobs and routines must produce their effects
-
-The weekly `workflow-health-audit` default inventories every effective job and
-routine, including disabled and custom definitions. Owner-only, non-reconciling
-inspection traces triggers through admission and terminal settlement, and checks
-durable effects rather than treating a green wrapper as proof of success. The
-seven-day scan uses up to 30 days for sparse definitions and records unobserved,
-unavailable and unvalidated rows explicitly. Existing isolated public-boundary
-fixtures can supply missing proof under the workspace's validation policy;
-production jobs and providers are never fired to manufacture coverage.
-
-Concrete, testable repairs become deduplicated proposed tasks. Other actionable
-obstacles become frictions naming the evidence or external action needed. Each
-pass files at most five new records and retains overflow. Its
-`workflow-health-audit.json` artifact contains the complete per-definition
-inventory, provenance, expected effects, evidence, validation gaps and finding
-dispositions. It complements `run-failure-patterns`: even a successful sweep
-with no output must explain eligible findings and their dispositions.
-
-Like other bundled defaults it is disabled until the operator enables it with
-`orbit auto-task toggle workflow-health-audit on`; `skip_if_open` prevents
-overlapping weekly audit tasks. Enabling or running the audit grants no
-production retry, dispatch, configuration, merge or release authority.
+`design-sync`, `workflow-health-audit` and six other former defaults are no
+longer shipped: they were demoted for unproven yield, and a workspace's
+existing copy is kept as a workspace-local definition
+([overview](1_overview.md#demoted-defaults)). Their design lives with the
+workspaces that keep them.
 
 ## 5. CRUD surfaces
 
@@ -496,7 +466,7 @@ under the cursor sidecar lock shared with the other writers. A settings failure
 leaves no definition behind, so the same add can be retried after repair.
 Update patches present fields (on a managed shipped
 default, settings fields go to the settings table, §5c); toggle (the CLI command,
-or `orbit.auto_task.update` with `enabled`) flips `enabled`
+or `orbit.auto_task` action `update` with `enabled`) flips `enabled`
 (disabling pauses and preserves; removal is `delete`, below). Update and
 toggle re-read the definition and write it while holding the cursor sidecar
 lock (without loading the cursor, so a malformed cursor cannot block the
@@ -576,6 +546,16 @@ never retired, because retirement only considers names the previous manifest
 recorded. It stays the active definition and reports `body: forked` against
 the bundled body, so the settings-only fork migration leaves it alone too.
 
+A default demoted for unproven yield (`orbit_config::DEMOTED_DEFAULT_AUTO_TASKS`)
+is not retired. Before reconciliation, `auto_tasks::demoted` drops each demoted
+name from the manifest and reports one `migrated` action, so reconciliation sees
+no recorded digest and leaves the file in place; the settings-table entry, which
+the loader applies by name, keeps applying. Create-only seeding releases
+nothing, `--check` reports the release without writing, and doctor's deprecated
+check and `--fix-stale-artifacts` skip those names while the manifest still
+records them. A compile-time assertion keeps the demoted list disjoint from the
+shipped and retired lists.
+
 ### 5c. Operator settings over bundled bodies
 
 A shipped default's YAML is its *body*; `orbit workspace sync` refreshes it
@@ -624,7 +604,7 @@ deduplicated by exact tool name as in the Rust deserializer, and
 `skip_if_unchanged.ref` uses the bundled base-branch placeholder after workspace
 rendering (including the historical
 hardcoded `agent-main`). Each history entry also
-records its source integration commit, the original settings and body tags,
+records its source revision, the original settings and body tags,
 and its `#` lines. The original tags, crew and complexity distinguish body
 edits from upstream changes; tag removal, clearing a shipped crew or complexity,
 and added notes remain body edits. A historical copy's shipped `crew: system`, retired with the system lane [ORB-15663], is an upstream change: migration drops it rather than carrying it into the settings table, so the template draws from its complexity pool; an explicit settings-table crew still wins. Existing settings-table overrides take
@@ -640,19 +620,24 @@ with the current body, including tags or a previously absent complexity.
 After landing changes to bundled defaults, run
 `python3 scripts/update-auto-task-body-history.py` (requires PyYAML) and commit
 the resulting history with the next asset change or release preparation.
-The script scans first-parent integration history, recomputes existing records
-from their source revisions (or saved source fixtures in shallow clones), and
-never records uncommitted asset edits. It also regenerates the CLI history
+The script scans first-parent history, including each parent's first-parent
+history at a merge head, recomputes existing records from their source revisions
+(or saved source fixtures in shallow clones), and never records uncommitted
+asset edits. An existing pre-squash revision stays recorded when its body also
+appears in that history; an available draft with an unlanded body is removed.
+It also regenerates the CLI history
 source fixtures; commit both generated files together. Run
 `python3 scripts/update-auto-task-body-history.py --check` to verify the history
 and fixtures without changing them. This check requires full Git history and
-rejects shallow checkouts; the CI Check job uses `fetch-depth: 0` and runs it
-before the Rust gates. Every superseded first-parent body must be recorded,
-including the last landed body when the checkout contains an uncommitted
-successor. Current bodies are compared directly and need no history entry until
-they become historical. The CLI regression exercises representative shipped
-bodies through workspace sync, including a settings-edited doc-duties copy,
-without needing Git history.
+rejects shallow checkouts. The separate CI guardrails job checks out full
+history (`fetch-depth: 0`) and runs it alongside the test build. The required
+Check / Clippy / Test job waits for guardrails, so a failure still fails that
+required check. Every superseded first-parent body must be recorded, including
+the last landed body when the checkout contains an uncommitted successor.
+Current bodies are compared directly and need no history entry until they
+become historical. The CLI regression exercises representative shipped bodies
+through workspace sync, including a settings-edited doc-duties copy, without
+needing Git history.
 The fingerprint format follows the v1 definition's serde defaults; update the
 generator together with any schema change. Unrecognized bodies are preserved
 conservatively; the manifest's exact-byte provenance behavior is unchanged.
@@ -723,7 +708,7 @@ cursor does not advance, so the deferred occurrence fires once when the queue
 drains. This is the behavior the hand-copy workaround could not provide.
 
 Advertisement follows who does the work [ORB-10798]. Reading the definitions
-(`list`), minting one on demand (`orbit.auto_task.mint`), and host-brokered
+(`list`), minting one on demand (`orbit.auto_task` action `mint`), and host-brokered
 edits (`add`, and `update`, which also enables or disables a definition) are
 registered at `McpToolScope::WorkspaceRequired`. `show` is `register_inactive`,
 reachable through `orbit auto-task show` but absent from MCP `tools/list`;
@@ -761,25 +746,69 @@ disclosure. All-workspace and inactive/unknown workspace selections stay
 read-only. Refresh and hash navigation only GET — they never replay a toggle
 or mint.
 
-The dashboard's `GET /api/auto-tasks` lists workspace task metadata once per
-request and groups it by definition provenance tag. It reads no task bodies on
-the indexed path and uses each group's newest instance for `last_minted_*`.
+**Delete** removes one definition with `POST /api/auto-tasks/delete`, a body of
+`name`, an optional `reason` and an optional `force` flag, scoped to the selected
+workspace. The governed operation is `auto_task.delete`, operator-only like the
+other auto-task writes; the row's Delete button is disabled with the
+`auto_task_delete` capability's reason when that decision is refused. Core removes
+the definition file, its scheduler cursor and, for a delivery trigger, the consumer
+state its audited reset owns. Deleting a shipped default's name also records a
+managed-asset opt-out, so `orbit workspace init --force` and `orbit workspace sync`
+do not reseed it; the success message then says the shipped default will not be
+reseeded. While a task minted from the definition is still open, the delete returns
+`409` with `code: "open_minted_tasks"` and an `open_tasks` list of those task ids,
+and it removes nothing. The confirmation names those tasks as links and offers
+**Delete anyway**, which posts the same request with `force: true`; the open tasks
+stay open. A refused delete changes nothing. A failure before the delivery consumer
+reset restores the definition, cursor and opt-out; the reset runs last and is not
+undone, so a failure after it leaves the reset applied under its own audit record.
+Every attempt writes a dashboard-operations audit row for `auto_task.delete` that
+records the reason and force flag the request sent. The row is `denied` when operator
+authority is missing, `failure` for a core refusal (including the 409, whose message
+it keeps), and `success` otherwise.
+
+The dashboard's `GET /api/auto-tasks` lists task metadata once per request,
+after one index freshness pass, selecting from the index only the tasks that
+carry a listed definition's provenance tag, and groups them by that tag. It
+reads no task bodies, and no envelopes of other tasks, on the indexed path, and
+uses each group's newest instance for `last_minted_*`.
 Both duplicate flags use the scheduler's shared listed-set rule: done,
 archived, rejected and someday instances do not count as open. Delivery-schedule
 automation diagnostics reuse the same open-instance result. The projection is
 recomputed on each request; it does not cache instance state.
 
-List responses expose separate `capabilities` decisions for auto-task toggle,
-manual mint, routine toggle, clock service, and clock cadence. Each decision
-uses the same governed operation as its POST endpoint; no client-side grant
-is inferred from another action. These five operations currently all require
-operator authority, while bounded-window submission has a separate policy.
-The legacy `controls_authorized` field remains for existing API consumers.
+`GET /api/auto-tasks` returns separate `capabilities` decisions for
+`auto_task_toggle`, `auto_task_mint`, `auto_task_schedule` and `auto_task_delete`.
+Each decision uses the same governed operation as its POST endpoint
+(`auto_task.toggle`, `auto_task.mint`, `auto_task.set_schedule` and
+`auto_task.delete`); no client-side grant is inferred from another action. All
+four currently require operator authority, while bounded-window submission has a
+separate policy. Routine toggle and the clock capabilities are on the routines
+list response instead. The legacy `controls_authorized` field remains for existing
+API consumers and still answers only for toggle and mint.
+
+`POST /api/auto-tasks/schedule` decodes the body, binds the trusted caller and
+runs the observed profile of the shared `auto_task_schedule_command`;
+operation auditing follows the command's outcome. An authorization denial is
+audited separately before the command runs. The command owns the rest: a
+missing definition is a 404 `auto_task_not_found`, a schedule that differs
+from `expected_schedule` is a 409 `stale_auto_task_schedule` carrying
+`actual_schedule`, and a request the stored schedule already satisfies answers
+`changed: false`; none of those validates, writes, stamps or audits. A read
+error likewise returns without an operation audit. Only a real change reaches
+the write, which rejects retired coverage, rechecks `expected_schedule` under
+the cursor lock (a later mismatch is an ordinary control error, not the 409),
+validates and stamps; the route then audits the written change, and audits a
+write error with its failure message before returning the control error. The
+ordinary `update` tool runs the unconditional profile steps inside
+its single locked edit, so a schedule combined with other fields is still one
+write and always validates and stamps.
 
 One session-access explanation appears above Operations. Dashboard authority
-comes from the **server process**, not from opening a browser or terminal.
-For deliberate operator access, restart the server with
-`ORBIT_OPERATOR=1 orbit web serve`, preserving its existing root, port, and
+comes from the **server's `--operator` flag**, not from opening a browser or
+terminal, and not from the server's own terminal or `ORBIT_OPERATOR`
+([ORB-23047]). For deliberate operator access, restart the server with
+`orbit web serve --operator`, preserving its existing root, port, and
 workspace options, then reload the page. No dashboard button grants authority.
 Unavailable actions retain a keyboard-focusable explanation, including host
 and workspace restrictions.
@@ -795,13 +824,7 @@ server-side idempotency promise for manual mint. A failed readback preserves
 the successful action result and task link, so a refresh failure does not
 invite another mint.
 
-Validation uses the shipped modules in Chromium through the required
-`dashboard-operations-browser` scenario in `scripts/qa-full-sweep-inventory.json`.
-Run it directly with `node crates/orbit-web/src/tests/dashboard_operations_browser.mjs
-/absolute/path/to/playwright/index.mjs /evidence/directory` (on one shell line).
-The runner serves isolated markup, styles and mocked API responses,
-checks behavior, and captures Operations panels at 1440px, 672px, 390px and 375px;
-Rust API tests separately exercise the canonical handlers and persisted state.
+Rust API tests exercise the canonical handlers and persisted state.
 
 ## 6. Concerns & Honest Limitations
 
@@ -850,8 +873,6 @@ accurate.
 
 ## Task References
 
-- [ORB-18557] — Adds design-sync with bounded reconciliation, intent safeguards and a cumulative ledger.
-
 - [ORB-11315] — proposes shared state-driven triggers and durable coverage semantics.
 - [ORB-11330] — implements delivery-trigger consumers on the sweep clock with
   durable batches and coverage checkpoints.
@@ -873,8 +894,17 @@ accurate.
   `code-review` auto-task name.
 - ORB-15663 — retired the system lane: system work routes through the
   complexity pools instead.
-- ORB-19112 — `orbit.auto_task.list` reports each definition's last fire.
+- ORB-19112 — `orbit.auto_task` action `list` reports each definition's last fire.
 - ORB-19122 — delivery auto-tasks report their actual last fire.
 - ORB-19131 — keeps the delivery `last_fire` visible while a retry backs off.
+- [ORB-11730] — made auto-task slot minting concurrency-safe and preserved
+  corrupt cursor evidence.
+- [ORB-12665] — made writable auto-task CRUD in a managed worktree write
+  definition YAML to the worktree's local root.
+- [ORB-12698] — skipped minting the periodic code-review and qa-sweep tasks
+  when nothing changed since the last completed sweep.
+- [ORB-15327] — shipped the generic `qa-full-sweep` default auto-task.
+- [ORB-20704] — demoted eight unproven defaults and made proven yield the
+  condition for shipping a default.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

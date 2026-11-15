@@ -1,9 +1,9 @@
 ---
 title: "Remote Access — Design"
 owner: codex
-last_updated: 2026-10-08
-last_validated: 2026-10-29
-status: Accepted
+last_updated: 2026-11-09
+last_validated: 2026-11-14
+status: Implemented
 feature: remote-access
 doc_role: design
 type: design
@@ -56,19 +56,22 @@ Runtime construction happens outside state locks. Web calls orbit-cmd's Register
 
 Workspace-scoped API handlers use ?workspace=<id>, falling back to the pinned default. Unknown workspaces return not found; inactive workspaces return a client error. Omitting the selector with no default is also an error.
 
-GET /api/workspaces lists current entries. `GET /api/tasks` and `GET /api/tasks/all` share the same task-page query contract. Both accept `status`, `tag` (also `tags`), `type` (also `task_type`), `q` (also `search`), `limit`, and `cursor`. Status and tag values may be repeated or comma-separated; `q` is a case-insensitive task ID/title substring; and `limit` is a positive integer capped at 200, defaulting to the server default only when omitted. Every predicate is applied before the page bound, so the page contains the newest matching tasks rather than the newest tasks filtered afterward.
+GET /api/workspaces lists current entries. `GET /api/tasks` and `GET /api/tasks/all` share the same task-page query contract. Both accept `status`, `tag` (also `tags`), `type` (also `task_type`), `q` (also `search`), `limit`, and `cursor`; `GET /api/tasks/all` also accepts repeated `workspaces` parameters to narrow its sources and bind the cursor to that subset. Status and tag values may be repeated or comma-separated; `q` is a case-insensitive task ID/title substring; and `limit` is a positive integer capped at 200, defaulting to the server default only when omitted. Every predicate is applied before the page bound, so the page holds the newest matching tasks rather than the newest tasks filtered afterward. On `GET /api/tasks` that is the newest matches in the selected workspace; on `GET /api/tasks/all` it is the newest matches of the first workspace or workspaces in workspace order, not the newest across all workspaces.
 
 Both endpoints return `{ items, total, limit, truncated, offset, next_cursor }`, and `GET /api/tasks/all` also returns `unavailable`. `total` is the count of all matches before the page bound and remains the pre-cursor total on later pages. `truncated` means `total > items.length` against that pre-cursor total; it can therefore remain `true` on a final cursor page. `next_cursor`, not `truncated`, tells a client whether to request another page. `offset` is zero for the first page and records the cursor's position thereafter.
 
-`GET /api/tasks` is scoped to the selected workspace. `GET /api/tasks/all` reads every registered workspace, tags rows with workspace metadata, applies the same predicates independently in each workspace that answers, and merges the candidate pages under one global `created_at DESC, id ASC` order. A workspace that is inactive, cannot be opened, or whose task read fails is omitted from `items` and named in `unavailable` as `{ workspace_id, workspace_name, error }`, the same object `/api/job-runs/all` uses. One unreadable task row marks that workspace unavailable for the response while the rows that did read stay in `items`. `total` still sums only the workspaces that answered, independent of `limit`. The caller-supplied `limit` bounds the merged page. When the task index answers every predicate (status and tag only; no `type` or `q`), each available workspace contributes only index keys — id and `created_at` — and only the tasks on the merged page are read from their bundles; a `type` or `q` filter, or a workspace whose index cannot be trusted, falls back to reading that workspace's candidate tasks. A response with no unavailable workspaces still includes `unavailable` as an empty array. The other envelope fields stay `items`, `total`, `limit`, `truncated`, `offset`, and `next_cursor`.
+`GET /api/tasks` is scoped to the selected workspace. `GET /api/tasks/all` reads every registered workspace, tags rows with workspace metadata, and applies the same predicates independently in each workspace that answers. It orders rows workspace by workspace, in `/api/workspaces` order (the dashboard's workspace picker order), with `created_at DESC, id ASC` inside each workspace, and cuts the page in that order; it does not merge the workspaces under one global order. A workspace that is inactive, cannot be opened, or whose task read fails is omitted from `items` and named in `unavailable` as `{ workspace_id, workspace_name, error }`, the same object `/api/job-runs/all` uses. One unreadable task row marks that workspace unavailable for the response while the rows that did read stay in `items`. `total` still sums only the workspaces that answered, independent of `limit`. The caller-supplied `limit` bounds the page. When the task index answers every predicate (status and tag only; no `type` or `q`), each available workspace contributes only index keys — id and `created_at` — and only the tasks on the page are read from their bundles; a `type` or `q` filter, or a workspace whose index cannot be trusted, falls back to reading that workspace's candidate tasks. A response with no unavailable workspaces still includes `unavailable` as an empty array. The other envelope fields stay `items`, `total`, `limit`, `truncated`, `offset`, and `next_cursor`.
 
-The cursor is opaque and bound to its endpoint scope and the active workspace set: a workspace cursor cannot be used for another workspace, and an aggregate cursor becomes invalid if its active workspace scope changes. It is also bound to the active status, tag, type, search, and limit values, so changing any of them requires a fresh request. The cursor continues the stable `created_at DESC, id ASC` order. Inserts newer than the first page do not disturb an existing continuation, but changes to a task's ordering or filter membership can move it across the boundary; clients that need a new live snapshot must restart without a cursor.
+The cursor is opaque and bound to its endpoint scope and the active workspace set: a workspace cursor cannot be used for another workspace, and an aggregate cursor becomes invalid if its active workspace scope changes. It is also bound to the active status, tag, type, search, and limit values, so changing any of them requires a fresh request. On `GET /api/tasks` the cursor continues the stable `created_at DESC, id ASC` order. On `GET /api/tasks/all` the cursor names the workspace its last row belongs to: that workspace resumes after the row, workspaces listed before it contribute no rows (they still count toward `total`), and later workspaces start from their newest task. A cursor issued before workspace-ordered pages names no workspace and is refused. Inserts newer than the first page do not disturb an existing continuation, but changes to a task's ordering or filter membership can move it across the boundary; clients that need a new live snapshot must restart without a cursor.
 
 ## 3. orbit web connect
 
 connect reads no local workspace state. It selects a local loopback port: an explicit --port must be free; otherwise 7878 is preferred and an ephemeral port is used when needed. The SSH forward explicitly binds that port to 127.0.0.1.
 
 The Web-owned tunnel then follows an attach-first lifecycle:
+
+[ORB-10708] delivered this lifecycle. [ORB-14057] moved the readiness budget
+after authentication, preserving interactive SSH prompts.
 
 1. Start ssh -N with ExitOnForwardFailure=yes and -L 127.0.0.1:<local>:localhost:<remote>, plus a LocalCommand that writes a private marker file once ssh has bound the forward ([bind report](./specs/ssh-tunnel.md#bind-report)).
 2. Wait until that marker exists, or until ssh exits. OpenSSH binds -L only after authentication, so passphrase, password, and 2FA time is outside the attach budget. An exit before the marker is a connection failure. A listener on the port alone proves nothing: another process may have taken the port before ssh, and ssh then exits. Ctrl-C cancels a stuck prompt; there is no separate authentication deadline.
@@ -82,9 +85,19 @@ In spawn mode, the forced PTY makes connection teardown deliver SIGHUP to the re
 
 connect's --workspace is POSIX-quoted and forwarded to the remote serve as --workspace, only in spawn mode. It is not forwarded as --root: on the remote that would choose a registry rather than preselect a workspace. connect rejects a top-level --root outright, since it reads no local Orbit data directory. --global is a deprecated no-op for current remote dashboards; when supplied, it is forwarded only in spawn mode for compatibility with older remote binaries. Attach mode sends no remote command, so no option can change an existing server.
 
+[ORB-18488] added optional browser-session tickets, which connect fetched over
+a separate `ssh <host> orbit web open --no-open`. [ORB-22808] removed browser
+sessions and `orbit web open`; connect always opens the plain local URL.
+
 ## 3a. Host forward
 
 `/api/on/<host>/<path>` forwards one request to `/api/<path>` on a registered host's own dashboard ([specs/host-forward.md](./specs/host-forward.md)). The host is resolved from the serving host's host file; the serving host's own name is answered locally.
+
+[ORB-14679] delivered this surface. [ORB-16130] subsequently allowed at most
+three ephemeral allocations for a proven initial attach bind collision, under
+the original deadline; authentication, readiness and remote-command failures
+remain failures. The [host-forward spec](./specs/host-forward.md#tunnels) records
+the diagnostic and child-reaping conditions.
 
 host_tunnels keeps one tunnel per host, keyed by `machine_id`, using ssh_tunnel's establish in unattended mode: `BatchMode=yes`, a bounded `ConnectTimeout` and a bounded wait for the forward listener, since a server has no terminal to prompt on. Establish is single-flight per host and runs on the blocking pool. Each new tunnel reads the remote's `GET /api/hosts?probe=false` and compares its local row's `machine_id` with the host file's; when the SSH child has exited by the end of that read, the exit is reported instead, since its port may have passed to another listener. A dead child is re-established by the next request, an idle tunnel closes after five minutes, and serve stops every child after its graceful-shutdown future completes, the one path that both a signal and the update handover take before exit or exec.
 
@@ -96,7 +109,9 @@ The forwarding client speaks HTTP/1.1 to the tunnel's loopback port, one connect
 
 The dashboard is an unauthenticated read/write HTTP application. check_bindable_host permits only `127.0.0.1` and `::1`. The request Host gate permits those IPs and `localhost`. The Origin middleware reduces browser cross-site request risk but is forgeable by non-browser clients and is not authentication.
 
-Remote confidentiality, server identity, and user authentication are delegated to SSH. The local forward is explicitly loopback-bound, but access to that port is still access to the remote dashboard's authority; connect adds no token, ACL, or Orbit session.
+Remote confidentiality, server identity, and user authentication are delegated to SSH.
+The local forward is explicitly loopback-bound, but access to that port still
+carries the remote dashboard's existing API authority.
 
 The host forward extends the serving dashboard's reach to every registered host its SSH identity can reach. An operator session there can act as operator on each of them; without it, only reads are forwarded. Each remote dashboard still applies its own gates.
 
@@ -106,3 +121,14 @@ Operational limitations:
 - Exit 127 is reported as a remote PATH problem; exit 255 as an SSH connection problem.
 - Local port selection and attach-versus-spawn contain accepted time-of-check/time-of-use races. SSH or the second Web bind fails loudly if a race is lost.
 - A target must remain online. Nothing is synchronized or available offline.
+
+## Task References
+
+- [ORB-10708] — delivered attach-first SSH connection and ownership-aware teardown.
+- [ORB-14057] — started readiness timing after SSH reports its authenticated bind.
+- [ORB-14679] — delivered identity-checked, operator-gated host forwarding.
+- [ORB-16130] — bounded initial bind-collision reallocation without replaying remote commands.
+- [ORB-18488] — added optional browser-session tickets while preserving existing API authority.
+- [ORB-22808] — removed browser sessions and `orbit web open`.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

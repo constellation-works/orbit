@@ -8,12 +8,14 @@ mod candidate_validate;
 pub mod claim;
 mod commit;
 mod completion_deadline;
+pub(crate) mod completion_hold;
 mod conventions;
 mod deferral_probe;
 mod deferred_sandbox;
 mod delivery_marker;
 mod failure;
 mod flaky;
+mod forge_text;
 mod freshness;
 pub(crate) mod git;
 mod handoff;
@@ -59,7 +61,10 @@ pub(super) use failure::pr_failure_handoff;
 pub(crate) use freshness::refreshed_input;
 pub(super) use freshness::{prepare_pr_handoff, rebase_pr_branch};
 pub use git::fetch_remote_base;
-pub(super) use landing::handoff_land;
+#[cfg(feature = "test-support")]
+pub use git::with_worktree_setup_fetch_limits;
+pub use landing::landing_wait_gate_cleared;
+pub(super) use landing::{handoff_land, pr_checks_watch};
 pub use light_delivery::{
     judge_light_delivery, judge_light_delivery_with_key, review_skip_decision,
     run_review_skip_guard,

@@ -4,7 +4,7 @@
 //! and reconciliation serializes migrations and manifests with runtime edits.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{RecvTimeoutError, sync_channel};
 use std::time::Duration;
@@ -16,15 +16,15 @@ use orbit_common::fs::io::{
 };
 use orbit_common::protocol::yaml::{parse_auto_task_yaml, parse_routine_yaml};
 use orbit_common::security::release::sha256_hex;
-use orbit_core::application::auto_tasks::AutoTaskBody;
+use orbit_core::application::auto_tasks::{AutoTaskBody, AutoTaskDeleteParams};
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
 use orbit_core::test_support::with_auto_task_manifest_read_hook;
 use orbit_core::{
-    AutoTaskDeleteParams, ManagedArtifactOutcome, ManagedArtifactScope, OrbitRuntime,
-    RoutineSeedIdentity, reconcile_workspace_managed_artifacts,
-    seed_absent_workspace_managed_artifacts,
+    ManagedArtifactOutcome, ManagedArtifactScope, OrbitRuntime, RoutineSeedIdentity,
+    reconcile_workspace_managed_artifacts, seed_absent_workspace_managed_artifacts,
 };
 use orbit_store::compose::auto_task::cursor_state_path;
+use orbit_types::workflow::AutoTaskSchedule;
 
 const MANIFEST: &str = ".orbit-managed-assets.json";
 
@@ -764,3 +764,570 @@ crate::scenario_table!(
     implicit_runtime_open_and_workspace_init_preserve_legacy_skill_trees,
     settings_only_migration_waits_for_crud_and_preserves_concurrent_settings
 );
+
+/// Blocked-task triage is retired: a fresh workspace seeds no
+/// `blocked_task_triage` routine, nor its sibling pilot-warning routine since
+/// [ORB-22844], and a full sync retires an unedited copy an earlier release wrote
+/// instead of keeping a routine on the retired `block_escalated` trigger.
+#[test]
+fn blocked_task_triage_is_not_seeded_and_an_unedited_earlier_copy_is_retired_by_sync() {
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated roots");
+    let (global, workspace) = seeded_host(dir.path());
+    let catalog = workspace.join("routines");
+    assert!(
+        !catalog.join("blocked_task_triage.yaml").exists(),
+        "a fresh workspace seeds no blocked-task triage routine"
+    );
+    assert!(
+        !catalog.join("pilot_warning_triage.yaml").exists(),
+        "a fresh workspace seeds no pilot-warning triage routine"
+    );
+
+    let earlier = include_str!("../../assets/routines/retired/blocked_task_triage.yaml");
+    record_unedited_retired_default(&catalog, "blocked_task_triage", earlier);
+    let report = reconcile_workspace_managed_artifacts(
+        &global,
+        &workspace,
+        Some(&identity()),
+        "main",
+        false,
+    )
+    .expect("full sync");
+    assert!(
+        report.actions.iter().any(|action| {
+            action.kind == "routine"
+                && action.name == "blocked_task_triage"
+                && action.outcome == ManagedArtifactOutcome::Retired
+        }),
+        "an unedited earlier copy is retired: {report:?}"
+    );
+    assert!(!catalog.join("blocked_task_triage.yaml").exists());
+}
+
+/// An unmanifested pilot-warning copy retires by content [ORB-22889]: the
+/// old shipped `pilot_warning_triage` template targets the still-shipped
+/// `escalation_triage_pipeline` job on the retired `pilot_warnings_held`
+/// trigger, so the untracked guard must accept the retired trigger, not only
+/// a retired job. Sync check reports the pending retirement, apply removes
+/// the file with a recovery copy, and a second check converges.
+#[test]
+fn unmanifested_pilot_warning_triage_is_retired_by_sync_with_recovery_copy() {
+    use orbit_automation::routines::loader::retired_routine_job_reason;
+
+    assert!(
+        retired_routine_job_reason("escalation_triage_pipeline").is_none(),
+        "manual triage still ships, so the retired pilot-warning template retires by trigger [ORB-22889]"
+    );
+
+    for enabled in [false, true] {
+        let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+            .expect("isolated roots");
+        let (global, workspace) = seeded_host(dir.path());
+        let catalog = workspace.join("routines");
+        assert!(
+            !catalog.join("pilot_warning_triage.yaml").exists(),
+            "a fresh workspace seeds no pilot-warning triage routine"
+        );
+
+        let template = include_str!("../../assets/routines/retired/pilot_warning_triage.yaml");
+        let mut body = template
+            .replace("__ORBIT_ROUTINE_NAME__", "pilot-warning-triage-repo")
+            .replace("__ORBIT_OWNER_MACHINE__", "hm_test")
+            .replace("__ORBIT_BASE_BRANCH__", "main");
+        if enabled {
+            body = body.replacen("enabled: false", "enabled: true", 1);
+        }
+        let definition = parse_routine_yaml(&body).expect("unmanifested pilot-warning parses");
+        assert!(
+            definition.enabled == enabled,
+            "fixture keeps enabled={enabled} [ORB-22889]"
+        );
+        // No manifest entry: an earlier release wrote the file without
+        // recording it.
+        std::fs::write(catalog.join("pilot_warning_triage.yaml"), &body)
+            .expect("write unmanifested retired default");
+
+        let check = reconcile_workspace_managed_artifacts(
+            &global,
+            &workspace,
+            Some(&identity()),
+            "main",
+            true,
+        )
+        .expect("sync check");
+        assert!(
+            check.actions.iter().any(|action| {
+                action.kind == "routine"
+                    && action.name == "pilot_warning_triage"
+                    && action.outcome == ManagedArtifactOutcome::Retired
+            }),
+            "sync --check reports the pending retirement (enabled={enabled}): {check:?}"
+        );
+
+        let applied = reconcile_workspace_managed_artifacts(
+            &global,
+            &workspace,
+            Some(&identity()),
+            "main",
+            false,
+        )
+        .expect("apply sync");
+        assert!(
+            applied.actions.iter().any(|action| {
+                action.kind == "routine"
+                    && action.name == "pilot_warning_triage"
+                    && action.outcome == ManagedArtifactOutcome::Retired
+            }),
+            "apply retires the unmanifested copy (enabled={enabled}): {applied:?}"
+        );
+        assert!(
+            !catalog.join("pilot_warning_triage.yaml").exists(),
+            "apply removes the retired definition from the active catalog (enabled={enabled})"
+        );
+        let preserved = workspace
+            .join(".retired-managed")
+            .join("routines")
+            .join("pilot_warning_triage.yaml");
+        assert!(
+            preserved.is_file(),
+            "apply preserves a recovery copy outside the active catalog (enabled={enabled})"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&preserved).expect("read recovery copy"),
+            body,
+            "the recovery copy keeps the exact bytes (enabled={enabled})"
+        );
+
+        let converged = reconcile_workspace_managed_artifacts(
+            &global,
+            &workspace,
+            Some(&identity()),
+            "main",
+            true,
+        )
+        .expect("second sync check");
+        assert!(
+            !converged.actions.iter().any(|action| {
+                action.kind == "routine"
+                    && action.name == "pilot_warning_triage"
+                    && action.outcome == ManagedArtifactOutcome::Retired
+            }),
+            "a second sync --check converges (enabled={enabled}): {converged:?}"
+        );
+    }
+
+    // A genuinely customized copy on the retired trigger stays in place with
+    // actionable advice instead of retiring.
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated roots");
+    let (global, workspace) = seeded_host(dir.path());
+    let catalog = workspace.join("routines");
+    let template = include_str!("../../assets/routines/retired/pilot_warning_triage.yaml");
+    let customized = template
+        .replace("__ORBIT_ROUTINE_NAME__", "pilot-warning-triage-repo")
+        .replace("__ORBIT_OWNER_MACHINE__", "hm_test")
+        .replace("__ORBIT_BASE_BRANCH__", "main")
+        .replacen(
+            "Triage proposed tasks",
+            "Operator-customized pilot-warning triage",
+            1,
+        );
+    assert_ne!(
+        customized, template,
+        "the customized copy differs in a template-owned field"
+    );
+    std::fs::write(catalog.join("pilot_warning_triage.yaml"), &customized)
+        .expect("write customized retired-trigger copy");
+    let report = reconcile_workspace_managed_artifacts(
+        &global,
+        &workspace,
+        Some(&identity()),
+        "main",
+        false,
+    )
+    .expect("sync customized copy");
+    let preserved = report
+        .actions
+        .iter()
+        .find(|action| {
+            action.kind == "routine"
+                && action.name == "pilot_warning_triage"
+                && action.outcome == ManagedArtifactOutcome::Preserved
+        })
+        .expect("a customized copy is preserved, not retired: {report:?}");
+    let detail = preserved.detail.as_deref().unwrap_or_default();
+    assert!(
+        detail.contains("delete") && detail.contains("retarget"),
+        "the preserved copy names the step that clears it: {report:?}"
+    );
+    assert!(
+        catalog.join("pilot_warning_triage.yaml").is_file(),
+        "the customized definition stays in the active catalog"
+    );
+}
+
+/// Re-run `orbit workspace init` over an existing workspace.
+fn reinit_workspace(global: &Path, workspace: &Path) {
+    init_workspace_at_root(
+        workspace,
+        InitOptions {
+            refresh_defaults: true,
+            global_root_override: Some(global.to_path_buf()),
+            routine_seed_identity: Some(identity()),
+            ..Default::default()
+        },
+    )
+    .expect("workspace re-init");
+}
+
+fn listed_enabled(runtime: &OrbitRuntime, name: &str) -> bool {
+    runtime
+        .auto_task_list()
+        .expect("list auto-tasks")
+        .into_iter()
+        .find(|definition| definition.name == name)
+        .unwrap_or_else(|| panic!("`{name}` is listed"))
+        .enabled
+}
+
+#[test]
+fn fresh_workspace_seeds_only_host_health_enabled() {
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated roots");
+    let (global, workspace) = seeded_host(dir.path());
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("workspace runtime");
+    let listed: BTreeMap<String, _> = runtime
+        .auto_task_list()
+        .expect("list auto-tasks")
+        .into_iter()
+        .map(|definition| (definition.name.clone(), definition))
+        .collect();
+
+    for name in orbit_config::SHIPPED_DEFAULT_AUTO_TASKS {
+        let definition = listed
+            .get(*name)
+            .unwrap_or_else(|| panic!("shipped default `{name}` is seeded: {listed:?}"));
+        if *name == "host-health" {
+            assert!(definition.enabled, "host-health seeds enabled");
+            assert!(
+                matches!(
+                    &definition.schedule,
+                    AutoTaskSchedule::Cron { cron, .. } if cron == "10 7 * * 1"
+                ),
+                "host-health keeps its shipped schedule: {:?}",
+                definition.schedule
+            );
+        } else {
+            assert!(
+                !definition.enabled,
+                "shipped default `{name}` seeds disabled"
+            );
+        }
+    }
+}
+
+#[test]
+fn reinit_and_sync_preserve_an_operator_edited_host_health_definition() {
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated roots");
+    let (global, workspace) = seeded_host(dir.path());
+    let path = workspace.join("auto_tasks/host-health.yaml");
+    let edited = format!(
+        "{}\n# operator note: keep this off on this host\n",
+        std::fs::read_to_string(&path)
+            .expect("read host-health")
+            .replacen("enabled: true", "enabled: false", 1)
+    );
+    std::fs::write(&path, &edited).expect("operator edit");
+
+    reinit_workspace(&global, &workspace);
+    seed_absent_workspace_managed_artifacts(&global, &workspace, &identity(), "main")
+        .expect("create-only seed");
+    reconcile_workspace_managed_artifacts(&global, &workspace, Some(&identity()), "main", false)
+        .expect("full sync");
+
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read host-health"),
+        edited,
+        "an operator-edited host-health definition keeps its exact bytes"
+    );
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("workspace runtime");
+    assert!(!listed_enabled(&runtime, "host-health"));
+}
+
+#[test]
+fn sync_moves_unconfigured_host_health_to_weekly_and_keeps_operator_schedule() {
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated roots");
+    let (global, workspace) = seeded_host(dir.path());
+    let catalog = workspace.join("auto_tasks");
+    let path = catalog.join("host-health.yaml");
+    let shipped = std::fs::read_to_string(&path).expect("read host-health");
+    assert!(shipped.contains("cron: 10 7 * * 1"), "shipped is weekly");
+    // The copy an earlier (daily) release wrote and recorded, unedited.
+    let earlier = shipped.replacen("cron: 10 7 * * 1", "cron: 10 7 * * *", 1);
+    record_unedited_retired_default(&catalog, "host-health", &earlier);
+
+    // `orbit init` only creates absent defaults, so it leaves the copy alone.
+    seed_absent_workspace_managed_artifacts(&global, &workspace, &identity(), "main")
+        .expect("create-only seed");
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), earlier);
+
+    // No operator configured it, so sync moves it to the weekly shipped bytes.
+    reconcile_workspace_managed_artifacts(&global, &workspace, Some(&identity()), "main", false)
+        .expect("full sync");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read host-health"),
+        shipped,
+        "unconfigured host-health moves to the weekly schedule on sync"
+    );
+
+    // An operator-edited schedule is preserved by sync: the settings-only
+    // fork moves into the settings table, so the file returns to the shipped
+    // bytes but the effective schedule stays the operator's.
+    let edited = shipped.replacen("cron: 10 7 * * 1", "cron: 0 9 * * 2", 1);
+    std::fs::write(&path, &edited).expect("operator edit");
+    reconcile_workspace_managed_artifacts(&global, &workspace, Some(&identity()), "main", false)
+        .expect("full sync");
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("workspace runtime");
+    let definition = runtime
+        .auto_task_list()
+        .expect("list auto-tasks")
+        .into_iter()
+        .find(|definition| definition.name == "host-health")
+        .expect("host-health is listed");
+    assert!(
+        matches!(
+            &definition.schedule,
+            AutoTaskSchedule::Cron { cron, .. } if cron == "0 9 * * 2"
+        ),
+        "operator-edited host-health keeps its own schedule: {:?}",
+        definition.schedule
+    );
+
+    // Once toggled, the operator's schedule and flag survive another sync.
+    runtime
+        .auto_task_toggle("host-health", false)
+        .expect("toggle host-health off");
+    reconcile_workspace_managed_artifacts(&global, &workspace, Some(&identity()), "main", false)
+        .expect("full sync");
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("workspace runtime");
+    assert!(!listed_enabled(&runtime, "host-health"));
+    let definition = runtime
+        .auto_task_list()
+        .expect("list auto-tasks")
+        .into_iter()
+        .find(|definition| definition.name == "host-health")
+        .expect("host-health is listed");
+    assert!(
+        matches!(
+            &definition.schedule,
+            AutoTaskSchedule::Cron { cron, .. } if cron == "0 9 * * 2"
+        ),
+        "toggled host-health keeps its own schedule: {:?}",
+        definition.schedule
+    );
+}
+
+#[test]
+fn sync_enables_an_unconfigured_earlier_host_health_copy_and_a_toggle_decides_after() {
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated roots");
+    let (global, workspace) = seeded_host(dir.path());
+    let catalog = workspace.join("auto_tasks");
+    let path = catalog.join("host-health.yaml");
+    // The copy an earlier release wrote and recorded: the same body, disabled.
+    let earlier = std::fs::read_to_string(&path)
+        .expect("read host-health")
+        .replacen("enabled: true", "enabled: false", 1);
+    record_unedited_retired_default(&catalog, "host-health", &earlier);
+
+    // `orbit init` only creates absent defaults, so it leaves the copy alone.
+    seed_absent_workspace_managed_artifacts(&global, &workspace, &identity(), "main")
+        .expect("create-only seed");
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), earlier);
+
+    // No operator configured it, so convergence turns it on.
+    reconcile_workspace_managed_artifacts(&global, &workspace, Some(&identity()), "main", false)
+        .expect("full sync");
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("workspace runtime");
+    assert!(listed_enabled(&runtime, "host-health"));
+
+    // Once an operator sets the flag, that flag decides across sync and re-init.
+    runtime
+        .auto_task_toggle("host-health", false)
+        .expect("toggle host-health off");
+    reconcile_workspace_managed_artifacts(&global, &workspace, Some(&identity()), "main", false)
+        .expect("full sync");
+    reinit_workspace(&global, &workspace);
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("workspace runtime");
+    assert!(!listed_enabled(&runtime, "host-health"));
+}
+
+/// A fresh managed skill install writes every file under `assets/skills`, and
+/// every relative link in the installed skill trees resolves [ORB-22531].
+/// The install manifest silently dropped five shipped references that other
+/// shipped pages link to, so this guards the install boundary rather than
+/// pinning prose.
+#[test]
+fn fresh_skill_install_writes_every_shipped_reference_and_resolves_links() {
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated roots");
+    let (global, _workspace) = seeded_host(dir.path());
+    let skills_root = global.join("skills");
+
+    let assets_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/skills");
+    let mut shipped = Vec::new();
+    collect_tree_files(&assets_root, &assets_root, &mut shipped);
+    assert!(
+        !shipped.is_empty(),
+        "skill assets must exist under {}",
+        assets_root.display()
+    );
+    let missing: Vec<String> = shipped
+        .iter()
+        .filter(|relative| !skills_root.join(relative).is_file())
+        .map(|relative| relative.display().to_string())
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "a fresh skill install dropped shipped references [ORB-22531]: {missing:?}"
+    );
+    for required in [
+        "orbit/references/attention.md",
+        "orbit-setup/references/applications.md",
+        "orbit-setup/references/browser-checks.md",
+        "orbit-setup/references/macos.md",
+        "orbit-setup/references/providers.md",
+    ] {
+        assert!(
+            skills_root.join(required).is_file(),
+            "a fresh skill install must write {required} [ORB-22531]"
+        );
+    }
+
+    let mut dangling = Vec::new();
+    let mut checked = 0;
+    for skill_id in ["orbit", "orbit-orchestrate", "orbit-setup"] {
+        let tree = skills_root.join(skill_id);
+        let mut pages = Vec::new();
+        collect_tree_files(&tree, &tree, &mut pages);
+        pages.sort();
+        for page in pages {
+            if page.extension().is_none_or(|extension| extension != "md") {
+                continue;
+            }
+            let absolute = tree.join(&page);
+            let body = std::fs::read_to_string(&absolute).expect("installed skill page");
+            for target in markdown_link_targets(&body) {
+                let Some(resolved) = resolve_skill_link(&absolute, target) else {
+                    continue;
+                };
+                checked += 1;
+                if !resolved.is_file() {
+                    dangling.push(format!("{} -> {target}", absolute.display()));
+                }
+            }
+        }
+    }
+    assert!(
+        checked > 0,
+        "installed skill trees must contain relative links to check"
+    );
+    assert!(
+        dangling.is_empty(),
+        "installed skill trees carry dangling relative links [ORB-22531]: {dangling:?}"
+    );
+}
+
+/// Every regular file under `dir`, relative to `base`.
+fn collect_tree_files(dir: &Path, base: &Path, out: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(dir).expect("read skill tree") {
+        let path = entry.expect("skill tree entry").path();
+        if path.is_dir() {
+            collect_tree_files(&path, base, out);
+        } else if path.is_file() {
+            out.push(
+                path.strip_prefix(base)
+                    .expect("skill tree under base")
+                    .to_path_buf(),
+            );
+        }
+    }
+}
+
+/// The destinations of inline Markdown links in `body`, ignoring fenced code
+/// blocks and inline code spans that may quote link syntax.
+fn markdown_link_targets(body: &str) -> Vec<&str> {
+    let mut targets = Vec::new();
+    let mut in_fence = false;
+    for line in body.lines() {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        // Keep the prose between backticks; a quoted `[text](target)`
+        // example is not a link the reader can follow.
+        for (index, span) in line.split('`').enumerate() {
+            if index % 2 == 1 {
+                continue;
+            }
+            let mut rest = span;
+            while let Some(open) = rest.find("](") {
+                let after = &rest[open + 2..];
+                let Some(close) = after.find(')') else {
+                    break;
+                };
+                targets.push(after[..close].trim());
+                rest = &after[close + 1..];
+            }
+        }
+    }
+    targets
+}
+
+/// Resolve a Markdown link against the installed page that carries it.
+/// Returns `None` for same-page anchors, external URLs and templates.
+fn resolve_skill_link(page: &Path, target: &str) -> Option<PathBuf> {
+    let target = target
+        .strip_prefix('<')
+        .and_then(|inner| inner.strip_suffix('>'))
+        .unwrap_or(target)
+        .trim();
+    if target.is_empty() || target.starts_with('#') {
+        return None;
+    }
+    if target.starts_with("http://")
+        || target.starts_with("https://")
+        || target.starts_with("mailto:")
+    {
+        return None;
+    }
+    if target.contains('{') || target.contains('$') {
+        return None;
+    }
+    let file = target.split('#').next().expect("anchor split").trim();
+    if file.is_empty() {
+        return None;
+    }
+    let mut resolved = PathBuf::new();
+    for component in page
+        .parent()
+        .expect("skill page directory")
+        .join(file)
+        .components()
+    {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                resolved.pop();
+            }
+            other => resolved.push(other.as_os_str()),
+        }
+    }
+    Some(resolved)
+}

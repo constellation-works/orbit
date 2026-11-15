@@ -1,6 +1,7 @@
 use clap::{Args, Subcommand};
 use orbit_core::OrbitRuntime;
 
+use crate::command::browser_kit::BrowserKitCommand;
 use crate::command::{CommandOut, Execute};
 
 use super::get::ConfigGetArgs;
@@ -34,6 +35,9 @@ pub enum ConfigSubcommand {
     Keys(ConfigKeysArgs),
     /// Print the resolved config.toml path
     Path(ConfigPathArgs),
+    /// Install, verify and remove the headless browser kit workers check UIs with
+    #[command(name = "browser-kit")]
+    BrowserKit(BrowserKitCommand),
 }
 
 impl Execute for ConfigSubcommand {
@@ -44,6 +48,7 @@ impl Execute for ConfigSubcommand {
             ConfigSubcommand::Set(args) => args.execute(runtime),
             ConfigSubcommand::Keys(args) => args.execute(runtime),
             ConfigSubcommand::Path(args) => args.execute(runtime),
+            ConfigSubcommand::BrowserKit(command) => command.execute_without_runtime(),
         }
     }
 }

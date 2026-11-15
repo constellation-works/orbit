@@ -12,20 +12,24 @@ use rusqlite::{Connection, TransactionBehavior};
 
 use super::store::validate_workspace_id;
 use super::{
-    FrictionAddParams, FrictionRehomeOutcome, FrictionRehomeParams, FrictionStore,
-    FrictionUpdateParams, StoredFrictionRecord, queries,
+    FrictionAddParams, FrictionListFilter, FrictionRehomeOutcome, FrictionRehomeParams,
+    FrictionStore, FrictionUpdateParams, StoredFrictionRecord, queries,
 };
 use crate::contracts::FrictionLandingOutcome;
 use crate::contracts::normalize_friction_tags as normalize_and_validate_tags;
 use crate::driver::file::friction_store::load_tag_taxonomy;
+use crate::driver::sqlite::friction_write;
 
 impl FrictionStore {
     pub fn add(&self, params: FrictionAddParams) -> Result<StoredFrictionRecord, OrbitError> {
         let prepared = prepare_add(&self.files_root, params)?;
-        self.store
+        let stored = self
+            .store
             .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
                 allocate_record(tx.connection(), &self.workspace_id, &prepared)
-            })
+            })?;
+        friction_write::project_committed_friction(&self.workspace_id, &stored.record);
+        Ok(stored)
     }
 
     /// Insert `params` unless `dedupe_key` already identifies a record in this
@@ -52,16 +56,53 @@ impl FrictionStore {
             ));
         }
         let prepared = prepare_add(&self.files_root, params)?;
-        self.store
-            .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-                let conn = tx.connection();
-                if let Some(existing) =
-                    queries::find_by_dedupe_marker(conn, &self.workspace_id, &marker)?
-                {
-                    return Ok(existing);
-                }
-                allocate_record(conn, &self.workspace_id, &prepared)
-            })
+        let (stored, created) =
+            self.store
+                .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+                    let conn = tx.connection();
+                    if let Some(existing) =
+                        queries::find_by_dedupe_marker(conn, &self.workspace_id, &marker)?
+                    {
+                        return Ok((existing, false));
+                    }
+                    allocate_record(conn, &self.workspace_id, &prepared)
+                        .map(|record| (record, true))
+                })?;
+        if created {
+            friction_write::project_committed_friction(&self.workspace_id, &stored.record);
+        }
+        Ok(stored)
+    }
+
+    /// Insert `params` unless a record matching `filter` already satisfies
+    /// `is_duplicate`. The list and the insert share one immediate
+    /// transaction, so two callers that both missed an earlier read cannot
+    /// both insert. `Ok(None)` means a duplicate exists and nothing was
+    /// written. Unlike [`Self::add_or_reuse`], the duplicate test is the
+    /// caller's, so it can be scoped by status.
+    pub fn add_unless_duplicate(
+        &self,
+        filter: &FrictionListFilter,
+        is_duplicate: &dyn Fn(&StoredFrictionRecord) -> bool,
+        params: FrictionAddParams,
+    ) -> Result<Option<StoredFrictionRecord>, OrbitError> {
+        let prepared = prepare_add(&self.files_root, params)?;
+        let stored =
+            self.store
+                .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+                    let conn = tx.connection();
+                    if queries::list_records(conn, &self.workspace_id, filter)?
+                        .iter()
+                        .any(is_duplicate)
+                    {
+                        return Ok(None);
+                    }
+                    allocate_record(conn, &self.workspace_id, &prepared).map(Some)
+                })?;
+        if let Some(stored) = &stored {
+            friction_write::project_committed_friction(&self.workspace_id, &stored.record);
+        }
+        Ok(stored)
     }
 
     pub fn update(

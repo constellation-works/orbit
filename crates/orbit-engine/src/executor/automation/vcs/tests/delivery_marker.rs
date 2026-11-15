@@ -19,6 +19,11 @@ fn delivery_markers_preserve_valid_inner_candidates_and_marker_grammar() {
         ),
         ("ORB-5] plain text [unfinished", &[]),
         ("", &[]),
+        (
+            "fix: repair [ORB-21300]\n\nFixes: 5cac195ba9ab (\"feat: original [ORB-21284]\")\nRegression-From: ORB-21284",
+            &["[ORB-21300]"],
+        ),
+        ("fix: x\n\n  Fixes: abc (\"feat: y [ORB-1]\")", &[]),
     ];
     for (message, expected) in cases {
         assert_eq!(delivery_markers(message), *expected, "message: {message:?}");

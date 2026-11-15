@@ -162,8 +162,6 @@ fn run_job(
         Arc::new(orbit_store::Store::open_in_memory().unwrap()),
         "ws_preparation",
         &prepared.run_id,
-        "fixture",
-        None,
         logs.path(),
     ));
     let writer = Arc::new(

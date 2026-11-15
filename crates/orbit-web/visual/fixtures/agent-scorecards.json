@@ -1,0 +1,1964 @@
+{
+  "fixture": "agent-scorecards",
+  "frozen_instant": "2026-01-01T12:00:00Z",
+  "tasks": [],
+  "scorecards": {
+    "implementers": {
+      "window": "30d",
+      "requested_window": "30d",
+      "window_attempts": null,
+      "since": "2026-10-11T07:06:03Z",
+      "until": "2026-11-10T07:06:03Z",
+      "min_support": 10,
+      "execution": "managed",
+      "computed_at": "2026-11-10T07:06:03.142Z",
+      "cache_ttl_seconds": 0,
+      "tasks_scanned": 510,
+      "role": "implementers",
+      "effort_breakdown": [],
+      "effort_population": "completed_workspace_invocations",
+      "unit": "implemented tasks",
+      "status": "ok",
+      "terms": [
+        {
+          "key": "weighted_landed",
+          "label": "Landed",
+          "weight": 1.0,
+          "definition": "Landed tasks whose final implementation run is the row's, one point each, whatever their complexity. Tasks tagged no-diff-expected when an attempt was admitted are not implementer work and are left out of every implementer count.",
+          "group": "credit"
+        },
+        {
+          "key": "first_pass_accepts",
+          "label": "First-pass accepts",
+          "weight": 1.0,
+          "definition": "Reviewed tasks whose first review verdict on the row's candidate was accept.",
+          "group": "credit",
+          "unit": "reviewed deliveries"
+        },
+        {
+          "key": "review_rejects",
+          "label": "Review rejects",
+          "weight": -1.0,
+          "definition": "reject verdicts on the row's candidates.",
+          "group": "problem",
+          "unit": "reviewed deliveries"
+        },
+        {
+          "key": "reviewer_repairs",
+          "label": "Reviewer repairs",
+          "weight": -0.5,
+          "definition": "accept_with_fixes verdicts on the row's candidates.",
+          "group": "problem",
+          "unit": "reviewed deliveries"
+        },
+        {
+          "key": "crew_rework",
+          "label": "Crew-caused rework",
+          "weight": -1.0,
+          "definition": "Repeat runs, [BLOCKED] or unmerged PRs, and operator requeues with cause crew, charged to the run that ended the attempt. Review verdicts are not counted again here.",
+          "group": "problem"
+        },
+        {
+          "key": "escaped_regressions",
+          "label": "Escaped regressions",
+          "weight": -0.5,
+          "definition": "regression_from links with escape no_test against the row's landed tasks, mostly delivery-review findings, each at its severity weight (critical 8, high 4, medium 2, low 1, nit 0.25), so a medium one costs as much as a review reject. Expected counts use other rows' rate for the same tier and expected change size, falling back to other rows in the tier, then the fleet, or zero without peers; never the row's own escapes or diff. A link whose defect site a pre-landing review finding on the row's candidate already cited or fixed is that review's reject or repair and is not counted again.",
+          "group": "problem"
+        }
+      ],
+      "execution_split": [
+        {
+          "crew": "codex-crew",
+          "crews": [
+            "codex-crew"
+          ],
+          "model": "codex-crew-model",
+          "reasoning_effort": "unknown",
+          "effort_label": "effort unknown",
+          "label": "codex-crew-model @ effort unknown",
+          "managed_tasks": 60,
+          "interactive_tasks": 0,
+          "unclassified_tasks": 0,
+          "interactive_landed": 0,
+          "interactive_regressed": 0
+        },
+        {
+          "crew": "gemini-crew",
+          "crews": [
+            "gemini-crew"
+          ],
+          "model": "gemini-crew-model",
+          "reasoning_effort": "unknown",
+          "effort_label": "effort unknown",
+          "label": "gemini-crew-model @ effort unknown",
+          "managed_tasks": 24,
+          "interactive_tasks": 0,
+          "unclassified_tasks": 0,
+          "interactive_landed": 0,
+          "interactive_regressed": 0
+        },
+        {
+          "crew": "haiku-crew",
+          "crews": [
+            "haiku-crew"
+          ],
+          "model": "haiku-crew-model",
+          "reasoning_effort": "unknown",
+          "effort_label": "effort unknown",
+          "label": "haiku-crew-model @ effort unknown",
+          "managed_tasks": 130,
+          "interactive_tasks": 0,
+          "unclassified_tasks": 0,
+          "interactive_landed": 0,
+          "interactive_regressed": 0
+        },
+        {
+          "crew": "mini-crew",
+          "crews": [
+            "mini-crew"
+          ],
+          "model": "mini-crew-model",
+          "reasoning_effort": "unknown",
+          "effort_label": "effort unknown",
+          "label": "mini-crew-model @ effort unknown",
+          "managed_tasks": 6,
+          "interactive_tasks": 0,
+          "unclassified_tasks": 0,
+          "interactive_landed": 0,
+          "interactive_regressed": 0
+        },
+        {
+          "crew": "opus-crew",
+          "crews": [
+            "opus-crew"
+          ],
+          "model": "opus-crew-model",
+          "reasoning_effort": "unknown",
+          "effort_label": "effort unknown",
+          "label": "opus-crew-model @ effort unknown",
+          "managed_tasks": 150,
+          "interactive_tasks": 0,
+          "unclassified_tasks": 0,
+          "interactive_landed": 0,
+          "interactive_regressed": 0
+        },
+        {
+          "crew": "sonnet-crew",
+          "crews": [
+            "sonnet-crew"
+          ],
+          "model": "sonnet-crew-model",
+          "reasoning_effort": "unknown",
+          "effort_label": "effort unknown",
+          "label": "sonnet-crew-model @ effort unknown",
+          "managed_tasks": 140,
+          "interactive_tasks": 0,
+          "unclassified_tasks": 0,
+          "interactive_landed": 0,
+          "interactive_regressed": 0
+        }
+      ],
+      "review_min_support": 30,
+      "fleet_average": 99.67,
+      "provisional": null,
+      "rows": [
+        {
+          "crew": "opus-crew",
+          "crews": [
+            "opus-crew"
+          ],
+          "model": "opus-crew-model",
+          "reasoning_effort": "unknown",
+          "effort_label": "effort unknown",
+          "label": "opus-crew-model @ effort unknown",
+          "units": 150,
+          "below_support": false,
+          "unjudged": false,
+          "rank": 1,
+          "counts": {
+            "weighted_landed": 128,
+            "first_pass_accepts": 60,
+            "review_rejects": 15,
+            "reviewer_repairs": 15,
+            "crew_rework": 0,
+            "escaped_regressions": 0
+          },
+          "per_100": {
+            "crew_rework": 0,
+            "escaped_regressions": 0,
+            "first_pass_accepts": 66.67,
+            "review_rejects": 16.67,
+            "reviewer_repairs": 16.67,
+            "weighted_landed": 85.33
+          },
+          "raw": 105.33,
+          "score": 104.39,
+          "interval": {
+            "p10": 92.11,
+            "p90": 115.7
+          },
+          "runs_without_model": 0,
+          "provisional": null,
+          "stats": [
+            {
+              "key": "cost_per_weighted_landed",
+              "label": "Cost per landed task (USD)",
+              "value": null
+            },
+            {
+              "key": "cost_coverage",
+              "label": "Cost coverage (counted attempts)",
+              "value": "0 measured \u00b7 0 unpriced \u00b7 150 missing run of 150 counted attempts"
+            },
+            {
+              "key": "cost_coverage_attempts",
+              "label": "Cost coverage denominator (counted attempts)",
+              "value": 150
+            },
+            {
+              "key": "cost_measured_attempts",
+              "label": "Cost measured attempts",
+              "value": 0
+            },
+            {
+              "key": "cost_unpriced_attempts",
+              "label": "Cost unpriced attempts",
+              "value": 0
+            },
+            {
+              "key": "cost_missing_run_attempts",
+              "label": "Cost missing-run attempts",
+              "value": 150
+            },
+            {
+              "key": "median_run_seconds",
+              "label": "Median completed run (seconds)",
+              "value": 3600
+            },
+            {
+              "key": "tasks_by_tier",
+              "label": "Tasks by tier",
+              "value": "hard: 150"
+            },
+            {
+              "key": "diff_economy",
+              "label": "Diff economy (\u00d7 fleet median)",
+              "value": null
+            },
+            {
+              "key": "tier_adjustments",
+              "label": "Sparse tier adjustments",
+              "value": []
+            }
+          ],
+          "escaped_regressions_fallback": false,
+          "term_units": {
+            "first_pass_accepts": 90,
+            "review_rejects": 90,
+            "reviewer_repairs": 90
+          },
+          "provisional_terms": [],
+          "reviewed_units": 90,
+          "expected": {
+            "crew_rework": 0,
+            "escaped_regressions": 0,
+            "first_pass_accepts": 60.0,
+            "review_rejects": 15.0,
+            "reviewer_repairs": 15.0,
+            "weighted_landed": 120.0
+          },
+          "score_base": 100,
+          "effort_breakdown": [
+            {
+              "crew": "opus-crew",
+              "model": "opus-crew-model",
+              "reasoning_effort": "unknown",
+              "source": "no_dispatch_evidence"
+            }
+          ]
+        },
+        {
+          "crew": "haiku-crew",
+          "crews": [
+            "haiku-crew"
+          ],
+          "model": "haiku-crew-model",
+          "reasoning_effort": "unknown",
+          "effort_label": "effort unknown",
+          "label": "haiku-crew-model @ effort unknown",
+          "units": 130,
+          "below_support": false,
+          "unjudged": false,
+          "rank": 2,
+          "counts": {
+            "weighted_landed": 110,
+            "first_pass_accepts": 40,
+            "review_rejects": 10,
+            "reviewer_repairs": 10,
+            "crew_rework": 0,
+            "escaped_regressions": 0
+          },
+          "per_100": {
+            "crew_rework": 0,
+            "escaped_regressions": 0,
+            "first_pass_accepts": 66.67,
+            "review_rejects": 16.67,
+            "reviewer_repairs": 16.67,
+            "weighted_landed": 84.62
+          },
+          "raw": 101.19,
+          "score": 100.9,
+          "interval": {
+            "p10": 86.05,
+            "p90": 113.81
+          },
+          "runs_without_model": 0,
+          "provisional": null,
+          "stats": [
+            {
+              "key": "cost_per_weighted_landed",
+              "label": "Cost per landed task (USD)",
+              "value": null
+            },
+            {
+              "key": "cost_coverage",
+              "label": "Cost coverage (counted attempts)",
+              "value": "0 measured \u00b7 0 unpriced \u00b7 130 missing run of 130 counted attempts"
+            },
+            {
+              "key": "cost_coverage_attempts",
+              "label": "Cost coverage denominator (counted attempts)",
+              "value": 130
+            },
+            {
+              "key": "cost_measured_attempts",
+              "label": "Cost measured attempts",
+              "value": 0
+            },
+            {
+              "key": "cost_unpriced_attempts",
+              "label": "Cost unpriced attempts",
+              "value": 0
+            },
+            {
+              "key": "cost_missing_run_attempts",
+              "label": "Cost missing-run attempts",
+              "value": 130
+            },
+            {
+              "key": "median_run_seconds",
+              "label": "Median completed run (seconds)",
+              "value": 3600
+            },
+            {
+              "key": "tasks_by_tier",
+              "label": "Tasks by tier",
+              "value": "low: 130"
+            },
+            {
+              "key": "diff_economy",
+              "label": "Diff economy (\u00d7 fleet median)",
+              "value": null
+            },
+            {
+              "key": "tier_adjustments",
+              "label": "Sparse tier adjustments",
+              "value": []
+            }
+          ],
+          "escaped_regressions_fallback": false,
+          "term_units": {
+            "first_pass_accepts": 60,
+            "review_rejects": 60,
+            "reviewer_repairs": 60
+          },
+          "provisional_terms": [],
+          "reviewed_units": 60,
+          "expected": {
+            "crew_rework": 0,
+            "escaped_regressions": 0,
+            "first_pass_accepts": 40.0,
+            "review_rejects": 10.48,
+            "reviewer_repairs": 9.52,
+            "weighted_landed": 108.97
+          },
+          "score_base": 100,
+          "effort_breakdown": [
+            {
+              "crew": "haiku-crew",
+              "model": "haiku-crew-model",
+              "reasoning_effort": "unknown",
+              "source": "no_dispatch_evidence"
+            }
+          ]
+        },
+        {
+          "crew": "sonnet-crew",
+          "crews": [
+            "sonnet-crew"
+          ],
+          "model": "sonnet-crew-model",
+          "reasoning_effort": "unknown",
+          "effort_label": "effort unknown",
+          "label": "sonnet-crew-model @ effort unknown",
+          "units": 140,
+          "below_support": false,
+          "unjudged": false,
+          "rank": 3,
+          "counts": {
+            "weighted_landed": 118,
+            "first_pass_accepts": 50,
+            "review_rejects": 17,
+            "reviewer_repairs": 17,
+            "crew_rework": 0,
+            "escaped_regressions": 0
+          },
+          "per_100": {
+            "crew_rework": 0,
+            "escaped_regressions": 0,
+            "first_pass_accepts": 59.52,
+            "review_rejects": 20.24,
+            "reviewer_repairs": 20.24,
+            "weighted_landed": 84.29
+          },
+          "raw": 99.8,
+          "score": 99.77,
+          "interval": {
+            "p10": 85.61,
+            "p90": 109.68
+          },
+          "runs_without_model": 0,
+          "provisional": null,
+          "stats": [
+            {
+              "key": "cost_per_weighted_landed",
+              "label": "Cost per landed task (USD)",
+              "value": null
+            },
+            {
+              "key": "cost_coverage",
+              "label": "Cost coverage (counted attempts)",
+              "value": "0 measured \u00b7 0 unpriced \u00b7 140 missing run of 140 counted attempts"
+            },
+            {
+              "key": "cost_coverage_attempts",
+              "label": "Cost coverage denominator (counted attempts)",
+              "value": 140
+            },
+            {
+              "key": "cost_measured_attempts",
+              "label": "Cost measured attempts",
+              "value": 0
+            },
+            {
+              "key": "cost_unpriced_attempts",
+              "label": "Cost unpriced attempts",
+              "value": 0
+            },
+            {
+              "key": "cost_missing_run_attempts",
+              "label": "Cost missing-run attempts",
+              "value": 140
+            },
+            {
+              "key": "median_run_seconds",
+              "label": "Median completed run (seconds)",
+              "value": 3600
+            },
+            {
+              "key": "tasks_by_tier",
+              "label": "Tasks by tier",
+              "value": "medium: 140"
+            },
+            {
+              "key": "diff_economy",
+              "label": "Diff economy (\u00d7 fleet median)",
+              "value": null
+            },
+            {
+              "key": "tier_adjustments",
+              "label": "Sparse tier adjustments",
+              "value": []
+            }
+          ],
+          "escaped_regressions_fallback": false,
+          "term_units": {
+            "first_pass_accepts": 84,
+            "review_rejects": 84,
+            "reviewer_repairs": 84
+          },
+          "provisional_terms": [],
+          "reviewed_units": 84,
+          "expected": {
+            "crew_rework": 0,
+            "escaped_regressions": 0,
+            "first_pass_accepts": 50.75,
+            "review_rejects": 16.62,
+            "reviewer_repairs": 16.62,
+            "weighted_landed": 116.1
+          },
+          "score_base": 100,
+          "effort_breakdown": [
+            {
+              "crew": "sonnet-crew",
+              "model": "sonnet-crew-model",
+              "reasoning_effort": "unknown",
+              "source": "no_dispatch_evidence"
+            }
+          ]
+        },
+        {
+          "crew": "gemini-crew",
+          "crews": [
+            "gemini-crew"
+          ],
+          "model": "gemini-crew-model",
+          "reasoning_effort": "unknown",
+          "effort_label": "effort unknown",
+          "label": "gemini-crew-model @ effort unknown",
+          "units": 24,
+          "below_support": false,
+          "unjudged": false,
+          "rank": 4,
+          "counts": {
+            "weighted_landed": 18,
+            "first_pass_accepts": 8,
+            "review_rejects": 2,
+            "reviewer_repairs": 2,
+            "crew_rework": 0,
+            "escaped_regressions": 0
+          },
+          "per_100": {
+            "crew_rework": 0,
+            "escaped_regressions": 0,
+            "first_pass_accepts": 66.67,
+            "review_rejects": 16.67,
+            "reviewer_repairs": 16.67,
+            "weighted_landed": 75
+          },
+          "raw": 92.07,
+          "score": 92.07,
+          "interval": {
+            "p10": 79.57,
+            "p90": 101.85
+          },
+          "runs_without_model": 0,
+          "provisional": null,
+          "stats": [
+            {
+              "key": "cost_per_weighted_landed",
+              "label": "Cost per landed task (USD)",
+              "value": null
+            },
+            {
+              "key": "cost_coverage",
+              "label": "Cost coverage (counted attempts)",
+              "value": "0 measured \u00b7 0 unpriced \u00b7 24 missing run of 24 counted attempts"
+            },
+            {
+              "key": "cost_coverage_attempts",
+              "label": "Cost coverage denominator (counted attempts)",
+              "value": 24
+            },
+            {
+              "key": "cost_measured_attempts",
+              "label": "Cost measured attempts",
+              "value": 0
+            },
+            {
+              "key": "cost_unpriced_attempts",
+              "label": "Cost unpriced attempts",
+              "value": 0
+            },
+            {
+              "key": "cost_missing_run_attempts",
+              "label": "Cost missing-run attempts",
+              "value": 24
+            },
+            {
+              "key": "median_run_seconds",
+              "label": "Median completed run (seconds)",
+              "value": 3600
+            },
+            {
+              "key": "tasks_by_tier",
+              "label": "Tasks by tier",
+              "value": "medium: 24"
+            },
+            {
+              "key": "diff_economy",
+              "label": "Diff economy (\u00d7 fleet median)",
+              "value": null
+            },
+            {
+              "key": "tier_adjustments",
+              "label": "Sparse tier adjustments",
+              "value": []
+            }
+          ],
+          "escaped_regressions_fallback": false,
+          "term_units": {
+            "first_pass_accepts": 12,
+            "review_rejects": 12,
+            "reviewer_repairs": 12
+          },
+          "provisional_terms": [
+            "first_pass_accepts",
+            "review_rejects",
+            "reviewer_repairs"
+          ],
+          "reviewed_units": 12,
+          "expected": {
+            "crew_rework": 0,
+            "escaped_regressions": 0,
+            "first_pass_accepts": 7.25,
+            "review_rejects": 2.38,
+            "reviewer_repairs": 2.38,
+            "weighted_landed": 19.9
+          },
+          "score_base": 100,
+          "effort_breakdown": [
+            {
+              "crew": "gemini-crew",
+              "model": "gemini-crew-model",
+              "reasoning_effort": "unknown",
+              "source": "no_dispatch_evidence"
+            }
+          ]
+        },
+        {
+          "crew": "codex-crew",
+          "crews": [
+            "codex-crew"
+          ],
+          "model": "codex-crew-model",
+          "reasoning_effort": "unknown",
+          "effort_label": "effort unknown",
+          "label": "codex-crew-model @ effort unknown",
+          "units": 60,
+          "below_support": false,
+          "unjudged": false,
+          "rank": 5,
+          "counts": {
+            "weighted_landed": 40,
+            "first_pass_accepts": 20,
+            "review_rejects": 5,
+            "reviewer_repairs": 5,
+            "crew_rework": 0,
+            "escaped_regressions": 0
+          },
+          "per_100": {
+            "crew_rework": 0,
+            "escaped_regressions": 0,
+            "first_pass_accepts": 66.67,
+            "review_rejects": 16.67,
+            "reviewer_repairs": 16.67,
+            "weighted_landed": 66.67
+          },
+          "raw": 86.67,
+          "score": 86.67,
+          "interval": {
+            "p10": 63.33,
+            "p90": 106.56
+          },
+          "runs_without_model": 0,
+          "provisional": null,
+          "stats": [
+            {
+              "key": "cost_per_weighted_landed",
+              "label": "Cost per landed task (USD)",
+              "value": null
+            },
+            {
+              "key": "cost_coverage",
+              "label": "Cost coverage (counted attempts)",
+              "value": "0 measured \u00b7 0 unpriced \u00b7 60 missing run of 60 counted attempts"
+            },
+            {
+              "key": "cost_coverage_attempts",
+              "label": "Cost coverage denominator (counted attempts)",
+              "value": 60
+            },
+            {
+              "key": "cost_measured_attempts",
+              "label": "Cost measured attempts",
+              "value": 0
+            },
+            {
+              "key": "cost_unpriced_attempts",
+              "label": "Cost unpriced attempts",
+              "value": 0
+            },
+            {
+              "key": "cost_missing_run_attempts",
+              "label": "Cost missing-run attempts",
+              "value": 60
+            },
+            {
+              "key": "median_run_seconds",
+              "label": "Median completed run (seconds)",
+              "value": 3600
+            },
+            {
+              "key": "tasks_by_tier",
+              "label": "Tasks by tier",
+              "value": "hard: 60"
+            },
+            {
+              "key": "diff_economy",
+              "label": "Diff economy (\u00d7 fleet median)",
+              "value": null
+            },
+            {
+              "key": "tier_adjustments",
+              "label": "Sparse tier adjustments",
+              "value": []
+            }
+          ],
+          "escaped_regressions_fallback": false,
+          "term_units": {
+            "first_pass_accepts": 30,
+            "review_rejects": 30,
+            "reviewer_repairs": 30
+          },
+          "provisional_terms": [],
+          "reviewed_units": 30,
+          "expected": {
+            "crew_rework": 0,
+            "escaped_regressions": 0,
+            "first_pass_accepts": 20,
+            "review_rejects": 5,
+            "reviewer_repairs": 5,
+            "weighted_landed": 48.0
+          },
+          "score_base": 100,
+          "effort_breakdown": [
+            {
+              "crew": "codex-crew",
+              "model": "codex-crew-model",
+              "reasoning_effort": "unknown",
+              "source": "no_dispatch_evidence"
+            }
+          ]
+        },
+        {
+          "crew": "mini-crew",
+          "crews": [
+            "mini-crew"
+          ],
+          "model": "mini-crew-model",
+          "reasoning_effort": "unknown",
+          "effort_label": "effort unknown",
+          "label": "mini-crew-model @ effort unknown",
+          "units": 6,
+          "below_support": true,
+          "unjudged": false,
+          "rank": null,
+          "counts": {
+            "weighted_landed": 4,
+            "first_pass_accepts": 2,
+            "review_rejects": 1,
+            "reviewer_repairs": 0,
+            "crew_rework": 0,
+            "escaped_regressions": 0
+          },
+          "per_100": {
+            "crew_rework": 0,
+            "escaped_regressions": 0,
+            "first_pass_accepts": 66.67,
+            "review_rejects": 33.33,
+            "reviewer_repairs": 0,
+            "weighted_landed": 66.67
+          },
+          "raw": 82.84,
+          "score": 82.84,
+          "interval": null,
+          "runs_without_model": 0,
+          "provisional": null,
+          "stats": [
+            {
+              "key": "cost_per_weighted_landed",
+              "label": "Cost per landed task (USD)",
+              "value": null
+            },
+            {
+              "key": "cost_coverage",
+              "label": "Cost coverage (counted attempts)",
+              "value": "0 measured \u00b7 0 unpriced \u00b7 6 missing run of 6 counted attempts"
+            },
+            {
+              "key": "cost_coverage_attempts",
+              "label": "Cost coverage denominator (counted attempts)",
+              "value": 6
+            },
+            {
+              "key": "cost_measured_attempts",
+              "label": "Cost measured attempts",
+              "value": 0
+            },
+            {
+              "key": "cost_unpriced_attempts",
+              "label": "Cost unpriced attempts",
+              "value": 0
+            },
+            {
+              "key": "cost_missing_run_attempts",
+              "label": "Cost missing-run attempts",
+              "value": 6
+            },
+            {
+              "key": "median_run_seconds",
+              "label": "Median completed run (seconds)",
+              "value": 3600
+            },
+            {
+              "key": "tasks_by_tier",
+              "label": "Tasks by tier",
+              "value": "low: 6"
+            },
+            {
+              "key": "diff_economy",
+              "label": "Diff economy (\u00d7 fleet median)",
+              "value": null
+            },
+            {
+              "key": "tier_adjustments",
+              "label": "Sparse tier adjustments",
+              "value": []
+            }
+          ],
+          "escaped_regressions_fallback": false,
+          "term_units": {
+            "first_pass_accepts": 3,
+            "review_rejects": 3,
+            "reviewer_repairs": 3
+          },
+          "provisional_terms": [
+            "first_pass_accepts",
+            "review_rejects",
+            "reviewer_repairs"
+          ],
+          "reviewed_units": 3,
+          "expected": {
+            "crew_rework": 0,
+            "escaped_regressions": 0,
+            "first_pass_accepts": 2,
+            "review_rejects": 0.52,
+            "reviewer_repairs": 0.48,
+            "weighted_landed": 5.03
+          },
+          "score_base": 100,
+          "effort_breakdown": [
+            {
+              "crew": "mini-crew",
+              "model": "mini-crew-model",
+              "reasoning_effort": "unknown",
+              "source": "no_dispatch_evidence"
+            }
+          ]
+        }
+      ]
+    },
+    "reviewers": {
+      "window": "30d",
+      "requested_window": "30d",
+      "window_attempts": null,
+      "since": "2026-10-11T07:06:03Z",
+      "until": "2026-11-10T07:06:03Z",
+      "min_support": 10,
+      "execution": "managed",
+      "computed_at": "2026-11-10T07:06:03.202Z",
+      "cache_ttl_seconds": 0,
+      "tasks_scanned": 244,
+      "role": "reviewers",
+      "effort_breakdown": [],
+      "effort_population": "completed_workspace_invocations",
+      "unit": "settled reviews",
+      "status": "ok",
+      "terms": [
+        {
+          "key": "findings_held",
+          "label": "Findings that held",
+          "weight": 1.0,
+          "definition": "Findings repaired by the reviewer whose fixes passed owner revalidation, open findings on a reject whose next implementation run changed a path the finding cites, and findings a review job filed that finding verification CONFIRMED or, with no verification verdict, whose task landed; each weighted by severity: critical 8, high 4, medium 2, low 1, nit 0.25. A CONFIRMED finding scores at the severity verification rated; an unverified landed finding at the highest severity rated on its own regression_from links, else low; a review gate finding at the reviewer's own. A filed finding whose task is still open is not judged yet.",
+          "group": "credit"
+        },
+        {
+          "key": "fixes_held",
+          "label": "Fixes that held",
+          "weight": 1.0,
+          "definition": "accept_with_fixes verdicts whose fixes passed owner revalidation and whose task has no regression with escape review_missed.",
+          "group": "credit"
+        },
+        {
+          "key": "rejected_findings",
+          "label": "Rejected findings",
+          "weight": -1.0,
+          "definition": "Findings closed by an authorized decision (Disposed), and findings a review job filed as tasks that finding verification REJECTED. A filed finding whose task was rejected or archived without landing and without a verification verdict costs nothing: task records carry no typed reason that tells a wrong finding from a duplicate, won't-fix or superseded one, so every such drop is neutral.",
+          "group": "problem"
+        },
+        {
+          "key": "false_rejects",
+          "label": "False rejects",
+          "weight": -2.0,
+          "definition": "reject verdicts where the next implementation run changed none of the open findings' cited paths and the next review accepted. A false reject counts here instead of against the implementer.",
+          "group": "problem"
+        },
+        {
+          "key": "failed_fixes",
+          "label": "Failed fixes",
+          "weight": -1.0,
+          "definition": "Reviewer fixes that failed owner revalidation and were escalated.",
+          "group": "problem"
+        },
+        {
+          "key": "missed_regressions",
+          "label": "Missed regressions",
+          "weight": -2.0,
+          "definition": "Regressions with escape review_missed against tasks the row's review accepted, whenever filed, each weighted by the link's severity: critical 8, high 4, medium 2, low 1, nit 0.25, so one costs -16 to -0.5.",
+          "group": "problem"
+        },
+        {
+          "key": "incomplete_reviews",
+          "label": "Incomplete reviews",
+          "weight": -0.5,
+          "definition": "incomplete verdicts whose block the run failure classification does not name as infrastructure.",
+          "group": "problem"
+        }
+      ],
+      "fleet_average": 12.3,
+      "provisional": 244,
+      "rows": [
+        {
+          "crew": "review-crew",
+          "crews": [
+            "review-crew"
+          ],
+          "model": "sonnet-review",
+          "reasoning_effort": "unknown",
+          "effort_label": "effort unknown",
+          "label": "sonnet-review @ effort unknown",
+          "units": 85,
+          "below_support": false,
+          "unjudged": false,
+          "rank": 1,
+          "counts": {
+            "findings_held": 0,
+            "fixes_held": 20,
+            "rejected_findings": 0,
+            "false_rejects": 0,
+            "failed_fixes": 0,
+            "missed_regressions": 0,
+            "incomplete_reviews": 10
+          },
+          "per_100": {
+            "failed_fixes": 0,
+            "false_rejects": 0,
+            "findings_held": 0,
+            "fixes_held": 23.53,
+            "incomplete_reviews": 11.76,
+            "missed_regressions": 0,
+            "rejected_findings": 0
+          },
+          "raw": 17.65,
+          "score": 16.25,
+          "interval": {
+            "p10": 11.18,
+            "p90": 21.47
+          },
+          "runs_without_model": 0,
+          "provisional": 85,
+          "stats": [
+            {
+              "key": "gate_reviews",
+              "label": "Review gate settlements",
+              "value": 85
+            },
+            {
+              "key": "review_jobs",
+              "label": "Review job runs that filed findings",
+              "value": 0
+            },
+            {
+              "key": "accept_rate",
+              "label": "Accept rate (%)",
+              "value": 82.35
+            },
+            {
+              "key": "compared_accept_rate",
+              "label": "Accept rate on tiers peers also reviewed (%)",
+              "value": 82.35
+            },
+            {
+              "key": "peer_accept_rate",
+              "label": "Peers' accept rate on the same tiers (%)",
+              "value": 81.13
+            },
+            {
+              "key": "accepts_often",
+              "label": "Accepts often",
+              "value": false
+            },
+            {
+              "key": "outcome_held_up",
+              "label": "Accepted and held up",
+              "value": 50
+            },
+            {
+              "key": "outcome_caught",
+              "label": "Caught a real problem",
+              "value": 20
+            },
+            {
+              "key": "outcome_false_alarm",
+              "label": "False alarm",
+              "value": 0
+            },
+            {
+              "key": "outcome_missed",
+              "label": "Missed a regression",
+              "value": 0
+            },
+            {
+              "key": "outcome_unresolved",
+              "label": "Unresolved (not judged yet, incomplete, failed fixes or findings dropped unverified)",
+              "value": 15
+            },
+            {
+              "key": "median_review_minutes",
+              "label": "Median review minutes",
+              "value": null
+            }
+          ],
+          "effort_breakdown": [
+            {
+              "crew": "review-crew",
+              "model": "sonnet-review",
+              "reasoning_effort": "unknown",
+              "source": "no_dispatch_evidence"
+            }
+          ]
+        },
+        {
+          "crew": "review-crew",
+          "crews": [
+            "review-crew"
+          ],
+          "model": "haiku-review",
+          "reasoning_effort": "unknown",
+          "effort_label": "effort unknown",
+          "label": "haiku-review @ effort unknown",
+          "units": 65,
+          "below_support": false,
+          "unjudged": false,
+          "rank": 2,
+          "counts": {
+            "findings_held": 0,
+            "fixes_held": 15,
+            "rejected_findings": 0,
+            "false_rejects": 0,
+            "failed_fixes": 0,
+            "missed_regressions": 0,
+            "incomplete_reviews": 15
+          },
+          "per_100": {
+            "failed_fixes": 0,
+            "false_rejects": 0,
+            "findings_held": 0,
+            "fixes_held": 23.08,
+            "incomplete_reviews": 23.08,
+            "missed_regressions": 0,
+            "rejected_findings": 0
+          },
+          "raw": 11.54,
+          "score": 11.54,
+          "interval": {
+            "p10": 3.08,
+            "p90": 17.57
+          },
+          "runs_without_model": 0,
+          "provisional": 65,
+          "stats": [
+            {
+              "key": "gate_reviews",
+              "label": "Review gate settlements",
+              "value": 65
+            },
+            {
+              "key": "review_jobs",
+              "label": "Review job runs that filed findings",
+              "value": 0
+            },
+            {
+              "key": "accept_rate",
+              "label": "Accept rate (%)",
+              "value": 69.23
+            },
+            {
+              "key": "compared_accept_rate",
+              "label": "Accept rate on tiers peers also reviewed (%)",
+              "value": 69.23
+            },
+            {
+              "key": "peer_accept_rate",
+              "label": "Peers' accept rate on the same tiers (%)",
+              "value": 86.03
+            },
+            {
+              "key": "accepts_often",
+              "label": "Accepts often",
+              "value": false
+            },
+            {
+              "key": "outcome_held_up",
+              "label": "Accepted and held up",
+              "value": 30
+            },
+            {
+              "key": "outcome_caught",
+              "label": "Caught a real problem",
+              "value": 15
+            },
+            {
+              "key": "outcome_false_alarm",
+              "label": "False alarm",
+              "value": 0
+            },
+            {
+              "key": "outcome_missed",
+              "label": "Missed a regression",
+              "value": 0
+            },
+            {
+              "key": "outcome_unresolved",
+              "label": "Unresolved (not judged yet, incomplete, failed fixes or findings dropped unverified)",
+              "value": 20
+            },
+            {
+              "key": "median_review_minutes",
+              "label": "Median review minutes",
+              "value": null
+            }
+          ],
+          "effort_breakdown": [
+            {
+              "crew": "review-crew",
+              "model": "haiku-review",
+              "reasoning_effort": "unknown",
+              "source": "no_dispatch_evidence"
+            }
+          ]
+        },
+        {
+          "crew": "review-crew",
+          "crews": [
+            "review-crew"
+          ],
+          "model": "opus-review",
+          "reasoning_effort": "unknown",
+          "effort_label": "effort unknown",
+          "label": "opus-review @ effort unknown",
+          "units": 90,
+          "below_support": false,
+          "unjudged": false,
+          "rank": 3,
+          "counts": {
+            "findings_held": 0,
+            "fixes_held": 10,
+            "rejected_findings": 0,
+            "false_rejects": 0,
+            "failed_fixes": 0,
+            "missed_regressions": 0,
+            "incomplete_reviews": 5
+          },
+          "per_100": {
+            "failed_fixes": 0,
+            "false_rejects": 0,
+            "findings_held": 0,
+            "fixes_held": 11.11,
+            "incomplete_reviews": 5.56,
+            "missed_regressions": 0,
+            "rejected_findings": 0
+          },
+          "raw": 8.33,
+          "score": 8.33,
+          "interval": {
+            "p10": 3.89,
+            "p90": 12.66
+          },
+          "runs_without_model": 0,
+          "provisional": 90,
+          "stats": [
+            {
+              "key": "gate_reviews",
+              "label": "Review gate settlements",
+              "value": 90
+            },
+            {
+              "key": "review_jobs",
+              "label": "Review job runs that filed findings",
+              "value": 0
+            },
+            {
+              "key": "accept_rate",
+              "label": "Accept rate (%)",
+              "value": 88.89
+            },
+            {
+              "key": "compared_accept_rate",
+              "label": "Accept rate on tiers peers also reviewed (%)",
+              "value": 88.89
+            },
+            {
+              "key": "peer_accept_rate",
+              "label": "Peers' accept rate on the same tiers (%)",
+              "value": 77.27
+            },
+            {
+              "key": "accepts_often",
+              "label": "Accepts often",
+              "value": true
+            },
+            {
+              "key": "outcome_held_up",
+              "label": "Accepted and held up",
+              "value": 70
+            },
+            {
+              "key": "outcome_caught",
+              "label": "Caught a real problem",
+              "value": 10
+            },
+            {
+              "key": "outcome_false_alarm",
+              "label": "False alarm",
+              "value": 0
+            },
+            {
+              "key": "outcome_missed",
+              "label": "Missed a regression",
+              "value": 0
+            },
+            {
+              "key": "outcome_unresolved",
+              "label": "Unresolved (not judged yet, incomplete, failed fixes or findings dropped unverified)",
+              "value": 10
+            },
+            {
+              "key": "median_review_minutes",
+              "label": "Median review minutes",
+              "value": null
+            }
+          ],
+          "effort_breakdown": [
+            {
+              "crew": "review-crew",
+              "model": "opus-review",
+              "reasoning_effort": "unknown",
+              "source": "no_dispatch_evidence"
+            }
+          ]
+        },
+        {
+          "crew": "review-crew",
+          "crews": [
+            "review-crew"
+          ],
+          "model": "tiny-review",
+          "reasoning_effort": "unknown",
+          "effort_label": "effort unknown",
+          "label": "tiny-review @ effort unknown",
+          "units": 4,
+          "below_support": true,
+          "unjudged": false,
+          "rank": null,
+          "counts": {
+            "findings_held": 0,
+            "fixes_held": 0,
+            "rejected_findings": 0,
+            "false_rejects": 0,
+            "failed_fixes": 0,
+            "missed_regressions": 0,
+            "incomplete_reviews": 0
+          },
+          "per_100": {
+            "failed_fixes": 0,
+            "false_rejects": 0,
+            "findings_held": 0,
+            "fixes_held": 0,
+            "incomplete_reviews": 0,
+            "missed_regressions": 0,
+            "rejected_findings": 0
+          },
+          "raw": 0,
+          "score": 0,
+          "interval": null,
+          "runs_without_model": 0,
+          "provisional": 4,
+          "stats": [
+            {
+              "key": "gate_reviews",
+              "label": "Review gate settlements",
+              "value": 4
+            },
+            {
+              "key": "review_jobs",
+              "label": "Review job runs that filed findings",
+              "value": 0
+            },
+            {
+              "key": "accept_rate",
+              "label": "Accept rate (%)",
+              "value": 100
+            },
+            {
+              "key": "compared_accept_rate",
+              "label": "Accept rate on tiers peers also reviewed (%)",
+              "value": 100
+            },
+            {
+              "key": "peer_accept_rate",
+              "label": "Peers' accept rate on the same tiers (%)",
+              "value": 81.25
+            },
+            {
+              "key": "accepts_often",
+              "label": "Accepts often",
+              "value": true
+            },
+            {
+              "key": "outcome_held_up",
+              "label": "Accepted and held up",
+              "value": 4
+            },
+            {
+              "key": "outcome_caught",
+              "label": "Caught a real problem",
+              "value": 0
+            },
+            {
+              "key": "outcome_false_alarm",
+              "label": "False alarm",
+              "value": 0
+            },
+            {
+              "key": "outcome_missed",
+              "label": "Missed a regression",
+              "value": 0
+            },
+            {
+              "key": "outcome_unresolved",
+              "label": "Unresolved (not judged yet, incomplete, failed fixes or findings dropped unverified)",
+              "value": 0
+            },
+            {
+              "key": "median_review_minutes",
+              "label": "Median review minutes",
+              "value": null
+            }
+          ],
+          "effort_breakdown": [
+            {
+              "crew": "review-crew",
+              "model": "tiny-review",
+              "reasoning_effort": "unknown",
+              "source": "no_dispatch_evidence"
+            }
+          ]
+        }
+      ]
+    },
+    "pilots": {
+      "window": "30d",
+      "requested_window": "30d",
+      "window_attempts": null,
+      "since": "2026-10-11T07:06:03Z",
+      "until": "2026-11-10T07:06:03Z",
+      "min_support": 10,
+      "execution": "managed",
+      "computed_at": "2026-11-10T07:06:03.202Z",
+      "cache_ttl_seconds": 0,
+      "tasks_scanned": 82,
+      "role": "pilots",
+      "effort_breakdown": [
+        {
+          "crew": "crew",
+          "model": "haiku-pilot",
+          "reasoning_effort": "high",
+          "invocations": 12,
+          "tasks": 12,
+          "duration_ms": 120000,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "provider_cost_usd": 0.0,
+          "provider_cost_count": 0
+        },
+        {
+          "crew": "crew",
+          "model": "opus-pilot",
+          "reasoning_effort": "high",
+          "invocations": 40,
+          "tasks": 40,
+          "duration_ms": 400000,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "provider_cost_usd": 0.0,
+          "provider_cost_count": 0
+        },
+        {
+          "crew": "crew",
+          "model": "sonnet-pilot",
+          "reasoning_effort": "medium",
+          "invocations": 30,
+          "tasks": 30,
+          "duration_ms": 300000,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "provider_cost_usd": 0.0,
+          "provider_cost_count": 0
+        }
+      ],
+      "effort_population": "completed_workspace_invocations",
+      "unit": "assessed tasks",
+      "status": "ok",
+      "terms": [
+        {
+          "key": "f1_lift",
+          "label": "F1 lift",
+          "weight": 1.0,
+          "definition": "F1 points gained over the filer's own selectors from before any pilot ran, per task.",
+          "group": "credit"
+        },
+        {
+          "key": "tier_calibration",
+          "label": "Tier calibration",
+          "weight": 0.25,
+          "definition": "Placed tasks whose assessed complexity matches their observed tier, per 100 placed tasks. Tasks without a tier or a priced implementation are unmeasured; below the requested minimum placement support this term is provisional and not scored.",
+          "group": "credit",
+          "unit": "placed tasks"
+        },
+        {
+          "key": "confirmed_warnings",
+          "label": "Confirmed warnings",
+          "weight": 3.0,
+          "definition": "Held assessments proved right: before approval someone other than the pilot edited the description or acceptance criteria, or the task was rejected or archived; or an unedited approval's delivery then blocked or was rejected.",
+          "group": "credit",
+          "unit": "settled assessments"
+        },
+        {
+          "key": "dismissed_warnings",
+          "label": "Dismissed warnings",
+          "weight": -1.0,
+          "definition": "Held assessments overridden as harmless: approved with no field edit by anyone other than the pilot, then done with no block.",
+          "group": "problem",
+          "unit": "settled assessments"
+        },
+        {
+          "key": "missed_scope_blocks",
+          "label": "Missed scope blocks",
+          "weight": -3.0,
+          "definition": "Clean assessments whose task was promoted, then blocked on a decision blocked-task triage proposed. Reads 0 while no triage record is in the window; the payload's sources say so.",
+          "group": "problem",
+          "unit": "settled assessments"
+        },
+        {
+          "key": "costly_misses",
+          "label": "Costly misses",
+          "weight": -1.0,
+          "definition": "Landed files no pilot selector covered that a base-conflict block or a refused lock request of the task named.",
+          "group": "problem"
+        },
+        {
+          "key": "lock_wait_hours",
+          "label": "Lock-wait hours",
+          "weight": -1.0,
+          "definition": "Hours other tasks waited, in lock-wait episodes, on paths the holder reserved through a pilot selector that covered none of the holder's landed files.",
+          "group": "problem"
+        }
+      ],
+      "warning_min_support": 10,
+      "pilot_modes": {
+        "full": {
+          "assessments": 0,
+          "runs": 0,
+          "median_seconds": null,
+          "total_seconds": null,
+          "total_tokens": null,
+          "runs_with_tokens": 0
+        },
+        "recheck": {
+          "assessments": 0,
+          "runs": 0,
+          "median_seconds": null,
+          "total_seconds": null,
+          "total_tokens": null,
+          "runs_with_tokens": 0
+        },
+        "rechecks_followed_by_full": 0,
+        "rechecks_escalated_to_full": 0,
+        "recheck_full_rate": null
+      },
+      "sources": {
+        "missed_scope_blocks": {
+          "available": false,
+          "triage_records": 0,
+          "detail": "Unavailable: no blocked-task triage record in the window, so missed scope blocks read 0 because nothing measured them, not because no clean assessment missed one. Enable the blocked-task triage routine, or triage blocks with orbit.task.block_triage, to measure them."
+        }
+      },
+      "fleet_average": 65.85,
+      "provisional": null,
+      "rows": [
+        {
+          "crew": "pilot-crew",
+          "crews": [
+            "pilot-crew"
+          ],
+          "model": "sonnet-pilot",
+          "reasoning_effort": "medium",
+          "effort_label": "medium",
+          "label": "sonnet-pilot @ medium",
+          "units": 30,
+          "below_support": false,
+          "unjudged": false,
+          "rank": 1,
+          "counts": {
+            "f1_lift": 20,
+            "tier_calibration": 0,
+            "confirmed_warnings": 0,
+            "dismissed_warnings": 0,
+            "missed_scope_blocks": 0,
+            "costly_misses": 0,
+            "lock_wait_hours": 0
+          },
+          "per_100": {
+            "confirmed_warnings": 0,
+            "costly_misses": 0,
+            "dismissed_warnings": 0,
+            "f1_lift": 66.67,
+            "lock_wait_hours": 0,
+            "missed_scope_blocks": 0,
+            "tier_calibration": 0
+          },
+          "raw": 66.67,
+          "score": 66.26,
+          "interval": {
+            "p10": 56.67,
+            "p90": 71.26
+          },
+          "runs_without_model": 0,
+          "provisional": null,
+          "stats": [
+            {
+              "key": "recall_percent",
+              "label": "Recall (%)",
+              "value": 100
+            },
+            {
+              "key": "precision_percent",
+              "label": "Precision (%)",
+              "value": 66.67
+            },
+            {
+              "key": "f1_percent",
+              "label": "F1 (%)",
+              "value": 80
+            },
+            {
+              "key": "filer_f1_percent",
+              "label": "Filer's F1 (%)",
+              "value": 0
+            },
+            {
+              "key": "missed_files",
+              "label": "Landed files no pilot selector covered",
+              "value": 0
+            },
+            {
+              "key": "unused_selectors",
+              "label": "Pilot selectors that covered no landed file",
+              "value": 10
+            },
+            {
+              "key": "selectors_per_task",
+              "label": "Selectors per task",
+              "value": 1
+            },
+            {
+              "key": "within_one_tier_percent",
+              "label": "Assessed within one tier (%)",
+              "value": null
+            },
+            {
+              "key": "cost_per_assessment",
+              "label": "Cost per assessment (USD)",
+              "value": null
+            },
+            {
+              "key": "median_run_seconds",
+              "label": "Median pilot run (seconds)",
+              "value": null
+            },
+            {
+              "key": "tier_matrix",
+              "label": "Assessed against observed tier",
+              "value": {
+                "tiers": [],
+                "rows": [],
+                "placed": 0,
+                "not_placed": 30,
+                "on_tier": 0,
+                "too_easy": 0,
+                "too_hard": 0
+              }
+            },
+            {
+              "key": "warning_precision_percent",
+              "label": "Warning precision (%)",
+              "value": null
+            },
+            {
+              "key": "holds_per_100_assessments",
+              "label": "Holds per 100 assessments",
+              "value": null
+            },
+            {
+              "key": "settled_assessments",
+              "label": "Settled assessments",
+              "value": 0
+            },
+            {
+              "key": "excluded_assessments",
+              "label": "Excluded or pending assessments",
+              "value": 0
+            },
+            {
+              "key": "missed_scope_block_count",
+              "label": "Missed scope blocks",
+              "value": 0
+            }
+          ],
+          "term_units": {
+            "confirmed_warnings": 0,
+            "dismissed_warnings": 0,
+            "missed_scope_blocks": 0,
+            "tier_calibration": 0
+          },
+          "provisional_terms": [
+            "confirmed_warnings",
+            "dismissed_warnings",
+            "missed_scope_blocks",
+            "tier_calibration"
+          ],
+          "effort_breakdown": [
+            {
+              "crew": "pilot-crew",
+              "model": "sonnet-pilot",
+              "reasoning_effort": "unknown",
+              "source": "no_dispatch_evidence"
+            }
+          ]
+        },
+        {
+          "crew": "pilot-crew",
+          "crews": [
+            "pilot-crew"
+          ],
+          "model": "haiku-pilot",
+          "reasoning_effort": "high",
+          "effort_label": "high",
+          "label": "haiku-pilot @ high",
+          "units": 12,
+          "below_support": false,
+          "unjudged": false,
+          "rank": 2,
+          "counts": {
+            "f1_lift": 8,
+            "tier_calibration": 0,
+            "confirmed_warnings": 0,
+            "dismissed_warnings": 0,
+            "missed_scope_blocks": 0,
+            "costly_misses": 0,
+            "lock_wait_hours": 0
+          },
+          "per_100": {
+            "confirmed_warnings": 0,
+            "costly_misses": 0,
+            "dismissed_warnings": 0,
+            "f1_lift": 66.67,
+            "lock_wait_hours": 0,
+            "missed_scope_blocks": 0,
+            "tier_calibration": 0
+          },
+          "raw": 66.67,
+          "score": 66.09,
+          "interval": {
+            "p10": 50,
+            "p90": 70.85
+          },
+          "runs_without_model": 0,
+          "provisional": null,
+          "stats": [
+            {
+              "key": "recall_percent",
+              "label": "Recall (%)",
+              "value": 100
+            },
+            {
+              "key": "precision_percent",
+              "label": "Precision (%)",
+              "value": 66.67
+            },
+            {
+              "key": "f1_percent",
+              "label": "F1 (%)",
+              "value": 80
+            },
+            {
+              "key": "filer_f1_percent",
+              "label": "Filer's F1 (%)",
+              "value": 0
+            },
+            {
+              "key": "missed_files",
+              "label": "Landed files no pilot selector covered",
+              "value": 0
+            },
+            {
+              "key": "unused_selectors",
+              "label": "Pilot selectors that covered no landed file",
+              "value": 4
+            },
+            {
+              "key": "selectors_per_task",
+              "label": "Selectors per task",
+              "value": 1
+            },
+            {
+              "key": "within_one_tier_percent",
+              "label": "Assessed within one tier (%)",
+              "value": null
+            },
+            {
+              "key": "cost_per_assessment",
+              "label": "Cost per assessment (USD)",
+              "value": null
+            },
+            {
+              "key": "median_run_seconds",
+              "label": "Median pilot run (seconds)",
+              "value": null
+            },
+            {
+              "key": "tier_matrix",
+              "label": "Assessed against observed tier",
+              "value": {
+                "tiers": [],
+                "rows": [],
+                "placed": 0,
+                "not_placed": 12,
+                "on_tier": 0,
+                "too_easy": 0,
+                "too_hard": 0
+              }
+            },
+            {
+              "key": "warning_precision_percent",
+              "label": "Warning precision (%)",
+              "value": null
+            },
+            {
+              "key": "holds_per_100_assessments",
+              "label": "Holds per 100 assessments",
+              "value": null
+            },
+            {
+              "key": "settled_assessments",
+              "label": "Settled assessments",
+              "value": 0
+            },
+            {
+              "key": "excluded_assessments",
+              "label": "Excluded or pending assessments",
+              "value": 0
+            },
+            {
+              "key": "missed_scope_block_count",
+              "label": "Missed scope blocks",
+              "value": 0
+            }
+          ],
+          "term_units": {
+            "confirmed_warnings": 0,
+            "dismissed_warnings": 0,
+            "missed_scope_blocks": 0,
+            "tier_calibration": 0
+          },
+          "provisional_terms": [
+            "confirmed_warnings",
+            "dismissed_warnings",
+            "missed_scope_blocks",
+            "tier_calibration"
+          ],
+          "effort_breakdown": [
+            {
+              "crew": "pilot-crew",
+              "model": "haiku-pilot",
+              "reasoning_effort": "unknown",
+              "source": "no_dispatch_evidence"
+            }
+          ]
+        },
+        {
+          "crew": "pilot-crew",
+          "crews": [
+            "pilot-crew"
+          ],
+          "model": "opus-pilot",
+          "reasoning_effort": "high",
+          "effort_label": "high",
+          "label": "opus-pilot @ high",
+          "units": 40,
+          "below_support": false,
+          "unjudged": false,
+          "rank": 3,
+          "counts": {
+            "f1_lift": 26,
+            "tier_calibration": 0,
+            "confirmed_warnings": 0,
+            "dismissed_warnings": 0,
+            "missed_scope_blocks": 0,
+            "costly_misses": 0,
+            "lock_wait_hours": 0
+          },
+          "per_100": {
+            "confirmed_warnings": 0,
+            "costly_misses": 0,
+            "dismissed_warnings": 0,
+            "f1_lift": 65,
+            "lock_wait_hours": 0,
+            "missed_scope_blocks": 0,
+            "tier_calibration": 0
+          },
+          "raw": 65,
+          "score": 65,
+          "interval": {
+            "p10": 55,
+            "p90": 69.65
+          },
+          "runs_without_model": 0,
+          "provisional": null,
+          "stats": [
+            {
+              "key": "recall_percent",
+              "label": "Recall (%)",
+              "value": 100
+            },
+            {
+              "key": "precision_percent",
+              "label": "Precision (%)",
+              "value": 65
+            },
+            {
+              "key": "f1_percent",
+              "label": "F1 (%)",
+              "value": 78.79
+            },
+            {
+              "key": "filer_f1_percent",
+              "label": "Filer's F1 (%)",
+              "value": 0
+            },
+            {
+              "key": "missed_files",
+              "label": "Landed files no pilot selector covered",
+              "value": 0
+            },
+            {
+              "key": "unused_selectors",
+              "label": "Pilot selectors that covered no landed file",
+              "value": 14
+            },
+            {
+              "key": "selectors_per_task",
+              "label": "Selectors per task",
+              "value": 1
+            },
+            {
+              "key": "within_one_tier_percent",
+              "label": "Assessed within one tier (%)",
+              "value": null
+            },
+            {
+              "key": "cost_per_assessment",
+              "label": "Cost per assessment (USD)",
+              "value": null
+            },
+            {
+              "key": "median_run_seconds",
+              "label": "Median pilot run (seconds)",
+              "value": null
+            },
+            {
+              "key": "tier_matrix",
+              "label": "Assessed against observed tier",
+              "value": {
+                "tiers": [],
+                "rows": [],
+                "placed": 0,
+                "not_placed": 40,
+                "on_tier": 0,
+                "too_easy": 0,
+                "too_hard": 0
+              }
+            },
+            {
+              "key": "warning_precision_percent",
+              "label": "Warning precision (%)",
+              "value": null
+            },
+            {
+              "key": "holds_per_100_assessments",
+              "label": "Holds per 100 assessments",
+              "value": null
+            },
+            {
+              "key": "settled_assessments",
+              "label": "Settled assessments",
+              "value": 0
+            },
+            {
+              "key": "excluded_assessments",
+              "label": "Excluded or pending assessments",
+              "value": 0
+            },
+            {
+              "key": "missed_scope_block_count",
+              "label": "Missed scope blocks",
+              "value": 0
+            }
+          ],
+          "term_units": {
+            "confirmed_warnings": 0,
+            "dismissed_warnings": 0,
+            "missed_scope_blocks": 0,
+            "tier_calibration": 0
+          },
+          "provisional_terms": [
+            "confirmed_warnings",
+            "dismissed_warnings",
+            "missed_scope_blocks",
+            "tier_calibration"
+          ],
+          "effort_breakdown": [
+            {
+              "crew": "pilot-crew",
+              "model": "opus-pilot",
+              "reasoning_effort": "unknown",
+              "source": "no_dispatch_evidence"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

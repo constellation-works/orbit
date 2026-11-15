@@ -2,10 +2,9 @@
 //! Analytics › Codebase view shows, and one path's detail behind them.
 use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec, ParamType,
-    Redaction, ToolOnlyRegistration, UnknownFields, both, defaulted, mcp_only, operation_registry,
-    required,
+    Redaction, ToolOnlyRegistration, UnknownFields, both, defaulted, operation_registry, required,
 };
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 operation_registry! {
     noun: CODEBASE;
@@ -100,19 +99,6 @@ const ESCAPES: &[EnumValue] = &[
     EnumValue::plain("unclassified"),
     EnumValue::plain("absent"),
 ];
-const LAYERS: &[EnumValue] = &[
-    EnumValue::plain("ci_tests"),
-    EnumValue::plain("docs_skills"),
-    EnumValue::plain("dashboard"),
-    EnumValue::plain("sandbox_policy"),
-    EnumValue::plain("store_migration"),
-    EnumValue::plain("vcs_delivery"),
-    EnumValue::plain("config"),
-    EnumValue::plain("cli_mcp"),
-    EnumValue::plain("runtime_lifecycle"),
-    EnumValue::plain("other"),
-    EnumValue::plain("unknown"),
-];
 const DETECTORS: &[EnumValue] = &[
     EnumValue::plain("delivery_review"),
     EnumValue::plain("security_review"),
@@ -143,10 +129,10 @@ const REGRESSION_FILTER: &[ParamSpec] = &[
     ),
     both(
         "layer",
-        ParamType::Enum(LAYERS),
-        "Count only regressions whose fix sits in this layer, read from the regression task's landed paths, else its declared footprint; `unknown` when it has neither.",
+        ParamType::String,
+        "Count only regressions whose fix sits in this layer: a name from the workspace's `workflow.regression_layers`, `other` or `unknown`. The layer is read from the regression task's landed paths, else its declared footprint; `unknown` when it has neither.",
         CliArgKind::flag("layer"),
-        "Count only regressions whose fix sits in this layer",
+        "Count only regressions whose fix sits in this layer (a workflow.regression_layers name, other or unknown)",
     ),
     both(
         "detected_by",
@@ -157,17 +143,11 @@ const REGRESSION_FILTER: &[ParamSpec] = &[
     ),
 ];
 
-const MODEL: &[ParamSpec] = &[mcp_only(
-    "model",
-    ParamType::String,
-    "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
-)];
-
 const ANALYTICS: OperationSpec<CodebaseVerb> = OperationSpec {
     verb: CodebaseVerb::Analytics,
     cli_path: &["analytics"],
     tool_name: "orbit.codebase.analytics",
-    tool_description: "Rank repository paths across codebase risk measures. Use `orbit_codebase_show` on a ranked path to inspect its evidence. See the installed Orbit skill's `tool-surface.md` reference, Codebase analytics and path detail, for metrics, attribution, filters and response fields.",
+    tool_description: "Rank repository paths across codebase risk measures. Use action `show` on a ranked path to inspect its evidence. See the installed Orbit skill's `tool-surface.md` reference, Codebase analytics and path detail, for metrics, attribution, filters and response fields.",
     cli_about: "Show the codebase rankings and the paths several share",
     cli_help: CliHelp {
         long_about: None,
@@ -178,11 +158,12 @@ const ANALYTICS: OperationSpec<CodebaseVerb> = OperationSpec {
         constraints: &[],
     },
     effect: Effect::Read,
-    params: &[SELECTION, REGRESSION_FILTER, MODEL],
+    params: &[SELECTION, REGRESSION_FILTER],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const PATH: &[ParamSpec] = &[path_param(required(both(
@@ -201,11 +182,12 @@ const SHOW: OperationSpec<CodebaseVerb> = OperationSpec {
     cli_about: "Show one path's rankings and the tasks behind each count",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
-    params: &[PATH, SELECTION, REGRESSION_FILTER, MODEL],
+    params: &[PATH, SELECTION, REGRESSION_FILTER],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const fn path_param(mut param: ParamSpec) -> ParamSpec {
@@ -253,11 +235,12 @@ const RELATED: OperationSpec<CodebaseVerb> = OperationSpec {
     cli_about: "List files that usually change alongside a repository file",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
-    params: &[RELATED_PATH, RELATED_SELECTION, MODEL],
+    params: &[RELATED_PATH, RELATED_SELECTION],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const RELATED_PATH: &[ParamSpec] = &[path_param(required(both(

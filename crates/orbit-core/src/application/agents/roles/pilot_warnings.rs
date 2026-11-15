@@ -1,13 +1,14 @@
 //! Pilot warnings: how each task-pilot assessment of a `proposed` task
 //! settled, and the three pilot terms that grade it.
 //!
-//! An assessment is one task-pilot receipt: the audit comment the apply
+//! An assessment is one task-pilot receipt: the resolved audit the apply
 //! boundary sealed with the assessment it persisted. It is held when that
 //! assessment carries at least one finding that holds promotion (a
-//! `blocked_by`, ADR conflict, utility, surface or validation-tool finding;
-//! advisory ones never count), and clean otherwise. Nothing else is read
-//! from it: how it settled comes only from task history (edits, status
-//! transitions) and blocked-task triage markers.
+//! `blocked_by`, ADR conflict, `contract_conflicts`, utility, surface or
+//! validation-tool finding; advisory ones never count), and clean
+//! otherwise. Nothing else is read from it: how it settled comes only
+//! from task history (edits, status transitions) and blocked-task triage
+//! markers.
 //!
 //! A held assessment is **confirmed** when, before the task leaves
 //! `proposed`, a writer other than the pilot or `system` edits the
@@ -27,7 +28,7 @@
 //! assessment-time done state is not stored, and a finished prerequisite must not
 //! turn a historical hold clean.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use orbit_types::task::{
@@ -35,22 +36,24 @@ use orbit_types::task::{
     task_fields_updated_documents,
 };
 use orbit_types::workflow::DrainHoldFinding;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::application::agents::AgentFacts;
-use crate::application::agents::attribution::row_key;
+use crate::application::agents::effort::{
+    MainActivity, MainInvocationUnit, ModelEffortKey, main_invocation_effort, model_effort_key,
+};
 use crate::application::agents::records::spec_documents;
 use crate::application::agents::score::{Denominator, Occurrence, Stat, Tally, number};
+use crate::application::agents::{AgentFacts, WindowBounds};
 use crate::application::codebase::PilotRun;
+use crate::application::statistics;
+use crate::application::task::blocked_recovery::{self, LegacyBlockedTriageDisposition};
 use crate::application::task::{BLOCKED_TASK_TRIAGED_EVENT, warning_hold_findings};
 
 /// The actor that writes task-pilot receipts.
 const PILOT_ACTOR: &str = "task-pilot";
 /// Orbit's own writes, which never settle a warning.
 const SYSTEM_ACTOR: &str = "system";
-/// The block-triage marker field of a decision proposal: the block needs the
-/// operator to decide what the task asks.
-const DECISION_DISPOSITION: &str = "disposition=decision";
 /// Settled assessments a row needs before its warning terms count.
 pub(super) const MIN_SETTLED: usize = 10;
 /// The warning terms, each rated per 100 settled assessments.
@@ -59,6 +62,19 @@ pub(super) const DISMISSED: &str = "dismissed_warnings";
 pub(super) const MISSED: &str = "missed_scope_blocks";
 /// The unit the warning terms are rated per 100 of.
 pub(super) const SETTLED_UNIT: &str = "settled assessments";
+
+const EXCLUDED_NOT_PROPOSED: &str = "not proposed when assessed";
+const EXCLUDED_SUPERSEDED: &str = "superseded by a later assessment";
+const EXCLUDED_DROPPED: &str = "dropped while proposed";
+const EXCLUDED_BARE_EDIT: &str = "approved after a field edit naming no document";
+const EXCLUDED_ARCHIVED: &str = "archived after approval";
+const EXCLUDED_REASONS: &[&str] = &[
+    EXCLUDED_NOT_PROPOSED,
+    EXCLUDED_SUPERSEDED,
+    EXCLUDED_DROPPED,
+    EXCLUDED_BARE_EDIT,
+    EXCLUDED_ARCHIVED,
+];
 
 /// How an assessment settled.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,8 +91,54 @@ pub(in crate::application::agents) enum Outcome {
     Pending,
 }
 
+#[derive(Serialize, Deserialize)]
+enum StoredOutcome {
+    Confirmed,
+    Dismissed,
+    Missed,
+    Clean,
+    Excluded(String),
+    Pending,
+}
+
+impl Serialize for Outcome {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match *self {
+            Self::Confirmed => StoredOutcome::Confirmed,
+            Self::Dismissed => StoredOutcome::Dismissed,
+            Self::Missed => StoredOutcome::Missed,
+            Self::Clean => StoredOutcome::Clean,
+            Self::Excluded(reason) => StoredOutcome::Excluded(reason.to_string()),
+            Self::Pending => StoredOutcome::Pending,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Outcome {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match StoredOutcome::deserialize(deserializer)? {
+            StoredOutcome::Confirmed => Self::Confirmed,
+            StoredOutcome::Dismissed => Self::Dismissed,
+            StoredOutcome::Missed => Self::Missed,
+            StoredOutcome::Clean => Self::Clean,
+            StoredOutcome::Excluded(reason) => {
+                let known = EXCLUDED_REASONS
+                    .iter()
+                    .find(|known| **known == reason)
+                    .copied()
+                    .ok_or_else(|| {
+                        serde::de::Error::custom(format!("unknown excluded reason '{reason}'"))
+                    })?;
+                Self::Excluded(known)
+            }
+            StoredOutcome::Pending => Self::Pending,
+        })
+    }
+}
+
 /// One task-pilot assessment and how it settled.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(in crate::application::agents) struct Assessment {
     /// When the receipt was written.
     pub(in crate::application::agents) at: DateTime<Utc>,
@@ -89,16 +151,39 @@ pub(in crate::application::agents) struct Assessment {
     /// When the outcome settled and the record that settled it.
     pub(in crate::application::agents) settled: Option<(DateTime<Utc>, String)>,
     /// The pilot run the receipt is attributed to, set after the scan.
+    #[serde(skip)]
     pub(in crate::application::agents) run: Option<PilotRun>,
+    /// `full` or `recheck`; a receipt written before modes was a full pilot.
+    pub(in crate::application::agents) mode: String,
+    /// A full assessment the pilot returned for a task prepared for a
+    /// re-check: that re-check needed a full pilot.
+    pub(in crate::application::agents) escalated: bool,
 }
 
 impl Assessment {
-    fn key(&self) -> (String, String) {
+    /// The assessment's (model, recorded effort) row: the effort of its
+    /// pilot run's main piloting invocation.
+    fn key(&self, facts: &AgentFacts, task_id: &str) -> ModelEffortKey {
         let run = self.run.as_ref();
-        row_key(
-            run.and_then(|run| run.crew.as_deref()),
-            run.and_then(|run| run.model.as_deref()),
-        )
+        let effort = main_invocation_effort(
+            facts,
+            MainInvocationUnit {
+                run_id: self.run_id().as_deref(),
+                activity: MainActivity::Pilot,
+                task_id: Some(task_id),
+                model: run.and_then(|run| run.model.as_deref()),
+                activity_id: run.and_then(|run| run.activity_id.as_deref()),
+                after: None,
+                until: None,
+                reported: None,
+                crew: run.and_then(|run| run.crew.as_deref()),
+            },
+        );
+        model_effort_key(run.and_then(|run| run.model.as_deref()), effort)
+    }
+
+    fn crew(&self) -> Option<&str> {
+        self.run.as_ref().and_then(|run| run.crew.as_deref())
     }
 
     pub(in crate::application::agents) fn run_id(&self) -> Option<String> {
@@ -110,7 +195,7 @@ impl Assessment {
 }
 
 /// A task's assessments and its block-triage markers.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(in crate::application::agents) struct Warnings {
     pub(in crate::application::agents) assessments: Vec<Assessment>,
     /// When block triage recorded any disposition on the task.
@@ -146,7 +231,7 @@ pub(in crate::application::agents) fn settle(
         .map(|(index, (at, operation_id, body))| {
             let held = warning_hold_findings(&body["assessment"], &dependencies, &|_| false);
             let next = receipts.get(index + 1).map(|(at, _, _)| *at);
-            let (outcome, settled) = outcome(history, *at, next, !held.is_empty());
+            let (outcome, settled) = outcome(history, comments, *at, next, !held.is_empty());
             Assessment {
                 at: *at,
                 operation_id: (*operation_id).to_string(),
@@ -159,6 +244,11 @@ pub(in crate::application::agents) fn settle(
                 outcome,
                 settled,
                 run: None,
+                mode: body["assessment"][PILOT_MODE_FIELD]
+                    .as_str()
+                    .unwrap_or(MODE_FULL)
+                    .to_string(),
+                escalated: body["assessment"]["mode_reason"] == RECHECK_ESCALATED,
             }
         })
         .collect();
@@ -172,18 +262,101 @@ pub(in crate::application::agents) fn settle(
     }
 }
 
+/// The assessment field naming the mode a receipt was produced in.
+const PILOT_MODE_FIELD: &str = "mode";
+const MODE_FULL: &str = "full";
+const MODE_RECHECK: &str = "recheck";
+/// The mode reason of a full assessment a re-checked task escalated to.
+const RECHECK_ESCALATED: &str = "recheck_escalated";
+
+/// One mode's pilot runs in the window: assessments, distinct runs, and
+/// those runs' durations and tokens.
+#[derive(Default)]
+struct ModeTally {
+    assessments: usize,
+    runs: BTreeMap<String, (Option<f64>, Option<u64>)>,
+}
+
+impl ModeTally {
+    fn json(&self) -> Value {
+        let mut seconds: Vec<f64> = self.runs.values().filter_map(|(s, _)| *s).collect();
+        let tokens: Vec<u64> = self.runs.values().filter_map(|(_, t)| *t).collect();
+        let total_seconds = (!seconds.is_empty()).then(|| seconds.iter().sum::<f64>());
+        let median_seconds = statistics::median(&mut seconds);
+        json!({
+            "assessments": self.assessments,
+            "runs": self.runs.len(),
+            "median_seconds": median_seconds.map(number),
+            "total_seconds": total_seconds.map(number),
+            "total_tokens": (!tokens.is_empty()).then(|| tokens.iter().sum::<u64>()),
+            "runs_with_tokens": tokens.len(),
+        })
+    }
+}
+
+/// Task-pilot runs split by mode over the assessments written in the
+/// window: each mode's assessments, runs, run durations and tokens, and
+/// how many re-checks needed a full pilot: re-checks a later full
+/// assessment of the same task followed, and re-check attempts the pilot
+/// escalated to a full assessment. A run that assessed tasks in both modes
+/// counts under each.
+fn pilot_modes(facts: &AgentFacts, window: WindowBounds) -> Value {
+    let mut full = ModeTally::default();
+    let mut recheck = ModeTally::default();
+    let mut followed_by_full = 0;
+    let mut escalated = 0;
+    for task in &facts.tasks {
+        let assessments = &task.warnings.assessments;
+        for (index, assessment) in assessments.iter().enumerate() {
+            if !window.admits(assessment.at) {
+                continue;
+            }
+            let is_recheck = assessment.mode == MODE_RECHECK;
+            if assessment.escalated {
+                escalated += 1;
+            }
+            let tally = if is_recheck { &mut recheck } else { &mut full };
+            tally.assessments += 1;
+            if let Some(run) = &assessment.run {
+                tally
+                    .runs
+                    .insert(run.run_id.clone(), (run.seconds, run.tokens));
+            }
+            if is_recheck
+                && assessments[index + 1..]
+                    .iter()
+                    .any(|later| later.mode != MODE_RECHECK)
+            {
+                followed_by_full += 1;
+            }
+        }
+    }
+    json!({
+        MODE_FULL: full.json(),
+        MODE_RECHECK: recheck.json(),
+        "rechecks_followed_by_full": followed_by_full,
+        "rechecks_escalated_to_full": escalated,
+        // Re-check attempts (completed or escalated) that needed a full pilot.
+        "recheck_full_rate": (recheck.assessments + escalated > 0).then(|| {
+            number((followed_by_full + escalated) as f64 / (recheck.assessments + escalated) as f64)
+        }),
+    })
+}
+
 /// A write by someone other than the pilot or Orbit itself.
 fn by_writer(entry: &TaskHistoryEntry) -> bool {
     entry.by != PILOT_ACTOR && entry.by != SYSTEM_ACTOR
 }
 
 /// A block-triage marker recording a decision proposal.
-fn decision_triage(entry: &TaskHistoryEntry) -> bool {
+fn decision_triage(
+    entry: &TaskHistoryEntry,
+    history: &[TaskHistoryEntry],
+    comments: &[TaskComment],
+) -> bool {
     entry.event == BLOCKED_TASK_TRIAGED_EVENT
-        && entry.note.as_deref().is_some_and(|note| {
-            note.split_whitespace()
-                .any(|field| field == DECISION_DISPOSITION)
-        })
+        && blocked_recovery::decode_blocked_task_triaged(entry, history, comments)
+            .is_some_and(|record| record.disposition == LegacyBlockedTriageDisposition::Decision)
 }
 
 type Settled = (Outcome, Option<(DateTime<Utc>, String)>);
@@ -191,6 +364,7 @@ type Settled = (Outcome, Option<(DateTime<Utc>, String)>);
 /// How the assessment written at `at` settled, given the next one at `next`.
 fn outcome(
     history: &[TaskHistoryEntry],
+    comments: &[TaskComment],
     at: DateTime<Utc>,
     next: Option<DateTime<Utc>>,
     held: bool,
@@ -287,7 +461,7 @@ fn outcome(
                 }
                 _ => {}
             }
-        } else if decision_triage(entry) {
+        } else if decision_triage(entry, history, comments) {
             return settled(
                 Outcome::Missed,
                 entry,
@@ -308,6 +482,10 @@ fn outcome(
 #[derive(Default)]
 pub(super) struct WarningRow<'a> {
     pub(super) tallies: BTreeMap<&'static str, Tally<'a>>,
+    /// Crews whose assessments this row groups.
+    pub(super) crews: BTreeSet<String>,
+    /// Settled assessments counted on each task unit for warning terms.
+    pub(super) settled_units: BTreeMap<String, usize>,
     /// Assessments whose outcome settled in the window.
     settled: usize,
     /// Assessments written in the window that are excluded or pending.
@@ -378,22 +556,28 @@ impl WarningRow<'_> {
     }
 }
 
-/// Each pilot row's warning tallies: assessments that settled since `since`
-/// count in the terms, and those written since then in the hold rate and
-/// the excluded count.
+/// Each pilot row's warning tallies: assessments that settled in the window
+/// count in the terms, and those written in it in the hold rate and the
+/// excluded count.
 pub(super) fn rows(
     facts: &AgentFacts,
-    since: DateTime<Utc>,
-) -> BTreeMap<(String, String), WarningRow<'_>> {
-    let mut rows: BTreeMap<(String, String), WarningRow<'_>> = BTreeMap::new();
+    window: WindowBounds,
+) -> BTreeMap<ModelEffortKey, WarningRow<'_>> {
+    let mut rows: BTreeMap<ModelEffortKey, WarningRow<'_>> = BTreeMap::new();
     for task in &facts.tasks {
         for assessment in &task.warnings.assessments {
-            let written = assessment.at >= since;
-            let settled = assessment.settled.as_ref().filter(|(at, _)| *at >= since);
+            let written = window.admits(assessment.at);
+            let settled = assessment
+                .settled
+                .as_ref()
+                .filter(|(at, _)| window.admits(*at));
             if !written && settled.is_none() {
                 continue;
             }
-            let row = rows.entry(assessment.key()).or_default();
+            let row = rows.entry(assessment.key(facts, &task.id)).or_default();
+            if let Some(crew) = assessment.crew() {
+                row.crews.insert(crew.to_string());
+            }
             if written {
                 row.written += 1;
                 row.held += usize::from(!assessment.held.is_empty());
@@ -405,6 +589,7 @@ pub(super) fn rows(
                 continue;
             };
             row.settled += 1;
+            *row.settled_units.entry(task.id.clone()).or_default() += 1;
             let key = match assessment.outcome {
                 Outcome::Confirmed => {
                     row.confirmed += 1;
@@ -432,6 +617,7 @@ pub(super) fn rows(
             };
             row.tallies.entry(key).or_default().add(
                 task,
+                &task.id,
                 1.0,
                 Some(Occurrence {
                     at: *at,
@@ -448,16 +634,17 @@ pub(super) fn rows(
 /// missed-scope-block source ran in the window. Block triage writes the
 /// markers it reads; with none in the window the term reads 0 because
 /// nothing measured it, not because no clean assessment missed a block.
-pub(super) fn header(facts: &AgentFacts, since: DateTime<Utc>) -> Map<String, Value> {
+pub(super) fn header(facts: &AgentFacts, window: WindowBounds) -> Map<String, Value> {
     let records = facts
         .tasks
         .iter()
         .flat_map(|task| &task.warnings.triaged)
-        .filter(|at| **at >= since)
+        .filter(|at| window.admits(**at))
         .count();
     let available = records > 0;
     let mut header = Map::new();
     header.insert("warning_min_support".to_string(), json!(MIN_SETTLED));
+    header.insert("pilot_modes".to_string(), pilot_modes(facts, window));
     header.insert(
         "sources".to_string(),
         json!({

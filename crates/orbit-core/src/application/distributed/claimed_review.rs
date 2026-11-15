@@ -191,6 +191,7 @@ impl OrbitRuntime {
         let FinalRecoveryDecision::Escalate {
             diagnosis,
             human_action,
+            ..
         } = &recovery.decision
         else {
             return None;

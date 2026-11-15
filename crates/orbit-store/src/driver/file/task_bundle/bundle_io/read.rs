@@ -11,9 +11,10 @@ use crate::fs::yaml::parse_yaml_with;
 use orbit_common::migration::Plan;
 use orbit_common::{NotFoundKind, OrbitError, StorageLayer};
 use orbit_types::task::{
-    TASK_ACCEPTANCE_FILE_NAME, TASK_COMMENTS_FILE_NAME, TASK_DESCRIPTION_FILE_NAME,
-    TASK_ENVELOPE_FILE_NAME, TASK_EVENTS_FILE_NAME, TASK_EXECUTION_SUMMARY_FILE_NAME,
-    TASK_PLAN_FILE_NAME, TaskCommentRowV2, TaskEnvelopeV2, TaskEventRowV2,
+    ArtifactManifestV2, TASK_ACCEPTANCE_FILE_NAME, TASK_COMMENTS_FILE_NAME,
+    TASK_DESCRIPTION_FILE_NAME, TASK_ENVELOPE_FILE_NAME, TASK_EVENTS_FILE_NAME,
+    TASK_EXECUTION_SUMMARY_FILE_NAME, TASK_PLAN_FILE_NAME, TaskCommentRowV2, TaskEnvelopeV2,
+    TaskEventRowV2,
 };
 use serde::de::DeserializeOwned;
 use std::fs::{self};
@@ -37,6 +38,29 @@ pub(crate) fn read_bundle_at(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitErr
 /// and sha256 of every `artifacts/files/**` blob named by the manifest.
 pub(crate) fn read_bundle_lightweight_at(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitError> {
     read_bundle_at_with(bundle_dir, ArtifactPayloadCheck::Defer)
+}
+
+/// Read only a bundle's artifact manifest: the envelope's presence (the
+/// missing-task check every bundle read makes) and `artifacts/manifest.yaml`,
+/// without parsing the envelope, bodies, events or comments the full reads
+/// assemble. The pending-write view never rewrites the manifest, so this is
+/// the same manifest a lightweight read returns; callers that need a
+/// consistent snapshot must take the same canonical bundle lock used by
+/// [`read_bundle_at`].
+pub(crate) fn read_artifact_manifest_at(
+    bundle_dir: &Path,
+) -> Result<Option<ArtifactManifestV2>, OrbitError> {
+    let expected_task_id = task_id_from_bundle_dir(bundle_dir)?;
+    let manifest = (|| {
+        if !bundle_dir.join(TASK_ENVELOPE_FILE_NAME).is_file() {
+            return Err(OrbitError::not_found(
+                NotFoundKind::Task,
+                expected_task_id.clone(),
+            ));
+        }
+        read_artifact_manifest(bundle_dir, ArtifactPayloadCheck::Defer)
+    })();
+    manifest.map_err(|error| corrupt_unless_missing_or_io(bundle_dir, expected_task_id, error))
 }
 
 /// Read only the documents task search matches on: the four text documents,

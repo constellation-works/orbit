@@ -183,8 +183,12 @@ task prose to a remote is an operator decision: review the bound repository,
 credentials and attachment policy before enabling it. `orbit workspace sync`
 adds it to existing workspaces disabled and preserves locally modified routines.
 
-Enable it by setting `enabled: true` in
-`.orbit/routines/task_publication.yaml`, then check `orbit routine list`.
+An operator enables it with `orbit routine enable task-publication-<workspace>`,
+copying the name from `orbit routine list`; add `--workspace <name>` when running
+from another checkout. The command is operator-only: an agent session is refused,
+and the change is audited. Do not hand-edit `enabled` in
+`.orbit/routines/task_publication.yaml` instead, because that skips the operator
+check and the audit row. Then check `orbit routine list`.
 
 The schedule is Sunday at 04:47 host-local time (`47 4 * * 0`), with
 `missed_run: skip` and `overlap: forbid`. It targets
@@ -197,17 +201,13 @@ without a new commit. Authority conflicts and authentication failures fail
 the run with the publisher's error and a redacted remote URL.
 
 ```bash
-orbit config set publication.routine_attachments omit
 orbit run job task_publication_pipeline --wait
 ```
 
-`publication.routine_attachments` defaults to `omit`, equivalent to manual
-`--attachments omit`. `fail` refuses snapshots with attachments. `include`
-keeps the publisher's 10 MiB per-file and 100 MiB total limits and sensitive
-path deny patterns. Without a sensitivity scanner it fails closed unless
-you explicitly set `publication.routine_allow_unscanned_attachments = true`.
-That opt-in accepts unchecked content; path and size checks still apply.
-Manual publication keeps its separate CLI flags and default `fail` policy.
+The routine always omits attachments, equivalent to manual
+`--attachments omit`. To publish attachments, run `orbit task publication
+publish --attachments include` by hand. Manual publication keeps its separate
+CLI flags and default `fail` policy.
 For unattended credentials, configure the clock service environment as
 [described above](#authenticate-unattended-https-publication).
 

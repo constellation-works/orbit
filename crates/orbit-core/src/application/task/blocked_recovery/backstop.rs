@@ -8,7 +8,8 @@ use orbit_common::fs::git::{GIT_CHECKOUT_TIMEOUT, run_git, run_git_within};
 use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
-    FinalRecoveryDecision, JobRun, JobRunState, JobRunTrigger, MAX_DECISION_TEXT_CHARS,
+    FAULT_JUDGED_BY_FIELD, FinalRecoveryDecision, JobRun, JobRunState, JobRunTrigger,
+    MAX_DECISION_TEXT_CHARS, RecoveryFault,
 };
 use serde_json::{Value, json};
 
@@ -84,7 +85,7 @@ impl OrbitRuntime {
 
     /// One backstop tick: settle recovery runs that ended without a decision,
     /// then dispatch recoveries for eligible episodes, at most
-    /// [`MAX_ACTIVE_BLOCKED_RECOVERIES`] live at once.
+    /// `MAX_ACTIVE_BLOCKED_RECOVERIES` live at once.
     pub fn run_blocked_task_recovery_tick(
         &self,
         now: DateTime<Utc>,
@@ -111,6 +112,18 @@ impl OrbitRuntime {
         submit: &mut dyn FnMut(Value) -> Result<String, OrbitError>,
     ) -> Result<BlockedRecoveryTick, OrbitError> {
         let mut tick = BlockedRecoveryTick::default();
+        // The recheck needs no agent and no crew, so it runs even where the
+        // backstop itself stands down for an empty pool. It stands down
+        // itself off the coordination owner and in a claimed worker.
+        if self.worker_invocation().is_none() && self.coordination_write_owner().is_none() {
+            match self.recheck_blocked_tasks() {
+                Ok(settled) => tick.rechecked = settled,
+                Err(error) => tracing::warn!(
+                    target: "orbit.core.blocked_recovery",
+                    "the blocked-task recheck failed: {error}"
+                ),
+            }
+        }
         if let Some(reason) = self.blocked_task_recovery_disabled_reason() {
             tick.skipped = Some(reason);
             return Ok(tick);
@@ -338,17 +351,28 @@ impl OrbitRuntime {
         base_ref: &str,
         output: Option<&Value>,
     ) -> Result<FinalRecoveryOutcome, OrbitError> {
-        let decision = match without_resume(FinalRecoveryDecision::from_output(output), input) {
+        let (decision, fault) = FinalRecoveryDecision::from_attributed_output(output);
+        // Only Orbit's own observation of the judge, which `decision_result`
+        // stamps over the agent's answer, survives the strict parse.
+        let fault = fault.judged_by(
+            output
+                .and_then(|output| output.get(FAULT_JUDGED_BY_FIELD))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        );
+        let decision = match without_resume(decision, input) {
             FinalRecoveryDecision::Escalate {
                 diagnosis,
                 human_action,
+                summary,
             } => FinalRecoveryDecision::Escalate {
                 diagnosis,
                 human_action: with_line(&human_action, &self.episode_candidate(input).summary()),
+                summary,
             },
             decision => decision,
         };
-        let output = serde_json::to_value(&decision).map_err(|error| {
+        let output = decision.to_attributed_value(&fault).map_err(|error| {
             OrbitError::Execution(format!("serialize final recovery decision: {error}"))
         })?;
         let request = FinalRecoveryRequest {
@@ -473,7 +497,6 @@ impl OrbitRuntime {
         };
         if FinalRecoveryRecord::newest_since(
             &self.get_task_history(&input.task_id)?,
-            &self.get_task_comments(&input.task_id)?,
             episode.blocked_at,
         )
         .is_some()
@@ -489,6 +512,11 @@ impl OrbitRuntime {
             "human_action": format!(
                 "Inspect `orbit run show {}`, then move the task by hand.",
                 run.run_id
+            ),
+            "fault": RecoveryFault::Unknown.as_str(),
+            "fault_evidence": format!(
+                "blocked-task recovery run {} ended {} without judging the failure",
+                run.run_id, run.state
             ),
         });
         let base_ref = self.workspace_base_branch().to_string();
@@ -520,6 +548,7 @@ fn without_resume(
             rationale.trim()
         ),
         human_action,
+        summary: None,
     }
 }
 

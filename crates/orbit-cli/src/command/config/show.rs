@@ -3,7 +3,8 @@ use orbit_config::{EffectiveConfigValue, load_effective_config};
 use orbit_core::OrbitRuntime;
 use serde_json::{Map, Value as JsonValue, json};
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{Block, CommandOut, Execute, Payload};
+use crate::output::payload::ConfigShow;
 
 use super::render;
 use super::support::{
@@ -44,16 +45,18 @@ impl Execute for ConfigShowArgs {
                 text.push_str(&review.text);
             }
             json["crew_purposes"] = purposes;
-            return Ok(Payload::detail(json, text).into());
+            return Ok(Payload::blocks(json, vec![Block::config_show(text)]).into());
         }
 
         let store = open_store_for_scope(runtime, self.scope)?;
         let snapshot = store.snapshot_with_global(&runtime.global_root())?;
         let settings = snapshot.all_values();
 
-        Ok(Payload::detail(
+        Ok(Payload::blocks(
             scoped_json(runtime, &store, &snapshot, &settings),
-            scoped_text(runtime, &store, &snapshot, &settings, self.all),
+            vec![Block::config_show(scoped_text(
+                runtime, &store, &snapshot, &settings, self.all,
+            ))],
         )
         .into())
     }
@@ -169,8 +172,9 @@ fn effective_json(runtime: &OrbitRuntime, values: &[EffectiveConfigValue]) -> Js
     let global_path = global_config_path(runtime);
     let workspace_path = runtime.shared_root().join("config.toml");
     let global_exists = global_path.exists();
-    let workspace_exists = workspace_path.exists();
-    let config_path = if workspace_exists && runtime.shared_root() != runtime.global_root() {
+    let workspace_exists =
+        workspace_path.exists() && runtime_config_roots(runtime).has_workspace_layer();
+    let config_path = if workspace_exists {
         &workspace_path
     } else {
         &global_path
@@ -201,7 +205,7 @@ pub(super) fn effective_text(
     runtime: &OrbitRuntime,
     values: &[EffectiveConfigValue],
     all: bool,
-) -> String {
+) -> ConfigShow {
     render::effective_text(runtime, values, all)
 }
 
@@ -254,6 +258,6 @@ pub(super) fn scoped_text(
     snapshot: &orbit_config::ConfigSnapshot,
     settings: &[(&'static str, JsonValue)],
     all: bool,
-) -> String {
+) -> ConfigShow {
     render::scoped_text(runtime, store, snapshot, settings, all)
 }

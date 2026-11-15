@@ -15,34 +15,54 @@
 //! - `drain_cancel` — graceful and forced cancellation of a drain with in-flight leaves.
 //! - `queued_cancel` — cancelling a run only while it is still queued, refusing one that started.
 //! - `interrupted_review` — keeping the repair of a review a stopped run was inside.
+//! - `rescue_candidate` — keeping a stopped run's candidate under a rescue ref.
 //! - `child_timeout` — cancelling a child whose parent's wait expired, keeping its candidate.
 //! - `completion_audit` — the completion audit the stop, worker-ceiling and extension controls share.
 //! - `root_cause` — typed root causes of cascaded failures, folding a listing by incident, and the
 //!   run-failure observation query run views share.
 //! - `step_recovery` — authenticating executor-owned recovery before it mutates Git.
+//! - `state_write` — the one create-or-update run-state write and terminal-run refusal the run controls share.
+//! - `audit_record` — the job-run audit writers (`record_pipeline_audit`,
+//!   `record_pipeline_diagnostic_step`) every module that audits a run shares.
+//! - `worker_exit` — the persisted worker-exit record format and the reads reconciliation makes of it.
+//! - `worker_scope` — the read side of a worker's containment scope, which `worker_exit` reads.
+//! - `definition` — the definition snapshot a run pinned, and the reads that resolve it.
 //! - `tests/*` — helpers and regression tests split by concern (actions, reconcile, owner, conflict).
 
+// `run` sits below `pipeline`: pipeline imports the four `pub(super)` modules
+// below (audit writer, definition reads, worker-exit evidence and scope reads),
+// and `scripts/check-dependency-direction.sh` refuses the reverse edge.
 mod actions;
 mod admissions_stop;
+pub(super) mod audit_record;
 mod build_budget;
 mod child_timeout;
 mod completion_audit;
 mod conflict;
 mod deferral;
+pub(super) mod definition;
 mod delivery;
 mod display_steps;
 mod drain_cancel;
+mod failure_streak;
 mod interrupted_review;
 mod owner;
 mod projection;
 mod query;
 mod queued_cancel;
 mod reconcile;
+mod recorded;
+mod rescue_candidate;
 mod root_cause;
+#[cfg(feature = "test-support")]
+pub use root_cause::with_run_root_cause_write_hook;
+mod state_write;
 mod step_recovery;
 mod types;
 mod window_extension;
+pub(super) mod worker_exit;
 mod worker_limit;
+pub(super) mod worker_scope;
 
 /// A claimed worker conclusively exited without a recorded cancellation.
 /// The reconciler cannot reap its exit signal once the process is gone; it
@@ -61,15 +81,22 @@ pub use admissions_stop::{
 pub(crate) use child_timeout::{kept_candidate, kept_clause};
 pub(crate) use delivery::CodebaseDeliveryScan;
 pub use display_steps::{RunDisplayStep, RunDisplaySteps, RunStepSource, run_display_steps};
+pub use failure_streak::{JOB_FAILURE_STREAK_WARN, JobFailureStreak};
 pub(crate) use owner::running_run_has_verified_owner;
+pub(crate) use owner::running_run_owner_is_stale;
 pub(crate) use owner::{RunOwnerLiveness, run_owner_liveness};
 pub use projection::{
-    ActivityInvocationEvidence, JobRunListStates, job_run_task_ids, job_run_to_json,
-    job_run_to_json_with_activity_provenance, run_error_step,
+    ActivityInvocationEvidence, BOUNDED_RUN_ANSWER_MAX_BYTES, BOUNDED_RUN_STEP_LIMIT,
+    JobRunListStates, JobRunProjectionEvidence, JobRunProjectionProfile,
+    add_bounded_display_steps_to_json, bound_bounded_agent_invocation_answer,
+    display_steps_with_agent_execution_to_json, job_run_task_ids, job_run_to_json,
+    job_run_to_json_with_activity_provenance, project_job_run, run_error_step,
+    run_execution_progress_to_json, trim_full_show_agent_invocation_answer,
 };
+pub use recorded::{JobRunHolder, RecordedJobRun};
 pub use root_cause::{
     RunFailureCause, RunFailureContext, RunFailureContextProfile, RunFailureContextWarning,
-    RunFailureEvidence, RunFailureRead, RunIncident, fold_run_incidents,
+    RunFailureEvidence, RunFailureRead, RunIncident, fold_run_incidents, run_upgrade_paused,
 };
 pub use types::{
     JobRunCancelOutcome, JobRunCancelResult, JobRunCancelResultProfile, JobRunListParams,
@@ -79,4 +106,7 @@ pub use window_extension::{
     DrainWindowExtensionChange, DrainWindowExtensionOutcome, DrainWindowExtensionRequest,
 };
 pub(crate) use window_extension::{drain_deadline, pull_window_closed};
-pub use worker_limit::{DrainWorkerLimitChange, DrainWorkerLimitOutcome, DrainWorkerLimitRequest};
+pub use worker_limit::{
+    DrainWorkerLimitChange, DrainWorkerLimitChangeProfile, DrainWorkerLimitOutcome,
+    DrainWorkerLimitRequest,
+};

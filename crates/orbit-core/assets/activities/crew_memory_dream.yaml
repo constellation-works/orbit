@@ -1,0 +1,29 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: crew_memory_dream
+spec:
+  type: deterministic
+  description: >
+    Mint this week's crew memory dreaming tasks: one backlog chore per model
+    with at least 10 implementer units in the trailing 7 days, pinned to the
+    model's base crew and carrying its score-blind evidence pack as the task
+    artifact `crew-memory-evidence.json`. A model with an open dreaming task
+    is skipped and the skip is recorded; a finished dreaming task that wrote
+    no revision is recorded as `no_revision`. Mints nothing while
+    `crew_memory.enabled` is false or no running shadow or live experiment
+    has a memory arm.
+  input_schema_json:
+    type: object
+  output_schema_json:
+    type: object
+    required: [week, minted]
+    properties:
+      week:
+        type: string
+      minted:
+        type: array
+      skipped_reason:
+        type: string
+  action: crew_memory_dream
+  config: {}

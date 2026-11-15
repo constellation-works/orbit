@@ -14,6 +14,12 @@ template:
 
     ## Select a batch
 
+    The executing worker selects this batch at run time. The steps below are
+    the worker's, not preparation's. The lock footprint stays the minted
+    template selectors (`dir:docs`, `file:README.md` and `file:CONTRIBUTING.md`).
+    Preparation keeps that footprint: it does not replace those selectors with
+    this batch, and it does not name a document this section excludes.
+
     1. List tracked Markdown files under `docs/` and tracked top-level
        `README*` or `CONTRIBUTING*` documents with `git ls-files`. Exclude vendored
        dependencies, generated trees and indexes, archives, and files the
@@ -28,10 +34,10 @@ template:
        any ledger: list the metadata-only artifacts projection with
        `orbit tool run orbit.task.show --input '{"id":"<id>","field":"artifacts","model":"<agent-family>"}'`
        and fetch the ledger with
-       `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"doc-duties-ledger.json","model":"<agent-family>"}'`
+       `orbit tool run orbit.task.artifact --input '{"action":"get","id":"<id>","path":"doc-duties-ledger.json","model":"<agent-family>"}'`
        only when that listing names `doc-duties-ledger.json`. Skip a task whose
        listing has no ledger (a run from before ledgers existed) without calling
-       `orbit.task.artifact.get` for it, and ignore its prose summary; never
+       `orbit.task.artifact` action `get` for it, and ignore its prose summary; never
        order by execution-summary text. A
        `schema_version` 2 ledger carries `state`, a cumulative map from each
        path to its two most recent attempt rows, newest first. It already
@@ -73,6 +79,24 @@ template:
     checked, leave it unchanged and record the limit. Give every selected
     document exactly one outcome:
 
+    Before assigning `clean` or `fixed`, perform both checks for every
+    applicable claim in the document:
+
+    - For each task ID cited with a status or timing claim (such as planned,
+      someday, in progress, or follow-up), call `orbit.task.show` for that ID
+      and compare the current task status or timing with the document. Correct
+      verified drift. If the task cannot be looked up or the claim cannot be
+      confirmed, leave it unchanged and assign `partial`.
+    - For each exclusive usage claim (such as only, never, or the sole loader
+      or caller), search the repository for the relevant identifier and its
+      other usages, loaders, or callers. Confirm the claim from the results. If
+      the search cannot be completed or its results are inconclusive, leave
+      the claim unchanged and assign `partial`.
+
+    Assign `clean` or `fixed` only when every applicable check above and every
+    other factual claim is fully verified. Record any unchecked claim and its
+    limit with a `partial` outcome.
+
     - `clean`: fully verified, no change needed.
     - `fixed`: fully verified, and drift was corrected.
     - `partial`: some claims verified, others left unchecked.
@@ -86,7 +110,7 @@ template:
     ## Attach the ledger
 
     Write `.orbit/tmp/doc-duties-ledger.json` and attach it with
-    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/doc-duties-ledger.json","path":"doc-duties-ledger.json","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this task ID>","source_path":".orbit/tmp/doc-duties-ledger.json","path":"doc-duties-ledger.json","model":"<agent-family>"}'`.
     Its shape is `{"schema_version":2,"run_date":"YYYY-MM-DD","head":"<full HEAD commit SHA>","notes":"<optional, for example that no prior ledger was readable>","documents":[{"path":"<repo-relative path>","attempted_on":"YYYY-MM-DD","outcome":"clean|fixed|partial|skipped","reason":"<required unless clean or fixed>","ordering_date":"YYYY-MM-DD","ordering_source":"ledger|frontmatter|git"}],"state":{"<repo-relative path>":[{"attempted_on":"YYYY-MM-DD","outcome":"clean|fixed|partial|skipped","reason":"<as above>"}]}}`.
     Include one `documents` row per selected document, in selection order, and
     attach the ledger even when every document was skipped. `attempted_on` is
@@ -120,20 +144,21 @@ template:
   required_tools:
   - orbit.search
   - orbit.task.add
-  - orbit.task.artifact.get
-  - orbit.task.artifact.put
+  - orbit.task.artifact:get
+  - orbit.task.artifact:put
   - orbit.task.list
   - orbit.task.show
-  # A batch edits only docs/ and the tracked top-level README/CONTRIBUTING
-  # documents its brief validates, so the minted task locks just that scope
-  # instead of the whole tree (a dir:. lock starves on a busy drain).
+  # The executing worker selects the batch at run time inside this bound.
+  # Preparation keeps these selectors. It does not replace them with the
+  # batch or with a document the brief excludes. A dir:. lock starves on a
+  # busy drain, so the minted task locks just this scope.
   context_files:
   - 'dir:docs'
   - 'file:README.md'
   - 'file:CONTRIBUTING.md'
   priority: medium
   complexity: low
-  status: backlog
+  status: proposed
 dedupe: skip_if_open
 created_by: system
 created_at: 2026-09-24T00:00:00Z

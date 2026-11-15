@@ -91,3 +91,56 @@ fn crew_env_entries_that_are_not_variable_names_or_name_orbit_variables_fail_nam
         );
     }
 }
+
+#[test]
+fn crew_env_file_sources_load_as_written_and_malformed_paths_fail_naming_the_entry() {
+    let global = tempfile::tempdir().expect("global tempdir");
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let roots = ConfigRoots::new(global.path(), workspace.path());
+    let entries = [
+        "ANTHROPIC_API_KEY=file:~/.config/anthropic/credits-key",
+        "OPENAI_API_KEY=file:/run/secrets/openai",
+    ];
+    crew_env_write_config(
+        global.path(),
+        &format!(
+            "{CREW_ENV_CREW}env = [\"{}\", \"{}\"]\n",
+            entries[0], entries[1]
+        ),
+    );
+    let loaded = ResolvedConfig::load(&roots).expect("file-backed crew env loads");
+    let written: Vec<String> = loaded.crews["opus-credits"]
+        .env
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(written, entries, "entries print back as written");
+    assert!(
+        loaded.crews["opus-credits"]
+            .env
+            .iter()
+            .all(|entry| entry.source.file().is_some()),
+        "a `file:` source is never read as a variable name"
+    );
+
+    for entry in [
+        "ANTHROPIC_API_KEY=file:",
+        "ANTHROPIC_API_KEY=file:relative/key",
+        "ANTHROPIC_API_KEY=file:~",
+        "ANTHROPIC_API_KEY=file:/run/secrets/",
+        "ORBIT_OPERATOR=file:/run/secrets/key",
+        "file:/run/secrets/key",
+    ] {
+        crew_env_write_config(
+            global.path(),
+            &format!("{CREW_ENV_CREW}env = [\"{entry}\"]\n"),
+        );
+        let refusal = ResolvedConfig::load(&roots)
+            .expect_err("a malformed file source must fail the load")
+            .to_string();
+        assert!(
+            refusal.contains("[crews.opus-credits].env") && refusal.contains(entry),
+            "the refusal names the crew and the entry `{entry}`: {refusal}"
+        );
+    }
+}

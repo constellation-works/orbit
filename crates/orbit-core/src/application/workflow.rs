@@ -12,15 +12,15 @@ pub struct Workflow {
 pub const WORKFLOWS: &[Workflow] = &[
     Workflow {
         alias: "auto",
-        job_id: "workspace_auto_pipeline",
+        job_id: orbit_types::workflow::WORKSPACE_AUTO_PIPELINE_JOB,
     },
     Workflow {
         alias: "ship",
-        job_id: "task_auto_pipeline",
+        job_id: orbit_types::workflow::TASK_AUTO_PIPELINE_JOB,
     },
     Workflow {
         alias: "task-pilot",
-        job_id: "task_pilot_pipeline",
+        job_id: orbit_types::workflow::TASK_PILOT_PIPELINE_JOB,
     },
 ];
 

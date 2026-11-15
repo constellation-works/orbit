@@ -1,5 +1,9 @@
-# plugin.yaml — the manifest example from docs/design/plugins/1_scope.md §2,
-# kept verbatim so `orbit plugin validate` is proven against the design.
+# plugin.yaml — adapted from the manifest example in
+# docs/design/plugins/1_scope.md §2, so `orbit plugin validate` is exercised
+# against a design-shaped manifest. Not verbatim: the host range below is
+# widened to >=0.23.0 (the design requires >=0.24.0) for fixture
+# compatibility, and the design's web refresh_ms and secrets sections are
+# omitted.
 schemaVersion: 2
 kind: Plugin
 metadata:

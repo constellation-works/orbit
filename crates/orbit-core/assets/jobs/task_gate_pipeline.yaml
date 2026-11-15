@@ -50,7 +50,7 @@
 #   and any execution claim holding them, `dispatch_child` stops on it
 #   without launching a child, and the run succeeds with the task still in
 #   `backlog` for a later drain pass.
-# - The child wait covers the longest supported implementation activity (3h)
+# - The child wait covers the maximum workspace implementation override (12h)
 #   plus a bounded delivery/review tail (1h). The default reservation TTL
 #   intentionally covers that full child dispatch wait budget. Keep
 #   `ttl_seconds >= dispatch_timeout_seconds` when overriding
@@ -126,8 +126,8 @@ spec:
     allowed_crews: []
     max_wait_seconds: 3600
     poll_interval_seconds: 30
-    ttl_seconds: 14400
-    dispatch_timeout_seconds: 14400
+    ttl_seconds: 46800
+    dispatch_timeout_seconds: 46800
 
   steps:
     - id: delivery

@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_store::contracts::TaskCreateParams;
 use orbit_tools::ToolContext;
-use orbit_types::policy::Role;
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::Value;
@@ -27,10 +26,9 @@ pub(crate) fn run_tool_as_operator(
     name: &str,
     input: Value,
 ) -> Result<Value, OrbitError> {
-    runtime.run_tool_with_context_and_role(
+    runtime.run_tool_with_context(
         name,
         input,
-        Role::Admin,
         ToolContext {
             session_context: ToolSessionContext {
                 effective_capabilities: BTreeSet::from([McpCapability::Operator]),

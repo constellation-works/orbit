@@ -20,7 +20,7 @@ Options:
           Wait for a terminal run state for up to 3600 seconds by default. Exit nonzero on wait expiry or an unsuccessful run; expiry reports wait_timeout=true with the actual run state and leaves the run active
 
       --timeout-seconds <TIMEOUT_SECONDS>
-          Wait deadline in seconds (0..=21600); requires --wait
+          Wait deadline in seconds (0..=86400); requires --wait
 
   -h, --help
           Print help (see a summary with '-h')
@@ -38,5 +38,6 @@ Examples:
   orbit run task-pilot --wait --json
 
 Pilots never promote or dispatch tasks. An omitted task list runs automatic
-discovery; explicit ids audit those tasks. Inspect submitted runs with
+discovery; explicit ids audit those tasks. Explicit tasks with different stored
+crews are submitted in separate runs. Inspect submitted runs with
 `orbit run history -j task_pilot_pipeline` and `orbit run show <RUN_ID>`.

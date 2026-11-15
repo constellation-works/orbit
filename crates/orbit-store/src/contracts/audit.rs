@@ -63,6 +63,9 @@ pub struct AuditEventFilter {
     /// Drop successful rows recorded by the `unverified` caller. Failures and
     /// denials from that caller stay listed.
     pub exclude_unverified_success: bool,
+    /// Application callback rows whose `entry_execution_id` is this entry
+    /// row's `execution_id`.
+    pub application_entry_execution_id: Option<String>,
     pub limit: usize,
     /// Rows to skip after ordering (newest first). Pushed into SQL so a
     /// caller can page past the first `limit` rows without prefetching the
@@ -88,6 +91,21 @@ pub struct AuditToolAggregate {
     /// incident classifier. Includes every matching row, without a scan cap.
     pub callable_unexpected_failures: i64,
     pub avg_duration_ms: f64,
+}
+
+/// One callable tool (`run` or `run-mcp`) grouped by its server-derived model.
+///
+/// `model` prefers `session_model`, then the role-derived `actor_model` and
+/// `actor_family`, so rows written before the session column still group.
+/// `unknown` is the bucket when none of those is set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditToolModelAggregate {
+    pub tool_name: String,
+    pub model: String,
+    pub successes: i64,
+    pub failures: i64,
+    pub denials: i64,
+    pub unexpected_failures: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,6 +151,8 @@ pub struct AuditActorAggregate {
 /// have to name a field that can only ever be `None` for them.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AuditInvocationFields<'a> {
+    /// Host-verified application consent, separate from client attribution.
+    pub application: Option<&'a orbit_types::tool::ApplicationInvocation>,
     /// Per-invocation correlation ID minted by the accepting process.
     pub trace_id: Option<&'a str>,
     /// Caller network address observed by the accepting process. Audit
@@ -163,6 +183,9 @@ pub struct AuditInvocationFields<'a> {
     /// authenticated peer's PID. The row is then written `brokered`. `None`
     /// for every in-process call.
     pub brokered_peer_pid: Option<u32>,
+    /// Server-derived model for this MCP tool call. `None` for every
+    /// non-MCP producer and for an MCP call with no job, crew, or client name.
+    pub session_model: Option<&'a str>,
 }
 
 /// Per-(actor, attribution) aggregate of audited tool calls [ORB-10890].

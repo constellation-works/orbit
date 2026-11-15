@@ -10,97 +10,34 @@
 // comes from the shared selector with the rest of the Metrics panel. Chart
 // drawing and tooltips stay in metrics.js, which passes its helpers in.
 
-import { el, fetchJson, getWorkspaceRevision } from './common.js';
-import { runningModel } from './metrics-running.js';
+import { el } from './common.js';
+import { OUTCOMES, TERMINAL_TIME_NOTE, axisScale, fmtCompactTotal, option, runningModel, seriesKey, seriesLabel, tagPicker, tasks, trendSource, undatedNote } from './metrics-running.js';
 
-const COMPLEXITY_LABELS = { low: "Low", medium: "Medium", hard: "Hard", xhard: "Xhard", unset: "Unassessed" };
-const OUTCOMES = [["done", "Done"], ["all", "All closed"]];
 const SCOPES = [["all", "All invocations"], ["implement", "Implement only"]];
-const MAX_TAGS = 8;
 
 const filters = { outcome: "done", scope: "all", model: "", tags: [] };
-let sequence = 0;
+
+const source = trendSource({
+  path: "/api/diagnostics/task_tokens",
+  params(windowKey) {
+    const query = new URLSearchParams({ since: windowKey, outcome: filters.outcome, scope: filters.scope });
+    if (filters.model) query.set("model", filters.model);
+    if (filters.tags.length) query.set("tags", filters.tags.join(","));
+    return query;
+  },
+  accepts: (payload) => payload && payload.window && Array.isArray(payload.series),
+  missingText: "This host answered without a tokens-per-task trend.",
+  notYetText: "This host's Orbit does not report tokens per task yet. Upgrade it to see this trend.",
+});
 
 /// The endpoint query for `windowKey` under the current filters.
-export function tokensQuery(windowKey) {
-  const query = new URLSearchParams({ since: windowKey, outcome: filters.outcome, scope: filters.scope });
-  if (filters.model) query.set("model", filters.model);
-  if (filters.tags.length) query.set("tags", filters.tags.join(","));
-  return `/api/diagnostics/task_tokens?${query}`;
-}
-
-/// Fetch the trend for `windowKey`. A failed read, or a host whose Orbit
-/// predates the endpoint, answers `{ unavailable }` so the other trends still
-/// render. Every result carries a fence (generation, workspace/host visit
-/// revision, window and complete query) captured at request time; both the
-/// filter refetch and the full-panel refresh share `sequence`, so whichever
-/// starts later retires the other.
-export function fetchTokens(windowKey) {
-  const fence = { generation: ++sequence, revision: getWorkspaceRevision(), windowKey, query: tokensQuery(windowKey) };
-  const query = fence.query;
-  return fetchJson(query).then(
-    (payload) => (payload && payload.window && Array.isArray(payload.series)
-      ? { ...payload, query, tokenFence: fence }
-      : { query, unavailable: "This host answered without a tokens-per-task trend.", tokenFence: fence }),
-    (error) => ({
-      query,
-      unavailable: error.status === 404 ? "This host's Orbit does not report tokens per task yet. Upgrade it to see this trend." : error.message,
-      tokenFence: fence,
-    }),
-  );
-}
-
-/// True only when `payload` is the newest tokens request and its visit,
-/// window and complete filter query still match current state. Unavailable
-/// and error replies carry the fence too, so they are gated the same way.
-export function isCurrentTokensPayload(payload, windowKey) {
-  const fence = payload && payload.tokenFence;
-  if (!fence) return false;
-  return fence.generation === sequence
-    && fence.revision === getWorkspaceRevision()
-    && fence.windowKey === windowKey
-    && fence.query === tokensQuery(windowKey);
-}
-
-/// Refetch after a filter change; `apply` runs only for a current request.
-function refetch(windowKey, apply) {
-  fetchTokens(windowKey).then((payload) => {
-    if (isCurrentTokensPayload(payload, windowKey)) apply(payload);
-  });
-}
+export const tokensQuery = source.query;
+/// Fetch the trend for `windowKey`, fenced by metrics-running.js `trendSource`.
+export const fetchTokens = source.fetch;
+export const isCurrentTokensPayload = source.isCurrent;
 
 /// "1.24M", "860k", "412".
-export function fmtTokens(value) {
-  if (value == null || !Number.isFinite(Number(value))) return "—";
-  const n = Number(value);
-  if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
-  if (n >= 1e6) return `${(n / 1e6).toFixed(n >= 1e7 ? 1 : 2)}M`;
-  if (n >= 1e3) return `${Math.round(n / 1e3)}k`;
-  return String(Math.round(n));
-}
-
-function tasks(n) {
-  return `${n} ${n === 1 ? "task" : "tasks"}`;
-}
-
-function seriesKey(series) {
-  return series.cohort === "all" ? series.complexity : `${series.complexity}-${series.cohort}`;
-}
-
-function seriesLabel(series) {
-  const name = COMPLEXITY_LABELS[series.complexity] || series.complexity;
-  if (series.cohort === "with") return `${name} · with tag`;
-  if (series.cohort === "without") return `${name} · without`;
-  return name;
-}
-
-/// A 1–2–5 axis from zero past `max`, in about four steps.
-function tokenScale(max) {
-  const raw = Math.max(max, 1) * 1.08 / 4;
-  const magnitude = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 5, 10].map((m) => m * magnitude).find((candidate) => candidate >= raw);
-  return { step, max: Math.ceil(Math.max(max, 1) * 1.08 / step) * step };
-}
+export const fmtTokens = fmtCompactTotal;
 
 /// The filter row: outcome, scope, implementing model and the tag picker.
 export function tokensTools({ segGroup, windowKey, payload, onChange }) {
@@ -110,7 +47,7 @@ export function tokensTools({ segGroup, windowKey, payload, onChange }) {
   const apply = (update) => {
     Object.assign(filters, update);
     onChange(null);
-    refetch(windowKey, onChange);
+    source.refetch(windowKey, onChange);
   };
   const models = (payload && payload.available_models) || [];
   const model = el("select", { class: "mx-select", "aria-label": "Implementing model" }, [
@@ -120,36 +57,12 @@ export function tokensTools({ segGroup, windowKey, payload, onChange }) {
   ]);
   model.addEventListener("change", () => apply({ model: model.value }));
 
-  const atTagLimit = filters.tags.length >= MAX_TAGS;
-  const available = atTagLimit ? [] : ((payload && payload.available_tags) || []).filter((entry) => !filters.tags.includes(entry.tag));
-  const picker = el("select", { class: "mx-select", "aria-label": "Compare a tag" }, [
-    option("", atTagLimit ? `Maximum of ${MAX_TAGS} tags selected` : filters.tags.length ? "Add a tag…" : "Compare a tag…", true),
-    ...available.map((entry) => option(entry.tag, `${entry.tag} (${entry.tasks})`, false)),
-  ]);
-  picker.addEventListener("change", () => {
-    if (picker.value && filters.tags.length < MAX_TAGS && available.some((entry) => entry.tag === picker.value)) {
-      apply({ tags: [...filters.tags, picker.value].sort() });
-    }
-  });
-  const chips = filters.tags.map((tag) => {
-    const chip = el("button", { class: "mx-chip", type: "button", title: `Stop comparing ${tag}`, "aria-label": `Remove tag ${tag}` }, [tag, el("span", { "aria-hidden": "true", text: "×" })]);
-    chip.addEventListener("click", () => apply({ tags: filters.tags.filter((other) => other !== tag) }));
-    return chip;
-  });
-
   return [
     segGroup("Task outcome", OUTCOMES, filters.outcome, (key) => key !== filters.outcome && apply({ outcome: key })),
     segGroup("Invocations", SCOPES, filters.scope, (key) => key !== filters.scope && apply({ scope: key })),
     model,
-    el("div", { class: "mx-tags", role: "group", "aria-label": "Tag cohorts" }, [picker, ...chips]),
+    tagPicker({ tags: filters.tags, offered: payload && payload.available_tags, apply }),
   ];
-}
-
-function option(value, text, selected) {
-  const node = el("option", { text });
-  node.value = value;
-  node.selected = selected;
-  return node;
 }
 
 /// The trend model metrics.js draws: cards, chart, table, or an empty state.
@@ -186,7 +99,7 @@ export function tokensModel(payload, { windowKey, shown, bucketTitle, bucketWidt
       cards,
       empty: {
         title: `No ${payload.outcome === "done" ? "done" : "closed"} tasks with token totals in the last ${windowKey === "all" ? "recorded history" : windowKey}`,
-        detail: left ? `${tasks(left)} excluded: ${total.excluded_uncovered} with an uncovered model, ${total.excluded_no_invocations} with no linked invocation in scope.` : "",
+        detail: [left ? `${tasks(left)} excluded: ${total.excluded_uncovered} with an uncovered model, ${total.excluded_no_invocations} with no linked invocation in scope.` : "", undatedNote(payload.undated_tasks)].filter(Boolean).join(" "),
       },
     };
   }
@@ -194,7 +107,7 @@ export function tokensModel(payload, { windowKey, shown, bucketTitle, bucketWidt
   const visible = series.filter((entry) => isShown(entry.key));
   let max = 0;
   for (const entry of visible) for (const point of entry.points) if (point.n) max = Math.max(max, point.mean);
-  const scale = tokenScale(max);
+  const scale = axisScale(0, max);
   const y = (value) => 100 - Math.min(value, scale.max) / scale.max * 100;
   const yTicks = [];
   for (let v = 0; v <= scale.max; v += scale.step) yTicks.push({ top: 100 - v / scale.max * 100, label: fmtTokens(v) });
@@ -202,9 +115,10 @@ export function tokensModel(payload, { windowKey, shown, bucketTitle, bucketWidt
   const notes = [
     `${bucketWidthLabel(seconds)}, aligned to the clock`,
     "lines join across buckets where no task closed",
-    "time = the task's last write after it closed",
+    TERMINAL_TIME_NOTE,
     payload.scope === "implement" ? "implement invocations only" : "every linked invocation",
   ];
+  if (payload.undated_tasks) notes.push(undatedNote(payload.undated_tasks));
   if (payload.tags.length) notes.push(`with tag = carries ${payload.tags.join(" or ")} now (current tags, not tags at the time); dashed = without`);
   if (payload.model) notes.push(`implementing model ${payload.model}; ${tasks(payload.excluded_other_model)} on other models left out`);
   if (excluded(total)) notes.push(`excluded: ${total.excluded_uncovered} with an uncovered model, ${total.excluded_no_invocations} with no linked invocation`);
@@ -292,7 +206,7 @@ export function tokenSpendModel(payload, { windowKey, shown, countView, bucketTi
       cards,
       empty: {
         title: `No ${payload.outcome === "done" ? "done" : "closed"} tasks with token totals in the last ${windowKey === "all" ? "recorded history" : windowKey}`,
-        detail: left ? `${tasks(left)} excluded: ${total.excluded_uncovered} with an uncovered model, ${total.excluded_no_invocations} with no linked invocation in scope.` : "",
+        detail: [left ? `${tasks(left)} excluded: ${total.excluded_uncovered} with an uncovered model, ${total.excluded_no_invocations} with no linked invocation in scope.` : "", undatedNote(payload.undated_tasks)].filter(Boolean).join(" "),
       },
     };
   }
@@ -301,9 +215,10 @@ export function tokenSpendModel(payload, { windowKey, shown, countView, bucketTi
   const addColumns = (lists, length) => Array.from({ length }, (_, i) => lists.reduce((sumSoFar, list) => sumSoFar + (list[i] || 0), 0));
   const leadLength = Math.max(0, ...series.map((entry) => (entry.lead_points || []).length));
   const notes = [
-    "time = the task's last write after it closed",
+    TERMINAL_TIME_NOTE,
     payload.scope === "implement" ? "implement invocations only" : "every linked invocation",
   ];
+  if (payload.undated_tasks) notes.push(undatedNote(payload.undated_tasks));
   if (payload.tags.length) notes.push(`with tag = carries ${payload.tags.join(" or ")} now (current tags, not tags at the time); dashed = without`);
   if (payload.model) notes.push(`implementing model ${payload.model}; ${tasks(payload.excluded_other_model)} on other models left out`);
   if (excluded(total)) notes.push(`excluded: ${total.excluded_uncovered} with an uncovered model, ${total.excluded_no_invocations} with no linked invocation`);

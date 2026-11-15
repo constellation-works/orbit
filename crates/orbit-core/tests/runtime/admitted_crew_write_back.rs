@@ -74,7 +74,7 @@ fn started_crew_experiment(runtime: &OrbitRuntime) -> String {
                         "overlay": { "crew": { "pool": [{ "crew": "luna", "weight": 1 }] } }
                     }
                 ])),
-                primary_metric: Some("implement_tokens".into()),
+                primary_metric: Some("total_tokens".into()),
                 mode: Some("live".into()),
                 ..ExperimentDefinitionInput::default()
             },
@@ -228,7 +228,7 @@ fn mismatches_for(
 
 fn crew_of(fx: &Fixture, task: &str) -> (Option<String>, Option<String>) {
     let task = fx.runtime.get_task(task).unwrap();
-    (task.crew, task.crew_source)
+    (task.crew, task.crew_source.map(|source| source.to_string()))
 }
 
 fn last_crew_note(fx: &Fixture, task: &str) -> String {
@@ -336,7 +336,14 @@ fn a_provider_hold_redraw_is_written_back_to_the_task() {
     let fx = fixture(HOLD_CREWS);
     let job = delivery_job(&fx);
     let created = fx.tagged_task(&[], None);
-    assert_eq!(created.crew_source.as_deref(), Some("pool:medium"));
+    assert_eq!(
+        created
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("pool:medium")
+    );
     let held = created.crew.clone().unwrap();
     let other = if held == "sol" { "luna" } else { "sol" };
     let run = fx.admit(&created.id, &held);
@@ -484,6 +491,24 @@ fn an_admitted_delivery_records_its_crew_exactly_once() {
     assert_eq!(
         last_crew_note(&fx, &task),
         "crew changed from `sol` to `luna` at admission (run_crew)"
+    );
+    // The write-back records the change as a typed decision beside the note.
+    let recorded = fx
+        .runtime
+        .get_task_history(&task)
+        .unwrap()
+        .iter()
+        .rev()
+        .find_map(orbit_types::task::RecordedCrewAssignment::from_entry)
+        .expect("a recorded crew assignment");
+    assert!(recorded.unknown.is_empty(), "{recorded:?}");
+    assert_eq!(recorded.before.crew.as_deref(), Some("sol"));
+    assert_eq!(
+        (
+            recorded.after.crew.as_deref(),
+            recorded.after.source.map(|source| source.to_string())
+        ),
+        (Some("luna"), Some("redraw:run_crew".to_string()))
     );
     assert_eq!(crew_assigned_entries(&fx, &task), assigned_before + 1);
 

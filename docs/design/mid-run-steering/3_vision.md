@@ -1,8 +1,8 @@
 ---
 title: Mid-Run Operator Steering — Vision
 owner: codex
-last_updated: 2026-10-20
-last_validated: 2026-10-20
+last_updated: 2026-10-31
+last_validated: 2026-10-31
 status: Accepted
 feature: mid-run-steering
 doc_role: vision
@@ -16,7 +16,7 @@ related_artifacts: [ORB-16577, ORB-10499]
 
 # Mid-Run Operator Steering — Vision
 
-Forward-looking: where steering could go now that the safe-point version in [2_design.md](./2_design.md) is implemented. Operational history still needs to accumulate. Everything here is speculation until a task adopts it; nothing in this doc is a commitment or a schedule. Native session injection, interrupt urgency, UI delivery states and automation-authored steering remain out of scope and unfiled unless an operator requests them. Accepted status records that boundary, not implementation of these ideas.
+Forward-looking: where steering could go now that the safe-point version in [2_design.md](./2_design.md) is implemented. Operational history still needs to accumulate. Everything here is speculation until a task adopts it; nothing in this doc is a commitment or a schedule. Native session injection, interrupt urgency, UI delivery states and automation-authored steering remain out of scope and unfiled unless an operator requests them. Accepted status records that boundary, not implementation of these ideas; the owner-authorized closeout is in [ORB-16606].
 
 ## 1. Open Questions
 
@@ -59,5 +59,6 @@ Steering through the system of record rather than a live socket: the comment, th
 
 - [ORB-16577] — added the Muse executor lane and supplied the missed-comment incident; its out-of-scope MSP session host is the example in open question 2.
 - [ORB-10499] — established the checkpoint re-read contract this vision extends.
+- [ORB-16606] — confirmed the owner-accepted boundary between shipped steering and future ideas.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

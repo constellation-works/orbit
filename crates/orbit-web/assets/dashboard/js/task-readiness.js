@@ -1,10 +1,25 @@
 // Orbit dashboard task readiness, pilot warnings and operator records.
 
-import { captureWorkspaceVisit, el, postJson, runHref, bindTaskLink } from './common.js';
-import { drainReadinessFor, drainReadinessView } from './drain-waits.js';
+import { captureWorkspaceVisit, el, fetchJson, patchJson, postJson, runHref, bindTaskLink } from './common.js';
+import { drainReason, drainReadinessEntry, drainReadinessFor, drainReadinessView, replaceDrainReadinessEntry } from './drain-waits.js';
+import { applyUpdatedTask, currentTaskRecord, forgetTaskDetailLoad } from './task-data.js';
 import * as taskShared from './task-shared.js';
+import * as taskDecision from './task-decision.js';
 
 const OPERATOR_RECORD_REFUSAL_MS = 20000;
+
+// A current host-operational hold is not released by `no-pilot`. Admission
+// checks it before the general skip and strips the tag from the hold's
+// fingerprint, so Skip pilot is not offered for it.
+const HOST_OPERATIONAL_REASON = "host_operational_handoff";
+
+function scheduleOperatorRecordRefusalExpiry(key, message, context) {
+  setTimeout(() => {
+    if (taskShared.taskState.operatorRecordRefusals.get(key) !== message) return;
+    taskShared.taskState.operatorRecordRefusals.delete(key);
+    taskShared.rerender(context);
+  }, OPERATOR_RECORD_REFUSAL_MS);
+}
 
 export function readinessOf(task) {
   const readiness = task && task.readiness;
@@ -67,6 +82,24 @@ export function buildPilotWarningBadge(task) {
   }, [el("span", { text: "⚠", "aria-hidden": "true" }), ` pilot warnings · ${count}`])] : [];
 }
 
+// The server binds these runs to the task; ordinary delivery runs do not
+// imply triage. Keep the workspace on links from an aggregate owner view.
+export function buildActiveTriageBadges(task) {
+  return (Array.isArray(task.active_triage) ? task.active_triage : []).map((triage) => {
+    const title = triage.crew ? `Triaging with ${triage.crew}` : "Triaging · crew assignment pending";
+    const link = el("a", {
+      class: "live-state-pill active-triage-chip",
+      text: "triaging",
+      title,
+      "aria-label": `${title}; view run`,
+    });
+    link.href = taskShared.taskRunHref(task, triage.run_id);
+    link.addEventListener("click", (event) => event.stopPropagation());
+    link.addEventListener("keydown", (event) => event.stopPropagation());
+    return link;
+  });
+}
+
 function deliveryAttentionLabel(attention) {
   if (!attention) return null;
   if (attention.blocker === "failed_checks") return "CI failed";
@@ -85,19 +118,26 @@ function deliveryAttentionTitle(task, attention) {
   if (attention.run_state) parts.push(`delivery run ${attention.run_state}`);
   if (attention.repairing) parts.push("a live run is repairing the pull request");
   if (attention.as_of) parts.push(`as of ${attention.as_of}`);
-  return parts.length ? `${task.status} · ${deliveryAttentionLabel(attention)}: ${parts.join(", ")}` : `${task.status} · ${deliveryAttentionLabel(attention)}`;
+  // A live repair still names the blocker it is repairing.
+  const label = deliveryAttentionLabel(attention);
+  const state = attention.repairing ? `repairing ${label}` : label;
+  return parts.length ? `${task.status} · ${state}: ${parts.join(", ")}` : `${task.status} · ${state}`;
 }
 
+// A live run repairing the pull request reads `repairing` with its auto-fix
+// attempt where the blocker was; the tooltip and aria-label still name the blocker.
 export function buildDeliveryAttentionBadge(task) {
   const attention = task.delivery_attention;
   if (!attention) return [];
-  const label = deliveryAttentionLabel(attention);
+  const repairing = Boolean(attention.repairing);
+  const attempt = attention.attempt != null && attention.budget != null ? ` ${attention.attempt}/${attention.budget}` : "";
+  const text = repairing ? `${task.status} · repairing${attempt}` : `${task.status} · ${deliveryAttentionLabel(attention)}`;
   return [el("span", {
-    class: "delivery-attention-badge",
+    class: repairing ? "live-state-pill delivery-attention-badge repairing" : "live-state-pill delivery-attention-badge",
     role: "img",
     "aria-label": deliveryAttentionTitle(task, attention),
     title: deliveryAttentionTitle(task, attention),
-    text: `${task.status} · ${label}`,
+    text,
   })];
 }
 
@@ -134,17 +174,21 @@ export function buildDeliveryAttentionBanner(task) {
   } else if (attention.pr_number) {
     actions.appendChild(el("span", { class: "attention-action", text: `PR #${attention.pr_number}` }));
   }
-  return el("section", { class: "task-attention warning delivery-attention", "aria-label": "Delivery needs attention" }, [
+  const state = attention.repairing ? "Delivery repairing" : "Delivery needs attention";
+  return el("section", { class: "task-attention warning delivery-attention", "aria-label": state }, [
     el("span", { class: "task-attention-icon", "aria-hidden": "true" }),
     el("div", { class: "task-attention-content" }, [
-      el("h3", { class: "task-attention-title", text: `Delivery needs attention · ${deliveryAttentionLabel(attention)}` }),
+      el("h3", { class: "task-attention-title", text: `${state} · ${deliveryAttentionLabel(attention)}` }),
       ...lines.map((line) => el("p", { class: "task-attention-body", text: line })),
       actions.children.length ? actions : null,
     ]),
   ]);
 }
 
-export function buildPilotWarnings(task) {
+// The pilot-hold callout on a proposed task: the pilot warning triage's summary
+// and one button per option when it opened a decision, else the findings and
+// the plain hold explanation. The raw findings sit under a collapsed "Details".
+export function buildPilotWarnings(task, detail, context) {
   const findings = pilotWarnings(task);
   if (!findings.length) return null;
   const labels = {
@@ -152,14 +196,24 @@ export function buildPilotWarnings(task) {
     validation_tool_warnings: "Validation tool", blocked_by: "Prerequisite",
     adr_conflicts: "Conflict",
   };
+  const decision = taskDecision.pilotHoldDecision(task);
+  const list = el("ul", { class: "pilot-warning-findings" }, findings.map(finding => el("li", {}, [
+    el("strong", { text: `${labels[finding.kind] || String(finding.kind).replaceAll("_", " ")}: ` }),
+    el("span", { text: finding.text }),
+  ])));
   const content = el("div", { class: "task-attention-content" }, [
     el("h3", { class: "task-attention-title", text: "Pilot warnings" }),
-    el("p", { class: "task-attention-body", text: "The drain holds this task until an operator approves it or edits it so the next pilot pass is clean." }),
-    el("ul", { class: "pilot-warning-findings" }, findings.map(finding => el("li", {}, [
-      el("strong", { text: `${labels[finding.kind] || String(finding.kind).replaceAll("_", " ")}: ` }),
-      el("span", { text: finding.text }),
-    ]))),
   ]);
+  if (decision && detail && context) {
+    content.appendChild(taskDecision.buildDecisionCard(task, decision, detail, context));
+    content.appendChild(el("details", { class: "task-block-details" }, [
+      el("summary", { text: "Details" }),
+      list,
+    ]));
+  } else {
+    content.appendChild(el("p", { class: "task-attention-body", text: "The drain holds this task until an operator approves it or edits it so the next pilot pass is clean." }));
+    content.appendChild(list);
+  }
   return el("section", { class: "task-attention warning pilot-warnings", "aria-label": "Pilot warnings" }, [
     el("span", { class: "task-attention-icon", "aria-hidden": "true" }),
     content,
@@ -171,6 +225,11 @@ export function buildPilotWarnings(task) {
 export function buildPilotAdmissionHold(task, detail, context) {
   if (!task.resolvable_pilot_admission_hold) return null;
   if ((task.open_decisions || []).some(request => request.gate === "pilot_admission")) return null;
+  // The Readiness card owns this remedy once the snapshot names it. Skip
+  // pilot cannot release a current host-operational hold, so a second
+  // Clear/Approve callout would only repeat the card.
+  const snapshot = drainReadinessEntry(task);
+  if (snapshot && drainReason(snapshot) === HOST_OPERATIONAL_REASON) return null;
   const content = el("div", { class: "task-attention-content" }, [
     el("h3", { class: "task-attention-title", text: "Pilot admission hold" }),
   ]);
@@ -201,6 +260,7 @@ export function buildPilotAdmissionHold(task, detail, context) {
   actions.appendChild(approve);
   content.appendChild(actions);
   content.dataset.operatorRecord = "true";
+  content.dataset.operatorRecordFeedback = "true";
   const refusal = operatorRecordRefusalNode(task);
   if (refusal) content.appendChild(refusal);
   return el("section", { class: "task-attention warning pilot-admission-hold", "aria-label": "Pilot admission hold" }, [
@@ -227,7 +287,7 @@ export function operatorRecordRefusalNode(task) {
 // the note a refused record leaves appears, and a cleared one goes.
 export function refreshOperatorRecordFeedback(wrap, task) {
   const refusal = operatorRecordSignature(task);
-  for (const host of wrap.querySelectorAll("[data-operator-record]")) {
+  for (const host of wrap.querySelectorAll("[data-operator-record-feedback]")) {
     const shown = host.querySelector(":scope > .operator-record-refusal");
     if ((shown ? shown.textContent : "") === refusal) continue;
     if (shown) shown.remove();
@@ -244,7 +304,8 @@ export function refreshOperatorRecordFeedback(wrap, task) {
 export async function runOperatorRecord(task, detail, btnNode, context, request) {
   const visit = captureWorkspaceVisit();
   const key = taskShared.taskDispatchIdentity(task);
-  if (!taskShared.canMutateTask(task)) return;
+  if (btnNode.disabled || !taskShared.canMutateTask(task)) return;
+  const recordHost = btnNode.closest("[data-operator-record]");
   let suffix;
   let body;
   let successText;
@@ -266,6 +327,7 @@ export async function runOperatorRecord(task, detail, btnNode, context, request)
       const message = "[pilot_admission_evidence_required] pilot admission needs evidence; it is recorded with the decision";
       taskShared.taskState.operatorRecordRefusals.set(key, message);
       taskShared.rerender(context);
+      scheduleOperatorRecordRefusalExpiry(key, message, context);
       return;
     }
     suffix = "/pilot-admission";
@@ -283,6 +345,7 @@ export async function runOperatorRecord(task, detail, btnNode, context, request)
       const message = "[post_deploy_evidence_required] post-deploy record needs evidence; it is recorded with the measurement";
       taskShared.taskState.operatorRecordRefusals.set(key, message);
       taskShared.rerender(context);
+      scheduleOperatorRecordRefusalExpiry(key, message, context);
       return;
     }
     suffix = "/post-deploy";
@@ -305,26 +368,24 @@ export async function runOperatorRecord(task, detail, btnNode, context, request)
     const message = `[${code}] ${error.message || String(error)}`;
     taskShared.taskState.operatorRecordRefusals.set(key, message);
     taskShared.rerender(context);
-    setTimeout(() => {
-      if (taskShared.taskState.operatorRecordRefusals.get(key) !== message) return;
-      taskShared.taskState.operatorRecordRefusals.delete(key);
-      taskShared.rerender(context);
-    }, OPERATOR_RECORD_REFUSAL_MS);
+    scheduleOperatorRecordRefusalExpiry(key, message, context);
     return;
   }
+  // A retained detail keeps only the settled record's controls disabled:
+  // one criterion row, or both alternatives for the same pilot decision.
+  // Release before refreshing so a failed read cannot strand unrelated actions.
+  for (const b of held) if (!recordHost || b.closest("[data-operator-record]") !== recordHost) b.disabled = false;
   if (!visit.isCurrent()) return;
   taskShared.taskState.taskActionNotice = successText;
+  taskShared.notifyDecisionAnswered();
   await taskShared.refreshTasks(context);
-  // A detail kept for a draft still shows the settled record's own controls
-  // (its hold or criterion); everything else it holds is usable again.
-  for (const b of held) if (!b.closest("[data-operator-record]")) b.disabled = false;
 }
 
 // The readiness dot beside a backlog task's ID: the pool colour, its words as
 // the dot's label and the full wait in the tooltip. A row the snapshot does
 // not mention keeps a hidden dot and says nothing.
 function buildReadinessDot(task) {
-  const readiness = drainReadinessFor(task.id);
+  const readiness = drainReadinessFor(task);
   if (!readiness) return el("span", { class: "ready-dot none", "aria-hidden": "true" });
   const dot = el("span", { class: "ready-dot", role: "img", "aria-label": readiness.label, title: readiness.title });
   dot.dataset.pool = readiness.pool;
@@ -337,7 +398,7 @@ function buildReadinessDot(task) {
 // hidden from it rather than read twice.
 export function buildRowReason(task) {
   const dot = buildReadinessDot(task);
-  const readiness = drainReadinessFor(task.id);
+  const readiness = drainReadinessFor(task);
   if (!readiness) return el("span", { class: "row-reason none" }, [dot]);
   const words = readiness.badge ? readiness.badge.text : readiness.label;
   const text = `${words.charAt(0).toUpperCase()}${words.slice(1)}`.replace(/\bmacos\b/g, "macOS");
@@ -354,10 +415,205 @@ function readinessTaskLink(taskId, workspace) {
   return bindTaskLink(link, taskId, workspace ? { workspace } : {});
 }
 
+// Drain reasons a task's pilot assessment holds it for, which an operator's
+// `no-pilot` skip lifts. A current host-operational hold is not in this set:
+// the tag does not release it. An unverified review finding is a review
+// gate, not an assessment, so it is not one either.
+const PILOT_HOLD_REASONS = new Set([
+  "pilot_assessment_stale",
+  "pilot_duplicate",
+  "pilot_already_landed",
+  "operator_validation_handoff",
+  "native_os_required",
+]);
+const NO_PILOT_TAG = "no-pilot";
+
+function taskTags(task) {
+  return Array.isArray(task && task.tags) ? task.tags : [];
+}
+
+// Whether the drain holds `task` on its pilot state, so skipping the pilot
+// would change its admission.
+export function pilotHeld(task, entry) {
+  return Boolean(task && entry) && task.status === "backlog"
+    && PILOT_HOLD_REASONS.has(drainReason(entry)) && !taskTags(task).includes(NO_PILOT_TAG);
+}
+
+// The Readiness card's "Skip pilot" control for a pilot-held task: one click
+// adds `no-pilot` through the ordinary guarded task update, which records the
+// operator and the requirements it dispatches without assessment. The card
+// then re-reads the task's readiness so it names whatever still holds it.
+function buildSkipPilot(task, context) {
+  const label = "Dispatch without a new pilot assessment";
+  const mutable = taskShared.canMutateTask(task);
+  const button = el("button", {
+    type: "button",
+    class: "attention-action skip-pilot",
+    text: "Skip pilot",
+    title: mutable
+      ? `${label}: adds the no-pilot tag, recorded in history with your name. Remove the tag to restore the pilot gate.`
+      : taskShared.aggregateRefusalTitle(label, "skip the pilot"),
+  });
+  button.disabled = !mutable;
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    runSkipPilot(task, button, context);
+  });
+  const wrap = el("div", { class: "readiness-skip-pilot" }, [
+    button,
+    el("span", { class: "readiness-fix", text: label }),
+  ]);
+  // A kept draft repaints this refusal in place, as the pilot hold's does.
+  wrap.dataset.operatorRecordFeedback = "true";
+  const refusal = operatorRecordRefusalNode(task);
+  if (refusal) wrap.appendChild(refusal);
+  return wrap;
+}
+
+// The Readiness card's remedy for a host-operational hold. `no-pilot` does
+// not release it, so the card offers the operator decision the server accepts
+// and a jump to the acceptance-criteria editor. It never says dispatch proceeds.
+function buildHostOperationalRemedy(task, context) {
+  const mutable = taskShared.canMutateTask(task);
+  const resolvable = Boolean(task && task.resolvable_pilot_admission_hold);
+  const disabledTitle = mutable ? "" : taskShared.aggregateRefusalTitle("Resolve hold", "record an operator decision");
+  const wrap = el("div", { class: "readiness-host-operational" }, [
+    el("p", {
+      class: "readiness-fix",
+      text: "Skip pilot does not release this hold. Adding no-pilot leaves the task held, so dispatch does not proceed. Re-scope the acceptance criteria, or record an operator decision.",
+    }),
+  ]);
+  const actions = el("div", { class: "readiness-host-operational-actions" });
+  if (resolvable) {
+    const clear = el("button", {
+      class: "attention-action primary pilot-admission-clear",
+      type: "button",
+      text: "Clear hold",
+      title: disabledTitle || "Record that the held requirement is satisfied, with your evidence; this clears the pilot admission hold",
+    });
+    clear.disabled = !mutable;
+    clear.addEventListener("click", (event) => {
+      event.stopPropagation();
+      runOperatorRecord(task, clear.closest(".task-detail") || wrap, clear, context, { kind: "pilot", verdict: "clear" });
+    });
+    actions.appendChild(clear);
+    const approve = el("button", {
+      class: "attention-action pilot-admission-approve-anyway",
+      type: "button",
+      text: "Approve anyway",
+      title: disabledTitle || "Record a deliberate override of the pilot admission hold, with your reason; the task is admitted despite the finding",
+    });
+    approve.disabled = !mutable;
+    approve.addEventListener("click", (event) => {
+      event.stopPropagation();
+      runOperatorRecord(task, approve.closest(".task-detail") || wrap, approve, context, { kind: "pilot", verdict: "approve-anyway" });
+    });
+    actions.appendChild(approve);
+  } else {
+    actions.appendChild(el("span", {
+      class: "readiness-fix",
+      text: "Operator decision controls are unavailable for this hold.",
+    }));
+  }
+  const rescope = el("button", {
+    class: "attention-action rescope-criteria",
+    type: "button",
+    text: "Re-scope criteria",
+    title: mutable
+      ? "Edit the acceptance criteria so this hold no longer matches the work"
+      : taskShared.aggregateRefusalTitle("Re-scope criteria", "edit the acceptance criteria"),
+  });
+  rescope.disabled = !mutable;
+  rescope.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openAcceptanceCriteriaEditor(rescope);
+  });
+  actions.appendChild(rescope);
+  wrap.appendChild(actions);
+  wrap.dataset.operatorRecord = "true";
+  wrap.dataset.operatorRecordFeedback = "true";
+  const refusal = operatorRecordRefusalNode(task);
+  if (refusal) wrap.appendChild(refusal);
+  return wrap;
+}
+
+// Opens the acceptance-criteria editor already on the detail. The overview
+// panel exists while another tab is showing, and a clamped list hides the
+// edit control until its own toggle opens it.
+function openAcceptanceCriteriaEditor(button) {
+  const detail = button.closest(".task-detail");
+  if (!detail) return;
+  if (typeof detail.activateTab === "function") detail.activateTab("overview");
+  const block = detail.querySelector(".criteria-block");
+  if (!block) return;
+  if (block.classList.contains("clamped")) block.querySelector(".ac-toggle")?.click();
+  const openInput = block.querySelector(".field-editor-input");
+  if (openInput) {
+    openInput.focus();
+    openInput.scrollIntoView({ block: "nearest" });
+    return;
+  }
+  const edit = block.querySelector(".field-edit");
+  if (!edit || edit.disabled) return;
+  edit.click();
+  const input = block.querySelector(".field-editor-input");
+  if (!input) return;
+  input.focus();
+  input.scrollIntoView({ block: "nearest" });
+}
+
+async function runSkipPilot(task, button, context) {
+  const visit = captureWorkspaceVisit();
+  const key = taskShared.taskDispatchIdentity(task);
+  if (button.disabled || !taskShared.canMutateTask(task)) return;
+  if (typeof window.confirm !== "function" || !window.confirm(
+    `Skip the pilot for ${task.id}? It is dispatched without a new pilot assessment: this adds the no-pilot tag and records the skip in its history with your name. Remove the tag to restore the pilot gate.`,
+  )) return;
+  taskShared.taskState.operatorRecordRefusals.delete(key);
+  button.disabled = true;
+  let updated;
+  try {
+    // The PATCH replaces the tag list wholesale, so build it from the
+    // current record — not the render-time closure — or tags added (or
+    // removed) since the detail was built are silently reverted.
+    const current = currentTaskRecord(task, context) || task;
+    const tags = taskTags(current);
+    updated = await patchJson(visit.path(taskShared.taskMutationPath(current)), {
+      tags: tags.includes(NO_PILOT_TAG) ? tags : [...tags, NO_PILOT_TAG],
+    });
+  } catch (error) {
+    button.disabled = false;
+    if (!visit.isCurrent()) return;
+    const code = error && error.code ? error.code : "skip_pilot_refused";
+    const message = `[${code}] ${error.message || String(error)}`;
+    taskShared.taskState.operatorRecordRefusals.set(key, message);
+    taskShared.rerender(context);
+    scheduleOperatorRecordRefusalExpiry(key, message, context);
+    return;
+  }
+  if (!visit.isCurrent()) return;
+  applyUpdatedTask(updated, context, task);
+  forgetTaskDetailLoad(task);
+  try {
+    const payload = await fetchJson(taskShared.taskWorkspacePath(task, `/api/workflows/auto/readiness?task=${encodeURIComponent(task.id)}`));
+    const entry = Array.isArray(payload?.tasks) ? payload.tasks.find((item) => item?.task_id === task.id) : null;
+    if (entry && visit.isCurrent()) replaceDrainReadinessEntry(entry, task);
+  } catch (error) {
+    console.error(error);
+  }
+  if (!visit.isCurrent()) return;
+  const current = drainReadinessEntry(task);
+  const stillHeld = current && drainReason(current) === HOST_OPERATIONAL_REASON;
+  taskShared.taskState.taskActionNotice = stillHeld
+    ? `${task.id}: pilot skipped. The host-operational hold remains, so dispatch does not proceed.`
+    : `${task.id}: pilot skipped; dispatch proceeds without a new assessment`;
+  await taskShared.refreshTasks(context);
+}
+
 // The Readiness card leads with the pool, then links every reported blocker.
 // Without an entry it says whether a read is pending, failed or found nothing,
 // and never claims a pool.
-function buildDrainReadiness(drain, workspace) {
+function buildDrainReadiness(drain, workspace, task, context) {
   const entry = drain && drain.entry;
   if (!entry) {
     const text = drain && drain.pending
@@ -407,15 +663,36 @@ function buildDrainReadiness(drain, workspace) {
     wrap.appendChild(line("Overlap", [el("span", { class: "mono", text: `${selector.requested}${selector.held ? ` overlaps ${selector.held}` : ""}` })]));
   }
   for (const text of badge.detail.split("\n").filter(Boolean)) wrap.appendChild(el("div", { class: "readiness-message", text }));
+  if (drainReason(entry) === HOST_OPERATIONAL_REASON) wrap.appendChild(buildHostOperationalRemedy(task, context));
+  else if (pilotHeld(task, entry)) wrap.appendChild(buildSkipPilot(task, context));
   return wrap;
+}
+
+// A task an operator dispatched without a new assessment says so, and how to
+// restore the gate; the drain line above names whatever still holds it. A
+// host-operational hold the tag did not release must not read as if dispatch
+// is going ahead.
+function buildPilotSkipped(task, entry) {
+  if (!task || !taskTags(task).includes(NO_PILOT_TAG)) return null;
+  const history = Array.isArray(task.history) ? task.history : [];
+  const skip = [...history].reverse().find((item) => item && item.event === "pilot_skipped");
+  if (!skip) return null;
+  const snapshot = drainReadinessEntry(task);
+  const hostOperational = [entry, snapshot].some((item) => item && drainReason(item) === HOST_OPERATIONAL_REASON);
+  const text = hostOperational
+    ? `Pilot skipped by ${skip.by}. The host-operational hold remains, so dispatch does not proceed. Re-scope the acceptance criteria or record an operator decision.`
+    : `Pilot skipped by ${skip.by}: dispatch proceeds without a new assessment. Remove the no-pilot tag to restore the pilot gate.`;
+  return el("div", { class: "readiness-note readiness-pilot-skipped", text });
 }
 
 // The detail's Readiness card: why the drain is or is not taking the task,
 // then each preparation gap with its severity and its fix. "Ready" is claimed
 // only for a task the drain reports eligible with nothing missing.
-export function buildReadinessBlock(readiness, drain, workspace) {
+export function buildReadinessBlock(readiness, drain, workspace, task = null, context = null) {
   const wrap = el("div", { class: "value readiness-list" });
-  if (drain) wrap.appendChild(buildDrainReadiness(drain, workspace));
+  if (drain) wrap.appendChild(buildDrainReadiness(drain, workspace, task, context));
+  const skipped = buildPilotSkipped(task, drain && drain.entry);
+  if (skipped) wrap.appendChild(skipped);
   if (!readiness) return wrap;
   if (readiness.preparing) {
     wrap.appendChild(el("div", {

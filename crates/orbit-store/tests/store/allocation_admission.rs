@@ -8,6 +8,8 @@ mod claim_retention;
 mod dependencies;
 #[path = "allocation_admission/handoff_compatibility.rs"]
 mod handoff_compatibility;
+#[path = "allocation_admission/import_relations.rs"]
+mod import_relations;
 #[path = "allocation_admission/known_red.rs"]
 mod known_red;
 #[path = "allocation_admission/mutation_receipts.rs"]
@@ -379,7 +381,6 @@ allocation_test!(
                     deny_patterns: Vec::new(),
                     scanner_failure_behavior: ScannerFailureBehavior::AllowUnchecked,
                 },
-                None,
             )
             .unwrap_or_else(|error| panic!("{publication_id}: publish: {error}"));
             for &(case, previous, expected) in rows {
@@ -462,7 +463,13 @@ allocation_test!(removed_job_run_ids_are_never_reallocated, {
                 }
                 assert!(jobs.get_job_run(&removed.run_id).unwrap().is_none());
                 drop(jobs);
-                let reopened = open();
+                // Deleted identities also stay reserved for another workspace
+                // opening its own connection to the host's database.
+                let reopened = if delete {
+                    workspace_job_run_store(Store::open(&db).unwrap(), "ws_b")
+                } else {
+                    open()
+                };
                 let next = reopened
                     .insert_job_run("job-a", 1, Utc::now(), None, None)
                     .unwrap();
@@ -495,6 +502,7 @@ fn admission_request(
         caller_before_pr: false,
         review_gate: false,
         selective_review: false,
+        visual_resolution: 0,
         run_context: AdmissionRunContext {
             run_id: run_id.into(),
             job_name: job_name.into(),
@@ -1058,7 +1066,7 @@ impl Delivery {
         owner.create_task_in("typed handoff", selectors);
         let mut request = owner_request("first");
         request.ship = ship.clone();
-        request.review_gate = ship.before_pr;
+        request.review_gate = ship.before_pr || ship.before_landing;
         let claim = owner.pull(&request).claim.expect("claim");
         let unbound = claim_worker(&claim, false);
         owner.bind_claim(&unbound, &claim, ship).expect("bind");
@@ -1493,7 +1501,7 @@ allocation_test!(
                                 actor: "owner".into(),
                                 ttl_seconds: 600,
                                 owner_run_id: None,
-                                owner_metadata_json: None,
+                                owner_metadata: None,
                             },
                         )
                         .unwrap();

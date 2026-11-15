@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use fs2::FileExt;
 use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
-use orbit_core::application::health::artifact::{ArtifactFinding, RetiredActivityBackendRepair};
+use orbit_core::application::health::artifact::ArtifactFinding;
 use orbit_store::maintenance::migration::SUPPORTED_SCHEMA_VERSION;
 use orbit_types::task::{TASK_ENVELOPE_FILE_NAME, is_valid_orb_task_id};
 use orbit_types::workspace::WorkspacePaths;
@@ -48,6 +48,7 @@ mod automation;
 mod browser_kit;
 mod commands;
 mod git_protection;
+mod host_workspaces;
 mod permissions;
 mod report;
 mod retired_config;
@@ -66,7 +67,8 @@ pub use commands::{
     WorkspaceDoctorStatus,
 };
 pub use report::{
-    doctor_report_probes, doctor_row_json, provider_limit_findings, run_doctor_report,
+    doctor_report_probes, doctor_row_json, misplaced_plugin_enablement_row,
+    provider_limit_findings, run_doctor_report,
 };
 pub use retired_config::RetiredConfigKeyRepair;
 pub(crate) use system::{collect_lock_files, disk_space_check, process_is_alive};

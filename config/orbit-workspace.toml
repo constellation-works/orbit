@@ -7,8 +7,105 @@ required_validation_commands = []
 unlocked_path_validation_commands = ["make ci-fast"]
 
 # Conflict recovery regenerates these instead of merging them.
+# A CI job that stopped because the test build did not succeed, or while
+# downloading its nextest archive or awaiting the test jobs, failed in CI's
+# dependency handoff, not in the candidate: when every failed job stopped in
+# one of these steps, the set gets the bounded infrastructure rerun instead
+# of a repair agent. A build that failed in its own steps is not in the set.
+[workflow.ci_infrastructure_retry]
+handoff_steps = [
+  "Require a successful test build",
+  "Download nextest archive",
+  "Await the test build and nextest shards",
+]
+
+# UI QA must run the disposable dashboard fixture inside the managed worker.
+# Declare visual-fixture in machine.labels only after verifying that runtime;
+# the browser kit alone does not establish fixture-backend capability.
+[workflow.tag_requires_labels]
+ui = ["visual-fixture"]
+
 [workflow.generated_paths]
 "docs/INDEX.md" = "make docs-index"
 
 [workflow.validation_env]
 build_output_env = ["CARGO_TARGET_DIR"]
+
+# Codebase regression analytics classify a regression fix into the first
+# layer whose rules match most of its paths; the order is also the order
+# breakdowns list layers in. These rows replace the generic defaults
+# (`ci_tests` and `docs_skills` alone) with Orbit's crate and module layout
+# from ARCHITECTURE.md: tests and docs are recognised wherever they sit, and
+# a narrow module precedes its crate.
+[[workflow.regression_layers]]
+name = "ci_tests"
+prefixes = [".github/", "scripts/ci-", "scripts/test-"]
+dirs = ["tests", "testdata", "fixtures"]
+
+[[workflow.regression_layers]]
+name = "docs_skills"
+prefixes = ["docs/", "crates/orbit-core/assets/skills/", "plugin/"]
+suffixes = [".md"]
+
+[[workflow.regression_layers]]
+name = "dashboard"
+prefixes = ["crates/orbit-web/", "desktop/"]
+
+[[workflow.regression_layers]]
+name = "sandbox_policy"
+prefixes = [
+  "crates/orbit-policy/",
+  "crates/orbit-exec/",
+  "crates/orbit-types/src/policy/",
+  "crates/orbit-core/src/adapter/engine_host/actions/sandbox/",
+]
+
+[[workflow.regression_layers]]
+name = "store_migration"
+prefixes = [
+  "crates/orbit-store/",
+  "crates/orbit-search/",
+  "crates/orbit-common/src/migration/",
+]
+
+[[workflow.regression_layers]]
+name = "vcs_delivery"
+prefixes = [
+  "crates/orbit-engine/src/executor/automation/vcs/",
+  "crates/orbit-engine/src/executor/automation/ci/",
+  "crates/orbit-engine/src/executor/automation/review/",
+  "crates/orbit-core/src/application/landing/",
+  "crates/orbit-core/src/application/review/",
+  "crates/orbit-automation/src/delivery/",
+  "crates/orbit-automation/src/review/",
+]
+
+[[workflow.regression_layers]]
+name = "config"
+prefixes = [
+  "crates/orbit-config/",
+  "crates/orbit-registry/",
+  "crates/orbit-core/src/application/config/",
+]
+
+[[workflow.regression_layers]]
+name = "cli_mcp"
+prefixes = [
+  "crates/orbit-cli/",
+  "crates/orbit-mcp/",
+  "crates/orbit-cmd/",
+  "crates/orbit-tools/",
+  "crates/orbit-common/src/governance/",
+  "crates/orbit-core/src/adapter/tool_host/",
+]
+
+[[workflow.regression_layers]]
+name = "runtime_lifecycle"
+prefixes = [
+  "crates/orbit-core/",
+  "crates/orbit-engine/",
+  "crates/orbit-automation/",
+  "crates/orbit-agent/",
+  "crates/orbit-types/src/task/",
+  "crates/orbit-types/src/workflow/",
+]

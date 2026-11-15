@@ -13,8 +13,9 @@ unattended drain is where every section below pays off.
 ## Before you change anything
 
 1. **Read the effective policy.** `orbit --version`, then
-   `orbit config show --all` (every key with its source: `workspace`,
-   `global`, `built-in`), `orbit config keys` (what this build accepts) and
+   `orbit config show --all` (every key with its state: `workspace`,
+   `global`, `environment`, `default`, or `unset`), `orbit config keys` (what
+   this build accepts) and
    `orbit workspace show` (registered base branch). Never assume a built-in
    default is this host's value.
 2. **Find the owner.** Policy is written on the owner host's workspace file
@@ -94,8 +95,8 @@ would have caught argues for that command.
 - **Watch the total.** The list runs on every candidate and again after every
   repair or rebase that changes code. Time it on the owner (`time make …`) and
   say what it adds per delivery when you propose it.
-- **Toolchain.** Validation resolves PATH from the owner's login shell
-  (`workflow.validation_env.shell_probe`). If the drain runs from a service
+- **Toolchain.** Validation resolves PATH from the owner's login shell.
+  If the drain runs from a service
   manager or SSH, add toolchain directories to `workflow.validation_env.path`
   and check `orbit doctor`'s `validation-env` row. For build tools that
   honour an output-directory variable, list it in
@@ -240,11 +241,11 @@ usage limit or failure hold redraws inside the pool instead of stalling it.
 
 Orbit's own work: `task_pilot`, `failure_recovery`, `final_recovery`,
 `auto_fix`, `review`, `pre_landing_review`, `baseline_red_repair`,
-`sweep_tasks`, `explorer`. `orbit init` writes them as explicit copies of the
-complexity pools, so editing a complexity pool later does **not** move them:
+`sweep_tasks`. `orbit init` writes most of them as fixed lists of the
+enabled crews, so editing a complexity pool later does **not** move them:
 revisit each one whenever you retune the tiers. Guidance:
 
-- `task_pilot`, `auto_fix`, `explorer`: cheap, fast crews; the pilot also
+- `task_pilot`, `auto_fix`: cheap, fast crews; the pilot also
   needs crews whose executor declares `inspection_args`.
 - `failure_recovery`: crews good at diagnosis; recovery sees failures from
   every tier.
@@ -259,7 +260,7 @@ revisit each one whenever you retune the tiers. Guidance:
 
 `workflow.type_complexity_crews.<type>.<tier>` overrides one tier's pool for
 one kind of work, such as routing hard UI work to the crew that renders and
-checks UI best. Types come from `[[workflow.crew_performance_types]]`, which
+checks UI best. Types come from `[[workflow.task_types]]`, which
 also feed the implementer scorecard, so define them first:
 
 - Keep the list short (about five to eight types) so each type and tier
@@ -270,32 +271,37 @@ also feed the implementer scorecard, so define them first:
   classify as code work.
 - Derive tags and paths from the backlog survey: the tags the repository
   already uses, and the source trees each kind of work lives in.
-- Editing the list re-sorts history and makes the performance snapshot
-  `type_list_changed` until its next hourly refresh.
+- Editing the list re-sorts the scorecard's history and re-routes open tasks
+  on their next draw.
 
 Then add type pools only where a kind of work measurably needs a different
 crew, usually at `hard`. Every member must be a defined, enabled crew with a
 positive weight; remove a key instead of leaving it empty. Untyped work and
 unlisted tiers keep the complexity pool.
 
-### Draw policy: `workflow.crew_selection` and `workflow.crew_performance`
+### Automatic effort: `<crew>@auto` members
+
+A pool member written `<crew>@auto` (in the implementer, task-pilot and
+review pools only) lets each draw pick the crew's effort from its
+`workflow.auto_effort.bands` instead of fixing one effort per member. Reach
+for it when one crew should run cheap on small, low-tier work and strong on
+hard work, rather than splitting the pool into fixed `<crew>@<effort>`
+members per tier. Order bands from the strongest claim to the weakest: the
+first band whose conditions the draw's signal meets wins, and unmatched
+draws fall back to the crew's configured effort. Tune band cut-offs from the
+implementer scorecard's size curves once deliveries accumulate; a fixed 10%
+of draws explores another effort, so both sides of a cutover keep getting
+data. Bands, signals, refusals and readback
+verification: [Automatic effort selection](configuration.md#automatic-effort-selection-crewauto).
+
+### Draw policy: `workflow.crew_selection`
 
 - **`crew_selection`**: `static` draws on the configured weights.
   `usage_pressure` scales each member by its provider's weekly usage pressure,
   so capacity about to reset is spent first. Use it when the pools span
   subscription providers that report weekly usage windows; leave `static` for
   pay-per-use accounts or a single provider.
-- **`crew_performance`**: weighs draws by each crew's implementer score on the
-  task's type and tier. Always start in `shadow_comparative` or
-  `shadow_absolute`: draws stay unchanged and the factor is recorded. After
-  draws accumulate, read
-  `orbit agents scorecard --role implementers --by-type --shadow --window 30d`
-  and switch to the live mode only when the cells you care about have enough
-  deliveries (`n`) and the would-be shares look right. `comparative` moves
-  each crew toward the types it does best; `absolute` moves work toward the
-  best crew for each type. Choosing to go live is the user's decision.
-- **Provider limits.** Keep `workflow.provider_limit_max_used_pct` near its
-  default so a nearly exhausted window stops new draws. Use
+- **Provider limits.** A window used at 90% or more stops new draws. Use
   `provider_limit_overrides` (`provider:100` to wait for exhaustion,
   `provider:off` to only record readings) for providers whose readings
   mislead, and `provider_limit_budgets` for providers that report no usage.
@@ -314,6 +320,11 @@ because review reruns checks. Pair a pre-landing layer with
 `review.baseline_commands` (section 2) and a `pre_landing_review` pool
 (section 6).
 
+Selective pre-landing review (`[review.selective_before_landing]`) was
+removed: its keys load with a deprecation warning and are ignored
+until 2026-12-08. Delete the table; use `review.timing = "before_landing"` or
+`review.before_landing_hosts` instead.
+
 ## 8. Analytics classification
 
 `workflow.test_paths` and `workflow.non_code_paths` class landed lines as
@@ -322,14 +333,81 @@ repository keeps tests or assets in unconventional places, and copy any
 default entries you still want, since an array replaces the default wholesale.
 Changes apply to deliveries recorded afterwards.
 
+### Regression layers
+
+`workflow.regression_layers` classifies each `regression_from` link by where
+the regression task's fix sits. Orbit uses the fix's landed paths, or its
+declared footprint when landed paths are unavailable. Each path matches the
+first layer whose `prefixes` entry it starts with, whose `dirs` entry equals
+one of its directory components, or whose `suffixes` entry it ends with. The
+fix is assigned the layer most of its paths match; a tie goes to the earlier
+layer. `ci_tests` and `docs_skills` count only when the fix touches nothing
+else. An unmatched path is `other`; a fix with no path is `unknown`.
+
+When unset, the list has two repository-neutral defaults:
+
+```toml
+[[workflow.regression_layers]]
+name = "ci_tests"
+prefixes = [".github/"]
+dirs = ["tests", "testdata", "fixtures"]
+
+[[workflow.regression_layers]]
+name = "docs_skills"
+prefixes = ["docs/"]
+suffixes = [".md"]
+```
+
+Setting the list replaces these rows. Repeat any defaults you want to keep
+before adding repository-specific layers. Every row needs a unique name other
+than `other` or `unknown`, at least one matching rule, and `dirs` entries must
+be single directory components. An invalid list prevents config loading and
+names the key. An explicit `workflow.regression_layers = []` classifies every
+path as `other`.
+
+Check the accepted key and its fields with `orbit config keys --json`, then
+verify the loaded value with `orbit config show --all`. After changing the
+list, run `orbit codebase analytics --layer <name> --min-support 1 --json` to
+inspect regressions assigned to a layer; use `other` or `unknown` to inspect
+those buckets. Follow a ranked path with
+`orbit codebase show <path> --layer <name> --min-support 1 --json` to inspect
+the regression details. Layer classification is computed when analytics runs,
+so the next analytics run reflects the updated list. A layer with no matching
+regression links has no rows to show.
+
+## Keeping a task out of the drain (`no-drain`)
+
+Use the reserved `no-drain` task tag when an interactive session owns a
+task and no automatic drain should pick it up. It is a tag, not a policy
+key: there is no exclusion list to configure.
+
+- **Apply it** by including `no-drain` in the task's tag list at filing
+  time, or with `orbit.task.update` sending the full tag list including
+  `no-drain` (a tag update replaces the stored list, so resend the tags
+  to keep alongside it).
+- **Automatic admission skips it.** `orbit run auto` drains, pull-drain
+  followers and any other automatic admission pass never admit a backlog
+  task carrying the tag.
+- **Automatic approval skips it too.** Drain-window auto-approval never
+  approves a proposed task carrying the tag, even with a clean
+  assessment; the hold is recorded under the tag's reason. An assessment
+  pass may still assess the task.
+- **Explicit dispatch still works.** Claiming the task to `in-progress`
+  by hand and running it with an explicit single-task dispatch
+  (`orbit run ship <task-id>`) both still work.
+- **Remove it** with `orbit.task.update` sending the full tag list
+  without `no-drain`. The task becomes eligible again on the next
+  admission pass.
+- **Verify the exclusion** with `orbit run readiness` and the
+  backlog-exclusion listing: an excluded task is reported with the
+  tag's reason (`no_drain_tag`). Re-run the same check after removing
+  the tag to confirm the task is eligible again.
+
 ## Optional features
 
 | Feature | Turn on when | Reference |
 |---|---|---|
-| `[workflow.mid_run_steering]` | Operators correct running tasks by comment | [orbit-orchestrate](../../orbit-orchestrate/SKILL.md#mid-run-steering) |
-| `workflow.explore.*` | Implementers would benefit from cheap read-only helpers; needs an `explorer` pool | [Common settings](configuration.md#common-settings) |
-| `[workflow.explore_brief]` | The task pilot should store context briefs for chosen tags | [Explore briefs](configuration.md#explore-briefs) |
-| `[lease]` | Interactive editors and agents share a checkout | [Path-lease policy](configuration.md#path-lease-policy) |
+| `[workflow.mid_run_steering]` | Operators correct running tasks by comment | [Mid-run steering configuration](configuration.md#mid-run-steering) |
 | `machine.auto_concurrency.mode` | Admission should follow forecast fit; start in `shadow` | [Common settings](configuration.md#common-settings) |
 
 ## Roll it out
@@ -337,7 +415,7 @@ Changes apply to deliveries recorded afterwards.
 1. **Write the workspace file on the owner** from the operator's shell.
    `orbit config set <key> <value>` writes scalars and arrays. Write tables
    (`generated_paths`, `type_complexity_crews`, `lock_modes`,
-   `crew_performance_types`) in the file, where they stay readable;
+   `task_types`) in the file, where they stay readable;
    `review_skip_tags` and `tag_instructions` can only be written there. Keep a dated backup of the
    previous file and record the previous values where the user tracks
    operational changes.
@@ -385,16 +463,16 @@ light_delivery_paths = ["docs/**", "**/*.md", "!app/**", "!gateway/**", ".github
 pattern = '^gateway/api/openapi\.json$'
 mode = "shared"
 
-[[workflow.crew_performance_types]]
+[[workflow.task_types]]
 name = "review"
 tags = ["no-diff-expected"]
 
-[[workflow.crew_performance_types]]
+[[workflow.task_types]]
 name = "ui"
 tags = ["ui"]
 paths = ["app/**"]
 
-[[workflow.crew_performance_types]]
+[[workflow.task_types]]
 name = "gateway"
 paths = ["gateway/**"]
 

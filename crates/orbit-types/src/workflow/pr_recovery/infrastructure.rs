@@ -1,4 +1,4 @@
-//! Durable admission for an evidenced workflow prerequisite rerun.
+//! Durable admission for evidenced workflow infrastructure recovery.
 use crate::task::TaskHistoryEntry;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -6,12 +6,42 @@ use serde_json::Value;
 /// History event reserved before the single infrastructure mutation.
 pub const PR_INFRASTRUCTURE_RESERVED_EVENT: &str = "pr_infrastructure_reserved";
 
+/// History evidence that a candidate workflow failed before creating jobs.
+pub const PR_CANDIDATE_WORKFLOW_FAILED_EVENT: &str = "pr_candidate_workflow_failed";
+
+/// Classification retained in completion errors and final-recovery input.
+pub const PR_CANDIDATE_WORKFLOW_FAILURE_MARKER: &str = "candidate_workflow_failure:";
+
 /// An effective required context, including its allowed integration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequiredGate {
     pub context: String,
     /// None is the provider's explicit any-integration policy.
     pub app_id: Option<u64>,
+}
+
+/// Verified failure of a workflow before it created any jobs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrFailedWorkflowRun {
+    /// The candidate diff changes this workflow file.
+    pub candidate_owned: bool,
+    /// Provider diagnosis, when the provider's run view could be read.
+    pub provider_message: Option<String>,
+}
+
+/// The source of a missing required context. The prerequisite variant retains
+/// the original flattened persisted shape, so existing reservations still read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PrInfrastructureFailure {
+    Prerequisite {
+        workflow_job: String,
+        prerequisite: String,
+        prerequisite_job_id: u64,
+    },
+    WorkflowRun {
+        failed_workflow_run: PrFailedWorkflowRun,
+    },
 }
 
 /// Adapter-verified, source-bound evidence for the missing protected check.
@@ -29,11 +59,12 @@ pub struct PrInfrastructureEvidence {
     pub app_id: u64,
     pub workflow_id: u64,
     pub workflow_path: String,
+    /// Definition binding the missing context. A zero-job failure may use the
+    /// base definition because the candidate's workflow cannot be parsed.
     pub workflow_source: String,
     pub workflow_blob: String,
-    pub workflow_job: String,
-    pub prerequisite: String,
-    pub prerequisite_job_id: u64,
+    #[serde(flatten)]
+    pub failure: PrInfrastructureFailure,
     pub run_id: u64,
     pub run_attempt: u32,
     pub event: String,
@@ -43,6 +74,18 @@ pub struct PrInfrastructureEvidence {
     pub run: Value,
     pub jobs: Value,
     pub log: String,
+}
+
+impl PrInfrastructureEvidence {
+    /// The verified zero-job failure, when no prerequisite job existed.
+    pub fn failed_workflow_run(&self) -> Option<&PrFailedWorkflowRun> {
+        match &self.failure {
+            PrInfrastructureFailure::WorkflowRun {
+                failed_workflow_run,
+            } => Some(failed_workflow_run),
+            PrInfrastructureFailure::Prerequisite { .. } => None,
+        }
+    }
 }
 
 /// A cumulative reservation; execution identity does not reset its budget.

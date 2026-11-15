@@ -16,20 +16,11 @@
 // still-running strip share one x-axis and one hover cursor.
 
 import {
-  el as makeEl, syncNodes, fetchJson, requestPanel, panelCanRender, getWorkspaceRevision,
+  el, syncNodes, fetchJson, requestPanel, panelCanRender, getWorkspaceRevision,
   onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime,
 } from './common.js';
 
 const $ = (id) => document.getElementById(id);
-
-// `el` from common.js, also applying the table and focus attributes it leaves out.
-function el(tag, opts = {}, children = []) {
-  const node = makeEl(tag, opts, children);
-  for (const name of ["scope", "tabindex"]) {
-    if (opts[name] != null) node.setAttribute(name, String(opts[name]));
-  }
-  return node;
-}
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const GIB = 1024 ** 3;
@@ -264,6 +255,12 @@ function profileSection() {
   view.workClass = workClass;
   const all = seriesFor(workClass);
   const hidden = new Set(view.hidden[workClass] || []);
+  // A different workspace or history window may contain only hidden series.
+  // Restore those series so the controls and charts agree on what is visible.
+  if (all.length && all.every((series) => hidden.has(series.key))) {
+    for (const series of all) hidden.delete(series.key);
+    view.hidden[workClass] = [...hidden];
+  }
   const shown = all.filter((series) => !hidden.has(series.key));
   const visible = shown.length ? shown : all;
   const u = units();
@@ -282,26 +279,24 @@ function profileSection() {
 }
 
 function classPicker(classes, current) {
-  return el("div", { class: "mx-seg rp-classes", role: "group", "aria-label": "Work class" }, classes.map((entry) => {
-    const on = entry.key === current;
-    const button = el("button", {
-      class: on ? "mx-seg-btn on" : "mx-seg-btn",
-      type: "button",
+  const select = el("select", { class: "mx-select rp-class-select", "aria-label": "Work class" }, classes.map((entry) => {
+    const option = el("option", {
       text: entry.label,
-      "aria-pressed": on ? "true" : "false",
       title: entry.available ? (entry.key.startsWith(TEMPLATE_PREFIX) ? `Auto-task template ${entry.label}` : `${entry.label} deliveries`) : `No ${entry.label.toLowerCase()} profiles on this host yet`,
     });
-    button.dataset.workClass = entry.key;
-    button.disabled = !entry.available;
-    button.addEventListener("click", () => {
-      if (view.workClass === entry.key) return;
-      view.workClass = entry.key;
-      view.hover = null;
-      rerender();
-      focusIn(`.rp-classes [data-work-class="${CSS.escape(entry.key)}"]`);
-    });
-    return button;
+    option.value = entry.key;
+    option.selected = entry.key === current;
+    option.disabled = !entry.available;
+    return option;
   }));
+  select.addEventListener("change", () => {
+    if (view.workClass === select.value) return;
+    view.workClass = select.value;
+    view.hover = null;
+    rerender();
+    focusIn(".rp-class-select");
+  });
+  return el("label", { class: "rp-class" }, [el("span", { class: "rp-class-label", text: "Work class" }), select]);
 }
 
 /// Deliveries per profile, counted rather than dated: a month without
@@ -322,7 +317,7 @@ function historyPicker() {
       "aria-pressed": on ? "true" : "false",
       title: key == null
         ? `The last ${window} deliveries of each kind: the window admission prices with`
-        : `Up to ${Number(key === "all" ? maximum : key).toLocaleString("en-US")} retained completed deliveries of each kind, following the newest crew model and Orbit version; admission is unchanged`,
+        : `Up to ${Number(key === "all" ? maximum : key).toLocaleString("en-US")} retained completed deliveries of each kind across crew models (union), with separate per-crew model windows. Orbit versions do not filter history; admission is unchanged`,
     });
     button.dataset.history = key ?? "window";
     button.addEventListener("click", () => {
@@ -396,7 +391,7 @@ function seriesCards(all, hidden, workClass, u) {
       if (next.has(series.key)) next.delete(series.key);
       else next.add(series.key);
       // The charts always keep one series.
-      if (next.size >= all.length) return;
+      if (!all.some((entry) => !next.has(entry.key))) return;
       view.hidden[workClass] = [...next];
       rerender();
     });

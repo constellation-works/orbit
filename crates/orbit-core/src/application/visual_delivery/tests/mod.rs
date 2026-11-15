@@ -1,2 +1,0 @@
-mod checks;
-mod resolve;

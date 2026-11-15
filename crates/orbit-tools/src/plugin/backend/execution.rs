@@ -1,6 +1,14 @@
 use super::*;
 use crate::{DeterministicStepPrograms, ToolCaller};
 
+/// Whether a child environment also writes the host program-link directory.
+enum ProgramLinks {
+    /// Create, repoint and prune links so a returned `PATH` entry exists.
+    Materialize,
+    /// Name the link directory without writing it.
+    Observe,
+}
+
 impl PluginBackendSpec {
     pub fn granted(&self, grant: PluginGrant) -> bool {
         self.grants.contains(grant)
@@ -94,6 +102,17 @@ impl PluginBackendSpec {
         } else {
             Vec::new()
         };
+        let scoped_files = if self.granted(PluginGrant::Fs) {
+            scope_fs_files(
+                &roots.write_files,
+                &self.permissions.fs.write_files,
+                granted_roots.as_deref(),
+                "spec.permissions.fs.write_files",
+                &mut dropped,
+            )
+        } else {
+            Vec::new()
+        };
         for root in &dropped {
             tracing::warn!(
                 target: "orbit.tools.plugin",
@@ -109,8 +128,17 @@ impl PluginBackendSpec {
         // only shrink a tree, but the granted side supplies the path when it
         // is the narrower one, so this is the last point at which a protected
         // path could reach the profile.
-        for root in &scoped_write {
-            if let Some(protected) = super::super::loader::fs_write_root_covers(
+        for (root, exact_file) in scoped_write
+            .iter()
+            .map(|root| (root, false))
+            .chain(scoped_files.iter().map(|root| (root, true)))
+        {
+            let check = if exact_file {
+                super::super::loader::fs_write_file_covers
+            } else {
+                super::super::loader::fs_write_root_covers
+            };
+            if let Some(protected) = check(
                 &root.path,
                 &self.plugin_root,
                 &self.global_root,
@@ -129,7 +157,12 @@ impl PluginBackendSpec {
             }
         }
         let mut write: Vec<PathBuf> = scoped_write.into_iter().map(|root| root.path).collect();
-        let mut write_files = Vec::new();
+        let manifest_write_files: Vec<PathBuf> =
+            scoped_files.into_iter().map(|root| root.path).collect();
+        for file in &manifest_write_files {
+            super::write_file::validate(file)?;
+        }
+        let mut write_files = manifest_write_files.clone();
         // The write directories the *host itself* adds for a grant, as opposed
         // to the ones the manifest asked for above. They are also exactly the
         // `orbit_tools` half of the materialization roots below: one list
@@ -172,6 +205,20 @@ impl PluginBackendSpec {
                 }
                 read.push(workspace_orbit);
             }
+            // Before it opens anything, the nested `orbit` reads the product
+            // marker in every physical ancestor of its roots. An ancestor
+            // outside the read roots above — an Orbit root nested under
+            // another Orbit tree, such as a managed worktree inside its
+            // repository's `.orbit/state/worktrees/` — would otherwise refuse
+            // the callback with EACCES. Each marker that exists is granted as
+            // a single file; its directory stays unreadable.
+            let marker_bases = std::iter::once(self.global_root.clone())
+                .chain(workspace_root.map(|root| root.join(".orbit")));
+            for marker in orbit_product_markers_above_roots(marker_bases) {
+                if !read.contains(&marker) {
+                    read.push(marker);
+                }
+            }
         }
         write.extend(host_write_dirs.iter().cloned());
         // Each declared program at the path the operator consented to, read
@@ -196,6 +243,14 @@ impl PluginBackendSpec {
                 ),
             }
         }
+        // The host's link directory for the granted names, so the child's
+        // `PATH` lookup of a declared name can see the link. A link adds no
+        // executable of its own: it resolves to the recorded file granted above.
+        if let Some(dir) = self.granted_program_dir()
+            && !read.contains(&dir)
+        {
+            read.push(dir);
+        }
         // The child's own state tree, re-allowed inside the denied
         // `state/plugins/` on every profile: the one directory the standard
         // gives a plugin for durable state stays readable to it and to no
@@ -216,6 +271,7 @@ impl PluginBackendSpec {
             state_dir: self.state_dir.clone(),
             write,
             write_files,
+            manifest_write_files,
             // The whole host-materialized prefix set, stated once: the
             // selected workspace, this plugin's own state tree, and every
             // directory the host itself put in `write` just above. Nothing
@@ -300,6 +356,13 @@ impl PluginBackendSpec {
             "spec.permissions.fs.write",
             &mut dropped,
         );
+        scope_fs_files(
+            &roots.write_files,
+            &self.permissions.fs.write_files,
+            Some(&granted),
+            "spec.permissions.fs.write_files",
+            &mut dropped,
+        );
         dropped
     }
 
@@ -321,12 +384,43 @@ impl PluginBackendSpec {
     /// even if present in the parent environment (`validate_structure`
     /// refuses them at the manifest too; this is the defense-in-depth
     /// boundary for a manifest loaded before that check existed).
+    ///
+    /// Materializes the program links first (`materialize_program_links`), so
+    /// the `PATH` it names exists whenever it is returned. A diagnostic
+    /// render uses [`Self::diagnostic_child_environment`] and does not write
+    /// those links.
     pub fn child_environment(
         &self,
         ctx: &ToolContext,
         cwd: &str,
         tool_name: Option<&str>,
-    ) -> Vec<(String, String)> {
+    ) -> Result<Vec<(String, String)>, OrbitError> {
+        self.compose_child_environment(ctx, cwd, tool_name, ProgramLinks::Materialize)
+    }
+
+    /// The child environment a diagnostic render projects.
+    ///
+    /// Same variables as [`Self::child_environment`], including a `PATH` that
+    /// names the program-link directory when this spec has a granted bare
+    /// program. It does not create, repoint or remove the links in that
+    /// directory, so rendering a same-namespace checkout leaves an installed
+    /// backend's program links unchanged.
+    pub fn diagnostic_child_environment(
+        &self,
+        ctx: &ToolContext,
+        cwd: &str,
+        tool_name: Option<&str>,
+    ) -> Result<Vec<(String, String)>, OrbitError> {
+        self.compose_child_environment(ctx, cwd, tool_name, ProgramLinks::Observe)
+    }
+
+    fn compose_child_environment(
+        &self,
+        ctx: &ToolContext,
+        cwd: &str,
+        tool_name: Option<&str>,
+        program_links: ProgramLinks,
+    ) -> Result<Vec<(String, String)>, OrbitError> {
         let env_pass = if self.granted(PluginGrant::EnvPass) {
             self.permissions.env_pass.as_slice()
         } else {
@@ -336,7 +430,41 @@ impl PluginBackendSpec {
             Some(parent) => allowlisted_child_env_from(parent, env_pass, &[]),
             None => allowlisted_child_env(env_pass, &[]),
         };
+        // Granted declared programs are discoverable by name whatever the
+        // caller's `PATH`: prepend the host's program link directory, which
+        // holds one link per still-granted name pointing at its recorded file.
+        // A program whose recorded path is no longer granted gets no link, so
+        // it adds nothing. The directory is not the recorded file's parent,
+        // because a name reached through a symlink is not in that parent.
+        // Observation names that directory without writing it: a rendered
+        // validation must not change links a running backend already uses.
+        let program_dir = match program_links {
+            ProgramLinks::Materialize => self.materialize_program_links()?,
+            ProgramLinks::Observe => self.granted_program_dir(),
+        };
+        let path_override = if let Some(program_dir) = program_dir {
+            let mut path_dirs = vec![program_dir];
+            if let Some(existing) = env_pairs
+                .iter()
+                .find(|(key, _)| key == "PATH")
+                .map(|(_, value)| value.clone())
+            {
+                for dir in std::env::split_paths(&existing) {
+                    if !dir.as_os_str().is_empty() && !path_dirs.contains(&dir) {
+                        path_dirs.push(dir);
+                    }
+                }
+            }
+            std::env::join_paths(&path_dirs)
+                .ok()
+                .map(|joined| joined.to_string_lossy().into_owned())
+        } else {
+            None
+        };
         let mut set = |key: &str, value: String| upsert_env(&mut env_pairs, key, value);
+        if let Some(path) = path_override {
+            set("PATH", path);
+        }
         set("ORBIT_HOST_API", PLUGIN_HOST_API.to_string());
         set("ORBIT_VERSION", env!("CARGO_PKG_VERSION").to_string());
         set("ORBIT_PLUGIN", self.provenance.name.clone());
@@ -365,7 +493,7 @@ impl PluginBackendSpec {
         set("ORBIT_ALLOWED_TOOLS", self.allowed_tools(ctx).join(","));
         // `requires.programs` is what a callback through `proc.spawn` may run.
         set("ORBIT_PROC_ALLOWED_PROGRAMS", self.programs.join(","));
-        env_pairs
+        Ok(env_pairs)
     }
 
     /// `permissions.orbit_tools` ∩ the `orbit_tools` grant ∩ the caller's own
@@ -379,8 +507,9 @@ impl PluginBackendSpec {
             .orbit_tools
             .iter()
             .filter(|tool| {
+                // Entries are tools, families or `family:action` names.
                 ctx.allowed_tools.is_empty()
-                    || ctx.allowed_tools.iter().any(|allowed| allowed == *tool)
+                    || orbit_types::workflow::tool_allowed(tool, &ctx.allowed_tools)
             })
             .filter(|tool| {
                 !ctx.tool_deny_policy

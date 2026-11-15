@@ -2,7 +2,7 @@
 
 use orbit_common::security::child_env::{
     allowlisted_child_env, allowlisted_child_env_from, apply_crew_env_from, inherited_child_env,
-    unset_crew_env_from, unset_pass_names_from,
+    inherited_child_env_from, unset_crew_env_from, unset_pass_names_from,
 };
 use orbit_types::identity::CrewEnvVar;
 use std::sync::Arc;
@@ -60,14 +60,16 @@ pub struct ExecutionEnvPolicy {
     /// because a workspace `config.toml` could flip it and replace the global
     /// value. The flag survives as the single seam that decides between full
     /// inheritance and the allowlist, so the two behaviors stay one branch in
-    /// one place rather than two spawn paths.
+    /// one place rather than two spawn paths. Inheritance still omits
+    /// privilege-bearing `ORBIT_*` names.
     pub(crate) inherit: bool,
     /// `execution.env.pass`: the names an operator admits by name.
     pub(crate) pass: Vec<String>,
     /// Immutable parent snapshot for a runtime supplied with credential defaults.
     parent: Option<Arc<Vec<(String, String)>>>,
-    /// The source names the configured crews' `[crews.<name>] env` entries
-    /// read, so runtime defaults (`clock.env`) and a detached worker's launch
+    /// The source variable names the configured crews' `[crews.<name>] env`
+    /// entries read (a `file:` source is read from disk, not the environment),
+    /// so runtime defaults (`clock.env`) and a detached worker's launch
     /// environment can supply them as well as `pass` names.
     crew_sources: Vec<String>,
 }
@@ -111,9 +113,12 @@ impl ExecutionEnvPolicy {
         mut self,
         entries: impl IntoIterator<Item = &'a CrewEnvVar>,
     ) -> Self {
-        for entry in entries {
-            if !self.crew_sources.contains(&entry.source) {
-                self.crew_sources.push(entry.source.clone());
+        for source in entries
+            .into_iter()
+            .filter_map(|entry| entry.source.variable())
+        {
+            if !self.crew_sources.iter().any(|held| held == source) {
+                self.crew_sources.push(source.to_string());
             }
         }
         self
@@ -170,14 +175,15 @@ impl ExecutionEnvPolicy {
     /// and every subprocess launcher starts from a cleared environment and
     /// applies exactly this — so `inherit = false` really is allowlist-based
     /// rather than a filter over ambient variables. `extras` carries the names
-    /// a provider declares it requires.
+    /// a provider declares it requires. `inherit = true` forwards the parent
+    /// environment except privilege-bearing `ORBIT_*` names, the same names
+    /// `allowlisted_child_env_from` refuses.
     pub fn agent_subprocess_env(&self, extras: &[&str]) -> Vec<(String, String)> {
         if self.inherit {
-            return self
-                .parent
-                .as_deref()
-                .cloned()
-                .unwrap_or_else(inherited_child_env);
+            return match &self.parent {
+                Some(parent) => inherited_child_env_from(parent),
+                None => inherited_child_env(),
+            };
         }
         if let Some(parent) = &self.parent {
             return allowlisted_child_env_from(parent, &self.pass, extras);
@@ -202,8 +208,9 @@ impl ExecutionEnvPolicy {
         env
     }
 
-    /// The crew `env` entries whose source the effective parent environment,
-    /// runtime defaults included, holds no non-empty value for. Names only.
+    /// The crew `env` entries whose source variable the effective parent
+    /// environment, runtime defaults included, holds no non-empty value for,
+    /// or whose source file is missing, empty or refused. Names and paths only.
     pub fn unset_crew_env(&self, crew_env: &[CrewEnvVar]) -> Vec<CrewEnvVar> {
         if crew_env.is_empty() {
             return Vec::new();

@@ -11,8 +11,10 @@ use crate::context::PrConfig;
 
 use super::super::attribution::orchestration_trailer;
 use super::super::conventions::{TaskValues, render_freshness_list};
+use super::super::forge_text;
 use super::super::freshness::BranchFreshness;
 use super::screenshots::Screenshots;
+use super::{meaningful_execution_summary, render_acceptance_criteria, task_url};
 
 pub(super) const GITHUB_PR_BODY_BYTE_LIMIT: usize = 65_536;
 
@@ -157,42 +159,6 @@ fn heading(line: &str) -> Option<(usize, &str)> {
     Some((level, name))
 }
 
-/// A fenced code block's delimiter run: the marker character and its length.
-/// A block closes only on a run of the same marker at least as long.
-#[derive(Clone, Copy)]
-struct Fence {
-    marker: char,
-    len: usize,
-}
-
-/// The fence a template line opens. A backtick fence's info string cannot
-/// hold a backtick, else the line is inline code.
-fn opens_fence(line: &str) -> Option<Fence> {
-    let (fence, info) = fence_run(line)?;
-    (fence.marker != '`' || !info.contains('`')).then_some(fence)
-}
-
-/// Whether a template line closes the open fence: the same marker, a run at
-/// least as long as the opener, and nothing but whitespace after the run.
-fn closes_fence(line: &str, open: Fence) -> bool {
-    fence_run(line).is_some_and(|(fence, info)| {
-        fence.marker == open.marker && fence.len >= open.len && info.trim().is_empty()
-    })
-}
-
-/// The delimiter run a line starts with and the text after it, when the line
-/// indents at most three spaces, as an ATX heading does.
-fn fence_run(line: &str) -> Option<(Fence, &str)> {
-    let line = line.trim_end_matches(['\r', '\n']);
-    let trimmed = line.trim_start_matches(' ');
-    if line.len() - trimmed.len() > 3 {
-        return None;
-    }
-    let marker = trimmed.chars().next().filter(|c| matches!(c, '`' | '~'))?;
-    let len = trimmed.chars().take_while(|c| *c == marker).count();
-    (len >= 3).then(|| (Fence { marker, len }, &trimmed[len..]))
-}
-
 /// Required headings still carrying Orbit's gap note in the live PR body.
 /// Ignore quoted code samples, as the body renderer does for headings.
 pub(super) fn missing_section_names(body: &str) -> Vec<String> {
@@ -201,12 +167,12 @@ pub(super) fn missing_section_names(body: &str) -> Vec<String> {
     let mut open_fence = None;
     for line in body.lines() {
         if let Some(fence) = open_fence {
-            if closes_fence(line, fence) {
+            if forge_text::closes_fence(line, fence) {
                 open_fence = None;
             }
             continue;
         }
-        if let Some(fence) = opens_fence(line) {
+        if let Some(fence) = forge_text::opens_fence(line) {
             open_fence = Some(fence);
             continue;
         }
@@ -239,7 +205,7 @@ fn render_template_body(
     // The level of the agent-filled heading being replaced, while its text
     // is skipped.
     let mut replacing: Option<usize> = None;
-    let mut open_fence: Option<Fence> = None;
+    let mut open_fence: Option<forge_text::Fence> = None;
     let mut screenshots_placed = false;
     let flush = |pending: &mut String, out: &mut String| -> Result<(), OrbitError> {
         if !pending.is_empty() {
@@ -253,12 +219,12 @@ fn render_template_body(
         // it is a sample, not a section.
         let opened = match open_fence {
             Some(fence) => {
-                if closes_fence(line, fence) {
+                if forge_text::closes_fence(line, fence) {
                     open_fence = None;
                 }
                 None
             }
-            None => match opens_fence(line) {
+            None => match forge_text::opens_fence(line) {
                 Some(fence) => {
                     open_fence = Some(fence);
                     None
@@ -380,6 +346,7 @@ fn filled_content<'a>(filled: &'a BTreeMap<String, String>, section: &str) -> Op
 /// complete task artifacts as the durable source of execution detail.
 /// A generated delivery-identity comment stays intact at the end.
 pub(super) fn bound_pr_body(body: String, tasks: &[Task]) -> String {
+    let body = forge_text::neutralize_mentions(&body);
     let (body, footer) = detach_delivery_identity(body, tasks);
     let footer_suffix = if footer.is_empty() {
         String::new()
@@ -421,11 +388,17 @@ fn project_pr_body(body: String, tasks: &[Task], limit: usize) -> String {
         return truncate_utf8(&audit_note, limit).to_string();
     }
 
-    format!(
-        "{}{}",
-        truncate_utf8(&body, retained_body_bytes),
-        audit_note
-    )
+    let mut prefix = truncate_utf8(&body, retained_body_bytes);
+    loop {
+        // Cutting an inline span can expose text that was code in the full
+        // body. Escape that projection too, keeping the joiners in the budget.
+        let protected = forge_text::neutralize_mentions(prefix);
+        if protected.len() <= retained_body_bytes {
+            return format!("{protected}{audit_note}");
+        }
+        let excess = protected.len() - retained_body_bytes;
+        prefix = truncate_utf8(prefix, prefix.len().saturating_sub(excess));
+    }
 }
 
 fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
@@ -545,16 +518,6 @@ pub(super) fn render_branch_freshness_section(freshness: &BranchFreshness) -> St
     )
 }
 
-pub(in crate::executor::automation::vcs) fn render_acceptance_criteria(
-    criteria: &[String],
-) -> String {
-    criteria
-        .iter()
-        .map(|criterion| format!("- {criterion}"))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 pub(super) fn render_legacy_task_section(task: &Task, pr_config: &PrConfig) -> String {
     let line = render_task_line(task, pr_config);
     match meaningful_execution_summary(&task.execution_summary) {
@@ -565,44 +528,6 @@ pub(super) fn render_legacy_task_section(task: &Task, pr_config: &PrConfig) -> S
         }
         None => line,
     }
-}
-
-pub(in crate::executor::automation::vcs) fn meaningful_execution_summary(
-    summary: &str,
-) -> Option<&str> {
-    let trimmed = summary.trim();
-    if trimmed.is_empty() || is_placeholder_execution_summary(trimmed) {
-        None
-    } else {
-        Some(trimmed)
-    }
-}
-
-pub(super) fn is_placeholder_execution_summary(summary: &str) -> bool {
-    let normalized = summary
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ");
-    let lower = normalized.to_ascii_lowercase();
-    let stripped = lower.trim_matches(|c: char| c.is_ascii_punctuation() || c.is_whitespace());
-    stripped.is_empty()
-        || matches!(
-            stripped,
-            "todo"
-                | "tbd"
-                | "n/a"
-                | "na"
-                | "none"
-                | "placeholder"
-                | "execution summary"
-                | "summary"
-                | "no execution summary"
-                | "no summary provided"
-                | "no execution summary provided"
-                | "to be authored by executing agent at start time"
-        )
 }
 
 pub(super) fn render_task_line(task: &Task, pr_config: &PrConfig) -> String {
@@ -630,22 +555,6 @@ pub(super) fn render_task_ref(task: &Task, pr_config: &PrConfig) -> String {
         Some(url) => format!("[{}]({url})", task.id),
         None => task.id.clone(),
     }
-}
-
-pub(in crate::executor::automation::vcs) fn task_url(
-    task: &Task,
-    pr_config: &PrConfig,
-) -> Option<String> {
-    task.external_refs
-        .iter()
-        .find_map(|external_ref| external_ref.url.as_deref())
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            pr_config
-                .task_url_template
-                .as_ref()
-                .map(|template| template.replace("{task_id}", &task.id))
-        })
 }
 
 /// The pull request title: `pr.title_template` rendered on one line for a

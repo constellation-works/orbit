@@ -2,6 +2,7 @@
 //! phases keep the store's existing unscoped-write behavior.
 
 use super::*;
+use orbit_store::contracts::TaskDocumentUpdateParams;
 
 fn append_unscoped_history(owner: &Coordinated, task_id: &str) -> Result<(), OrbitError> {
     owner
@@ -218,5 +219,255 @@ fn settled_claim_phases_keep_unscoped_task_commits() {
         &landed.owner,
         &landed.claim.task_id,
         ExecutionClaimPhase::Landed,
+    );
+}
+
+fn update_unscoped_document(owner: &Coordinated, task_id: &str) -> Result<(), OrbitError> {
+    owner
+        .backends
+        .task
+        .document
+        .update_task_document(
+            task_id,
+            TaskDocumentUpdateParams {
+                actor: "test".into(),
+                title: Some("unscoped update probe".into()),
+                ..Default::default()
+            },
+        )
+        .map(|_| ())
+}
+
+fn assert_unscoped_update_names_recovery(
+    owner: &Coordinated,
+    task_id: &str,
+    phase: ExecutionClaimPhase,
+    recovery: &str,
+) {
+    let error =
+        update_unscoped_document(owner, task_id).expect_err("protecting claim refuses task update");
+    assert!(
+        matches!(error, OrbitError::InvalidInput(_)),
+        "{phase:?} keeps the invalid-input refusal: {error}"
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("active execution claim requires a claim-scoped mutation"),
+        "{phase:?} keeps the claim-scoped mutation fence: {message}"
+    );
+    assert!(
+        message.contains(&format!("(task {task_id}, run ")),
+        "{phase:?} names the claiming run: {message}"
+    );
+    assert!(
+        message.contains(recovery),
+        "{phase:?} names its recovery: {message}"
+    );
+}
+
+#[test]
+fn unscoped_task_update_names_phase_recovery() {
+    if !allocation_admission_isolated(
+        "unscoped_claim_writes::unscoped_task_update_names_phase_recovery",
+    ) {
+        return;
+    }
+
+    let claimed_owner = Coordinated::fixture();
+    let claimed_task = claimed_owner.create_task("claimed update phase");
+    let claimed = claimed_owner
+        .pull(&owner_request("claimed-update-phase"))
+        .claim
+        .expect("claim admitted");
+    assert_eq!(claimed.phase, ExecutionClaimPhase::Claimed);
+    assert_unscoped_update_names_recovery(
+        &claimed_owner,
+        &claimed_task.id,
+        ExecutionClaimPhase::Claimed,
+        "wait for it to settle",
+    );
+
+    let running = Delivery::admit(done_ship());
+    assert_eq!(
+        running.owner.claims()[0].phase,
+        ExecutionClaimPhase::Running
+    );
+    assert_unscoped_update_names_recovery(
+        &running.owner,
+        &running.claim.task_id,
+        ExecutionClaimPhase::Running,
+        "wait for it to settle",
+    );
+    let artifact_error = running
+        .owner
+        .upsert_artifacts(
+            &running.claim.task_id,
+            vec![json_artifact("probe.json".into(), b"{}".to_vec())],
+        )
+        .expect_err("protecting claim refuses artifact write");
+    assert!(
+        artifact_error
+            .to_string()
+            .contains("recover the claim from the owner's operator console"),
+        "Running artifact refusal names its recovery: {artifact_error}"
+    );
+
+    let handed_off = Delivery::admit(done_ship());
+    handed_off
+        .accept(Some(OWNER_POLICY))
+        .expect("handoff accepted");
+    assert_eq!(
+        handed_off.owner.claims()[0].phase,
+        ExecutionClaimPhase::HandedOff
+    );
+    assert_unscoped_update_names_recovery(
+        &handed_off.owner,
+        &handed_off.claim.task_id,
+        ExecutionClaimPhase::HandedOff,
+        "land it through that authority",
+    );
+
+    let repair = Delivery::admit(done_ship());
+    repair.accept(Some(OWNER_POLICY)).expect("handoff accepted");
+    let accepted = repair
+        .owner
+        .backends
+        .commit_boundary
+        .accepted_handoff(&repair.claim.claim_id)
+        .expect("accepted handoff");
+    let operator = repair.operator();
+    repair
+        .owner
+        .mutate(
+            &operator,
+            "dispatch-update-probe",
+            &ClaimMutation::DispatchLanding {
+                handoff_id: accepted.handoff_id.clone(),
+                job_run_id: None,
+            },
+        )
+        .expect("landing attempt dispatched");
+    repair
+        .owner
+        .mutate(
+            &operator,
+            "stop-update-probe",
+            &ClaimMutation::StopLanding {
+                handoff_id: accepted.handoff_id,
+                reason: "candidate needs a repair".into(),
+                repairable: true,
+                requeue: false,
+            },
+        )
+        .expect("repairable landing stop");
+    assert_eq!(
+        repair.owner.claims()[0].phase,
+        ExecutionClaimPhase::RepairPending
+    );
+    assert_unscoped_update_names_recovery(
+        &repair.owner,
+        &repair.claim.task_id,
+        ExecutionClaimPhase::RepairPending,
+        "automatic repair is pending",
+    );
+}
+
+/// [ORB-24233] A landing's completion hold on a handed-off claim is written
+/// through the claim: the unscoped task write the landing used to make is still
+/// fenced, and the claim-scoped hold is accepted and lands its history entry.
+#[test]
+fn landing_completion_hold_is_claim_scoped_while_handed_off() {
+    if !allocation_admission_isolated(
+        "unscoped_claim_writes::landing_completion_hold_is_claim_scoped_while_handed_off",
+    ) {
+        return;
+    }
+
+    let delivery = Delivery::admit(done_ship());
+    delivery
+        .accept(Some(OWNER_POLICY))
+        .expect("handoff accepted");
+    assert_eq!(
+        delivery.owner.claims()[0].phase,
+        ExecutionClaimPhase::HandedOff
+    );
+    let accepted = delivery
+        .owner
+        .backends
+        .commit_boundary
+        .accepted_handoff(&delivery.claim.claim_id)
+        .expect("accepted handoff");
+    let operator = delivery.operator();
+    delivery
+        .owner
+        .mutate(
+            &operator,
+            "dispatch-hold-probe",
+            &ClaimMutation::DispatchLanding {
+                handoff_id: accepted.handoff_id.clone(),
+                job_run_id: None,
+            },
+        )
+        .expect("landing attempt dispatched");
+
+    // The landing's completion hold reaches the store through
+    // `with_task_write_lock` (`apply_task_automation_update`), so probe that
+    // entry point rather than the commit boundary.
+    let refused = delivery
+        .owner
+        .task_store()
+        .with_task_write_lock(&delivery.claim.task_id, &mut || Ok(()))
+        .expect_err("a handed-off claim refuses the unscoped landing task write")
+        .to_string();
+    assert!(
+        refused.contains("active execution claim requires a claim-scoped mutation"),
+        "the handed-off landing write keeps the claim-scoped mutation fence: {refused}"
+    );
+    assert!(
+        refused.contains("its handoff awaits the owner's completion authority"),
+        "the refusal names the handed-off completion authority: {refused}"
+    );
+
+    let hold = orbit_types::task::TaskHistoryEntry {
+        at: Utc::now(),
+        by: "system".into(),
+        event: orbit_types::workflow::COMPLETION_HELD_EVENT.into(),
+        note: Some("completion hold probe".into()),
+        from_status: None,
+        to_status: None,
+        operation_id: None,
+        decision: None,
+    };
+    delivery
+        .owner
+        .mutate(
+            &operator,
+            "completion-hold-probe",
+            &ClaimMutation::RecordLandingCompletionHold {
+                handoff_id: accepted.handoff_id.clone(),
+                history: hold,
+                comment: "held for a person to approve".into(),
+            },
+        )
+        .expect("landing completion hold is accepted through the handed-off claim");
+
+    assert_eq!(
+        delivery.owner.claims()[0].phase,
+        ExecutionClaimPhase::HandedOff,
+        "a completion hold changes no claim authority"
+    );
+    let recorded = delivery
+        .owner
+        .backends
+        .task
+        .history
+        .get_task_history(&delivery.claim.task_id)
+        .expect("history read")
+        .expect("task exists");
+    assert!(
+        recorded
+            .iter()
+            .any(|entry| entry.event == orbit_types::workflow::COMPLETION_HELD_EVENT),
+        "the claim-scoped hold lands its completion_held history entry"
     );
 }

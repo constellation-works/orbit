@@ -69,7 +69,7 @@ fn validate_task_ids(task_ids: &[String]) -> Result<(), OrbitError> {
 
 fn readiness_payload(payload: Value, formatter: &WaitingTaskFormatter) -> CommandOut {
     let lines = readiness_lines(&payload, formatter);
-    Ok(Payload::blocks(payload, vec![Block::text(lines.join("\n"))]).into())
+    Ok(Payload::blocks(payload, vec![Block::prose(lines.join("\n"))]).into())
 }
 
 // pub(super) widened for sibling-layout tests in run/tests/readiness.rs
@@ -79,6 +79,14 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
         "Snapshot only — eligible does not guarantee a task will start. Active leaf runs: {}/{}; free slots: {}.",
         capacity["active_leaf_runs"], capacity["max_active_leaf_runs"], capacity["free_slots"],
     )];
+    for warning in payload["crew_pool_warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        lines.push(format!("Warning: {warning}"));
+    }
     if let Some(warning) = payload["validation_env_warning"].as_str() {
         lines.push(format!("Validation environment warning: {warning}"));
     }
@@ -166,7 +174,6 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
         },
     ));
     lines.extend(provider_limit_lines(&payload["provider_limits"]));
-    lines.push(crew_performance_line(&payload["crew_performance"]));
     let now = Utc::now();
     if let Ok(providers) = serde_json::from_value::<
         Vec<orbit_core::application::task::ProviderUsageStatus>,
@@ -332,7 +339,10 @@ fn out_of_run_auto_fix_lines(repairs: &Value) -> Vec<String> {
                 return format!(
                     "Out-of-run auto-fix skipped: {tasks} PR #{} ({}): {} — {} (latest pass of {ended} {}, {}).",
                     repair["pr_number"].as_str().unwrap_or("-"),
-                    repair["blocker"].as_str().unwrap_or("blocker unknown"),
+                    repair["blocker"]
+                        .as_str()
+                        .or_else(|| repair["hold_code"].as_str())
+                        .unwrap_or("blocker unknown"),
                     repair["reason"].as_str().unwrap_or("unknown"),
                     repair["detail"].as_str().unwrap_or("-"),
                     repair["drain_run_id"].as_str().unwrap_or("-"),
@@ -342,7 +352,10 @@ fn out_of_run_auto_fix_lines(repairs: &Value) -> Vec<String> {
             format!(
                 "Out-of-run auto-fix: {tasks} PR #{} ({}) in run {} ({}), resumed from {}.",
                 repair["pr_number"].as_str().unwrap_or("-"),
-                repair["blocker"].as_str().unwrap_or("-"),
+                repair["blocker"]
+                    .as_str()
+                    .or_else(|| repair["hold_code"].as_str())
+                    .unwrap_or("-"),
                 repair["run_id"].as_str().unwrap_or("-"),
                 repair["state"].as_str().unwrap_or("-"),
                 repair["source_run_id"].as_str().unwrap_or("-"),
@@ -418,45 +431,6 @@ fn provider_limit_lines(readings: &Value) -> Vec<String> {
         .collect()
 }
 
-/// The crew-performance snapshot draws read: when it was computed, its
-/// window and type list, or the reason a draw ignores it.
-fn crew_performance_line(crew_performance: &Value) -> String {
-    let mode = crew_performance["mode"].as_str().unwrap_or("off");
-    let snapshot = &crew_performance["snapshot"];
-    if snapshot.is_null() {
-        let reason = crew_performance["unusable_reason"]
-            .as_str()
-            .unwrap_or("missing");
-        if let Some(error) = crew_performance["error"].as_str() {
-            return format!("Crew performance snapshot: {reason} (mode {mode}): {error}");
-        }
-        return format!("Crew performance snapshot: {reason} (mode {mode}).");
-    }
-    let types = snapshot["types"]
-        .as_array()
-        .map(|types| {
-            types
-                .iter()
-                .filter_map(|entry| entry["name"].as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
-        .filter(|types| !types.is_empty())
-        .unwrap_or_else(|| "other only".to_string());
-    let detail = format!(
-        "computed {} (window {}d, types: {types}; {} cells)",
-        snapshot["computed_at"].as_str().unwrap_or("-"),
-        snapshot["window_days"],
-        snapshot["cells"],
-    );
-    match crew_performance["unusable_reason"].as_str() {
-        Some(reason) => {
-            format!("Crew performance snapshot: unusable ({reason}); {detail} (mode {mode}).")
-        }
-        None => format!("Crew performance snapshot: {detail} (mode {mode})."),
-    }
-}
-
 /// [ORB-14624] While CPU alone throttles, the reserved light slots are the
 /// only ones open, so say how many are left.
 fn cpu_light_budget_line(budget: &Value) -> Option<String> {
@@ -530,7 +504,7 @@ fn host_shutdown_line(shutdown: &Value, holding: Option<bool>) -> Option<String>
     if holding == Some(false) {
         return Some(format!(
             "Host {mode} scheduled for {at}. Admissions continue until \
-             machine.host_shutdown_hold_minutes of that time; in-flight runs are not touched."
+             180 minutes before that time; in-flight runs are not touched."
         ));
     }
     Some(format!(

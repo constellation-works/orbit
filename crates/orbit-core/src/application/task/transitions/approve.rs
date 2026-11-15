@@ -1,0 +1,319 @@
+use super::*;
+
+/// What an approval runs on other records once its task lock is released.
+#[must_use = "an approval's deferred effects must run after the caller's task lock"]
+pub(crate) struct DeferredApprovalEffects {
+    task: Task,
+    note: Option<String>,
+}
+
+/// The caller-supplied parts of an approval, shared by the locked and
+/// deferred-effects bodies.
+struct ApprovalRequest {
+    note: Option<String>,
+    decision: Option<TaskDecision>,
+    comment: Option<String>,
+    agent: Option<String>,
+    model: Option<String>,
+    guard_run_ownership: bool,
+}
+
+impl OrbitRuntime {
+    /// Move a task to backlog through the approval body when its current
+    /// state is proposed, otherwise through the ordinary governed update.
+    /// The outer lock keeps the dispatch decision and the selected transition
+    /// body on one task snapshot.
+    pub(crate) fn transition_task_to_backlog_with_identity(
+        &self,
+        id: &str,
+        note: Option<String>,
+        comment: Option<String>,
+        agent: Option<String>,
+        model: Option<String>,
+    ) -> Result<Task, OrbitError> {
+        self.with_task_write_locked(id, || {
+            let task = self.get_task(id)?;
+            if task.status == TaskStatus::Proposed {
+                ensure_status_change_not_run_owned(self, id)?;
+                self.approve_task_with_identity(id, note, comment, agent, model)
+            } else {
+                if note.is_some() {
+                    return Err(OrbitError::InvalidInput(
+                        "`note` on a backlog transition is only valid when approving a proposed task"
+                            .to_string(),
+                    ));
+                }
+                self.update_task_with_identity(
+                    id,
+                    TaskUpdateParams {
+                        comment,
+                        status: Some(TaskStatus::Backlog),
+                        ..Default::default()
+                    },
+                    agent,
+                    model,
+                )
+            }
+        })
+    }
+
+    /// Trusted approval. Drain promotion calls this while its own run still
+    /// lists the task, so this path does not apply the operator ownership
+    /// guard. Operator surfaces use the guarded approval path.
+    pub fn approve_task(
+        &self,
+        id: &str,
+        note: Option<String>,
+        comment: Option<String>,
+    ) -> Result<Task, OrbitError> {
+        self.approve_task_with_identity(id, note, comment, None, None)
+    }
+
+    pub fn approve_task_with_identity(
+        &self,
+        id: &str,
+        note: Option<String>,
+        comment: Option<String>,
+        agent: Option<String>,
+        model: Option<String>,
+    ) -> Result<Task, OrbitError> {
+        self.approve_task_locked(
+            id,
+            ApprovalRequest {
+                note,
+                decision: None,
+                comment,
+                agent,
+                model,
+                guard_run_ownership: false,
+            },
+        )
+    }
+
+    /// Trusted approval of [`Self::approve_task`] that also records
+    /// `decision` on the approval's history event, for an automated approver
+    /// whose approval later readers attribute (a drain's
+    /// [`TaskDecision::DrainApproved`]).
+    pub(crate) fn approve_task_with_decision(
+        &self,
+        id: &str,
+        note: Option<String>,
+        decision: Option<TaskDecision>,
+    ) -> Result<Task, OrbitError> {
+        self.approve_task_locked(
+            id,
+            ApprovalRequest {
+                note,
+                decision,
+                comment: None,
+                agent: None,
+                model: None,
+                guard_run_ownership: false,
+            },
+        )
+    }
+
+    /// Operator approval (`orbit task update --approve` and the dashboard).
+    ///
+    /// The ownership check runs under the task lock, before any comment or
+    /// history write. A non-terminal local run whose `input.task_ids` lists
+    /// the task refuses both `proposed → backlog` and `review → done`.
+    pub(crate) fn approve_task_guarding_run_ownership(
+        &self,
+        id: &str,
+        note: Option<String>,
+        comment: Option<String>,
+        agent: Option<String>,
+        model: Option<String>,
+    ) -> Result<Task, OrbitError> {
+        self.approve_task_locked(
+            id,
+            ApprovalRequest {
+                note,
+                decision: None,
+                comment,
+                agent,
+                model,
+                guard_run_ownership: true,
+            },
+        )
+    }
+
+    fn approve_task_locked(&self, id: &str, request: ApprovalRequest) -> Result<Task, OrbitError> {
+        let (result, effects) = self.approve_task_deferring_effects(id, request)?;
+        self.run_deferred_approval_effects(effects);
+        Ok(result)
+    }
+
+    /// The operator approval of [`Self::approve_task_guarding_run_ownership`]
+    /// without its effects on other records, for a caller that holds this
+    /// task's lock across the approval and must run them only after it
+    /// releases that lock (a decision answer). Cascading resolution touches
+    /// other tasks and frictions, so it never runs under this task's lock.
+    pub(crate) fn approve_task_guarded_deferring_effects(
+        &self,
+        id: &str,
+        note: Option<String>,
+        comment: Option<String>,
+    ) -> Result<(Task, DeferredApprovalEffects), OrbitError> {
+        self.approve_task_deferring_effects(
+            id,
+            ApprovalRequest {
+                note,
+                decision: None,
+                comment,
+                agent: None,
+                model: None,
+                guard_run_ownership: true,
+            },
+        )
+    }
+
+    /// Run the effects an approval deferred until its caller released the
+    /// task lock: resolves bookkeeping and PR closure for a review approval.
+    pub(crate) fn run_deferred_approval_effects(&self, effects: DeferredApprovalEffects) {
+        let DeferredApprovalEffects { task, note } = effects;
+        if task.status == TaskStatus::Done {
+            self.record_resolves_side_effects(TaskStatus::Review, &task);
+            // Approval to done only ever leaves `review`.
+            self.close_task_prs_after_transition(TaskStatus::Review, &task, note.as_deref());
+        }
+    }
+
+    fn approve_task_deferring_effects(
+        &self,
+        id: &str,
+        request: ApprovalRequest,
+    ) -> Result<(Task, DeferredApprovalEffects), OrbitError> {
+        let ApprovalRequest {
+            note,
+            decision,
+            comment,
+            agent,
+            model,
+            guard_run_ownership,
+        } = request;
+        self.ensure_coordination_task_write_permitted()?;
+        let note = note.map(|value| redact_all(&value));
+        if comment
+            .as_deref()
+            .is_some_and(orbit_types::workflow::ResidentComment::is_resident_comment)
+        {
+            return Err(OrbitError::InvalidInput("append resident records using a comment-only task update, separately from lifecycle transitions".into()));
+        }
+        let comment = comment.map(|value| redact_all(&value));
+        let (canonical_agent, canonical_model) =
+            self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
+        let actor = self.actor().clone();
+        let effective_label = effective_actor_label(
+            &actor.label,
+            canonical_agent.as_deref(),
+            canonical_model.as_deref(),
+        )?;
+        let append_comments = build_task_comments(comment, effective_label.as_str())?;
+        let result = self.with_task_write_locked(id, || {
+            let task = self.get_task(id)?;
+            #[cfg(test)]
+            self.apply_transition_read_hook(id)?;
+            if guard_run_ownership
+                && matches!(task.status, TaskStatus::Proposed | TaskStatus::Review)
+            {
+                ensure_status_change_not_run_owned(self, id)?;
+            }
+            let implemented_by =
+                implementation_label(&task, effective_label.as_str(), canonical_model.as_deref());
+            if task.status == TaskStatus::Review {
+                super::super::lifecycle::ensure_completion_gates(self, &task)?;
+                super::super::lifecycle::ensure_completion_run_stopped(self, &task, None, None)?;
+            }
+
+            match task.status {
+                TaskStatus::Proposed => self.stores().task_records().update(
+                    id,
+                    StoreTaskUpdateParams {
+                        actor: effective_label.clone(),
+                        status_event: Some("proposal_approved".to_string()),
+                        status_note: note.clone(),
+                        status_decision: decision.clone(),
+                        append_comments: append_comments.clone(),
+                        expected_status: Some(vec![task.status]),
+                        ..StoreTaskUpdateParams::from(TaskUpdateParams {
+                            status: Some(TaskStatus::Backlog),
+                            ..Default::default()
+                        })
+                    },
+                ),
+                TaskStatus::Review => self.stores().task_records().update(
+                    id,
+                    StoreTaskUpdateParams {
+                        actor: effective_label.clone(),
+                        status_event: Some("review_approved".to_string()),
+                        status_note: note.clone(),
+                        implemented_by: implemented_by.clone().map(Some),
+                        append_comments: append_comments.clone(),
+                        expected_status: Some(vec![task.status]),
+                        ..StoreTaskUpdateParams::from(TaskUpdateParams {
+                            status: Some(TaskStatus::Done),
+                            ..Default::default()
+                        })
+                    },
+                ),
+                other => Err(OrbitError::InvalidInput(format!(
+                    "task '{id}' is in status '{other}'; approve requires 'proposed' or 'review'"
+                ))),
+            }
+        })?;
+        let effects = DeferredApprovalEffects {
+            task: result.clone(),
+            note,
+        };
+        Ok((result, effects))
+    }
+
+    /// Refuse a done transition whose unqualified `resolves` target lives in
+    /// another workspace on this host (ORB-11078).
+    ///
+    /// Same-workspace targets and IDs that cannot be shown to belong
+    /// elsewhere stay on the existing auto-resolve / dangling path.
+    pub(crate) fn ensure_resolves_are_workspace_local(
+        &self,
+        task: &Task,
+    ) -> Result<(), OrbitError> {
+        let Ok(frictions) = crate::runtime::friction::store_for(self) else {
+            return Ok(());
+        };
+        let workspace_id = self.workspace_id()?;
+        ensure_resolves_targets_are_workspace_local(frictions.as_ref(), &workspace_id, task)
+    }
+}
+
+/// Rejects an unqualified `resolves` friction ID that is missing locally
+/// but present in another workspace on this host.
+fn ensure_resolves_targets_are_workspace_local(
+    frictions: &dyn FrictionStoreBackend,
+    workspace_id: &str,
+    task: &Task,
+) -> Result<(), OrbitError> {
+    for relation in &task.relations {
+        if relation.relation_type != TaskRelationType::Resolves {
+            continue;
+        }
+        let target = relation.target.as_str();
+        if !is_valid_friction_id(target) {
+            continue;
+        }
+        if frictions.show(target)?.is_some() {
+            continue;
+        }
+        let found_in = frictions.foreign_owners_of(target)?;
+        if !found_in.is_empty() {
+            return Err(OrbitError::friction_not_local(
+                target,
+                task.id.clone(),
+                workspace_id,
+                found_in,
+            ));
+        }
+    }
+    Ok(())
+}

@@ -58,8 +58,9 @@ pub struct ServeArgs {
     pub workspace: Option<String>,
 
     /// Grant operator capability for the dashboard's governed controls —
-    /// Operations, and the owner's handoff approve/revoke/recover actions —
-    /// without a TTY or ORBIT_OPERATOR. `orbit web connect` passes this by
+    /// Operations, and the owner's handoff approve/revoke/recover actions.
+    /// This flag is the dashboard's only operator grant: the server's terminal
+    /// and ORBIT_OPERATOR are ignored. `orbit web connect` passes it by
     /// default.
     #[arg(long)]
     pub operator: bool,
@@ -287,7 +288,7 @@ pub(crate) async fn security_headers(mut response: Response) -> Response {
 /// Build the axum app and block on the tokio runtime until graceful shutdown.
 fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), OrbitError> {
     check_bindable_host(args.host, args.port)?;
-    // Before the TCP bind, so a refused `lease.intake.peer_user` stops startup.
+    // Before the TCP bind, so a refused intake peer user stops startup.
     let mut lease_intake = bind_lease_intake(state.global_root())?;
     let intake_state = state.clone();
 
@@ -298,7 +299,6 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
     let handover_target = Arc::clone(&handover);
     let host_tunnels = Arc::clone(state.host_tunnels());
     let close_host_streams = Arc::clone(&host_tunnels);
-    let config_root = state.global_root().to_path_buf();
     let app = build_app(state)?;
 
     let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
@@ -325,25 +325,18 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
             println!("Dashboard listening on {url}");
         }
 
-        let browser_sessions = crate::browser_session::start_browser_sessions(&config_root, bound)?;
-        let app = if let Some((sessions, session_url)) = browser_sessions {
-            crate::browser_session::print_interactive_session_url(&session_url);
-            if !no_open {
-                crate::browser_session::open_private_browser_url(&session_url)?;
-            }
-            app.layer(axum::Extension(sessions))
-        } else {
-            if !no_open {
-                open_browser(&url);
-            }
-            app
-        };
+        if !no_open {
+            open_browser(&url);
+        }
 
         #[cfg(unix)]
         let intake_task = match intake_socket {
             Some(socket) => {
                 let accept = socket.serve(intake_state, lease_intake::IntakeLimits::default())?;
-                #[allow(clippy::print_stdout)]
+                #[allow(
+                    clippy::print_stdout,
+                    reason = "the operator reads the lease intake socket path from stdout when the server binds it"
+                )]
                 {
                     println!(
                         "Lease intake socket listening on {}",
@@ -424,23 +417,28 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
     Ok(())
 }
 
-/// Bind the lease intake socket when the operator's global
-/// `lease.intake.peer_user` is set; `None` when it is unset.
+/// The former `lease.intake.peer_user` default (unset), fixed when the key
+/// was removed [ORB-22808]: the OS user Orbit Web's lease intake socket
+/// accepts. With none, Orbit Web serves no intake socket.
+const LEASE_INTAKE_PEER_USER: Option<&str> = None;
+
+/// Bind the lease intake socket when there is an intake peer user; `None`
+/// when there is none.
 #[cfg(unix)]
 fn bind_lease_intake(
     global_root: &Path,
 ) -> Result<Option<lease_intake::LeaseIntakeSocket>, OrbitError> {
-    let Some(peer_user) = orbit_core::load_lease_intake_peer_user(global_root)? else {
+    let Some(peer_user) = LEASE_INTAKE_PEER_USER else {
         return Ok(None);
     };
-    lease_intake::LeaseIntakeSocket::bind(global_root, &peer_user).map(Some)
+    lease_intake::LeaseIntakeSocket::bind(global_root, peer_user).map(Some)
 }
 
 #[cfg(not(unix))]
-fn bind_lease_intake(global_root: &Path) -> Result<Option<()>, OrbitError> {
-    match orbit_core::load_lease_intake_peer_user(global_root)? {
+fn bind_lease_intake(_global_root: &Path) -> Result<Option<()>, OrbitError> {
+    match LEASE_INTAKE_PEER_USER {
         Some(_) => Err(OrbitError::InvalidInput(
-            "lease.intake.peer_user needs a Unix host: the lease intake socket checks its \
+            "a lease intake peer user needs a Unix host: the lease intake socket checks its \
              peer's user through the kernel"
                 .to_string(),
         )),

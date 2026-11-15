@@ -54,7 +54,7 @@ pub(super) fn claimed(
     let context = ToolContext {
         reservation_owner: Some(ReservationOwnerContext {
             owner_run_id: attempt.action_id.clone().unwrap(),
-            owner_metadata_json: None,
+            owner_metadata: None,
         }),
         ..ToolContext::default()
     };
@@ -165,8 +165,7 @@ fn a_state_pilot_persists_findings_from_origin_while_the_primary_branch_lags() {
     assert_eq!(output["status"], "succeeded", "{output}");
     assert_eq!(output["applied_count"], 1, "{output}");
     let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
-    let audit = comments.last().unwrap().receipt().unwrap().body;
-    let audit: Value = serde_json::from_str(audit).unwrap();
+    let audit = super::pilot_audit(&workspace.runtime, &task.id, comments.last().unwrap());
     assert_eq!(
         audit["assessment"]["assessment_rationale"],
         format!("At {origin}, a.rs has {material}")
@@ -211,6 +210,66 @@ fn a_failed_state_pilot_fetch_prepares_the_local_head_even_with_a_stale_tracking
     assert_eq!(output["applied_count"], 1, "{output}");
     assert!(pilot_applied(&workspace, &task));
     assert_eq!(head(&workspace), local);
+}
+
+/// ORB-21834: pilot prepare queued behind every other Orbit fetch on the
+/// shared fetch lock. It now pins the commit its own fetch read from origin
+/// while another holder keeps the lock, leaves the remote-tracking ref to
+/// that holder, and advances the ref itself once the lock is free.
+fn a_pilot_prepare_pins_fresh_origin_while_another_fetch_holds_the_lock() {
+    use std::sync::mpsc;
+    use std::time::Duration as StdDuration;
+
+    let workspace = Workspace::new();
+    let (task, _) = disjoint_tasks(&workspace);
+    let (local, origin) = origin_ahead(&workspace);
+    let primary_index = workspace.git(&["write-tree"]);
+    let tracking = || {
+        workspace
+            .git(&[
+                "for-each-ref",
+                "--format=%(objectname)",
+                "refs/remotes/origin/main",
+            ])
+            .trim()
+            .to_string()
+    };
+    assert_eq!(tracking(), "", "the fixture starts with no tracking ref");
+
+    let (held, lock_held) = mpsc::channel();
+    let (release, released) = mpsc::channel::<()>();
+    let repo = workspace.repo.clone();
+    let holder = std::thread::spawn(move || {
+        orbit_common::fs::git::with_git_fetch_lock(&repo, || {
+            held.send(()).unwrap();
+            // A prepare that queues on the lock is still waiting here, so
+            // the holder gives up and the case fails instead of hanging.
+            Ok::<_, std::io::Error>(released.recv_timeout(StdDuration::from_secs(20)).is_ok())
+        })
+    });
+    lock_held.recv().unwrap();
+    let prepared = workspace.prepare(&[&task.id]);
+    release.send(()).unwrap();
+    assert!(
+        holder.join().unwrap().unwrap(),
+        "prepare returned only after the other fetch gave up the lock"
+    );
+    assert_eq!(prepared["source"]["source_revision"], origin);
+    assert_eq!(prepared["source"]["source_ref"], "origin/main");
+    assert_eq!(prepared["task_ids"], json!([task.id]));
+    assert_eq!(tracking(), "", "the tracking ref moved without the lock");
+    assert_eq!(
+        workspace.git(&["for-each-ref", "refs/orbit/pilot-source/"]),
+        "",
+        "the private fetch ref is removed"
+    );
+
+    // With the lock free, the same fetch also advances the tracking ref.
+    let second = workspace.prepare(&[&task.id]);
+    assert_eq!(second["source"]["source_revision"], origin, "{second}");
+    assert_eq!(tracking(), origin);
+    assert_eq!(head(&workspace), local);
+    assert_eq!(workspace.git(&["write-tree"]), primary_index);
 }
 
 fn a_head_move_supersedes_the_overlapping_task_and_reclaims_it_at_the_head() {
@@ -744,6 +803,130 @@ fn deleting_a_pending_pilot_task_does_not_block_its_successor() {
     );
 }
 
+/// ORB-22622: a prepared file whose NUL-delimited diff path begins with
+/// whitespace is still stale; the comparison preserves exact filename bytes.
+/// Disjoint siblings still apply, and `Any` sensitivity still stales every
+/// task on a move disjoint from all selectors.
+fn a_leading_whitespace_prepared_path_is_stale_while_disjoint_siblings_apply() {
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    workspace.commit_file(" leading.rs", "fn leading() {}\n", "add leading");
+    workspace.commit_file("ordinary.rs", "fn ordinary() {}\n", "add ordinary");
+    workspace.commit_file("unrelated.rs", "fn unrelated() {}\n", "add unrelated");
+    let task = |title: &str, selector: &str| {
+        workspace
+            .runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                description: format!("Prepare {title}."),
+                acceptance_criteria: vec!["Selectors identify the implementation scope.".into()],
+                plan: format!("Inspect {selector}."),
+                context_files: vec![selector.into()],
+                status: Some(TaskStatus::Proposed),
+                ..Default::default()
+            })
+            .unwrap()
+    };
+    let whitespace = task("whitespace", "file: leading.rs");
+    let ordinary = task("ordinary", "file:ordinary.rs");
+    let disjoint = task("disjoint", "file:unrelated.rs");
+    assert_eq!(
+        whitespace.context_files,
+        ["file: leading.rs"],
+        "the selector preserves the leading space"
+    );
+    let routine = pilot_routine();
+    evaluate_routine(&workspace.runtime, &routine, false, Utc::now()).unwrap();
+    let attempt = workspace.admitted_batch(&[&whitespace, &ordinary, &disjoint], 2);
+    let prepared = prepare_claim(&workspace, &attempt);
+    assert_eq!(prepared["superseded_by_source"], json!([]), "{prepared}");
+    // Only the whitespace file changes, so it is the first diff path.
+    workspace.commit_file(
+        " leading.rs",
+        "fn leading() { changed() }\n",
+        "touch leading",
+    );
+    let output = apply_claim(&workspace, &attempt, &prepared);
+    assert_eq!(output["status"], "succeeded", "{output}");
+    assert_eq!(output["applied_count"], 2, "{output}");
+    assert_eq!(output["superseded_count"], 1, "{output}");
+    let outcome = outcome_for(&output, &whitespace);
+    assert_eq!(outcome["reason"], "superseded_by_source");
+    let detail = outcome["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("` leading.rs`"),
+        "stale detail preserves the leading space: {detail}"
+    );
+    assert_eq!(outcome_for(&output, &ordinary)["outcome"], "applied");
+    assert_eq!(outcome_for(&output, &disjoint)["outcome"], "applied");
+    assert!(!pilot_applied(&workspace, &whitespace));
+    assert!(pilot_applied(&workspace, &ordinary));
+    assert!(pilot_applied(&workspace, &disjoint));
+
+    // `Any` sensitivity still stales every task on any move, even one
+    // disjoint from all selectors.
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    workspace.commit_file("a.rs", "fn a() {}\n", "add a");
+    workspace.commit_file("b.rs", "fn b() {}\n", "add b");
+    workspace.commit_file("other.rs", "fn other() {}\n", "add other");
+    let task = |title: &str, selector: &str| {
+        workspace
+            .runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                description: format!("Prepare {title}."),
+                acceptance_criteria: vec!["Selectors identify the implementation scope.".into()],
+                plan: format!("Inspect {selector}."),
+                context_files: vec![selector.into()],
+                status: Some(TaskStatus::Proposed),
+                ..Default::default()
+            })
+            .unwrap()
+    };
+    let first = task("first", "file:a.rs");
+    let second = task("second", "file:b.rs");
+    let routine: RoutineDefinition = serde_json::from_value(json!({
+        "schemaVersion": 1, "name": "fixture-pilot", "enabled": true,
+        "target": "job:task_pilot_pipeline",
+        "trigger": {"state": {
+            "kind": "preparation_eligible", "owner_machine": "fixture-machine", "branch": "main",
+            "debounce_minutes": 2, "max_wait_minutes": 10, "max_items": 50,
+            "retries": 1, "deadline_minutes": 90,
+            "freshness": {"source_sensitivity": "any"},
+        }},
+    }))
+    .unwrap();
+    let routines = workspace.runtime.shared_root().join("routines");
+    std::fs::create_dir_all(&routines).unwrap();
+    std::fs::write(
+        routines.join("fixture-pilot.yaml"),
+        serde_yaml::to_string(&routine).unwrap(),
+    )
+    .unwrap();
+    evaluate_routine(&workspace.runtime, &routine, false, Utc::now()).unwrap();
+    let attempt = workspace.admitted_batch(&[&first, &second], 2);
+    let prepared = prepare_claim(&workspace, &attempt);
+    assert_eq!(prepared["superseded_by_source"], json!([]), "{prepared}");
+    workspace.commit_file("other.rs", "fn other() { changed() }\n", "touch other");
+    let output = apply_claim(&workspace, &attempt, &prepared);
+    assert_eq!(output["status"], "succeeded", "{output}");
+    assert_eq!(output["applied_count"], 0, "{output}");
+    assert_eq!(output["superseded_count"], 2, "{output}");
+    for task in [&first, &second] {
+        let outcome = outcome_for(&output, task);
+        assert_eq!(outcome["reason"], "superseded_by_source");
+        assert!(
+            outcome["detail"]
+                .as_str()
+                .unwrap()
+                .contains("source_sensitivity is any"),
+            "{outcome}"
+        );
+        assert!(!pilot_applied(&workspace, task));
+    }
+}
+
 crate::scenario_table!(
     deleted_pending_member_scenarios,
     deleting_a_pending_pilot_task_does_not_block_its_successor
@@ -754,8 +937,10 @@ crate::scenario_table!(
     a_state_pilot_persists_findings_from_origin_while_the_primary_branch_lags_scenarios,
     a_state_pilot_persists_findings_from_origin_while_the_primary_branch_lags,
     a_failed_state_pilot_fetch_prepares_the_local_head_even_with_a_stale_tracking_ref,
+    a_pilot_prepare_pins_fresh_origin_while_another_fetch_holds_the_lock,
     a_head_move_supersedes_the_overlapping_task_and_reclaims_it_at_the_head,
     a_run_stopped_after_a_head_move_settles_superseded_without_spending_its_retry,
     editing_one_claimed_task_before_prepare_pilots_its_siblings_and_reclaims_it,
-    context_and_instruction_edits_skip_stale_partitions_and_requeue_without_failures
+    context_and_instruction_edits_skip_stale_partitions_and_requeue_without_failures,
+    a_leading_whitespace_prepared_path_is_stale_while_disjoint_siblings_apply
 );

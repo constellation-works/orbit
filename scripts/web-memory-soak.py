@@ -22,6 +22,10 @@ Usage:
     make web-memory-soak
     python3 scripts/web-memory-soak.py --bin target/release/orbit \
         [--work-dir DIR] [--report report.json] [--rounds 20] [--report-only]
+
+`--rounds` must be at least 3 so drift is measured from round 3 to the last round.
+`--server-env` takes KEY=VALUE.
+`--startup-timeout` bounds each server announcement wait (default 30 seconds).
 """
 
 from __future__ import annotations
@@ -29,10 +33,13 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
+import math
 import os
 import random
 import re
+import selectors
 import shutil
+import signal
 import sqlite3
 import statistics
 import subprocess
@@ -96,9 +103,9 @@ TOOLS = [
     "orbit.task.update",
     "orbit.task.list",
     "orbit.search",
-    "orbit.friction.add",
+    "orbit.friction",
     "proc.spawn",
-    "orbit.task.artifact.put",
+    "orbit.task.artifact",
 ]
 LOREM = (
     "The dashboard polls every visible panel on a fixed interval, and each "
@@ -590,9 +597,52 @@ def arena_like_mappings(pid: int) -> int:
 
 
 class Server:
-    def __init__(self, fixture: Fixture, extra_env: dict[str, str] | None = None):
+    def _leader_exit_without_reaping(self) -> int | None:
+        """Return the leader's exit status if it exited, else ``None``.
+
+        Uses ``WNOWAIT`` so an exited leader stays an unreaped zombie. That
+        zombie pins its process-group id until the final group signal in
+        `stop`, so the numeric id cannot be reused by an unrelated group
+        in between (STD-03 §R14).
+        """
+        try:
+            info = os.waitid(
+                os.P_PID,
+                self.process.pid,
+                os.WEXITED | os.WNOHANG | os.WNOWAIT,
+            )
+        except (ChildProcessError, ProcessLookupError, OSError):
+            # Not waitable here (already handled elsewhere or a substituted
+            # process in a test): fall back to the cached status only. Never
+            # call poll()/wait() to find out, as those reap the leader.
+            self._leader_wait_unavailable = True
+            return getattr(self.process, "returncode", None)
+        if info is None:
+            return None
+        if info.si_code == os.CLD_EXITED:
+            return info.si_status
+        if info.si_code in (os.CLD_KILLED, os.CLD_DUMPED):
+            return -info.si_status
+        return None
+
+    def _wait_leader_without_reaping(self, timeout: float) -> None:
+        deadline = time.monotonic() + timeout
+        while True:
+            if self._leader_exit_without_reaping() is not None:
+                return
+            if getattr(self, "_leader_wait_unavailable", False):
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.05, remaining))
+
+    def __init__(self, fixture: Fixture, extra_env: dict[str, str] | None = None,
+                 startup_timeout: float = 30.0):
         env = dict(fixture.env)
         env.update(extra_env or {})
+        self._stopped = False
+        self._leader_wait_unavailable = False
         self.process = subprocess.Popen(
             [
                 str(fixture.binary), "--root", str(fixture.root), "web", "serve",
@@ -602,15 +652,43 @@ class Server:
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            text=True,
+            start_new_session=True,
         )
-        line = self.process.stdout.readline()
-        match = re.search(r"http://(\S+)", line)
-        if not match:
+        try:
+            line = self.announcement(startup_timeout)
+            match = re.search(r"http://(\S+)", line)
+            if not match:
+                raise RuntimeError(f"dashboard did not announce its address: {line!r}")
+            self.base = f"http://{match.group(1)}"
+            self.pid = self.process.pid
+        except BaseException:
             self.stop()
-            raise RuntimeError(f"dashboard did not announce its address: {line!r}")
-        self.base = f"http://{match.group(1)}"
-        self.pid = self.process.pid
+            raise
+
+    def announcement(self, timeout: float) -> str:
+        deadline = time.monotonic() + timeout
+        pending = bytearray()
+        with selectors.DefaultSelector() as selector:
+            selector.register(self.process.stdout, selectors.EVENT_READ)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError(f"dashboard did not announce its address: timed out after {timeout:g}s")
+                # Read available bytes, never readline(): even a partial line
+                # must obey the deadline. Also notice an exited leader whose
+                # descendant still holds the pipe open.
+                if selector.select(min(remaining, 0.1)):
+                    chunk = os.read(self.process.stdout.fileno(), 4096)
+                    pending.extend(chunk)
+                    if b"\n" in pending:
+                        return pending.split(b"\n", 1)[0].decode("utf-8", errors="replace")
+                    if not chunk:
+                        raise RuntimeError("dashboard did not announce its address: stdout closed")
+                    if len(pending) >= 64 * 1024:
+                        raise RuntimeError("dashboard did not announce its address: announcement exceeds 64 KiB")
+                exited = self._leader_exit_without_reaping()
+                if exited is not None:
+                    raise RuntimeError(f"dashboard did not announce its address: exited {exited}")
 
     def get(self, path: str) -> dict:
         started = time.monotonic()
@@ -623,12 +701,35 @@ class Server:
         return {"path": path, "ms": round((time.monotonic() - started) * 1000), "bytes": len(body)}
 
     def stop(self) -> None:
-        self.process.terminate()
+        # The dedicated group belongs to this Server, including children that
+        # outlive its leader. Signal it only while the leader is unreaped:
+        # an exited-but-unreaped leader pins the group id, so no signal here
+        # can land on a reused id (STD-03 §R14). Reap last, on every path.
+        if getattr(self, "_stopped", False):
+            return
+        self._stopped = True
         try:
-            self.process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            self.process.kill()
-            self.process.wait()
+            try:
+                try:
+                    os.killpg(self.process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                # Bounded grace, observed without reaping the leader.
+                self._wait_leader_without_reaping(timeout=5)
+            finally:
+                # Final signal: the leader is still unreaped, so the group
+                # id is still the one this Server spawned.
+                try:
+                    os.killpg(self.process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        finally:
+            try:
+                self.process.wait(timeout=5)
+            finally:
+                stdout = getattr(self.process, "stdout", None)
+                if stdout is not None:
+                    stdout.close()
 
 
 def settle() -> None:
@@ -636,8 +737,8 @@ def settle() -> None:
     time.sleep(2.0)
 
 
-def fresh_request_growth(fixture: Fixture, path: str, extra_env) -> dict:
-    server = Server(fixture, extra_env)
+def fresh_request_growth(fixture: Fixture, path: str, extra_env, startup_timeout: float = 30.0) -> dict:
+    server = Server(fixture, extra_env, startup_timeout)
     try:
         server.get("/api/workspaces")
         server.get(f"/api/tasks/locks?workspace={WORKSPACE_ID}")
@@ -659,8 +760,8 @@ def fresh_request_growth(fixture: Fixture, path: str, extra_env) -> dict:
     }
 
 
-def soak(fixture: Fixture, rounds: int, interval: float, extra_env) -> dict:
-    server = Server(fixture, extra_env)
+def soak(fixture: Fixture, rounds: int, interval: float, extra_env, startup_timeout: float = 30.0) -> dict:
+    server = Server(fixture, extra_env, startup_timeout)
     paths = [path.format(ws=WORKSPACE_ID) for path in GET_MIX]
     samples = []
     try:
@@ -729,18 +830,56 @@ def task_list_timing(fixture: Fixture, runs: int) -> dict:
     }
 
 
+def positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid integer: {value!r}") from None
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return parsed
+
+
+def soak_rounds(value: str) -> int:
+    parsed = positive_int(value)
+    if parsed < 3:
+        raise argparse.ArgumentTypeError(
+            "must be at least 3 so RSS drift is measured from round 3")
+    return parsed
+
+
+def server_env_binding(value: str) -> str:
+    key, separator, _rest = value.partition("=")
+    if separator != "=" or not key:
+        raise argparse.ArgumentTypeError(f"expected KEY=VALUE, got {value!r}")
+    return value
+
+
+def startup_timeout_seconds(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a finite positive number of seconds") from None
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a finite positive number of seconds")
+    return parsed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--bin", required=True, type=Path, help="orbit binary to measure")
     parser.add_argument("--work-dir", type=Path, help="fixture directory (reused when it already holds one)")
     parser.add_argument("--report", type=Path, help="write the JSON report here")
-    parser.add_argument("--rounds", type=int, default=20)
+    parser.add_argument("--rounds", type=soak_rounds, default=20)
     parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL_S)
-    parser.add_argument("--task-list-runs", type=int, default=9)
+    parser.add_argument("--task-list-runs", type=positive_int, default=9)
+    parser.add_argument("--startup-timeout", type=startup_timeout_seconds, default=30.0,
+                        help="seconds to wait for each server's address announcement (default: 30)")
     parser.add_argument(
         "--server-env",
         action="append",
         default=[],
+        type=server_env_binding,
         metavar="KEY=VALUE",
         help="extra environment for the dashboard process (e.g. MALLOC_ARENA_MAX=2)",
     )
@@ -775,8 +914,8 @@ def main() -> int:
 
         print("Fresh-server single requests:", flush=True)
         fresh = [
-            fresh_request_growth(fixture, f"/api/cost?window=24h&workspace={WORKSPACE_ID}", extra_env),
-            fresh_request_growth(fixture, "/api/routines", extra_env),
+            fresh_request_growth(fixture, f"/api/cost?window=24h&workspace={WORKSPACE_ID}", extra_env, args.startup_timeout),
+            fresh_request_growth(fixture, "/api/routines", extra_env, args.startup_timeout),
         ]
         for item in fresh:
             print(
@@ -784,9 +923,12 @@ def main() -> int:
                 f"hwm +{item['hwm_growth_mb']} MB, {item['ms']} ms"
             )
         print(f"Soak: {args.rounds} rounds every {args.interval:g}s", flush=True)
-        soak_report = soak(fixture, args.rounds, args.interval, extra_env)
+        soak_report = soak(fixture, args.rounds, args.interval, extra_env, args.startup_timeout)
         timing = task_list_timing(fixture, args.task_list_runs)
         print(f"orbit task list: median {timing['median_ms']} ms over {timing['runs']} runs")
+    except RuntimeError as error:
+        print(f"web-memory-soak: {error}", file=sys.stderr)
+        return 1
     finally:
         if temp is not None:
             temp.cleanup()

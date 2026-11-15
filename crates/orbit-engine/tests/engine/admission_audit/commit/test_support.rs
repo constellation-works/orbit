@@ -6,10 +6,12 @@ use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, ExecutionLocation,
-    Task, TaskDecision, TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
+    REVIEW_SETTLED_EVENT, RecordedReviewSettlement, ReviewSettlementGate, Task, TaskComment,
+    TaskDecision, TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
 };
 use orbit_types::tool::WorkerInvocation;
 use orbit_types::workflow::JobRun;
+use orbit_types::workflow::ReviewVerdict;
 use tempfile::tempdir;
 
 use orbit_engine::{RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate};
@@ -18,12 +20,14 @@ use super::git_success;
 
 pub struct CommitTestHost {
     tasks: Mutex<Vec<Task>>,
+    pr_config: orbit_engine::PrConfig,
     repo_root: PathBuf,
     data_root: PathBuf,
     /// The trusted claim binding a claimed leaf's host carries, if any.
     worker: Option<WorkerInvocation>,
     /// Task history, including the selector widenings this host recorded.
     history: Mutex<Vec<(String, TaskHistoryEntry)>>,
+    comments: Mutex<Vec<(String, TaskComment)>>,
 }
 
 impl CommitTestHost {
@@ -31,11 +35,18 @@ impl CommitTestHost {
         let data_root = repo_root.join(".orbit-test-data");
         Self {
             tasks: Mutex::new(tasks),
+            pr_config: orbit_engine::PrConfig::default(),
             repo_root,
             data_root,
             worker: None,
             history: Mutex::new(Vec::new()),
+            comments: Mutex::new(Vec::new()),
         }
+    }
+
+    pub fn with_pr_config(mut self, config: orbit_engine::PrConfig) -> Self {
+        self.pr_config = config;
+        self
     }
 
     /// Every widening recorded for `task_id`, in order.
@@ -66,6 +77,56 @@ impl CommitTestHost {
         self
     }
 
+    /// Record a settled before-landing review whose final candidate is
+    /// `final_commit`, as the review gate publishes it.
+    pub fn with_settled_review(self, task_id: &str, final_commit: &str) -> Self {
+        let settlement = RecordedReviewSettlement {
+            gate: ReviewSettlementGate::BeforeLanding,
+            attempt_id: "review-1".to_string(),
+            verdict: ReviewVerdict::Reject,
+            reviewer_crew: Some("fixture-reviewer".to_string()),
+            reviewer_model: None,
+            reviewed_commit: None,
+            final_commit: Some(final_commit.to_string()),
+            runtime_seconds: None,
+            findings: Vec::new(),
+        };
+        self.history.lock().unwrap().push((
+            task_id.to_string(),
+            TaskHistoryEntry {
+                at: Utc::now(),
+                by: "system".to_string(),
+                event: REVIEW_SETTLED_EVENT.to_string(),
+                note: None,
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: Some(TaskDecision::ReviewSettlement(settlement)),
+            },
+        ));
+        self
+    }
+
+    /// Record a legacy comment-only settlement with stored author `by`.
+    ///
+    /// Authentic gate comments are stamped `system`. Any other author is
+    /// ordinary prose and must not authorize a moved HEAD.
+    pub fn with_legacy_settled_review(self, task_id: &str, by: &str, final_commit: &str) -> Self {
+        self.comments.lock().unwrap().push((
+            task_id.to_string(),
+            TaskComment {
+                at: Utc::now(),
+                by: by.to_string(),
+                message: format!(
+                    "before-landing review settled attempt `review-1`: verdict **reject**\n\
+                     - Final candidate: `{final_commit}`"
+                ),
+                operation_id: None,
+            },
+        ));
+        self
+    }
+
     pub fn task(&self, task_id: &str) -> Task {
         self.get_task(task_id).unwrap()
     }
@@ -89,6 +150,10 @@ impl CommitTestHost {
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for CommitTestHost {
+    fn pr_config(&self) -> orbit_engine::PrConfig {
+        self.pr_config.clone()
+    }
+
     fn get_job_run(&self, _run_id: &str) -> Result<Option<JobRun>, OrbitError> {
         Ok(None)
     }
@@ -192,6 +257,17 @@ impl orbit_engine::test_support::NullRuntimeHost for CommitTestHost {
             .iter()
             .filter(|(id, _)| id == task_id)
             .map(|(_, entry)| entry.clone())
+            .collect())
+    }
+
+    fn get_task_comments(&self, task_id: &str) -> Result<Vec<TaskComment>, OrbitError> {
+        Ok(self
+            .comments
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(id, _)| id == task_id)
+            .map(|(_, comment)| comment.clone())
             .collect())
     }
 

@@ -400,6 +400,14 @@ fn explicit_root_allows_a_managed_child_to_round_trip_a_scratch_task_artifact() 
             .is_dir(),
         "task must be stored in the scratch workspace partition"
     );
+    // Tracing was not dropped: with `RUST_LOG=debug` the startup feed lands
+    // under the explicit scratch root, not in the managed registry.
+    let scratch_log = root.join("state/logs/orbit.jsonl");
+    assert!(
+        std::fs::read_to_string(&scratch_log).is_ok_and(|log| !log.trim().is_empty()),
+        "explicit-root startup tracing must be kept under the scratch root at {}",
+        scratch_log.display()
+    );
     sentinel.assert_unchanged(&before);
 }
 
@@ -540,7 +548,10 @@ fn managed_orbit(cwd: &Path, home: &Path, sentinel: &Sentinel) -> Command {
         .current_dir(cwd)
         .env("HOME", home)
         .env("USERPROFILE", home)
-        .env("ORBIT_AGENT_NAME", "codex");
+        .env("ORBIT_AGENT_NAME", "codex")
+        // Startup tracing must actually emit, so the sentinel assertion
+        // below cannot pass by suppressing every event.
+        .env("RUST_LOG", "debug");
     command
 }
 

@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use orbit_types::workflow::{JobKind, JobRun, JobScheduleState, JobV2, JobV2Step, JobV2StepBody};
+use orbit_types::workflow::{
+    JobKind, JobRun, JobScheduleState, JobV2, JobV2Step, JobV2StepBody, TASK_PILOT_PIPELINE_JOB,
+};
 use serde_json::{Value, json};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,7 +29,7 @@ impl JobCatalogEntry {
             && !self.spec.holds_task_delivery()
             && !(name.starts_with("workspace_")
                 || name.starts_with("epic_")
-                || (name.starts_with("task_") && name != "task_pilot_pipeline"))
+                || (name.starts_with("task_") && name != TASK_PILOT_PIPELINE_JOB))
     }
 
     pub fn kind(&self) -> JobKind {
@@ -51,6 +53,7 @@ pub fn job_catalog_to_json_with_last_run(
     job: &JobCatalogEntry,
     last_run: Option<&JobRun>,
 ) -> Value {
+    let manual_runnable = job.supports_no_input_submission();
     let mut value = json!({
         "job_id": job.job_id.clone(),
         "schema_version": job.spec.schema_version,
@@ -58,6 +61,8 @@ pub fn job_catalog_to_json_with_last_run(
         "state": job.state().to_string(),
         "default_input": job.spec.default_input,
         "max_active_runs": job.spec.max_active_runs,
+        "manual_runnable": manual_runnable,
+        "supports_no_input_submission": manual_runnable,
         "steps": job.spec.steps.iter().map(job_v2_step_to_json).collect::<Vec<_>>(),
         "path": job.path.display().to_string(),
     });
@@ -97,7 +102,6 @@ pub(super) fn job_v2_step_to_json(step: &JobV2Step) -> Value {
                 "target": target.target.clone(),
                 "default_input": target.default_input,
                 "timeout_seconds": target.timeout_seconds,
-                "session": target.session,
             });
         }
         JobV2StepBody::Target(target) => {
@@ -105,7 +109,6 @@ pub(super) fn job_v2_step_to_json(step: &JobV2Step) -> Value {
                 "kind": "target",
                 "default_input": target.default_input,
                 "timeout_seconds": target.timeout_seconds,
-                "session": target.session,
                 "spec": target.spec,
             });
         }

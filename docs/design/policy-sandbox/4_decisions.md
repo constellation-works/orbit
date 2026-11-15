@@ -3,7 +3,7 @@ summary: "Policy & Sandboxing — Decisions"
 type: design
 title: "Policy & Sandboxing — Decisions"
 owner: claude
-last_updated: 2026-10-04
+last_updated: 2026-11-02
 status: Draft
 feature: policy-sandbox
 doc_role: decisions
@@ -453,22 +453,29 @@ This deliberately retires the narrower child read guarantee from ORB-11514. The 
 
 ## Task References
 
-- [T20260328-221810] — subprocess termination on Ctrl+C / job cancel; predecessor of the current process-group design.
-- [T20260416-0728] — aligned the policy contract with runtime enforcement; v2 schema and effective-profile resolution land here.
-- [T20260417-0550] — decomposed `orbit-exec` supervision modules.
-- [T20260419-0503] — enforced `fsProfiles` across runtime and CLI; introduced `tool_context_for_activity`.
-- [T20260426-0622] — add this design folder and record the initial ADR set.
+- [DANI-10447] — Harden signal fan-out against reaped or reused process-group identifiers.
+- [ORB-10552] — Implement the shipped fail-closed Linux Bubblewrap write-confinement backend for CLI agents.
+- [ORB-10602] — derive write-grant anchors from the effective profile at each spawn; remove the hardcoded target inventory and the context-file materialization gate.
+- [ORB-10607] — Enforce final-policy grant preparation, anchor kinds, containment and failed-write attribution.
+- [ORB-10828] — Retire the registered filesystem read and delete builtins.
+- [ORB-10833] — Retire remaining unregistered filesystem builtins and their private policy helpers.
+- [ORB-11376] — protect checkout-local runtime identity from managed-agent writes and add exact-registration recovery.
+- [ORB-11514] — Implement the earlier Linux proc.spawn read boundary, subsequently replaced by inherited worker confinement.
+- [ORB-13317] — Allow ordinary development programs through shipped activity program denylists.
+- [ORB-13672] — Validate documentation in the run that exposed the parent-checkout Cargo read problem.
+- [ORB-13689] — remove the extra `proc.spawn` read sandbox on Linux and macOS and inherit the enclosing worker boundary.
+- [ORB-14017] — run the read-only `github.*` tools of a confined worker on the host through the run's plugin broker.
+- [T20260328-221810] — Add subprocess termination on Ctrl+C and job cancellation.
+- [T20260416-0728] — Establish schema-v2 policy and effective-profile resolution.
+- [T20260417-0550] — Decompose orbit-exec supervision modules.
+- [T20260417-0558-4] — Harden subprocess signal forwarding and process-group cleanup.
+- [T20260417-0558-5] — Harden shared signal-handler and process-group supervision.
+- [T20260419-0503] — Bind filesystem profiles throughout runtime and CLI activity dispatch.
+- [T20260426-0622] — Add this folder and name the open questions.
 - [T20260427-51] — wrap cli-backend agent invocations in `sandbox-exec` on macOS with inner-flag neutralization for codex/gemini.
 - [T20260428-10] — allow Codex CLI state writes under the macOS sandbox.
 - [T20260428-14] — extend the macOS sandbox state-dir allowance to Claude and Gemini, and document why side-write roots remain Codex-only.
 - [T20260508-13] — add `$HOME/.claude.json{,.lock,.tmp.<pid>.<ms_ts>}` sibling allows to the macOS sandbox profile so Claude can persist its main settings file.
 - [T20260509-30] — resolve `sandbox-exec` from trusted absolute locations rather than inherited `PATH`.
-- [ORB-10552] — implement fail-closed Linux Bubblewrap write confinement and preserve the explicit read-policy limitation.
-- [ORB-10602] — derive write-grant anchors from the effective profile at each spawn; remove the hardcoded target inventory and the context-file materialization gate.
-- [ORB-10607] — enforce final-policy materialization, canonical/symlink containment, rule-derived anchor types, and production failed-write attribution.
-- [ORB-10833] — retire the remaining unregistered `fs.*` builtins and their private policy helpers.
-- [ORB-11376] — protect checkout-local runtime identity from managed-agent writes and add exact-registration recovery.
-- [ORB-13689] — remove the extra `proc.spawn` read sandbox on Linux and macOS and inherit the enclosing worker boundary.
-- [ORB-14017] — run the read-only `github.*` tools of a confined worker on the host through the run's plugin broker.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

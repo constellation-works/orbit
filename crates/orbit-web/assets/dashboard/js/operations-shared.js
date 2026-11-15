@@ -1,5 +1,4 @@
-import { bindTaskLink, detailsPanel, el, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, onWorkspaceChange, runHref, fmtDuration, normalizeTaskStatus, relativeTime } from './common.js';
-import { navigateToRun } from './router.js';
+import { bindRunLink, bindTaskLink, detailsPanel, el, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, onWorkspaceChange, fmtDuration, normalizeTaskStatus, relativeTime } from './common.js';
 
 export const operationsState = {
   context: null,
@@ -30,7 +29,7 @@ function resetOperationsForWorkspace() {
   operationsState.lastAutoTasks = null;
   operationsState.lastAutoDrain = null;
   for (const reset of operationsResetCallbacks) reset();
-  for (const id of ["routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback", "job-operation-feedback"]) feedback(id, "", "");
+  for (const id of ["routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback", "job-operation-feedback", "script-operation-feedback", "resident-operation-feedback"]) feedback(id, "", "");
 }
 
 export const OPERATION_FEEDBACK_CLEAR_MS = 60000;
@@ -222,12 +221,6 @@ export function field(label, value) {
   ]);
 }
 
-function lastFireText(fire) {
-  if (!fire) return "Never";
-  const when = time(fire.finished_at || fire.started_at);
-  return fire.state ? `${fire.state} · ${when}` : when;
-}
-
 // "on task creation/edit · debounce 2m": what fires a state-triggered routine
 // and how long it settles first.
 function stateTriggerText(state) {
@@ -251,13 +244,6 @@ export function routineScheduleText(routine) {
 // describe.
 export function routineEventDriven(routine) {
   return Boolean(routine.trigger?.deliveries_landed || routine.trigger?.state || routine.trigger?.condition);
-}
-
-function operationIdentity(name, state) {
-  return el("div", { class: "operation-identity" }, [
-    el("strong", { text: name }),
-    el("span", { class: `operation-state ${state}`, text: state }),
-  ]);
 }
 
 export function operationFact(label, value, title) {
@@ -370,14 +356,54 @@ export function noteCronZone(payload) {
   if (payload?.cron_zone) operationsState.hostCronZone = payload.cron_zone;
 }
 
-// "PDT" for an IANA host zone, else "UTC-07:00" from the offset.
-function cronZoneLabel(zone) {
+// Dates used only to ask whether a zone's short name changes with the season.
+// The label is never taken from the browser's current clock.
+const CRON_ZONE_WINTER = new Date(Date.UTC(2026, 0, 15, 12));
+const CRON_ZONE_SUMMER = new Date(Date.UTC(2026, 6, 15, 12));
+
+function parseCronInstant(value) {
+  if (value == null || value === "") return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function intlZoneName(timeZone, style, date) {
+  return new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: style })
+    .formatToParts(date)
+    .find((part) => part.type === "timeZoneName")?.value || "";
+}
+
+// "PT", or "UTC" when the short name does not change between winter and summer.
+// Offset-shaped generics ("GMT+0") are kept only when no stable short name exists.
+function stableCronZoneName(timeZone) {
+  let generic = "";
+  try {
+    generic = intlZoneName(timeZone, "shortGeneric", CRON_ZONE_WINTER);
+  } catch {
+    generic = "";
+  }
+  if (generic && !/\d/.test(generic)) return generic;
+  const january = intlZoneName(timeZone, "short", CRON_ZONE_WINTER);
+  const july = intlZoneName(timeZone, "short", CRON_ZONE_SUMMER);
+  if (january && january === july) return january;
+  return generic;
+}
+
+// Abbreviation for a cron cadence. `instant` is that row's next evaluation, so
+// the name is the one at the fire ("PDT" before a Pacific fallback, "PST"
+// after it) and agrees with the UTC next fire beside it. Rendered cadences,
+// job chips and the editor preview of an unchanged cron pass that instant when
+// the row has one (an edited draft takes the generic name; see cronDraftText). With
+// no instant the stable generic name ("PT") is used. Today's abbreviation is
+// not applied to a future or unspecified fire. An unknown zone name falls
+// back to the reported offset ("UTC-07:00").
+function cronZoneLabel(zone, instant) {
   if (!zone) return "";
   if (zone.name) {
+    const at = parseCronInstant(instant);
     try {
-      const part = new Intl.DateTimeFormat("en-US", { timeZone: zone.name, timeZoneName: "short" })
-        .formatToParts(new Date()).find((p) => p.type === "timeZoneName");
-      if (part?.value) return part.value;
+      const named = at ? intlZoneName(zone.name, "short", at) : stableCronZoneName(zone.name);
+      if (named) return named;
     } catch {
       // Unknown to this browser: fall back to the offset.
     }
@@ -393,23 +419,34 @@ function cronZoneLabel(zone) {
 // A readable cadence for the common cron shapes routines use; anything else
 // is shown verbatim so nothing is misdescribed. Clock times are in the host
 // zone the scheduler evaluates cron in, not UTC.
-export function cronText(cron) {
+export function cronText(cron, instant) {
   const parts = String(cron || "").trim().split(/\s+/);
   if (parts.length !== 5) return cron || "—";
   const [minute, hour, dom, month, dow] = parts;
   const pad = (v) => String(v).padStart(2, "0");
-  const label = cronZoneLabel(operationsState.hostCronZone);
+  const label = cronZoneLabel(operationsState.hostCronZone, instant);
   const zone = label ? ` ${label}` : "";
   if (dom !== "*" || month !== "*") return cron;
   if (minute === "*" && hour === "*" && dow === "*") return "every minute";
   const every = /^\*\/(\d+)$/.exec(minute);
-  if (every && hour === "*" && dow === "*") return `every ${every[1]} min`;
+  // Steps restart at the hour: */45 alternates 45- and 15-minute gaps.
+  if (every && Number(every[1]) > 0 && 60 % Number(every[1]) === 0 && hour === "*" && dow === "*") return `every ${every[1]} min`;
   if (/^\d+$/.test(minute) && hour === "*" && dow === "*") return `hourly at :${pad(minute)}`;
   if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && dow === "*") return `daily ${pad(hour)}:${pad(minute)}${zone}`;
   if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && /^\d$/.test(dow)) {
-    return `weekly ${CRON_DAYS[Number(dow)] || dow} ${pad(hour)}:${pad(minute)}${zone}`;
+    // Cron day-of-week runs 0-7 with both 0 and 7 naming Sunday.
+    return `weekly ${CRON_DAYS[Number(dow) % 7] || dow} ${pad(hour)}:${pad(minute)}${zone}`;
   }
   return cron;
+}
+
+// Editor preview of a draft cron. The saved row's next evaluation belongs to
+// the saved cron only: an edited draft fires at other instants, possibly across
+// a seasonal change, so it takes the stable generic zone name instead of
+// borrowing the saved fire's abbreviation.
+export function cronDraftText(draftCron, savedCron, savedInstant) {
+  const same = (a, b) => String(a || "").trim().split(/\s+/).join(" ") === String(b || "").trim().split(/\s+/).join(" ");
+  return cronText(draftCron, same(draftCron, savedCron) ? savedInstant : null);
 }
 
 // One switch for enable/disable. The visible text stays "Enable"/"Disable"
@@ -473,12 +510,7 @@ export function outcomeDot(state) {
 
 export function runLink(runId, workspaceId, text = runId) {
   const link = el("a", { class: "mono operation-run-link", text, title: `Open run ${runId}` });
-  link.href = runHref(runId, { workspace: workspaceId || null });
-  link.addEventListener("click", (event) => {
-    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
-    event.preventDefault();
-    navigateToRun(runId, workspaceId || null);
-  });
+  bindRunLink(link, runId, { workspace: workspaceId || getWorkspace() });
   return link;
 }
 
@@ -550,7 +582,3 @@ export function taskLink(taskId, workspaceId) {
 export function autoDrainNumber(value) {
   return value == null || value === "" ? NaN : Number(value);
 }
-
-// Capacity in words: how many leaf runs hold a slot against the limit, a bar
-// that shows any overflow past the limit, and one sentence on what a window
-// started now would do with that.

@@ -280,20 +280,14 @@ fn config_path_and_set_print_json_documents() {
         "config",
         "set",
         "--global",
-        "automation.stall_window_minutes",
+        "retention.audit_days",
         "45",
         "--format",
         "json",
     ]);
-    assert_eq!(set["key"], "automation.stall_window_minutes");
+    assert_eq!(set["key"], "retention.audit_days");
     assert_eq!(set["scope"], "global");
-    let value = fixture.json(&[
-        "config",
-        "get",
-        "automation.stall_window_minutes",
-        "--format",
-        "json",
-    ]);
+    let value = fixture.json(&["config", "get", "retention.audit_days", "--format", "json"]);
     assert_eq!(value["value"], 45);
 }
 
@@ -637,7 +631,7 @@ fn config_set_rejections_leave_config_files_byte_identical() {
         ("non-bool crew flag", &["crews.sol.enabled", "maybe"]),
         (
             "invalid global value",
-            &["--global", "automation.stall_window_minutes", "soon"],
+            &["--global", "retention.audit_days", "soon"],
         ),
     ] {
         fixture
@@ -863,32 +857,13 @@ fn audit_prune_reports_a_bad_duration_before_asking_for_confirmation() {
 }
 
 #[test]
-fn routine_init_tool_scaffold_and_workspace_teardown_print_json_documents() {
+fn routine_init_and_workspace_teardown_print_json_documents() {
     let fixture = Fixture::new();
     fixture.init_machine_and_workspace();
 
     let routine = fixture.json(&["routine", "init", "--format", "json"]);
     assert_eq!(routine["machine"]["name"], "qa-host");
     assert_eq!(routine["clock"]["installed"], false);
-
-    let script = fixture.work.join("tools").join("hello");
-    let scaffold = fixture.json(&[
-        "tool",
-        "scaffold",
-        script.to_str().expect("utf8 path"),
-        "--name",
-        "hello",
-        "--format",
-        "json",
-    ]);
-    assert_eq!(scaffold["tool"], "hello");
-    assert!(script.is_file(), "scaffold must still write the executable");
-    assert!(
-        scaffold["executable"]
-            .as_str()
-            .is_some_and(|path| path.ends_with("hello")),
-        "scaffold document: {scaffold}"
-    );
 
     // Teardown needs the operator capability; the override is per-child here.
     fixture

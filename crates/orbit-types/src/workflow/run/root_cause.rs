@@ -15,9 +15,12 @@
 //! [ORB-15517] Nor is a claimed leaf its provider's usage limit stopped: the
 //! claim goes back to its owner, and the leaf holds on the provider and the
 //! reset it reported ([`HeldFailure::of_claimed_leaf`]).
-//! Owner-local runs also hold on capacity and usage limits: admission can
-//! choose another crew while the task keeps its provider failure hold.
+//! Owner-local runs also hold on capacity, usage limits and an unusable
+//! provider (an expired login, say): admission can choose another crew while
+//! the task keeps its provider failure hold, so the expired-login attempt is
+//! not counted as a failed run.
 
+use super::super::JobRunState;
 use super::DeliveryRefusal;
 use super::failure_classification_text;
 use serde::{Deserialize, Serialize};
@@ -25,21 +28,36 @@ use serde::{Deserialize, Serialize};
 use super::agent_blocker::{TASK_BLOCKED_BY_AGENT_ERROR_CODE, is_task_blocked_by_agent};
 use super::baseline::{BASELINE_RED_ERROR_CODE, is_baseline_red_failure};
 use super::provider_hold::{ProviderFailureClass, ProviderLimitFailure, failed_provider};
-use super::state::{PROVIDER_CAPACITY_ERROR_CODE, PROVIDER_LIMIT_ERROR_CODE, is_provider_limit};
+use super::state::{
+    OWNER_SIGNOFF_REQUIRED_ERROR_CODE, PROVIDER_CAPACITY_ERROR_CODE, PROVIDER_LIMIT_ERROR_CODE,
+    PROVIDER_UNAVAILABLE_ERROR_CODE, is_owner_signoff_required, is_provider_limit,
+};
 use crate::workflow::review::REVIEW_LANDING_DECISION_PENDING;
 
 /// Error code a held run's diagnostic step records when a before-landing
 /// review refusal left its pull request open for a recorded decision.
 pub const REVIEW_DECISION_PENDING_ERROR_CODE: &str = "review_decision_pending";
 
-/// Error code a parent's diagnostic step records when it ends `cancelled`
-/// because a child it waited on was cancelled.
-pub const CHILD_CANCELLED_ERROR_CODE: &str = "child_cancelled";
-
 /// Error code of a blocking child its parent cancelled because the parent's
 /// wait on it expired. The child's failure handoff keeps its candidate under
 /// this code, and the parent's wait result leads its error with it.
 pub const CHILD_TIMEOUT_ERROR_CODE: &str = "child_timeout";
+
+/// Error code of a run the host manager stopped. With recorded sender
+/// evidence, the run is `held`, not `interrupted`, and failure queries do not
+/// count it. A supervisor-observed non-signal crash of a running worker is
+/// `failed` without `worker_terminated`; a pending worker exit is interrupted
+/// startup. Stale-owner reconciliation can instead record a dead worker as
+/// `interrupted` with that code. If reconciliation finalizes before
+/// the sender evidence is recorded, later evidence does not rewrite the state.
+pub const OPERATOR_STOPPED_ERROR_CODE: &str = "operator_stopped";
+
+/// Whether `state` and `error_code` record a host-manager stop: `held` under
+/// [`OPERATOR_STOPPED_ERROR_CODE`].
+#[must_use]
+pub fn is_operator_stopped(state: JobRunState, error_code: Option<&str>) -> bool {
+    state == JobRunState::Held && error_code == Some(OPERATOR_STOPPED_ERROR_CODE)
+}
 
 /// The leaf failure a cascaded parent failure echoes.
 ///
@@ -76,8 +94,17 @@ pub enum HeldFailure {
     /// An owner-local run's selected model had no capacity; the task waits
     /// for another crew or the capacity backoff to end.
     ProviderCapacity,
+    /// An owner-local run's provider was unusable on this host, such as an
+    /// expired login; the task waits for another crew or for the login to be
+    /// renewed, and no step is counted as a work failure.
+    ProviderUnavailable,
     /// An implementer declared a blocker; the task awaits an operator.
     AgentBlocker,
+    /// Recorded owner approval is still missing
+    /// ([`OWNER_SIGNOFF_REQUIRED_ERROR_CODE`]). The task waits for the
+    /// operator and the run does not fail. The declared message stays the
+    /// reason.
+    OwnerSignoffRequired,
     /// A typed fail-closed delivery decision left its candidate parked.
     DeliveryRefused(DeliveryRefusal),
 }
@@ -99,17 +126,24 @@ impl HeldFailure {
             || message.is_some_and(|message| {
                 failure_classification_text(message).contains(REVIEW_LANDING_DECISION_PENDING)
             });
-        pending.then_some(Self::DecisionPending)
+        if pending {
+            return Some(Self::DecisionPending);
+        }
+        // [ORB-23956] Recorded owner approval is still missing. The run holds
+        // and the declared message stays the reason.
+        is_owner_signoff_required(error_code, message).then_some(Self::OwnerSignoffRequired)
     }
 
-    /// [`Self::of`] for an owner-local run, where capacity and usage limits
-    /// return the task to admission under its provider failure hold.
+    /// [`Self::of`] for an owner-local run, where capacity, usage limits and
+    /// an unusable provider return the task to admission under its provider
+    /// failure hold.
     #[must_use]
     pub fn of_local(error_code: Option<&str>, message: Option<&str>) -> Option<Self> {
         Self::of(error_code, message).or_else(|| {
             match ProviderFailureClass::of(error_code, message) {
                 Some(ProviderFailureClass::Capacity) => Some(Self::ProviderCapacity),
                 Some(ProviderFailureClass::Limit) => Some(Self::ProviderLimit),
+                Some(ProviderFailureClass::Unavailable) => Some(Self::ProviderUnavailable),
                 _ => None,
             }
         })
@@ -129,17 +163,20 @@ impl HeldFailure {
     pub fn error_code(self) -> &'static str {
         match self {
             Self::AgentBlocker => TASK_BLOCKED_BY_AGENT_ERROR_CODE,
+            Self::OwnerSignoffRequired => OWNER_SIGNOFF_REQUIRED_ERROR_CODE,
             Self::BaselineRed => BASELINE_RED_ERROR_CODE,
             Self::DecisionPending => REVIEW_DECISION_PENDING_ERROR_CODE,
             Self::ProviderLimit => PROVIDER_LIMIT_ERROR_CODE,
             Self::ProviderCapacity => PROVIDER_CAPACITY_ERROR_CODE,
+            Self::ProviderUnavailable => PROVIDER_UNAVAILABLE_ERROR_CODE,
             Self::DeliveryRefused(refusal) => refusal.error_code(),
         }
     }
 
     /// The held run's diagnostic text for `message`, the failure it held on.
     /// A usage limit leads with the provider and the reset it reported, and
-    /// keeps the provider's own text after them.
+    /// keeps the provider's own text after them. Every other hold, including
+    /// a missing owner approval, keeps `message` unchanged.
     #[must_use]
     pub fn diagnostic(self, message: &str) -> String {
         if self != Self::ProviderLimit {

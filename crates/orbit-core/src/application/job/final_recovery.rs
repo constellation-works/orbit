@@ -22,8 +22,8 @@ use orbit_engine::{
     FinalRecoveryApplied,
 };
 use orbit_types::workflow::{
-    FinalRecoveryCheckpoint, FinalRecoveryDecision, FinalRecoveryKey, FinalRecoveryObservedTask,
-    JobRunState, RunStateUpdate,
+    FinalRecoveryCheckpoint, FinalRecoveryCheckpointOutcome, FinalRecoveryDecision,
+    FinalRecoveryKey, FinalRecoveryObservedTask, JobRunState, RunStateUpdate,
 };
 
 use crate::OrbitRuntime;
@@ -106,6 +106,7 @@ fn admit(
                     base_ref: request.base_ref.clone(),
                     admitted_at: Utc::now(),
                     decision: None,
+                    fault: Default::default(),
                     repair_commit: None,
                     resume_context: None,
                     outcome: None,
@@ -143,15 +144,9 @@ fn apply(
             ))
         })?;
     let decision = &application.decision;
-    if matches!(decision, FinalRecoveryDecision::Resume { .. }) {
-        record_decision(
-            runtime,
-            run_id,
-            application,
-            Some(&FinalRecoveryApplied::Resume),
-        )?;
-        return Ok(FinalRecoveryApplied::Resume);
-    }
+    // A replay must not replace a different decision already recorded,
+    // including a resume over a settlement that may already have touched
+    // the task. The same decision, resume included, may be recorded again.
     if let Some(recorded) = checkpoint
         .decision
         .as_ref()
@@ -162,6 +157,15 @@ fn apply(
             recorded.kind(),
             decision.kind()
         )));
+    }
+    if matches!(decision, FinalRecoveryDecision::Resume { .. }) {
+        record_decision(
+            runtime,
+            run_id,
+            application,
+            Some(&FinalRecoveryApplied::Resume),
+        )?;
+        return Ok(FinalRecoveryApplied::Resume);
     }
     // The intent is durable before the task is touched. If recording it
     // fails, the task stays as the failure left it.
@@ -214,7 +218,8 @@ fn apply(
         },
         requeue_bound: FinalRecoveryRequeueBound::default(),
     };
-    let output = serde_json::to_value(decision)
+    let output = decision
+        .to_attributed_value(&application.fault)
         .map_err(|error| OrbitError::Execution(format!("encode decision: {error}")))?;
     // When a write after the applier's own fails, the task's record of this
     // run's decision is the authority. Reporting an error would escalate
@@ -321,9 +326,13 @@ fn record_decision(
     applied: Option<&FinalRecoveryApplied>,
 ) -> Result<(), OrbitError> {
     let outcome = applied.map(|applied| match applied {
-        FinalRecoveryApplied::Resume => "resume".to_string(),
-        FinalRecoveryApplied::Settled { outcome } => format!("settled: {outcome}"),
-        FinalRecoveryApplied::Escalated { outcome } => format!("escalated: {outcome}"),
+        FinalRecoveryApplied::Resume => FinalRecoveryCheckpointOutcome::Resume,
+        FinalRecoveryApplied::Settled { outcome } => FinalRecoveryCheckpointOutcome::Settled {
+            detail: outcome.clone(),
+        },
+        FinalRecoveryApplied::Escalated { outcome } => FinalRecoveryCheckpointOutcome::Escalated {
+            detail: outcome.clone(),
+        },
     });
     let update = runtime
         .stores()
@@ -331,6 +340,7 @@ fn record_decision(
         .update_run_state(run_id, &mut |_, state| {
             if let Some(checkpoint) = state.final_recovery.as_mut() {
                 checkpoint.decision = Some(application.decision.clone());
+                checkpoint.fault = application.fault.clone();
                 checkpoint.outcome = outcome.clone();
                 checkpoint.repair_commit = application.repair_commit.clone();
                 checkpoint.resume_context = application.resume_context.clone();
@@ -342,7 +352,9 @@ fn record_decision(
                     |index: &u32| *index < from || application.preserved_steps.contains(index);
                 state.step_states.retain(|index, _| keep(index));
                 state.step_outputs.retain(|index, _| keep(index));
+                state.skipped_steps.retain(|index| keep(index));
                 state.compound_outputs.retain(|index, _| *index < from);
+                state.script_output_sets.retain(|index, _| *index < from);
             }
             state.updated_at = Utc::now();
             Ok(())

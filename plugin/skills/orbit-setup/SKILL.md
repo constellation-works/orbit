@@ -1,6 +1,6 @@
 ---
 name: orbit-setup
-description: Sets up and maintains Orbit on a user's machine and repositories according to their needs. Use for installation, `orbit workspace init`, onboarding, provider/crew and MCP configuration, the Linux sandbox, the headless browser kit for UI checks, the scheduler (sweep clock, routines, auto-tasks), worktree GC, `orbit doctor`, upgrades, task publication and backup, remote access, the dashboard, or host and service log troubleshooting. Supports existing installations as well as first-time setup; task execution belongs to orbit and backlog dispatch to orbit-orchestrate.
+description: Sets up and maintains Orbit on a user's machine and repositories according to their needs. Use for installation, `orbit workspace init`, onboarding, provider/crew and MCP configuration, experimental crew memory, the Linux sandbox, the headless browser kit for UI checks, the scheduler (sweep clock, routines, auto-tasks), worktree GC, `orbit doctor`, upgrades, task publication and backup, remote access, the dashboard, or host and service log troubleshooting. Supports existing installations as well as first-time setup; task execution belongs to orbit and backlog dispatch to orbit-orchestrate.
 ---
 
 # Orbit Setup
@@ -21,32 +21,53 @@ shared workspace. Preserve the user's installation method and existing config.
 |---|---|
 | First installation or another repository | [First run](references/first-run.md); for an agent lane, continue with [Provider setup](references/providers.md#provider-setup) |
 | Add a Copilot, Antigravity or Muse crew; fix provider authentication | [Configuration — Provider setup](references/providers.md#provider-setup) |
+| Pass Claude or Codex credentials, choose a per-crew API key, or diagnose a stale service environment | [Provider credentials](references/providers.md#provider-credentials) |
 | Every `orbit` command fails to load configuration because a crew name contains `:`; repair the defining file by hand | [Configuration — Crew names containing a colon](references/configuration.md#crew-names-containing-a-colon) |
 | Explain crew selection, provider aliases or a dispatch refusal | [Configuration — Provider identity and resolution](references/providers.md#provider-identity-and-resolution) |
-| Configure task-pilot explore briefs, choose tasks by tag, or verify whether a brief was stored and delivered | [Configuration — Explore briefs](references/configuration.md#explore-briefs) |
+| Configure automatic per-draw effort (`<crew>@auto` bands, `workflow.auto_effort.*`), check which pools accept it, or verify a resolved effort without dispatching work | [Configuration — Automatic effort selection](references/configuration.md#automatic-effort-selection-crewauto) |
+| Configure or verify mid-run steering, including rollout timing and limits | [Configuration — Mid-run steering](references/configuration.md#mid-run-steering); for the operator procedure, see [orbit-orchestrate](../orbit-orchestrate/SKILL.md#mid-run-steering) |
+| Choose an MCP role, configure global MCP roles and toolsets, understand server flag precedence, or inspect the advertised surface | [Configuration — MCP roles and toolsets](references/configuration.md#mcp-roles-and-toolsets); [Remote access](references/remote-access.md#role-and-toolset-selection) |
+| Activity-scoped workspace knowledge: map exact activities in `[workflow.agent_corpus]` to a shared `INDEX.md`, verify `activity.agent_corpus_applied` in the run audit trail, or understand append proposals versus reviewed corpus changes | [Configuration — Activity-scoped agent corpus](references/configuration.md#activity-scoped-agent-corpus) |
 | Experiments: `[experiments]` settings, approved config overlays, operator lifecycle, shadow/live modes and readouts | [Configuration — Experiments](references/configuration.md#experiments) |
-| Decision assistance: the global-only `[assistance]` table, its off-by-default policy grants, modes, limits and budget, and how to inspect or verify it without activating a consumer | [Configuration — Decision assistance](references/configuration.md#decision-assistance) |
+| Discover, configure, inspect or stop experimental crew memory (`crew_memory.enabled`, `orbit memory`, shadow capture and live delivery) | [Crew memory](references/crew-memory.md) |
+| Executor image input: declaring `spec.image_input` on an executor, `vision = false` on a crew, the canary and visual hold, or reading `orbit agents vision-probe` results | [Configuration — Executor image input](references/configuration.md#executor-image-input-image_input) |
 | Host capability labels: set `machine.labels`, understand the implicit OS label and `requires_labels` matching, or inspect placement waits | [Host capability labels](references/configuration.md#host-capability-labels) |
-| Path leases: enabling or tuning `lease.*`, advisory versus hard coordination, or verifying a lease or a refused hard request | [Configuration — Path-lease policy](references/configuration.md#path-lease-policy) |
 | Landed-delivery line classes (Analytics › Metrics › Lines changed): `workflow.test_paths`, `workflow.non_code_paths`, their defaults and verification; backfilling missing history with `migrate --backfill-diff-stats` | [Configuration — Landed diff classification](references/configuration.md#landed-diff-classification) |
-| Tune a repository's workspace policy from evidence: required validation and baseline commands, footprint locks and generated files, task types, type and complexity crew pools, purpose pools, crew selection and performance draws, review layers | [Workspace tuning](references/workspace-tuning.md) |
-| Crews, policies, workspace settings, executor definitions (host OS support, auth probes, inspection tools, shared Cargo-cache grants), generated-file conflict recovery, prose-only validation, executor admission order, host pressure, stalled providers, command timeouts, per-tag instruction files, review-skip tag mappings, review-finding verification and owed host evidence | [Configuration](references/configuration.md#review-finding-verification-and-owed-host-evidence) |
+| Configure or verify regression fix layers in codebase analytics, including ordered path matching, defaults, replacement and empty-list behavior | [Workspace tuning — Regression layers](references/workspace-tuning.md#regression-layers) |
+| Tune a repository's workspace policy from evidence: required validation and baseline commands, footprint locks and generated files, task types, type and complexity crew pools, purpose pools, crew selection, review layers | [Workspace tuning](references/workspace-tuning.md) |
+| Keep one task out of automatic drains while an interactive session owns it: apply or remove the reserved `no-drain` tag, its admission and approval effects, explicit dispatch and readiness verification | [Workspace tuning — Keeping a task out of the drain](references/workspace-tuning.md#keeping-a-task-out-of-the-drain-no-drain) |
+| The fixed bounds of fleet notices, the attention feed, the resident evolution ledger and the failing-job warning, and how to verify each | [Configuration — Fleet notices, attention, evolution ledger and failing jobs](references/configuration.md#fleet-notices-attention-evolution-ledger-and-failing-jobs) |
+| Crews, workspace policy and settings, admission policy, host pressure, stalled providers, command timeouts, generated-file conflict recovery and prose-only validation | [Configuration — Common settings](references/configuration.md#common-settings); [Crews](references/configuration.md#crews); [Recovery settings](references/configuration.md#recovery-settings) |
+| Configure another human crew (`[crews.<name>] kind = "human"`), its supported keys and restrictions, dispatch and pilot exclusions, operator status moves, or verify it with config and readiness | [Configuration — Human crews](references/configuration.md#human-crews) |
+| Executor definitions: host OS support, auth probes, inspection tools and shared Cargo-cache grants | [Configuration — Executor definitions](references/configuration.md#executor-definitions) |
+| Per-tag instruction files and review-skip tag mappings | [Configuration — Tag instructions](references/configuration.md#tag-instructions); [Review-skip tags](references/configuration.md#review-skip-tags) |
+| Review baseline commands and owed host evidence | [Configuration — Review baseline commands and owed host evidence](references/configuration.md#review-baseline-commands-and-owed-host-evidence) |
 | Linux execution prerequisites or sandbox failure | [Linux sandbox](references/linux-sandbox.md) |
 | Windows host (Orbit runs inside WSL2) | [Windows through WSL2](references/windows-wsl2.md) |
 | macOS: Claude worker token and the clock env file | [macOS](references/macos.md) |
-| Headless browser kit (`orbit browser-kit`) so workers can render and screenshot UI changes | [Browser kit](references/browser-checks.md) |
+| Headless browser kit (`orbit config browser-kit`) so workers can render and screenshot UI changes | [Browser kit](references/browser-checks.md) |
+| Enable or disable a scheduled routine as an operator, verify it, or tell an enabled routine apart from a host-local pause or the host clock | [Automation — Turning the scheduler on](references/automation.md#turning-the-scheduler-on); [Observe and control](references/automation.md#observe-and-control) |
 | Scheduled execution | [Automation](references/automation.md) |
-| Recurring QA and other task templates | [Auto-tasks](references/auto-tasks.md) |
+| Configure task-pilot eligibility or freshness, inspect readiness, or request a later assessment | [Automation — Tuning task-pilot](references/automation.md#tuning-which-tasks-task-pilot-prepares); [Orchestration — task-pilot](../orbit-orchestrate/references/orchestration.md) |
+| Workspace scripts (`target: script:<name>` job steps): what a script is, granting or revoking one, grant staleness, network and root grants, or verifying a grant | [Automation — Workspace scripts](references/automation.md#workspace-scripts) |
+| Recurring QA and other task templates, including tool grants and the upgrade rule before setting one | [Auto-tasks — Granting tools to every minted task](references/auto-tasks.md#granting-tools-to-every-minted-task) |
 | Prompt-size cost estimates, token usage and unknown cost | [Operational logs — Prompt-size cost accounting](references/operational-logs.md#prompt-size-cost-accounting) |
 | Choose which shipped routines and auto-tasks an existing workspace carries, reconcile a policy change, or diagnose excluded defaults | [Configuration — Seeding policy](references/configuration.md#seeding-policy) |
-| MCP clients, SSH federation, remote dashboard or the lease listener user and its tokens | [Remote access](references/remote-access.md) |
-| Dashboard browser sessions: enabling `machine.web_terminal.enabled` or setting `machine.web_session.ttl`, one-time URLs from `orbit web open`, or checking whether the running dashboard serves `/api/session` (not the headless browser kit) | [Remote access — Browser sessions](references/remote-access.md#browser-sessions) |
-| Installing plugins, their `orbit <ns>` commands and dashboard panels, the `.orbit/plugins.yaml` pin file, and decision channels for plugin answer submission | [Plugins](references/plugins.md#decision-channels) |
+| MCP clients, SSH federation or remote dashboard | [Remote access](references/remote-access.md) |
+| Installing plugins, their `orbit <ns>` commands and dashboard panels, and the `.orbit/plugins.yaml` pin file | [Plugins](references/plugins.md) |
+| Decision channels for plugin answer submission | [Plugins — Decision channels](references/plugins.md#decision-channels) |
+| Register Grok's MCP server, understand its shared Claude config and compatibility cases, or verify which source Grok loaded | [First run — Grok MCP registration](references/first-run.md#grok-mcp-registration) |
+| Set up a host-local application that acts on an operator's consent for exact workspace-bound tool calls, including credentials, callbacks, rotation and revocation | [Scoped application authority](references/applications.md) |
 | Manage a legacy external tool (`orbit tool add`, `list`, `show`, `run`, `enable`, `disable`, `remove`, `doctor`) | [Plugins — Managing legacy external tools](references/plugins.md#managing-legacy-external-tools) |
-| Owner/replica roles and multiple machines | [Multi-host](references/multi-host.md) |
+| Owner/replica roles, multiple machines, or coordinating a breaking workspace-layout upgrade across hosts | [Multi-host](references/multi-host.md#upgrading-a-workspace-together) |
 | Single-owner distributed drain setup or claimed-attempt recovery | [Distributed drain](../orbit/references/setup/distributed-drain.md) |
+| Owner completion policy for distributed-drain handoffs (`review` versus automatic owner landing) | [Configuration — Distributed-drain completion policy](references/configuration.md#distributed-drain-completion-policy) |
 | Task snapshots, backup and restore | [Publication](references/publication.md) |
-| Upgrade, resource sync, doctor, worktree GC, workspace removal or teardown, or source-remote rebinding | [Maintenance](references/maintenance.md#removing-or-re-targeting-a-workspace) |
+| Upgrade, resource sync, doctor, worktree GC, workspace removal or teardown, or source-remote rebinding; inspect layout migrations or repair SQLite permissions offline | [Maintenance](references/maintenance.md#database-and-layout-upgrades) |
+| Inspect the installed skill catalog or user-level skill links: use `orbit skill list` and `show`, and `orbit skill doctor` to diagnose dangling links. If a client cannot find a skill, inspect the expected links or run `orbit skill link`; a healthy doctor result does not certify that every client link exists. | [Maintenance — Skill management](references/maintenance.md#skill-management) |
+| Retired features and their leftover keys, commands or toolset names (explorer and agent invocation, crew ladder, regression-risk marks, explore brief, visual review, and the other removals): what to delete, what replaces it, the recognition deadline, and how to verify the cleanup with `orbit doctor` | [Maintenance — Retired features](references/maintenance.md#retired-features-and-their-keys) |
+| A removed command, MCP tool name or task input: `orbit orchestrator`, `--role orchestrators`, per-action MCP names such as `orbit_friction_add`, a bare string in a list field, or a `model`, `agent` or `context` task input. Find the replacement and what to delete | [Maintenance — Retired features](references/maintenance.md#retired-features-and-their-keys) |
+| Compare implementer models or crews now that the orchestrator scorecard is gone | `orbit agents rank` in [model ranking](../orbit-orchestrate/references/model-ranking.md); crew comparison in [Configuration — Experiments](references/configuration.md#experiments) |
 | Inspect or compact admission receipt storage on an owner checkout | [Maintenance — Admission receipt storage](references/maintenance.md#admission-receipt-storage) |
 | Scheduler/service logs and host incidents | [Operational logs](references/operational-logs.md) |
 | Inspect one CLI audit event by ID | [Operational logs — Audit Event Log](references/operational-logs.md#audit-event-log) |
@@ -82,8 +103,12 @@ live state. Check long-lived MCP and service processes, not only active jobs.
 Never delete admission/identity files, bypass schema guards, or start a shadow
 store to recover access. Follow [maintenance](references/maintenance.md).
 
-Seeded schedules are disabled until deliberately enabled (except
-`crew-performance-refresh`, which is seeded enabled and no-ops while
-`workflow.crew_performance` is `off`); preserve existing schedule and
-enablement choices on an established host. Shared repositories
+Seeded schedules are disabled until an operator deliberately enables them, except
+the `worktree-gc`, `task-pilot` and `crew-memory-dream` routines and the `host-health` auto-task, which
+seed enabled when the seeding policy selects them. Seeded enabled does not
+turn the experimental crew-memory feature on: `crew-memory-dream` mints
+nothing while `crew_memory.enabled` is false or no running memory-arm
+experiment applies. Configure, inspect and stop crew memory with
+[Crew memory](references/crew-memory.md). Preserve
+existing schedule and enablement choices on an established host. Shared repositories
 need an explicit owner; copying a checkout does not migrate its control plane.

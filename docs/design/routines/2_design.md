@@ -1,7 +1,7 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-10-30
+last_updated: 2026-11-14
 last_validated: 2026-10-19
 status: Accepted
 feature: routines
@@ -30,11 +30,18 @@ decides whether that pass fires work. The OS clock is host-local infrastructure,
 routine definition. Its durable configuration is `~/.orbit/clock.toml`, defaults to a
 60-second cadence, and accepts only whole-minute values from 60 through 3600 seconds.
 
-`orbit clock status` reports configured cadence, native-manager enabled state,
-and whether an enabled Linux timer is active with a finite next trigger. An enabled timer
-without that scheduling state is `unhealthy`, has no effective cadence, and reports
-`orbit clock enable`, which rewrites a stale installed systemd timer if needed,
-restarts the timer, and verifies the resulting deadline.
+`orbit clock status` reports configured cadence, native-manager enabled state, and whether an
+enabled Linux clock is schedulable. An enabled systemd timer is schedulable when it is loaded and
+active and either has a finite next trigger, or is waiting on its in-flight tick: systemd assigns
+no next elapse until the paired oneshot finishes, so an active timer with an unknown next elapse
+counts as healthy while its service is `activating` or `active` with no service-health issue, and
+it reports the effective cadence. Any other enabled timer is `unhealthy` and has no effective
+cadence: an inactive timer, or an active timer with no finite trigger whose service is not
+running, reports the diagnostic that it is not active with a finite future trigger. A service-health
+issue (a tick past its deadline, a failed most recent tick, or a missing finite `TimeoutStartSec` or
+`KillMode=mixed`) makes it `unhealthy` even when the timer has a finite trigger. The recovery is
+`orbit clock enable`, which rewrites a stale installed systemd timer if needed, restarts the timer,
+and verifies the resulting deadline.
 A disabled but active systemd timer is also `unhealthy`: status shows its runtime activity
 and any future trigger, and `orbit clock pause` stops and verifies it.
 An installed unit that still invokes `orbit sweep`, or one whose program path has moved or
@@ -49,20 +56,62 @@ it preserves routine cursors, fire history, and per-routine pauses, and a delibe
 `orbit clock tick` (or its `orbit sweep` compatibility alias) is still available. `enable`
 resumes with the configured cadence, while
 `set --cadence-seconds N` atomically rewrites the host setting and reloads the existing
-unit identity. Linux installation, cadence changes, and enablement verify an active timer
-with a finite next trigger after native commands complete. A failed verification is an
+unit identity. Linux installation, cadence changes, and enablement verify, after native commands
+complete, that the timer is schedulable under the status rules above (a finite next trigger, or an
+in-flight tick). A failed verification is an
 actionable error rather than a claim that the clock is active. launchd and systemd user managers are
 the supported platforms; there is no resident Orbit daemon ([Host-local sweep clock configuration](./4_decisions.md#host-local-sweep-clock-configuration)).
 
 The dashboard Operations view projects the same typed status and control functions
 [ORB-10875]. Routine definitions remain workspace-scoped and show their versioned
 `enabled` value; the host clock remains one independent host-scoped card.
+Automation > Routines filters names, job targets and descriptions locally and
+shows every matching routine in each Active or Paused group. Paused
+routines start collapsed behind a keyboard- and touch-operable disclosure;
+filtering opens it to show matching paused entries. Group counts include the
+total catalogue and summarize blocked, stalled and repeatedly failing routines
+even when their cards are collapsed or filtered out. The failure warning
+and next-hour timeline always cover the full catalogue. Filter and
+disclosure choices survive status refreshes and reset on workspace or host
+changes. Filtering is refused only while a trigger editor is on
+screen: close it first. An open editor whose routine is filtered out
+keeps the controls usable, so the operator can filter back to it;
+filtering back onto the editor disables them again. If a filter keystroke
+reveals the editor, the query stops there and focus moves to the editor panel;
+remaining query characters do not change the draft. Tab or click into a form
+control to resume editing. Clear focuses an enabled editor control
+when available, or the panel while a save is pending. A save still in flight
+reports its refusal in the editor now on screen, with the draft kept.
 The host-wide `GET /api/routines` projection uses a process-local single-flight
 memo with a five-second TTL, shared across workspace selections and tabs. Its
 `Age` header reports the cached payload's age. Each request stamps the workspace
-registry, global and workspace config, routine and target definitions, and
-resolved database files plus their WALs; changes invalidate the next read,
-including definition toggles, pauses and recorded runs. Status opens existing
+registry, global and workspace config, and routine and target definitions, and
+reads a change token over the routine fire, cursor, pause and automation-consumer
+rows of the shared audit database; sampled changes invalidate the next read at
+once, including definition toggles, pauses and recorded fires. Fire in-place
+updates are sampled only over the newest 256 rows: an older row rewritten in
+place leaves the token unchanged, so it does not immediately invalidate the
+cached payload. The changed row becomes visible on the next successful
+recomputation, which may replace the payload through refresh-ahead before the
+five-second freshness bound expires; expiry remains the fallback that forces a
+recomputation. The audit database's own file stamp is not part of the key:
+unrelated audit rows share that file and would otherwise force a full recompute
+on every poll.
+
+Job runs (the fire record of state-, delivery- and condition-triggered routines,
+sampled over the newest 256 rows) and the task registry database plus its WAL
+are a churn stamp, not part of the key: a live drain moves them with every run
+it starts or finishes, so keying on them made most polls wait out a 0.8-1.9 s
+recompute (p95 1788 ms on the live dashboard). A fresh payload computed under a
+different churn stamp is served as it stands while one background recompute
+replaces it, so a run's state reaches `last_fire` within the five-second
+freshness bound (the next poll after the recompute lands) and the `Age` header
+shows how old the served payload is. A still-fresh hit
+three seconds old or more starts one background recompute while the entry is
+still served, so steady polling whose refresh completes in time meets a replacement
+before the five-second bound instead of waiting out the compute; a request past the
+bound computes synchronously and waits, as does one whose refresh failed or had not
+landed before expiry. The bound itself is unchanged. Status opens existing
 stores observationally, without migrations or run reconciliation. Branch
 inspection reads local Git objects, config and refs in process, sharing heads
 across routines within a request; a repository libgit2 cannot open (a partial
@@ -90,14 +139,22 @@ clock object is `health: unknown` with the bounded diagnostic in `error` /
 `health_issue`, `enabled` is JSON null, and clock controls are disabled. That
 projection never invents paused or disabled clock authority. `orbit clock status`
 continues to fail closed with the same diagnostic.
+The read paths never create the machine's scheduler store. `orbit routine list`
+and `show`, the shared status projection behind them, `GET /api/routines` and
+the fire-history read open the existing store read-only. When the store file is
+absent they fail with an actionable setup error that names `orbit init` (STD-01
+R31), and an unwritable location fails the same way without a write attempt.
+`orbit init` and the sweep route own first-run creation and migration. Mutating
+routine commands that read the projection first (`routine toggle`, `pause`, and
+the dashboard toggle) therefore also require the store to exist.
 Core owns one projection of a routine status row, its fire records and the
 `retired`, `owner_only` and `load_errors` rows; `orbit routine list` and `show`,
 `GET /api/routines` and the MCP `orbit.routine.control` list each select the
 fields they render from it. Core also owns one clock-health classification,
 which each surface names in its own vocabulary: `orbit clock status` reads any
-reported health issue as `unhealthy`, while the dashboard's `health` stays
-`healthy` for an enabled clock with a future trigger and reports an enabled
-clock without one as `missed`. Dashboard and MCP routine toggles and trigger
+reported health issue as `unhealthy`, while the dashboard's `health` is
+`healthy` for an enabled clock that is schedulable (including one whose tick is in flight and has
+no known next trigger yet) and reports an enabled clock that is not schedulable as `missed`. Dashboard and MCP routine toggles and trigger
 edits (`set_trigger`) run the same Core selection (owner-only refusal, name
 lookup, source workspace, target); the dashboard keeps its own authorization,
 audit rows and error codes. A trigger edit compares the observed trigger,
@@ -149,7 +206,10 @@ changed.
 
 Three or more consecutive failures produce a warning above the routine rows
 and a badge in the Health rail for the selected workspace and host. The badge
-refreshes from every tab and clears on a host/workspace switch. History reads
+refreshes from every tab and clears on a host/workspace switch. A failed
+refresh is not a recovery: the badge keeps the last known warning marked
+“stale”, or shows “routines ?” when no read has succeeded in this scope; only
+a successful empty payload or a scope switch clears it. History reads
 are bounded to 100 records per source; a streak that reaches that boundary is
 shown as “at least” the retained count, with a start time that may be earlier.
 The HTTP routine payload retains `last_fire` and adds `recent_fires` (newest
@@ -241,7 +301,7 @@ trigger:
     deadline_minutes: 90
     eligibility:
       statuses: [proposed, backlog]
-      exclude_tags: [no-diff-expected, no-diff-needed]
+      exclude_tags: [no-diff-expected, no-diff-needed, no-pilot]
       require_tags: []
       task_types: []
 target: job:task_pilot_pipeline
@@ -253,14 +313,18 @@ policy:
 
 `owner_machine` is required and only that machine admits new work. State routines
 require `overlap: forbid` and the job fixed by their kind:
-`preparation_eligible` targets `job:task_pilot_pipeline`;
-`finding_unverified` targets `job:finding_verification_pipeline` and uses the
-[finding-verification eligibility contract](../finding-verification/2_design.md#7-state-trigger);
-`pilot_warnings_held` targets `job:escalation_triage_pipeline` and uses the
-[pilot warning hold contract](../automation-triggers/2_design.md#61-pilot-warning-holds-pilot_warnings_held).
-`block_escalated` targets the same job for escalated blocked-task episodes;
-[ORB-17744] moved blocked-task triage from an auto-task to this state routine.
-The two triage kinds own separate consumers and member sets, so enabling both
+`preparation_eligible` targets `job:task_pilot_pipeline`.
+`finding_unverified` ([ORB-15662] added it; [finding verification](../_archived/finding-verification/2_design.md#7-state-trigger))
+and `pilot_warnings_held` ([pilot warning holds](../automation-triggers/2_design.md#61-pilot-warning-holds-pilot_warnings_held))
+are retired [ORB-22844]: they still parse, observe nothing, and a routine on either loads as
+retired.
+`resident_due` targets `job:resident_cycle_pipeline`, takes `batch_size: 1` only and uses the
+[resident cycle rule](../resident-orchestrator/2_design.md#51-slice-3-as-implemented).
+`block_escalated` is retired: [ORB-17744] moved blocked-task triage from an
+auto-task to a state routine, and [ORB-20629] retired that routine because final
+recovery now decides blocked tasks. The loader skips a routine on that trigger
+as inert and the seeding catalog lists `blocked_task_triage` as retired.
+State-trigger kinds own separate consumers and member sets, so enabling several
 is supported. [ORB-17918] narrowed the duplicate-ownership guard: enabled
 state routines with the same source and target conflict only when their kinds
 match, while a state routine still conflicts with a non-state routine on that
@@ -285,17 +349,18 @@ Optional `freshness` resolves each key from the routine, then
 `[workflow.task_pilot_freshness]` in `config.toml`, then built-in defaults:
 `material_fields: [title, description, criteria, plan, selectors]` and
 `source_sensitivity: ignore`. Thus an ordinary branch-head move or retagging
-does not by itself re-pilot an assessed task. `context_files` and `any` are the
-other source sensitivities. Predicate/freshness edits invalidate affected
-assessments; neither block configures finding verification. See
+does not change the default material fingerprint. `context_files` and `any` are
+the other source sensitivities. These fields guard preparation/apply drift;
+a certified `description` or `criteria` change queues a fresh routine pilot for an already assessed task unless a live execution claim or an unresolved failed pilot holds it; changes to the other fields never queue one through the routine (an `--approve-proposed` drain still repilots a stale assessment automatically). See
 [State preparation](../automation-triggers/5_operations.md#state-preparation-orb-11331)
 for all material fields, stale-source checks during apply, limits and rollback.
 
 Inspect `orbit routine list`, `orbit routine show <name> --format json`, and
-`orbit clock tick --dry-run --format json` before setting `enabled: true`.
-The seed resolves the name, owner and branch, starts disabled, and evaluates as
-`disabled` until opted in; an empty eligible inventory is `fresh` (or
-`debouncing` while pending material settles). The existing
+`orbit clock tick --dry-run --format json` before setting `enabled: true` on a routine seeded
+disabled. The seed resolves the name, owner and branch. A newly initialized workspace starts
+`task_pilot.yaml` with `enabled: true` [ORB-22802]; setting `enabled: false` makes it evaluate as
+`disabled`. An empty eligible inventory is `fresh` (or `debouncing` while pending material
+settles). The existing
 [routine seed boundary fixture](../../../crates/orbit-cli/tests/workspace/routine_state_seed.rs)
 exercises that configuration through init, show and dry-run tick.
 Explicit `orbit run task-pilot <id>` remains independent of this scheduled gate.
@@ -344,12 +409,20 @@ under `schedule.deliveries_landed`, creating tasks instead of submitting jobs.
 ### Seeded defaults and ownership
 
 `orbit workspace init` seeds `ci_failure_sweep.yaml`, `dependabot_alert_sweep.yaml`,
-`task_pilot.yaml`, `finding_verification.yaml`, `pilot_warning_triage.yaml`,
-`blocked_task_triage.yaml`, `worktree_gc.yaml`, `store_gc.yaml`
-and `task_publication.yaml` with workspace-unique names and `enabled: false`.
+`task_pilot.yaml`, `resident_cycle.yaml`, `worktree_gc.yaml`, `store_gc.yaml`,
+`task_publication.yaml` and `crew_memory_dream.yaml` with workspace-unique names. Three ship
+`enabled: true`: `task_pilot.yaml` and `worktree_gc.yaml` [ORB-22802], and `crew_memory_dream.yaml`
+[ORB-23115]. The others ship `enabled: false`.
+[ORB-22844] retired `finding_verification.yaml`, `pilot_warning_triage.yaml`,
+`evolution_pass.yaml` and `ux-rules.yaml` (templates under `routines/retired/`).
 [ORB-17816] added `crew_performance_refresh.yaml`, seeded
-enabled: hourly at :23 it skips scanning and writes no snapshot while
-`workflow.crew_performance` is `off`, but still records a job run.
+enabled hourly; [ORB-22804] retired it (template under `routines/retired/`, its
+`crew_performance_refresh_pipeline` job in `RETIRED_ROUTINE_JOBS`) with crew-performance
+weighting.
+[ORB-23115] added `crew_memory_dream.yaml`, seeded enabled: Monday 02:00 host-local,
+`missed_run: skip`, `overlap: forbid`, targeting `job:crew_memory_dream_pipeline`. Its action
+is its own gate and mints nothing while `crew_memory.enabled` is false or no memory
+experiment runs ([crew memory](../crew-memory/2_design.md) §6.1).
 [ORB-18378] added the disabled publication default: Sunday 04:47 host-local,
 `missed_run: skip`, `overlap: forbid`, owner-only, and a successful
 `publication_unbound` skip when no publication target is configured.
@@ -358,15 +431,16 @@ seed time, so two hosts initializing the same workspace name write byte-identica
 definitions [ORB-12236]. `task_pilot.yaml` is a `preparation_eligible` state routine
 [ORB-12745]; a state trigger names the one machine that evaluates it, so its
 `owner_machine` renders this host's registered machine id and its `branch` the workspace's
-registered base branch — the only host-dependent bytes a seed writes. `finding_verification.yaml`
-is a `finding_unverified` state routine rendered the same way [ORB-15662]. The two
-triage state routines render the same owner and branch placeholders. Which edits re-pilot an
-assessed task is `[workflow.task_pilot_freshness]` in `config.toml` (default: title,
-description, criteria, plan and selectors; head moves ignored), overridable by the routine's
-optional `trigger.state.freshness` block [ORB-13638]. Auto-task definitions
+registered base branch — the only host-dependent bytes a seed writes. `resident_cycle.yaml`
+renders the same owner and branch placeholders. The
+prepare/apply drift contract is `[workflow.task_pilot_freshness]` in `config.toml`
+(default: title, description, criteria, plan and selectors; head moves ignored),
+overridable by the routine's optional `trigger.state.freshness` block [ORB-13638].
+The first routine pilot is automatic. After it, a certified description or acceptance-criteria edit queues a fresh routine pilot for a proposed or backlog task unless a live execution claim or an unresolved failed pilot holds the task; edits to other material and policy changes never queue one through the routine (an `--approve-proposed` drain still repilots a stale assessment automatically). Auto-task definitions
 are evaluated by the tick directly; there is no seeded auto-task scheduler routine. The definition's
-`enabled` field controls scheduled capability in the workspace; the performance
-refresh is the single seeded-enabled exception described above.
+`enabled` field controls scheduled capability in the workspace. The seeded values above apply only
+when a definition is first written: re-init and `workspace sync` keep an existing workspace's
+`enabled` value.
 
 `worktree_gc.yaml` uses `missed_run: catch_up_once`, so a gap in that hourly backstop runs one make-up GC instead of dropping the slots. Other seeded routines keep their own `missed_run` policy.
 
@@ -396,7 +470,8 @@ the upgrade unable to converge: the retired default kept failing to load on ever
 tick while `workspace sync` demanded a manual move that changed nothing. So
 provenance is byte-exact first and shape-aware second. A file that differs from a
 template *this or a prior release shipped for that stem* only in fields the
-operator owns — `enabled`, the retired `hosts:` key — is still Orbit's. The
+operator owns — `enabled`, the retired `hosts:` key — or in comments, is still Orbit's. The
+comparison reads the parsed definition's template-owned fields, so comments never reach it. The
 shipped historical shapes are `assets/routines/retired/` (defaults this Orbit no
 longer ships) and `assets/routines/superseded/` (earlier shapes of defaults it
 still ships); retiring a default or changing a template's fields adds an entry to
@@ -407,12 +482,15 @@ one of them in the same change. The consequences:
   to `.retired-managed/routines/` first, so nothing the operator wrote is lost.
 - A stale shipped default matching a superseded shape is refreshed onto the
   current template **with its `enabled` setting carried over**, so convergence
-  never silently switches off a routine an operator opted into. A cron
+  never silently switches off a routine an operator opted into. The refresh
+  writes the current template's bytes, so an operator's comments and the retired
+  `hosts:` key in that file are not carried over. A cron
   `task_pilot.yaml` refreshed onto the state form takes this host as its owner;
   a recorded binding that already names an owner keeps it, exactly as a
   recorded name is kept [ORB-12745].
-- A current-shape default whose only difference is a lifecycle setting is adopted
-  in place — recorded as Orbit's without being rewritten.
+- A current-shape default whose only differences are lifecycle settings (`enabled`,
+  the retired `hosts:` key) or comments is adopted in place — recorded as Orbit's
+  without being rewritten, so an operator's comment survives.
 - A default a prior release wrote without recording it in the manifest is adopted
   the same way when it carries the name this workspace seeds. An operator's own
   routine wearing a bundled filename declares its own name, so it is still
@@ -427,8 +505,9 @@ one of them in the same change. The consequences:
   recorded digest proves Orbit wrote those exact bytes; anything else is the
   operator's own file, preserved in place and reported with the step that
   clears it.
-- Any other difference — cadence, target, policy, description, an added comment —
-  is a local edit: preserved, reported, never rewritten.
+- Any other difference — cadence, target, policy or description — is a local edit:
+  preserved, reported, never rewritten. A comment is not a routine field, so adding
+  one does not make a file a local edit; the bullets above say what happens to it.
 
 `orbit doctor` classifies routine provenance through the same helper, so
 `--fix-stale-artifacts` and `workspace sync` never disagree about whether a
@@ -557,8 +636,8 @@ Every task-pilot run, not only a sweep's, may also judge a review-filed bug wron
 `finding_invalid` result with `path:line` evidence at the pinned revision is never promoted
 (drain approval holds it as `finding_invalid`), and after the pilot write apply records a
 REJECTED finding verdict and rejects the task. The same result on any other task is an invalid
-assessment
-([finding verification §8](../finding-verification/2_design.md#8-default-rejection-routes)).
+assessment. This default rejection route outlived the finding-verification job removed in
+[ORB-22844] ([archived design §8](../_archived/finding-verification/2_design.md#8-default-rejection-routes)).
 
 Publication shares that release boundary. A job can fail because the repository already
 records a version, tag, or artifact its operator has not published or promoted yet; the
@@ -706,8 +785,11 @@ it loads with a warning for one release and selects nothing.
 
 Host identity is the one genuinely host-local datum: the `[machine]` table of the global
 `~/.orbit/config.toml` carries the generated `id` (the machine ID), the operator-chosen
-`name`, and the immutable `task_prefix`. `orbit init` owns identity creation; a legacy
-`host.toml` from before [ORB-12725] is migrated into that table once.
+`name`, and the immutable `task_prefix`. `orbit init` owns identity creation. A legacy
+`host.toml` left as the only identity source is refused, naming both files, with the
+manual repair: copy `machine_id` as `[machine] id`, `host_id` as `machine.name` and
+`task_prefix` as `machine.task_prefix` into `~/.orbit/config.toml` by hand, then delete
+`host.toml`. Beside an existing `[machine]` table, a leftover `host.toml` is ignored.
 `orbit routine init --install-clock` only installs the OS clock unit (§5). A malformed
 `[machine]` table is an error, not a fallback. The stable `id` participates in
 owner-only routine admission: a state trigger compares `owner_machine` with the local
@@ -874,8 +956,16 @@ diagnostics without persisting state or dispatching work.
   settling for `debounce_minutes` or reaching `max_wait_minutes`. Admission rechecks
   eligibility and freezes member fingerprints/source, retry budget and deadline.
   Deterministic per-member apply evidence settles assessments, including fresh
-  unready results; wrapper success is not an assessment. An edit creates new debt,
-  and successful apply certifies its resulting fingerprint without a self-loop.
+  unready results; wrapper success is not an assessment. The first routine pilot is
+  automatic. Edits make evidence stale for dispatch; a certified description or
+  acceptance-criteria edit also creates routine pilot debt unless a live execution claim or an unresolved failed pilot holds the task, while edits to other material or policy create none. An `--approve-proposed` drain still repilots a stale assessment automatically when its certified description/criteria or other material drifted and no live execution claim holds it. Other later routine pilots require `orbit task repilot <id>` (also available as
+  `orbit.task.recover` action `repilot`, task update `repilot: true`, or decision action `re_pilot`).
+  Shared admission withholds edited requirements until a new assessment
+  completes, unless an operator adds `no-pilot` to skip reassessment for an
+  assessed or preparing task. The skip bypasses pilot holds, but other holds,
+  including an unverified-finding hold, still apply. If the assessment remains
+  stale, removing the tag restores its hold. Held warnings retain one pending
+  decision across routine windows.
   Exhausted members remain withheld at that fingerprint; other members can proceed.
   Timing edits affect pending work while active budgets stay captured. Kind, owner,
   target or branch edits report `definition_changed`; restore the original
@@ -1060,10 +1150,14 @@ on each owner; delivery/state admission still requires the consumer's owner mach
 - [ORB-14173] allowed replica-local scheduled worktree GC.
 - [ORB-14449] implemented task-prefix routing and --host selection.
 - [ORB-15662] added review-finding verification and its finding_unverified state trigger.
+- [ORB-22844] retired finding verification, scheduled pilot-warning triage, the evolution pass and the ux-rules routine.
 - [ORB-16354] enabled replica-local store GC.
 - [ORB-17744] moved blocked-task triage onto the block_escalated state routine.
+- [ORB-20629] retired that routine and the `block_escalated` trigger; final recovery decides blocked tasks.
 - [ORB-17816] added the enabled hourly crew-performance snapshot refresh routine.
+- [ORB-22804] retired that routine and its job with crew-performance weighting.
 - [ORB-17918] allowed distinct state-trigger kinds to share a job while retaining duplicate-ownership guards.
 - [ORB-18378] seeded disabled weekly task publication and shared owner-bound publishing.
+- [ORB-23115] added the seeded `crew_memory_dream` routine, targeting the crew-memory dream job.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

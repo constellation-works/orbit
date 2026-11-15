@@ -9,7 +9,7 @@ feature: host-registry
 tags: [host-registry, federated-mcp, task-migration, spec]
 related_features: [host-registry, federated-mcp, task-migration, distributed-drain]
 related_artifacts: [ORB-14449, ORB-14448, ORB-14447]
-last_updated: 2026-10-26
+last_updated: 2026-11-11
 ---
 
 # Spec: Host routing
@@ -41,22 +41,27 @@ The rule is the decision
 Each process builds one table:
 
 - the local `machine.task_prefix` maps to the local host;
-- each host-file entry's `task_prefix` maps to that host;
-- legacy destination rows, which have no prefix, contribute nothing.
+- each host-file entry's `task_prefix` maps to that host.
 
 Host-file validation keeps prefixes unique, so lookup is exact and never ambiguous. The
-table is read from the host file and never from a probe.
+table is read from the host file and never from a probe. A readable regular retired
+`~/.orbit/mcp-destinations.toml` is never parsed and contributes no rows: its presence,
+alone or beside `hosts.toml`, fails every host-registry load with `host_file_conflict`.
+Move it aside, run `orbit host add <ssh-target>` for each `ssh` row, then delete the
+moved file.
 
 ## Routed calls
 
 **Id-routed tools** take exactly one task id as their target and accept an optional
 `workspace`. Today these are `orbit.task.show`, `orbit.task.update`, `orbit.task.reject`,
-`orbit.task.delete`, `orbit.task.artifact.get`, `orbit.task.artifact.put`,
-`orbit.task.review_reset`, `orbit.task.reconcile_review` and `orbit.task.requeue`.
+`orbit.task.delete`, `orbit.task.artifact` action `get`, `orbit.task.artifact` action `put`,
+`orbit.task.recover` action `review_reset`, `orbit.task.recover` action `reconcile_review`, `orbit.task.recover` action `repilot` and
+`orbit.task.recover` action `requeue` ([ORB-23280]). `orbit.task.recover` actions `recover_claim`, `retry_handoff` and `revoke_handoff` are not id-routed.
 
-The set is a static list in code. A test fails when a tool whose input schema has a required
-task `id` and an optional `workspace` is neither on the list nor explicitly excluded with a
-reason. Workspace-scoped tools without an id target are never prefix-routed. `orbit.task.add`,
+Each builtin declares its route at its definition site, in `OperationSpec::id_route` or
+`Tool::declared_id_route` for hand-written tools. The registry's MCP definition build rejects
+unclassified or misdeclared tools, and a boundary test checks builtin classifications.
+Workspace-scoped tools without an id target are never prefix-routed. `orbit.task.add`,
 `list`, `eligible`, `lint`, `pull` and `locks*` keep their selector behavior.
 
 For an id-routed tool:
@@ -179,5 +184,6 @@ implementation in [ORB-14449].
 - [ORB-14447] fixed replica GC lookup of locally owned task IDs.
 - [ORB-14448] implemented the host file and orbit host operations.
 - [ORB-14449] implemented task-prefix routing and --host selection.
+- [ORB-23280] consolidated MCP tool families behind an action field, including the id-routed task tools.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

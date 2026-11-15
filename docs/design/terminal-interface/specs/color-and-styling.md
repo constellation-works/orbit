@@ -1,8 +1,8 @@
 ---
 type: design
 summary: "Spec: Color and Styling"
-last_updated: 2026-10-14
-last_validated: 2026-10-30
+last_updated: 2026-11-02
+last_validated: 2026-11-06
 ---
 
 # Spec: Color and Styling
@@ -69,11 +69,19 @@ There are no command-line color override flags; the sink owns this environment-b
 
 ## 6. Migration
 
-1. ~~Define the role enum and the single domain-value mapping table.~~ Done.
+1. ~~Define the role enum and the single domain-value mapping table.~~ Done [ORB-10568].
 2. ~~Reimplement the eight existing `*_color*` functions as thin wrappers over it, so no call site changes yet and the drift is fixed immediately.~~ Done — this alone resolved the `backlog` inconsistency between `status_color` and `status_color_cell`.
 3. ~~Move emission gating into the sink; delete the local `is_terminal` check in `command/log/tail.rs`.~~ Done [ORB-10570].
 4. ~~Replace the wrappers with role-tagged values at each call site and delete the wrappers.~~ Done [ORB-10570]. A call site now passes either a `Role` it names outright or the `Domain` the value came from; `cell(value, tag)` and `text(value, tag)` are the only two renderings.
+5. ~~Keep filtered columns visible while rendering their values neutrally.~~ Done [ORB-21574] — the table renderer removes role foreground and dim styling from filtered cells.
 
-The table renderer translates the four role foreground colors emitted by `comfy_table` to basic SGR codes after layout. This keeps the §3 palette and column widths the same for colored and uncolored output.
+[ORB-13140] completed the 16-color repair: the table renderer translates the four role foreground colors emitted by `comfy_table` to basic SGR codes after layout. This keeps the §3 palette and column widths the same for colored and uncolored output.
 
-**Remaining gap:** §3's "never restyle a value the user is filtering on" is unimplemented. `Column::filtered` keeps such a column on screen, but the cell is still painted, in every list command.
+## Task References
+
+- [ORB-10568] — Consolidate CLI color helpers into a single semantic role mapping.
+- [ORB-10570] — Gate color and width at the sink, convert audit tables, and move errors to stderr.
+- [ORB-13140] — Translate table role colors to basic 16-color ANSI after layout.
+- [ORB-21574] — Make filtered table cells neutral while keeping their columns visible.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

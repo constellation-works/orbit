@@ -8,9 +8,9 @@
 //! CLI reaches the same tools, so an agent envelope is refused there too.
 use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec, ParamType,
-    ToolOnlyRegistration, UnknownFields, both, free_text, mcp_only, operation_registry, required,
+    ToolOnlyRegistration, UnknownFields, both, free_text, operation_registry, required,
 };
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 operation_registry! {
     noun: EXPERIMENT;
@@ -39,6 +39,8 @@ operation_registry! {
         Conclude => CONCLUDE,
         /// Abandon an experiment without a conclusion.
         Abandon => ABANDON,
+        /// Delete a finished experiment that never applied a treatment.
+        Delete => DELETE,
         /// One experiment with its arms and event log.
         Show => SHOW,
         /// The workspace's experiments.
@@ -68,11 +70,6 @@ const MODES: &[EnumValue] = &[
     ),
 ];
 
-const TEMPLATES: &[EnumValue] = &[EnumValue::helped(
-    "visual-review",
-    "verify-mock-ui tasks, control without and treatment with the visual comparison reviewer, 1:1, live, 30 per arm, 60 days",
-)];
-
 const STATUSES: &[EnumValue] = &[
     EnumValue::plain("draft"),
     EnumValue::plain("running"),
@@ -80,12 +77,6 @@ const STATUSES: &[EnumValue] = &[
     EnumValue::plain("concluded"),
     EnumValue::plain("abandoned"),
 ];
-
-const MODEL: &[ParamSpec] = &[mcp_only(
-    "model",
-    ParamType::String,
-    "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
-)];
 
 const ID: &[ParamSpec] = &[required(both(
     "id",
@@ -95,13 +86,13 @@ const ID: &[ParamSpec] = &[required(both(
     "The experiment's id or name",
 ))];
 
-const ARMS_DESCRIPTION: &str = "The arms as a JSON array, each {\"name\", \"control\", \"weight\", \"overlay\"}. Exactly one arm is the control; weights are positive integers (default 1). An overlay is an object with any of: instructions (role implement, review or recovery to a repository file path, or false to suppress the shipped default), skills ({\"replace\": {skill name: bundle directory}, \"roles\"}), tools ({\"add\", \"remove\", \"roles\"}), crew ({\"pool\": [{\"crew\", \"weight\"}]}) and config ({\"values\": {key: value}, \"roles\"}). Roles default to implement. Unknown fields are refused.";
+const ARMS_DESCRIPTION: &str = "The arms as a JSON array, each {\"name\", \"control\", \"weight\", \"overlay\"}. Exactly one arm is the control; weights are positive integers (default 1). An overlay is an object with any of: instructions (role implement, review or recovery to a repository file path, or false to suppress the shipped default), skills ({\"replace\": {skill name: bundle directory}, \"roles\"}), tools ({\"add\", \"remove\", \"roles\"}), crew ({\"pool\": [{\"crew\", \"weight\"}]}), config ({\"values\": {key: value}, \"roles\"}) and memory ({\"roles\", \"global\"}: deliver the drawn crew's model memory, and the global memory when global is true, as data; experimental). Roles default to implement. Unknown fields are refused.";
 
 const POPULATION_DESCRIPTION: &str = "Which tasks the experiment enrolls, as a JSON object with any of: complexity, task_type, tags_include, tags_exclude and origin, each a list of strings. Empty enrolls every task.";
 
 const GUARDRAILS_DESCRIPTION: &str = "Guardrail metrics as a JSON object from metric name to the threshold its difference from control may not pass, such as {\"delivery_done_rate\": \"-5pt\", \"escaped_regressions\": \"+0\"}.";
 
-const METRIC_DESCRIPTION: &str = "The metric the verdict is read on: implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, visual_landed_mismatches, visual_review_repairs or visual_verified_finding_rate.";
+const METRIC_DESCRIPTION: &str = "The whole-task metric the verdict is read on: total_tokens, cost_usd, lead_time, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, cost_per_line or lead_time_per_line. cost_per_line and lead_time_per_line divide arm totals by reviewable lines and require a lines_changed guardrail. Step-local metrics are exploratory and may be used as guardrails.";
 
 /// The definition fields `create` and `update` share, after the name.
 const DEFINITION: &[ParamSpec] = &[
@@ -179,22 +170,13 @@ const REQUIRED_REASON: &[ParamSpec] = &[required(free_text(both(
     "Why, recorded on the event",
 )))];
 
-const CREATE_NAME: &[ParamSpec] = &[
-    required(both(
-        "name",
-        ParamType::String,
-        "A name unique among this workspace's experiments.",
-        CliArgKind::Positional,
-        "A name unique in this workspace",
-    )),
-    both(
-        "template",
-        ParamType::Enum(TEMPLATES),
-        "Start from a definition Orbit ships; any definition field given as well replaces the template's. `visual-review` compares delivering `verify-mock-ui` tasks without (control) and with (treatment) the visual comparison reviewer: 1:1, live, 30 tasks per arm, 60 days, primary metric visual_landed_mismatches. The workspace must also list `visual_review.reviewer` in `experiments.config_keys` before it starts.",
-        CliArgKind::flag("template"),
-        "Start from a shipped definition",
-    ),
-];
+const CREATE_NAME: &[ParamSpec] = &[required(both(
+    "name",
+    ParamType::String,
+    "A name unique among this workspace's experiments.",
+    CliArgKind::Positional,
+    "A name unique in this workspace",
+))];
 
 const CREATE: OperationSpec<ExperimentVerb> = OperationSpec {
     verb: ExperimentVerb::Create,
@@ -204,11 +186,12 @@ const CREATE: OperationSpec<ExperimentVerb> = OperationSpec {
     cli_about: "Define a new draft experiment",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
-    params: &[CREATE_NAME, DEFINITION, OPTIONAL_REASON, MODEL],
+    params: &[CREATE_NAME, DEFINITION, OPTIONAL_REASON],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const RENAME: &[ParamSpec] = &[both(
@@ -227,7 +210,7 @@ const UPDATE: OperationSpec<ExperimentVerb> = OperationSpec {
     cli_about: "Edit a draft experiment's definition",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
-    params: &[ID, RENAME, DEFINITION, OPTIONAL_REASON, MODEL],
+    params: &[ID, RENAME, DEFINITION, OPTIONAL_REASON],
     at_least_one_of: &[
         "name",
         "hypothesis",
@@ -242,6 +225,9 @@ const UPDATE: OperationSpec<ExperimentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };
 
 const CLONE_NAME: &[ParamSpec] = &[required(both(
@@ -260,26 +246,32 @@ const CLONE: OperationSpec<ExperimentVerb> = OperationSpec {
     cli_about: "Copy an experiment's definition into a new draft",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
-    params: &[ID, CLONE_NAME, OPTIONAL_REASON, MODEL],
+    params: &[ID, CLONE_NAME, OPTIONAL_REASON],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };
 
 const START: OperationSpec<ExperimentVerb> = OperationSpec {
     verb: ExperimentVerb::Start,
     cli_path: &["start"],
     tool_name: "orbit.experiment.start",
-    tool_description: "Start a draft experiment, opening segment 1; from then on its definition is frozen. Refused unless experiments.enabled is true, while experiments.max_running experiments are already running, and unless the definition is complete: at least two arms with unique names, exactly one control, positive weights, a primary metric, and config overlays only for keys on experiments.config_keys. Operator only: an agent session is refused.",
+    tool_description: "Start a draft experiment, opening segment 1; from then on its definition is frozen. Refused unless experiments.enabled is true, while 3 experiments are already running, and unless the definition is complete: at least two arms with unique names, exactly one control, positive weights, a primary metric, config overlays only for keys on experiments.config_keys, and crew_memory.enabled true for a memory overlay. Operator only: an agent session is refused.",
     cli_about: "Start a draft experiment",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
-    params: &[ID, OPTIONAL_REASON, MODEL],
+    params: &[ID, OPTIONAL_REASON],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };
 
 const PAUSE: OperationSpec<ExperimentVerb> = OperationSpec {
@@ -290,26 +282,32 @@ const PAUSE: OperationSpec<ExperimentVerb> = OperationSpec {
     cli_about: "Pause a running experiment",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
-    params: &[ID, REQUIRED_REASON, MODEL],
+    params: &[ID, REQUIRED_REASON],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };
 
 const RESUME: OperationSpec<ExperimentVerb> = OperationSpec {
     verb: ExperimentVerb::Resume,
     cli_path: &["resume"],
     tool_name: "orbit.experiment.resume",
-    tool_description: "Resume a paused experiment. Refused while experiments.max_running other experiments are already running. Operator only: an agent session is refused.",
+    tool_description: "Resume a paused experiment. Refused while 3 other experiments are already running. Operator only: an agent session is refused.",
     cli_about: "Resume a paused experiment",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
-    params: &[ID, OPTIONAL_REASON, MODEL],
+    params: &[ID, OPTIONAL_REASON],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };
 
 const REWEIGHT_PARAMS: &[ParamSpec] = &[
@@ -337,11 +335,14 @@ const REWEIGHT: OperationSpec<ExperimentVerb> = OperationSpec {
     cli_about: "Change arm weights or retire arms, opening a new segment",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
-    params: &[ID, REWEIGHT_PARAMS, REQUIRED_REASON, MODEL],
+    params: &[ID, REWEIGHT_PARAMS, REQUIRED_REASON],
     at_least_one_of: &["weights", "retire"],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };
 
 const CONCLUDE_ARM: &[ParamSpec] = &[both(
@@ -356,30 +357,54 @@ const CONCLUDE: OperationSpec<ExperimentVerb> = OperationSpec {
     verb: ExperimentVerb::Conclude,
     cli_path: &["conclude"],
     tool_name: "orbit.experiment.conclude",
-    tool_description: "Conclude a running or paused experiment. Records the chosen arm (or none), the reason, and the readout JSON at that moment on the conclusion event, which orbit experiment show returns. A chosen arm files one proposed task naming the experiment, arm, readout verdict and overlay; no arm files nothing. Assignment stops; tasks already assigned keep their arm. Changes no configuration or repository file. Operator only: an agent session is refused.",
+    tool_description: "Conclude a running or paused experiment. Records the chosen arm (or none), the reason, and the readout JSON at that moment on the conclusion event, which orbit experiment show returns. A chosen arm files one proposed task naming the experiment, arm, readout verdict and overlay; no arm files nothing. Assignment stops. A fresh admission applies no overlay from the concluded experiment; runs and claims already admitted keep the treatment they captured. Changes no configuration or repository file. Operator only: an agent session is refused.",
     cli_about: "Conclude an experiment with the chosen arm, or none",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
-    params: &[ID, CONCLUDE_ARM, REQUIRED_REASON, MODEL],
+    params: &[ID, CONCLUDE_ARM, REQUIRED_REASON],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };
 
 const ABANDON: OperationSpec<ExperimentVerb> = OperationSpec {
     verb: ExperimentVerb::Abandon,
     cli_path: &["abandon"],
     tool_name: "orbit.experiment.abandon",
-    tool_description: "Abandon a draft, running or paused experiment without a conclusion. It enrolls no new tasks; tasks already assigned keep their arm. Operator only: an agent session is refused.",
+    tool_description: "Abandon a draft, running or paused experiment without a conclusion. It enrolls no new tasks. A fresh admission applies no overlay from the abandoned experiment; runs and claims already admitted keep the treatment they captured. Operator only: an agent session is refused.",
     cli_about: "Abandon an experiment without a conclusion",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
-    params: &[ID, REQUIRED_REASON, MODEL],
+    params: &[ID, REQUIRED_REASON],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+};
+
+const DELETE: OperationSpec<ExperimentVerb> = OperationSpec {
+    verb: ExperimentVerb::Delete,
+    cli_path: &["delete"],
+    tool_name: "orbit.experiment.delete",
+    tool_description: "Delete a draft, concluded or abandoned experiment with its arms, events and assignments. Refused for a running or paused experiment, for one that ran live and assigned tasks to arms (their crews and runs cite it), and for any experiment concluded with an arm (its promotion task names it), including shadow experiments. Shadow experiments concluded without an arm applied nothing and can be deleted. Operator CLI only.",
+    cli_about: "Delete a finished experiment that never applied a treatment",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[ID, REQUIRED_REASON],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: None,
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };
 
 const SHOW: OperationSpec<ExperimentVerb> = OperationSpec {
@@ -390,11 +415,14 @@ const SHOW: OperationSpec<ExperimentVerb> = OperationSpec {
     cli_about: "Show one experiment with its arms and event log",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
-    params: &[ID, MODEL],
+    params: &[ID],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };
 
 const LIST_FILTER: &[ParamSpec] = &[both(
@@ -413,11 +441,12 @@ const LIST: OperationSpec<ExperimentVerb> = OperationSpec {
     cli_about: "List the workspace's experiments",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
-    params: &[LIST_FILTER, MODEL],
+    params: &[LIST_FILTER],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const ASSIGN_PARAMS: &[ParamSpec] = &[
@@ -445,17 +474,20 @@ const ASSIGN: OperationSpec<ExperimentVerb> = OperationSpec {
     cli_about: "Force a task into an active arm of a running experiment (shadow or live)",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
-    params: &[ID, ASSIGN_PARAMS, MODEL],
+    params: &[ID, ASSIGN_PARAMS],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };
 
 const READOUT_PARAMS: &[ParamSpec] = &[both(
     "metric",
     ParamType::String,
-    "Report only this metric; the verdict is still read on the primary metric and guardrails. One of implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, visual_landed_mismatches, visual_review_repairs or visual_verified_finding_rate.",
+    "Report only this metric; the verdict is still read on the primary metric and guardrails. One of implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, cost_per_line or lead_time_per_line.",
     CliArgKind::flag("metric"),
     "Report only this metric",
 )];
@@ -464,13 +496,16 @@ const READOUT: OperationSpec<ExperimentVerb> = OperationSpec {
     verb: ExperimentVerb::Readout,
     cli_path: &["readout"],
     tool_name: "orbit.experiment.readout",
-    tool_description: "Read an experiment's outcomes per arm, computed now from its assignments and the records Orbit already keeps. Intention-to-treat by task; forced assignments are left out and counted. Per arm and segment: n, mean and median with 95% bootstrap intervals (fixed seed) or Wilson intervals for rates, open (lagging) outcomes and crew mix; each arm's difference from control overall (post-stratified by complexity) and per complexity; guardrail status; a sample-ratio chi-square against the weights; overlay-digest drift. The verdict is collecting until every arm reaches min_sample or max_days pass, withheld on a sample-ratio mismatch, then winner <arm>, no difference or inconclusive. The shape carries schema_version. Read-only.",
+    tool_description: "Compare experiment arms read-only: outcomes, intervals, differences, verdict. Computed now from its assignments and the records Orbit already keeps; `--metric` narrows the report while the verdict stays on the primary metric and guardrails. Estimator, exclusion and verdict details: https://orbit-cli.com/how-to/experiments/#read-the-readout.",
     cli_about: "Show an experiment's per-arm outcomes, intervals and verdict",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
-    params: &[ID, READOUT_PARAMS, MODEL],
+    params: &[ID, READOUT_PARAMS],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
 };

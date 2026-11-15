@@ -64,6 +64,11 @@ pub(crate) fn find_git_repo_root(start: &Path) -> Option<PathBuf> {
 }
 
 pub(crate) fn find_git_worktree_root(start: &Path) -> Option<PathBuf> {
+    if !git_location_override_set()
+        && let Some(root) = linked_worktree_root_from_gitfile(start)
+    {
+        return Some(root);
+    }
     git_rev_parse_path(start, "--show-toplevel").or_else(|| {
         start
             .ancestors()
@@ -73,6 +78,40 @@ pub(crate) fn find_git_worktree_root(start: &Path) -> Option<PathBuf> {
             })
             .map(normalize_path_components)
     })
+}
+
+/// Filesystem answer for the standard linked-worktree layout, without git.
+///
+/// Returns the worktree root (the ancestor carrying the `.git` file) when the
+/// nearest `.git` entry is a gitfile that resolves as a standard linked
+/// worktree (see [`resolve_main_repo_from_worktree_gitfile`]). Every other
+/// shape — a `.git` directory, a submodule gitfile, a worktree of another
+/// repository, or no `.git` entry at all — returns `None` so the caller falls
+/// back to the git probes and stays identical to them. The ancestor is
+/// canonicalized so the spelling matches git's `--show-toplevel`.
+fn linked_worktree_root_from_gitfile(start: &Path) -> Option<PathBuf> {
+    for ancestor in start.ancestors() {
+        let git_path = ancestor.join(".git");
+        if git_path.is_file() {
+            resolve_main_repo_from_worktree_gitfile(&git_path)?;
+            return Some(
+                ancestor
+                    .canonicalize()
+                    .unwrap_or_else(|_| normalize_path_components(ancestor)),
+            );
+        }
+        if git_path.is_dir() {
+            return None;
+        }
+    }
+    None
+}
+
+fn git_location_override_set() -> bool {
+    const GIT_LOCATION_OVERRIDES: [&str; 3] = ["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"];
+    GIT_LOCATION_OVERRIDES
+        .iter()
+        .any(|name| std::env::var_os(name).is_some())
 }
 
 /// Resolve the linked worktree a call is running in, when that worktree is a
@@ -103,9 +142,17 @@ fn shared_git_dir(checkout: &Path) -> Option<PathBuf> {
 pub(crate) fn find_git_main_worktree_root(start: &Path) -> Option<PathBuf> {
     // Every short command resolves its roots here; two `git rev-parse`
     // processes to learn that an ordinary checkout is not a linked worktree
-    // cost more than the rest of root resolution.
+    // cost more than the rest of root resolution, so the standard
+    // linked-worktree layout is answered from the gitfile without spawning
+    // git. Git stays the authority for every other layout and whenever a
+    // location override is set.
     if !may_be_linked_worktree(start) {
         return None;
+    }
+    if !git_location_override_set()
+        && let Some(main_root) = find_git_main_worktree_root_from_gitfile(start)
+    {
+        return Some(main_root);
     }
     match find_git_main_worktree_root_with_git(start) {
         Some(main_root) => main_root,
@@ -120,11 +167,7 @@ pub(crate) fn find_git_main_worktree_root(start: &Path) -> Option<PathBuf> {
 /// Git's own overrides (`GIT_DIR` and friends) can relocate the answer, so
 /// with one set only git can say.
 fn may_be_linked_worktree(start: &Path) -> bool {
-    const GIT_LOCATION_OVERRIDES: [&str; 3] = ["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"];
-    if GIT_LOCATION_OVERRIDES
-        .iter()
-        .any(|name| std::env::var_os(name).is_some())
-    {
+    if git_location_override_set() {
         return true;
     }
     start
@@ -228,7 +271,7 @@ fn find_git_main_worktree_root_from_gitfile(start: &Path) -> Option<PathBuf> {
 ///
 /// Its `commondir` must resolve to the enclosing `.git` directory. Submodule
 /// gitfiles point into `modules/` and do not imply a shared main checkout.
-fn resolve_main_repo_from_worktree_gitfile(git_file: &Path) -> Option<PathBuf> {
+pub(crate) fn resolve_main_repo_from_worktree_gitfile(git_file: &Path) -> Option<PathBuf> {
     let content = std::fs::read_to_string(git_file).ok()?;
     let raw_path = content.strip_prefix("gitdir:")?.trim();
     if raw_path.is_empty() {

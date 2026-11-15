@@ -10,7 +10,7 @@ Options:
           [possible values: task, friction, all]
 
       --limit <LIMIT>
-          Maximum total results returned (across all kinds when --kind all; round-robin per kind to ensure fair representation)
+          Maximum total results returned (across all kinds when --kind all; round-robin per kind to ensure fair representation). 0 uses the default: 10
           
           [default: 10]
 

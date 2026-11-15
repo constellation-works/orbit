@@ -8,39 +8,20 @@ use crate::application::task::SYSTEM_ACTOR_LABEL;
 use crate::runtime::run_input::carried_task_ids;
 use crate::runtime::task::FINAL_RECOVERY_REQUEUED_EVENT;
 
-/// The run a system block attributes itself to, when resume may undo it.
-///
-/// Workflow failure and interruption notes carry `, run_id=<id>,`. Final
-/// recovery carries `run_id=` inside its escalation prefix. The run's own
-/// failure handoff (`pr_failure_handoff`, `pr_conflict_blocked`,
-/// `validation_environment_blocked`, `review_gate_escalation` in
-/// `executor::automation::vcs::failure`) carries `: run=<id>,`. Any other
-/// block, including an operator decision, returns `None` and stays put.
+/// The run a system block attributes itself to, when resume may undo it:
+/// workflow failure or interruption, a final-recovery escalation, or the
+/// run's own failure handoff or expired forge hold, as
+/// [`TaskHistoryEntry::transition_run_id`] reads it. Any other block,
+/// including an operator decision, returns `None` and stays put.
 pub(super) fn blocking_run_id(entry: &TaskHistoryEntry) -> Option<&str> {
     if entry.by != SYSTEM_ACTOR_LABEL || entry.to_status != Some(TaskStatus::Blocked) {
         return None;
     }
-    let note = entry.note.as_deref()?;
-    match entry.event.as_str() {
-        orbit_engine::WORKFLOW_RUN_FAILED_EVENT | orbit_engine::WORKFLOW_RUN_INTERRUPTED_EVENT => {
-            note.split_once(", run_id=")?.1.split(',').next()
-        }
-        "final_recovery_escalated" => note
-            .strip_prefix("final recovery (run_id=")?
-            .split_once(") escalated:")
-            .map(|(id, _)| id),
-        "pr_failure_handoff"
-        | "pr_conflict_blocked"
-        | "validation_environment_blocked"
-        | "review_gate_escalation"
-        | orbit_types::workflow::FORGE_UNAVAILABLE_EXPIRED_EVENT => failure_handoff_run_id(note),
-        _ => None,
-    }
+    entry.transition_run_id()
 }
 
-/// The run a system final-recovery requeue to `backlog` attributes itself to:
-/// its note leads with `final recovery (run_id=<id>):`. An operator's move to
-/// `backlog` returns `None`.
+/// The run a system final-recovery requeue to `backlog` attributes itself
+/// to. An operator's move to `backlog` returns `None`.
 pub(super) fn requeuing_run_id(entry: &TaskHistoryEntry) -> Option<&str> {
     if entry.by != SYSTEM_ACTOR_LABEL
         || entry.to_status != Some(TaskStatus::Backlog)
@@ -48,12 +29,7 @@ pub(super) fn requeuing_run_id(entry: &TaskHistoryEntry) -> Option<&str> {
     {
         return None;
     }
-    entry
-        .note
-        .as_deref()?
-        .strip_prefix("final recovery (run_id=")?
-        .split_once("):")
-        .map(|(id, _)| id)
+    entry.transition_run_id()
 }
 
 /// The run that shelved a task in `blocked` or `backlog`, when delivery or
@@ -65,17 +41,6 @@ pub(crate) fn shelving_run_id(history: &[TaskHistoryEntry]) -> Option<&str> {
         .rev()
         .find(|entry| entry.to_status.is_some())?;
     blocking_run_id(entry).or_else(|| requeuing_run_id(entry))
-}
-
-/// `run=<id>` in a failure-handoff note, bounded by the next comma or semicolon.
-fn failure_handoff_run_id(note: &str) -> Option<&str> {
-    let id = note
-        .split_once(": run=")?
-        .1
-        .split([',', ';'])
-        .next()?
-        .trim();
-    (!id.is_empty()).then_some(id)
 }
 
 /// Resolve host actions, never agent claims or a step name alone. A promotion

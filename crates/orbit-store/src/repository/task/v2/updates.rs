@@ -2,9 +2,9 @@ use super::*;
 use crate::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
 use crate::driver::file::task_bundle::PendingWriteGuard;
 use orbit_types::task::{
-    ACCEPTANCE_CRITERIA_DOCUMENT, DESCRIPTION_DOCUMENT, EXECUTION_SUMMARY_DOCUMENT, PLAN_DOCUMENT,
-    TAGS_CHANGED_EVENT, TASK_FIELDS_UPDATED_EVENT, TagsChanged, TaskDecision,
-    task_fields_updated_note,
+    ACCEPTANCE_CRITERIA_DOCUMENT, CrewSource, DESCRIPTION_DOCUMENT, EXECUTION_SUMMARY_DOCUMENT,
+    PLAN_DOCUMENT, TAGS_CHANGED_EVENT, TASK_FIELDS_UPDATED_EVENT, TagsChanged, TaskDecision,
+    named_friction_targets, pending_resolves_entries, task_fields_updated_note,
 };
 
 /// The `tags_changed` event a write appends when it leaves different tags
@@ -91,6 +91,8 @@ impl TaskV2Store {
                 .transpose()?;
 
             let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
+            let mut pending_events: Vec<TaskEventRowV2> = Vec::new();
+            let mut pending_comments: Vec<TaskCommentRowV2> = Vec::new();
             let now = Utc::now();
             for entry in &fields.append_history {
                 let event = TaskEventRowV2 {
@@ -105,7 +107,7 @@ impl TaskV2Store {
                     operation_id: None,
                     decision: entry.decision.clone(),
                 };
-                self.bundle_store.append_event(id, &event)?;
+                pending_events.push(event.clone());
                 bundle.events.push(event);
             }
             let status_changed = fields.status != bundle.envelope.status;
@@ -121,7 +123,7 @@ impl TaskV2Store {
                 operation_id: Some(fields.operation_id.clone()),
                 decision: fields.decision.clone(),
             };
-            self.bundle_store.append_event(id, &event)?;
+            pending_events.push(event.clone());
             bundle.events.push(event);
             let comment = TaskCommentRowV2 {
                 schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
@@ -131,14 +133,14 @@ impl TaskV2Store {
                 body: fields.audit_note.clone(),
                 operation_id: Some(fields.operation_id.clone()),
             };
-            self.bundle_store.append_comment(id, &comment)?;
+            pending_comments.push(comment);
             append_creation_grant(
-                &self.bundle_store,
                 &mut bundle,
                 &fields.context_files,
                 &[],
                 &fields.actor,
                 now,
+                &mut pending_events,
             )?;
             bundle.envelope.context_files = fields.context_files.clone();
             for target in &fields.add_dependencies {
@@ -160,11 +162,13 @@ impl TaskV2Store {
                         bundle.envelope.tags.clone(),
                         tags.clone(),
                     );
-                    self.bundle_store.append_event(id, &event)?;
+                    pending_events.push(event.clone());
                     bundle.events.push(event);
                 }
                 bundle.envelope.tags = tags;
             }
+            self.bundle_store.append_events(id, &pending_events)?;
+            self.bundle_store.append_comments(id, &pending_comments)?;
             bundle.envelope.status = fields.status;
             bundle.envelope.complexity = Some(fields.complexity);
             bundle.envelope.crew = fields.crew.clone();
@@ -177,11 +181,84 @@ impl TaskV2Store {
         })
     }
 
+    /// Rewrite the task's stored pre-family tool names (`required_tools`,
+    /// `granted_tools`) to family actions [ORB-23552], recording one
+    /// `tool_names_migrated` history event. The rewrite names the same
+    /// operations, so it is a migration rather than an edit: `updated_at`, the
+    /// creation grant and every other field stay as they were. Returns whether
+    /// anything changed; a task already holding family actions is untouched.
+    pub(crate) fn migrate_task_tool_names(
+        &self,
+        id: &str,
+        actor: &str,
+    ) -> Result<bool, OrbitError> {
+        orbit_types::task::validate_orb_task_id(id)?;
+        if actor.trim().is_empty() {
+            return Err(OrbitError::InvalidInput(
+                "task actor must not be empty".to_string(),
+            ));
+        }
+        self.with_task_lock(id, || {
+            let mut bundle = self.read_existing_bundle(id)?;
+            let required =
+                orbit_types::tool::family_action_tool_names(&bundle.envelope.required_tools);
+            let granted =
+                orbit_types::tool::family_action_tool_names(&bundle.envelope.granted_tools);
+            if required.is_none() && granted.is_none() {
+                return Ok(false);
+            }
+            let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
+            let mut changes = Vec::new();
+            if let Some(after) = &required {
+                changes.push((
+                    "required_tools",
+                    bundle.envelope.required_tools.as_slice(),
+                    after.as_slice(),
+                ));
+            }
+            if let Some(after) = &granted {
+                changes.push((
+                    "granted_tools",
+                    bundle.envelope.granted_tools.as_slice(),
+                    after.as_slice(),
+                ));
+            }
+            let event = TaskEventRowV2 {
+                schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                event_id: next_event_id(&bundle.events),
+                at: Utc::now(),
+                by: actor.to_string(),
+                event_type: orbit_types::task::TOOL_NAMES_MIGRATED_EVENT.to_string(),
+                note: Some(orbit_types::task::tool_names_migrated_note(&changes)),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            };
+            self.bundle_store
+                .append_events(id, std::slice::from_ref(&event))?;
+            bundle.events.push(event);
+            if let Some(after) = required {
+                bundle.envelope.required_tools = after;
+            }
+            if let Some(after) = granted {
+                bundle.envelope.granted_tools = after;
+            }
+            self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
+            pending.finish();
+            self.publish_task_index_and_lease_notices(
+                &bundle.envelope,
+                "task tool names migration",
+            )?;
+            Ok(true)
+        })
+    }
+
     pub(crate) fn update_task_document(
         &self,
         id: &str,
         fields: &TaskDocumentUpdateParams,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<crate::contracts::TaskRow, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
         if fields.actor.trim().is_empty() {
             return Err(OrbitError::InvalidInput(
@@ -196,6 +273,7 @@ impl TaskV2Store {
             let original_plan = bundle.plan.clone();
             let original_execution_summary = bundle.execution_summary.clone();
             let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
+            let mut pending_events: Vec<TaskEventRowV2> = Vec::new();
             let updated_at = Utc::now();
             let mut envelope_changed = false;
             let mut title_changed = false;
@@ -241,12 +319,12 @@ impl TaskV2Store {
             }
             if let Some(value) = &fields.context_files {
                 append_creation_grant(
-                    &self.bundle_store,
                     &mut bundle,
                     value,
                     &fields.context_creation,
                     &fields.actor,
                     updated_at,
+                    &mut pending_events,
                 )?;
                 bundle.envelope.context_files = value.clone();
                 envelope_changed = true;
@@ -348,7 +426,7 @@ impl TaskV2Store {
             if let Some(value) = &fields.crew {
                 bundle.envelope.crew = value.clone();
                 // A crew replacement without provenance is an explicit pin.
-                bundle.envelope.crew_source = value.as_ref().map(|_| "explicit".to_string());
+                bundle.envelope.crew_source = value.as_ref().map(|_| CrewSource::Explicit);
                 envelope_changed = true;
             }
             if let Some(value) = &fields.crew_source {
@@ -376,24 +454,30 @@ impl TaskV2Store {
                 )?;
             }
 
+            // Body documents are separate files. The post-write row is this
+            // in-memory bundle, so it has to carry the same bytes just published
+            // or a caller would observe the pre-write description, criteria,
+            // plan or execution summary.
             if let Some(value) = &fields.description {
                 self.bundle_store
                     .rewrite_document(id, TaskDocumentV2::Description, value)?;
+                bundle.description = value.clone();
             }
             if let Some(value) = &fields.acceptance_criteria {
-                self.bundle_store.rewrite_document(
-                    id,
-                    TaskDocumentV2::Acceptance,
-                    &render_acceptance(value),
-                )?;
+                let rendered = render_acceptance(value);
+                self.bundle_store
+                    .rewrite_document(id, TaskDocumentV2::Acceptance, &rendered)?;
+                bundle.acceptance = rendered;
             }
             if let Some(value) = &fields.plan {
                 self.bundle_store
                     .rewrite_document(id, TaskDocumentV2::Plan, value)?;
+                bundle.plan = value.clone();
             }
             if let Some(value) = &fields.execution_summary {
                 self.bundle_store
                     .rewrite_document(id, TaskDocumentV2::ExecutionSummary, value)?;
+                bundle.execution_summary = value.clone();
             }
 
             if title_changed {
@@ -415,7 +499,7 @@ impl TaskV2Store {
                     operation_id: None,
                     decision: None,
                 };
-                self.bundle_store.append_event(id, &event)?;
+                pending_events.push(event.clone());
                 bundle.events.push(event);
             }
 
@@ -427,7 +511,7 @@ impl TaskV2Store {
                     original_envelope.tags.clone(),
                     bundle.envelope.tags.clone(),
                 );
-                self.bundle_store.append_event(id, &event)?;
+                pending_events.push(event.clone());
                 bundle.events.push(event);
             }
 
@@ -505,7 +589,7 @@ impl TaskV2Store {
                     operation_id: None,
                     decision: None,
                 };
-                self.bundle_store.append_event(id, &event)?;
+                pending_events.push(event.clone());
                 bundle.events.push(event);
             }
 
@@ -518,14 +602,15 @@ impl TaskV2Store {
                 if fields.context_files.is_none() {
                     let context_files = bundle.envelope.context_files.clone();
                     append_creation_grant(
-                        &self.bundle_store,
                         &mut bundle,
                         &context_files,
                         &[],
                         &fields.actor,
                         updated_at,
+                        &mut pending_events,
                     )?;
                 }
+                self.bundle_store.append_events(id, &pending_events)?;
                 bundle.envelope.updated_at = updated_at;
                 self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
                 pending.finish();
@@ -534,7 +619,44 @@ impl TaskV2Store {
                     "task document update",
                 )?;
             } else {
+                self.bundle_store.append_events(id, &pending_events)?;
                 pending.finish();
+            }
+            // The in-memory bundle is the post-write row. Callers answer from
+            // it instead of reading the bundle they just published.
+            self.row_from_bundle(bundle)
+        })
+    }
+
+    /// Pre-flight form of the work-start guard in [`Self::update_task_history`]:
+    /// same target/event classification and same claim check, evaluated
+    /// against the footprint the combined write would start work on.
+    pub(crate) fn check_ordinary_work_start_footprint(
+        &self,
+        id: &str,
+        status: Option<TaskStatus>,
+        status_event: Option<&str>,
+        context_files: Option<&[String]>,
+    ) -> Result<(), OrbitError> {
+        orbit_types::task::validate_orb_task_id(id)?;
+        if !matches!(
+            status_event,
+            Some("started" | "pulled_by" | "resume_readmitted")
+        ) {
+            return Ok(());
+        }
+        self.with_task_read_lock(id, || {
+            let bundle = self.read_existing_bundle(id)?;
+            let target_status = status.unwrap_or(bundle.envelope.status);
+            if target_status != TaskStatus::InProgress {
+                return Ok(());
+            }
+            let effective_files: Vec<String> = match context_files {
+                Some(files) => files.to_vec(),
+                None => bundle.envelope.context_files.clone(),
+            };
+            if let Some(boundary) = &self.coordination {
+                boundary.guard_ordinary_footprint(target_status, &effective_files)?;
             }
             Ok(())
         })
@@ -544,7 +666,7 @@ impl TaskV2Store {
         &self,
         id: &str,
         fields: &TaskHistoryUpdateParams,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<crate::contracts::TaskRow, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
         if fields.actor.trim().is_empty() {
             return Err(OrbitError::InvalidInput(
@@ -562,11 +684,16 @@ impl TaskV2Store {
             && fields.status.is_none()
             && fields.status_event.is_none()
             && fields.status_note.is_none()
+            && fields.status_decision.is_none()
             && fields.append_history.is_empty()
-            && fields.expected_status.is_none();
+            && fields.expected_status.is_none()
+            && fields.planned_by.is_none()
+            && fields.implemented_by.is_none();
         let write = |claimed: bool| {
             let mut bundle = self.read_existing_bundle(id)?;
             let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
+            let mut pending_events: Vec<TaskEventRowV2> = Vec::new();
+            let mut pending_comments: Vec<TaskCommentRowV2> = Vec::new();
             let now = Utc::now();
             let current_status = bundle.envelope.status;
             // [ORB-11305] Compare-and-set, evaluated against the bundle we just
@@ -598,10 +725,63 @@ impl TaskV2Store {
             }
             let status_transition =
                 (target_status != current_status).then_some((current_status, target_status));
+            if fields.planned_by.is_some() || fields.implemented_by.is_some() {
+                let previous = bundle.envelope.clone();
+                if let Some(value) = &fields.planned_by {
+                    bundle.envelope.planned_by = value.clone();
+                }
+                if let Some(value) = &fields.implemented_by {
+                    bundle.envelope.implemented_by = value.clone();
+                }
+                if bundle.envelope != previous {
+                    let event = TaskEventRowV2 {
+                        schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                        event_id: next_event_id(&bundle.events),
+                        at: now,
+                        by: fields.actor.clone(),
+                        event_type: TASK_FIELDS_UPDATED_EVENT.to_string(),
+                        note: Some(task_fields_updated_note(&[])),
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision: None,
+                    };
+                    pending_events.push(event.clone());
+                    bundle.events.push(event);
+                }
+                // The document write this replaces sealed any due grant here,
+                // ahead of the status event; keep that history order.
+                if !claimed {
+                    let context_files = bundle.envelope.context_files.clone();
+                    append_creation_grant(
+                        &mut bundle,
+                        &context_files,
+                        &[],
+                        &fields.actor,
+                        now,
+                        &mut pending_events,
+                    )?;
+                }
+            }
             let mut next_event = next_sequence(&bundle.events, "EV-");
             let mut next_comment = next_sequence(&bundle.comments, "C-");
+            // Retry work commits ahead of the transition into done, so no
+            // crash or later read failure can leave done without it.
+            let pending_resolves =
+                if status_transition.is_some_and(|(_, to)| to == TaskStatus::Done) {
+                    pending_resolves_entries(
+                        &named_friction_targets(
+                            &bundle.envelope.relations,
+                            [bundle.description.as_str(), bundle.acceptance.as_str()],
+                        ),
+                        &fields.actor,
+                        now,
+                    )
+                } else {
+                    Vec::new()
+                };
 
-            for entry in &fields.append_history {
+            for entry in fields.append_history.iter().chain(&pending_resolves) {
                 let event = TaskEventRowV2 {
                     schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
                     event_id: format!("EV-{next_event:04}"),
@@ -614,7 +794,7 @@ impl TaskV2Store {
                     operation_id: None,
                     decision: entry.decision.clone(),
                 };
-                self.bundle_store.append_event(id, &event)?;
+                pending_events.push(event.clone());
                 bundle.events.push(event);
                 next_event += 1;
             }
@@ -628,7 +808,7 @@ impl TaskV2Store {
                     body: comment.message.clone(),
                     operation_id: None,
                 };
-                self.bundle_store.append_comment(id, &row)?;
+                pending_comments.push(row.clone());
                 bundle.comments.push(row);
                 next_comment += 1;
             }
@@ -648,9 +828,9 @@ impl TaskV2Store {
                     from_status: status_transition.map(|(from, _)| from),
                     to_status: status_transition.map(|(_, to)| to),
                     operation_id: None,
-                    decision: None,
+                    decision: fields.status_decision.clone(),
                 };
-                self.bundle_store.append_event(id, &event)?;
+                pending_events.push(event.clone());
                 bundle.events.push(event);
             }
 
@@ -665,23 +845,29 @@ impl TaskV2Store {
                 if !claimed {
                     let context_files = bundle.envelope.context_files.clone();
                     append_creation_grant(
-                        &self.bundle_store,
                         &mut bundle,
                         &context_files,
                         &[],
                         &fields.actor,
                         now,
+                        &mut pending_events,
                     )?;
                 }
+                self.bundle_store.append_events(id, &pending_events)?;
+                self.bundle_store.append_comments(id, &pending_comments)?;
                 bundle.envelope.status = target_status;
                 bundle.envelope.updated_at = now;
                 self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
                 pending.finish();
                 self.publish_task_index_and_lease_notices(&bundle.envelope, "task history update")?;
             } else {
+                self.bundle_store.append_events(id, &pending_events)?;
+                self.bundle_store.append_comments(id, &pending_comments)?;
                 pending.finish();
             }
-            Ok(())
+            // Same post-write row as a document update: history runs after
+            // the document commit, so this bundle includes both.
+            self.row_from_bundle(bundle)
         };
         if comment_only {
             self.with_task_comment_lock(id, write)

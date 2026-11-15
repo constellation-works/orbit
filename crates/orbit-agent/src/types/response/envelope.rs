@@ -12,6 +12,57 @@ use super::{AgentResponseStatus, ResponseParseResult, trace::extract_invocation_
 pub struct DeclaredResponseFailure {
     pub status: String,
     pub error: Option<AgentRunError>,
+    /// The typed unfinished-work signal, when this declaration is one
+    /// [ORB-21837]. See [`IncompleteContinuationRequest`].
+    pub continuation: Option<IncompleteContinuationRequest>,
+}
+
+/// The one `error.code` an implementer declares to say its authorized work
+/// is unfinished and could continue in a fresh invocation [ORB-21837].
+pub const IMPLEMENTATION_INCOMPLETE_CODE: &str = "implementation_incomplete";
+
+/// The parser's refusal of an envelope that says `success` and carries `error`.
+const SUCCESS_CARRYING_ERROR_VIOLATION: &str = "success status must not carry error object";
+
+/// Is `parse_error` exactly the parser's refusal of an envelope that says
+/// `success` and carries an `error` object [ORB-22426]?
+///
+/// Exact equality, so that an error quoting agent text can never match.
+pub fn is_success_carrying_error_violation(parse_error: &str) -> bool {
+    parse_error
+        == OrbitError::AgentProtocolViolation(SUCCESS_CARRYING_ERROR_VIOLATION.to_string())
+            .to_string()
+}
+
+/// Is `parse_error` exactly the parser's generic refusal of a capture with no
+/// envelope [ORB-22427]?
+///
+/// Exact equality: a refusal that names an abnormal provider ending, or quotes
+/// agent text, is not this one.
+pub fn is_missing_envelope_violation(parse_error: &str) -> bool {
+    parse_error
+        == OrbitError::AgentProtocolViolation(MISSING_ENVELOPE_MESSAGE.to_string()).to_string()
+}
+
+/// Most `result.remaining_work` entries a continuation request may carry.
+const MAX_REMAINING_WORK_ITEMS: usize = 32;
+/// Longest `result.remaining_work` entry, in bytes.
+const MAX_REMAINING_WORK_ITEM_BYTES: usize = 2_000;
+
+/// A declared-failed envelope that asks for an implementation continuation
+/// [ORB-21837].
+///
+/// The signal is narrow and typed, never read from prose: `status` is
+/// `"failed"`, `error.code` is exactly [`IMPLEMENTATION_INCOMPLETE_CODE`],
+/// `result` is an object with no non-null `blocker`, and
+/// `result.remaining_work` is a non-empty, bounded array of non-empty
+/// strings. Any other shape, including the code with a missing or malformed
+/// `remaining_work`, is an ordinary declared failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IncompleteContinuationRequest {
+    /// What the implementer says remains, in its words. Advisory: it is
+    /// handed to the continuation invocation, never trusted as a result.
+    pub remaining_work: Vec<String>,
 }
 
 /// JSON documents from one stdout capture.
@@ -37,6 +88,19 @@ impl<'a> ParsedStdout<'a> {
         self.raw
     }
 
+    /// Extract telemetry independently of response-envelope validity or exit
+    /// alignment. A failed formatting attempt still spent provider tokens.
+    /// Invalid JSON yields only the observed duration, never an answer.
+    pub fn cli_invocation_trace(&self, duration_ms: u64) -> InvocationTrace {
+        match self.json_documents() {
+            Ok(documents) => extract_invocation_trace(documents, duration_ms),
+            Err(_) => InvocationTrace {
+                duration_ms,
+                ..Default::default()
+            },
+        }
+    }
+
     fn json_documents(&self) -> Result<&[Value], OrbitError> {
         self.documents
             .as_ref()
@@ -54,6 +118,12 @@ impl<'a> ParsedStdout<'a> {
         self.discover(response_candidate)
             .unwrap_or_default()
             .and_then(|candidate| declared_response_failure(&candidate))
+    }
+
+    /// The newest response envelope in the capture, unvalidated. For handing a
+    /// rejected reply back to its author; it never supplies a step's result.
+    pub fn peek_response_envelope(&self) -> Option<Value> {
+        self.discover(response_candidate).unwrap_or_default()
     }
 
     fn discover<T>(&self, inspect: impl Fn(&Value) -> Option<T>) -> Result<Option<T>, OrbitError> {
@@ -198,22 +268,27 @@ fn parse_json_envelope(
     let envelope = deserialize_envelope(candidate)?;
     let trace = synthesize_trace_from_parsed(exec_result, parsed);
 
+    // The provider schema does not enforce status/error correlation
+    // (protocol_schema.rs): `status` and `error` are independent properties
+    // with no conditional branches, so this parser is the layer that enforces
+    // it, including for transports that emit no schema-constrained output.
     let state = match envelope.status.as_str() {
-        "success" => AgentResponseStatus::Success,
-        "failed" => {
-            let Some(error) = &envelope.error else {
+        "success" => {
+            if envelope.error.is_some() {
                 return Err(OrbitError::AgentProtocolViolation(
-                    "failed status requires error object".to_string(),
-                ));
-            };
-            if error.code.trim().is_empty() {
-                return Err(OrbitError::AgentProtocolViolation(
-                    "failed status requires non-empty error.code".to_string(),
+                    SUCCESS_CARRYING_ERROR_VIOLATION.to_string(),
                 ));
             }
+            AgentResponseStatus::Success
+        }
+        "failed" => {
+            require_status_error(&envelope, "failed")?;
             AgentResponseStatus::Failed
         }
-        "timeout" => AgentResponseStatus::Timeout,
+        "timeout" => {
+            require_status_error(&envelope, "timeout")?;
+            AgentResponseStatus::Timeout
+        }
         other => {
             return Err(OrbitError::AgentProtocolViolation(format!(
                 "unknown status: {other}"
@@ -223,6 +298,25 @@ fn parse_json_envelope(
 
     validate_exit_alignment(exec_result, &envelope)?;
     Ok((envelope, state, trace))
+}
+
+fn require_status_error(envelope: &AgentResponseEnvelope, status: &str) -> Result<(), OrbitError> {
+    let Some(error) = &envelope.error else {
+        return Err(OrbitError::AgentProtocolViolation(format!(
+            "{status} status requires error object"
+        )));
+    };
+    if error.code.trim().is_empty() {
+        return Err(OrbitError::AgentProtocolViolation(format!(
+            "{status} status requires non-empty error.code"
+        )));
+    }
+    if error.message.trim().is_empty() {
+        return Err(OrbitError::AgentProtocolViolation(format!(
+            "{status} status requires non-empty error.message"
+        )));
+    }
+    Ok(())
 }
 
 fn synthesize_from_parsed(
@@ -325,13 +419,7 @@ fn synthesize_trace_from_parsed(
     exec_result: &ExecutionResult,
     parsed: &ParsedStdout<'_>,
 ) -> InvocationTrace {
-    match parsed.json_documents() {
-        Ok(documents) => extract_invocation_trace(documents, exec_result.duration_ms),
-        Err(_) => InvocationTrace {
-            duration_ms: exec_result.duration_ms,
-            ..InvocationTrace::default()
-        },
-    }
+    parsed.cli_invocation_trace(exec_result.duration_ms)
 }
 
 fn synthetic_error_message(exec_result: &ExecutionResult) -> String {
@@ -626,10 +714,45 @@ fn declared_response_failure(value: &Value) -> Option<DeclaredResponseFailure> {
             })
         });
 
+    let continuation = (status == "failed")
+        .then(|| incomplete_continuation_request(object, error.as_ref()))
+        .flatten();
     Some(DeclaredResponseFailure {
         status: status.to_string(),
         error,
+        continuation,
     })
+}
+
+fn incomplete_continuation_request(
+    envelope: &serde_json::Map<String, Value>,
+    error: Option<&AgentRunError>,
+) -> Option<IncompleteContinuationRequest> {
+    if error?.code != IMPLEMENTATION_INCOMPLETE_CODE {
+        return None;
+    }
+    let result = envelope.get("result")?.as_object()?;
+    // A declared blocker is a legitimate stop, never unfinished work.
+    if result
+        .get("blocker")
+        .is_some_and(|blocker| !blocker.is_null())
+    {
+        return None;
+    }
+    let items = result.get("remaining_work")?.as_array()?;
+    if items.is_empty() || items.len() > MAX_REMAINING_WORK_ITEMS {
+        return None;
+    }
+    let remaining_work = items
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .map(str::trim)
+                .filter(|item| !item.is_empty() && item.len() <= MAX_REMAINING_WORK_ITEM_BYTES)
+                .map(str::to_string)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(IncompleteContinuationRequest { remaining_work })
 }
 
 fn deserialize_envelope(mut candidate: Value) -> Result<AgentResponseEnvelope, OrbitError> {

@@ -27,16 +27,6 @@ pub const DEFAULT_TAG_INSTRUCTIONS: &[(&str, TagInstructionRole, &str)] = &[
         TagInstructionRole::Review,
         include_str!("../../orbit-core/assets/tag_instructions/ui/review.md"),
     ),
-    (
-        "verify-mock-ui",
-        TagInstructionRole::Implement,
-        include_str!("../../orbit-core/assets/tag_instructions/verify-mock-ui/implement.md"),
-    ),
-    (
-        "verify-mock-ui",
-        TagInstructionRole::Review,
-        include_str!("../../orbit-core/assets/tag_instructions/verify-mock-ui/review.md"),
-    ),
 ];
 
 /// Shippable default activity assets, seeded under
@@ -55,10 +45,6 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
     (
         "apply_blocked_task_recovery",
         include_str!("../../orbit-core/assets/activities/apply_blocked_task_recovery.yaml"),
-    ),
-    (
-        "apply_finding_verification",
-        include_str!("../../orbit-core/assets/activities/apply_finding_verification.yaml"),
     ),
     (
         "apply_task_pilot_results",
@@ -137,16 +123,8 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/activities/file_dependabot_alert_tasks.yaml"),
     ),
     (
-        "file_rule_findings",
-        include_str!("../../orbit-core/assets/activities/file_rule_findings.yaml"),
-    ),
-    (
-        "agent_invoke",
-        include_str!("../../orbit-core/assets/activities/agent_invoke.yaml"),
-    ),
-    (
-        "agent_explore",
-        include_str!("../../orbit-core/assets/activities/agent_explore.yaml"),
+        "attach_script_files",
+        include_str!("../../orbit-core/assets/activities/attach_script_files.yaml"),
     ),
     (
         "image_input_probe",
@@ -209,6 +187,10 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/activities/handoff_land.yaml"),
     ),
     (
+        "pr_checks_watch",
+        include_str!("../../orbit-core/assets/activities/pr_checks_watch.yaml"),
+    ),
+    (
         "pr_conflict_recovery",
         include_str!("../../orbit-core/assets/activities/pr_conflict_recovery.yaml"),
     ),
@@ -235,42 +217,6 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
     (
         "review_gate_settle",
         include_str!("../../orbit-core/assets/activities/review_gate_settle.yaml"),
-    ),
-    (
-        "visual_capture",
-        include_str!("../../orbit-core/assets/activities/visual_capture.yaml"),
-    ),
-    (
-        "visual_checks",
-        include_str!("../../orbit-core/assets/activities/visual_checks.yaml"),
-    ),
-    (
-        "visual_review_prepare",
-        include_str!("../../orbit-core/assets/activities/visual_review_prepare.yaml"),
-    ),
-    (
-        "visual_review",
-        include_str!("../../orbit-core/assets/activities/visual_review.yaml"),
-    ),
-    (
-        "visual_verify_prepare",
-        include_str!("../../orbit-core/assets/activities/visual_verify_prepare.yaml"),
-    ),
-    (
-        "visual_verify",
-        include_str!("../../orbit-core/assets/activities/visual_verify.yaml"),
-    ),
-    (
-        "visual_settle",
-        include_str!("../../orbit-core/assets/activities/visual_settle.yaml"),
-    ),
-    (
-        "visual_recapture",
-        include_str!("../../orbit-core/assets/activities/visual_recapture.yaml"),
-    ),
-    (
-        "visual_landed",
-        include_str!("../../orbit-core/assets/activities/visual_landed.yaml"),
     ),
     (
         "review_reconciliation_prepare",
@@ -301,12 +247,20 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/activities/prepare_blocked_task_recovery.yaml"),
     ),
     (
-        "prepare_escalation_triage",
-        include_str!("../../orbit-core/assets/activities/prepare_escalation_triage.yaml"),
+        "resident_observe",
+        include_str!("../../orbit-core/assets/activities/resident_observe.yaml"),
     ),
     (
-        "prepare_finding_verification",
-        include_str!("../../orbit-core/assets/activities/prepare_finding_verification.yaml"),
+        "resident_cycle",
+        include_str!("../../orbit-core/assets/activities/resident_cycle.yaml"),
+    ),
+    (
+        "resident_finalize",
+        include_str!("../../orbit-core/assets/activities/resident_finalize.yaml"),
+    ),
+    (
+        "prepare_escalation_triage",
+        include_str!("../../orbit-core/assets/activities/prepare_escalation_triage.yaml"),
     ),
     (
         "prepare_task_pilot",
@@ -345,8 +299,8 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/activities/store_gc.yaml"),
     ),
     (
-        "crew_performance_refresh",
-        include_str!("../../orbit-core/assets/activities/crew_performance_refresh.yaml"),
+        "crew_memory_dream",
+        include_str!("../../orbit-core/assets/activities/crew_memory_dream.yaml"),
     ),
     (
         "task_pilot",
@@ -363,10 +317,6 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
     (
         "validate_bundles",
         include_str!("../../orbit-core/assets/activities/validate_bundles.yaml"),
-    ),
-    (
-        "verify_finding",
-        include_str!("../../orbit-core/assets/activities/verify_finding.yaml"),
     ),
     (
         "worktree_setup",
@@ -392,14 +342,6 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
 /// only.
 pub const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
     (
-        "agent_explore_pipeline",
-        include_str!("../../orbit-core/assets/jobs/agent_explore_pipeline.yaml"),
-    ),
-    (
-        "agent_invoke_pipeline",
-        include_str!("../../orbit-core/assets/jobs/agent_invoke_pipeline.yaml"),
-    ),
-    (
         "image_input_probe_pipeline",
         include_str!("../../orbit-core/assets/jobs/image_input_probe_pipeline.yaml"),
     ),
@@ -420,16 +362,12 @@ pub const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/jobs/dependabot_alert_sweep_pipeline.yaml"),
     ),
     (
-        "ux_rules_pipeline",
-        include_str!("../../orbit-core/assets/jobs/ux_rules_pipeline.yaml"),
+        "resident_cycle_pipeline",
+        include_str!("../../orbit-core/assets/jobs/resident_cycle_pipeline.yaml"),
     ),
     (
         "escalation_triage_pipeline",
         include_str!("../../orbit-core/assets/jobs/escalation_triage_pipeline.yaml"),
-    ),
-    (
-        "finding_verification_pipeline",
-        include_str!("../../orbit-core/assets/jobs/finding_verification_pipeline.yaml"),
     ),
     (
         "review_evidence_fulfilment_pipeline",
@@ -456,6 +394,10 @@ pub const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/jobs/task_landing_pipeline.yaml"),
     ),
     (
+        "task_pr_watch_pipeline",
+        include_str!("../../orbit-core/assets/jobs/task_pr_watch_pipeline.yaml"),
+    ),
+    (
         "task_local_pipeline",
         include_str!("../../orbit-core/assets/jobs/task_local_pipeline.yaml"),
     ),
@@ -480,8 +422,8 @@ pub const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/jobs/store_gc_pipeline.yaml"),
     ),
     (
-        "crew_performance_refresh_pipeline",
-        include_str!("../../orbit-core/assets/jobs/crew_performance_refresh_pipeline.yaml"),
+        "crew_memory_dream_pipeline",
+        include_str!("../../orbit-core/assets/jobs/crew_memory_dream_pipeline.yaml"),
     ),
     (
         "workspace_auto_pipeline",

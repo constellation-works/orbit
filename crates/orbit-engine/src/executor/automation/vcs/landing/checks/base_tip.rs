@@ -11,11 +11,14 @@ use crate::context::RuntimeHost;
 use super::super::super::super::ci::log_signature::error_signature;
 use super::super::super::git::git_output;
 use super::super::super::operations;
+use super::super::super::operations::{
+    CiCommitJobEvidence, CiCommitJobsAnswer, CiJobConclusion, CiJobStatus,
+};
 
 use super::base_update::contains;
 use super::head::{CheckReadGap, prerequisite_log};
 use super::jobs::{
-    answers, commit_jobs, excerpt, failed_step, same_job, transient_evidence, unsuccessful,
+    answers, commit_jobs, excerpt, failed_step, infrastructure_evidence, same_job, unsuccessful,
 };
 
 /// Base commits, the starting one included, read for a job that ran to a
@@ -94,7 +97,7 @@ pub(in crate::executor::automation::vcs) fn base_tip_check_evidence<H: RuntimeHo
         let Some((base_commit, base_job)) = history.decisive(tip, job) else {
             return Ok(None);
         };
-        if base_job["conclusion"] == "success" {
+        if base_job.conclusion.value() == Some(&CiJobConclusion::Success) {
             let fork_point = fork_point.get_or_insert_with(|| {
                 git_output(workspace, &["merge-base", head, tip])
                     .ok()
@@ -103,7 +106,9 @@ pub(in crate::executor::automation::vcs) fn base_tip_check_evidence<H: RuntimeHo
             if fork_point
                 .clone()
                 .and_then(|fork_point| history.decisive(&fork_point, job))
-                .is_some_and(|(_, fork_point_job)| fork_point_job["conclusion"] == "success")
+                .is_some_and(|(_, fork_point_job)| {
+                    fork_point_job.conclusion.value() == Some(&CiJobConclusion::Success)
+                })
             {
                 candidate_owned = true;
                 continue;
@@ -113,10 +118,10 @@ pub(in crate::executor::automation::vcs) fn base_tip_check_evidence<H: RuntimeHo
             continue;
         }
         let (Some(run), Some(id), Some(base_run), Some(base_id)) = (
-            job["run_id"].as_u64(),
-            job["job_id"].as_u64(),
-            base_job["run_id"].as_u64(),
-            base_job["job_id"].as_u64(),
+            job.run_id.number(),
+            job.job_id.number(),
+            base_job.run_id.number(),
+            base_job.job_id.number(),
         ) else {
             return Ok(None);
         };
@@ -130,7 +135,9 @@ pub(in crate::executor::automation::vcs) fn base_tip_check_evidence<H: RuntimeHo
             base_id,
             deadline_ms,
         )?;
-        if transient_evidence(&log).is_some() || transient_evidence(&base_log).is_some() {
+        if infrastructure_evidence(host, &log).is_some()
+            || infrastructure_evidence(host, &base_log).is_some()
+        {
             return Ok(None);
         }
         let signature = error_signature(&log, failed_step(job));
@@ -161,7 +168,7 @@ struct BaseHistory<'a, H: RuntimeHost + ?Sized> {
     host: &'a H,
     workspace: &'a Path,
     base_branch: &'a str,
-    jobs: HashMap<String, Option<Vec<Value>>>,
+    jobs: HashMap<String, Option<Vec<CiCommitJobEvidence>>>,
 }
 
 impl<H: RuntimeHost + ?Sized> BaseHistory<'_, H> {
@@ -170,7 +177,11 @@ impl<H: RuntimeHost + ?Sized> BaseHistory<'_, H> {
     /// failure, with that job. `None` when a same job has not concluded,
     /// a commit lists that job more than once, a listing or the history
     /// cannot be read, or no commit in the bound ran it to a result.
-    fn decisive(&mut self, start: &str, job: &Value) -> Option<(String, Value)> {
+    fn decisive(
+        &mut self,
+        start: &str,
+        job: &CiCommitJobEvidence,
+    ) -> Option<(String, CiCommitJobEvidence)> {
         let limit = format!("--max-count={BASE_WALK_LIMIT}");
         let commits = git_output(
             self.workspace,
@@ -190,8 +201,13 @@ impl<H: RuntimeHost + ?Sized> BaseHistory<'_, H> {
                 .collect::<Vec<_>>();
             match matching.as_slice() {
                 [] => {}
-                [found] if found["status"] != "completed" => return None,
-                [found] if matches!(found["conclusion"].as_str(), Some("success" | "failure")) => {
+                [found] if found.status.value() != Some(&CiJobStatus::Completed) => return None,
+                [found]
+                    if matches!(
+                        found.conclusion.value(),
+                        Some(CiJobConclusion::Success | CiJobConclusion::Failure)
+                    ) =>
+                {
                     return Some((commit.to_string(), (*found).clone()));
                 }
                 [_] => {}
@@ -209,12 +225,12 @@ fn latest_push_jobs<H: RuntimeHost + ?Sized>(
     workspace: &Path,
     commit: &str,
     base_branch: &str,
-) -> Option<Vec<Value>> {
+) -> Option<Vec<CiCommitJobEvidence>> {
     let response = host
         .run_private_vcs_operation(
             operations::CI_COMMIT_JOBS,
             json!({"commit":commit,"workspace_path":workspace,"latest_push_branch":base_branch}),
         )
         .ok()?;
-    response["jobs"].as_array().cloned()
+    CiCommitJobsAnswer::decode_response(response).map(|answer| answer.jobs)
 }

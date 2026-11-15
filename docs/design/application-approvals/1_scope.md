@@ -1,0 +1,249 @@
+---
+title: "Scope: bounded application approvals"
+owner: claude
+last_updated: 2026-11-14
+last_validated: 2026-11-04
+status: Draft
+stage: building
+next: "Orbit slices 1-5 shipped; office profile remains ORB-20363, compatibility retirement ORB-21043"
+feature: application-approvals
+doc_role: scope
+type: design
+summary: "Scope: parameterised application consent scopes (typed per-field constraints bound to live task state, bound read callbacks, named transitions) so an app can carry a user's approvals without operator authority"
+tags: [application-approvals, application-authority, plugins, security]
+---
+
+# Scope: bounded application approvals
+
+This folder is the design deliverable of [ORB-20852]. Orbit implementation slices 1-5
+have shipped as [ORB-21038], [ORB-21039], [ORB-21040], [ORB-21041] and [ORB-21042]: schema v2, constrained entries, bound
+and read callbacks, audit fields, and payload-bound auto-task callbacks. The office
+profile remains [ORB-20363]; compatibility retirement is [ORB-21043]. Like
+[human-decision-channel](../human-decision-channel/1_scope.md),
+the folder pairs this scope doc with [2_design.md](./2_design.md), which holds the
+mechanisms, and with [4_decisions.md](./4_decisions.md). That pairing is the task's own
+acceptance shape. It deviates from the two tracks in [CONVENTIONS.md](../CONVENTIONS.md) §1
+and is recorded here per CONVENTIONS.md §11.
+
+Bearing: [ORB-20362] shipped scoped application authority in orbit 0.41.0. An operator
+consents, once, to an application id, an expiry and a list of exact operations, bound to
+one workspace id and checkout root. Orbit mints a credential that the service passes to
+CLI children through an inherited descriptor. Authority lives in a SQLite row plus an
+owner-only witness file, so a modified row alone grants nothing. Every call is audited
+with an `application` object. Exact scopes keep their original matching; constrained
+scopes admit entries and callbacks against typed fields and current task state. The
+contract is documented for users in the installed `orbit-setup` skill reference
+`applications.md`. The admission code is `crates/orbit-runtime/src/application_consent/invocation.rs`.
+
+## Problem
+
+The original problem was that the orbit-office app (the user's Today and Needs-you
+screens) could not carry the user's approval clicks through application authority.
+Friction F2026-11-006 records that problem. The first two restrictions below describe
+the exact-only baseline at `9a03c7cc5`, before slices 1-5 shipped; they are not current
+limits on constrained scopes. Routine control remains refused. The office integration
+is still tracked by [ORB-20363].
+
+1. **Admission matches the whole input exactly.** A direct call is admitted only when a
+   consented scope has the same tool and a structurally equal input
+   (`admit_application_call`, `crates/orbit-runtime/src/application_consent/invocation.rs`).
+   Every app approval embeds a value that does not exist at consent time: a proposal id
+   and the payload digest the user reviewed (`office.proposal-accept {id, sha256}`), a
+   draft id and digest (`gateway.http-send`), or a comment the user typed (send-back,
+   dismiss). A standing consent cannot list them. A per-click consent would need the
+   operator, and that consent would itself be the approval.
+2. **Callbacks are limited to two exact writes.** Only `orbit.task.update` and
+   `orbit.decision.answer` may be consented
+   (`APPLICATION_OPERATION_CEILINGS` in `crates/orbit-common/src/governance/authorization/catalog/application.rs`, formerly `APPLICATION_BUILTIN_OPERATIONS`).
+   `orbit.task.update` admits only `id`, `status`, `comment` and `workspace`, with
+   `status` limited to `backlog`, `done`, `rejected` or `archived`
+   (`application_authority.rs:270-296`). `office.proposal-accept` reads the task and its
+   `proposal.json` artifact, moves the task to `in-progress` with a `plan`, then to
+   `review` and `done` with an `execution_summary`. Auto-task proposals also call
+   `orbit.auto_task` action `add` and `orbit.auto_task` action `update`. Every one of those callbacks is
+   refused before the plugin applies anything.
+3. **Routine control is refused at consent time.** `orbit.routine.control` and
+   `orbit.auto_task` action `mint` fall to the "does not support application consent" arm
+   (`application_authority.rs:298-302`).
+
+The original app integration used `ORBIT_OPERATOR` to accept proposals. That standing
+operator grant to a login service is what ORB-20363 rules out; the scoped office profile
+is the remaining integration work.
+
+## Goal
+
+An operator can consent once to a bounded **approval profile** for one app. Under it the
+app can accept, dismiss, approve, send back and send exactly the kinds of work the profile
+names, and only at the state the user saw. Every property application authority has today
+stays: the one-workspace and checkout bound, expiry and revocation, the protected witness,
+digest binding of plugin manifests, per-call audit, and refusal of everything not listed.
+No capability is granted. Unattended-execution controls (`orbit.routine.control`,
+`orbit.auto_task` action `mint`) stay outside application authority.
+
+## Shape
+
+The chosen flow is option (a) of the three the task asked to compare:
+**parameterised consent scopes**. [2_design.md §2](./2_design.md#2-options-compared)
+compares it with (b), a per-click decision request, and (c), an operator-held approval
+surface in Orbit.
+
+### Constrained scopes
+
+A consent scope keeps today's exact form (`operation.input`). It gains a second form:
+`operation.fields`, a closed map from input field to a typed constraint. Every field
+the call sends must be in the map, and every non-optional field in the map must be sent.
+The constraint kinds form a closed set:
+
+| Constraint | Admits |
+|---|---|
+| `const`, `one_of` | an exact value, or one of at most 16 |
+| `text` | a string up to `max_chars`, no control characters except newline and tab, unchanged by credential redaction |
+| `token` | an ASCII identifier (`[A-Za-z0-9._:-]`) up to `max_len` |
+| `sha256` | 64 lowercase hex characters |
+| `workspace` | a selector that resolves to the consent's workspace |
+| `task` | the id of a task in this workspace whose **current** state satisfies a predicate: required tags, allowed statuses, and optionally "artifact `<path>` has sha256 equal to field `<f>`" |
+| `transition` | a target status allowed only from listed current statuses of the call's task |
+| `bound` | (callbacks only) equal to the value the entry call was admitted with |
+| `artifact_json` | (callbacks only) equal to the JSON value at a pointer inside the entry's digest-verified artifact |
+| `subset_of` | an array whose elements all come from a listed set |
+| `optional` | wraps another constraint; the field may be absent |
+
+There are no regular expressions, wildcards or defaults.
+[2_design.md §4](./2_design.md#4-consent-schema-v2) gives the exact schema.
+
+### Bound callbacks
+
+Inside an app-bound plugin call, a callback is admitted when it satisfies a listed
+callback's constraints. Its `id` must either be `bound` to the entry's admitted task or
+be pinned on first use. Two read callbacks become admissible: `orbit.task.show`, with
+listed non-secret fields, and `orbit.task.artifact` action `get` on a constant path. When the
+entry bound an artifact digest, every later read and write in that invocation rechecks
+the digest against current state.
+
+### Ceilings and fixed refusals
+
+A closed per-tool ceiling table replaces `APPLICATION_BUILTIN_OPERATIONS`. A consent may
+narrow a ceiling, never exceed it. Application authority never admits a transition that
+first approves work for dispatch: `proposed`, `someday` or `blocked` to `backlog`. It never admits
+`orbit.routine.control`, `orbit.auto_task` action `mint`, dispatch, force, tool grants or consent
+administration.
+
+### Configuration
+
+Consent is host state, not workspace config. The one setting is the expiry cap, read
+only from the global `config.toml` (a `machine.*` key, which a workspace file cannot
+supply), so a checkout cannot lengthen the authority it is granted.
+
+| Limit | Value | Meaning |
+|---|---|---|
+| Consented operation size | 8 KiB per operation in a v2 consent; a v1 (exact-only) request keeps its 4 KiB total | A constrained profile for one app is about 3-5 KiB |
+| Plugin callback session record | 8 KiB | Current `MAX_SESSION_BYTES` in `crates/orbit-tools/src/plugin/callback/session.rs`; the proposed 16 KiB increase has not shipped |
+| Constrained-scope consent expiry | 30 days, fixed since [ORB-22808] | Renewed with `orbit application rotate` |
+| Scope rate limit | optional `rate_limit`, default none | `admissions` (1-10000) per `window_seconds` (1-86400) |
+| `text` / `token` maxima | 4096 chars / 128 bytes | Per field |
+
+### Surfaces
+
+- `orbit application consent` and `rotate` accept constrained scopes and refuse an
+  invalid constraint or one that exceeds a ceiling, naming the field.
+- `orbit audit list` and `orbit audit show` carry the selected scope name, the bound
+  values, the predicate evidence and text-field digests in the existing `application`
+  object.
+- The office app shows its existing not-permitted message for every action the profile
+  refuses.
+
+## Non-goals
+
+- **No capability grant.** The app never holds Operator, Runner or Agent. Admission
+  bypasses the capability floor only for the listed, constrained operations, exactly as
+  it does today for exact ones.
+- **No proof of a fresh human click.** The app server relays the user's click. Orbit can
+  bind the click to current state but cannot authenticate the human behind it.
+  [4_decisions.md](./4_decisions.md#a-relayed-click-is-no-stronger-than-its-relayer)
+  records why.
+- **No unattended-execution controls.** Routine toggles, trigger edits and unconditional
+  mints stay on the operator surfaces: the dashboard (`routine.toggle`, `auto_task.mint`
+  rows in `catalog/types.rs`, listed in `catalog/operations.rs`) and the CLI.
+- **No application MCP sessions or Windows support.** Both still fail closed.
+- **No Office-specific code in Orbit core.** Constraints name tags, statuses, artifact
+  paths and JSON pointers. The office profile is data the operator consents to.
+
+## Concerns and honest limitations
+
+- **A stolen credential approves what is pending.** Until expiry or revocation, a holder
+  can accept every pending proposal at its current payload, dismiss approval tasks and
+  send them back. It cannot change a payload, reach another workspace or task kind, or
+  make new work dispatchable. [2_design.md §3](./2_design.md#3-threat-model) bounds it.
+- **Tags classify; they do not authorise.** Agents can tag tasks, so a predicate on tags
+  only selects which work the profile covers. The digest binding and the relayed click
+  carry the approval.
+- **Plugin side effects stay unverified.** Orbit checks what a plugin asks of Orbit, not
+  what it writes elsewhere (Library pages, outbound HTTP). The plugin's pinned manifest
+  digest is the only bound on that, as today.
+
+## Phasing
+
+Slices 1-5 below are implemented ([ORB-21038], [ORB-21039], [ORB-21040], [ORB-21041], [ORB-21042]). The descriptions
+record the delivery sequence; admission no longer waits for those slices. Slice 6 is
+[ORB-20363], and slice 7 is [ORB-21043].
+
+1. **Schema and consent-time validation.** Constrained scopes parse and validate against
+   the ceiling table. Admission still refuses them.
+2. **Entry admission.** Direct constrained calls (dismiss, send-back) and plugin entries
+   are admitted with bindings.
+3. **Bound callbacks.** Read callbacks, bound and pinned ids, digest rechecks, callback
+   session schema 5.
+4. **Audit and documentation.** The new audit fields, their rendering, and the installed
+   `applications.md` reference.
+5. **Auto-task callbacks.** `artifact_json` and the `orbit.auto_task` action `add` and `update`
+   ceilings.
+6. **Office profile** (orbit-office). Consent profile, installer step, close walks that
+   avoid `proposed` to `backlog`, and ORB-20363 re-scoped.
+7. **Compatibility retirement.** After the 30-day window, the writer emits v2 records
+   only.
+
+[2_design.md §9](./2_design.md#9-implementation-slices) records the slices and task IDs.
+
+## Open questions
+
+None open. Daniel answered all three on 2026-11-01; his words are quoted verbatim.
+
+1. **Is a 30-day expiry cap right for constrained consents?** A shorter cap limits a
+   stolen credential. A longer one avoids monthly operator renewal on a one-user host.
+   **Resolved:** "30 can be default but configurable". The cap defaulted to 30
+   days via host-only `machine.application_consent_max_days`. [ORB-22808] fixed
+   it at 30 days and ignores that key. Consent validation enforces 30 days.
+2. **Should a constrained scope carry a rate limit?** For example, at most N admissions
+   per hour per scope. It would blunt bulk misuse of a stolen credential, but accept-all
+   is legitimately bulk.
+   **Resolved:** "configurable, default off". A scope may carry an optional
+   `rate_limit` (admissions per window), validated at consent time. A scope without one
+   has no limit. Constrained admission (slice 2) enforces it.
+3. **Should Orbit bind the gateway draft digest?** Today only the gateway plugin checks
+   it, because the draft lives in plugin state.
+   **Resolved:** "No, plugin checks it". Orbit does not bind it; the gateway plugin
+   keeps the check.
+
+## Acceptance (feature level)
+
+- Given an operator consented to the office profile, the app accepts a pending proposal
+  at the digest the user saw. The task ends `done`, and no `ORBIT_OPERATOR` is in the
+  app's environment.
+- Given the payload changed after review, the same accept is refused before any callback
+  writes, and the audit row names the failing constraint without the payload.
+- Given the same credential, a call on a task outside the predicate, an unlisted
+  callback, `proposed` to `backlog`, `orbit.routine.control` or `orbit.auto_task` action `mint` is
+  refused. So is a call after expiry or revocation, or from another workspace.
+- Given an existing v1 exact consent, it keeps working unchanged across the upgrade.
+
+## Task References
+
+- [ORB-20362] — shipped scoped, audited application authority (orbit 0.41.0).
+- [ORB-20363] — wires the office app's approval actions to application authority;
+  office profile integration remains outstanding.
+- [ORB-20852] — this design.
+- [ORB-21038], [ORB-21039], [ORB-21040], [ORB-21041], [ORB-21042] — shipped Orbit slices 1-5.
+- [ORB-21043] — retire v1-only consent writing after the compatibility window.
+- [ORB-22808] — fixed the constrained-consent expiry cap at 30 days and ignores `machine.application_consent_max_days`.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

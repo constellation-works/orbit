@@ -1,0 +1,22 @@
+/* Page chrome for the mocks only. Everything inside .mock-stage is styled by the
+   dashboard's own stylesheets, linked from crates/orbit-web/assets/dashboard/css. */
+@font-face { font-family: "Geist"; font-style: normal; font-weight: 100 900; font-display: swap;
+  src: url("../../../../../crates/orbit-web/assets/dashboard/fonts/geist-latin.woff2") format("woff2"); }
+@font-face { font-family: "Geist Mono"; font-style: normal; font-weight: 100 900; font-display: swap;
+  src: url("../../../../../crates/orbit-web/assets/dashboard/fonts/geist-mono-latin.woff2") format("woff2"); }
+html, body { height: auto; overflow: auto; }
+body.mock-page { display: block; padding: 24px; }
+.mock-title { margin: 0 0 4px; font: 600 14px var(--font-sans); color: var(--fg-strong); }
+.mock-note { margin: 0 0 20px; max-width: 86ch; font: 13px/1.5 var(--font-sans); color: var(--fg-dim); }
+.mock-pair { display: flex; flex-wrap: wrap; gap: 40px; align-items: flex-start; margin-bottom: 36px; }
+.mock-col { min-width: 0; }
+.mock-label { margin: 0 0 8px; font: 600 11px var(--font-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--fg-mute); }
+.mock-label.new { color: var(--accent); }
+.mock-rail { width: 200px; }
+.mock-rail .rail { overflow: visible; border: 1px solid var(--hair); }
+.mock-dock { width: 336px; }
+.mock-stage .dock-pane { display: flex; overflow: visible; padding-bottom: 0; }
+.mock-list { width: 520px; max-width: 100%; }
+.mock-menu { margin: 8px 0 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-elev); color: var(--fg-soft); font: 12px/1.7 var(--font-mono); white-space: pre; }
+.mock-changes { margin: 10px 0 0; padding-left: 18px; max-width: 46ch; font: 12px/1.6 var(--font-sans); color: var(--fg-dim); }

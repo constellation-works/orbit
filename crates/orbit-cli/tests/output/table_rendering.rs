@@ -21,6 +21,7 @@
 
 use std::process::Output;
 
+use orbit_types::task::TaskStatus;
 use serde_json::Value;
 
 const BOX_GLYPHS: &[char] = &['─', '│', '┌', '┐', '└', '┘', '├', '┤', '┬', '┴', '┼'];
@@ -37,6 +38,133 @@ fn task_list_renders_one_line_per_task() {
     );
 
     assert_both_forms(&workspace, &["task", "list"], 3, "orbit task list");
+}
+
+/// Attention keeps its repair command beside the reason at narrow terminal
+/// widths, and gives pipe consumers a separate final TSV field.
+#[cfg(unix)]
+#[test]
+fn attention_items_keep_the_reason_and_next_command_together() {
+    use assert_cmd::cargo::cargo_bin_cmd;
+    use orbit_common::test_env;
+
+    let workspace = workspace();
+    let task_id = workspace.add_task("Attention output regression");
+    let receipt = format!(
+        "operation_id={}\n{}",
+        "a".repeat(64),
+        serde_json::json!({
+            "assessment": {
+                "utility_warnings": [{
+                    "text": "A reproduced warning needs an operator action.",
+                    "holds_promotion": true
+                }]
+            }
+        })
+    );
+    let mut update = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        update.env_remove(name);
+    });
+    update
+        .current_dir(&workspace.work)
+        .env("HOME", &workspace.home)
+        .env("USERPROFILE", &workspace.home)
+        .env("ORBIT_ACTOR", "task-pilot")
+        .args(["task", "update", &task_id, "--comment", &receipt, "--json"])
+        .assert()
+        .success();
+
+    let json = workspace.run_as_operator(
+        &["attention", "--kind", "pilot_warning", "--json"],
+        "read attention JSON",
+    );
+    let document: Value = serde_json::from_slice(&json.stdout).expect("attention JSON");
+    assert_eq!(document["counts"]["returned"], 1, "{document}");
+    assert_eq!(document["items"][0]["refs"]["task_id"], task_id);
+    let reason = document["items"][0]["reason"]
+        .as_str()
+        .expect("attention reason");
+    let next = document["items"][0]["next"]["command"]
+        .as_str()
+        .expect("next command");
+    assert!(!next.is_empty(), "the fixture has a suggested next command");
+    assert_eq!(document["message"], "1 item needs attention");
+
+    for width in ["60", "80", "120"] {
+        let output = run_cli_on_terminal_at_width_as_operator(
+            &workspace,
+            &["attention", "--kind", "pilot_warning"],
+            width,
+        );
+        let stdout = String::from_utf8(output.stdout)
+            .expect("terminal attention output")
+            .replace("\r\n", "\n");
+        let normalized = stdout.split_whitespace().collect::<Vec<_>>().join(" ");
+        let normalized_command = next.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(stdout.starts_with("1 item needs attention\n"), "{stdout:?}");
+        assert!(stdout.contains("Reason:"), "{stdout:?}");
+        assert!(stdout.contains("Next:"), "{stdout:?}");
+        assert!(stdout.contains(reason), "the reason is visible: {stdout:?}");
+        assert!(
+            normalized.contains(&normalized_command),
+            "the complete suggested command is visible at {width} columns: {stdout:?}"
+        );
+    }
+
+    for args in [
+        vec!["attention", "--kind", "pilot_warning"],
+        vec!["attention", "--kind", "pilot_warning", "--format", "plain"],
+    ] {
+        let output = workspace.run_as_operator(&args, "read plain attention");
+        let stdout = String::from_utf8(output.stdout).expect("plain attention output");
+        assert!(
+            !stdout.contains("\\n"),
+            "plain output has no escaped newline: {stdout:?}"
+        );
+        let records = stdout.lines().collect::<Vec<_>>();
+        assert_eq!(records.len(), 2, "one summary plus one item: {stdout:?}");
+        assert_eq!(records[0], "1 item needs attention");
+        let fields = records[1].split('\t').collect::<Vec<_>>();
+        assert!(
+            fields.contains(&reason),
+            "reason has its own field: {fields:?}"
+        );
+        assert!(
+            fields.contains(&next),
+            "next command has its own field: {fields:?}"
+        );
+        assert_eq!(
+            fields.last(),
+            Some(&next),
+            "next command is a separate final field"
+        );
+    }
+
+    let header_output = workspace.run_as_operator(
+        &[
+            "attention",
+            "--kind",
+            "pilot_warning",
+            "--format",
+            "plain",
+            "--header",
+        ],
+        "read plain attention with header",
+    );
+    let stdout = String::from_utf8(header_output.stdout).expect("plain attention output");
+    let records = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(records.len(), 3, "summary, header and one item: {stdout:?}");
+    assert_eq!(records[0], "1 item needs attention");
+    assert_eq!(
+        records[1], "SEVERITY\tKIND\tWORKSPACE\tREF\tAGE\tREASON\tNEXT",
+        "the global --header labels the plain fields: {stdout:?}"
+    );
+    assert_eq!(
+        records[2].split('\t').count(),
+        records[1].split('\t').count(),
+        "the item record has one field per header label: {stdout:?}"
+    );
 }
 
 /// The CLI exposes a crew-only OS limit in human and projected readouts.
@@ -177,6 +305,151 @@ fn task_list_plain_escapes_embedded_separators_and_json_keeps_them() {
     );
 }
 
+/// Filtering a semantic value keeps its column visible and removes only that
+/// column's role styling; the other semantic column remains styled. The PTY
+/// makes the built CLI resolve its real terminal color path deterministically.
+#[cfg(unix)]
+#[test]
+fn task_list_filtered_status_and_priority_are_neutral_only_in_terminal_tables() {
+    let workspace = workspace();
+    let proposed_low = workspace.task_seed("Filtered status low priority");
+    let mut done_high = workspace.task_seed("Filtered priority completed task");
+    done_high.status = TaskStatus::Done;
+    let tasks = workspace.seed_tasks(&[
+        proposed_low,
+        workspace.task_seed("Filtered status high priority"),
+        done_high,
+    ]);
+    let low_id = tasks[0]["id"].as_str().expect("low priority task id");
+    let high_id = tasks[1]["id"].as_str().expect("high priority task id");
+    let done_id = tasks[2]["id"].as_str().expect("done task id");
+    workspace.run(
+        &["task", "update", low_id, "--priority", "low", "--json"],
+        "set low priority",
+    );
+    workspace.run(
+        &["task", "update", high_id, "--priority", "high", "--json"],
+        "set high priority",
+    );
+    workspace.run(
+        &["task", "update", done_id, "--priority", "high", "--json"],
+        "set completed task priority",
+    );
+
+    let status_table = run_on_terminal(
+        &workspace,
+        &["task", "list", "--status", "proposed", "--format", "table"],
+    );
+    let status_stdout = String::from_utf8(status_table.stdout)
+        .expect("terminal task table is UTF-8")
+        .replace("\r\n", "\n");
+    assert!(
+        status_stdout.contains("STATUS"),
+        "filtered status column stays visible: {status_stdout:?}"
+    );
+    assert!(
+        status_stdout.contains("proposed"),
+        "filtered status value stays visible: {status_stdout:?}"
+    );
+    assert!(
+        !status_stdout.contains("\x1b[93mproposed") && !status_stdout.contains("\x1b[2mproposed"),
+        "a filtered status has neither severity foreground nor dim styling: {status_stdout:?}"
+    );
+    assert!(
+        status_stdout.contains("\x1b[91mhigh"),
+        "unfiltered high priority keeps its role: {status_stdout:?}"
+    );
+    assert!(
+        status_stdout.contains("\x1b[2mlow"),
+        "unfiltered low priority keeps its role: {status_stdout:?}"
+    );
+
+    let priority_table = run_on_terminal(
+        &workspace,
+        &["task", "list", "--priority", "high", "--format", "table"],
+    );
+    let priority_stdout = String::from_utf8(priority_table.stdout)
+        .expect("terminal task table is UTF-8")
+        .replace("\r\n", "\n");
+    assert!(
+        priority_stdout.contains("PRIORITY"),
+        "filtered priority column stays visible: {priority_stdout:?}"
+    );
+    assert!(
+        priority_stdout.contains("high"),
+        "filtered priority value stays visible: {priority_stdout:?}"
+    );
+    assert!(
+        !priority_stdout.contains("\x1b[91mhigh") && !priority_stdout.contains("\x1b[2mhigh"),
+        "a filtered priority has neither severity foreground nor dim styling: {priority_stdout:?}"
+    );
+    assert!(
+        priority_stdout.contains("\x1b[93mproposed"),
+        "unfiltered proposed status keeps its role: {priority_stdout:?}"
+    );
+    assert!(
+        priority_stdout.contains("\x1b[92mdone"),
+        "unfiltered done status keeps its role: {priority_stdout:?}"
+    );
+
+    let dimmed_priority_table = run_on_terminal(
+        &workspace,
+        &["task", "list", "--priority", "low", "--format", "table"],
+    );
+    let dimmed_priority_stdout = String::from_utf8(dimmed_priority_table.stdout)
+        .expect("terminal task table is UTF-8")
+        .replace("\r\n", "\n");
+    assert!(dimmed_priority_stdout.contains("PRIORITY"));
+    assert!(dimmed_priority_stdout.contains("low"));
+    assert!(
+        !dimmed_priority_stdout.contains("\x1b[2mlow")
+            && !dimmed_priority_stdout.contains("\x1b[91mlow"),
+        "a filtered dim priority has neither dim nor severity styling: {dimmed_priority_stdout:?}"
+    );
+    assert!(
+        dimmed_priority_stdout.contains("\x1b[93mproposed"),
+        "unfiltered status remains styled beside a filtered dim priority: {dimmed_priority_stdout:?}"
+    );
+
+    let plain = workspace.run(
+        &["task", "list", "--status", "proposed", "--format", "plain"],
+        "plain filtered task list",
+    );
+    let plain_stdout = String::from_utf8(plain.stdout).expect("plain task list is UTF-8");
+    assert!(
+        !plain_stdout.contains('\x1b'),
+        "plain output has no styling: {plain_stdout:?}"
+    );
+    let plain_rows = plain_stdout.lines().collect::<Vec<_>>();
+    assert_eq!(
+        plain_rows.len(),
+        2,
+        "plain output retains both filtered records: {plain_stdout:?}"
+    );
+    assert!(
+        plain_rows
+            .iter()
+            .all(|row| row.split('\t').nth(2) == Some("proposed"))
+    );
+
+    let json = workspace.run(
+        &["task", "list", "--status", "proposed", "--format", "json"],
+        "JSON filtered task list",
+    );
+    let records: Value = serde_json::from_slice(&json.stdout).expect("task list JSON");
+    let records = records.as_array().expect("task list remains a JSON array");
+    assert_eq!(
+        records.len(),
+        2,
+        "JSON output retains both filtered records"
+    );
+    assert!(records.iter().all(|record| {
+        record.is_object()
+            && record["status"] == "proposed"
+            && matches!(record["priority"].as_str(), Some("low" | "high"))
+    }));
+}
+
 #[test]
 fn job_show_json_contains_no_human_step_rows() {
     let workspace = workspace();
@@ -266,6 +539,122 @@ fn workspace() -> TestWorkspace {
     let mut template = TaskSeed::new("");
     template.description = "A record whose rendered row must stay on one line.".into();
     TestWorkspace::new("table-rendering-test", template)
+}
+
+#[cfg(unix)]
+fn run_on_terminal(workspace: &TestWorkspace, args: &[&str]) -> Output {
+    run_cli_on_terminal_at_width(workspace, args, "120")
+}
+
+#[cfg(unix)]
+pub(super) fn run_cli_on_terminal_at_width(
+    workspace: &TestWorkspace,
+    args: &[&str],
+    width: &str,
+) -> Output {
+    run_cli_on_terminal_at_width_with_operator(workspace, args, width, false)
+}
+
+#[cfg(unix)]
+fn run_cli_on_terminal_at_width_as_operator(
+    workspace: &TestWorkspace,
+    args: &[&str],
+    width: &str,
+) -> Output {
+    run_cli_on_terminal_at_width_with_operator(workspace, args, width, true)
+}
+
+#[cfg(unix)]
+fn run_cli_on_terminal_at_width_with_operator(
+    workspace: &TestWorkspace,
+    args: &[&str],
+    width: &str,
+    operator: bool,
+) -> Output {
+    use std::io::Read;
+    use std::os::fd::FromRawFd;
+    use std::process::Stdio;
+
+    use orbit_common::test_env;
+
+    let mut master = -1;
+    let mut slave = -1;
+    let mut dimensions = libc::winsize {
+        ws_row: 24,
+        ws_col: width.parse().expect("terminal width"),
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    // SAFETY: openpty initializes both descriptors on success; pointers are valid.
+    // macOS declares the winsize parameter as *mut, Linux as *const. A raw *mut
+    // satisfies both (coercing to *const on Linux) and avoids
+    // clippy::unnecessary_mut_passed, which fires on `&mut` where *const suffices.
+    let rc = unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::addr_of_mut!(dimensions),
+        )
+    };
+    assert_eq!(rc, 0, "openpty: {}", std::io::Error::last_os_error());
+    let mut actual = dimensions;
+    // SAFETY: `slave` is the live pty descriptor openpty returned above, and `actual`
+    // is a writable winsize that TIOCGWINSZ fills in for the duration of the call.
+    let read_size = unsafe { libc::ioctl(slave, libc::TIOCGWINSZ, &mut actual) };
+    assert_eq!(read_size, 0, "read PTY window size");
+    assert_eq!(actual.ws_col, dimensions.ws_col, "PTY width readback");
+    // SAFETY: successful openpty returned owned, distinct file descriptors.
+    let mut master = unsafe { std::fs::File::from_raw_fd(master) };
+    // SAFETY: slave is the other owned end of the same openpty pair.
+    let slave = unsafe { std::fs::File::from_raw_fd(slave) };
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_orbit"));
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    if operator {
+        command.env("ORBIT_OPERATOR", "1");
+    }
+    let mut child = command
+        .current_dir(&workspace.work)
+        .env("HOME", &workspace.home)
+        .env("USERPROFILE", &workspace.home)
+        .env("TERM", "xterm-256color")
+        .env_remove("COLUMNS")
+        .env_remove("NO_COLOR")
+        .env_remove("ORBIT_FORMAT")
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(slave))
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run CLI on terminal");
+    drop(command);
+    let mut stdout = Vec::new();
+    if let Err(error) = master.read_to_end(&mut stdout) {
+        // Linux PTY masters signal closure with EIO; other Unix systems return EOF.
+        assert_eq!(error.raw_os_error(), Some(libc::EIO), "read pty: {error}");
+    }
+    let status = child.wait().expect("wait for CLI");
+    let mut stderr = Vec::new();
+    child
+        .stderr
+        .take()
+        .expect("captured stderr")
+        .read_to_end(&mut stderr)
+        .expect("read CLI stderr");
+    assert!(
+        status.success(),
+        "CLI command failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&stdout),
+        String::from_utf8_lossy(&stderr)
+    );
+    Output {
+        status,
+        stdout,
+        stderr,
+    }
 }
 
 #[test]
@@ -432,7 +821,7 @@ fn config_keys_obeys_format_plain_and_header_and_table_and_ndjson() {
     );
     for line in &lines {
         let fields = line.split('\t').collect::<Vec<_>>();
-        assert_eq!(fields.len(), 4, "4 tab-separated fields per row: {line}");
+        assert_eq!(fields.len(), 5, "5 tab-separated fields per row: {line}");
     }
     assert!(
         !lines[0].starts_with("KEY\t"),
@@ -455,14 +844,14 @@ fn config_keys_obeys_format_plain_and_header_and_table_and_ndjson() {
         let fields = line.split('\t').collect::<Vec<_>>();
         assert_eq!(
             fields.len(),
-            4,
-            "4 tab-separated fields in each row: {line}"
+            5,
+            "5 tab-separated fields in each row: {line}"
         );
     }
     assert_eq!(
         lines_header[0].split('\t').count(),
-        4,
-        "header has 4 fields"
+        5,
+        "header has 5 fields"
     );
 
     // 4. Table: aligned columns with header, key_count + 1 lines.
@@ -502,4 +891,199 @@ fn config_keys_obeys_format_plain_and_header_and_table_and_ndjson() {
         assert!(doc.get("section").is_some());
         assert!(doc.get("description").is_some());
     }
+}
+
+/// An all-fixed table wider than the terminal warns instead of overflowing
+/// silently [ORB-20485]: `orbit run history` builds only fixed columns, so the
+/// shared fitter's shrink-and-drop path never engages and no "columns hidden"
+/// notice fires. The renderer must still say the table does not fit and where
+/// the full row lives, while leaving identifier cells whole. Pinned sink
+/// widths stand in for a PTY, the way the doctor render fixtures do.
+#[test]
+fn all_fixed_overflow_warns_and_keeps_identifiers_whole() {
+    for width in [60, 80, 120] {
+        let rendered = render_overflow_fixture(&format!("fixed-{width}"));
+        assert!(
+            rendered
+                .stderr
+                .lines()
+                .all(|line| line.chars().count() <= width),
+            "fit notice must word-wrap at {width}: {}",
+            rendered.stderr
+        );
+        assert_eq!(rendered.stdout.lines().count(), 2, "table rows stay whole");
+    }
+    let narrow = render_overflow_fixture("narrow-fixed");
+    assert!(
+        narrow.stderr.contains("wider than the terminal"),
+        "an all-fixed overflow must say the table does not fit: {}",
+        narrow.stderr
+    );
+    assert!(
+        narrow.stderr.contains("--format plain") && narrow.stderr.contains("--json"),
+        "the overflow notice must name where the full row lives: {}",
+        narrow.stderr
+    );
+    assert!(
+        !narrow.stderr.contains("columns hidden"),
+        "no column was hidden, so none may be named: {}",
+        narrow.stderr
+    );
+    assert!(
+        narrow.stdout.contains("jrun-20261031-0843-c3"),
+        "the identifier cell stays whole under overflow: {}",
+        narrow.stdout
+    );
+    assert_eq!(
+        narrow.stdout.lines().count(),
+        2,
+        "one header line plus one record line: {}",
+        narrow.stdout
+    );
+
+    let wide = render_overflow_fixture("wide-fixed");
+    assert!(
+        !wide.stderr.contains("wider than the terminal") && !wide.stderr.contains("columns hidden"),
+        "a fitting table warns about nothing: {}",
+        wide.stderr
+    );
+
+    let flex = render_overflow_fixture("narrow-flex");
+    assert!(
+        flex.stderr
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .contains("columns hidden to fit the terminal: TITLE"),
+        "a dropped flexible column is still named: {}",
+        flex.stderr
+    );
+    assert!(
+        !flex.stderr.contains("wider than the terminal"),
+        "once the drop fits, no overflow remains to report: {}",
+        flex.stderr
+    );
+
+    let plain = render_overflow_fixture("plain");
+    assert!(
+        !plain.stderr.contains("terminal"),
+        "piped plain output carries no terminal-fit notice: {}",
+        plain.stderr
+    );
+    assert!(
+        plain.stdout.contains('\t') && plain.stdout.contains("jrun-20261031-0843-c3"),
+        "piped plain output stays tab-separated and untruncated: {}",
+        plain.stdout
+    );
+}
+
+struct OverflowFixture {
+    stdout: String,
+    stderr: String,
+}
+
+fn render_overflow_fixture(case: &str) -> OverflowFixture {
+    use orbit_common::test_env;
+    let logs = tempfile::tempdir_in(test_env::canonical_temp_dir()).expect("child logs");
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+    command
+        .args([
+            "--exact",
+            "table_rendering::render_overflow_child",
+            "--nocapture",
+        ])
+        .env("ORBIT_TABLE_OVERFLOW_CASE", case);
+    let output = test_env::run_child_test(
+        &mut command,
+        "table_rendering::render_overflow_child",
+        logs.path(),
+    );
+    test_env::assert_child_test_passed(
+        "table_rendering::render_overflow_child",
+        output.status,
+        &output.stdout,
+        &output.stderr,
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf-8 child stdout");
+    let body = stdout
+        .split_once("BEGIN_TABLE\n")
+        .expect("start marker")
+        .1
+        .split_once("END_TABLE")
+        .expect("end marker")
+        .0
+        .to_string();
+    OverflowFixture {
+        stdout: body,
+        stderr: String::from_utf8(output.stderr).expect("utf-8 child stderr"),
+    }
+}
+
+#[test]
+fn render_overflow_child() {
+    use crate::output::{
+        payload::{Block, Payload},
+        sink::{FormatArg, OutputSink, SinkEnv},
+        table::{Column, Table},
+    };
+    use std::io::Write as _;
+    let Ok(case) = std::env::var("ORBIT_TABLE_OVERFLOW_CASE") else {
+        return;
+    };
+    // History-shaped: every column fixed, so the fitter can neither shrink
+    // nor drop its way to the sink width.
+    let mut history = Table::new(vec![
+        Column::new("RUN_ID").fixed(),
+        Column::new("JOB_ID").fixed(),
+        Column::new("TASK").fixed(),
+        Column::new("STARTED_AT").fixed(),
+        Column::new("FINISHED_AT").fixed(),
+        Column::new("DURATION").fixed(),
+    ]);
+    history.add_row(vec![
+        comfy_table::Cell::new("jrun-20261031-0843-c3"),
+        comfy_table::Cell::new("task_pr_pipeline"),
+        comfy_table::Cell::new("ORB-20463"),
+        comfy_table::Cell::new("2026-10-31T08:43:04Z"),
+        comfy_table::Cell::new("2026-10-31T08:44:46Z"),
+        comfy_table::Cell::new("1m 42s"),
+    ]);
+    // Task-list-shaped: one flexible column that must be dropped at a narrow
+    // width, so the existing "columns hidden" notice still fires by name.
+    let mut flexible = Table::new(vec![
+        Column::new("ID").fixed(),
+        Column::new("TITLE"),
+        Column::new("STATUS").fixed(),
+    ]);
+    flexible.add_row(vec![
+        comfy_table::Cell::new("ORB-1"),
+        comfy_table::Cell::new("a title far longer than any narrow terminal line should ever hold"),
+        comfy_table::Cell::new("proposed"),
+    ]);
+    let doc = serde_json::json!([]);
+    let (table, width, mode, is_tty) = match case.as_str() {
+        case if case.starts_with("fixed-") => (history, &case[6..], FormatArg::Table, true),
+        "wide-fixed" => (history, "120", FormatArg::Table, true),
+        "narrow-flex" => (flexible, "20", FormatArg::Table, true),
+        "plain" => (history, "0", FormatArg::Plain, false),
+        _ => (history, "80", FormatArg::Table, true),
+    };
+    let sink = OutputSink::resolve(
+        is_tty,
+        &SinkEnv {
+            columns: Some(width.into()),
+            no_color: Some("1".into()),
+            ..SinkEnv::default()
+        },
+        None,
+        Some(mode),
+        false,
+    );
+    writeln!(std::io::stdout(), "BEGIN_TABLE").expect("start marker");
+    crate::output::render::emit(
+        Payload::blocks(doc, vec![Block::table(table)]).into(),
+        &sink,
+    )
+    .expect("emit");
+    writeln!(std::io::stdout(), "END_TABLE").expect("end marker");
 }

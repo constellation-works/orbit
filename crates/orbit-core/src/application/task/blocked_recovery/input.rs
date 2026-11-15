@@ -19,7 +19,7 @@ pub struct BlockedRecoveryInput {
     pub task_id: String,
     /// [`BlockEpisode::key`] of the episode being recovered.
     pub episode_key: String,
-    /// [`BlockSource::as_str`](super::BlockSource::as_str).
+    /// `BlockSource::as_str`.
     pub block_source: String,
     /// The run that failed, when known.
     pub failed_run_id: Option<String>,
@@ -88,6 +88,8 @@ pub struct BlockedRecoveryTick {
     pub dispatched: Vec<(String, String)>,
     /// Tasks whose recovery run ended without a decision and were escalated.
     pub settled: Vec<String>,
+    /// Blocked tasks the deterministic recheck settled without an agent.
+    pub rechecked: Vec<super::BlockedRecheckSettlement>,
 }
 
 /// One blocked task as the backstop sees it, for `orbit doctor`.

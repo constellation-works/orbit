@@ -63,6 +63,14 @@ pub struct InvocationTrace {
     pub usage: TokenUsage,
     #[serde(default)]
     pub tool_calls: Vec<ToolCallTrace>,
+    /// The provider's stdout outgrew the bounded capture, so `tool_calls`
+    /// holds only the calls that survived in its retained suffix, numbered
+    /// from 1 within it. Calls before that suffix are lost, so the list can
+    /// neither prove that a tool was never called nor locate a first edit.
+    /// `false` for a complete trace and for every invocation recorded before
+    /// the flag existed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tool_calls_incomplete: bool,
     #[serde(default)]
     pub duration_ms: u64,
     /// Exact model string reported by the provider CLI, when its result

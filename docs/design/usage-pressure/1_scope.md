@@ -10,7 +10,7 @@ type: design
 summary: "Scope: weight crew pool draws by how much of each provider account's usage window would expire unused, so Orbit spends the capacity that is about to reset before the capacity that is not"
 tags: [usage-pressure, crews, crew-pools, provider-limits, admission]
 last_updated: 2026-10-30
-last_validated: 2026-10-30
+last_validated: 2026-11-06
 ---
 
 # Scope: usage-pressure crew selection
@@ -38,7 +38,7 @@ Before this feature, the readings only removed crews; they did not prefer one.
 
 A second fact shaped the fix. A task's pool crew was drawn **once, when the task was created**
 (`CreationCrewAssignment`, source `pool:<complexity>` or `purpose:<purpose>`, in
-[`candidates.rs`](../../../crates/orbit-core/src/application/job/crew_pools/candidates.rs)).
+[`candidate_assignment.rs`](../../../crates/orbit-core/src/application/job/crew_pools/candidate_assignment.rs)).
 Admission then kept that member "while it can run", in `unheld_task_crew_candidates`, and only
 re-drew when a hold or a limit removed it. A task filed on Tuesday could run on Friday with
 Tuesday's draw. Weighting the creation draw alone would weight it with days-old readings.
@@ -97,7 +97,7 @@ weekly readings also count. Every other window is ignored for pressure, the 5-ho
    and the other crews use their provider's default login.
 
 The existing usage-limit gate is untouched. It still removes a crew whose window of any length
-reaches `provider_limit_max_used_pct`, before pressure weights what is left.
+reaches the provider-limit threshold (90%, or its `provider_limit_overrides` entry), before pressure weights what is left.
 
 ### Effective weight
 
@@ -132,7 +132,7 @@ spend**, from the same provider-limit observations that gating reads.
 2. **Creation still draws.** The creation draw keeps its role: OS routing, `runs_on`, and a crew
    to show before the task runs. It uses pressure too, but admission makes the final choice.
 3. **Other pool draws share the seam.** Activity pools, review crew pools, finding-verification
-   partitions and agent explore all call `weighted_draw`. They take the same multiplier through
+   partitions (removed in [ORB-22844]) and agent explore all call `weighted_draw`. They take the same multiplier through
    one helper applied after limit narrowing, so no draw site computes pressure on its own.
 4. **Pull drains.** A follower spends its own login ([ORB-16324]). The owner must never weigh a
    follower's run with the owner's readings. On a claimed leaf, the follower re-draws eligible
@@ -145,11 +145,10 @@ spend**, from the same provider-limit observations that gating reads.
 ```toml
 [workflow]
 crew_selection = "usage_pressure"   # "static" (default until rollout) | "usage_pressure"
-usage_pressure_cap = 8              # 1 disables in effect; bounds the multiplier both ways
-usage_pressure_strength = 1.0       # exponent; 0 disables
 ```
 
-These are `workflow.*` keys and can be overridden per workspace, like `provider_limit_*`.
+[ORB-22808] fixed `cap` at 8 and `strength` at 1 and removed their keys
+(`usage_pressure_cap`, `usage_pressure_strength`). `crew_selection` is a `workflow.*` key and can be overridden per workspace, like `provider_limit_*`.
 Readings stay per host.
 
 ### Surfaces

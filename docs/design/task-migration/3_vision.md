@@ -41,14 +41,18 @@ other extensions below remain open; the import policy itself is implemented.
    diverge. Where does that guard live: the store (prefix ≠ local ⇒ refuse
    write), or each surface?
 4. **Cross-host relations.** A `DANI-*` task may `depends_on` an `ORB-*` task.
-   Import must preserve foreign target ids verbatim (no renumbering), and the
+   Import preserves foreign target ids verbatim (no renumbering), and the
    dependent is only dispatchable once its target's mirror has landed — so the
-   sync order is pull-then-push. Is a dangling foreign relation an error, a
-   warning, or normal transient state?
+   sync order is pull-then-push. The shipped import rejects an unresolved target
+   under a prefix known to the registry (or registered by this import); an
+   unknown foreign-prefix target may dangle until its mirror arrives. Should
+   surfaces make that transient state more visible?
 5. **Frictions and learnings.** Only the task registry is in scope for
-   [ORB-12126]. The global frictions store has the same two-writer shape; the
-   docs corpus does not (it is git). Do frictions get the same prefix-ownership
-   treatment, or a simpler append-only merge?
+   [ORB-12126]. Friction rows live in a host-global store partitioned by
+   workspace, with `(workspace_id, friction_id)` identity; they do not use the
+   task registry's per-host prefix ownership. The docs corpus is versioned in
+   Git. Any future cross-host synchronization for frictions needs its own
+   authority and merge contract.
 6. **Idempotency proof.** *Answered for now:* the shipped policy reuses the
    byte-identical bundle comparison, so a second identical run reports every
    task `already-present` and writes no `.idmap.json`. Open only at scale: does

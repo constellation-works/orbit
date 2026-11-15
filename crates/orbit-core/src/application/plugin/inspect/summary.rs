@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_tools::plugin::{LoadedPlugin, PluginProgramStatus, program_statuses};
+use orbit_tools::plugin::{
+    LoadedPlugin, PluginProgramStatus, mark_resolution_drift, program_statuses,
+};
 use orbit_types::plugin::{
     InstalledPlugin, PluginBuildRecord, PluginDisabledLayer, PluginExecutionKind, PluginGrant,
     PluginSandbox, PluginStatus, plugin_tool_name,
@@ -299,12 +301,15 @@ pub(in crate::application::plugin) fn summary_for_installed(
         }),
         programs: plugin
             .map(|plugin| {
-                program_statuses(
+                let mut programs = program_statuses(
                     &plugin.manifest.spec.requires.programs,
                     &recorded_program_paths(global_root, &installed.name),
                     global_root,
                     &plugin_state_dir(global_root, &installed.name),
-                )
+                );
+                // Inspection reads the operator's PATH; the call path never does.
+                mark_resolution_drift(&mut programs, std::env::var_os("PATH").as_deref());
+                programs
             })
             .unwrap_or_default(),
         tools,

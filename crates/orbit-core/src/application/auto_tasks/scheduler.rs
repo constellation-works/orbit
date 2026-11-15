@@ -12,10 +12,12 @@ pub use orbit_automation::auto_tasks::scheduler::{
 use orbit_automation::condition::GuardVerdict;
 use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskStatus};
-use orbit_types::workflow::{AutoTaskDefinition, SkipIfUnchanged, auto_task_tag};
+use orbit_types::workflow::{
+    AutoTaskAcceptedHistory, AutoTaskDefinition, SkipIfUnchanged, auto_task_tag,
+};
 use std::path::PathBuf;
 
-use crate::application::automation::SourceCache;
+use crate::application::automation::{AutomationAutoTaskPort, SourceCache};
 use crate::application::plugin::InactivePlugin;
 
 struct CachedDispatch<'a> {
@@ -45,83 +47,11 @@ impl AutoTaskDispatch for CachedDispatch<'_> {
         dry_run: bool,
         now: DateTime<Utc>,
     ) -> Result<orbit_automation::condition::ConditionDiagnostic, OrbitError> {
-        self.runtime.evaluate_condition(definition, dry_run, now)
-    }
-
-    fn evaluate_guard(&self, definition: &AutoTaskDefinition, now: DateTime<Utc>) -> GuardVerdict {
-        self.runtime.evaluate_guard(definition, now)
-    }
-
-    fn definition_root(&self) -> PathBuf {
-        self.runtime.definition_root()
-    }
-
-    fn state_dir(&self) -> PathBuf {
-        self.runtime.state_dir()
-    }
-
-    fn has_open_instance(
-        &self,
-        definition: &AutoTaskDefinition,
-    ) -> Result<Option<String>, OrbitError> {
-        self.runtime.has_open_instance(definition)
-    }
-
-    fn mint_task(&self, definition: &AutoTaskDefinition) -> Result<String, OrbitError> {
-        self.runtime.mint_task(definition)
-    }
-
-    fn skip_reason(&self, definition: &AutoTaskDefinition) -> Option<InactivePluginSkip> {
-        self.runtime.skip_reason(definition)
-    }
-
-    fn probe_change_since_last_sweep(
-        &self,
-        definition: &AutoTaskDefinition,
-        precondition: &SkipIfUnchanged,
-    ) -> Result<ChangeProbe, OrbitError> {
-        self.runtime
-            .probe_change_since_last_sweep(definition, precondition)
-    }
-
-    fn probe_blocked_candidates(
-        &self,
-        definition: &AutoTaskDefinition,
-        now: DateTime<Utc>,
-    ) -> Result<BlockedCandidateProbe, OrbitError> {
-        self.runtime.probe_blocked_candidates(definition, now)
-    }
-}
-
-/// One definition as a list surface shows it.
-#[derive(Debug, Clone)]
-pub struct ListedAutoTask {
-    pub definition: AutoTaskDefinition,
-    /// The plugin that parks this definition here; `None` when it is live or
-    /// user-authored.
-    pub inactive_plugin: Option<InactivePlugin>,
-    /// The operator-facing reason, set exactly when `inactive_plugin` is.
-    pub skipped_reason: Option<String>,
-}
-
-impl AutoTaskDispatch for OrbitRuntime {
-    fn evaluate_delivery(
-        &self,
-        definition: &AutoTaskDefinition,
-        dry_run: bool,
-        now: DateTime<Utc>,
-    ) -> Result<orbit_types::workflow::automation::AutomationDiagnostic, OrbitError> {
-        crate::application::automation::evaluate_auto_task(self, definition, dry_run, now)
-    }
-
-    fn evaluate_condition(
-        &self,
-        definition: &AutoTaskDefinition,
-        dry_run: bool,
-        now: DateTime<Utc>,
-    ) -> Result<orbit_automation::condition::ConditionDiagnostic, OrbitError> {
         crate::application::automation::condition::evaluate_auto_task_condition(
-            self, definition, dry_run, now,
+            self.runtime,
+            definition,
+            dry_run,
+            now,
         )
     }
 
@@ -134,7 +64,7 @@ impl AutoTaskDispatch for OrbitRuntime {
             return GuardVerdict::Open;
         };
         crate::application::automation::condition::evaluate_guard(
-            self,
+            self.runtime,
             when,
             "schedule.when",
             orbit_automation::condition::ConditionCarrier::AutoTask,
@@ -143,33 +73,36 @@ impl AutoTaskDispatch for OrbitRuntime {
     }
 
     fn definition_root(&self) -> PathBuf {
-        self.paths().local_dir.clone()
+        self.runtime.paths().local_dir.clone()
     }
 
     fn state_dir(&self) -> PathBuf {
-        self.paths().state_dir.clone()
+        self.runtime.paths().state_dir.clone()
     }
 
     fn has_open_instance(
         &self,
         definition: &AutoTaskDefinition,
     ) -> Result<Option<String>, OrbitError> {
-        open_auto_task_instance(self, definition)
+        open_auto_task_instance(self.runtime, definition)
     }
 
     fn mint_task(&self, definition: &AutoTaskDefinition) -> Result<String, OrbitError> {
-        mint_task(self, definition).map(|task| task.id)
+        mint_task(self.runtime, definition).map(|task| task.id)
     }
 
     fn skip_reason(&self, definition: &AutoTaskDefinition) -> Option<InactivePluginSkip> {
-        self.auto_task_inactive_plugin(definition).map(|inactive| {
-            let reason = inactive.reason(&self.auto_task_definition_path(definition), None);
-            InactivePluginSkip {
-                plugin: inactive.namespace,
-                version: inactive.version,
-                reason,
-            }
-        })
+        self.runtime
+            .auto_task_inactive_plugin(definition)
+            .map(|inactive| {
+                let reason =
+                    inactive.reason(&self.runtime.auto_task_definition_path(definition), None);
+                InactivePluginSkip {
+                    plugin: inactive.namespace,
+                    version: inactive.version,
+                    reason,
+                }
+            })
     }
 
     fn probe_change_since_last_sweep(
@@ -177,7 +110,7 @@ impl AutoTaskDispatch for OrbitRuntime {
         _definition: &AutoTaskDefinition,
         precondition: &SkipIfUnchanged,
     ) -> Result<ChangeProbe, OrbitError> {
-        super::change_probe::probe_change_since_last_sweep(self, precondition)
+        super::change_probe::probe_change_since_last_sweep(self.runtime, precondition)
     }
 
     fn probe_blocked_candidates(
@@ -185,7 +118,7 @@ impl AutoTaskDispatch for OrbitRuntime {
         _definition: &AutoTaskDefinition,
         now: DateTime<Utc>,
     ) -> Result<BlockedCandidateProbe, OrbitError> {
-        let views = self.blocked_triage_view(now)?;
+        let views = self.runtime.blocked_triage_view(now)?;
         let task_ids = views
             .iter()
             .filter(|view| {
@@ -206,7 +139,26 @@ impl AutoTaskDispatch for OrbitRuntime {
     }
 }
 
+/// One definition as a list surface shows it.
+#[derive(Debug, Clone)]
+pub struct ListedAutoTask {
+    pub definition: AutoTaskDefinition,
+    /// The plugin that parks this definition here; `None` when it is live or
+    /// user-authored.
+    pub inactive_plugin: Option<InactivePlugin>,
+    /// The operator-facing reason, set exactly when `inactive_plugin` is.
+    pub skipped_reason: Option<String>,
+}
+
 impl OrbitRuntime {
+    /// The latest result `name`'s declared completion contract accepted. A task
+    /// that merely finished never appears here, including a successful probe
+    /// whose evidence the contract does not accept. No accepted result and an
+    /// unreadable history are different answers.
+    pub fn auto_task_accepted_history(&self, name: &str) -> AutoTaskAcceptedHistory {
+        super::completion::accepted_history(self, name)
+    }
+
     /// The plugin that makes `definition` inactive in this workspace, if any:
     /// the one rule both the scheduler's skip and every listing's default
     /// hiding read.
@@ -285,6 +237,48 @@ impl OrbitRuntime {
         definition: &AutoTaskDefinition,
     ) -> Result<Option<String>, OrbitError> {
         open_auto_task_instance(self, definition)
+    }
+}
+
+/// The catalog reads automation makes, forwarded to this module's policy and
+/// discovery [ORB-23334]: `auto_tasks` sits above `automation`.
+impl AutomationAutoTaskPort for OrbitRuntime {
+    fn listed_auto_task_definitions(&self) -> Result<Vec<AutoTaskDefinition>, OrbitError> {
+        Ok(self
+            .auto_task_listing(false)?
+            .into_iter()
+            .map(|listed| listed.definition)
+            .collect())
+    }
+
+    fn validated_auto_task_definition(
+        &self,
+        name: &str,
+    ) -> Result<Option<AutoTaskDefinition>, OrbitError> {
+        self.auto_task_show(name)
+    }
+
+    fn auto_task_discovery_path(&self, name: &str) -> Result<Option<PathBuf>, OrbitError> {
+        Ok(self.auto_task_read_source(name)?.map(|(_, path)| path))
+    }
+
+    fn auto_task_completion_history(&self, name: &str) -> AutoTaskAcceptedHistory {
+        self.auto_task_accepted_history(name)
+    }
+
+    fn open_auto_task_instance_id(
+        &self,
+        definition: &AutoTaskDefinition,
+    ) -> Result<Option<String>, OrbitError> {
+        open_auto_task_instance(self, definition)
+    }
+
+    fn auto_task_template_task_params(&self, definition: &AutoTaskDefinition) -> TaskAddParams {
+        template_params(self, definition)
+    }
+
+    fn auto_task_mint_task_params(&self, definition: &AutoTaskDefinition) -> TaskAddParams {
+        mint_params(self, definition)
     }
 }
 
@@ -370,6 +364,11 @@ pub(crate) fn run_auto_task_scheduler_with_cache(
     options: SchedulerOptions,
     cache: &SourceCache,
 ) -> Result<AutoTaskSchedulerOutcome, OrbitError> {
+    // Definitions that still name pre-family tools are rewritten before the
+    // pass loads them [ORB-23552].
+    if !options.dry_run {
+        runtime.heal_local_auto_task_tool_names_best_effort();
+    }
     orbit_automation::auto_tasks::scheduler::run_auto_task_scheduler_at(
         &CachedDispatch { runtime, cache },
         now,
@@ -435,8 +434,19 @@ pub(crate) fn template_params(
     definition: &AutoTaskDefinition,
 ) -> TaskAddParams {
     let template = &definition.template;
-    let mut tags = template.tags.clone();
+    let mut tags = orbit_types::task::normalize_task_tags(template.tags.clone());
     tags.push(auto_task_tag(&definition.name));
+    // Workspace forks keep their old body across upgrades. Apply the pilot
+    // gate here as well as in bundled YAML, using the tags task creation
+    // will persist. No-diff chores retain their existing admission path;
+    // explicit non-backlog statuses remain operator overrides.
+    let status = if template.status == TaskStatus::Backlog
+        && !tags.iter().any(|tag| tag == "no-diff-expected")
+    {
+        TaskStatus::Proposed
+    } else {
+        template.status
+    };
 
     TaskAddParams {
         title: template.title.clone(),
@@ -444,6 +454,9 @@ pub(crate) fn template_params(
         acceptance_criteria: template.acceptance_criteria.clone(),
         tags,
         required_tools: template.required_tools.clone(),
+        // The definition's operator grant; task creation records it in the
+        // minted task's history.
+        granted_tools: definition.granted_tools.clone(),
         context_files: template.context_files.clone(),
         priority: template.priority,
         // Legacy/custom definitions may omit an assessment. Preserve their
@@ -453,7 +466,7 @@ pub(crate) fn template_params(
             .complexity
             .unwrap_or(orbit_types::task::TaskComplexity::Unassessed),
         task_type: Some(template.task_type),
-        status: Some(template.status),
+        status: Some(status),
         // A template without a crew mints an unassigned task, which draws
         // from the complexity pool for its complexity; so does one still
         // naming the retired `system` crew [ORB-15663].

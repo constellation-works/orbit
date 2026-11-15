@@ -1,6 +1,6 @@
 // These live chips observe the selected host (the serving host unless the host
 // picker names another), independently of workspace scope.
-import { el, findRegisteredHost, getHost, getServingHost, hostDisplayName, isHostUnavailable } from './common.js';
+import { el, findRegisteredHost, getHost, getServingHost, hostDisplayName, infoHint, isHostUnavailable } from './common.js';
 import { renderProviderUsage } from './provider-usage.js';
 
 export { describeProviderReading, providerReadingAge, renderProviderUsage } from './provider-usage.js';
@@ -99,7 +99,8 @@ let ioReported = false;
 
 const NAMES = { cpu: 'Load', memory: 'Memory', disk: 'Disk', io: 'Disk I/O stall' };
 // Server defaults, used when a payload omits a mark. They match
-// workflow.resource_throttle.* so a tick is never a made-up threshold.
+// workflow.resource_throttle.* so a tick is never a made-up threshold; the
+// io marks are fixed server-side and never in the payload [ORB-22808].
 const MARK_DEFAULTS = {
   cpu: [85, 90], memory: [85, 90], disk: [85, 90], io: [10, 20],
 };
@@ -158,13 +159,6 @@ function worstAlarm(rows) {
     if (better) best = { row, rank, percent };
   }
   return best;
-}
-
-function sublabel(row) {
-  if (row.resource === 'cpu') return row.utilization ? 'busy time across cores' : '1-minute load ÷ online cores';
-  if (row.resource === 'memory') return 'used';
-  if (row.resource === 'disk') return row.path || 'used';
-  return 'time waiting on disk';
 }
 
 function setHidden(node, hidden) {
@@ -254,7 +248,7 @@ export function renderHostResources(payload, host = document.getElementById('hos
     : tone === 'elevated' ? `${named.charAt(0).toUpperCase()}${named.slice(1)} near limit`
     : 'Throttle open';
   renderHostWarning(alarm, tone);
-  renderHostDetail(payload, rows, verdict, tone, pill, compact, alarm);
+  renderHostDetail(payload, rows, verdict, tone, pill, alarm);
   bindHostDetail();
 }
 
@@ -274,20 +268,15 @@ function renderHostWarning(alarm, tone) {
   }
 }
 
-function renderHostDetail(payload, rows, verdict, tone, pill, compact, alarm) {
+function renderHostDetail(payload, rows, verdict, tone, pill, alarm) {
   const panel = document.getElementById('host-detail');
   if (!panel) return;
   const name = hostDisplayName();
   const resource = alarm?.row.resource;
-  const limits = resource ? marks(payload, resource) : null;
-  const plain = verdict.verdictUnknown
-    ? (compact ? `Last sample ${compact} ago. ` : '')
-    : verdict.status === 'disabled' ? 'Throttle disabled — pressure is still reported but holds nothing. '
-    : verdict.status === 'held' ? (alarm && limits ? `New tasks wait until ${alarm.row.label} drops below ${markText(payload, resource, limits.resume)}. ` : 'New tasks wait while sustained pressure holds. ')
-    : tone === 'critical' ? `Admission is still open; ${alarm.row.label} reads critical but no sustained pressure is holding work yet. `
-    : tone === 'ok' ? 'Nothing is held back on this host. '
-    : `Admission is still open; ${alarm.row.label} is between ${markText(payload, resource, limits.resume)} and its limit at ${markText(payload, resource, limits.high)}. `;
-  const foot = `${plain}Throttle verdict: ${verdict.status}. ${verdict.reason}`;
+  // The pill states the verdict; the foot adds only what ends a hold.
+  const heldUntil = verdict.status !== 'held' ? ''
+    : resource ? `New tasks wait until ${alarm.row.label} drops below ${markText(payload, resource, marks(payload, resource).resume)}.`
+    : 'New tasks wait while sustained pressure holds.';
   const link = el('a', { class: 'host-detail-drain', text: 'Open Tasks dock' });
   link.setAttribute('href', '#tasks?dock=drain');
   panel.className = `host-detail ${tone}`;
@@ -298,14 +287,22 @@ function renderHostDetail(payload, rows, verdict, tone, pill, compact, alarm) {
     el('div', { class: 'host-detail-head' }, [
       el('span', { class: 'host-detail-name', id: 'host-detail-name', text: name }),
       el('span', { class: `host-detail-pill ${tone}`, text: pill }),
+      infoHint(verdict.reason),
       el('span', { class: 'host-detail-age', text: verdict.age === 'age unknown' ? 'age unknown' : `sampled ${verdict.age}` }),
     ]),
     ...rows.map(row => detailRow(payload, row)),
     el('div', { class: 'host-detail-foot' }, [
-      el('span', { class: 'host-detail-foot-text', text: foot }),
+      ...(heldUntil ? [el('span', { class: 'host-detail-foot-text', text: heldUntil })] : []),
       link,
     ]),
   );
+}
+
+// The disk reading is the fullest of the host's watched paths, so its hint says
+// which path that is rather than leaving a bare path to explain itself.
+function detailHint(row) {
+  if (row.resource !== 'disk' || !row.path || row.value === '-') return row.detail;
+  return `Fullest watched path: ${row.path}\n${row.percent.toFixed(1)}% used (${row.severity})`;
 }
 
 function detailRow(payload, row) {
@@ -318,11 +315,10 @@ function detailRow(payload, row) {
   const node = el('div', { class: `host-detail-row ${row.severity}` }, [
     el('div', { class: 'host-detail-row-head' }, [
       el('span', { class: 'host-detail-label', text: row.utilization ? 'CPU utilization' : NAMES[row.resource] }),
-      el('span', { class: 'host-detail-sub', text: sublabel(row) }),
+      infoHint(detailHint(row)),
       el('span', { class: 'host-detail-value', text: row.shown }),
     ]),
     meter,
-    el('p', { class: 'host-detail-read', text: row.detail }),
   ]);
   node.dataset.resource = row.resource;
   return node;
@@ -444,7 +440,13 @@ let selectedRead = null;
 const resourceTarget = row => row ? JSON.stringify([row.machine_id, row.ssh || null]) : null;
 export async function fetchHostResourcePayload() {
   const host = getHost();
-  const read = { host, target: resourceTarget(host ? findRegisteredHost(host) : getServingHost()), pending: true, at: 0 };
+  const target = resourceTarget(host ? findRegisteredHost(host) : getServingHost());
+  // Concurrent callers for the same host join the read in flight
+  // instead of each issuing their own /host/resources request.
+  if (selectedRead?.pending && selectedRead.host === host && selectedRead.target === target) {
+    return selectedRead.promise;
+  }
+  const read = { host, target, pending: true, at: 0 };
   selectedRead = read;
   read.promise = fetchHostResourcePayloadFor(read.host);
   try {
@@ -466,6 +468,7 @@ const PUSHED_SAMPLE_TTL_MS = 12_000;
 
 function showHostResources(payload) {
   lastPayload = payload;
+  expiredAgeRendered = false;
   receivedAt = Date.now();
   renderHostResources(payload);
   renderProviderUsage(payload);
@@ -482,20 +485,41 @@ export function applyPushedHostResources(payload) {
   showHostResources(payload);
 }
 
-export async function fetchAndRenderHostResources() {
-  const current = ++sequence;
-  try {
-    const payload = await fetchHostResourcePayload();
-    if (current === sequence) showHostResources(payload);
-  } catch (error) {
-    if (current === sequence) {
-      lastPayload = null;
-      renderHostResources(null);
-      renderProviderUsage(null);
-      for (const listener of listeners) listener(null);
-    }
-    throw error;
+// The dashboard refresh tick and the chips' own 5s timer can land on
+// the same tick. A caller may opt into sharing (shareRecent) the read
+// already in flight, or completed within the last second — the window
+// fetchHostResourcePayloadFor already grants the Hosts view — instead
+// of issuing a second /host/resources request for the same tick. The
+// default, used by the chips' timer and direct callers, always reads
+// fresh, and a non-poll dashboard refresh does the same.
+let renderRead = null;
+
+export function fetchAndRenderHostResources({ shareRecent = false } = {}) {
+  if (shareRecent && renderRead
+    && (renderRead.pending || Date.now() - renderRead.at < 1000)) {
+    return renderRead.promise;
   }
+  const current = ++sequence;
+  const read = { pending: true, at: 0, promise: null };
+  read.promise = (async () => {
+    try {
+      const payload = await fetchHostResourcePayload();
+      if (current === sequence) showHostResources(payload);
+    } catch (error) {
+      if (current === sequence) {
+        lastPayload = null;
+        renderHostResources(null);
+        renderProviderUsage(null);
+        for (const listener of listeners) listener(null);
+      }
+      throw error;
+    } finally {
+      read.pending = false;
+      read.at = Date.now();
+    }
+  })();
+  renderRead = read;
+  return read.promise;
 }
 
 /// Forget the last reading when the selected host changes, so one host's
@@ -503,13 +527,29 @@ export async function fetchAndRenderHostResources() {
 /// the previous host is dropped with it.
 export function resetHostResources() {
   sequence += 1;
+  expiredAgeRendered = false;
   pushedAt = 0;
+  renderRead = null;
   selectedRead = null;
   ioReported = false;
   lastPayload = null;
   renderHostResources(null);
   renderProviderUsage(null);
   for (const listener of listeners) listener(null);
+}
+
+// Update only the age readings in place, so a focused node inside the host
+// detail dialog survives the 1s ticker.
+let expiredAgeRendered = false;
+function updateHostAgeInPlace(payload) {
+  const verdict = hostVerdict(payload);
+  const detailAge = document.querySelector?.('#host-detail .host-detail-age');
+  if (detailAge) detailAge.textContent = verdict.age === 'age unknown' ? 'age unknown' : `sampled ${verdict.age}`;
+  if (verdict.verdictUnknown) {
+    const compact = ageCompact(payload);
+    const blockText = document.querySelector?.('#host-block .host-block-verdict-text');
+    if (blockText) blockText.textContent = compact ? `stale · ${compact}` : 'unknown';
+  }
 }
 
 export function initHostResources() {
@@ -526,8 +566,16 @@ export function initHostResources() {
     if (!lastPayload || document.hidden) return;
     const age = lastPayload.sample_age_seconds + (Date.now() - receivedAt) / 1000;
     const expired = age > lastPayload.max_age_seconds;
-    renderHostResources({ ...lastPayload, sample_age_seconds: age, stale: lastPayload.stale || expired,
+    const aged = { ...lastPayload, sample_age_seconds: age, stale: lastPayload.stale || expired,
       verdict_unknown: expired, throttle: expired ? false : lastPayload.throttle,
-      reason: expired ? 'Resource sample expired; awaiting a fresh verdict' : lastPayload.reason });
+      reason: expired ? 'Resource sample expired; awaiting a fresh verdict' : lastPayload.reason };
+    if (expired && !expiredAgeRendered) {
+      // One full render marks the sample stale; later ticks age it in place.
+      expiredAgeRendered = true;
+      renderHostResources(aged);
+    } else {
+      if (!expired) expiredAgeRendered = false;
+      updateHostAgeInPlace(aged);
+    }
   }, 1000);
 }

@@ -39,6 +39,7 @@ impl Execute for DecisionCommand {
         match spec.verb {
             DecisionVerb::List
             | DecisionVerb::Show
+            | DecisionVerb::Raise
             | DecisionVerb::Submit
             | DecisionVerb::Digest => {
                 let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
@@ -91,7 +92,70 @@ impl Execute for DecisionCommand {
                 ))];
                 Ok(Payload::blocks(value, blocks).into())
             }
+            DecisionVerb::Reverse => {
+                let id = required(&input, "id")?;
+                let actor = operator_label(runtime);
+                let request = runtime.reverse_decision_answer(&id, &actor)?;
+                let value = serde_json::to_value(&request).map_err(|error| {
+                    OrbitError::Execution(format!("serialize decision request: {error}"))
+                })?;
+                let blocks = vec![Block::text(format!(
+                    "Re-opened {}; the request on {} now reads {}.",
+                    request.id,
+                    request.task_id,
+                    request.state.as_str(),
+                ))];
+                Ok(Payload::blocks(value, blocks).into())
+            }
+            DecisionVerb::RuleAuto => {
+                let rule = required(&input, "rule")?;
+                let setting = required(&input, "auto")?;
+                let auto = match setting.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    other => {
+                        return Err(OrbitError::InvalidInput(format!(
+                            "`auto` must be on or off, not `{other}`"
+                        )));
+                    }
+                };
+                let actor = operator_label(runtime);
+                runtime.set_decision_rule_auto(&rule, auto, &actor)?;
+                let value = serde_json::json!({ "rule": rule, "auto": auto });
+                let word = if auto { "on" } else { "off" };
+                let blocks = vec![Block::text(format!("Set auto {word} on `{rule}`."))];
+                Ok(Payload::blocks(value, blocks).into())
+            }
+            DecisionVerb::Consolidate => {
+                let since = input.get("since").and_then(Value::as_str);
+                let value = runtime.consolidate_decision_precedent(since)?;
+                let count = value.get("count").and_then(Value::as_u64).unwrap_or(0);
+                let paths = value
+                    .get("proposals")
+                    .and_then(Value::as_array)
+                    .map(|proposals| {
+                        proposals
+                            .iter()
+                            .filter_map(|proposal| proposal.get("path").and_then(Value::as_str))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default();
+                let blocks = vec![Block::text(format!(
+                    "Proposed {count} corpus file(s). Nothing was written. Open a pull request with these proposals; do not edit a rule outside that pull request.\n{paths}"
+                ))];
+                Ok(Payload::blocks(value, blocks).into())
+            }
         }
+    }
+}
+
+fn operator_label(runtime: &OrbitRuntime) -> String {
+    let label = runtime.actor_label().trim();
+    if label.is_empty() {
+        "human".to_string()
+    } else {
+        label.to_string()
     }
 }
 
@@ -212,6 +276,8 @@ fn list_blocks(value: &Value) -> Vec<Block> {
         Column::new("TASK").fixed(),
         Column::new("GATE").fixed(),
         Column::new("STATE").fixed(),
+        Column::new("RISK").fixed(),
+        Column::new("CATEGORY"),
         Column::new("ANSWERS"),
         Column::new("EXPIRES").fixed(),
     ])
@@ -229,6 +295,8 @@ fn list_blocks(value: &Value) -> Vec<Block> {
             text(&request["task_id"]),
             text(&request["gate"]),
             text(&request["state"]),
+            text(&request["risk_tier"]),
+            text(&request["category"]),
             answers,
             text(&request["expires_at"]),
         ]);
@@ -257,7 +325,7 @@ fn digest_blocks(value: &Value) -> Vec<Block> {
 
 fn show_blocks(value: &Value) -> Vec<Block> {
     let mut out = format!(
-        "{} ({}, {})\ntask {} · raised by {} at {} · expires {}",
+        "{} ({}, {})\ntask {} · raised by {} at {} · expires {}\nrisk: {} · category: {}",
         text(&value["id"]),
         text(&value["gate"]),
         text(&value["state"]),
@@ -265,6 +333,8 @@ fn show_blocks(value: &Value) -> Vec<Block> {
         text(&value["raised_by"]),
         text(&value["raised_at"]),
         text(&value["expires_at"]),
+        text(&value["risk_tier"]),
+        text(&value["category"]),
     );
     for (index, answer) in value["answers"]
         .as_array()
@@ -274,15 +344,22 @@ fn show_blocks(value: &Value) -> Vec<Block> {
     {
         let _ = write!(
             out,
-            "\n{}. {} (`{}`) — {}",
+            "\n{}. {} (`{}`; {}) — {}",
             index + 1,
             text(&answer["label"]),
             text(&answer["id"]),
+            text(&answer["risk_tier"]),
             text(&answer["consequence"]),
         );
     }
+    if let Some(topic) = value.get("topic").filter(|value| !value.is_null()) {
+        let _ = write!(out, "\ntopic: {}", text(topic));
+    }
     if let Some(binding) = value.get("binding") {
         let _ = write!(out, "\nbinding: {binding}");
+    }
+    if let Some(grant) = value.get("script_grant").filter(|value| value.is_object()) {
+        script_grant_section(&mut out, grant);
     }
     if let Some(resolution) = value.get("resolution").filter(|value| !value.is_null()) {
         let _ = write!(
@@ -295,8 +372,59 @@ fn show_blocks(value: &Value) -> Vec<Block> {
         if let Some(note) = resolution["note"].as_str() {
             let _ = write!(out, "\nnote: {note}");
         }
+        if let Some(model) = resolution.get("model").filter(|value| !value.is_null()) {
+            let _ = write!(
+                out,
+                "\nmodel: probability {} (threshold {}), {} cited precedent(s), category {}",
+                model["probability"],
+                model["threshold"],
+                model["cited_precedents"].as_array().map_or(0, Vec::len),
+                text(&model["category"]),
+            );
+            match resolution
+                .get("confirmation")
+                .filter(|value| !value.is_null())
+            {
+                Some(confirmation) => {
+                    let _ = write!(
+                        out,
+                        "\nconfirmed by {}",
+                        text(&confirmation["confirmed_by"])
+                    );
+                }
+                None => out.push_str("\nunconfirmed model answer"),
+            }
+        }
     }
     vec![Block::text(out)]
+}
+
+/// What a `script_grant` answer consents to: the script, both digests, the
+/// refusal, requested against granted capabilities and the diff to review.
+fn script_grant_section(out: &mut String, grant: &Value) {
+    let _ = write!(
+        out,
+        "\nscript: {} (entry {})\ndigest: {} (granted: {})\nrefusal: {} — {}\nrequested: {}\ngranted: {}",
+        text(&grant["name"]),
+        text(&grant["entry"]),
+        text(&grant["digest"]),
+        grant["granted_digest"].as_str().unwrap_or("none"),
+        text(&grant["refusal"]),
+        text(&grant["refusal_message"]),
+        grant["requested"],
+        if grant["granted"].is_null() {
+            "none".to_string()
+        } else {
+            grant["granted"].to_string()
+        },
+    );
+    let diff = text(&grant["diff"]);
+    if !diff.is_empty() {
+        let _ = write!(out, "\ndiff:\n{}", diff.trim_end());
+    }
+    if grant["diff_truncated"].as_bool() == Some(true) {
+        out.push_str("\n(diff truncated)");
+    }
 }
 
 fn text(value: &Value) -> String {

@@ -195,8 +195,54 @@ impl WindowBoundaryTokens {
             .map_or(usize::MAX, |end| end.saturating_sub(window_start));
         let from = start.saturating_sub(offset).min(bytes.len());
         let to = end.saturating_sub(offset).min(bytes.len());
-        &bytes[from.min(to)..to]
+        trim_partial_utf8(&bytes[from.min(to)..to])
     }
+}
+
+fn is_utf8_continuation(byte: u8) -> bool {
+    (byte & 0xC0) == 0x80
+}
+
+fn utf8_sequence_len(lead: u8) -> Option<usize> {
+    match lead {
+        0x00..=0x7F => Some(1),
+        0xC2..=0xDF => Some(2),
+        0xE0..=0xEF => Some(3),
+        0xF0..=0xF4 => Some(4),
+        _ => None,
+    }
+}
+
+/// Drop a partial UTF-8 character at either edge of a byte cut.
+///
+/// A cut through a valid character would otherwise be lossily decoded as
+/// U+FFFD, a character the source never contained. Only the incomplete
+/// character is dropped; source coordinates and counts are computed by the
+/// callers from the original bytes, so they are unaffected. Genuinely invalid
+/// bytes (no valid lead byte) are left for the lossy decoder.
+pub(super) fn trim_partial_utf8(bytes: &[u8]) -> &[u8] {
+    let mut start = 0;
+    while start < bytes.len() && start < 3 && is_utf8_continuation(bytes[start]) {
+        start += 1;
+    }
+    let mut end = bytes.len();
+    if end > start {
+        let mut index = end;
+        let mut scanned = 0;
+        while index > start && scanned < 4 {
+            index -= 1;
+            scanned += 1;
+            if !is_utf8_continuation(bytes[index]) {
+                if let Some(len) = utf8_sequence_len(bytes[index])
+                    && index + len > end
+                {
+                    end = index;
+                }
+                break;
+            }
+        }
+    }
+    &bytes[start..end.max(start)]
 }
 
 /// Whether `adjacent` belongs to the same whitespace-delimited token as the
@@ -213,7 +259,7 @@ pub(super) fn cut_continues_token(adjacent: Option<u8>) -> bool {
 /// neither window matches. Removing the partial token leaves every complete
 /// token in the window for `redact_all`.
 pub(super) fn excerpt_without_partial_suffix(bytes: &[u8], cut_token: bool) -> String {
-    let text = String::from_utf8_lossy(bytes);
+    let text = String::from_utf8_lossy(trim_partial_utf8(bytes));
     if !cut_token {
         return text.into_owned();
     }
@@ -229,7 +275,7 @@ pub(super) fn excerpt_without_partial_suffix(bytes: &[u8], cut_token: bool) -> S
 /// Drop a token split by the start of the retained tail. See
 /// [`excerpt_without_partial_suffix`].
 pub(super) fn excerpt_without_partial_prefix(bytes: &[u8], cut_token: bool) -> String {
-    let text = String::from_utf8_lossy(bytes);
+    let text = String::from_utf8_lossy(trim_partial_utf8(bytes));
     if !cut_token {
         return text.into_owned();
     }
@@ -251,7 +297,7 @@ pub(super) fn excerpt_without_partial_prefix(bytes: &[u8], cut_token: bool) -> S
 /// reset before that token drops the lookbehind, so ordinary text after a
 /// long non-credential span stays readable.
 pub(super) fn excerpt_without_orphaned_tail_token(bytes: &[u8], lookbehind: &[u8]) -> String {
-    let text = String::from_utf8_lossy(bytes);
+    let text = String::from_utf8_lossy(trim_partial_utf8(bytes));
     let continues = cut_continues_token(lookbehind.last().copied());
     if continues && !text.contains(char::is_whitespace) {
         return String::new();

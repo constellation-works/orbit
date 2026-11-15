@@ -206,11 +206,173 @@ fn a_step_inserted_before_apply_does_not_move_what_settles_a_member() {
     assert_assessed(&workspace, &attempt, &task);
 }
 
+/// A one-task partition whose assessment the apply rejects — empty
+/// `context_files` without a `verified_no_diff`/`host_operational`
+/// disposition — in both the first apply and the targeted repair apply:
+/// the guard records the run held (not failed) and the unresolved task
+/// stays held for the operator instead of being assessed or re-pending
+/// [ORB-24083].
+fn a_one_task_apply_rejected_after_repair_is_held_not_failed() {
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    let task = workspace.task("rejected after repair");
+    let routine = pilot_routine();
+    let now = Utc::now();
+    evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
+    let attempt = workspace.admitted(&task, 2);
+    let run_id = start_run(&workspace, &attempt);
+
+    let prepared = prepare_claim(&workspace, &attempt);
+    let mut input = apply_input(&workspace, &prepared);
+    input["results"][0]["tasks"][0]["context_files_after"] = json!([]);
+    let first = claimed(&workspace, &attempt, "apply_task_pilot_results", input);
+    assert_eq!(first["status"], "failed", "{first}");
+    assert_eq!(first["applied_count"], 0, "{first}");
+    assert_eq!(first["unresolved_count"], 1, "{first}");
+    assert_eq!(first["repair_count"], 1, "{first}");
+    assert_eq!(first["task_outcomes"][0]["outcome"], "invalid", "{first}");
+    assert!(
+        first["task_outcomes"][0]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("may keep empty context_files")),
+        "{first}"
+    );
+    workspace.record_steps(&run_id, &[("prepare", &prepared), ("apply", &first)]);
+
+    let mut repair = apply_input(&workspace, &first["repair_prepared"]);
+    repair["results"][0]["tasks"][0]["context_files_after"] = json!([]);
+    repair["prior_applied_count"] = first["applied_count"].clone();
+    repair["carried_task_outcomes"] = first["non_repairable_outcomes"].clone();
+    let repaired = claimed(&workspace, &attempt, "apply_task_pilot_results", repair);
+    assert_eq!(repaired["status"], "failed", "{repaired}");
+    assert_eq!(repaired["applied_count"], 0, "{repaired}");
+    assert_eq!(repaired["unresolved_count"], 1, "{repaired}");
+    assert_eq!(
+        repaired["task_outcomes"][0]["outcome"], "invalid",
+        "{repaired}"
+    );
+
+    let guard = workspace.action(
+        "pipeline_success_guard",
+        json!({"context": "task-pilot targeted repair apply", "result": repaired}),
+    );
+    assert_eq!(guard["succeeded"], true, "{guard}");
+    assert_eq!(guard["held_count"], 1, "{guard}");
+    assert_eq!(guard["rejected_apply_held_count"], 1, "{guard}");
+
+    workspace.record_steps(
+        &run_id,
+        &[
+            ("repair_pilots", &first["repair_partitions"]),
+            ("apply_repairs", &repaired),
+        ],
+    );
+    finish_run(&workspace, &run_id);
+    evaluate_routine(
+        &workspace.runtime,
+        &routine,
+        false,
+        now + Duration::minutes(5),
+    )
+    .unwrap();
+    let members = workspace.routine_state().members.unwrap();
+    assert!(members.active.is_none(), "{members:?}");
+    assert!(!members.assessed.contains_key(&task.id), "{members:?}");
+    assert!(members.failed.contains_key(&task.id), "{members:?}");
+    assert!(
+        members.failed[&task.id].exhausted,
+        "the failed attempt is exhausted, so the task is held for the operator: {members:?}"
+    );
+    assert!(
+        workspace
+            .runtime
+            .get_task_history(&task.id)
+            .unwrap()
+            .iter()
+            .all(|entry| entry.event != "task_pilot_applied"),
+        "a rejected assessment writes no pilot receipt"
+    );
+}
+
+/// The guard still fails an apply that failed for another reason, and
+/// still passes the partial apply (applied > 0, unresolved > 0) as held
+/// [ORB-24083, ORB-21172].
+fn other_apply_failures_still_fail_and_partial_apply_still_holds() {
+    let workspace = Workspace::new();
+    let guard = |input: Value| {
+        workspace
+            .runtime
+            .run_deterministic(
+                "pipeline_success_guard",
+                &json!({}),
+                &input,
+                ToolContext::default(),
+            )
+            .map_err(|error| error.to_string())
+    };
+    let rejected = json!({
+        "status": "failed", "applied_count": 0, "unresolved_count": 1,
+        "error": "task-pilot apply unresolved: partition 0, task T: invalid: x; 0 applied, 1 unresolved",
+        "partition_decisions": [{
+            "partition_index": 0, "outcome": "failed", "applied_task_ids": [],
+            "task_outcomes": [{"task_id": "T", "outcome": "invalid", "error": "x"}],
+            "unresolved_count": 1,
+        }],
+        "task_outcomes": [{"task_id": "T", "outcome": "invalid", "error": "x"}],
+    });
+    // A failed partition whose task did not settle as `invalid`.
+    let mut failed_partition = rejected.clone();
+    failed_partition["partition_decisions"][0]["task_outcomes"][0]["outcome"] =
+        json!("apply_failed");
+    failed_partition["task_outcomes"][0]["outcome"] = json!("apply_failed");
+    assert!(
+        guard(json!({"result": failed_partition})).is_err(),
+        "a failed partition that is not an apply rejection still fails"
+    );
+    // A skipped (stale) partition.
+    let mut skipped = rejected.clone();
+    skipped["partition_decisions"][0]["outcome"] = json!("skipped_stale");
+    skipped["partition_decisions"][0]["task_outcomes"][0]["outcome"] = json!("stale");
+    skipped["task_outcomes"][0]["outcome"] = json!("stale");
+    assert!(
+        guard(json!({"result": skipped})).is_err(),
+        "a skipped partition still fails"
+    );
+    // A missing apply envelope.
+    let missing = json!({"status": "failed", "applied_count": 0, "unresolved_count": 1});
+    assert!(
+        guard(json!({"result": missing})).is_err(),
+        "a missing apply envelope still fails"
+    );
+    // No unresolved tasks.
+    let mut none_unresolved = rejected.clone();
+    none_unresolved["unresolved_count"] = json!(0);
+    assert!(
+        guard(json!({"result": none_unresolved})).is_err(),
+        "an apply with no unresolved tasks still fails"
+    );
+    // The existing partial apply still passes as held.
+    let mut partial = rejected.clone();
+    partial["applied_count"] = json!(1);
+    partial["unresolved_count"] = json!(1);
+    partial["partition_decisions"][0]["outcome"] = json!("partial");
+    partial["partition_decisions"][0]["applied_task_ids"] = json!(["U"]);
+    partial["task_outcomes"] = json!([
+        {"task_id": "U", "outcome": "applied", "error": null},
+        {"task_id": "T", "outcome": "invalid", "error": "x"},
+    ]);
+    let held = guard(json!({"result": partial})).expect("a partial apply is held");
+    assert_eq!(held["succeeded"], true, "{held}");
+    assert_eq!(held["held_count"], 1, "{held}");
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_state_pilot_whose_apply_requests_a_repair_settles_with_the_repair_apply_scenarios,
     a_state_pilot_whose_apply_requests_a_repair_settles_with_the_repair_apply,
-    a_step_inserted_before_apply_does_not_move_what_settles_a_member
+    a_step_inserted_before_apply_does_not_move_what_settles_a_member,
+    a_one_task_apply_rejected_after_repair_is_held_not_failed,
+    other_apply_failures_still_fail_and_partial_apply_still_holds
 );
 
 /// Delivery routines must settle a stopped job without coverage, including

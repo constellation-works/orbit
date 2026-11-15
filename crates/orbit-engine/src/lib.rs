@@ -3,6 +3,10 @@
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(
+    not(any(test, feature = "test-support")),
+    deny(clippy::disallowed_methods)
+)]
 //! v2 activity/job execution engine with template rendering and retry logic.
 //!
 //! Orchestrates the full lifecycle of running a v2 activity or job:
@@ -45,6 +49,7 @@ pub mod test_support {
     pub use crate::executor::automation::vcs::with_host_target_removal_hook;
     pub use crate::executor::automation::vcs::{
         with_prerequisite_clock, with_remote_probe_backoff, with_vcs_retry_wait,
+        with_worktree_setup_fetch_limits,
     };
 }
 mod condition;
@@ -64,19 +69,22 @@ pub use activity_job::{
     validate_job, validate_job_deterministic_actions,
 };
 pub use context::{
-    ClaimExecutionContext, CompletionObservationAdmission, CrewConfig, FinalRecoveryAdmission,
-    FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied, GeneratedPath,
-    HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate, PLUGIN_BROKER_ENV,
-    PluginBrokerHandle, PluginBrokerRun, PrAutoFixAdmission, PrAutoFixRequest, PrConfig,
-    RebaseRecoveryAttemptScope, ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
+    AGENT_STALL_MINUTES, AutoTaskAdmission, AutoTaskObservation, AutoTaskReadiness,
+    AutoTaskStepRequest, ClaimExecutionContext, CompletionObservationAdmission, CrewConfig,
+    FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
+    FinalRecoveryApplied, GeneratedPath, HandoffLandingContext, HandoffLandingStep,
+    HandoffLandingUpdate, PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun,
+    PrAutoFixAdmission, PrAutoFixRequest, PrConfig, RebaseRecoveryAttemptScope,
+    ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
     ReviewReportCorrectionRequest, ReviewerInvocationRequest, RuntimeHost,
     STEP_RECOVERY_DECISION_SCHEMA_VERSION, ScratchGcEntry, ScratchGcReport, ScriptStepEnd,
-    ScriptStepRan, ScriptStepRequest, ScriptStepRun, SteeringGateReading, SteeringRoundAdmission,
-    StepRecoveryAdmission, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
-    StepRecoveryDecisionSlot, StepRecoveryVerdict, TaskActivityUpdate, TaskAutomationUpdate,
-    UnlockedPathValidation, ValidatedTree, WORKFLOW_RUN_FAILED_EVENT,
-    WORKFLOW_RUN_INTERRUPTED_EVENT, WorktreeGcTaskLookup, baseline_red_hold_update,
-    blocked_workflow_failure_update, blocked_workflow_interruption_update,
+    ScriptStepOutputs, ScriptStepRan, ScriptStepRequest, ScriptStepRun, SteeringGateReading,
+    SteeringRoundAdmission, StepRecoveryAdmission, StepRecoveryDecisionRead,
+    StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, StepRecoveryVerdict, TaskActivityUpdate,
+    TaskAutomationUpdate, UnlockedPathValidation, ValidatedTree, WORKFLOW_RUN_FAILED_EVENT,
+    WORKFLOW_RUN_INTERRUPTED_EVENT, WORKTREE_PARKED_RECLAIM_AFTER_HOURS, WorktreeGcTaskLookup,
+    baseline_red_hold_update, blocked_workflow_failure_update,
+    blocked_workflow_interruption_update, blocked_workflow_owner_signoff_update,
 };
 pub use executor::automation::ci::log_signature as ci_log_signature;
 pub use executor::automation::ci::run_event as ci_run_event;
@@ -87,6 +95,7 @@ pub use executor::automation::vcs::claim::{
     observe_published_candidate, verify_handoff_pull_request_head,
 };
 pub use executor::automation::vcs::git::BaseSyncMode;
+pub use executor::automation::vcs::landing_wait_gate_cleared;
 pub use executor::automation::vcs::review_gate;
 pub use executor::automation::vcs::run_private_operation as run_private_vcs_operation;
 pub use executor::automation::vcs::{
@@ -98,3 +107,6 @@ pub use executor::automation::vcs::{
     run_worktree_has_reclaim_output, run_worktree_paths, validate_claim_new_paths,
     verify_claimed_known_red, verify_claimed_known_red_base,
 };
+pub use orbit_agent::provider_supports_continuity;
+
+pub use executor::automation::vcs::completion_hold::candidate_completion_hold;

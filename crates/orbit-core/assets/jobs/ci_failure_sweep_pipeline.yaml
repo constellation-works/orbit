@@ -14,7 +14,7 @@
 #   carrying that evidence inline. Filing is deduped against still-open tasks
 #   by failure key. Operator covered_by relations retain archived/rejected
 #   ownership while a task or PR cover is open; uncovered decisions hold for
-#   ci_failure.operator_suppression_hours (default 6). Every hold is reported
+#   6 hours. Every hold is reported
 #   with its key, reason, owner and cover/expiry, and is never piloted. A failure
 #   on a checkout containing a landed cover files a repair naming the failed fix.
 #   Equal normalized test signatures across jobs share one task listing all jobs.
@@ -50,6 +50,11 @@
 # - No GitHub client or no credentials on this host: `collect` reports
 #   `capability_unavailable` and `file` passes that through unchanged. That is
 #   never reported as a no-current-failure and is never a CI pass.
+# - GitHub rate-limited the host's account: `collect` stops reading at the
+#   first rate-limited answer and reports `rate_limited` with the reset, and
+#   `file` reports `deferred` with that `rate_limit`, so the sweep succeeds and
+#   records a `pipeline.run.deferred` row. A sweep before the reset reads
+#   nothing from GitHub and defers again.
 # - Errors are separated by blast radius. One that names a run defers only that
 #   finding: it is reported in `file`'s `deferred` list with its reasons and
 #   left for a later sweep, while every complete finding in the same snapshot
@@ -59,9 +64,13 @@
 #   `deferred_count` and the sweep succeeds; it records a
 #   `pipeline.run.deferred` audit row, which Incidents lists as `deferred`.
 #   That is never `no_current_failure`. One that names no run — a repository
-#   or listing read, a registration, dedupe, or task-creation failure — or a
-#   snapshot in which nothing else was complete enough to file, fails `file`
-#   with a bounded `retryable_error` payload. The job retry wrapper retries
+#   or listing read — leaves the whole snapshot in doubt, so `file` files
+#   nothing and reports `deferred` (stage `collection_or_investigation`,
+#   with the retryable errors and audit) and records a
+#   `pipeline.run.deferred` row for a later sweep to retry. A registration,
+#   dedupe, or task-creation failure, or a snapshot in which nothing else
+#   was complete enough to file, still fails `file` with a bounded
+#   `retryable_error` payload. The job retry wrapper retries
 #   the handoff; no current failure is consumed as a clean result.
 # - Bounded investigation makes progress across sweeps rather than re-spending
 #   its budget on the same refs: red runs on branches origin no longer has are

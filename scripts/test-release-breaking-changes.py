@@ -10,18 +10,25 @@ come from a stub `orbit` binary that serves a JSON fixture.
 import json
 import os
 from pathlib import Path
-import runpy
 import subprocess
 import sys
 import tempfile
 import textwrap
 import unittest
-from unittest import mock
 
 import self_test_hang
 from release_schema_oracle import INSTANCES, bounded_schema_pairs, schema_accepts_instance
 
 SCRIPT = Path(__file__).resolve().parent / "release-breaking-changes.py"
+GIT_LOCATION_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+
+
+def git_environment(source):
+    """Copy an environment without Git variables that redirect repository access."""
+    environment = dict(source)
+    for name in GIT_LOCATION_ENV:
+        environment.pop(name, None)
+    return environment
 
 SCHEMA = "crates/orbit-store/src/driver/sqlite/migration/ledger/registry.rs"
 LAYOUT = "crates/orbit-store/src/workflow/layout/registry.rs"
@@ -174,9 +181,10 @@ class FixtureRepo:
     def __init__(self, root):
         self.root = Path(root)
         self.root.mkdir()
-        self.env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
-                        GIT_AUTHOR_NAME="fixture", GIT_AUTHOR_EMAIL="fixture@example.invalid",
-                        GIT_COMMITTER_NAME="fixture", GIT_COMMITTER_EMAIL="fixture@example.invalid")
+        self.env = git_environment(dict(
+            os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+            GIT_AUTHOR_NAME="fixture", GIT_AUTHOR_EMAIL="fixture@example.invalid",
+            GIT_COMMITTER_NAME="fixture", GIT_COMMITTER_EMAIL="fixture@example.invalid"))
         self.git("init", "-q", "-b", "agent-main")
         self.write(SCHEMA, "pub const SUPPORTED_SCHEMA_VERSION: u32 = 67;\n")
         self.write(LAYOUT, "pub const SUPPORTED_LAYOUT_VERSION: u32 = 3;\n")
@@ -241,7 +249,7 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
 
     def survey(self, *extra, tasks=None):
         args = [sys.executable, str(SCRIPT), "--repo", str(self.repo.root), *extra]
-        env = dict(self.repo.env)
+        env = git_environment(self.repo.env)
         if tasks is None:
             args.append("--offline")
         else:
@@ -258,6 +266,59 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
 
     def signals(self, report):
         return {(s["task"], s["signal"], s["detail"]) for s in report["signals"]}
+
+    def test_public_entrypoint_ignores_git_location_environment(self):
+        sentinel = Path(self.tmp.name) / "sentinel"
+        sentinel.mkdir()
+        sentinel_env = git_environment(os.environ)
+        sentinel_env.update(
+            GIT_CONFIG_GLOBAL=os.devnull,
+            GIT_CONFIG_NOSYSTEM="1",
+            GIT_AUTHOR_NAME="sentinel",
+            GIT_AUTHOR_EMAIL="sentinel@example.invalid",
+            GIT_COMMITTER_NAME="sentinel",
+            GIT_COMMITTER_EMAIL="sentinel@example.invalid",
+        )
+
+        def sentinel_git(*args):
+            return subprocess.run(
+                ["git", "-C", str(sentinel), *args], env=sentinel_env,
+                capture_output=True, text=True, check=True,
+                timeout=self_test_hang.HANG_CEILING_SECONDS)
+
+        sentinel_git("init", "-q", "-b", "sentinel-main")
+        (sentinel / "sentinel.txt").write_text("keep this repository unchanged\n")
+        sentinel_git("add", "sentinel.txt")
+        sentinel_git("commit", "-q", "-m", "sentinel baseline")
+        sentinel_git("tag", "sentinel-tag")
+
+        def sentinel_snapshot():
+            return {
+                "head_file": (sentinel / ".git/HEAD").read_bytes(),
+                "head_commit": sentinel_git("rev-parse", "HEAD").stdout,
+                "index": (sentinel / ".git/index").read_bytes(),
+                "tags": sentinel_git(
+                    "for-each-ref", "--format=%(refname):%(objectname)", "refs/tags").stdout,
+                "status": sentinel_git("status", "--porcelain=v1").stdout,
+                "file": (sentinel / "sentinel.txt").read_bytes(),
+            }
+
+        before = sentinel_snapshot()
+        child_env = git_environment(os.environ)
+        child_env.update(
+            GIT_DIR=str(sentinel / ".git"),
+            GIT_WORK_TREE=str(sentinel),
+            GIT_INDEX_FILE=str(sentinel / ".git/index"),
+        )
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()),
+             "ReleaseBreakingChangesTest.test_schema_bump_and_deny_unknown_field_decide_minor"],
+            env=child_env, capture_output=True, text=True,
+            timeout=self_test_hang.HANG_CEILING_SECONDS)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(sentinel_snapshot(), before,
+                         "the public test entrypoint changed the exported sentinel Git repository")
 
     def test_mcp_schema_bounded_soundness_oracle(self):
         # One real CLI survey batches independent tools so the bounded search
@@ -780,6 +841,35 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["bump"], "patch")
         self.assertEqual(report["next_version"], "0.35.1")
 
+    def test_numeric_enum_representation_change_is_not_a_removal(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["properties"]["level"] = {
+            "enum": [1, [2, {"depth": 3}], "full"]}
+        tools[0]["inputSchema"]["properties"]["flag"] = {"enum": [True]}
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: prepare numeric enum fixture [ORB-64]")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        tools[0]["inputSchema"]["properties"]["level"]["enum"] = [
+            1.0, [2.0, {"depth": 3.0}], "full"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Rewrite numeric enums [ORB-65]")
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(report["signals"], [], report)
+        self.assertEqual(report["bump"], "patch")
+
+        # A real removal and a boolean-to-number change are still breaking.
+        tools[0]["inputSchema"]["properties"]["level"]["enum"] = [
+            [2.0, {"depth": 3.0}], "full"]
+        tools[0]["inputSchema"]["properties"]["flag"]["enum"] = [1]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Remove numeric enum values [ORB-66]")
+        report = self.report("--range", "v0.35.0..HEAD")
+        details = {detail for _, _, detail in self.signals(report)}
+        self.assertIn("`orbit_task_show` `inputSchema.level` enum value 1 removed", details)
+        self.assertIn("`orbit_task_show` `inputSchema.flag` enum value true removed", details)
+        self.assertEqual(report["bump"], "minor")
+
     def test_oneof_overlap_check_respects_json_schema_instance_semantics(self):
         cases = (
             (
@@ -958,6 +1048,56 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
                 })
                 self.assertEqual(report["bump"], "minor")
                 self.assertEqual(report["next_version"], "0.36.0")
+
+    def _set_attention_kind_schema(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "kind": {"anyOf": [
+                    {"type": "string", "enum": ["a", "b"]},
+                    {"type": "array",
+                     "items": {"type": "string", "enum": ["a", "b"]}},
+                ]},
+            },
+            "required": ["id"],
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add kind anyOf enum [ORB-70] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+        return tools
+
+    def test_anyof_input_enum_widening_is_additive(self):
+        # Gaining enum values in both anyOf branches (direct and items)
+        # accepts everything accepted before (ORB-21674).
+        tools = self._set_attention_kind_schema()
+        kind = tools[0]["inputSchema"]["properties"]["kind"]["anyOf"]
+        kind[0]["enum"].append("c")
+        kind[1]["items"]["enum"].append("c")
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Widen kind enum [ORB-71] (#2)")
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_anyof_input_enum_narrowing_decides_minor(self):
+        tools = self._set_attention_kind_schema()
+        kind = tools[0]["inputSchema"]["properties"]["kind"]["anyOf"]
+        kind[0]["enum"].remove("b")
+        kind[1]["items"]["enum"].remove("b")
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Narrow kind enum [ORB-72] (#2)")
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(self.signals(report), {
+            ("ORB-72", "mcp-schema",
+             "`orbit_task_show` `inputSchema.kind{anyOf0}` enum value \"b\" removed"),
+            ("ORB-72", "mcp-schema",
+             "`orbit_task_show` `inputSchema.kind{anyOf1}[items]` enum value \"b\" removed"),
+        })
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
 
     def test_removing_entire_input_mcp_applicator_is_additive(self):
         # Both formerly accepted {id, view} inputs remain accepted; deleting
@@ -1278,7 +1418,8 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
                     self.assertEqual(report["next_version"], "0.36.0")
 
     def test_zero_shared_edited_mcp_alternative_changes_are_reported(self):
-        detect_mcp_changes = runpy.run_path(str(SCRIPT))["detect_mcp_changes"]
+        # Drive the public CLI over a fixture repo (like sibling cases), so
+        # CLI wiring and rev handling for zero-shared-name edits are exercised.
         cases = (
             (
                 {"properties": {"b": {"type": "string"}, "c": {"type": "string"}}},
@@ -1292,26 +1433,33 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
             ),
         )
         unchanged = {"properties": {"a": {"type": "string"}}}
+        counter = 0
         for keyword in ("anyOf", "oneOf"):
             for old_branch, new_branch, changes in cases:
                 for reordered in (False, True):
                     with self.subTest(keyword=keyword, changes=changes, reordered=reordered):
-                        before = [unchanged, old_branch]
-                        after = [new_branch, unchanged] if reordered else [unchanged, new_branch]
-                        git = mock.Mock()
-                        git.show.side_effect = [
-                            json.dumps([{"name": "orbit_task_show",
-                                         "inputSchema": {keyword: branches}}])
-                            for branches in (before, after)
-                        ]
-
-                        signals = detect_mcp_changes(git, "before", "after", [MCP])
-                        self.assertEqual(signals, [
-                            {"signal": "mcp-schema", "file": MCP,
-                             "detail": f"`orbit_task_show` property "
-                                       f"`inputSchema{{{keyword}1}}.{prop}` {change}"}
+                        counter += 1
+                        self.repo = FixtureRepo(Path(self.tmp.name) / f"zero-shared-{counter}")
+                        tools = self.repo.mcp()
+                        schema = tools[0]["inputSchema"]
+                        schema.pop("anyOf", None)
+                        schema.pop("oneOf", None)
+                        schema[keyword] = [unchanged, old_branch]
+                        self.repo.write_mcp(tools)
+                        self.repo.commit(f"feat: Add {keyword} alternatives [ORB-60] (#1)")
+                        self.repo.git("tag", "-f", "v0.35.0")
+                        schema[keyword] = ([new_branch, unchanged] if reordered
+                                           else [unchanged, new_branch])
+                        self.repo.write_mcp(tools)
+                        self.repo.commit(f"feat: Edit {keyword} alternative [ORB-61] (#2)")
+                        report = self.report()
+                        self.assertEqual(self.signals(report), {
+                            ("ORB-61", "mcp-schema",
+                             f"`orbit_task_show` property `inputSchema{{{keyword}1}}.{prop}` {change}")
                             for prop, change in changes
-                        ])
+                        })
+                        self.assertEqual(report["bump"], "minor")
+                        self.assertEqual(report["next_version"], "0.36.0")
 
     def test_reordered_edited_mcp_alternative_removal_is_reported(self):
         tools = self.repo.mcp()
@@ -1407,6 +1555,32 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["signals"], [])
         self.assertEqual(report["bump"], "patch")
         self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_property_tightened_to_false_decides_minor(self):
+        # Witness: {"value": "previously valid"} is accepted before and
+        # rejected after the property schema becomes `false`.
+        before = {"type": "object", "required": ["value"],
+                  "properties": {"value": {"type": "string"}}}
+        after = {"type": "object", "required": ["value"],
+                 "properties": {"value": False}}
+        witness = {"value": "previously valid"}
+        self.assertTrue(schema_accepts_instance(before, witness))
+        self.assertFalse(schema_accepts_instance(after, witness))
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = before
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: prepare string property fixture [ORB-64]")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        tools[0]["inputSchema"] = after
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Forbid value property [ORB-65]")
+        report = self.report()
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(self.signals(report), {
+            ("ORB-65", "mcp-schema",
+             "`orbit_task_show` `inputSchema.value` schema tightened to false"),
+        })
 
     def test_false_additional_properties_gaining_required_child_decides_patch(self):
         # As above: no request with extra properties was valid under

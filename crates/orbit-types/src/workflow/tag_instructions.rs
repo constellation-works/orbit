@@ -228,6 +228,11 @@ pub struct CapturedTagInstructions {
     pub instructions: Vec<TagInstruction>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refusals: Vec<TagInstructionRefusal>,
+    /// Owner's pinned corpus rows, keyed by exact activity name. An error
+    /// refuses dispatch rather than falling back to replica content.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub agent_corpus:
+        std::collections::BTreeMap<String, Result<Option<super::AgentCorpusInjection>, String>>,
 }
 
 impl CapturedTagInstructions {

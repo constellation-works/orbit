@@ -10,7 +10,7 @@
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, OwnedFd};
 
-use super::{InheritedFd, relocate_clear_of_targets};
+use super::super::process::{InheritedFd, relocate_clear_of_targets};
 
 /// An `OwnedFd` on a file holding `contents`, so a relocation can be checked
 /// to have carried the open file with it rather than opened a new one.

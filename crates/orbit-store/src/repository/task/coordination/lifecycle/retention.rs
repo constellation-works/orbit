@@ -42,11 +42,25 @@ impl TaskCommitBoundary {
         settled_before: DateTime<Utc>,
     ) -> Result<usize, OrbitError> {
         self.enter_ordinary(|| {
+            // Start from what can be deleted: only a claim carrying a
+            // receipt older than the cutoff can lose one, so with no such
+            // receipt this is one statement and no claim payload is decoded.
+            let candidates = self.store.claim_ids_with_receipts_before(
+                &self.workspace_id,
+                RECEIPT,
+                &settled_before.to_rfc3339(),
+            )?;
+            if candidates.is_empty() {
+                return Ok(0);
+            }
             let mut settled = Vec::new();
-            for row in self
-                .store
-                .task_coordination_rows(&self.workspace_id, CLAIM)?
-            {
+            for claim_id in candidates {
+                let Some(row) =
+                    self.store
+                        .task_coordination_row(&self.workspace_id, CLAIM, &claim_id)?
+                else {
+                    continue;
+                };
                 let claim: ExecutionClaim = decode(&row.payload_json)?;
                 if claim.phase.is_unsettled() {
                     continue;

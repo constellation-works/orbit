@@ -30,6 +30,7 @@ mod macos_audit_support;
 mod macos_provider;
 mod macos_spawn;
 mod path_identity;
+mod script_sandbox;
 
 // Streaming stdout and validation-environment cases share this area.
 // `signal_fanout` stays separate: it installs a process-wide SIGINT handler.

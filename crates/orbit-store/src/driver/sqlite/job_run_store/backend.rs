@@ -9,8 +9,8 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::identity::Crew;
 use orbit_types::workflow::{
-    ChildDispatch, JobRun, JobRunStartOutcome, JobRunState, JobRunStep, KnowledgeRunMetrics,
-    PipelineState, RunEvent, RunIdRole, RunStateUpdate,
+    ChildDispatch, JobRun, JobRunStartOutcome, JobRunState, JobRunStep, PipelineState, RunEvent,
+    RunIdRole, RunStateUpdate,
 };
 use rusqlite::{OptionalExtension, TransactionBehavior};
 
@@ -228,6 +228,12 @@ impl JobRunStoreBackend for SqliteJobRunStore {
     ) -> Result<Vec<crate::contracts::LocalPullAdmission>, OrbitError> {
         super::pull::unsettled(&self.store, &self.workspace_id)
     }
+    fn settled_leaf_run_ids_pending_build_reclaim(&self) -> Result<Vec<String>, OrbitError> {
+        super::pull::pending_build_reclaim_leaves(&self.store, &self.workspace_id)
+    }
+    fn note_settled_leaf_build_output_clear(&self, leaf_run_id: &str) -> Result<(), OrbitError> {
+        super::pull::note_build_output_clear(&self.store, &self.workspace_id, leaf_run_id)
+    }
     fn drain_leaf_occupancy(&self) -> Result<crate::contracts::DrainLeafOccupancy, OrbitError> {
         super::pull::drain_occupancy(&self.store, &self.workspace_id, None)
     }
@@ -331,8 +337,8 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                 return Ok(KeyedJobRunAdmission::Existing(Box::new(run)));
             }
             let now=Utc::now();
-            let id=next_run_id_conn(conn,&self.workspace_id,RunIdRole::TopLevel,now)?;
-            let run=JobRun {executed_on: self.executed_on.clone(),run_id:id.clone(),job_id:job_id.into(),attempt:1,state:JobRunState::Pending,scheduled_at:now,started_at:None,finished_at:None,duration_ms:None,created_at:now,pid:None,pid_start_time:None,input:Some(input.clone()),retry_source_run_id:None,knowledge_metrics:None,resolved_crew:None,crew_model:None,steps:Vec::new()};
+            let id=next_run_id_conn(conn,RunIdRole::TopLevel,now)?;
+            let run=JobRun {build: Some(orbit_common::process::build::current_orbit_build()), executed_on: self.executed_on.clone(),run_id:id.clone(),job_id:job_id.into(),attempt:1,state:JobRunState::Pending,scheduled_at:now,started_at:None,finished_at:None,duration_ms:None,created_at:now,pid:None,pid_start_time:None,input:Some(input.clone()),retry_source_run_id:None,knowledge_metrics:None,resolved_crew:None,crew_model:None,steps:Vec::new()};
             let state=PipelineState::new(id.clone(),job_id.into(),input.clone());
             upsert_job_run_for_workspace_conn(conn,&self.workspace_id,&run,Some(&state))?;
             conn.execute("INSERT INTO automation_job_keys VALUES (?1,?2,?3)",rusqlite::params![self.workspace_id,key,id]).map_err(sqlite_store_error)?;
@@ -394,6 +400,16 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         self.read_run(run_id)
     }
 
+    fn get_job_runs_by_id(&self, run_ids: &[String]) -> Result<Vec<JobRun>, OrbitError> {
+        self.store
+            .job_runs_by_id_for_workspace(&self.workspace_id, run_ids)
+    }
+
+    fn get_job_run_state(&self, run_id: &str) -> Result<Option<JobRunState>, OrbitError> {
+        self.store
+            .get_job_run_state_for_workspace(&self.workspace_id, run_id)
+    }
+
     fn list_pending_or_running_job_runs(&self, job_id: &str) -> Result<Vec<JobRun>, OrbitError> {
         validate_path_stem(job_id, "job")?;
         self.store.list_job_runs_for_workspace(
@@ -422,9 +438,9 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         // the loser upsert over the sibling that committed first.
         self.store
             .with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-                let run_id =
-                    next_run_id_conn(&tx.tx, &self.workspace_id, RunIdRole::TopLevel, created_at)?;
+                let run_id = next_run_id_conn(&tx.tx, RunIdRole::TopLevel, created_at)?;
                 let run = JobRun {
+                    build: Some(orbit_common::process::build::current_orbit_build()),
                     executed_on: self.executed_on.clone(),
                     run_id,
                     job_id: job_id.to_string(),
@@ -473,9 +489,9 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                         run_id,
                     });
                 }
-                let run_id =
-                    next_run_id_conn(&tx.tx, &self.workspace_id, RunIdRole::TopLevel, created_at)?;
+                let run_id = next_run_id_conn(&tx.tx, RunIdRole::TopLevel, created_at)?;
                 let run = JobRun {
+                    build: Some(orbit_common::process::build::current_orbit_build()),
                     executed_on: self.executed_on.clone(),
                     run_id,
                     job_id: job_id.to_string(),
@@ -530,9 +546,9 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                         .ok_or_else(|| OrbitError::Store("keyed run disappeared".into()))?;
                     return Ok(KeyedJobRunAdmission::Existing(Box::new(run)));
                 }
-                let run_id =
-                    next_run_id_conn(&tx.tx, &self.workspace_id, RunIdRole::TopLevel, created_at)?;
+                let run_id = next_run_id_conn(&tx.tx, RunIdRole::TopLevel, created_at)?;
                 let run = JobRun {
+                    build: Some(orbit_common::process::build::current_orbit_build()),
                     executed_on: self.executed_on.clone(),
                     run_id,
                     job_id: params.job_id.clone(),
@@ -612,11 +628,11 @@ impl JobRunStoreBackend for SqliteJobRunStore {
 
                 let run_id = next_run_id_conn(
                     &tx.tx,
-                    &self.workspace_id,
                     RunIdRole::Child,
                     params.scheduled_at,
                 )?;
                 let run = JobRun {
+                    build: Some(orbit_common::process::build::current_orbit_build()),
                     executed_on: self.executed_on.clone(),
                     run_id: run_id.clone(),
                     job_id: params.job_id.clone(),
@@ -720,22 +736,20 @@ impl JobRunStoreBackend for SqliteJobRunStore {
             agent_response_json: params.agent_response_json.clone(),
             state: params.state,
             error_code: params.error_code.clone(),
-            error_message: params.error_message.clone(),
+            // The store's `error_code` column is the typed code's storage;
+            // parse it into its typed form at this boundary.
+            failure_code: params
+                .error_code
+                .as_deref()
+                .map(orbit_types::workflow::StepFailureCode::parse),
+            error_message: params
+                .error_message
+                .as_deref()
+                .map(orbit_common::security::redaction::redact_all),
         };
         self.store
             .upsert_job_run_step_for_workspace(&self.workspace_id, run_id, &step)?;
         Ok(true)
-    }
-
-    fn record_job_run_knowledge_metrics(
-        &self,
-        run_id: &str,
-        metrics: KnowledgeRunMetrics,
-    ) -> Result<bool, OrbitError> {
-        self.update_run(run_id, |run| {
-            run.knowledge_metrics = Some(metrics);
-            Ok(())
-        })
     }
 
     fn record_job_run_crew(&self, run_id: &str, crew: &Crew) -> Result<bool, OrbitError> {
@@ -828,10 +842,15 @@ impl JobRunStoreBackend for SqliteJobRunStore {
     }
 
     fn list_all_pending_or_running_runs(&self) -> Result<Vec<JobRun>, OrbitError> {
+        // No consumer of this listing reads step rows: stale-run
+        // reconciliation classifies from run-row fields and re-reads the
+        // full run before finalizing, and the orphan/parked probes read
+        // only state and owner fields.
         self.store.list_job_runs_for_workspace(
             &self.workspace_id,
             &JobRunQuery {
                 active_only: true,
+                include_steps: false,
                 ..Default::default()
             },
         )
@@ -868,6 +887,14 @@ impl JobRunStoreBackend for SqliteJobRunStore {
             .read_job_run_states_for_workspace(&self.workspace_id, run_ids)
     }
 
+    fn read_run_states_exact(
+        &self,
+        run_ids: &[String],
+    ) -> Result<HashMap<String, Option<PipelineState>>, OrbitError> {
+        self.store
+            .read_job_run_states_exact_for_workspace(&self.workspace_id, run_ids)
+    }
+
     fn write_run_state(&self, run_id: &str, state: &PipelineState) -> Result<(), OrbitError> {
         self.store
             .write_job_run_state_for_workspace(&self.workspace_id, run_id, state)
@@ -889,5 +916,15 @@ impl JobRunStoreBackend for SqliteJobRunStore {
     ) -> Result<RunStateUpdate, OrbitError> {
         self.store
             .update_job_run_state_for_workspace(&self.workspace_id, run_id, update)
+    }
+
+    fn adopt_parked_job_run(
+        &self,
+        run_id: &str,
+        parked_at: DateTime<Utc>,
+        pid: u32,
+    ) -> Result<bool, OrbitError> {
+        self.store
+            .adopt_parked_job_run_for_workspace(&self.workspace_id, run_id, parked_at, pid)
     }
 }

@@ -3,6 +3,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_exec::{EnvironmentMode, NoSandbox, run_process};
 
+use super::super::forge_text;
 use super::super::git::{git_output, git_output_paths, git_output_raw, git_request, git_success};
 use super::author::GitAuthor;
 
@@ -21,7 +22,7 @@ pub(super) fn git_commit_with_identity(
     let mut args = vec!["commit".to_string()];
     args.push("--author".to_string());
     args.push(author.spec());
-    args.extend(["-m".to_string(), message.to_string()]);
+    args.extend(["-m".to_string(), forge_text::neutralize_mentions(message)]);
     git_success_dynamic_with_identity(workspace_path, &args, &author, &committer)
 }
 
@@ -43,7 +44,7 @@ pub(super) fn git_commit_paths_with_identity(
         "--author".to_string(),
         author.spec(),
         "-m".to_string(),
-        message.to_string(),
+        forge_text::neutralize_mentions(message),
         "--".to_string(),
     ];
     args.extend(paths.iter().map(|path| literal_pathspec(path)));
@@ -62,7 +63,7 @@ pub(super) fn git_commit_as(
         "--author".to_string(),
         author.spec(),
         "-m".to_string(),
-        message.to_string(),
+        forge_text::neutralize_mentions(message),
     ];
     git_success_dynamic_with_identity(workspace_path, &args, author, &committer)
 }

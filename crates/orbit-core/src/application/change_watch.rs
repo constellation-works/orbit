@@ -4,6 +4,8 @@
 //! repairs or audits, so a watcher's poll never queues behind a drain's
 //! commits; each answer can be stale as soon as it returns.
 
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::JobRunQuery;
@@ -50,9 +52,13 @@ impl RunStateStamp {
 impl OrbitRuntime {
     /// Every task of this workspace with its status and last update, from the
     /// generated index alone.
-    pub fn task_change_stamps(&self) -> Result<Vec<TaskChangeStamp>, OrbitError> {
+    ///
+    /// While the registry is unchanged this is the same `Arc` as the previous
+    /// successful read, so a watcher can skip rebuilding its comparison. A
+    /// failed read leaves that previous snapshot with the caller.
+    pub fn task_change_stamps(&self) -> Result<Arc<Vec<TaskChangeStamp>>, OrbitError> {
         if !self.coordination_task_reads_visible() {
-            return Ok(Vec::new());
+            return Ok(Arc::new(Vec::new()));
         }
         self.stores().tasks().task_change_stamps()
     }

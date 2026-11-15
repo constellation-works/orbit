@@ -15,7 +15,6 @@ use orbit_common::OrbitError;
 use orbit_types::identity::Crew;
 
 use super::target::{ProviderLimitTarget, validate_crew_target};
-use crate::ConfigSnapshot;
 
 pub(crate) const BUDGETS_KEY: &str = "workflow.provider_limit_budgets";
 
@@ -156,17 +155,6 @@ impl ProviderLimitBudget {
             window_hours,
             window_label: window,
         })
-    }
-}
-
-impl ConfigSnapshot {
-    /// The admitted `workflow.provider_limit_budgets`.
-    #[must_use]
-    pub fn provider_limit_budgets(&self) -> Vec<ProviderLimitBudget> {
-        self.workflow_provider_limit_budgets
-            .iter()
-            .filter_map(|entry| ProviderLimitBudget::parse(entry).ok())
-            .collect()
     }
 }
 

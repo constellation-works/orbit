@@ -11,6 +11,7 @@ use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use orbit_types::telemetry::ProviderLimitObservation;
+use orbit_types::workflow::activity_job::Provider;
 use serde_json::Value;
 
 use super::antigravity::antigravity_usage_windows;
@@ -31,18 +32,26 @@ use super::muse::muse_usage_windows;
 /// are left for the caller.
 #[must_use]
 pub fn provider_usage_windows(
-    provider: &str,
+    provider: Provider,
     stdout: &[u8],
     codex_home: Option<&Path>,
     now: DateTime<Utc>,
 ) -> Vec<ProviderLimitObservation> {
     match provider {
-        "claude" => claude_usage_windows(stdout, now),
-        "codex" => codex_home.map_or_else(Vec::new, |home| codex_usage_windows(stdout, home, now)),
-        "muse" => muse_usage_windows(stdout, now),
-        "grok" => grok_usage_windows(stdout, now),
-        "antigravity" => antigravity_usage_windows(stdout, now),
-        _ => Vec::new(),
+        Provider::Claude => claude_usage_windows(stdout, now),
+        Provider::Codex => {
+            codex_home.map_or_else(Vec::new, |home| codex_usage_windows(stdout, home, now))
+        }
+        Provider::Muse => muse_usage_windows(stdout, now),
+        Provider::Grok => grok_usage_windows(stdout, now),
+        Provider::Antigravity => antigravity_usage_windows(stdout, now),
+        Provider::Gemini
+        | Provider::Copilot
+        | Provider::Ollama
+        | Provider::OpenaiCompat
+        | Provider::Cursor
+        | Provider::Pi
+        | Provider::Opencode => Vec::new(),
     }
 }
 

@@ -14,19 +14,19 @@
 //!   otherwise seed the same names on one host [ORB-12107].
 //! - `__ORBIT_OWNER_MACHINE__` and `__ORBIT_BASE_BRANCH__` — a state trigger
 //!   names the one machine that evaluates it and the branch it observes, so
-//!   the seeded `task_pilot`, `finding_verification`,
-//!   `pilot_warning_triage` and `blocked_task_triage` definitions render
-//!   this host's registered machine id and the workspace's registered base
-//!   branch [ORB-12745].
+//!   the seeded `task_pilot` and `resident_cycle` definitions render this
+//!   host's registered machine id and the workspace's registered base branch
+//!   [ORB-12745].
 //!
 //! Cron definitions carry no host pin [ORB-12236]: two hosts initializing the
 //! same workspace name write byte-identical cron definitions, and differ only
-//! in the state trigger's owner. Seeded routines are disabled when written;
-//! they exist so a fresh workspace gets reviewable, opt-in schedules without
-//! silently enabling unattended work. The one exception is
-//! `crew_performance_refresh`, seeded enabled because, while
-//! `workflow.crew_performance` is `off`, its action skips the scan and
-//! writes no snapshot (it still records a job run each hour).
+//! in the state trigger's owner. Most seeded routines are disabled when
+//! written; they exist so a fresh workspace gets reviewable, opt-in schedules
+//! without silently enabling unattended work. `worktree_gc` and `task_pilot`
+//! are seeded enabled, as is `crew_memory_dream`, whose action mints nothing
+//! until `crew_memory.enabled` is set and a memory experiment is running. `enabled` is the operator's: a refresh onto a changed
+//! template keeps the on-disk value, so a workspace seeded while a default was
+//! disabled stays disabled.
 //!
 //! Provenance is byte-exact first and shape-aware second. The manifest records
 //! the digest Orbit last wrote; a file that still matches is Orbit's. A file
@@ -65,16 +65,8 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/routines/task_pilot.yaml"),
     ),
     (
-        "finding_verification",
-        include_str!("../../../assets/routines/finding_verification.yaml"),
-    ),
-    (
-        "pilot_warning_triage",
-        include_str!("../../../assets/routines/pilot_warning_triage.yaml"),
-    ),
-    (
-        "blocked_task_triage",
-        include_str!("../../../assets/routines/blocked_task_triage.yaml"),
+        "resident_cycle",
+        include_str!("../../../assets/routines/resident_cycle.yaml"),
     ),
     (
         "worktree_gc",
@@ -89,12 +81,8 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/routines/store_gc.yaml"),
     ),
     (
-        "crew_performance_refresh",
-        include_str!("../../../assets/routines/crew_performance_refresh.yaml"),
-    ),
-    (
-        "ux-rules",
-        include_str!("../../../assets/routines/ux-rules.yaml"),
+        "crew_memory_dream",
+        include_str!("../../../assets/routines/crew_memory_dream.yaml"),
     ),
 ];
 
@@ -104,8 +92,13 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
 /// loader skips a routine targeting its job as retired instead of failing it
 /// on every clock tick (`RETIRED_ROUTINE_JOBS`).
 ///
-/// Retiring a default: move its template here and add its target job to
-/// `RETIRED_ROUTINE_JOBS` in the same change.
+/// Retiring a default: move its template here and, when its target job went
+/// with it, add that job to `RETIRED_ROUTINE_JOBS` in the same change. A
+/// default whose job still ships (`blocked_task_triage` and
+/// `pilot_warning_triage` targeted `escalation_triage_pipeline`, which now
+/// serves the dashboard's manual triage only) is retired by its trigger kind
+/// instead: the loader skips a state routine on a retired trigger
+/// (`block_escalated`, `pilot_warnings_held`).
 pub(crate) const RETIRED_ROUTINE_FILES: &[(&str, &str)] = &[
     (
         "auto_task_scheduler",
@@ -118,6 +111,30 @@ pub(crate) const RETIRED_ROUTINE_FILES: &[(&str, &str)] = &[
     (
         "ship_sweep",
         include_str!("../../../assets/routines/retired/ship_sweep.yaml"),
+    ),
+    (
+        "blocked_task_triage",
+        include_str!("../../../assets/routines/retired/blocked_task_triage.yaml"),
+    ),
+    (
+        "crew_performance_refresh",
+        include_str!("../../../assets/routines/retired/crew_performance_refresh.yaml"),
+    ),
+    (
+        "evolution_pass",
+        include_str!("../../../assets/routines/retired/evolution_pass.yaml"),
+    ),
+    (
+        "ux-rules",
+        include_str!("../../../assets/routines/retired/ux-rules.yaml"),
+    ),
+    (
+        "finding_verification",
+        include_str!("../../../assets/routines/retired/finding_verification.yaml"),
+    ),
+    (
+        "pilot_warning_triage",
+        include_str!("../../../assets/routines/retired/pilot_warning_triage.yaml"),
     ),
 ];
 
@@ -142,6 +159,18 @@ pub(crate) const SUPERSEDED_ROUTINE_TEMPLATES: &[(&str, &str)] = &[
     (
         "task_pilot",
         include_str!("../../../assets/routines/superseded/task_pilot.2026-09-21.yaml"),
+    ),
+    (
+        "task_pilot",
+        include_str!("../../../assets/routines/superseded/task_pilot.2026-11-01.yaml"),
+    ),
+    (
+        "task_pilot",
+        include_str!("../../../assets/routines/superseded/task_pilot.2026-11-07.yaml"),
+    ),
+    (
+        "task_publication",
+        include_str!("../../../assets/routines/superseded/task_publication.2026-10-25.yaml"),
     ),
     (
         "worktree_gc",

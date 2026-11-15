@@ -12,11 +12,12 @@ use orbit_store::Store;
 use orbit_store::contracts::PluginStoreBackend;
 use orbit_tools::ProcSpawnBudget;
 use orbit_tools::plugin::{
-    CallbackResolution, PluginCallbackIdentity, load_plugin_dir, resolve_plugin_callback_session,
+    CallbackResolution, PluginCallbackIdentity, resolve_plugin_callback_session,
 };
 use orbit_types::plugin::{InstalledPlugin, PluginGrant, PluginProvenance};
 use orbit_types::workflow::{ActivityToolDenyPolicy, ActivityToolPolicyMode};
 
+use crate::runtime::plugin::cache::load_installed_plugin;
 use crate::runtime::plugin::grants::verify_install_path;
 
 thread_local! {
@@ -121,6 +122,43 @@ pub fn refuse_plugin_child_cli_command(
     }
 }
 
+/// Refuse a plugin callback before the CLI delivers it to another host.
+///
+/// The caller has resolved `destination` (a selector, explicit host/workspace
+/// address or task id) to a remote host using only the local registry.
+/// Callback sessions authorize local tools, not a federated SSH session with
+/// host credentials. Resolve the host-issued identity even if a descendant
+/// cleared its environment; a missing credential must not enable SSH either.
+/// Preflight has no runtime audit guard, so retain the refusal in the
+/// operational log with plugin attribution as well as returning it to the child.
+pub fn refuse_plugin_child_remote_callback(
+    global_root: &Path,
+    tool: &str,
+    destination: &str,
+) -> Result<(), OrbitError> {
+    let plugin = match resolve_plugin_callback_session(global_root)? {
+        CallbackResolution::None => return Ok(()),
+        CallbackResolution::Identified(identity) => Some(identity.provenance.name),
+        CallbackResolution::RetiredCredential(identity) => {
+            identity.map(|identity| identity.provenance.name)
+        }
+        CallbackResolution::UnidentifiedPluginChild => None,
+    };
+    let message = format!(
+        "cross-host callbacks are not supported from confined plugins; destination \
+         '{destination}' names another host. Use a workspace on this host"
+    );
+    let error = OrbitError::PolicyDenied(message);
+    tracing::warn!(
+        plugin = plugin.as_deref().unwrap_or("unidentified"),
+        tool,
+        workspace = destination,
+        code = "policy_denied",
+        "{error}"
+    );
+    Err(error)
+}
+
 fn plugin_cli_surface_refused(plugin: Option<&str>, invocation: Option<&str>) -> OrbitError {
     let who = match plugin {
         Some(plugin) => format!("plugin '{plugin}'"),
@@ -191,11 +229,14 @@ fn refuse_unless_recorded(
         Some(installed) => recorded_orbit_tools(global_root, installed)?,
         None => Vec::new(),
     };
-    let allowed: Vec<&String> = recorded
+    let allowed: Vec<String> = recorded
         .iter()
         .filter(|tool| identity.ceiling_admits(tool))
+        .cloned()
         .collect();
-    if allowed.iter().any(|tool| *tool == name) {
+    // An entry is a tool, a whole family or one `family:action`; `name` is
+    // the tool or the operation serving a family action.
+    if orbit_types::workflow::tool_allowed(name, &allowed) {
         return Ok(());
     }
     let plugin = &identity.provenance.name;
@@ -211,7 +252,7 @@ fn refuse_unless_recorded(
     );
     // Separate the two refusals for the operator: a tool the plugin was never
     // granted reads differently from one it holds but this caller does not.
-    if recorded.iter().any(|tool| tool == name) {
+    if orbit_types::workflow::tool_allowed(name, &recorded) {
         message.push_str(&format!(
             "; the plugin does request it, but the caller that spawned this backend could reach \
              only [{}], and a live callback session's authority never widens",
@@ -254,15 +295,19 @@ fn recorded_orbit_tools(
     // writable by the very backend this gate confines. The load pass checks
     // the same thing [ORB-12785], but a backend already running can relocate
     // its row without a reload, so the path is checked again here rather than
-    // reading an allowlist out of a manifest the backend wrote.
+    // reading an allowlist out of a manifest the backend wrote. The cached
+    // load keeps that property: the cache key is the full `InstalledPlugin`
+    // row plus the manifest stamp (or digest when the stamp moved), so a
+    // relocated row or a rewritten manifest misses the cache and reloads
+    // from the tree the current row names.
     verify_install_path(global_root, installed).map_err(OrbitError::PolicyDenied)?;
-    let loaded = load_plugin_dir(Path::new(&installed.install_path)).map_err(|error| {
+    let loaded = load_installed_plugin(installed).map_err(|error| {
         OrbitError::PolicyDenied(format!(
             "plugin '{}' callback allowlist cannot be read from the recorded install: {error}",
             installed.name
         ))
     })?;
-    Ok(loaded.manifest.spec.permissions.orbit_tools)
+    Ok(loaded.manifest.spec.permissions.orbit_tools.clone())
 }
 
 pub(super) fn read_proc_allowed_programs_from_env() -> Vec<String> {
@@ -284,16 +329,16 @@ pub(super) fn read_proc_disallowed_programs_from_env() -> Option<Vec<String>> {
 }
 
 /// The `proc.spawn` budget of the managed activity this process serves: the
-/// deadline its CLI runner stamped, under the operator's per-call ceiling.
+/// deadline its CLI runner stamped, under the fixed per-call ceiling.
 /// A missing or malformed deadline keeps the unscoped ceiling.
-pub(super) fn read_proc_spawn_budget_from_env(max_timeout_ms: u64) -> Option<ProcSpawnBudget> {
+pub(super) fn read_proc_spawn_budget_from_env() -> Option<ProcSpawnBudget> {
     let mut deadline_ms = std::env::var(ACTIVITY_DEADLINE_ENV)
         .ok()?
         .trim()
         .parse::<u64>()
         .ok()?;
     // A fresh call gets the activity's admission credit accumulated so far;
-    // the operator's per-call ceiling remains independent and unchanged.
+    // the per-call ceiling remains independent and unchanged.
     if let (Ok(directory), Some(timeout_ms)) = (
         std::env::var(orbit_common::process::build_budget::WAIT_DIRECTORY_ENV),
         std::env::var(orbit_common::security::child_env::ACTIVITY_TIMEOUT_ENV)
@@ -308,7 +353,7 @@ pub(super) fn read_proc_spawn_budget_from_env(max_timeout_ms: u64) -> Option<Pro
     }
     Some(ProcSpawnBudget {
         deadline: std::time::UNIX_EPOCH + std::time::Duration::from_millis(deadline_ms),
-        max_timeout_ms,
+        max_timeout_ms: orbit_tools::PROC_SPAWN_MAX_TIMEOUT_MINUTES * 60_000,
     })
 }
 

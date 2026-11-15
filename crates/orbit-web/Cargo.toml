@@ -8,8 +8,16 @@ license.workspace = true
 [package.metadata.orbit]
 stability = "internal"
 
+[features]
+# Test-only hooks for HTTP fixture servers. Enable it only from
+# `[dev-dependencies]`, never in a shipped build.
+test-support = []
+
 [lints]
 workspace = true
+
+[lib]
+doctest = false
 
 [dependencies]
 axum.workspace = true
@@ -19,7 +27,6 @@ chrono.workspace = true
 clap.workspace = true
 flate2.workspace = true
 futures-core.workspace = true
-getrandom.workspace = true
 hyper = { workspace = true, features = ["server"] }
 hyper-util = { workspace = true, features = ["service"] }
 # Lease intake socket: the token scope the lease listener sends.
@@ -46,6 +53,7 @@ url.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+orbit-web = { path = ".", features = ["test-support"] }
 # Exercise production lock-denial writes through the runner action in HTTP fixtures.
 orbit-engine = { path = "../orbit-engine" }
 orbit-store = { path = "../orbit-store" }

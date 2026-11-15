@@ -20,6 +20,7 @@
 
 mod backend;
 mod cursor;
+mod fingerprint;
 mod fires;
 mod lock;
 mod pause;

@@ -3,8 +3,17 @@
 # Scheduled and other zero-input runs leave discovery entirely to
 # `prepare_task_pilot`: automatic mode (task_ids empty) discovers only
 # proposed/backlog tasks in the active workspace with empty context_files or
-# unassessed complexity, excluding no-diff tasks. Explicit mode audits named
-# proposed/backlog tasks, including non-empty selectors. Any unsupported
+# unassessed complexity, excluding no-diff tasks. A task whose description or
+# acceptance criteria changed after its applied assessment is discovered
+# again for a fresh pilot, unless a live execution claim holds it or a
+# repilot already failed against unchanged requirements. Apply records failed
+# stale repilots for proposed and backlog tasks even without a drain; a later
+# description/criteria edit or explicit request can retry. Provider outages and
+# missing inspection crews leave the task retryable. Explicit mode audits named
+# proposed/backlog tasks, including non-empty selectors. A child pilot, such
+# as one an approve-proposed drain dispatched, is not that request: when an
+# explicit or routine pilot already certified an assessment, the child does
+# not call the provider for that task again. Any unsupported
 # explicit status refuses the whole selection before agent work or task
 # reservation; the refusal names every unsupported task and its current status.
 # The CLI preflights before submission; prepare checks again for direct callers
@@ -22,8 +31,20 @@
 # outputs and reaches apply without dispatching a pilot; any joins run only
 # when preparation selected work.
 # Apply rejects untrusted partition envelopes, then isolates stale or malformed
-# assessments by task and applies every independently valid sibling. The guard
-# fails the total run while any task remains unresolved. Targets admitted to
+# assessments by task and applies every independently valid sibling. An apply
+# that applied at least one task while leaving others unresolved still
+# reports `failed` with its applied and unresolved counts, but the guard
+# passes it as held: the applied tasks' receipts stand, and each unresolved
+# task is held for the operator (apply records failed stale repilots, and a
+# drain also records unresolved children as `pilot_unresolved`) instead of
+# being piloted again on the next pass against unchanged requirements. An
+# apply whose unresolved tasks are all apply-rejected assessments (`invalid`
+# after the targeted repair round) is likewise passed as held regardless of
+# its applied count, counted in the guard's `rejected_apply_held_count`: the
+# refusal is fail-closed by design and its tasks are already held. An apply
+# that failed for another reason — a failed or skipped partition whose tasks
+# are not all `invalid`, a missing apply envelope, or no unresolved tasks —
+# still fails the guard. Targets admitted to
 # execution, claimed by a follower, or retired during preparation settle as
 # superseded without pilot writes. Durable material edits by an operator or
 # another writer likewise refuse the stale write and settle as superseded.
@@ -50,11 +71,7 @@
 # by an operator `allow_missing_context` write) may be missing there, and apply
 # keeps every such target the assessment omits. Apply atomically persists context_files, assessed complexity, its
 # audit rationale/evidence, and a replay receipt.
-# Under `workflow.explore_brief.*`, prepare lists the tasks requesting an
-# explore brief in each partition's `explore_brief_task_ids`; apply validates
-# each returned brief and writes it as the system-written `explore-brief.json`
-# task artifact before the receipt. An invalid brief is dropped with its
-# reason in the receipt and never fails or repairs the assessment. A CI sweep may pass its
+# A CI sweep may pass its
 # exact filing record plus literal promotion authority; only then can apply
 # promote a warning-free, selector-backed proposed repair to backlog. A filed
 # task another writer already promoted settles superseded `promoted_elsewhere`. An
@@ -63,6 +80,20 @@
 # drain is live, opted in, and dispatched this run before it approves any
 # qualifying, warning-free proposed task.
 #
+# Re-check mode [ORB-21124]
+# - An explicit selection whose task's latest assessment holds promotion is
+#   re-checked, not piloted in full: prepare records `pilot_mode: recheck` on
+#   the task and passes the prior assessment, its holding findings and a
+#   field-level task diff in the partition's `rechecks`. The pilot judges each
+#   holding finding and the fields the diff invalidates; apply keeps every
+#   other prior field and validates the result like a full assessment.
+# - Prepare pilots in full, recording `pilot_mode_reason`, when the run sets
+#   `full_pilot` (`orbit task repilot --full`), the prior assessment is not
+#   held, was itself a re-check, predates the recorded basis or is older than
+#   `recheck_max_age_hours` (0 disables re-checks), its footprint paths
+#   changed since its source revision, or the title or description was
+#   rewritten or new context_files were added.
+#
 # Crew resolution
 # - The pilot steps name `workflow.purpose_crews.task_pilot` as their
 #   `crew_config_key`. The run draws one crew from that pool on the first pilot
@@ -70,6 +101,14 @@
 #   source natively, skipping disabled and provider-limited crews, and every
 #   pilot and repair pilot of the run reuses it; `orbit run show` records the
 #   draw and the pool it came from.
+# - When that pool has `<crew>@auto` members, prepare also splits partitions
+#   by the effort each task's filed complexity resolves to under
+#   `workflow.auto_effort.bands`, and each partition's first dispatch freezes
+#   its own `<crew>@<effort>` (`workflow.purpose_crews.task_pilot#pilots:<n>`).
+#   A valid assessment from a lower-effort `@auto` pilot that raised the
+#   task's tier to a higher-effort band, or reported confidence medium or
+#   low, settles `escalated`: the repair round re-pilots it once at the
+#   higher effort and applies that assessment. Repair rounds never escalate.
 # - While that purpose is unset, the pilot draws from
 #   `workflow.low_complexity_crews` instead: piloting reads tasks and writes a
 #   bounded proposal, so it is low work. An empty low pool falls back to
@@ -90,6 +129,18 @@
 #   run start checks the claim against the routine's live attempt and its
 #   action key. Any other run whose task ids mix crews is still refused,
 #   including an explicit run and one whose input merely carries a claim.
+# - A drain pilot whose tasks' crews changed after the drain selected a
+#   homogeneous bundle gets the same repartitioning [ORB-21839]: run start
+#   verifies the named drain is a live `--approve-proposed` drain that
+#   dispatched this exact run, then prepare partitions by live crew. A
+#   forged or ended drain's record, or a run it never dispatched, is
+#   refused like any other mixed bundle.
+# - A human task crew is operator work. Run start does not take that crew
+#   as this run's agent crew and does not fail the run. Prepare excludes
+#   those tasks, and the run keeps an agent crew (the first non-human task
+#   crew in a partition, otherwise `workflow.default_crew`). An explicit
+#   human crew on the run input is still refused. An approve-proposed drain
+#   does not select those tasks, so it never dispatches a pilot for them.
 
 schemaVersion: 2
 kind: Job
@@ -109,6 +160,8 @@ spec:
     drain_promotion: null
     state_automation: null
     source_revision: ""
+    full_pilot: false
+    recheck_max_age_hours: 72
 
   steps:
     - id: prepare
@@ -121,6 +174,8 @@ spec:
         base_branch: "{{ input.base_branch }}"
         max_tasks: "{{ input.max_tasks }}"
         max_partition_size: "{{ input.max_partition_size }}"
+        full_pilot: "{{ input.full_pilot }}"
+        recheck_max_age_hours: "{{ input.recheck_max_age_hours }}"
 
     - id: pilot_results
       when: "{{ steps.prepare.output.partition_count }} == 0"
@@ -145,8 +200,8 @@ spec:
           default_input:
             task_ids: "{{ item.task_ids }}"
             partition_index: "{{ item.partition_index }}"
-            # The whole item, so a partition without
-            # `explore_brief_task_ids` (none requested) still dispatches.
+            # The whole item, so a partition without its optional fields
+            # (`rechecks`, `auto_effort_escalation`) still dispatches.
             partition: "{{ item }}"
             workspace_path: "{{ steps.prepare.output.workspace_path }}"
             owner_machine: "{{ steps.prepare.output.owner_machine }}"

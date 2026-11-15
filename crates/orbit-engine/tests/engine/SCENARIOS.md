@@ -266,6 +266,7 @@ certifies the repaired head as both the original head and publication lease.
 
 - `claimed_commit_accepts_required_checks_with_controls_and_diagnostics`
 - `claimed_commit_refuses_incomplete_or_mismatched_mixed_role_evidence`
+- `claimed_commit_lands_after_owner_records_supplied_regression_from`
 
 ### `candidate_resume::candidate_resume_contracts_1`
 

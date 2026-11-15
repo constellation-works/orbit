@@ -1,6 +1,6 @@
 //! Kernel-level identity-bound delivery under deterministic numeric PID reuse.
 
-use super::BoundProcess;
+use super::super::signal::BoundProcess;
 
 /// Substitute a real bystander's number after binding the original, simulating
 /// the otherwise unforceable PID-reuse window without exhausting host PIDs.
@@ -13,7 +13,7 @@ fn retained_signal_identity_never_targets_a_reused_numeric_pid() {
     // Positive control: the ordinary bound signal reaches a live original.
     assert!(bound.signal(libc::SIGTERM).unwrap());
     drop(original);
-    bound.pid = replacement.pid();
+    bound.set_pid_for_test(replacement.pid());
     for signal in [libc::SIGTERM, libc::SIGKILL] {
         assert!(!bound.is_alive().unwrap());
         assert!(!bound.signal(signal).unwrap());

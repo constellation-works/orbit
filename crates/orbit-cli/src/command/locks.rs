@@ -33,6 +33,7 @@ pub(crate) fn render(verb: TaskVerb, value: Value) -> CommandOut {
         | TaskVerb::ArtifactPut
         | TaskVerb::ArtifactGet
         | TaskVerb::ReviewReset
+        | TaskVerb::Repilot
         | TaskVerb::Requeue
         | TaskVerb::BlockTriage
         | TaskVerb::ReconcileReview
@@ -48,7 +49,7 @@ pub(crate) fn render(verb: TaskVerb, value: Value) -> CommandOut {
 
 /// The TTL as whole seconds. `parse_duration_seconds` accepts the same
 /// `s/m/h/d/w` forms as the rest of the CLI; the domain rejects anything
-/// outside 1..=14400, so only the conversion to its integer width is checked
+/// outside 1..=86400, so only the conversion to its integer width is checked
 /// here — a week-long TTL must reach the domain to be refused by name rather
 /// than silently wrapping.
 pub(crate) fn reservation_ttl_seconds(raw: &str) -> Result<u64, OrbitError> {
@@ -143,8 +144,8 @@ const DEFAULT_CONTENTION_LIMIT: usize = 10;
                   two tasks inside one group are often compatible and merely linked through\n\
                   a third.\n\n\
                   Surfaces are the ones conflict admission reserves: declared selectors,\n\
-                  pruned of paths that no longer exist. A task declaring nothing locks\n\
-                  nothing and is counted apart."
+                  including valid ones whose target no longer exists. A task declaring\n\
+                  nothing locks nothing and is counted apart."
 )]
 pub struct LocksContentionArgs {
     /// Maximum hotspot rows to show. Default 10.

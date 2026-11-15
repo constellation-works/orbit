@@ -366,9 +366,13 @@ fn disabled_resolution_never_starts_the_login_shell() {
     assert!(!marker.exists(), "the login shell must not run");
     assert_eq!(resolved.source, ValidationEnvSource::LauncherFallback);
     assert_eq!(resolved.path(), Some(MINIMAL_PATH));
+    // The launcher-fallback warning names its source and PATH; configured
+    // runtimes always probe, so this policy is its only route [ORB-22808].
     let warning = resolved.preflight_warning().unwrap();
     assert!(
-        warning.contains("login-shell resolution is disabled"),
+        warning.contains("login-shell resolution is disabled")
+            && warning.contains("source: launcher_fallback")
+            && warning.contains(&format!("PATH={MINIMAL_PATH}")),
         "{warning}"
     );
 }

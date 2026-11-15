@@ -1,4 +1,7 @@
-#![allow(clippy::unwrap_used)]
+#![allow(
+    clippy::unwrap_used,
+    reason = "job-wait fixtures panic when a spec does not parse, which means the fixture itself is wrong"
+)]
 
 //! Load-time checks of a job's auto-task steps [ORB-20157], through the
 //! public `check_job_waits` boundary: the allowed shapes of
@@ -150,12 +153,6 @@ fn each_refusal_names_its_field() {
     // Each case is refused at its field, located by the structured `clause`
     // of the error, not by its wording.
     let cases: Vec<(&str, Value, &str)> = vec![
-        (
-            "enabled job",
-            json!({"state": "enabled", "expire_when": "now >= job.started_at + duration('1h')",
-                   "steps": [{"id": "a", "target": "auto-task:x"}]}),
-            "spec.state",
-        ),
         (
             "missing outer bound",
             json!({"state": "disabled", "steps": [{"id": "a", "target": "auto-task:x"}]}),

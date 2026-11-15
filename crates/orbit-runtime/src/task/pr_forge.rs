@@ -5,10 +5,13 @@
 //! and an owner drain checks a dead delivery leaf's PR is still open before
 //! it adopts the leaf. When an operator merges a task's delivery PR outside
 //! Orbit, Core settles the task from that merge
-//! (`application::task::external_merge`). Those policies only need a few
+//! (`application::task::external_merge`). The blocked-task triage re-requests
+//! the failed checks on a blocked task's PR head. Those policies only need a few
 //! forge operations, so they reach them through [`TaskPrForge`] rather than
 //! the `gh` CLI directly: production uses [`GhTaskPrForge`], and fixtures
-//! inject a fake forge. No operation deletes a branch.
+//! inject a fake forge. A resident holding the merge right lands a task's
+//! delivery PR through it (`application::task::external_merge`). No operation
+//! deletes a branch.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -71,9 +74,45 @@ pub struct PullRequestBlockers {
     pub passed_required_checks: Vec<String>,
 }
 
+/// Open pull request state needed for an operator's failure-handoff landing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandoffLandingPullRequest {
+    /// Exact head and required checks, with known mergeability.
+    pub blockers: PullRequestBlockers,
+    /// Destination branch.
+    pub base_branch: String,
+    /// Whether the author still marks the pull request as a draft.
+    pub draft: bool,
+}
+
+/// Outcomes of requests made to rerun failed workflow jobs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckRerunOutcome {
+    /// Successfully acknowledged workflow requests, including their run IDs.
+    pub requested: Vec<(u64, String)>,
+    /// The first request whose outcome could not be confirmed, and its error.
+    pub uncertain: Option<(u64, String, String)>,
+}
+
+/// How a request to merge a pull request ended when the forge answered it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PullRequestMergeOutcome {
+    /// The forge merged it synchronously.
+    Merged {
+        /// The commit it merged as.
+        merge_commit: String,
+    },
+    /// The forge refused it, so nothing merged: branch protection, a moved
+    /// head, a method the repository forbids or a caller it does not permit.
+    Refused {
+        /// The forge's own reason.
+        reason: String,
+    },
+}
+
 /// Forge operations behind closing a task's PRs on a terminal decision,
-/// settling a task from its merged delivery PR, and finding the merge
-/// blockers an out-of-run auto-fix repairs.
+/// settling a task from its merged delivery PR, landing one, and finding the
+/// merge blockers an out-of-run auto-fix repairs.
 pub trait TaskPrForge: Send + Sync {
     /// The PR for this binding, including an unmerged PR. `None` proves the
     /// branch has no PR; errors must never fall back to ancestry. The caller
@@ -130,13 +169,71 @@ pub trait TaskPrForge: Send + Sync {
     /// is not open or this forge cannot tell. GitHub's still-calculating
     /// `UNKNOWN` mergeability answer is reported as
     /// [`OrbitError::PullRequestMergeabilityUnknown`]. The default cannot tell,
-    /// so a forge without it repairs nothing out of run.
+    /// so a forge without it repairs nothing out of run. A caller that needs
+    /// the required checks while mergeability is still calculating uses
+    /// [`Self::pull_request_required_checks`].
     fn pull_request_blockers(
         &self,
         _repo_root: &Path,
         _number: u64,
     ) -> Result<Option<PullRequestBlockers>, OrbitError> {
         Ok(None)
+    }
+
+    /// Open state for an owner landing. Unsupported forges fail closed.
+    fn handoff_landing_pull_request(
+        &self,
+        _repo_root: &Path,
+        _number: u64,
+    ) -> Result<Option<HandoffLandingPullRequest>, OrbitError> {
+        Err(OrbitError::Execution(
+            "handoff landing PR lookup unavailable".into(),
+        ))
+    }
+
+    /// Required checks on open pull request `number`, without treating unknown
+    /// mergeability as unread. `None` when the pull request is not open.
+    /// `conflicting` is true only when the forge reports a conflict. The
+    /// default asks [`Self::pull_request_blockers`], so a forge that has not
+    /// separated the two still refuses while mergeability is unknown.
+    fn pull_request_required_checks(
+        &self,
+        repo_root: &Path,
+        number: u64,
+    ) -> Result<Option<PullRequestBlockers>, OrbitError> {
+        self.pull_request_blockers(repo_root, number)
+    }
+
+    /// Re-request the checks that failed on exactly commit `head_sha` of pull
+    /// request `number`, returning acknowledged requests and any uncertain
+    /// request. Errors must occur before a request is attempted; once one is
+    /// attempted, return its outcome even if the transport fails. Nothing is
+    /// re-requested for any other head. The default refuses before a request.
+    fn rerun_failed_checks(
+        &self,
+        _repo_root: &Path,
+        number: u64,
+        _head_sha: &str,
+    ) -> Result<CheckRerunOutcome, OrbitError> {
+        Err(OrbitError::Execution(format!(
+            "this forge cannot re-request the checks of pull request #{number}"
+        )))
+    }
+
+    /// Merge pull request `number` at exactly commit `head_sha`, under every
+    /// rule the forge enforces. An error means the outcome is unknown or no
+    /// request was made; a refusal the forge answered is
+    /// [`PullRequestMergeOutcome::Refused`]. The default refuses before a
+    /// request.
+    fn merge_pull_request(
+        &self,
+        _repo_root: &Path,
+        number: u64,
+        _head_sha: &str,
+    ) -> Result<PullRequestMergeOutcome, OrbitError> {
+        Err(OrbitError::Execution(format!(
+            "this forge cannot merge pull request #{number}"
+        )))
     }
 
     /// The login this machine's forge credentials act as, which is the
@@ -217,7 +314,7 @@ impl TaskPrForge for GhTaskPrForge {
             })?;
             view_pull_request(repo_root, number)?
         } else {
-            let stdout = run_gh(
+            let stdout = task_forge_gh_request(
                 orbit_tools::github_cli::bound_branch_pull_request_request(binding),
                 repo_root,
                 "gh pr list",
@@ -256,7 +353,7 @@ impl TaskPrForge for GhTaskPrForge {
     }
 
     fn open_pull_requests(&self, repo_root: &Path) -> Result<Vec<ForgePullRequest>, OrbitError> {
-        let stdout = run_gh(
+        let stdout = task_forge_gh_request(
             orbit_tools::github_cli::open_pull_requests_request(),
             repo_root,
             "gh pr list",
@@ -285,7 +382,7 @@ impl TaskPrForge for GhTaskPrForge {
     }
 
     fn merged_pull_requests(&self, repo_root: &Path) -> Result<Vec<MergedPullRequest>, OrbitError> {
-        let stdout = run_gh(
+        let stdout = task_forge_gh_request(
             orbit_tools::github_cli::merged_pull_requests_request(),
             repo_root,
             "gh pr list",
@@ -324,36 +421,151 @@ impl TaskPrForge for GhTaskPrForge {
         repo_root: &Path,
         number: u64,
     ) -> Result<Option<PullRequestBlockers>, OrbitError> {
-        let stdout = run_gh(
-            orbit_tools::github_cli::pull_request_blockers_request(number),
-            repo_root,
-            "gh api graphql",
-        )?;
-        let answer = orbit_tools::github_cli::parse_gh_json(&stdout, "gh api graphql")?;
-        let pull = answer
-            .pointer("/data/repository/pullRequest")
-            .filter(|pull| !pull.is_null())
-            .ok_or_else(|| {
-                OrbitError::Execution(format!("gh api graphql found no pull request #{number}"))
-            })?;
-        if !has_state(pull, "open") {
+        let Some(pull) = open_pull_request_document(repo_root, number)? else {
             return Ok(None);
-        }
+        };
+        // Unknown mergeability is its own answer: callers that merge or defer
+        // must not treat it as a conflict, a clean merge, or an unreadable
+        // rollup. Check reads use `pull_request_required_checks` instead.
         if pull.get("mergeable").and_then(Value::as_str) == Some("UNKNOWN") {
             return Err(OrbitError::PullRequestMergeabilityUnknown { number });
         }
-        pull_request_blockers_from_json(number, pull)
+        if !matches!(
+            pull.get("mergeable").and_then(Value::as_str),
+            Some("MERGEABLE" | "CONFLICTING")
+        ) {
+            return Err(unreadable_pull_request_blockers(number));
+        }
+        pull_request_blockers_from_json(number, &pull)
+            .map(Some)
+            .ok_or_else(|| unreadable_pull_request_blockers(number))
+    }
+
+    fn handoff_landing_pull_request(
+        &self,
+        repo_root: &Path,
+        number: u64,
+    ) -> Result<Option<HandoffLandingPullRequest>, OrbitError> {
+        let Some(pull) = open_pull_request_document(repo_root, number)? else {
+            return Ok(None);
+        };
+        if pull.get("mergeable").and_then(Value::as_str) == Some("UNKNOWN") {
+            return Err(OrbitError::PullRequestMergeabilityUnknown { number });
+        }
+        if !matches!(
+            pull.get("mergeable").and_then(Value::as_str),
+            Some("MERGEABLE" | "CONFLICTING")
+        ) {
+            return Err(unreadable_pull_request_blockers(number));
+        }
+        let blockers = pull_request_blockers_from_json(number, &pull)
+            .ok_or_else(|| unreadable_pull_request_blockers(number))?;
+        let base_branch = pull
+            .get("baseRefName")
+            .and_then(Value::as_str)
+            .filter(|base| !base.is_empty())
+            .ok_or_else(|| unreadable_pull_request_blockers(number))?
+            .to_string();
+        let draft = pull
+            .get("isDraft")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| unreadable_pull_request_blockers(number))?;
+        Ok(Some(HandoffLandingPullRequest {
+            blockers,
+            base_branch,
+            draft,
+        }))
+    }
+
+    fn pull_request_required_checks(
+        &self,
+        repo_root: &Path,
+        number: u64,
+    ) -> Result<Option<PullRequestBlockers>, OrbitError> {
+        let Some(pull) = open_pull_request_document(repo_root, number)? else {
+            return Ok(None);
+        };
+        pull_request_blockers_from_json(number, &pull)
             .map(Some)
             .ok_or_else(|| {
                 OrbitError::Execution(format!(
-                    "gh api graphql did not report the author, head, mergeability and complete \
-                 required checks of pull request #{number}"
+                    "gh api graphql did not report the author, head and complete required \
+                     checks of pull request #{number}"
                 ))
             })
     }
 
+    /// Waits up to 120 seconds for in-progress workflows on the head, then
+    /// reruns failed jobs. A run on another head is never touched.
+    fn rerun_failed_checks(
+        &self,
+        repo_root: &Path,
+        number: u64,
+        head_sha: &str,
+    ) -> Result<CheckRerunOutcome, OrbitError> {
+        super::pr_forge_rerun::rerun_failed_head_workflows(repo_root, number, head_sha)
+    }
+
+    fn merge_pull_request(
+        &self,
+        repo_root: &Path,
+        number: u64,
+        head_sha: &str,
+    ) -> Result<PullRequestMergeOutcome, OrbitError> {
+        if !matches!(head_sha.len(), 40 | 64) || !head_sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(OrbitError::InvalidInput(format!(
+                "merging pull request #{number} requires its exact head commit"
+            )));
+        }
+        let stdout = task_forge_gh_request(
+            orbit_tools::github_cli::repository_merge_methods_request(),
+            repo_root,
+            "gh repo view",
+        )?;
+        let methods = orbit_tools::github_cli::parse_gh_json(&stdout, "gh repo view")?;
+        let Some(method) = [
+            ("squashMergeAllowed", "squash"),
+            ("rebaseMergeAllowed", "rebase"),
+            ("mergeCommitAllowed", "merge"),
+        ]
+        .into_iter()
+        .find_map(|(field, method)| {
+            (methods.get(field).and_then(Value::as_bool) == Some(true)).then_some(method)
+        }) else {
+            return Ok(PullRequestMergeOutcome::Refused {
+                reason: "the repository permits no merge method".to_string(),
+            });
+        };
+        let mut request =
+            orbit_tools::github_cli::merge_pull_request_at_head_request(number, head_sha, method);
+        request.current_dir = Some(repo_root.to_string_lossy().into_owned());
+        let result = run_process(&request, &NoSandbox)?;
+        if !result.success {
+            // This text is returned to an agent's call.
+            let stderr =
+                orbit_common::security::redaction::redact_all_and_home(result.stderr.trim());
+            if !result.timed_out && forge_refused_request(&stderr) {
+                return Ok(PullRequestMergeOutcome::Refused { reason: stderr });
+            }
+            return Err(OrbitError::Execution(format!(
+                "gh api merge of pull request #{number} failed: {stderr}"
+            )));
+        }
+        let answer = orbit_tools::github_cli::parse_gh_json(&result.stdout, "gh api merge")?;
+        match answer.get("sha").and_then(Value::as_str) {
+            Some(merge_commit) if answer.get("merged").and_then(Value::as_bool) == Some(true) => {
+                Ok(PullRequestMergeOutcome::Merged {
+                    merge_commit: merge_commit.to_string(),
+                })
+            }
+            _ => Err(OrbitError::Execution(format!(
+                "gh api merge of pull request #{number} did not confirm a merge"
+            ))),
+        }
+    }
+
     fn authenticated_login(&self, repo_root: &Path) -> Result<String, OrbitError> {
-        let stdout = run_gh(
+        let stdout = task_forge_gh_request(
             orbit_tools::github_cli::authenticated_login_request(),
             repo_root,
             "gh api user",
@@ -373,7 +585,7 @@ impl TaskPrForge for GhTaskPrForge {
         number: u64,
         comment: &str,
     ) -> Result<(), OrbitError> {
-        run_gh(
+        task_forge_gh_request(
             orbit_tools::github_cli::close_pull_request_request(number, comment),
             repo_root,
             "gh pr close",
@@ -383,12 +595,24 @@ impl TaskPrForge for GhTaskPrForge {
 }
 
 fn view_pull_request(repo_root: &Path, number: u64) -> Result<Value, OrbitError> {
-    let stdout = run_gh(
+    let stdout = task_forge_gh_request(
         orbit_tools::github_cli::view_pull_request_request(number),
         repo_root,
         "gh pr view",
     )?;
     orbit_tools::github_cli::parse_gh_json(&stdout, "gh pr view")
+}
+
+/// Whether a failed `gh api` call's stderr is the forge's own rejection of the
+/// request: an HTTP 4xx, which `gh` reports as `gh: <reason> (HTTP 405)`. A
+/// timed-out request or rate limit, a server error and a transport failure
+/// leave the outcome unknown or say nothing about the request.
+fn forge_refused_request(stderr: &str) -> bool {
+    stderr
+        .rsplit_once("(HTTP ")
+        .and_then(|(_, status)| status.split_once(')'))
+        .and_then(|(status, _)| status.parse::<u16>().ok())
+        .is_some_and(|status| (400..500).contains(&status) && !matches!(status, 408 | 429))
 }
 
 fn has_state(entry: &Value, state: &str) -> bool {
@@ -398,7 +622,11 @@ fn has_state(entry: &Value, state: &str) -> bool {
         .is_some_and(|reported| reported.eq_ignore_ascii_case(state))
 }
 
-fn run_gh(mut request: ExecRequest, repo_root: &Path, label: &str) -> Result<String, OrbitError> {
+pub(super) fn task_forge_gh_request(
+    mut request: ExecRequest,
+    repo_root: &Path,
+    label: &str,
+) -> Result<String, OrbitError> {
     request.current_dir = Some(repo_root.to_string_lossy().into_owned());
     let result = run_process(&request, &NoSandbox)?;
     if !result.success {
@@ -443,18 +671,45 @@ fn merged_pull_request_from_json(entry: &Value) -> Option<MergedPullRequest> {
     })
 }
 
-/// Read a GraphQL pull request answer whose mergeability can be judged. The
-/// caller classifies `UNKNOWN` separately; a head the rollup does not describe
-/// or a truncated rollup cannot be judged, so neither is reported as no blocker.
-/// Every context must say whether it is required: an unreadable flag cannot
-/// prove a failed or unfinished check optional.
+fn open_pull_request_document(repo_root: &Path, number: u64) -> Result<Option<Value>, OrbitError> {
+    let stdout = task_forge_gh_request(
+        orbit_tools::github_cli::pull_request_blockers_request(number),
+        repo_root,
+        "gh api graphql",
+    )?;
+    let answer = orbit_tools::github_cli::parse_gh_json(&stdout, "gh api graphql")?;
+    let Some(pull) = answer
+        .pointer("/data/repository/pullRequest")
+        .filter(|pull| !pull.is_null())
+        .cloned()
+    else {
+        return Err(OrbitError::Execution(format!(
+            "gh api graphql found no pull request #{number}"
+        )));
+    };
+    if !has_state(&pull, "open") {
+        return Ok(None);
+    }
+    Ok(Some(pull))
+}
+
+fn unreadable_pull_request_blockers(number: u64) -> OrbitError {
+    OrbitError::Execution(format!(
+        "gh api graphql did not report the author, head, mergeability and complete \
+         required checks of pull request #{number}"
+    ))
+}
+
+/// Read a GraphQL pull request answer's required checks. `conflicting` is
+/// true only for `CONFLICTING`; `UNKNOWN` and any other spelling are not a
+/// conflict, and a missing mergeability field does not hide the checks. A
+/// head the rollup does not describe, or a truncated rollup, cannot be
+/// judged, so neither is reported as no blocker. Every context must say
+/// whether it is required: an unreadable flag cannot prove a failed or
+/// unfinished check optional.
 fn pull_request_blockers_from_json(number: u64, pull: &Value) -> Option<PullRequestBlockers> {
     let head_sha = pull.get("headRefOid")?.as_str()?.to_string();
-    let conflicting = match pull.get("mergeable")?.as_str()? {
-        "CONFLICTING" => true,
-        "MERGEABLE" => false,
-        _ => return None,
-    };
+    let conflicting = pull.get("mergeable").and_then(Value::as_str) == Some("CONFLICTING");
     let commit = pull.pointer("/commits/nodes/0/commit")?;
     if commit.get("oid")?.as_str()? != head_sha {
         return None;

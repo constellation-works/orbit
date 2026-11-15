@@ -6,7 +6,7 @@
 //!
 //! - **Fit.** The candidate's profile, added to the host load forecast, must
 //!   stay under `admit_cpu_percent` of the host's cores and
-//!   `admit_memory_percent` of its memory at every minute of its horizon. A
+//!   75% of its memory at every minute of its horizon. A
 //!   candidate that fits is added to the forecast before the next is checked,
 //!   so one pass can admit several that account for each other. One that
 //!   does not is recorded with the minute and resource that failed, and the
@@ -17,12 +17,12 @@
 //!   threshold: nothing would make room by finishing. Its admission records
 //!   the miss.
 //! - **Starvation guard.** The first candidate gap fit judges in a pass is
-//!   the head. Once it has failed for longer than `head_max_wait_minutes`,
+//!   the head. Once it has failed for longer than 30 minutes,
 //!   over consecutive passes, nothing behind it is admitted until it fits.
 //!   It waits only on running deliveries and reservations, which end: once
 //!   they have, the idle-host rule admits it.
 //! - **Stuck head.** A protected head whose miss has not improved over
-//!   `head_stuck_passes` consecutive protected passes is marked stuck, with
+//!   20 consecutive protected passes is marked stuck, with
 //!   the miss, its profile and the baseline, so the drain can report it.
 //!   Being stuck changes no admission.
 //! - **No profiles.** On a host without profiles every lookup finds none
@@ -90,7 +90,7 @@ pub(crate) struct HeadWait<'a> {
     /// The previous pass's head, while it was failing.
     pub(crate) previous: Option<&'a GapFitHead>,
     pub(crate) max_wait: Duration,
-    /// `head_stuck_passes`: protected passes without a better miss before
+    /// Protected passes without a better miss before
     /// the head is stuck.
     pub(crate) stuck_passes: u32,
     pub(crate) now: DateTime<Utc>,

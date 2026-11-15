@@ -7,6 +7,9 @@ use serde_json::Value;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolSessionContext {
+    /// Verified by the host from a credential, never from wire metadata.
+    #[serde(skip)]
+    pub application: Option<Box<super::ApplicationInvocation>>,
     /// Runtime-owned attempt binding. Ordinary JSON session metadata cannot
     /// create authority; transport adapters propagate it explicitly.
     #[serde(skip)]
@@ -94,6 +97,14 @@ pub struct ToolSessionContext {
     /// switch on the client side.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orchestrator: Option<String>,
+    /// `clientInfo.name` the MCP client sent at initialize, verbatim.
+    ///
+    /// Self-reported like [`Self::self_reported_actor`], so it grants no
+    /// capability and never enters authorization. It only lets a destination
+    /// keep a reserved input, such as attention's `candidate_read`, to the
+    /// Orbit client that is documented to send it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_client_name: Option<String>,
 }
 
 impl ToolSessionContext {
@@ -104,6 +115,7 @@ impl ToolSessionContext {
         machine_name: Option<String>,
     ) -> Self {
         Self {
+            application: None,
             workspace: None,
             worker_invocation: None,
             worker_host_call: false,
@@ -124,6 +136,7 @@ impl ToolSessionContext {
             // The standalone adapter is launched per call, not configured as
             // a session, so it carries no attribution default.
             orchestrator: None,
+            mcp_client_name: None,
         }
     }
 
@@ -359,6 +372,17 @@ pub enum McpToolDefinitionError {
     DuplicateCanonicalName(String),
     #[error("duplicate advertised MCP tool name: {0}")]
     DuplicateAdvertisedName(String),
+    #[error("MCP tool {0} belongs to no toolset; classify it in the builtin toolset table")]
+    UnclassifiedToolset(String),
+    #[error(
+        "MCP tool {0} addresses one id with an optional workspace but declares no id route; \
+         declare its McpIdRoute at its definition site"
+    )]
+    UnclassifiedIdRoute(String),
+    #[error(
+        "MCP tool {0} declares an id route but does not address one id with an optional workspace"
+    )]
+    MisdeclaredIdRoute(String),
 }
 
 /// Convert a canonical Orbit tool name to its MCP-advertised form.

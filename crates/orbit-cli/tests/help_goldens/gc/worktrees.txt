@@ -1,4 +1,4 @@
-Reap job-run worktrees whose associated task has settled to rejected, archived, or done, or whose claim this follower has settled with its owner
+Reap job-run worktrees whose associated task has settled to rejected, archived, or done, or whose claim this follower has settled with its owner. Also reap terminal-run worktrees for tasks parked in someday after the age set by `worktree.parked_reclaim_after_hours`
 
 Usage: orbit gc worktrees [OPTIONS]
 

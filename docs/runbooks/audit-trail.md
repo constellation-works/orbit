@@ -5,7 +5,7 @@ tags: [operations, audit, observability, debugging]
 paths: ["crates/orbit-runtime/src/audit/run/trail.rs", "crates/orbit-runtime/src/audit/run/projection.rs", "crates/orbit-types/src/telemetry/audit_event.rs"]
 related_features: [auditability, activity-job]
 related_artifacts: [ORB-10014, ORB-10227, ORB-10228, ORB-16383]
-last_validated: 2026-10-19
+last_validated: 2026-11-08
 ---
 
 # Inspect the Audit Trail
@@ -74,17 +74,27 @@ peer's host PID). Secret metadata contains names and update outcomes only;
 secret values are never exported. Rows without this metadata use `null` for
 optional fields, empty arrays/maps for collections, and `false` for `brokered`.
 
-CSV export appends the same six columns after the existing columns. `plugin`,
-`plugin_secrets` and `plugin_secret_updates` are compact JSON within CSV cells;
-the CSV writer escapes their quotes and commas. An absent plugin is `null`,
-empty secret collections are `[]` and `{}`, `brokered` is `true` or `false`,
-and an absent `peer_pid` or `self_reported_actor` is an empty cell. The
+CSV export appends the same columns after the existing ones, plus
+`session_model`. `plugin`, `plugin_secrets` and `plugin_secret_updates` are
+compact JSON within CSV cells; the CSV writer escapes their quotes and commas.
+An absent plugin is `null`, empty secret collections are `[]` and `{}`,
+`brokered` is `true` or `false`, and an absent `peer_pid`,
+`self_reported_actor` or `session_model` is an empty cell. The
 `self_reported_actor` column is unverified attribution, separate from `role`.
+
+`session_model` is the server-derived model on an MCP tool call, and it is
+never taken from tool input. The order is the brokered job's resolved crew
+model, otherwise a managed worker's `ORBIT_AGENT_MODEL`, otherwise the
+`orbit mcp serve --orchestrator` crew's configured model, otherwise the MCP
+client's `clientInfo` name. It is not the authenticated `role`. CLI rows and
+rows written before the column existed leave it empty; the Tools failure
+breakdown then uses the role-derived actor model, then family.
 
 Compatibility matters when interpreting those fields: legacy `host` is always the hostname of
 the executing process, not the caller; `session_id` is unchanged; and `job_run_id` remains the
-canonical run correlation. `origin_session_id` groups MCP calls while `mcp_call_id` identifies
-one call. Ordinary standalone agent MCP rows have role `unverified` and local transport. By
+canonical run correlation. `origin_session_id` groups MCP calls while the per-call `trace_id`
+identifies one call; `mcp_call_id` is the compatibility identifier federated routed calls may
+carry. Ordinary standalone agent MCP rows have role `unverified` and local transport. By
 default, the session has only the `agent` capability; a server started with `--operator` also
 grants `operator`. Trusted managed-envelope identity may replace `unverified`; client JSON may
 not.
@@ -95,9 +105,8 @@ not.
 the invocation store and writes nothing. Each dashboard server shares one
 computation per live workspace runtime and canonical window for 90 seconds,
 including concurrent requests. Omitted `window` and `window=all` share an
-entry. A rebuilt workspace runtime starts a fresh cache namespace. The retired
-`GET /api/scoreboard` returns the same body with `Deprecation` and `Sunset`
-headers until 2026-11-12. Files left under `state/scoreboard/` are never read.
+entry. A rebuilt workspace runtime starts a fresh cache namespace. The retired `GET /api/scoreboard` alias was removed after its 2026-11-12
+sunset and now returns 404. Files left under `state/scoreboard/` are never read.
 
 Cross-run incident grouping tokenizes messages once and incrementally refreshes
 only citations affected by a fold. It preserves the existing fold order,
@@ -114,6 +123,8 @@ whose recorded role is a model label. The existing `role=<label>` Events filter
 still matches the exact stored role. A
 failure-incident drill-down adds `status=non_success`, which includes both
 `failure` and `denied`; Events shows these filters as removable scope chips.
+A tool, execution-id or profile filter is a removable scope chip too; removing
+it re-queries without that filter.
 The rows are raw evidence, so several rows can belong to one counted incident.
 
 Family and combined-status filters compose with the other Events filters and
@@ -168,13 +179,13 @@ all values. Wider cards show those columns. Top duration ranks named tools
 only, excluding the synthetic `unknown` bucket and empty names before choosing
 the top eight.
 
-The denial badge on the Health rail entry shows the canonical policy-decision
-count (`denials` in `/api/audit/summary`, split in its title into audit rows,
-`denials_sql`, and loop denials, `denials_v2`). Clicking it opens Health › Incidents › Events
-filtered to `status=denied` for the window it counted. That list holds every
+The Health rail shows no denial count. The canonical policy-decision count is
+still `denials` in `/api/audit/summary` (the sum of `denials_sql`, audit rows,
+and `denials_v2`, loop denials). To list denials, open Health › Incidents › Events
+with the `status=denied` filter for the window you need. That list holds every
 denied audit row, including the lock-contention and settlement refusals the
 count excludes, and not the loop denials, so its length can differ from the
-badge.
+count.
 `GET /api/diagnostics/denials` still returns the per-denial evidence:
 `policy_decisions` (`total`, `sql`, `v2`), `evidence_scan_limit`, the evidence
 `total` and `recent_denials`. Evidence scans are capped at 1,000 rows per

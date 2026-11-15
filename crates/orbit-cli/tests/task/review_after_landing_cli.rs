@@ -1,9 +1,7 @@
 //! After-landing review is the shipped `delivery-code-review` auto-task's
 //! own `enabled` flag [ORB-13992], and `orbit doctor` fails while an enabled
 //! consumer cannot run [ORB-13896]: a disabled, unowned or wedged consumer
-//! once looked healthy for weeks. The deprecated
-//! `operation.review_policy = "after-landing"` still enables a consumer no
-//! operator has configured, for one release.
+//! once looked healthy for weeks.
 
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -138,6 +136,13 @@ pub(super) fn enable_review_crew(fixture: &Fixture) {
             &pooled,
         );
     }
+    // Init likewise seeds `workflow.purpose_crews.pre_landing_review` from
+    // the detected families; on a host that runs all of them the pool is
+    // non-empty, so before-PR review would draw from it instead of falling
+    // back to `workflow.purpose_crews.review` as these tests arrange. An
+    // empty pool keeps that fallback; a test that wants a pre-landing pool
+    // sets it after this helper runs.
+    set_policy(fixture, "workflow.purpose_crews.pre_landing_review", "[]");
 }
 
 /// Toggle the shipped consumer, as an operator switching after-landing
@@ -449,7 +454,7 @@ fn after_landing_review_mints_exactly_when_the_auto_task_is_enabled() {
     toggle(&fixture, "on");
     let runtime = open_runtime(&fixture);
     let listed = runtime
-        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .run_tool_as_human("orbit.auto_task", json!({"action": "list"}))
         .unwrap();
     let listed_consumer = listed
         .as_array()
@@ -501,12 +506,12 @@ fn after_landing_review_mints_exactly_when_the_auto_task_is_enabled() {
     assert_doctor_fails(&fixture, "does not resolve");
 }
 
-/// [ORB-13992] The deprecated `operation.review_policy = "after-landing"`
-/// keeps reviewing through a consumer no operator has configured, and stops
-/// counting once an operator toggles the auto-task themselves.
+/// The deprecated `operation.review_policy = "after-landing"` no longer
+/// enables the consumer: only the auto-task's own `enabled` flag does.
 #[test]
-fn deprecated_after_landing_policy_enables_only_an_unconfigured_consumer() {
-    const TEST: &str = "review_after_landing_cli::deprecated_after_landing_policy_enables_only_an_unconfigured_consumer";
+fn deprecated_after_landing_policy_no_longer_enables_the_consumer() {
+    const TEST: &str =
+        "review_after_landing_cli::deprecated_after_landing_policy_no_longer_enables_the_consumer";
     if !in_isolated_child(TEST) {
         return;
     }
@@ -520,27 +525,17 @@ fn deprecated_after_landing_policy_enables_only_an_unconfigured_consumer() {
 
     let shown = fixture.json(&["auto-task", "show", CONSUMER, "--json"]);
     assert_eq!(shown["enabled"], false, "the seed is not rewritten");
-    assert_eq!(shown["effective_enabled"], true, "{shown}");
+    assert_eq!(shown["effective_enabled"], false, "{shown}");
     let config = fixture.json(&["config", "show", "--json"]);
     assert_eq!(
-        config["review"]["after_landing"]["enabled"], true,
-        "{config}"
-    );
-    assert!(
-        config["review"]["after_landing"]["source"]
-            .as_str()
-            .unwrap()
-            .contains("deprecated operation.review_policy"),
+        config["review"]["after_landing"]["enabled"], false,
         "{config}"
     );
     assert_eq!(config["review"]["before_pr"]["enabled"], false, "{config}");
 
-    toggle(&fixture, "off");
+    toggle(&fixture, "on");
     let shown = fixture.json(&["auto-task", "show", CONSUMER, "--json"]);
-    assert_eq!(
-        shown["effective_enabled"], false,
-        "an operator's toggle is explicit configuration the deprecated key no longer overrides"
-    );
+    assert_eq!(shown["effective_enabled"], true, "{shown}");
 }
 
 #[test]
@@ -649,13 +644,13 @@ fn doctor_fails_while_the_after_landing_consumer_cannot_review_landed_work() {
     );
     let (row, _) = doctor_row(&fixture);
     assert_eq!(row["status"], "ok", "deleting the consumer opts out: {row}");
-    // The deprecated policy still asks for after-landing review, which a
-    // deleted consumer cannot give.
+    // The deprecated policy no longer asks for after-landing review, so a
+    // deleted consumer is not a doctor problem.
     append_global_config(
         &fixture,
         "\n[operation]\nreview_policy = \"after-landing\"\n",
     );
-    assert_doctor_fails(&fixture, "is missing");
+    assert_eq!(doctor_row(&fixture).0["status"], "ok");
 
     fixture.json(&["auto-task", "restore", CONSUMER, "--json"]);
     toggle(&fixture, "off");

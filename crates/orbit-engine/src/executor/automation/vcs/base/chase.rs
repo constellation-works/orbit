@@ -9,6 +9,7 @@
 //! hands a conflicting advance to another bounded conflict recovery.
 
 use orbit_common::OrbitError;
+use orbit_types::workflow::DeliveryRefusal;
 use serde_json::{Value, json};
 
 use crate::DispatchError;
@@ -26,7 +27,8 @@ use super::super::handoff::{HandoffContext, rebase_in_progress};
 /// How many times one step may carry its certified recovery onto a base that
 /// advanced past it. Every chase either rebases cleanly, which costs seconds,
 /// or spends one more bounded conflict recovery; a base that keeps moving
-/// past this blocks as `base_chase_exhausted` instead of looping.
+/// past this holds as `base_chase_exhausted` for the owner drain to resume
+/// in a new run, instead of looping or failing the delivery.
 const MAX_BASE_CHASES: usize = 2;
 
 /// Carry a certified recovered HEAD onto a base that advanced after the
@@ -62,15 +64,32 @@ pub(in crate::executor::automation::vcs) fn chase_advanced_base<H: RuntimeHost +
         .into_iter()
         .map(|attempt| attempt.target_base_sha)
         .collect::<std::collections::BTreeSet<_>>();
+    // A resumed run starts from its source's certified base, which its own
+    // attempt ledger does not contain. Keep that starting base in the count
+    // after this run certifies its first chase, too; otherwise a retry could
+    // follow one more base than the per-run limit permits.
+    if let Some(source) = host
+        .get_job_run(run_id)?
+        .and_then(|run| run.retry_source_run_id)
+        && let Some(state) = host.read_run_state(&source)?
+        && let Some(start) = state.rebase_recovery_checkpoints.get(step_id)
+        && let Some(base) = start.get("base_sha").and_then(Value::as_str)
+    {
+        bases.insert(base.to_string());
+    }
     bases.insert(recovered_base.to_string());
     bases.insert(base_sha.to_string());
     if bases.len() - 1 > MAX_BASE_CHASES {
-        return Err(OrbitError::Execution(format!(
-            "base_chase_exhausted: '{base_ref}' advanced to '{base_sha}' after step \
+        return Err(OrbitError::DeliveryRefused {
+            refusal: DeliveryRefusal::BaseChaseExhausted,
+            message: format!(
+                "base_chase_exhausted: '{base_ref}' advanced to '{base_sha}' after step \
              `{step_id}` certified recovered HEAD '{recovered}' on '{recovered_base}', and the \
              step has already followed its base {MAX_BASE_CHASES} time(s); refusing to chase \
-             it again"
-        )));
+             it again in this run. The certified recovery and PR are kept for the next \
+             authorized owner drain pass"
+            ),
+        });
     }
 
     let what = "a recovered HEAD the base advanced past";

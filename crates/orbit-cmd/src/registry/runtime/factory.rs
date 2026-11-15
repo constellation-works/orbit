@@ -102,12 +102,23 @@ impl RegisteredRuntimeStamp {
     /// shared_root)` in Core's composition, where a registered checkout's
     /// shared root is its own `.orbit` directory.
     pub fn read(global_root: &Path, checkout: &WorkspaceCheckout) -> Self {
+        let host_plugins = host_plugin_rows(global_root).unwrap_or_default();
+        Self::read_with_host_plugins(global_root, checkout, host_plugins)
+    }
+
+    /// Stamp composition inputs using host plugin rows already read by a
+    /// long-lived host, avoiding a second config resolution and store open.
+    pub fn read_with_host_plugins(
+        global_root: &Path,
+        checkout: &WorkspaceCheckout,
+        host_plugins: Vec<InstalledPlugin>,
+    ) -> Self {
         Self {
             registry: FileStamp::read(&workspace_registry::registry_path_for(global_root)),
             host_registry: FileStamp::read(&orbit_registry::hosts::hosts_path(global_root)),
             workspace_binding: FileStamp::read(&workspace_config_path(&checkout.orbit_dir)),
             config: ConfigLayerStamp::read(global_root, &checkout.orbit_dir),
-            host_plugins: host_plugin_rows(global_root).unwrap_or_default(),
+            host_plugins,
         }
     }
 }
@@ -306,8 +317,24 @@ impl RegisteredRuntimeFactory {
             let hint = preloaded
                 .as_ref()
                 .and_then(|inputs| checkout_root_hint(&inputs.registry, &cwd));
-            let mut roots =
-                OrbitRuntime::resolve_roots_for_cwd_with_hint(&cwd, root_override, hint.as_ref())?;
+            // A host read launched from HOME has no workspace root to resolve.
+            // Keep the ordinary resolver's refusal to adopt ~/.orbit for every
+            // workspace operation; only this existing host-fallback route lends it.
+            let host_root = preloaded.as_ref().filter(|inputs| {
+                host_fallback
+                    && hint.is_none()
+                    && canonical_or_original(&cwd.join(".orbit"))
+                        == canonical_or_original(&inputs.global_root)
+            });
+            let mut roots = if let Some(inputs) = host_root {
+                OrbitRuntimeRoots {
+                    global_root: inputs.global_root.clone(),
+                    shared_root: inputs.global_root.clone(),
+                    local_root: inputs.global_root.clone(),
+                }
+            } else {
+                OrbitRuntime::resolve_roots_for_cwd_with_hint(&cwd, root_override, hint.as_ref())?
+            };
             let inputs = match preloaded {
                 Some(inputs) if inputs.global_root == roots.global_root => inputs,
                 _ => RuntimeOpenInputs::read(&roots.global_root)?,
@@ -330,7 +357,6 @@ impl RegisteredRuntimeFactory {
                 // A discovered workspace may belong to another generation
                 // authority: refuse before this open writes anything.
                 verify_workspace_layout_authority(&roots.global_root, &roots.shared_root)?;
-                sync_task_prefix_for_identity(&roots.global_root, &inputs.identity)?;
             }
             let replica_owner = selection
                 .as_ref()
@@ -339,13 +365,18 @@ impl RegisteredRuntimeFactory {
             let runtime = if read_only {
                 OrbitRuntime::initialize_from_resolved_roots_read_only(roots, binding)
             } else {
-                OrbitRuntime::initialize_from_resolved_roots(roots, binding)
+                OrbitRuntime::initialize_from_resolved_roots_with_task_prefix(
+                    roots,
+                    binding,
+                    sync_task_prefix_for_identity(&inputs.identity),
+                )
             };
             return runtime.map(|runtime| {
                 attach_registry_context(
                     runtime.with_coordination_write_owner(replica_owner),
                     &global_root,
                     &inputs.identity,
+                    Some(&inputs.registry),
                 )
             });
         };
@@ -366,6 +397,7 @@ impl RegisteredRuntimeFactory {
                 &selected.checkout,
                 &local_root,
                 &identity,
+                Some(&registry),
             )
         } else {
             Self::open_registered_checkout_with_identity_and_local_root(
@@ -375,6 +407,7 @@ impl RegisteredRuntimeFactory {
                 &local_root,
                 HostLifetime::ShortLived,
                 &identity,
+                Some(&registry),
             )
         }
     }
@@ -394,12 +427,12 @@ impl RegisteredRuntimeFactory {
         global_root: &Path,
         selector: &str,
     ) -> Result<ResolvedWorkspaceSelection, OrbitError> {
-        let registry = Self::load_registry_for_selectors(global_root)?;
-        Self::resolve_selector_in(
-            &registry,
-            selector,
-            inspect_machine_identity(global_root)?.id(),
-        )
+        let identity = inspect_machine_identity(global_root)?;
+        let registry = load_registry_for_selector_resolution(
+            &workspace_registry::registry_path_for(global_root),
+            &identity,
+        )?;
+        Self::resolve_selector_in(&registry, selector, identity.id())
     }
 
     /// The registry read [`Self::resolve_workspace_selector`] performs, exposed
@@ -461,26 +494,30 @@ impl RegisteredRuntimeFactory {
             .map(|(workspace, checkout)| workspace_runtime_binding(workspace, checkout))
             .transpose()?;
         verify_workspace_layout_authority(&roots.global_root, &roots.shared_root)?;
-        sync_task_prefix_for_identity(&roots.global_root, &inputs.identity)?;
+        let task_prefix = sync_task_prefix_for_identity(&inputs.identity);
         let replica_owner =
             registered.and_then(|(_, checkout)| replica_owner_for_checkout(checkout));
         let runtime = match binding {
-            Some(binding) => OrbitRuntime::from_resolved_roots_with_binding(
+            Some(binding) => OrbitRuntime::from_resolved_roots_with_binding_for_task_prefix(
                 &roots.global_root,
                 &roots.shared_root,
                 &roots.local_root,
                 binding,
+                HostLifetime::ShortLived,
+                task_prefix,
             ),
-            None => OrbitRuntime::from_resolved_roots(
+            None => OrbitRuntime::from_resolved_roots_with_task_prefix(
                 &roots.global_root,
                 &roots.shared_root,
                 &roots.local_root,
+                task_prefix,
             ),
         }?;
         Ok(attach_registry_context(
             runtime.with_coordination_write_owner(replica_owner),
             &roots.global_root,
             &inputs.identity,
+            Some(&inputs.registry),
         ))
     }
 
@@ -513,18 +550,23 @@ impl RegisteredRuntimeFactory {
             checkout,
             host_lifetime,
             &identity,
+            None,
         )
     }
 
     /// [`Self::open_registered_checkout_for`] from a machine-identity
     /// classification the caller already read to resolve the selector
     /// [DANI-10371].
+    ///
+    /// `registry`, when the caller already loaded it, is the snapshot later
+    /// CLI binds reuse. `None` leaves that fallback reading `workspaces.json`.
     fn open_registered_checkout_with_identity(
         global_root: &Path,
         workspace: &Workspace,
         checkout: &WorkspaceCheckout,
         host_lifetime: HostLifetime,
         identity: &MachineIdentityState,
+        registry: Option<&WorkspaceRegistry>,
     ) -> Result<OrbitRuntime, OrbitError> {
         Self::open_registered_checkout_with_identity_and_local_root(
             global_root,
@@ -533,6 +575,7 @@ impl RegisteredRuntimeFactory {
             &checkout.orbit_dir,
             host_lifetime,
             identity,
+            registry,
         )
     }
 
@@ -549,16 +592,17 @@ impl RegisteredRuntimeFactory {
         local_root: &Path,
         host_lifetime: HostLifetime,
         identity: &MachineIdentityState,
+        registry: Option<&WorkspaceRegistry>,
     ) -> Result<OrbitRuntime, OrbitError> {
         verify_workspace_layout_authority(global_root, &checkout.orbit_dir)?;
-        sync_task_prefix_for_identity(global_root, identity)?;
         let binding = workspace_runtime_binding(workspace, checkout)?;
-        OrbitRuntime::from_resolved_roots_with_binding_for(
+        OrbitRuntime::from_resolved_roots_with_binding_for_task_prefix(
             global_root,
             &checkout.orbit_dir,
             local_root,
             binding,
             host_lifetime,
+            sync_task_prefix_for_identity(identity),
         )
         .map(|runtime| {
             attach_registry_context(
@@ -567,6 +611,7 @@ impl RegisteredRuntimeFactory {
                     .with_workspace_explicitly_selected(true),
                 global_root,
                 identity,
+                registry,
             )
         })
     }
@@ -585,6 +630,7 @@ impl RegisteredRuntimeFactory {
             checkout,
             &checkout.orbit_dir,
             &identity,
+            None,
         )
     }
 
@@ -606,6 +652,7 @@ impl RegisteredRuntimeFactory {
                 runtime.with_coordination_write_owner(replica_owner_for_checkout(checkout)),
                 global_root,
                 &identity,
+                None,
             )
         })
     }
@@ -616,6 +663,7 @@ impl RegisteredRuntimeFactory {
         checkout: &WorkspaceCheckout,
         local_root: &Path,
         identity: &MachineIdentityState,
+        registry: Option<&WorkspaceRegistry>,
     ) -> Result<OrbitRuntime, OrbitError> {
         let binding = workspace_runtime_binding(workspace, checkout)?;
         OrbitRuntime::from_resolved_roots_read_only_with_binding(
@@ -631,6 +679,7 @@ impl RegisteredRuntimeFactory {
                     .with_workspace_explicitly_selected(true),
                 global_root,
                 identity,
+                registry,
             )
         })
     }
@@ -643,20 +692,21 @@ impl RegisteredRuntimeFactory {
         host_lifetime: HostLifetime,
     ) -> Result<OrbitRuntime, OrbitError> {
         let identity = inspect_machine_identity(global_root)?;
-        sync_task_prefix_for_identity(global_root, &identity)?;
         let replica_owner = replica_owner_for_binding(&binding);
-        OrbitRuntime::from_resolved_roots_with_binding_for(
+        OrbitRuntime::from_resolved_roots_with_binding_for_task_prefix(
             global_root,
             shared_root,
             local_root,
             binding,
             host_lifetime,
+            sync_task_prefix_for_identity(&identity),
         )
         .map(|runtime| {
             attach_registry_context(
                 runtime.with_coordination_write_owner(replica_owner),
                 global_root,
                 &identity,
+                None,
             )
         })
     }
@@ -700,16 +750,14 @@ impl RegisteredRuntimeFactory {
     pub fn bind_cli_tool_workspace(
         runtime: &OrbitRuntime,
         input: &mut Value,
+        tool: &str,
     ) -> Result<Option<OrbitRuntime>, OrbitError> {
         let Some(selector) = cli_workspace_selector(input)? else {
             return Ok(None);
         };
         let global_root = runtime.global_root();
-        let identity = inspect_machine_identity(&global_root)?;
-        let registry = load_registry_for_selector_resolution(
-            &workspace_registry::registry_path_for(&global_root),
-            &identity,
-        )?;
+        super::refuse_cli_callback_workspace(&global_root, tool, &selector)?;
+        let (identity, registry) = cli_tool_bind_inputs(runtime)?;
         match resolve_cli_workspace_target(&registry, runtime, &selector, identity.id())? {
             CliWorkspaceTarget::CurrentRuntime => Ok(None),
             CliWorkspaceTarget::Checkout {
@@ -733,6 +781,7 @@ impl RegisteredRuntimeFactory {
                     checkout,
                     HostLifetime::ShortLived,
                     &identity,
+                    Some(&registry),
                 )
                 .map(Some)
             }

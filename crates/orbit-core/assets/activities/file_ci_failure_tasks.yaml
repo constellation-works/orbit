@@ -13,9 +13,11 @@ spec:
     in attributed, without changing its status or producing pilot candidates.
     An owner under an active execution claim is not written: the receipt is
     queued and listed in deferred_attribution with reason claimed, and the
-    artifact is written when that claim settles. One observation that cannot
-    be retained is recorded on the audit and does not stop filing of the
-    snapshot's other failures.
+    artifact is written when that claim settles. The same holds for the
+    compiler and completed-repair receipts retained on a matching owner; a
+    compiler observation's comment lands with its receipt. One branch
+    observation that cannot be retained is recorded on the audit and does not
+    stop filing of the snapshot's other failures.
     A missing owner stays retryable; other non-landing failures are reported in
     excluded_branch_failures. The guard also applies to older snapshots that
     included task PR failures in current_failures.
@@ -46,7 +48,7 @@ spec:
     files a new task naming the cover as a fix that did not hold. Unavailable
     cover evidence stays explicitly withheld, and a closed unmerged cover
     releases its key. Plain archive/rejection holds the same evidenced cause for
-    ci_failure.operator_suppression_hours (default 6) from the status event; a
+    6 hours from the status event; a
     different retained diagnostic under the same broad key files. An undetermined
     cause is held as a candidate owner, without attribution.
     Every operator hold appears in withheld and audit.withheld with outcome,
@@ -87,15 +89,21 @@ spec:
     prose; completed coverage adds idempotent observation artifacts. Skips name
     the covering task and bounded match evidence. The four
     endings stay distinct
-    and none of them is a CI pass: a snapshot with `collected: false` reports
-    `capability_unavailable` and files nothing, a snapshot with no current
+    and none of them is a CI pass: a snapshot GitHub rate-limited
+    (`outcome_hint: rate_limited`) reports `deferred` with the snapshot's
+    `rate_limit` and files nothing, any other snapshot with `collected: false`
+    reports `capability_unavailable` and files nothing, a snapshot with no current
     failure reports `no_current_failure` and files nothing, a snapshot whose
     every current failure is deferred for a run-scoped collection gap
     reports `deferred` and files nothing, and anything else
     reports `current_failures` with what it filed, skipped as already open,
     left unfiled at the `max_tasks` cap, or deferred for incomplete evidence.
     Every successful output carries `deferred_count`, the number of entries
-    in `deferred`.
+    in `deferred`. A failure whose log has a line starting with an entry of
+    `workflow.ci_infrastructure_signatures` is listed in `infrastructure` and
+    never filed or retained on a task: it is not a code failure to repair, and
+    it is not a CI pass, so a snapshot holding only such failures reports
+    `current_failures`. A workspace that declares none files as before.
     Schema version 2 requires one job per failure row, matching diagnostic
     and checkout job identities, one known failed step, and complete
     diagnostic evidence. A complete bounded diagnostic_unit with matching job
@@ -111,8 +119,12 @@ spec:
     `deferred` with its reasons and is excluded from clustering, while
     every complete finding in the same snapshot still files and dedupes. One
     that names no run — a repository, run-listing, or pull-request-listing
-    read, a registration, dedupe-lookup, or task-creation failure — leaves the
-    whole snapshot in doubt and fails the activity with a bounded
+    read — leaves the whole snapshot in doubt, so no finding is filed from
+    it; because that gap is retryable, the sweep reports `deferred` (stage
+    `collection_or_investigation`, with the full retryable errors and audit)
+    and records one `pipeline.run.deferred` audit row instead of failing,
+    so a later sweep retries the read. A registration, dedupe-lookup, or
+    task-creation failure still fails the activity with a bounded
     `retryable_error` payload. A snapshot in which nothing was complete enough
     to file fails the same way, unless every gap is a run-scoped collection
     error, which collection's sweep history degrades or escalates after three
@@ -236,6 +248,12 @@ spec:
         items:
           type: object
           required: [task_id, failure_key, workflow, job, step, tested_commit, run_ids, run_urls, ref_kinds, head_branches]
+      infrastructure:
+        type: array
+        description: Failures not filed because their log carries a declared infrastructure signature.
+        items:
+          type: object
+          required: [run_id, job_id, signature]
       withheld:
         type: array
         description: Exact-key operator holds with outcome, reason, owner, and cover or expiry.
@@ -266,10 +284,11 @@ spec:
       deferred_attribution:
         type: array
         description: >
-          Task-branch failures whose owner had an active execution claim, so
+          Task-branch failures, and compiler or completed-repair observations
+          of a matching owner, whose owner had an active execution claim, so
           the sweep did not write the task. Each entry carries task_id, the
-          CI run_id, and reason claimed. The artifact is written when that
-          claim settles.
+          CI run_id, the receipt's artifact path, and reason claimed. The
+          artifact, with any comment, is written when that claim settles.
         items:
           type: object
           required: [task_id, run_id, reason]
@@ -277,6 +296,8 @@ spec:
             task_id:
               type: string
             run_id: {}
+            artifact:
+              type: string
             reason:
               type: string
       excluded_branch_failures:

@@ -54,7 +54,11 @@ pub(super) fn observe_candidate(
     // The validated base must still be reachable from the branch this lands on;
     // a rewritten history is not the base the evidence was produced against.
     if !matches!(candidate.delivery, HandoffDelivery::AlreadyLanded { .. })
-        && !contains_commit(workspace, &landing, &observed_base.commit)?
+        && !crate::executor::automation::vcs::git::is_ancestor(
+            workspace,
+            &observed_base.commit,
+            &landing,
+        )?
     {
         return Err(OrbitError::Execution(format!(
             "handoff_land: validated base {} is no longer reachable from landing ref \
@@ -133,23 +137,6 @@ pub(super) fn resolve_landing_ref(
     Err(OrbitError::Execution(format!(
         "handoff_land: landing branch '{landing_branch}' does not resolve in the owner checkout"
     )))
-}
-
-pub(super) fn contains_commit(
-    workspace: &Path,
-    reference: &str,
-    commit: &str,
-) -> Result<bool, OrbitError> {
-    if !git_command_success(
-        workspace,
-        &["rev-parse", "--verify", &format!("{commit}^{{commit}}")],
-    )? {
-        return Ok(false);
-    }
-    git_command_success(
-        workspace,
-        &["merge-base", "--is-ancestor", commit, reference],
-    )
 }
 
 /// [ORB-15956] Pin the pull request's reported head instead of the accepted

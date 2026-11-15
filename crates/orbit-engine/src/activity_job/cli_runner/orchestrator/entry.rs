@@ -1,7 +1,7 @@
 //! Public entry point for CLI backend dispatch.
 use super::super::super::audit_writer::V2AuditWriter;
 use super::super::super::dispatcher::{DispatchError, DispatchOutcome};
-use super::dispatch::run_cli_backend_for_step;
+use super::continuation::run_cli_backend_for_step;
 use crate::context::RuntimeHost;
 use orbit_types::workflow::activity_job::AgentLoopSpec;
 use serde_json::Value;
@@ -25,5 +25,6 @@ pub fn run_cli_backend(
         audit,
         input,
         fs_profile,
+        None,
     )
 }

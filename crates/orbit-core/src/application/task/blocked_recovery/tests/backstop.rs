@@ -21,13 +21,14 @@ use orbit_types::workflow::{JobRunState, JobTargetType};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
+use super::super::MAX_ACTIVE_BLOCKED_RECOVERIES;
+use super::super::input::BlockedRecoveryTick;
 use crate::OrbitRuntime;
 use crate::application::task::blocked_recovery::ATTRIBUTION_SLACK_MS;
 use crate::application::task::tests::{assert_isolated_child, enter_isolated_child};
 use crate::application::task::{
     BLOCKED_TASK_RECOVERY_JOB, BlockedRecoveryInput, BlockedRecoveryPreparation,
-    BlockedRecoveryTick, EpisodeDisposition, FinalRecoveryOutcome, FinalRecoveryRecord,
-    MAX_ACTIVE_BLOCKED_RECOVERIES, TaskAddParams, TaskUpdateParams,
+    EpisodeDisposition, FinalRecoveryOutcome, FinalRecoveryRecord, TaskAddParams, TaskUpdateParams,
 };
 
 /// A runtime whose repository has one commit on `main` and whose
@@ -566,7 +567,7 @@ fn field_edit_after_the_block_is_never_overridden(
             &input,
             &run_id,
             "main",
-            Some(&json!({"decision": "requeue", "reason": "retry"})),
+            Some(&json!({"decision": "requeue", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "reason": "retry"})),
         )
         .expect("apply");
     assert!(
@@ -775,7 +776,7 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
             &input,
             &run_id,
             &prepared.base_ref,
-            Some(&json!({"decision": "requeue", "reason": "the flaky dependency was fixed"})),
+            Some(&json!({"decision": "requeue", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "reason": "the flaky dependency was fixed"})),
         )
         .expect("apply");
     assert_eq!(outcome, FinalRecoveryOutcome::Requeued);
@@ -787,7 +788,7 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
         runtime.get_task(&requeued.id).expect("task").status,
         TaskStatus::Backlog
     );
-    let record = FinalRecoveryRecord::last(&recovery_decisions(&runtime, &requeued.id), &[])
+    let record = FinalRecoveryRecord::last(&recovery_decisions(&runtime, &requeued.id))
         .expect("typed decision");
     assert_eq!(
         (record.run_id.as_str(), record.decision.as_str()),
@@ -802,7 +803,7 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
             &input,
             &run_id,
             "main",
-            Some(&json!({"decision": "resume", "step_id": "implement", "rationale": "retry"})),
+            Some(&json!({"decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "step_id": "implement", "rationale": "retry"})),
         )
         .expect("apply resume");
     assert!(
@@ -890,7 +891,7 @@ fn a_recovery_run_that_ends_without_a_decision_is_escalated_once() {
 
     let decisions = recovery_decisions(&runtime, &task.id);
     assert_eq!(decisions.len(), 1, "one decision for the episode");
-    let record = FinalRecoveryRecord::last(&decisions, &[]).expect("decision");
+    let record = FinalRecoveryRecord::last(&decisions).expect("decision");
     assert_eq!(record.decision, "escalate");
     assert!(
         [run_id.as_str(), resumed.run_id.as_str()].contains(&record.run_id.as_str()),
@@ -931,7 +932,7 @@ fn requeues_share_the_final_recovery_bound_across_episodes() {
                     &input,
                     &tick.dispatched[0].1,
                     "main",
-                    Some(&json!({"decision": "requeue", "reason": "try again"})),
+                    Some(&json!({"decision": "requeue", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "reason": "try again"})),
                 )
                 .expect("apply"),
         );
@@ -1091,7 +1092,7 @@ fn the_backstop_offers_only_its_decisions_and_names_the_retained_candidate() {
         format!(
             "#!/bin/sh\ncat > '{}'\nprintf '%s\\n' '{}'\n",
             envelope.display(),
-            r#"{"schemaVersion":1,"status":"success","result":{"decision":"resume","step_id":"agent_implement","rationale":"finished the implementation"},"error":null}"#
+            r#"{"schemaVersion":1,"status":"success","result":{"decision":"resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check","step_id":"agent_implement","rationale":"finished the implementation"},"error":null}"#
         ),
     )
     .expect("write provider");
@@ -1244,7 +1245,7 @@ fn complete_no_diff_needs_a_covering_commit_on_the_base() {
                 run_id,
                 &prepared.base_ref,
                 Some(&json!({
-                    "decision": "complete_no_diff",
+                    "decision": "complete_no_diff", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check",
                     "evidence_commit": commit,
                     "rationale": "the outcome is on the base",
                 })),

@@ -1,8 +1,11 @@
-//! `orbit mcp serve` toolsets over any [`McpHost`].
+//! `orbit mcp serve` toolsets and roles over any [`McpHost`].
 //!
-//! A server advertises the definitions of its enabled toolsets and refuses a
-//! call to any other definition with a structured `toolset_not_enabled`
-//! refusal naming the toolset and how to enable it, never "unknown tool". The
+//! A server advertises the definitions of its enabled toolsets (its role's,
+//! plus any `--toolset` adds) and refuses a call to any other definition with
+//! a structured `toolset_not_enabled` refusal naming the toolset, the serving
+//! role and the roles and flag that would allow it, never "unknown tool". A
+//! role grants no authority: operator-only tools keep their capability check
+//! under every role. The
 //! tools stay registered: only this server's listing and dispatch change, so
 //! `orbit tool run`, activities and plugin callback sessions are unaffected.
 //! Each definition's toolset comes from its registry rules; nothing here names
@@ -13,8 +16,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use orbit_common::{OrbitError, RemoteToolCode};
 use orbit_types::tool::{
-    McpToolDefinition, McpToolset, McpToolsetSelection, ToolSessionContext,
-    mcp_advertised_tool_name,
+    McpRole, McpToolDefinition, McpToolRules, McpToolset, McpToolsetSelection, TOOL_ACTION_FIELD,
+    ToolSessionContext, mcp_advertised_tool_name,
 };
 use serde_json::{Value, json};
 
@@ -22,6 +25,9 @@ use crate::McpHost;
 
 /// The host config key that selects a server's toolsets.
 pub const MCP_TOOLSETS_CONFIG_KEY: &str = "machine.mcp.toolsets";
+
+/// The host config key that selects a server's default role.
+pub const MCP_ROLE_CONFIG_KEY: &str = "machine.mcp.role";
 
 /// The refusal code of a call to a tool outside the server's toolsets.
 pub const TOOLSET_NOT_ENABLED_CODE: &str = "toolset_not_enabled";
@@ -31,7 +37,7 @@ pub fn with_mcp_toolsets(
     inner: Arc<dyn McpHost>,
     selection: McpToolsetSelection,
 ) -> Arc<dyn McpHost> {
-    if selection == McpToolsetSelection::all() {
+    if selection.enables_all() {
         return inner;
     }
     Arc::new(ToolsetFilteredHost {
@@ -53,18 +59,28 @@ struct FilteredSurface {
     source: Arc<Vec<McpToolDefinition>>,
     advertised: Arc<Vec<McpToolDefinition>>,
     withheld: HashMap<String, (String, McpToolset)>,
+    /// Advertised families whose actions span toolsets, gated per action at
+    /// call time, by canonical and advertised name.
+    per_action: HashMap<String, (String, McpToolRules)>,
 }
 
 impl ToolsetFilteredHost {
     fn surface(&self) -> Result<Arc<FilteredSurface>, OrbitError> {
+        Ok(self.resolved_surface()?.0)
+    }
+
+    /// The filtered surface plus whether the inner host supplied a dynamic
+    /// (live) surface, from a single inner resolution.
+    fn resolved_surface(&self) -> Result<(Arc<FilteredSurface>, bool), OrbitError> {
         let dynamic = self.inner.dynamic_mcp_tool_definitions()?;
+        let is_dynamic = dynamic.is_some();
         let mut cached = self.surface.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(surface) = cached.as_ref()
             && dynamic
                 .as_ref()
                 .is_none_or(|source| Arc::ptr_eq(source, &surface.source))
         {
-            return Ok(Arc::clone(surface));
+            return Ok((Arc::clone(surface), is_dynamic));
         }
         let source = match dynamic {
             Some(source) => source,
@@ -72,9 +88,19 @@ impl ToolsetFilteredHost {
         };
         let mut advertised = Vec::with_capacity(source.len());
         let mut withheld = HashMap::new();
+        let mut per_action = HashMap::new();
         for definition in source.iter() {
             let toolset = definition.rules.toolset;
-            if self.selection.enables(toolset) {
+            if self
+                .selection
+                .enables_definition(&definition.rules, &definition.schema.name)
+            {
+                if !definition.rules.action_toolsets.is_empty() {
+                    let canonical = definition.schema.name.clone();
+                    let gate = (canonical.clone(), definition.rules.clone());
+                    per_action.insert(mcp_advertised_tool_name(&canonical), gate.clone());
+                    per_action.insert(canonical, gate);
+                }
                 advertised.push(definition.clone());
             } else {
                 let canonical = definition.schema.name.clone();
@@ -89,19 +115,40 @@ impl ToolsetFilteredHost {
             source,
             advertised: Arc::new(advertised),
             withheld,
+            per_action,
         });
         *cached = Some(Arc::clone(&surface));
-        Ok(surface)
+        Ok((surface, is_dynamic))
     }
 }
 
 /// The refusal a long-lived client gets for a tool this server withholds.
-fn toolset_not_enabled(tool: &str, toolset: McpToolset) -> OrbitError {
+fn toolset_not_enabled(
+    tool: &str,
+    action: Option<&str>,
+    toolset: McpToolset,
+    role: Option<McpRole>,
+) -> OrbitError {
     let flag = format!("--toolset {toolset}");
+    let roles = toolset.roles();
+    let role_names = roles
+        .iter()
+        .map(|role| role.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let served = match role {
+        Some(role) => format!("this server's '{role}' MCP role does not enable it"),
+        None => "this server does not enable it".to_string(),
+    };
+    let subject = match action {
+        Some(action) => format!("action '{action}' of tool '{tool}'"),
+        None => format!("tool '{tool}'"),
+    };
     let message = format!(
-        "tool '{tool}' is in the '{toolset}' MCP toolset, which this server does not \
-         enable; restart `orbit mcp serve` with `{flag}` or add '{toolset}' to \
-         `{MCP_TOOLSETS_CONFIG_KEY}`. `orbit tool run {tool}` reaches it without MCP"
+        "{subject} is in the '{toolset}' MCP toolset, and {served}; restart \
+         `orbit mcp serve` with `{flag}`, add '{toolset}' to `{MCP_TOOLSETS_CONFIG_KEY}`, or \
+         serve a role that includes it ({role_names}). `orbit tool run {tool}` reaches it \
+         without MCP"
     );
     OrbitError::RemoteTool {
         code: RemoteToolCode::Other(TOOLSET_NOT_ENABLED_CODE.into()),
@@ -109,10 +156,13 @@ fn toolset_not_enabled(tool: &str, toolset: McpToolset) -> OrbitError {
             "code": TOOLSET_NOT_ENABLED_CODE,
             "message": message,
             "tool": tool,
+            "action": action,
             "toolset": toolset,
+            "role": role,
             "enable": {
                 "flag": flag,
                 "config_key": MCP_TOOLSETS_CONFIG_KEY,
+                "roles": roles,
             },
         }),
         message,
@@ -120,6 +170,10 @@ fn toolset_not_enabled(tool: &str, toolset: McpToolset) -> OrbitError {
 }
 
 impl McpHost for ToolsetFilteredHost {
+    fn presentation_enabled(&self) -> bool {
+        self.selection.enables(McpToolset::Ui) && self.inner.presentation_enabled()
+    }
+
     fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
         self.surface()
             .map(|surface| surface.advertised.as_ref().clone())
@@ -128,11 +182,11 @@ impl McpHost for ToolsetFilteredHost {
     fn dynamic_mcp_tool_definitions(
         &self,
     ) -> Result<Option<Arc<Vec<McpToolDefinition>>>, OrbitError> {
-        if self.inner.dynamic_mcp_tool_definitions()?.is_none() {
+        let (surface, is_dynamic) = self.resolved_surface()?;
+        if !is_dynamic {
             return Ok(None);
         }
-        self.surface()
-            .map(|surface| Some(Arc::clone(&surface.advertised)))
+        Ok(Some(Arc::clone(&surface.advertised)))
     }
 
     fn friction_tag_taxonomy(
@@ -152,8 +206,25 @@ impl McpHost for ToolsetFilteredHost {
         input: Value,
         session_context: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
-        if let Some((canonical, toolset)) = self.surface()?.withheld.get(name) {
-            return Err(toolset_not_enabled(canonical, *toolset));
+        let surface = self.surface()?;
+        if let Some((canonical, toolset)) = surface.withheld.get(name) {
+            return Err(toolset_not_enabled(
+                canonical,
+                None,
+                *toolset,
+                self.selection.role(),
+            ));
+        }
+        if let Some((canonical, rules)) = surface.per_action.get(name) {
+            let action = input.get(TOOL_ACTION_FIELD).and_then(Value::as_str);
+            if !self.selection.enables_call(rules, canonical, action) {
+                return Err(toolset_not_enabled(
+                    canonical,
+                    action,
+                    rules.toolset_for_action(action),
+                    self.selection.role(),
+                ));
+            }
         }
         self.inner.call_tool(name, input, session_context)
     }
@@ -179,4 +250,57 @@ impl McpHost for ToolsetFilteredHost {
     fn federated_workspace_selectors(&self) -> bool {
         self.inner.federated_workspace_selectors()
     }
+}
+
+/// The size of the surface one selection advertises over the canonical
+/// definitions (builtins and discovery; plugin tools vary per workspace and
+/// are not counted).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct McpSurfaceReport {
+    /// The serving role, when one is configured.
+    pub role: Option<McpRole>,
+    /// The enabled toolsets.
+    pub toolsets: Vec<McpToolset>,
+    /// How many tools are advertised.
+    pub tools: usize,
+    /// Approximate tokens of the advertised name, description and input
+    /// schema: their serialized bytes divided by four, rounded up.
+    pub approx_tokens: usize,
+    /// The advertised canonical names, sorted.
+    pub tool_names: Vec<String>,
+}
+
+/// Measure what `selection` advertises over the canonical definitions.
+pub fn mcp_surface_report(selection: &McpToolsetSelection) -> Result<McpSurfaceReport, OrbitError> {
+    let definitions = crate::canonical_mcp_tool_definitions()
+        .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+    let mut tool_names = Vec::new();
+    let mut bytes = 0usize;
+    for definition in definitions.iter().filter(|definition| {
+        selection.enables_definition(&definition.rules, &definition.schema.name)
+    }) {
+        let input_schema = definition.input_schema.clone().unwrap_or_else(|| {
+            Value::Object(
+                orbit_common::governance::tool_schema::tool_input_schema_for(
+                    &definition.schema.name,
+                    &definition.schema.parameters,
+                ),
+            )
+        });
+        let advertised = json!({
+            "name": mcp_advertised_tool_name(&definition.schema.name),
+            "description": definition.schema.description,
+            "inputSchema": input_schema,
+        });
+        bytes += advertised.to_string().len();
+        tool_names.push(definition.schema.name.clone());
+    }
+    tool_names.sort();
+    Ok(McpSurfaceReport {
+        role: selection.role(),
+        toolsets: selection.toolsets().collect(),
+        tools: tool_names.len(),
+        approx_tokens: bytes.div_ceil(4),
+        tool_names,
+    })
 }

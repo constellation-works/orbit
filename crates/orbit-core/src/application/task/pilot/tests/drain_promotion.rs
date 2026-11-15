@@ -486,10 +486,7 @@ fn a_drain_hold_is_the_typed_decision_and_rationale_text_cannot_forge_one() {
         NO_AUTO_APPROVE_TAG
     );
     let entry = pilot_entry(runtime, &held.id);
-    assert_eq!(
-        held_classification(runtime, &entry),
-        Some(NO_AUTO_APPROVE_TAG)
-    );
+    assert_eq!(held_classification(&entry), Some(NO_AUTO_APPROVE_TAG));
     let note = entry.note.as_deref().expect("pilot history note");
     assert!(
         note.contains(forged),
@@ -524,7 +521,7 @@ fn a_drain_hold_is_the_typed_decision_and_rationale_text_cannot_forge_one() {
         "{entry:?}"
     );
     assert_eq!(
-        held_classification(runtime, &entry),
+        held_classification(&entry),
         None,
         "a marker in an agent-written note has no effect: {entry:?}"
     );
@@ -553,7 +550,7 @@ fn prerequisite_covered_by_a_dependency_promotes_and_clears_pilot_warnings() {
     let current = runtime.get_task(&task.id).expect("task");
     assert_eq!(current.status, TaskStatus::Backlog);
     assert_eq!(current.dependencies(), [blocker.id.as_str()]);
-    let comments = runtime.get_task_comments(&task.id).expect("comments");
+    let comments = runtime.get_task_pilot_comments(&task.id).expect("comments");
     let warnings = super::super::promotion::task_pilot_warnings(
         TaskStatus::Proposed,
         &comments,
@@ -752,7 +749,7 @@ fn prerequisite_lost_before_atomic_write_holds_both_authorities_and_replay() {
                 assert_eq!(current.status, TaskStatus::Proposed);
                 assert!(current.dependencies().is_empty());
                 assert_eq!(approvals(runtime, &task), 0);
-                let comments = runtime.get_task_comments(&task.id).expect("comments");
+                let comments = runtime.get_task_pilot_comments(&task.id).expect("comments");
                 let warnings = crate::application::task::task_pilot_warnings(
                     current.status,
                     &comments,
@@ -764,12 +761,75 @@ fn prerequisite_lost_before_atomic_write_holds_both_authorities_and_replay() {
             }
             if !ci_sweep {
                 assert_eq!(
-                    held_classification(runtime, &pilot_entry(runtime, &task.id)),
+                    held_classification(&pilot_entry(runtime, &task.id)),
                     Some("warnings")
                 );
             }
         }
     }
+}
+
+#[test]
+fn contract_conflict_holds_promotion_and_advisory_matching_criterion_does_not() {
+    // A criterion naming behaviour the pinned contract contradicts is held
+    // through the typed finding, which has no advisory opt-out.
+    let workspace = workspace(None);
+    let runtime = &workspace.runtime;
+    let task = qualifying_task(runtime);
+    let (drain, pilot) = drain_with_pilot(runtime, &task.id);
+    let applied = pilot_with_findings(
+        &workspace,
+        &task,
+        &drain,
+        &pilot,
+        None,
+        json!({"contract_conflicts": [{
+            "criterion": 1,
+            "evidence": "README.md at the pinned revision contradicts the criterion as written",
+        }]}),
+    );
+    let decision = &applied["drain_approval"][0];
+    assert_eq!(decision["decision"], "withhold", "{decision}");
+    assert_eq!(decision["classification"], "warnings", "{decision}");
+    assert_eq!(
+        runtime.get_task(&task.id).expect("task").status,
+        TaskStatus::Proposed
+    );
+    assert_eq!(approvals(runtime, &task), 0);
+    let comments = runtime.get_task_pilot_comments(&task.id).expect("comments");
+    let warnings =
+        super::super::promotion::task_pilot_warnings(TaskStatus::Proposed, &comments, &[], &|_| {
+            false
+        });
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert_eq!(warnings[0].kind, "contract_conflicts");
+    assert!(warnings[0].text.contains("criterion 1"), "{warnings:?}");
+
+    // The matching criterion is not held for this signature: an advisory
+    // utility finding on an otherwise promotable task still promotes.
+    let workspace2 = super::persist::workspace(None);
+    let runtime = &workspace2.runtime;
+    let task = qualifying_task(runtime);
+    let (drain, pilot) = drain_with_pilot(runtime, &task.id);
+    let applied = pilot_with_findings(
+        &workspace2,
+        &task,
+        &drain,
+        &pilot,
+        None,
+        json!({"utility_warnings": [{
+            "text": "Criterion 1 matches the pinned contract in README.md",
+            "holds_promotion": false,
+        }]}),
+    );
+    let decision = &applied["drain_approval"][0];
+    assert_eq!(decision["decision"], "promote", "{decision}");
+    assert_eq!(decision["approved"], true, "{decision}");
+    assert_eq!(
+        runtime.get_task(&task.id).expect("task").status,
+        TaskStatus::Backlog
+    );
+    assert_eq!(approvals(runtime, &task), 1);
 }
 
 #[test]

@@ -1,6 +1,8 @@
 mod activity_v2;
 mod candidate_carry;
 mod delivery_conventions;
+mod final_recovery;
+mod gate_note;
 mod host_evidence;
 mod job;
 mod job_v2;

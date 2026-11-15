@@ -1,6 +1,7 @@
 //! Bounded recovery inputs and diagnostics.
 use super::*;
 use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
+use orbit_types::workflow::SYNC_BASE_STEP_ID;
 
 /// Largest `error_message` the recovery input may carry, in bytes.
 ///
@@ -40,7 +41,7 @@ pub(super) fn bind_recovery_context(
         )?,
         _ => Value::Null,
     };
-    if step.id == "sync_base"
+    if step.id == SYNC_BASE_STEP_ID
         && failed_input
             .get("preparation")
             .is_some_and(|v| !v.is_null())

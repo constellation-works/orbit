@@ -1,4 +1,4 @@
-//! Lease token audit rows, redaction and audit attribution.
+//! Lease token audit rows and redaction.
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
@@ -7,23 +7,6 @@ use rusqlite::{Connection, params};
 
 use crate::scope::LeaseTokenVerb;
 use crate::token::LEASE_TOKEN_PREFIX;
-
-/// Who is running a token command, for the audit row: the `sudo` caller when
-/// there is one, else the running user. Attribution only, not authority.
-pub fn lease_token_actor() -> String {
-    let named = |key: &str| {
-        std::env::var(key)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-    };
-    match (named("SUDO_USER"), named("USER")) {
-        (Some(sudo_user), Some(user)) => format!("{sudo_user} as {user}"),
-        (Some(sudo_user), None) => sudo_user,
-        (None, Some(user)) => user,
-        (None, None) => "unknown".to_string(),
-    }
-}
 
 pub(super) struct AuditRow<'a> {
     pub(super) at: DateTime<Utc>,

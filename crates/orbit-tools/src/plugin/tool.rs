@@ -163,7 +163,7 @@ impl PluginTool {
             OrbitError::Execution(format!("serialize plugin envelope: {error}"))
         })?;
         let timeout_ms = spec.timeout_ms();
-        let mut environment = spec.child_environment(ctx, &cwd, Some(&self.name));
+        let mut environment = spec.child_environment(ctx, &cwd, Some(&self.name))?;
         // Minted before the profile is compiled: the child is granted a read
         // rule on this one record, and a Landlock rule binds the inode that
         // exists when it is compiled.
@@ -177,6 +177,7 @@ impl PluginTool {
             &spec.allowed_tools(ctx),
         )?;
         callback.stamp_env(&mut environment);
+        callback.bind_application(ctx.session_context.application.as_deref())?;
         // The decision-channel callbacks read a store no plugin child may
         // read, so the child reaches them through this host.
         callback.open_host_route(ctx.orbit_host.as_ref())?;
@@ -187,6 +188,7 @@ impl PluginTool {
             Some(caller) => spec.brokered_sandbox_profile(caller)?,
             None => spec.sandbox_profile(ctx.workspace_root.as_deref())?,
         };
+        callback.bind_workspace_root(ctx.workspace_root.as_deref(), profile.unsandboxed)?;
         let sandbox = profile.with_callback_session(&callback);
         let request = ExecRequest {
             program: spec.command.to_string_lossy().into_owned(),

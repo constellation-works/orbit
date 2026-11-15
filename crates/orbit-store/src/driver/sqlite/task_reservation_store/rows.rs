@@ -89,6 +89,11 @@ pub(crate) fn reserve_files_in_tx(
     let expires_at = (Utc::now() + Duration::seconds(params.ttl_seconds as i64)).to_rfc3339();
     let task_ids_json = serialize_string_list(&params.task_ids)?;
     let files_json = serialize_string_list(&params.stored_files)?;
+    let owner_metadata_json = params
+        .owner_metadata
+        .as_ref()
+        .map(serialize_owner_metadata)
+        .transpose()?;
 
     tx.tx
         .execute(
@@ -118,7 +123,7 @@ pub(crate) fn reserve_files_in_tx(
                 created_at,
                 expires_at,
                 params.owner_run_id.as_deref(),
-                params.owner_metadata_json.as_deref(),
+                owner_metadata_json.as_deref(),
             ],
         )
         .map_err(sqlite_store_error)?;
@@ -163,9 +168,9 @@ pub(super) fn expire_reservations_in_scope(
     let filter = match scope {
         TaskReservationScope::Files => format!(
             "{} AND {TASK_RESERVATION_ROWS}",
-            reservation_scope_clause(scope)
+            reservation_scope_clause(scope, workspace_id)
         ),
-        TaskReservationScope::WorkspaceClaim => reservation_scope_clause(scope),
+        TaskReservationScope::WorkspaceClaim => reservation_scope_clause(scope, workspace_id),
     };
     expire_rows(tx, workspace_orbit_dir, workspace_id, now, &filter)
 }
@@ -179,7 +184,7 @@ pub(super) fn expire_leases(
 ) -> Result<Vec<ExpiredTaskReservation>, OrbitError> {
     let filter = format!(
         "{} AND {LEASE_ROWS}",
-        reservation_scope_clause(TaskReservationScope::Files)
+        reservation_scope_clause(TaskReservationScope::Files, workspace_id)
     );
     let expired = expire_rows(tx, workspace_orbit_dir, workspace_id, now, &filter)?;
     for lease in &expired {
@@ -298,7 +303,7 @@ pub(super) fn visit_reservation_conflicts(
            AND released_at IS NULL
            AND expires_at > ?3
          ORDER BY created_at ASC, reservation_id ASC",
-        reservation_scope_clause(TaskReservationScope::Files),
+        reservation_scope_clause(TaskReservationScope::Files, workspace_id),
     );
     let lock_modes = tx.lock_modes.clone();
     let mut stmt = tx.tx.prepare(&sql).map_err(sqlite_store_error)?;
@@ -342,20 +347,29 @@ pub(super) fn visit_reservation_conflicts(
 /// NULL-workspace rows for the same orbit dir; legacy callers see all rows
 /// scoped to that orbit dir.
 ///
+/// The arm is chosen here, from the same `Option` the caller binds, because
+/// SQLite cannot fold `?1 IS NOT NULL` at prepare time and then refuses every
+/// `idx_task_reservations_*` index. Callers still bind `?1` when it is absent:
+/// an unreferenced parameter below the highest index is legal. `?3` and later
+/// stay the caller's own parameters.
+///
 /// [ORB-10709] `scope` is a required argument rather than a default so every
 /// query site has to state which dimension it reads. File reservations and
 /// workspace claims share this table and must never see each other's rows; a
 /// forgotten filter would let a claim block the worker reservations it exists
 /// to leave alone, so the compiler asks the question at each call site.
-pub(super) fn reservation_scope_clause(scope: TaskReservationScope) -> String {
+pub(super) fn reservation_scope_clause(
+    scope: TaskReservationScope,
+    workspace_id: Option<&str>,
+) -> String {
     // `as_str()` is a closed set of 'static literals, never caller input.
-    format!(
-        "(
-        (?1 IS NOT NULL AND (workspace_id = ?1 OR (workspace_id IS NULL AND workspace_orbit_dir = ?2)))
-        OR (?1 IS NULL AND workspace_orbit_dir = ?2)
-    ) AND scope = '{}'",
-        scope.as_str()
-    )
+    // Presence, not the id text, chooses the arm; the caller binds the same
+    // `Option` as `?1`.
+    let workspace = match workspace_id {
+        Some(_) => "(workspace_id = ?1 OR (workspace_id IS NULL AND workspace_orbit_dir = ?2))",
+        None => "workspace_orbit_dir = ?2",
+    };
+    format!("{workspace} AND scope = '{}'", scope.as_str())
 }
 
 #[derive(Debug, Clone)]
@@ -385,7 +399,7 @@ impl ReservationRow {
             created_at: self.created_at,
             expires_at: self.expires_at,
             owner_run_id: self.owner_run_id,
-            owner_metadata_json: self.owner_metadata_json,
+            owner_metadata: parse_owner_metadata(self.owner_metadata_json)?,
         })
     }
 
@@ -405,7 +419,7 @@ impl ReservationRow {
             expires_at: self.expires_at,
             released_at,
             owner_run_id: self.owner_run_id,
-            owner_metadata_json: self.owner_metadata_json,
+            owner_metadata: parse_owner_metadata(self.owner_metadata_json)?,
             release_reason,
             release_metadata_json,
         })
@@ -446,7 +460,7 @@ pub(super) fn load_reservation_row(
            AND {TASK_RESERVATION_ROWS}
            AND reservation_id = ?3",
         select_reservation_columns(),
-        reservation_scope_clause(TaskReservationScope::Files),
+        reservation_scope_clause(TaskReservationScope::Files, workspace_id),
     );
     tx.tx
         .query_row(
@@ -472,7 +486,7 @@ pub(super) fn load_active_reservations_by_owner(
            AND released_at IS NULL
          ORDER BY created_at ASC, reservation_id ASC",
         select_reservation_columns(),
-        reservation_scope_clause(TaskReservationScope::Files),
+        reservation_scope_clause(TaskReservationScope::Files, workspace_id),
     );
     let mut stmt = tx.tx.prepare(&sql).map_err(sqlite_store_error)?;
     let rows = stmt
@@ -507,7 +521,7 @@ pub(super) fn find_owned_reservation_conflicts(
            AND owner_run_id IS NOT NULL
          ORDER BY created_at ASC, reservation_id ASC",
         select_reservation_columns(),
-        reservation_scope_clause(TaskReservationScope::Files),
+        reservation_scope_clause(TaskReservationScope::Files, workspace_id),
     );
     let lock_modes = tx.lock_modes.clone();
     let mut stmt = tx.tx.prepare(&sql).map_err(sqlite_store_error)?;
@@ -540,6 +554,28 @@ pub(super) fn find_owned_reservation_conflicts(
 pub(super) fn parse_string_list(raw: &str) -> Result<Vec<String>, OrbitError> {
     serde_json::from_str(raw)
         .map_err(|error| OrbitError::Store(format!("deserialize reservation string list: {error}")))
+}
+
+/// Parse the `owner_metadata_json` TEXT column once, where a reservation
+/// record is constructed from a row. Every in-process carrier past this
+/// edge holds the typed struct.
+pub(super) fn parse_owner_metadata(
+    raw: Option<String>,
+) -> Result<Option<orbit_types::task::ReservationOwnerMetadata>, OrbitError> {
+    raw.map(|raw| {
+        orbit_types::task::ReservationOwnerMetadata::parse_owner_metadata(&raw).map_err(|error| {
+            OrbitError::Store(format!("deserialize reservation owner metadata: {error}"))
+        })
+    })
+    .transpose()
+}
+
+pub(super) fn serialize_owner_metadata(
+    metadata: &orbit_types::task::ReservationOwnerMetadata,
+) -> Result<String, OrbitError> {
+    metadata.encode_owner_metadata().map_err(|error| {
+        OrbitError::Store(format!("serialize reservation owner metadata: {error}"))
+    })
 }
 
 pub(super) fn serialize_string_list(values: &[String]) -> Result<String, OrbitError> {

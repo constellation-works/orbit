@@ -77,9 +77,6 @@ pub(super) fn write_v2_step(step: &JobV2Step, indent: usize, out: &mut String) {
                 bold("Target Ref:"),
                 target.target.as_str()
             );
-            if let Some(session) = &target.session {
-                let _ = writeln!(out, "{pad}{} {}", bold("Session:"), session);
-            }
             let _ = writeln!(
                 out,
                 "{pad}{} {}",
@@ -100,9 +97,6 @@ pub(super) fn write_v2_step(step: &JobV2Step, indent: usize, out: &mut String) {
                     let _ = writeln!(out, "{pad}{} deterministic", bold("Activity Type:"));
                     let _ = writeln!(out, "{pad}{} {}", bold("Action:"), spec.action.as_str());
                 }
-            }
-            if let Some(session) = &target.session {
-                let _ = writeln!(out, "{pad}{} {}", bold("Session:"), session);
             }
             let _ = writeln!(
                 out,

@@ -2,10 +2,10 @@
 
 use super::operations::{TaskOperation, TaskVerb};
 use crate::governance::operation::{
-    CliArgKind, CliConstraint, CliHelp, Effect, ParamType, UnknownFields, aliased, both, cli_only,
-    defaulted, mcp_only, required,
+    CliArgKind, CliConstraint, CliHelp, Effect, ParamType, RETIRED_AGENT_FIELD, UnknownFields,
+    aliased, both, cli_only, defaulted, mcp_only, required,
 };
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 pub(super) const ARTIFACT_PUT: TaskOperation = TaskOperation {
     verb: TaskVerb::ArtifactPut,
@@ -60,18 +60,18 @@ pub(super) const ARTIFACT_PUT: TaskOperation = TaskOperation {
             ),
             &["artifact_path", "artifactPath"],
         ),
-        both(
+        cli_only(
             "model",
             ParamType::String,
-            "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
             CliArgKind::flag("model"),
             "Explicit agent model to persist on the task artifact update",
         ),
     ]],
     at_least_one_of: &[],
-    retired_fields: &[],
-    unknown_fields: UnknownFields::Warn,
+    retired_fields: &[RETIRED_AGENT_FIELD],
+    unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Task,
 };
 
 pub(super) const ARTIFACT_GET: TaskOperation = TaskOperation {
@@ -124,20 +124,17 @@ pub(super) const ARTIFACT_GET: TaskOperation = TaskOperation {
                 "Write the artifact's bytes to this file instead of printing them",
             ),
         ],
-        super::operations::IDENTITY_PARAMS,
         &[mcp_only(
             "workspace",
             ParamType::String,
-            "Optional explicit workspace filter. `id` is resolved globally by \
-                default; when supplied, a registered workspace name, logical workspace ID \
-                (`ws_*`), or absolute local checkout path is fail-closed — a valid workspace that \
-                does not own the task returns not-found.",
+            "Optional workspace filter by registered name, ID or path; task `id` is resolved globally by default.",
         )],
     ],
     at_least_one_of: &[],
-    retired_fields: &[],
-    unknown_fields: UnknownFields::Warn,
+    retired_fields: &[RETIRED_AGENT_FIELD],
+    unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Task,
 };
 
 pub(super) const LOCKS_LIST: TaskOperation = TaskOperation {
@@ -157,8 +154,9 @@ pub(super) const LOCKS_LIST: TaskOperation = TaskOperation {
     params: &[&[]],
     at_least_one_of: &[],
     retired_fields: &[],
-    unknown_fields: UnknownFields::Warn,
+    unknown_fields: UnknownFields::Refuse,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 pub(super) const LOCKS_RESERVE: TaskOperation = TaskOperation {
@@ -194,70 +192,68 @@ pub(super) const LOCKS_RESERVE: TaskOperation = TaskOperation {
         ],
     },
     effect: Effect::Write,
-    params: &[
-        &[
-            aliased(
-                both(
-                    "task_ids",
-                    ParamType::StringList,
-                    "Task IDs in the bundle as a string or array of strings.",
-                    CliArgKind::Flag {
-                        long: "task",
-                        delimiter: Some(','),
-                        aliases: &[],
-                        visible_aliases: &[],
-                        value_name: Some("TASK_ID"),
-                        multiple: false,
-                    },
-                    "Task whose declared context surface to reserve. Repeat or comma-separate to claim a bundle's combined surface",
-                ),
-                &["taskIds", "task-ids"],
-            ),
+    params: &[&[
+        aliased(
             both(
-                "files",
+                "task_ids",
                 ParamType::StringList,
-                "Canonical file or directory selectors to reserve (`file:...`, `dir:...`).",
+                "Task IDs in the bundle as a string or array of strings.",
                 CliArgKind::Flag {
-                    long: "file",
+                    long: "task",
                     delimiter: Some(','),
                     aliases: &[],
                     visible_aliases: &[],
-                    value_name: Some("SELECTOR"),
+                    value_name: Some("TASK_ID"),
                     multiple: false,
                 },
-                "Selector to reserve directly (`file:...`, `dir:...`). Repeat or comma-separate for several",
+                "Task whose declared context surface to reserve. Repeat or comma-separate to claim a bundle's combined surface",
             ),
-            aliased(
-                mcp_only(
-                    "ttl_seconds",
-                    ParamType::UnsignedInteger,
-                    "Optional reservation TTL in seconds. Defaults to 1800; max 14400.",
-                ),
-                &["ttlSeconds", "ttl-seconds"],
+            &["taskIds", "task-ids"],
+        ),
+        both(
+            "files",
+            ParamType::StringList,
+            "Canonical file or directory selectors to reserve (`file:...`, `dir:...`).",
+            CliArgKind::Flag {
+                long: "file",
+                delimiter: Some(','),
+                aliases: &[],
+                visible_aliases: &[],
+                value_name: Some("SELECTOR"),
+                multiple: false,
+            },
+            "Selector to reserve directly (`file:...`, `dir:...`). Repeat or comma-separate for several",
+        ),
+        aliased(
+            mcp_only(
+                "ttl_seconds",
+                ParamType::UnsignedInteger,
+                "Optional reservation TTL in seconds. Defaults to 1800; max 86400.",
             ),
-            defaulted(
-                cli_only(
-                    "ttl",
-                    ParamType::String,
-                    CliArgKind::Flag {
-                        long: "ttl",
-                        delimiter: None,
-                        aliases: &[],
-                        visible_aliases: &[],
-                        value_name: Some("DURATION"),
-                        multiple: false,
-                    },
-                    "How long the claim holds, e.g. `45m`, `2h`. Default 30m, maximum 4h",
-                ),
-                "30m",
+            &["ttlSeconds", "ttl-seconds"],
+        ),
+        defaulted(
+            cli_only(
+                "ttl",
+                ParamType::String,
+                CliArgKind::Flag {
+                    long: "ttl",
+                    delimiter: None,
+                    aliases: &[],
+                    visible_aliases: &[],
+                    value_name: Some("DURATION"),
+                    multiple: false,
+                },
+                "How long the claim holds, e.g. `45m`, `2h`. Default 30m, maximum 24h",
             ),
-        ],
-        super::operations::IDENTITY_PARAMS,
-    ],
+            "30m",
+        ),
+    ]],
     at_least_one_of: &[],
-    retired_fields: &[],
-    unknown_fields: UnknownFields::Warn,
+    retired_fields: &[RETIRED_AGENT_FIELD],
+    unknown_fields: UnknownFields::Refuse,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 pub(super) const LOCKS_RELEASE: TaskOperation = TaskOperation {
@@ -273,29 +269,27 @@ pub(super) const LOCKS_RELEASE: TaskOperation = TaskOperation {
         constraints: &[],
     },
     effect: Effect::Write,
-    params: &[
-        &[
-            required(aliased(
-                both(
-                    "reservation_id",
-                    ParamType::String,
-                    "Reservation ID to release.",
-                    CliArgKind::Positional,
-                    "Reservation ID to release (see `orbit task locks list --json`)",
-                ),
-                &["reservationId", "reservation-id"],
-            )),
-            cli_only(
-                "confirm",
-                ParamType::Switch,
-                CliArgKind::flag("confirm"),
-                "Confirm release of the reservation",
+    params: &[&[
+        required(aliased(
+            both(
+                "reservation_id",
+                ParamType::String,
+                "Reservation ID to release.",
+                CliArgKind::Positional,
+                "Reservation ID to release (see `orbit task locks list --json`)",
             ),
-        ],
-        super::operations::IDENTITY_PARAMS,
-    ],
+            &["reservationId", "reservation-id"],
+        )),
+        cli_only(
+            "confirm",
+            ParamType::Switch,
+            CliArgKind::flag("confirm"),
+            "Confirm release of the reservation",
+        ),
+    ]],
     at_least_one_of: &[],
-    retired_fields: &[],
-    unknown_fields: UnknownFields::Warn,
+    retired_fields: &[RETIRED_AGENT_FIELD],
+    unknown_fields: UnknownFields::Refuse,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };

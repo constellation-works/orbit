@@ -1,7 +1,7 @@
 ---
 title: Task Publication — Decisions
 owner: codex
-last_updated: 2026-10-28
+last_updated: 2026-11-04
 last_validated: 2026-10-28
 status: Accepted
 feature: task-publication
@@ -196,7 +196,6 @@ checks. Omission is recorded as incomplete backup state.
 ## Task References
 
 - [ORB-11068] — recorded the dedicated-repository, authority, acknowledgement, branch-conflict, and privacy rules.
-- [ORB-11077] — shipped those rules through an explicit CLI-only operator surface and deferred unattended publication.
 - [ORB-18375] — shipped branch-scoped lineages in a shared publication repository, superseding the one-repository-per-workspace rule.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

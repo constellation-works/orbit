@@ -1,17 +1,26 @@
 //! The child process's own work: execute the run it was handed.
 
 use super::*;
-use crate::application::job::{JobAutomationPort, JobPullSettlementPort};
+use crate::application::job::{JobAutomationPort, JobExperimentPort, JobPullSettlementPort};
 
 impl OrbitRuntime {
     pub fn execute_pipeline_run_worker(&self, run_id: &str) -> Result<(), OrbitError> {
         // [ORB-18166] Before anything can be killed mid-run, so a terminating
         // signal's sender reaches the supervisor's exit record.
         super::exit::capture_terminating_signal_senders();
+        // A detached worker can outlive its submitting fixture or removed
+        // checkout even while blocked inside a step, not only while polling.
+        let _cwd_guard = super::cwd::WorkerCwdGuard::start(run_id)?;
         self.preflight_pipeline_worker_store()?;
         upgrade_handover::bind_worker_run(run_id);
         if upgrade_handover::adopts_run(run_id) {
             return self.adopt_pipeline_run(run_id);
+        }
+        // [ORB-20158] A parked auto-task run the owner clock woke: adopt it
+        // under the store's compare-and-set, then continue the same logical
+        // run from its checkpoint.
+        if let Some(parked_at) = self.due_parked_run(run_id)? {
+            return self.resume_parked_pipeline_run(run_id, parked_at);
         }
         // [ORB-12616] A claimed leaf is executable, but only by the worker the
         // owner's claim is bound to. The check is the trusted process worker
@@ -21,9 +30,9 @@ impl OrbitRuntime {
         // worker bound to a different claim is refused too.
         if let Some(admission) = self.claimed_leaf_admission(run_id)? {
             self.authorize_claimed_leaf(run_id, admission)?;
-        } else if crate::application::job::claimed::CLAIMED_LEAF_JOBS
-            .contains(&self.show_job_run(run_id)?.job_id.as_str())
-        {
+        } else if orbit_types::workflow::is_claimed_delivery_leaf_job(
+            &self.show_job_run(run_id)?.job_id,
+        ) {
             // A claimed definition submitted by hand has no claim to execute
             // for. Refuse here rather than after `worktree_setup` and an
             // implementation step that can never reach a handoff.
@@ -162,8 +171,11 @@ impl OrbitRuntime {
         // with a durable `running` projection.
         let outcome = (|| {
             #[cfg(target_os = "macos")]
-            let _watchdog = self.start_worker_watchdog(run)?;
-            if crate::application::job::claimed::CLAIMED_LEAF_JOBS.contains(&run.job_id.as_str()) {
+            let _watchdog = self.start_worker_watchdog(
+                run,
+                super::usage::tree::session_tree_reader(std::process::id()),
+            )?;
+            if orbit_types::workflow::is_claimed_delivery_leaf_job(&run.job_id) {
                 if let Some(selection) = self
                     .read_run_state(&run.run_id)?
                     .and_then(|state| state.crew_selection)
@@ -171,7 +183,7 @@ impl OrbitRuntime {
                     input["crew"] = selection["crew"].clone();
                     input["crew_selection"] = selection;
                 } else {
-                    self.install_claimed_experiment_crew(&mut input)?;
+                    self.install_job_claimed_experiment_crew(&mut input)?;
                     if let Some(selection) = input.get("crew_selection") {
                         self.stores()
                             .jobs()
@@ -199,11 +211,14 @@ impl OrbitRuntime {
             // died after checkpointing continues from where that worker
             // stopped. Reusing a checkpoint is therefore idempotent — the
             // successful steps are skipped, never re-dispatched.
+            // [ORB-20158] An auto-task run's checkpoint carries its frozen
+            // bindings and branch results even before any step succeeded.
             let resume = self.read_run_state(&run.run_id)?.filter(|state| {
-                state
-                    .step_states
-                    .values()
-                    .any(|step_state| *step_state == JobRunState::Success)
+                state.auto_task.is_some()
+                    || state
+                        .step_states
+                        .values()
+                        .any(|step_state| *step_state == JobRunState::Success)
             });
             self.run_job_v2_from_yaml_with_run_id_and_resume(
                 yaml_path,
@@ -214,6 +229,12 @@ impl OrbitRuntime {
             )
         })();
         drop(sampler);
+        // A parked run stays live with its park recorded; nothing finishes.
+        if let Ok(result) = &outcome
+            && result.parked.is_some()
+        {
+            return Ok(());
+        }
         let finished_at = Utc::now();
         self.record_worker_resource_limit(run, started_at, finished_at, outcome.as_ref());
         self.finalize_v2_pipeline_run(
@@ -228,5 +249,62 @@ impl OrbitRuntime {
         // here, after the run is final, rather than in terminalization.
         self.retry_leaf_settlement(&run.run_id);
         outcome.map(|_| ())
+    }
+
+    /// When `run_id` is a running run parked on an auto-task step and due,
+    /// the park this worker must adopt.
+    fn due_parked_run(&self, run_id: &str) -> Result<Option<chrono::DateTime<Utc>>, OrbitError> {
+        let Some(run) = self.get_job_run_backend(run_id)? else {
+            return Ok(None);
+        };
+        if run.state != JobRunState::Running {
+            return Ok(None);
+        }
+        Ok(self
+            .read_run_state(run_id)?
+            .and_then(|state| state.parked_wait().cloned())
+            .filter(|park| park.wake_at <= Utc::now())
+            .map(|park| park.parked_at))
+    }
+
+    /// Adopt a due parked run and continue it. Losing the compare-and-set to
+    /// another worker is not an error. The job's current catalog state still
+    /// governs: a job disabled or removed while its run was parked cancels the
+    /// run, as a disabled job's queued run is.
+    fn resume_parked_pipeline_run(
+        &self,
+        run_id: &str,
+        parked_at: chrono::DateTime<Utc>,
+    ) -> Result<(), OrbitError> {
+        if !self
+            .stores()
+            .jobs()
+            .adopt_parked_job_run(run_id, parked_at, std::process::id())?
+        {
+            tracing::info!(
+                target: "orbit.core.job_run",
+                run_id,
+                "another worker adopted the parked run first",
+            );
+            return Ok(());
+        }
+        let run = self.show_job_run(run_id)?;
+        let enabled = self
+            .load_v2_job_asset_by_name(&run.job_id)
+            .is_ok_and(|(_, spec)| spec.state == JobScheduleState::Enabled);
+        if !enabled {
+            log_best_effort(
+                "cancel parked run of a disabled job",
+                &run.run_id,
+                self.cancel_job_run(&run.run_id),
+            );
+            return Err(OrbitError::InvalidInput(format!(
+                "job '{}' is disabled or missing; its parked run was cancelled",
+                run.job_id
+            )));
+        }
+        let (yaml_path, _) = self.resolve_run_definition(&run)?;
+        let started_at = run.started_at.unwrap_or(run.scheduled_at);
+        self.execute_started_pipeline_run(&run, &yaml_path, started_at, false)
     }
 }

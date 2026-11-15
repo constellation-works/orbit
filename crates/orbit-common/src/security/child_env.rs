@@ -21,11 +21,15 @@
 //! uses, and treating them as a gate is what let the bypass exist.
 //!
 //! [`inherited_child_env`] is the explicit opt-out for an operator who really
-//! does want full inheritance.
+//! does want full inheritance. Privilege-bearing `ORBIT_*` names are still
+//! withheld: inheritance is not a way to hand `ORBIT_OPERATOR` or
+//! `ORBIT_WORKSPACE_CLAIM_TOKEN` to a child.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use orbit_types::identity::CrewEnvVar;
+use orbit_types::identity::{CrewEnvSource, CrewEnvVar};
+
+use super::operator_env::read_secret_file;
 
 /// Runtime context every supported provider CLI needs in order to start.
 ///
@@ -68,6 +72,11 @@ pub const ACTIVITY_NAME_ENV: &str = "ORBIT_ACTIVITY_NAME";
 pub const ACTIVITY_DEADLINE_ENV: &str = "ORBIT_ACTIVITY_DEADLINE_UNIX_MS";
 /// Original activity budget, bounding build-admission deadline credit.
 pub const ACTIVITY_TIMEOUT_ENV: &str = "ORBIT_ACTIVITY_TIMEOUT_MS";
+/// Opt-in MCP toolsets the activity's nested `orbit mcp serve` advertises
+/// beside its own selection, comma-separated as `--toolset` takes them. The
+/// dispatch stamps toolsets for the activity's resolved tools. A toolset
+/// changes advertisement only and grants nothing: every call keeps its admission.
+pub const ACTIVITY_MCP_TOOLSETS_ENV: &str = "ORBIT_ACTIVITY_MCP_TOOLSETS";
 
 /// Where a sandboxed agent's run plugin broker listens. A nested
 /// `orbit mcp serve` reaches brokered tools (the claimed before-PR review
@@ -94,6 +103,7 @@ pub const MCP_MANAGED_BINDING_ENV_VARS: &[&str] = &[
     ACTIVITY_NAME_ENV,
     ACTIVITY_DEADLINE_ENV,
     ACTIVITY_TIMEOUT_ENV,
+    ACTIVITY_MCP_TOOLSETS_ENV,
     crate::process::build_budget::WAIT_DIRECTORY_ENV,
     "ORBIT_ACTIVITY_FS_PROFILE",
     "ORBIT_PROC_ALLOWED_PROGRAMS",
@@ -225,15 +235,18 @@ pub fn unset_pass_names_from(parent: &[(String, String)], pass: &[String]) -> Ve
 pub const CLAUDE_CREDENTIAL_ENV: [&str; 2] = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
 
 /// Overlay one crew's `[crews.<name>] env` entries on a composed child
-/// environment, taking values from `parent`.
+/// environment, taking values from `parent` or, for a `file:` source, from the
+/// file itself.
 ///
 /// Each entry's `name` replaces whatever `child` held for it (crew env wins
-/// over `pass`) with `parent`'s non-empty value of its `source`, or is
-/// removed when `parent` holds none: a crew whose credential is unset never
-/// falls back to the shared one. A mapped source is not forwarded under its
-/// own name to this crew. When the crew sets a Claude credential
-/// ([`CLAUDE_CREDENTIAL_ENV`]), the other one is removed. Privilege-bearing
-/// `ORBIT_*` names are never admitted, whoever asks.
+/// over `pass`) with `parent`'s non-empty value of its source variable, or
+/// the trimmed contents of its source file (read now, owner-only, see
+/// [`read_secret_file`]), or is removed when there is none: a crew whose
+/// credential is unset never falls back to the shared one. A mapped source
+/// variable is not forwarded under its own name to this crew. When the crew
+/// sets a Claude credential ([`CLAUDE_CREDENTIAL_ENV`]), the other one is
+/// removed. Privilege-bearing `ORBIT_*` names are never admitted, whoever
+/// asks.
 pub fn apply_crew_env_from(
     child: &mut Vec<(String, String)>,
     parent: &[(String, String)],
@@ -243,7 +256,10 @@ pub fn apply_crew_env_from(
         .iter()
         .filter(|entry| {
             !is_privilege_bearing_orbit_name(&entry.name)
-                && !is_privilege_bearing_orbit_name(&entry.source)
+                && entry
+                    .source
+                    .variable()
+                    .is_none_or(|source| !is_privilege_bearing_orbit_name(source))
         })
         .collect();
     if entries.is_empty() {
@@ -255,7 +271,7 @@ pub fn apply_crew_env_from(
         entries
             .iter()
             .filter(|entry| entry.is_mapped())
-            .map(|entry| entry.source.as_str()),
+            .filter_map(|entry| entry.source.variable()),
     );
     if CLAUDE_CREDENTIAL_ENV
         .iter()
@@ -265,40 +281,69 @@ pub fn apply_crew_env_from(
     }
     child.retain(|(key, _)| !removed.contains(key.as_str()));
     for entry in entries {
-        if let Some((_, value)) = parent
-            .iter()
-            .rev()
-            .find(|(key, value)| key == &entry.source && !value.is_empty())
-        {
-            child.push((entry.name.clone(), value.clone()));
+        if let Some(value) = crew_env_value(parent, entry) {
+            child.push((entry.name.clone(), value));
         }
     }
 }
 
-/// The crew `env` entries whose source `parent` holds no non-empty value for,
-/// in listed order. Names only, never values.
+/// The value one crew `env` entry resolves to: `parent`'s non-empty value of
+/// its source variable, or the contents of its source file. `None` when there
+/// is none.
+fn crew_env_value(parent: &[(String, String)], entry: &CrewEnvVar) -> Option<String> {
+    match &entry.source {
+        CrewEnvSource::Variable(source) => parent
+            .iter()
+            .rev()
+            .find(|(key, value)| key == source && !value.is_empty())
+            .map(|(_, value)| value.clone()),
+        CrewEnvSource::File(path) => read_secret_file(path).ok(),
+    }
+}
+
+/// The crew `env` entries that resolve to no value: a source variable
+/// `parent` holds no non-empty value for, or a source file that is missing,
+/// empty or refused. In listed order. Names and paths only, never values.
 pub fn unset_crew_env_from(
     parent: &[(String, String)],
     crew_env: &[CrewEnvVar],
 ) -> Vec<CrewEnvVar> {
     crew_env
         .iter()
-        .filter(|entry| {
-            !parent
-                .iter()
-                .any(|(key, value)| key == &entry.source && !value.is_empty())
-        })
+        .filter(|entry| crew_env_value(parent, entry).is_none())
         .cloned()
         .collect()
 }
 
-/// Full inheritance of the parent environment.
+/// Why a file-backed crew `env` entry resolves to no value, for a warning that
+/// names the file's state. `None` for a variable source or a usable file.
+pub fn crew_env_file_problem(entry: &CrewEnvVar) -> Option<String> {
+    let path = entry.source.file()?;
+    read_secret_file(path).err().map(|error| error.to_string())
+}
+
+/// [`inherited_child_env`] over an explicit parent snapshot.
 ///
-/// The explicit opt-in behind `[execution.env] inherit = true`: every ambient
-/// variable, credentials included, reaches the child. Callers that do not opt
-/// in use [`allowlisted_child_env`].
+/// Every ambient name is forwarded, credentials included, except
+/// privilege-bearing `ORBIT_*` names: any `ORBIT_*` name outside the named
+/// execution envelope, such as `ORBIT_OPERATOR` and
+/// `ORBIT_WORKSPACE_CLAIM_TOKEN`. That is the same exclusion
+/// [`allowlisted_child_env_from`] applies when a pass list names one.
+pub fn inherited_child_env_from(parent: &[(String, String)]) -> Vec<(String, String)> {
+    parent
+        .iter()
+        .filter(|(name, _)| !is_privilege_bearing_orbit_name(name))
+        .cloned()
+        .collect()
+}
+
+/// Full inheritance of the parent environment, minus privilege-bearing
+/// `ORBIT_*` names.
+///
+/// The explicit opt-in behind `[execution.env] inherit = true`. Callers that
+/// do not opt in use [`allowlisted_child_env`].
 pub fn inherited_child_env() -> Vec<(String, String)> {
-    std::env::vars().collect()
+    inherited_child_env_from(&std::env::vars().collect::<Vec<_>>())
 }
 
 /// Ensure a child environment carries a login identity (`USER` / `LOGNAME`).
@@ -339,10 +384,9 @@ pub(crate) fn backfill_login_identity(vars: &mut BTreeMap<String, String>) {
 /// On Unix this is the `pw_name` for the real uid via the reentrant
 /// `getpwuid_r`, which (unlike `$USER`) does not depend on the ambient
 /// environment. Returns `None` when no passwd entry exists or the lookup
-/// fails.
-// pub(crate) for sibling-layout tests in security/tests/child_env.rs.
+/// fails. Also the fallback for the operator crew name `orbit init` offers.
 #[cfg(unix)]
-pub(crate) fn os_login_name() -> Option<String> {
+pub fn os_login_name() -> Option<String> {
     use std::ffi::CStr;
 
     // SAFETY: getuid cannot fail. getpwuid_r writes into caller-owned buffers
@@ -376,9 +420,8 @@ pub(crate) fn os_login_name() -> Option<String> {
 }
 
 /// Non-Unix fallback: derive the login name from `USERNAME` if present.
-// pub(crate) for sibling-layout tests in security/tests/child_env.rs.
 #[cfg(not(unix))]
-pub(crate) fn os_login_name() -> Option<String> {
+pub fn os_login_name() -> Option<String> {
     std::env::var("USERNAME")
         .ok()
         .filter(|name| !name.is_empty())

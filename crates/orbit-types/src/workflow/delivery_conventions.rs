@@ -24,6 +24,56 @@ pub const PR_SECTIONS_ARTIFACT: &str = "pr-sections.json";
 /// published without filled content.
 pub const PR_SECTION_GAP_EVENT: &str = "pr_section_gap";
 
+/// The decision recorded on [`PR_SECTION_GAP_EVENT`]: which required
+/// sections a delivery had no content for, what the configured policy did,
+/// and, when this delivery created the pull request with that body, the
+/// publication it binds to. The rendered history note and the body's
+/// missing-section note are presentation; this record is the evidence draft
+/// recovery and handed-off landing read.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct PrSectionGap {
+    /// Configured names of the required sections published without content.
+    pub missing_sections: Vec<String>,
+    /// `pr.missing_required_section` when the gap was found.
+    pub action: MissingSectionPolicy,
+    /// Job run (execution) that rendered the body.
+    pub run_id: String,
+    /// Head branch the delivery publishes from.
+    pub head_branch: String,
+    /// The pull request this delivery created with the gap body. Absent when
+    /// it refused, or reused a pull request without publishing this body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication: Option<PrSectionGapPublication>,
+}
+
+/// The exact body a delivery created its pull request with. Only a live body
+/// with this digest on a pull request from this head branch is that
+/// publication; a human edit changes the digest.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct PrSectionGapPublication {
+    /// Head branch of the created pull request.
+    pub head_branch: String,
+    /// SHA-256 of the body sent to the forge's create operation.
+    pub body_sha256: String,
+}
+
+impl PrSectionGap {
+    /// Whether this decision published the live body of a pull request from
+    /// `head_branch`.
+    pub fn published_body(&self, head_branch: &str, body_sha256: &str) -> bool {
+        self.publication.as_ref().is_some_and(|publication| {
+            publication.head_branch == head_branch && publication.body_sha256 == body_sha256
+        })
+    }
+
+    /// Whether this decision created a pull request from `head_branch`.
+    pub fn published_from(&self, head_branch: &str) -> bool {
+        self.publication
+            .as_ref()
+            .is_some_and(|publication| publication.head_branch == head_branch)
+    }
+}
+
 /// History event explaining a reused pull request's draft recovery decision.
 pub const PR_DRAFT_RECOVERY_EVENT: &str = "pr_draft_recovery";
 
@@ -352,7 +402,9 @@ impl ConventionTemplate {
     }
 
     /// The task id `branch` names under this template and `prefix`: the
-    /// first candidate `accept` admits, shortest first.
+    /// first candidate `accept` admits, shortest first. A repeated task
+    /// placeholder must carry that same id at every occurrence, so a captured
+    /// owner always satisfies [`Self::branch_names_task`].
     pub fn branch_task_id(
         &self,
         branch: &str,
@@ -372,7 +424,8 @@ fn is_id_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '-' || c == '_'
 }
 
-/// Match the complete rendered shape, returning the task id matched. Fixed
+/// Match the complete rendered shape, returning the task id matched. Every
+/// occurrence of a repeated task placeholder must carry the same id. Fixed
 /// literals and the hash length establish the task boundary even when the
 /// template puts digits or the hash immediately after the task id. An external
 /// ref may contain `/`; later segments still bound where it ends.
@@ -409,12 +462,20 @@ fn match_owner(
                     .all(|c| c.is_ascii_hexdigit())
                     .then(|| go(rest, &text[BRANCH_HASH_LEN..], prefix, task, captured))?
             }
-            Segment::Placeholder(Placeholder::TaskId) => match task {
-                TaskMatch::Exact(id) => {
+            // A repeated task placeholder renders the same id every time, so
+            // a later occurrence must repeat the id the first one bound.
+            // Capture would otherwise keep the last candidate, naming a task
+            // the exact matcher refuses.
+            Segment::Placeholder(Placeholder::TaskId) => match (task, captured) {
+                (_, Some(bound)) => {
+                    let tail = text.strip_prefix(bound)?;
+                    go(rest, tail, prefix, task, Some(bound))
+                }
+                (TaskMatch::Exact(id), None) => {
                     let tail = text.strip_prefix(id)?;
                     go(rest, tail, prefix, task, Some(id))
                 }
-                TaskMatch::Capture(accept) => {
+                (TaskMatch::Capture(accept), None) => {
                     let run = text.find(|c: char| !is_id_char(c)).unwrap_or(text.len());
                     (1..=run).find_map(|end| {
                         let (candidate, tail) = text.split_at(end);
@@ -436,7 +497,8 @@ fn match_owner(
 
 /// What a delivery does when a required pull request section has no filled
 /// content.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MissingSectionPolicy {
     /// Open the pull request as a draft, with a note under the heading.
     #[default]
@@ -465,8 +527,37 @@ impl MissingSectionPolicy {
     }
 }
 
+/// The former `pr.close_on_terminal` default, fixed when the key was removed
+/// [ORB-22808]: a task's open Orbit-authored pull requests close when the
+/// task reaches done, rejected or archived.
+pub const PR_CLOSE_ON_TERMINAL: bool = true;
+/// The former `pr.screenshot_section` default, fixed when the key was removed
+/// [ORB-22808]: single-task bodies carry the Screenshots table for tasks
+/// tagged `ui`.
+pub const PR_SCREENSHOT_SECTION: ScreenshotSection = ScreenshotSection::Auto;
+/// The former `pr.freshness_section` default, fixed when the key was removed
+/// [ORB-22808]: generated bodies carry the Branch Freshness section.
+pub const PR_FRESHNESS_SECTION: bool = true;
+/// The former `pr.signature` default, fixed when the key was removed
+/// [ORB-22808]: generated bodies end with the authoring model's signature.
+pub const PR_SIGNATURE: bool = true;
+/// The former `pr.orchestration_trailer` default, fixed when the key was
+/// removed [ORB-22808]: generated bodies carry the `Orchestrated-By:` line.
+pub const PR_ORCHESTRATION_TRAILER: bool = true;
+/// The former `pr.draft` default, fixed when the key was removed
+/// [ORB-22808]: a pull request opens ready for review, and as a draft only
+/// for a required-section gap under [`MissingSectionPolicy::Draft`].
+pub const PR_DRAFT: bool = false;
+/// The former `commit.orchestrated_by_trailer` default, fixed when the key
+/// was removed [ORB-22808]: commit messages carry `Orchestrated-By:`.
+pub const COMMIT_ORCHESTRATED_BY_TRAILER: bool = true;
+/// The former `commit.regression_trailers` default, fixed when the key was
+/// removed [ORB-22808]: commit messages carry the `Fixes`, `Regression-From`
+/// and `Regression` trailers for `regression_from` relations.
+pub const COMMIT_REGRESSION_TRAILERS: bool = true;
+
 /// When a single-task pull request body carries the screenshot section
-/// (`pr.screenshot_section`).
+/// ([`PR_SCREENSHOT_SECTION`] for configured deliveries).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ScreenshotSection {
     /// Only for tasks tagged [`UI_TASK_TAG`].
@@ -479,7 +570,7 @@ pub enum ScreenshotSection {
 }
 
 impl ScreenshotSection {
-    /// Accepted spellings of `pr.screenshot_section`.
+    /// Accepted spellings of a screenshot-section policy.
     pub const VALUES: &'static [&'static str] = &["auto", "always", "off"];
 
     pub fn parse(value: &str) -> Option<Self> {
@@ -566,13 +657,13 @@ pub struct DeliveryConventions {
     pub required_sections: Vec<String>,
     /// `pr.missing_required_section`.
     pub missing_section: MissingSectionPolicy,
-    /// `pr.screenshot_section`.
+    /// When the Screenshots table renders; [`PR_SCREENSHOT_SECTION`].
     pub screenshot_section: ScreenshotSection,
-    /// `pr.freshness_section`.
+    /// The Branch Freshness section; [`PR_FRESHNESS_SECTION`].
     pub freshness_section: bool,
-    /// `pr.signature`: the `*authored by: <model>*` line.
+    /// The `*authored by: <model>*` line; [`PR_SIGNATURE`].
     pub signature: bool,
-    /// `pr.orchestration_trailer`: the `Orchestrated-By:` line of the body.
+    /// The `Orchestrated-By:` line of the body; [`PR_ORCHESTRATION_TRAILER`].
     pub pr_orchestration_trailer: bool,
     /// `pr.labels`.
     pub labels: Vec<String>,
@@ -582,18 +673,16 @@ pub struct DeliveryConventions {
     pub task_type_labels: BTreeMap<String, String>,
     /// `pr.reviewers`.
     pub reviewers: Vec<String>,
-    /// `pr.draft`.
+    /// Open every pull request as a draft; [`PR_DRAFT`].
     pub draft: bool,
     /// `commit.subject_template`.
     pub commit_subject: Option<ConventionTemplate>,
     /// `commit.body_template`.
     pub commit_body: Option<ConventionTemplate>,
-    /// `commit.planned_by_trailer`.
-    pub planned_by_trailer: bool,
-    /// `commit.implemented_by_trailer`.
-    pub implemented_by_trailer: bool,
-    /// `commit.orchestrated_by_trailer`.
+    /// The commit `Orchestrated-By:` trailer; [`COMMIT_ORCHESTRATED_BY_TRAILER`].
     pub orchestrated_by_trailer: bool,
+    /// The commit regression trailers; [`COMMIT_REGRESSION_TRAILERS`].
+    pub regression_trailers: bool,
     /// `branch.name_template`, else [`DEFAULT_BRANCH_TEMPLATE`].
     pub branch_name: ConventionTemplate,
 }
@@ -606,20 +695,19 @@ impl Default for DeliveryConventions {
             agent_sections: Vec::new(),
             required_sections: Vec::new(),
             missing_section: MissingSectionPolicy::Draft,
-            screenshot_section: ScreenshotSection::Auto,
-            freshness_section: true,
-            signature: true,
-            pr_orchestration_trailer: true,
+            screenshot_section: PR_SCREENSHOT_SECTION,
+            freshness_section: PR_FRESHNESS_SECTION,
+            signature: PR_SIGNATURE,
+            pr_orchestration_trailer: PR_ORCHESTRATION_TRAILER,
             labels: Vec::new(),
             task_tag_labels: Vec::new(),
             task_type_labels: BTreeMap::new(),
             reviewers: Vec::new(),
-            draft: false,
+            draft: PR_DRAFT,
             commit_subject: None,
             commit_body: None,
-            planned_by_trailer: true,
-            implemented_by_trailer: true,
-            orchestrated_by_trailer: true,
+            orchestrated_by_trailer: COMMIT_ORCHESTRATED_BY_TRAILER,
+            regression_trailers: COMMIT_REGRESSION_TRAILERS,
             branch_name: default_branch_template(),
         }
     }

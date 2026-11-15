@@ -25,7 +25,12 @@ export async function check(ctx) {
       for (const layer of layers.reverse()) base = blend(layer, base);
       return base;
     };
-    let matched = 0; let unmeasurable = 0; const failures = [];
+    // WCAG 1.4.3 exempts inactive components. Only natively disabled controls count
+    // (:disabled also covers controls disabled through a disabled fieldset, except
+    // inside its first legend), and their descendants' text. aria-disabled and
+    // cosmetic classes or colour tokens do not exempt text.
+    const inactiveControl = "button:disabled, input:disabled, select:disabled, textarea:disabled, optgroup:disabled, option:disabled";
+    let matched = 0; let unmeasurable = 0; let exempt = 0; const failures = []; const rows = [];
     for (const el of H.all("*")) {
       const ownText = [...el.childNodes].some((node) => node.nodeType === 3 && node.textContent.trim() !== "");
       if (!ownText) continue;
@@ -35,16 +40,19 @@ export async function check(ctx) {
       const fg = parse(s.color); const bg = effectiveBg(el);
       if (!fg || !bg) { unmeasurable += 1; continue; }
       matched += 1;
+      if (el.closest(inactiveControl)) { exempt += 1; continue; }
       const blended = fg.a < 1 ? blend(fg, bg) : fg;
       const l1 = luminance(blended); const l2 = luminance(bg);
       const ratio = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
       const size = H.px(s.fontSize); const weight = Number.parseInt(s.fontWeight, 10) || 400;
       const large = size >= 24 || (size >= 18.66 && weight >= 700);
       const needed = large ? 3 : 4.5;
-      if (ratio < needed) failures.push({ selector: H.selectorOf(el), ratio: Math.round(ratio * 100) / 100, needed, font_size: s.fontSize, text: (el.textContent ?? "").trim().slice(0, 60) });
+      const row = { ...H.elementFacts(el), ratio: Math.round(ratio * 100) / 100, needed, font_size: s.fontSize, text: (el.textContent ?? "").trim().slice(0, 60) };
+      rows.push(row);
+      if (ratio < needed) failures.push(row);
       if (failures.length >= 20) break;
     }
-    return { matched, unmeasurable, failures };
+    return { matched, unmeasurable, exempt, rows, failures };
   });
-  return verdict(ctx, rule, m.matched, m.failures, { unmeasurable: m.unmeasurable });
+  return verdict(ctx, rule, m.matched, m.failures, { unmeasurable: m.unmeasurable, disabled_exempt: m.exempt }, m.rows);
 }

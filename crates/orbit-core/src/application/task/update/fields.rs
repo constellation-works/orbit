@@ -1,8 +1,8 @@
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_types::task::{
-    LIGHT_DELIVERY_TAGS, REQUIRES_LABELS_FIELD, Task, TaskStatus, is_system_identity_tag,
-    is_valid_orb_task_id, normalize_host_labels, normalize_required_tools,
+    CrewSource, LIGHT_DELIVERY_TAGS, REQUIRES_LABELS_FIELD, Task, TaskStatus,
+    is_system_identity_tag, is_valid_orb_task_id, normalize_host_labels, normalize_required_tools,
     normalize_task_dependencies, normalize_task_tags, validate_os_tags,
     validate_task_dependencies_with,
 };
@@ -15,7 +15,7 @@ use super::artifacts::validate_pr_status;
 use super::entry::{TaskFieldWriter, ValidatedTaskFieldEdits};
 use crate::OrbitRuntime;
 use crate::application::contracts::CreationCrewAssignment;
-use crate::application::task::TaskJobPort;
+use crate::application::task::{TaskJobPort, TaskResidentPort};
 
 impl OrbitRuntime {
     /// Re-check, under the task lock, the creation intent an operator
@@ -66,6 +66,9 @@ impl OrbitRuntime {
         // Both ordinary updates and guarded starts reach this application
         // boundary, including CLI/dashboard callers that bypass tool-host
         // sanitization. Scrub prose before it enters a bundle or write journal.
+        if let Some(comment) = &params.comment {
+            self.refuse_resident_comment_needing_redaction(comment)?;
+        }
         for value in [
             &mut params.title,
             &mut params.description,
@@ -160,6 +163,9 @@ impl OrbitRuntime {
                      or an operator update sets it"
                 )));
             }
+            // [ORB-21238] `no-pilot` on an assessed or preparing task
+            // bypasses the pilot gate: an operator decision.
+            self.refuse_unauthorized_pilot_skip(task, &tags, writer)?;
             params.tags = Some(tags);
         }
         // [granted-tools §1] An unchanged grant is no change, so it needs no
@@ -203,7 +209,7 @@ impl OrbitRuntime {
         let mut crew_assignment = None;
         let mut crew_redraw_history = None;
         if let Some(crew) = &mut params.crew {
-            *crew = self.canonical_crew_name(crew.as_deref())?;
+            *crew = self.canonical_task_crew_name(crew.as_deref())?;
             if crew.is_none() {
                 crew_assignment = self.creation_crew(
                     params.complexity.or(task.complexity),
@@ -224,10 +230,13 @@ impl OrbitRuntime {
                     .map(|assignment| assignment.crew.clone());
             } else {
                 // An explicit update must not pin a disabled crew onto a task.
-                self.resolve_crew_for_task(None, crew.as_deref())?;
+                // A human crew is no agent: it is assigned, never dispatched.
+                if !self.is_human_crew(crew.as_deref()) {
+                    self.resolve_crew_for_task(None, crew.as_deref())?;
+                }
                 crew_assignment = crew.as_ref().map(|crew| CreationCrewAssignment {
                     crew: crew.clone(),
-                    source: "explicit".to_string(),
+                    source: CrewSource::Explicit,
                 });
             }
         }
@@ -279,7 +288,9 @@ impl OrbitRuntime {
                 Some(crew) => crew.clone(),
                 None => task.crew.clone(),
             };
-            if let Some(crew) = crew.as_deref() {
+            if let Some(crew) = crew.as_deref()
+                && !self.is_human_crew(Some(crew))
+            {
                 self.refuse_unsatisfiable_os_crew(tags, crew)?;
             }
         }

@@ -12,7 +12,7 @@ use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
 
 use super::*;
-use crate::contracts::{TaskDocumentUpdateParams, TaskListFilter};
+use crate::contracts::{TaskDocumentUpdateParams, TaskListFilter, TaskListHydration};
 use crate::repository::task::v2::repair_gate::RepairGate;
 use crate::repository::task::v2_bundle::LISTING_BUNDLE_READS;
 
@@ -252,6 +252,7 @@ fn repeated_reads_while_degraded_attempt_one_rebuild_and_stay_correct() {
                     },
                     50,
                     None,
+                    TaskListHydration::Full,
                 )
                 .expect("page")
         });

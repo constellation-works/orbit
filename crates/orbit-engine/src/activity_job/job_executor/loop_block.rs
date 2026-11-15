@@ -73,12 +73,14 @@ pub(super) fn run_loop(
                 .as_ref()
                 .and_then(|items| items.get(iteration_index as usize).cloned()),
             iteration: Some(iteration_index),
+            restored_branches: None,
         };
 
         for body in &block.steps {
             let outcome = run_step(body, &loop_ctx)?;
             if !outcome.success {
                 return Ok(StepOutcome {
+                    failure_code: outcome.failure_code,
                     success: false,
                     output: outcome.output,
                     message: outcome.message,
@@ -144,6 +146,7 @@ pub(super) fn run_loop(
     record_pipeline(ctx, &step.id, out.clone());
 
     Ok(StepOutcome {
+        failure_code: None,
         success: true,
         output: out,
         message: None,

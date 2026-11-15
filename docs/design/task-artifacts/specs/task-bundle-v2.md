@@ -2,7 +2,8 @@
 type: design
 summary: "Spec: Task Bundle V2"
 tags: ["task-artifacts"]
-last_validated: 2026-10-22
+last_validated: 2026-11-02
+last_updated: 2026-11-02
 ---
 
 # Spec: Task Bundle V2
@@ -258,8 +259,8 @@ rated it (`filer`, `verified`, `operator`, `backfill`, `default`). The screened
 `orbit.task.add` and `orbit.task.update` writes require `severity` on a new
 classified link; a link the task already holds may be re-sent without one and
 keeps its recorded rating. A severity given alone records source `filer`, and
-only finding verification records `verified`, when it confirms the finding
-that carries the link. A classified link stored before severity existed reads
+only finding verification recorded `verified`, when it confirmed the finding
+that carries the link (that job was removed in [ORB-22844]; older links keep it). A classified link stored before severity existed reads
 as `medium` with source `default`, and is written back that way. Binaries
 before this field refuse a payload that carries it (the payload is
 `deny_unknown_fields`), so hosts sharing a store upgrade together.
@@ -316,6 +317,12 @@ once at refresh, so warm scans traverse one row vector without rebuilding
 lookup maps or formatting unchanged proof stamps.
 Registries admitted read-only retain their direct reads, including the
 existing immutable-main-file fallback when live WAL observation is unavailable.
+Change-stamp reads for the dashboard stream use the same version gate on
+their own query-only connection: one partition's stamps are kept and handed
+back until a commit on another connection changes `data_version`, which is
+sampled before the index load. A failed sample or load leaves the previous
+snapshot in place. Read-only registries keep reading `task_bundle_index`
+directly.
 
 Within a process, a successful comparison of a parsed envelope with an
 immutable index row is also reused while that exact row and the envelope's
@@ -352,11 +359,12 @@ intent from bytes:
 - A reader that assembles a **complete** bundle must hold the same lock in
   shared mode. It then observes only settled bundles, so a genuine mismatch
   still fails the read (`task_bundle_corrupt`) with no tolerance widened.
-- The lock is per bundle: one task's transition must never block, fail, or
-  delay a read of any other task.
+- The lock is per bundle: one task's transition must never block or fail a
+  read of any other task. A listing that scans the partition is the one bounded
+  exception: see the freshness probe below.
 - Reads of the **envelope alone** need no lock. `task.yaml` is renamed into
   place atomically, so a single file is always self-consistent; the index
-  freshness scan every listing performs stays lock-free.
+  freshness scan every listing performs reads envelopes lock-free.
 - The read lock is not the create/delete sentinel, which keys on the bundle
   directory. Readers never block a task's creation or removal, and those
   transient states stay governed by the existing skip tolerance
@@ -427,11 +435,12 @@ registered, settled envelope, then select from the index: SQL answers the
 status, priority, job-run, tag and continuation predicates, newest-first
 ordering (task ID ascending for ties), the limit and the total, so only the
 selected envelopes leave the parse cache and only the selected bundles load.
-A parent predicate narrows the selection through the indexed `child_of`
-relation rows, but the freshness scan does not compare relations, so each
-selected envelope still confirms it. That predicate and those the index does
-not project (search, type, external references) narrow the indexed candidates
-in memory before the limit. Exact
+A parent predicate narrows selection through indexed `child_of` relation
+rows. The freshness scan compares every envelope's complete parent-target set
+with those rows, and proof fingerprints include it, so a relation-only restore
+cannot hide a child behind a stale parent index [ORB-15856]. Predicates the
+index does not project (search, type, external references) narrow the indexed
+candidates in memory before the limit. Exact
 totals count metadata matches; they do not certify off-page body, event, or
 artifact integrity. A selected bundle with envelope, body, or event-log damage fails
 the request and is never replaced with another row. Listing and search
@@ -454,8 +463,12 @@ reading that scan propagate. A registry opened read-only never takes a repair
 ticket or writes freshness proofs: its fallback logs only at debug and leaves
 the writer's repair gate untouched. Writable readers still attempt repair.
 Index fields and tags are loaded in one SQLite snapshot; the freshness probe
-retries once before accepting a mismatch, because a writer may finish publishing
-between the snapshot and an envelope probe. Completed task creation and update
+retries before accepting a mismatch, because a writer may finish publishing
+between the snapshot and an envelope probe. A writer shows its envelope before it
+updates the index row, and a coordinated commit keeps that gap open across its
+deferred apply, so a writable probe first waits, bounded, for the mismatching
+bundle's lock. Only the same task mismatching again with no writer on it proves
+the row stale ([ORB-22425]). Completed task creation and update
 publish the generated row before returning, including history-only updates.
 A refused writable repair is recorded per process,
 registry and workspace against the envelope stamps of every registered task
@@ -522,3 +535,15 @@ references resolve in the checkout's repository. The CI-failure filer uses it
 on archived/rejected exact-key sweep tasks to retain operator coverage;
 [CI recovery guidance](../../../../plugin/skills/orbit-orchestrate/references/recovery.md)
 describes open, landed, unavailable and abandoned cover handling.
+
+## Task References
+
+- [ORB-10332] — Retire review-thread task surfaces and leave their legacy sidecars inert.
+- [ORB-10343] — Bound failure-history notes while retaining a command to retrieve the full durable error.
+- [ORB-11205] — Bound task-list hydration and eliminate repeated dashboard bundle reads.
+- [ORB-11349] — Coordinate full-bundle readers with concurrent lifecycle writers through the per-task lock.
+- [ORB-14181] — Report canonical dangling relations and bound failed task-index repair attempts.
+- [ORB-22425] — A freshness probe waits for a mismatching bundle's writer before it falls back to a workspace scan and rebuild.
+- [ORB-15856] — Validate child-of index freshness against canonical parent-target sets.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

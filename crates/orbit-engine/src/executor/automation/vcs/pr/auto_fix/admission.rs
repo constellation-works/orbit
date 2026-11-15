@@ -100,20 +100,30 @@ pub(in crate::executor::automation::vcs::pr) fn admit<H: RuntimeHost + ?Sized>(
             );
             Ok(attempt)
         }
-        PrAutoFixDecision::Duplicate(previous) => Err(verdict::hold_auto_fix_stop(
-            verdict::stopped(
-                pr_number,
-                &format!(
-                    "a {} repair was already dispatched for head {head_sha} as attempt {} of {} by \
-                 run {}, and that head is still the one blocked",
-                    blocker.as_str(),
-                    previous.attempt,
-                    previous.budget,
-                    previous.run_id
+        PrAutoFixDecision::Duplicate(previous) => {
+            let remedy = if blocker == PrAutoFixBlocker::FailedChecks {
+                ". If a repair is running, let it finish. If none ran because the job lacked \
+                 step_failure_recovery, configure recovery for future heads, repair and publish \
+                 a new head, then start a new delivery attempt; adding recovery alone cannot \
+                 re-admit this head. Further repairs require remaining per-PR budget"
+            } else {
+                ""
+            };
+            Err(verdict::hold_auto_fix_stop(
+                verdict::stopped(
+                    pr_number,
+                    &format!(
+                        "a {} repair was already admitted for head {head_sha} as attempt {} of {} by \
+                         run {}, and that head is still the one blocked{remedy}",
+                        blocker.as_str(),
+                        previous.attempt,
+                        previous.budget,
+                        previous.run_id
+                    ),
                 ),
-            ),
-            DeliveryRefusal::RepairDispatched,
-        )),
+                DeliveryRefusal::RepairDispatched,
+            ))
+        }
         PrAutoFixDecision::Exhausted(attempts) => {
             let spent = attempts
                 .iter()

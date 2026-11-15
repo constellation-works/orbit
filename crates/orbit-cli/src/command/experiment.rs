@@ -31,6 +31,13 @@ impl Execute for ExperimentCommand {
         let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
         let blocks = match spec.verb {
             ExperimentVerb::Assign => vec![Block::text(value.to_string())],
+            ExperimentVerb::Delete => vec![Block::text(format!(
+                "deleted {} {} ({}, {})",
+                text(&value["deleted"]),
+                text(&value["name"]),
+                text(&value["status"]),
+                text(&value["mode"]),
+            ))],
             ExperimentVerb::List => vec![Block::table(list_table(&value))],
             ExperimentVerb::Readout => readout_blocks(&value),
             ExperimentVerb::Create
@@ -158,6 +165,14 @@ fn experiment_blocks(value: &Value) -> Vec<Block> {
         blocks.push(Block::table(table));
     }
     for event in &events {
+        for warning in event["detail"]["warnings"].as_array().into_iter().flatten() {
+            blocks.push(Block::text(format!("Warning: {}", text(warning))));
+        }
+        if let Some(warning) = event["detail"]["warning"].as_str() {
+            blocks.push(Block::text(format!("Warning: {warning}")));
+        }
+    }
+    for event in &events {
         if event["kind"] != "concluded" {
             continue;
         }
@@ -177,6 +192,29 @@ fn experiment_blocks(value: &Value) -> Vec<Block> {
         }
     }
     blocks
+}
+
+/// An arm's delivered tasks over its settled ones, with the rate and any
+/// tasks still pending; blank for an arm without a delivery check.
+fn delivered_cell(delivery: &Value) -> String {
+    if !delivery.is_object() {
+        return String::new();
+    }
+    let settled = delivery["assigned"]
+        .as_u64()
+        .unwrap_or(0)
+        .saturating_sub(delivery["pending"].as_u64().unwrap_or(0));
+    let mut cell = format!("{}/{settled}", text(&delivery["delivered"]));
+    if let Some(rate) = delivery["rate"].as_f64() {
+        let _ = write!(cell, " ({:.0}%)", rate * 100.0);
+    }
+    if delivery["pending"]
+        .as_u64()
+        .is_some_and(|pending| pending > 0)
+    {
+        let _ = write!(cell, ", {} pending", text(&delivery["pending"]));
+    }
+    cell
 }
 
 fn readout_blocks(value: &Value) -> Vec<Block> {
@@ -203,12 +241,13 @@ fn readout_blocks(value: &Value) -> Vec<Block> {
     let lagging = &value["lagging"];
     let _ = write!(
         header,
-        "\nPrimary metric: {}\nEnrollment: {} analysed, {} forced (excluded), {} surface-conflict exclusions, {} explicit-crew exclusions\nSample ratio: chi-square {}, df {}, p = {}{}\nLagging: {} task(s) in flight, {} regression window(s) open",
+        "\nPrimary metric: {}\nEnrollment: {} analysed, {} forced (excluded), {} surface-conflict exclusions, {} explicit-crew exclusions, {} interactive exclusions\nSample ratio: chi-square {}, df {}, p = {}{}\nLagging: {} task(s) in flight, {} regression window(s) open",
         text(&experiment["primary_metric"]),
         text(&enrollment["analysed"]),
         text(&enrollment["forced_excluded"]),
         text(&enrollment["surface_conflict_excluded"]),
         text(&enrollment["explicit_crew_excluded"]),
+        text(&enrollment["interactive_excluded"]),
         number(&ratio["chi_square"]),
         text(&ratio["df"]),
         number(&ratio["p_value"]),
@@ -235,6 +274,8 @@ fn readout_blocks(value: &Value) -> Vec<Block> {
         Column::new("CONTROL"),
         Column::new("WEIGHT").number(),
         Column::new("N").number(),
+        Column::new("EXPLORER").number(),
+        Column::new("DELIVERED"),
         Column::new("SEGMENTS"),
         Column::new("CREW MIX"),
         Column::new("RECORDED EFFORT"),
@@ -265,6 +306,8 @@ fn readout_blocks(value: &Value) -> Vec<Block> {
             },
             text(&arm["weight"]),
             text(&arm["n"]),
+            text(&arm["tasks_with_explorer_call"]),
+            delivered_cell(&arm["delivery"]),
             segments,
             crews,
             arm["effort_breakdown"]
@@ -295,6 +338,105 @@ fn readout_blocks(value: &Value) -> Vec<Block> {
     }
     blocks.push(Block::text("\nArms:"));
     blocks.push(Block::table(arms));
+
+    // Shadow memory arms: what was captured, never delivered.
+    let has_captures = value["arms"].as_array().into_iter().flatten().any(|arm| {
+        arm["memory_captures"]
+            .as_array()
+            .is_some_and(|captures| !captures.is_empty())
+    });
+    if has_captures {
+        blocks.push(Block::text("\nMemory captures (captured, not delivered):"));
+        let mut captures = Table::new(vec![
+            Column::new("ARM"),
+            Column::new("TASK"),
+            Column::new("DIGEST"),
+            Column::new("MODEL REV"),
+            Column::new("GLOBAL REV"),
+            Column::new("RENDERER").number(),
+            Column::new("WEEK"),
+        ]);
+        for arm in value["arms"].as_array().into_iter().flatten() {
+            for capture in arm["memory_captures"].as_array().into_iter().flatten() {
+                captures.add_row(vec![
+                    text(&arm["name"]),
+                    text(&capture["task_id"]),
+                    text(&capture["digest"]),
+                    text(&capture["model_revision"]),
+                    text(&capture["global_revision"]),
+                    text(&capture["renderer_version"]),
+                    text(&capture["week"]),
+                ]);
+            }
+        }
+        blocks.push(Block::table(captures));
+        for arm in value["arms"].as_array().into_iter().flatten() {
+            let strata = arm["memory_capture_strata"].as_array();
+            if let Some(strata) = strata.filter(|strata| !strata.is_empty()) {
+                let summary = strata
+                    .iter()
+                    .map(|stratum| {
+                        format!(
+                            "{}: {} task(s), digests {}",
+                            text(&stratum["week"]),
+                            text(&stratum["tasks"]),
+                            stratum["digests"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .map(text)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                blocks.push(Block::text(format!(
+                    "Arm {} captured (not delivered): {}",
+                    text(&arm["name"]),
+                    summary
+                )));
+            }
+        }
+    }
+
+    let per_protocol = &value["per_protocol"];
+    if per_protocol.is_object() {
+        let metric = &per_protocol["metric"];
+        // The table that follows is the per-protocol primary metric (delivered
+        // runs only). Intention-to-treat metrics are emitted later, each under
+        // its own heading, so this sentence must not describe them.
+        blocks.push(Block::text(format!(
+            "\nPrimary metric {}, {}:",
+            text(&metric["metric"]),
+            text(&per_protocol["label"]),
+        )));
+        let mut table = Table::new(vec![
+            Column::new("ARM"),
+            Column::new("N").number(),
+            Column::new("MEAN [95%]"),
+            Column::new("DIFF VS CONTROL [95%]"),
+        ]);
+        for arm in metric["arms"].as_array().into_iter().flatten() {
+            let difference = metric["differences"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|difference| difference["arm"] == arm["arm"]);
+            table.add_row(vec![
+                text(&arm["arm"]),
+                text(&arm["n"]),
+                with_interval(&arm["mean"], &arm["mean_interval"]),
+                difference.map_or_else(String::new, |difference| {
+                    with_interval(
+                        &difference["overall"]["estimate"],
+                        &difference["overall"]["interval"],
+                    )
+                }),
+            ]);
+        }
+        blocks.push(Block::table(table));
+    }
 
     let mut empty = Vec::new();
     for metric in value["metrics"].as_array().into_iter().flatten() {
@@ -332,13 +474,26 @@ fn readout_blocks(value: &Value) -> Vec<Block> {
             .flatten()
             .any(|arm| arm["n"].as_u64().is_some_and(|n| n > 0));
         if !has_data {
-            empty.push(text(&metric["metric"]));
+            empty.push(format!(
+                "{}{}",
+                text(&metric["metric"]),
+                if metric["exploratory"] == true {
+                    " (exploratory)"
+                } else {
+                    ""
+                }
+            ));
             continue;
         }
         let rate = metric["kind"] == "rate";
         blocks.push(Block::text(format!(
-            "\n{} ({}, {} is better, {}):",
+            "\n{}{} ({}, {} is better, {}):",
             text(&metric["metric"]),
+            if metric["exploratory"] == true {
+                " (exploratory)"
+            } else {
+                ""
+            },
             text(&metric["kind"]),
             text(&metric["better"]),
             text(&metric["unit"]),

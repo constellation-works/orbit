@@ -8,7 +8,7 @@ pub struct OrbitPipelineWaitTool;
 
 impl Tool for OrbitPipelineWaitTool {
     fn schema(&self) -> ToolSchema {
-        let mut parameters = vec![
+        let parameters = vec![
             ToolParam {
                 name: "run_ids".to_string(),
                 description: "One or more run IDs to wait for as a string or array of strings."
@@ -18,7 +18,7 @@ impl Tool for OrbitPipelineWaitTool {
             },
             ToolParam {
                 name: "timeout_seconds".to_string(),
-                description: "Optional timeout in seconds (default 3600, max 7200).".to_string(),
+                description: "Optional timeout in seconds (default 3600, max 86400).".to_string(),
                 param_type: "number".to_string(),
                 required: false,
             },
@@ -31,8 +31,6 @@ impl Tool for OrbitPipelineWaitTool {
                 required: false,
             },
         ];
-        parameters.extend(super::super::identity_params());
-
         ToolSchema {
             name: "orbit.pipeline.wait".to_string(),
             description: "Block until the supplied pipeline runs reach terminal state or timeout."

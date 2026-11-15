@@ -16,7 +16,7 @@ use orbit_core::adapter::command::{
 };
 use orbit_core::application::task::{TaskListResultPolicy, TaskListResultProfile};
 use orbit_mcp::McpHost;
-use orbit_types::tool::{McpToolDefinition, ToolSessionContext};
+use orbit_types::tool::{McpToolDefinition, ToolSessionContext, tool_family_operation_call};
 use serde_json::Value;
 
 /// Wraps a worker's MCP host with the claimed-owner route.
@@ -55,12 +55,18 @@ impl McpHost for ClaimedOwnerBridge {
         session_context: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
         let cwd = std::env::current_dir()?;
+        // The owner's handler reads the same compact hint the local MCP
+        // transport stamps; it carries no leading underscore, so the
+        // broker's internal-field refusal does not trip on it.
+        let mut forwarded_input = input.clone();
+        TaskListResultPolicy::for_call(name, &input, TaskListResultProfile::Default)
+            .apply_compact_hint(&mut forwarded_input);
         if let Some(route) = bridge_claimed_owner_call(
             &self.global_root,
             session_context.worker_invocation.as_ref(),
             Some(&self.process_machine_id),
             name,
-            &input,
+            &forwarded_input,
             &cwd,
             &cwd,
             ToolEntryPoint::Mcp,
@@ -82,9 +88,12 @@ impl McpHost for ClaimedOwnerBridge {
                     // transport failures here, with this MCP session's caller
                     // and call identity; a broker response already owns its
                     // audit row and is returned above without a duplicate.
+                    // Audit rows record the operation a family action runs,
+                    // as the CLI's refusal does [ORB-23280].
+                    let (operation, input) = tool_family_operation_call(name, input);
                     execute_global_in_process_tool_dispatch(
                         &self.global_root,
-                        name,
+                        &operation,
                         input,
                         ToolEntryPoint::Mcp,
                         session_context,

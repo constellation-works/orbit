@@ -40,8 +40,8 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_types::record::OrbitEvent;
-use orbit_types::task::{Task, TaskDecision, TaskHistoryEntry, TaskStatus};
+use orbit_common::security::redaction::redact_all;
+use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     MAX_TRANSIENT_INFRA_REQUEUES, TRANSIENT_INFRA_BLOCKED_EVENT,
     TRANSIENT_INFRA_REQUEUE_DEFERRED_EVENT, TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT,
@@ -51,6 +51,10 @@ use orbit_types::workflow::{
 use rusqlite::TransactionBehavior;
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
+use super::helpers::{self, SYSTEM_ACTOR_LABEL, is_automation_actor};
+use super::requeue::CandidateRequeue;
+use super::transitions::INFRA_BLOCK_CLEARED_EVENT;
+use crate::OrbitRuntime;
 use crate::application::task::{TaskJobPort, TaskRecords};
 
 /// Transient authentication errors one block may take before it waits for an
@@ -60,10 +64,15 @@ const MAX_DEFERRALS: usize = 5;
 /// Minutes the cleared-infra requeue waits after a transient authentication
 /// error before it tries the same block again.
 const DEFERRAL_BACKOFF_MINUTES: i64 = 10;
-use super::helpers::{SYSTEM_ACTOR_LABEL, is_automation_actor};
-use super::requeue::CandidateRequeue;
-use super::transitions::INFRA_BLOCK_CLEARED_EVENT;
-use crate::OrbitRuntime;
+
+// One authentication error the next cleared-infra requeue records instead of
+// calling the forge. The real refusal is a remote round trip; this only
+// supplies the error text the deferral persists.
+#[cfg(test)]
+thread_local! {
+    pub(super) static PRESERVATION_FAULT: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
 
 /// A blocked task whose block is transient Orbit infrastructure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,7 +138,9 @@ impl OrbitRuntime {
             return Ok(None);
         };
         if !untouched_since(&history[index + 1..])
-            || latest_final_recovery(&history, &run_id) != Some("escalated")
+            || helpers::authoritative_recovery_outcome(&history, &run_id)
+                .map(|outcome| outcome.as_str())
+                != Some("escalated")
         {
             return Ok(None);
         }
@@ -156,7 +167,7 @@ impl OrbitRuntime {
             pull_request,
             requeues,
             exhausted: requeues >= MAX_TRANSIENT_INFRA_REQUEUES,
-            cleared: self.transient_infrastructure_clear(),
+            cleared: self.transient_infrastructure_clear_for(block.class),
             held,
         }))
     }
@@ -215,14 +226,31 @@ impl OrbitRuntime {
         Ok(human.map(|by| format!("{by} acted on the task after the block; their call stands")))
     }
 
-    /// The probe: the task store takes an immediate write transaction now.
-    /// A requeue then also has to take the task's write lock.
-    fn transient_infrastructure_clear(&self) -> bool {
-        self.sqlite_store()
+    /// The probe for `class`: the task store takes an immediate write
+    /// transaction now, and for a host-configuration block the misplaced
+    /// table is also gone. A requeue then also has to take the task's
+    /// write lock.
+    fn transient_infrastructure_clear_for(&self, class: TransientInfrastructure) -> bool {
+        if !self
+            .sqlite_store()
             .and_then(|store| {
                 store.with_transaction_behavior(TransactionBehavior::Immediate, |_| Ok(()))
             })
             .is_ok()
+        {
+            return false;
+        }
+        // A host-configuration block clears only when the misplaced table is
+        // gone from this host's global config; a writable store alone would
+        // requeue onto the same refusal.
+        if class == TransientInfrastructure::HostConfiguration {
+            let path = self.global_root().join("config.toml");
+            return matches!(
+                orbit_config::misplaced_global_plugin_enablement(&path),
+                Ok(None)
+            );
+        }
+        true
     }
 
     /// Return every transient-infra blocked task whose probe passes, whose
@@ -261,11 +289,11 @@ impl OrbitRuntime {
         let task = self.get_task(&scanned.task_id)?;
         // Authenticate first, outside the lock: it asks the remote and forge.
         let preserved = match &scanned.pull_request {
-            Some(_) => match self.failure_handoff_preservation(&task) {
+            Some(_) => match self.failure_handoff_for_requeue(&task) {
                 Ok((entry, _)) => Some(entry),
                 // Only the authentication's own refusal is final; a remote,
                 // forge or store error says nothing about the publication.
-                Err(error @ OrbitError::JobValidation(_)) => {
+                Err(error) if error.job_validation_message().is_some() => {
                     self.refuse_transient_infra_requeue(scanned, &error.to_string())?;
                     return Ok(None);
                 }
@@ -368,6 +396,25 @@ impl OrbitRuntime {
         self.record_transient_infra_attempt(scanned, TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT, reason)
     }
 
+    /// The failure-handoff preservation record, or the test fault standing in
+    /// for an unreadable forge response.
+    fn failure_handoff_for_requeue(
+        &self,
+        task: &orbit_types::task::Task,
+    ) -> Result<
+        (
+            orbit_types::task::TaskHistoryEntry,
+            orbit_types::workflow::SourceRepairBinding,
+        ),
+        OrbitError,
+    > {
+        #[cfg(test)]
+        if let Some(message) = PRESERVATION_FAULT.with(|fault| fault.borrow_mut().take()) {
+            return Err(OrbitError::Execution(message));
+        }
+        self.failure_handoff_preservation(task)
+    }
+
     /// Append `event` (a refusal or a deferral) to `scanned`'s block, while
     /// it is still the block that was scanned and nothing holds it.
     fn record_transient_infra_attempt(
@@ -376,6 +423,10 @@ impl OrbitRuntime {
         event: &'static str,
         reason: &str,
     ) -> Result<(), OrbitError> {
+        // Sibling writers (`requeue_blocked_task_as`, `resolves_history_entry`)
+        // redact error text before it becomes a durable note. Forge and git
+        // errors can carry a remote URL with credentials.
+        let reason = redact_all(reason.trim());
         tracing::warn!(
             target: "orbit.core.transient_infra",
             task_id = %scanned.task_id,
@@ -392,32 +443,24 @@ impl OrbitRuntime {
                 if current.blocked_at != scanned.blocked_at || current.held.is_some() {
                     return Ok(());
                 }
-                self.with_mutation(|| {
-                    let updated = self.stores().task_records().update(
-                        &scanned.task_id,
-                        StoreTaskUpdateParams {
-                            actor: SYSTEM_ACTOR_LABEL.to_string(),
-                            append_history: vec![TaskHistoryEntry {
-                                at: Utc::now(),
-                                by: SYSTEM_ACTOR_LABEL.to_string(),
-                                event: event.to_string(),
-                                note: Some(format!("run_id={}: {reason}", scanned.run_id)),
-                                from_status: None,
-                                to_status: None,
-                                operation_id: None,
-                                decision: None,
-                            }],
-                            expected_status: Some(vec![TaskStatus::Blocked]),
-                            ..Default::default()
-                        },
-                    )?;
-                    Ok((
-                        updated,
-                        OrbitEvent::TaskUpdated {
-                            id: scanned.task_id.clone(),
-                        },
-                    ))
-                })?;
+                self.stores().task_records().update(
+                    &scanned.task_id,
+                    StoreTaskUpdateParams {
+                        actor: SYSTEM_ACTOR_LABEL.to_string(),
+                        append_history: vec![TaskHistoryEntry {
+                            at: Utc::now(),
+                            by: SYSTEM_ACTOR_LABEL.to_string(),
+                            event: event.to_string(),
+                            note: Some(format!("run_id={}: {reason}", scanned.run_id)),
+                            from_status: None,
+                            to_status: None,
+                            operation_id: None,
+                            decision: None,
+                        }],
+                        expected_status: Some(vec![TaskStatus::Blocked]),
+                        ..Default::default()
+                    },
+                )?;
                 Ok(())
             })
     }
@@ -430,20 +473,4 @@ fn untouched_since(after: &[TaskHistoryEntry]) -> bool {
         entry.to_status.is_none()
             || (entry.by == SYSTEM_ACTOR_LABEL && entry.to_status == Some(TaskStatus::Blocked))
     })
-}
-
-/// The outcome name of the latest typed final-recovery decision Orbit
-/// recorded for `run_id`.
-fn latest_final_recovery<'a>(history: &'a [TaskHistoryEntry], run_id: &str) -> Option<&'a str> {
-    history
-        .iter()
-        .rev()
-        .find_map(|entry| match &entry.decision {
-            Some(TaskDecision::FinalRecovery {
-                run_id: recorded,
-                outcome,
-                ..
-            }) if entry.by == SYSTEM_ACTOR_LABEL && recorded == run_id => Some(outcome.as_str()),
-            _ => None,
-        })
 }

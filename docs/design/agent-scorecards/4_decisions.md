@@ -1,13 +1,13 @@
 ---
 title: Agent Scorecards — Decisions
 owner: claude
-last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_updated: 2026-11-10
+last_validated: 2026-11-08
 status: Draft
 feature: agent-scorecards
 doc_role: decisions
 type: design
-summary: Standing rules for agent scorecards; one owner per problem, cost shown but never scored, reviewers scored on accuracy.
+summary: Standing rules for agent scorecards; one owner per problem, cost shown but never scored, reviewers scored on accuracy, escaped regressions scored against expected size.
 tags: [agent-scorecards, dashboard, analytics]
 paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-core/src/application/codebase/pilot.rs"]
 related_features: [user-interface, review-gate]
@@ -32,8 +32,8 @@ Every recorded problem has exactly one owning role, or none (**Not scored**). Th
 
 ### Consequences
 
-- The attribution strip's per-role totals are ownership counts, not score contributions: each problem contributes once to exactly one owner total, and no problem appears in two, but rankings use only their role's scored terms. In particular, `no_test` escapes increase the Implementers strip count while leaving the Implementers score unchanged.
-- An implementer is not charged for a defect review should have seen; the reviewer is. Orchestrator spec regressions narrow to escape `spec_ambiguous`.
+- The attribution strip's per-role totals are ownership counts, not score contributions: each problem contributes once to exactly one owner total, and no problem appears in two, but rankings use only their role's scored terms. In particular, `no_test` escapes increase the Implementers strip count; since [ORB-21789] they are also scored, except a defect a pre-landing review already charged.
+- An implementer is not charged for a defect review should have seen; the reviewer is. Spec regressions narrow to escape `spec_ambiguous`; since [ORB-23582] they are Not scored with the other spec problems.
 - Cost: a problem that really was shared is charged to one role only, so a weak implementer paired with a weak reviewer looks better than either deserves on its own tab. Reading roles together is required to see that.
 
 ## Cost is shown, never scored
@@ -52,6 +52,7 @@ Dollar cost, tokens and wall time never enter an agent score. They are shown nex
 
 - A score answers "how good is the work", and the cost panel answers "at what price"; the frontier of crews nothing beats on both makes the trade visible.
 - Cost: the ranking alone never recommends a crew. An operator has to read two views, and a reader who looks only at the ranking will prefer expensive crews.
+- Proposed amendment, for the [model ranking](../model-ranking/4_decisions.md#cost-orders-a-tie-band-and-is-never-scored) only ([ORB-23297]): cost stays out of the score but orders models within a statistical tie band. These boards are unchanged.
 
 ## Score accuracy, never the volume of objections
 
@@ -75,7 +76,7 @@ A gatekeeping role (reviewers today, and any future verifier) earns only for obj
 
 **Recorded:** 2026-10-24 · [ORB-17779] removed implementer complexity weighting and centred every term on same-tier fleet expectations, extending [ORB-17118]'s unit-landed orchestrator principle.
 
-**Code anchors:** `crates/orbit-core/src/application/agents/roles/implementers.rs::rows`, `crates/orbit-core/src/application/agents/score.rs::score`
+**Code anchors:** `crates/orbit-core/src/application/agents/roles/implementers/performance.rs::implementer_rows`, `crates/orbit-core/src/application/agents/roles/implementers/tier_reference.rs::tier_references`, `crates/orbit-core/src/application/agents/score.rs::score`
 
 ### Context
 
@@ -88,22 +89,178 @@ when tiers have different outcome rates.
 
 Implementer landings count one each. Compare every term's actual count with
 the fleet's expected count on that row's tier mix, per 100 tasks, starting at
-100. Pool tiers below 30 observations with the largest tier before computing
-rates, rather than letting a handful of rare-tier tasks set their own rate.
-Keep cost outside the score and keep the existing shrinkage and support rules.
+100. **Amended 2026-11-08:** tiers below 30 fleet row-task observations retain
+their own evidence and shrink toward the nearest supported assessed tier
+(`low < medium < hard < xhard`, lower on distance ties). Unassessed tiers,
+or assessed tiers with no supported assessed neighbour, use the supported
+pool; if every tier is sparse, use the fleet pool. The previous largest-tier
+pool erased rare-tier evidence and could substitute medium outcomes for hard
+or xhard work.
+
+Use the [conservative exchange rule](./2_design.md#52-implementers) with `K = 30`:
+borrow `n × K / (n + K)` units of reference evidence and apply the opposite
+expected-count change to the reference. Cap simultaneous exchanges by each
+tier's borrowing budget, retaining its own evidence too. The all-sparse pool
+uses symmetric exchanges weighted by borrowing mass. This preserves fleet expected counts and keeps
+rates within the observed range, unlike independent shrinkage followed by
+unbounded count rescaling. Compute exchanges separately for implemented and
+reviewed populations; leave the escaped-regression size reference unchanged.
+Expose sparse-tier references and retained own weights in the JSON row stats.
+Keep cost outside the score and keep the existing row-score shrinkage and
+support rules.
 
 ### Consequences
 
-- A row matching each reference pool's rates has raw 100 regardless of mix.
+- A row matching each adjusted tier's expected rates has raw 100 regardless of mix.
+- Fleet expected counts are conserved; weeks with every tier supported retain
+  their previous rates and scores.
 - Expected counts and actual counts remain inspectable in the existing detail.
 - Cost: fleet-relative scores can move when peers change even if the crew's own
-  outcomes do not. Pooling sparse tiers trades exact per-tier invariance for a
-  supported reference; until those tiers grow, their crews inherit the larger
-  pool's rate and atypical difficulty can still affect their comparison.
+  outcomes do not. Sparse-tier shrinkage trades exact per-tier invariance for
+  a supported reference while retaining the rare tier's observed outcomes.
+  Supported reference tiers also receive balancing adjustments when they lend
+  evidence; a reference with no observations in a term's population lends none.
+
+## Score escaped regressions against expected change size
+
+**Recorded:** 2026-11-03 · [ORB-21789] revisited [ORB-19629], which left escaped regressions unscored until roughly 100 linked regressions with sites and another backtest.
+
+**Code anchors:** `crates/orbit-core/src/application/agents/roles/implementers/performance.rs::TERMS`, `performance.rs::charged_by_pre_landing_review`, `crates/orbit-core/src/application/agents/roles/implementers/context.rs::append_diff_context`
+
+### Context
+
+`review.timing` is `off` in ws_orbit and `before_pr` is deprecated, so few
+tasks carry a pre-landing review settlement: in the 7 days to 2026-11-03,
+muse-wonder-full had 0 of 12 tasks reviewed, opus 3 of 90 and sol 19 of 161.
+Delivery review covers every landed task and files each finding as a fix task
+linked `regression_from` to its culprit. With escaped regressions unscored, the
+review terms saw almost nothing and the score was effectively landings minus
+rework: on hard work muse-wonder-full ranked third at 4.0 severity-weighted
+regressions per task, 31.6 over expected on 12 tasks.
+
+The rerun backtest read the ws_orbit owner store on 2026-11-03 at 06:55 UTC:
+1,760 typed `regression_from` links, **662 with sites** (sites start
+2026-10-28), 453 of those filed by `delivery-code-review`, and 543 against 306
+culprits with a recorded landed diff size. Delivery review is prompt: from the
+culprit's landing to the link's filing took a median of 0.2 hours, 7.4 at the
+90th percentile and 31 at the 95th. The cohort is the **814** tasks that landed
+with a recorded diff, crew and tier from 2026-10-28 02:14 to 2026-11-01 06:55
+UTC, so each had 48 hours of follow-up, excluding `no-diff-expected` and empty
+diffs. **192** of them had a linked regression with sites within 48 hours (359
+links). The outcome is whether a task had any such link, fitted by logistic
+regression with 5-fold cross-validation by task:
+
+| Predictors | Cross-validated AUC |
+|---|---:|
+| ln(1 + lines changed) | 0.769 |
+| Tier | 0.718 |
+| Size and tier | 0.777 |
+| Size, tier and crew | 0.763 |
+
+Crew did not improve on size and tier: the likelihood-ratio χ² was 13.4 on 8 df
+(p = 0.10), and it held out worse. On `no_test` links alone, the implementer-owned
+escape, p was 0.08. Crew added no more beyond tier alone (p = 0.11) or beyond the
+expected-size bucket the score uses (p = 0.11). A 24-hour follow-up (1,041
+tasks, 236 regressed) gave the same picture (crew p = 0.08). This reproduces
+the 2026-10-27 finding (AUC 0.737, no crew effect beyond size), whose scripts
+were never recovered, on four times the linked sample.
+
+### Decision
+
+The implementer score takes delivery-review evidence as **Escaped regressions**,
+a problem term weighted −0.5 per severity point: `no_test` regression links
+against the row's landed tasks, at their severity weights. A `medium` finding
+costs as much as a review reject. Its expected count is the size-adjusted one
+the residual already displayed: the fleet rate for the task's tier and
+expected-size bucket. Expected size is the fleet's median for the task's
+(tier, type) cell, never the row's own diff. So routing larger work to a crew
+does not lower its score, but writing a larger diff than comparable work does.
+
+A defect is counted once across review layers. When a link's `sites` name a
+path that a finding of the row's pre-landing `reject` (not a false reject) or
+`accept_with_fixes` cited or changed, that verdict already charged the defect
+and the link adds nothing. Other links on the same task still count, since they
+are defects the pre-landing review did not report.
+
+The alternative was a delivery-review review term: an accept credit for a task
+with no findings, and the delivery verdict replacing the pre-landing one. It was
+not chosen. Nothing in the scan records when delivery review has covered a task,
+so a clean credit would be paid before the review ran. Escape attribution
+already sends `review_missed`, `spec_ambiguous` and the unscored escapes to
+their owners.
+
+### Consequences
+
+- A crew whose work no pre-landing review sees is now scored on its delivery-review findings, and a crew whose diffs run larger than comparable work pays for the regressions that come with them.
+- `escaped_regressions` moves from the row's stats into its scored counts and expectations. The `regression_residual` stat is removed: the term's actual, expected count and contribution replace it. Diff economy stays shown, not scored.
+- By-type cells score the term against their (tier, type) cell rates, so crew-performance draws now respond to escaped regressions.
+- The `no_test` charge stays in the attribution strip's Implementers count even when a pre-landing verdict absorbed it.
+- Cost: crew differences in regression rate beyond size were not significant (p ≈ 0.1), so much of the term's spread is noise; shrinkage toward the fleet average and the −0.5 weight limit it. The expectation excludes the row's own escapes, falling back to other rows in the same tier, then the fleet, and finally a zero prior when no peers exist; sparse references can be noisy. Site matching depends on filers naming sites: a link without sites always counts, even when it repeats a pre-landing finding. The filer's severity stands until verification confirms or replaces it, and 95% of delivery-review findings arrived within 31 hours of landing, so the newest tasks can still pick up findings after they are first scored.
+
+## A scorecard window can end in the past
+
+**Recorded:** 2026-11-08 · ORB-23066
+
+### Context
+
+Every scorecard window ended at the scan's now. `--window 7d` meant the last 7 days, and a count window (`last50` and the other lastN values) meant the newest N attempts in the scan. Reviewer scores stay provisional for 30 days, because a review's missed regressions can surface that long after the review. A window that ends now is therefore mostly unsettled. The weekly crew-rankings note needs reviewer scores on a window of the same length that ends 30 days back.
+
+### Decision
+
+`orbit agents scorecard`, `orbit agents show`, the matching MCP tools and `GET /api/agents/{role}/scorecard` and `/detail` take an optional `until`: an RFC 3339 instant, or a duration ago such as `30d` (units `m`/`min`/`minute`, `h`/`hour`, `d`/`day`, `w`/`week`). The window is then `[until - window, until)` for a calendar window, and the newest N attempts with `start < until` for a count window. A bare date is not accepted. A future instant is refused. Omitted, selection is unchanged: a calendar window still starts `window` before now and does not drop work at or after that instant. The JSON payload always reports the served `since` and `until` (RFC 3339 UTC). When `until` was omitted, `until` is the instant used as now. Reviewer provisional counts and the other lookbacks stay measured against now, so a window ending 30 or more days before now reports `provisional: 0` for reviewers.
+
+### Consequences
+
+- A consumer can ask for settled reviewer scores without changing the provisional rule or the default window.
+- The human selection line does not gain an until label, so omitting the flag leaves that line unchanged. The JSON payload gains `until` on every response, including the deprecated orchestrator aliases, which do not grow their own flag.
+- Cost: a caller that compared whole JSON bytes of an omitted window must ignore the new `until` field. Parsing accepts the resident-metrics duration grammar, including a trailing `s` and ignored whitespace, and rejects a bare calendar date rather than guessing one.
+
+## Task authorship is not ranked
+
+**Recorded:** 2026-11-09 · [ORB-23582]
+
+### Context
+
+The orchestrators role ranked the orchestrators that file tasks by their tasks' landings, less spec defects and spec-caused rework. In practice nobody chose or tuned an orchestrator from it, so the role, its deprecated `orbit orchestrator` aliases and its routes cost maintenance without informing a decision.
+
+### Decision
+
+No scorecard ranks task authorship. The orchestrators role and every surface that served it (the `orbit orchestrator` command, the `orbit.orchestrator.*` tools, `--role orchestrators`, `/api/agents/orchestrators/*`) are removed with no replacement. Problems the one-owner rule gave orchestrators keep that rule: they are Not scored with reason `spec`, never moved to another role. Tasks keep their `orchestrator` and `orchestrator_model` attribution.
+
+### Consequences
+
+- Spec edits, criteria blocks and escalations, spec-caused rework and `spec_ambiguous` regressions appear in the attribution strip's Not scored bucket and lower no ranking.
+- The one-per-task charge for a confirmed task-pilot scope hold existed only for this role and is no longer produced; pilot warning terms are unchanged.
+- Bringing authorship back needs a new decision, with an owner named for spec problems under the one-owner rule.
+
+## Implementer review terms need minimum support
+
+**Recorded:** 2026-11-10 · [ORB-23838]
+
+### Context
+
+The implementers' first-pass accepts, review rejects and reviewer repairs are rated per 100 reviewed deliveries and entered the raw score at any positive count. With the in-run review gate idle, few tasks are reviewed (270 of 4,086 row-task units in one window), so a handful of reviews outweighed hundreds of tasks: a row with 31 reviewed of 394 tasks took +42.7 of its +47.2 raw points from them and ranked first, and another scored −16.5 from 2 reviewed deliveries. The pilots' terms already leave a term below its own minimum support out of the raw score as `provisional_terms`.
+
+### Decision
+
+A row, by-type or tier cell, or ranked model with fewer than `review_min_support` reviewed deliveries has the three review terms provisional: rated and shown, left out of the raw score. The default is 30, one named value that matches the smoothing constant K, returned in the implementers payload. On the model ranking, review outcome is then unmeasured and its weight leaves the model's denominator. Zero reviewed deliveries stays unmeasured. The fleet expectation's population is unchanged, so a provisional row's reviews still count in the fleet's rates. Other roles and terms are unchanged. This supersedes the earlier rule that any positive reviewed count is measured with no separate threshold.
+
+### Consequences
+
+- A row's score no longer separates on one or two reviews; ranking among low-review rows follows landings, rework and escaped regressions.
+- The fleet average no longer conserves to 100 when provisional rows leave the review terms out, since the fleet's rates still include their reviews.
+- A model near the threshold gains or loses review outcome as reviews settle, which shifts its weight denominator and score; the count and rate stay visible throughout.
+- Cost: the threshold is not a per-query option; changing it is a code change and a new decision.
 
 ## Task References
 
+- ORB-23838 — minimum support for the implementer review terms and the model ranking's review outcome.
+- ORB-23066 — optional `until` window end on the agent scorecard CLI, MCP tools and API.
+
 - ORB-17118 — the unit-landed orchestrator principle this decision extends.
 - ORB-17779 — replaced complexity-weighted implementer credit with unit landings and same-task-mix fleet expectations.
+- ORB-19629 — left escaped regressions unscored pending a larger linked sample and another backtest.
+- ORB-21789 — reran the backtest on 662 links with sites and scored escaped regressions against expected change size, counting a defect once across review layers.
+- ORB-23582 — removed the orchestrators role and its surfaces; spec problems became Not scored.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

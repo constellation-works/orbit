@@ -8,6 +8,7 @@
 //! workspace sync` leave it absent. `restore` is the one way back for a
 //! shipped default: it writes the shipped content and clears the opt-out.
 
+use std::fmt;
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
@@ -72,6 +73,131 @@ pub struct AutoTaskDeleteReport {
     pub deleted_at: String,
 }
 
+/// Success-receipt contracts over the same completed delete operation.
+#[derive(Debug, Clone, Copy)]
+pub enum AutoTaskDeleteProfile {
+    /// Complete CLI/tool report, omitting absent consumer and reason fields.
+    Tool,
+    /// Bounded dashboard receipt, including a reason even when it is null.
+    Http,
+}
+
+/// Project a completed delete without changing lifecycle or audit behavior.
+/// The HTTP profile never serializes the report's forensic fields.
+pub fn project_auto_task_delete_receipt(
+    report: &AutoTaskDeleteReport,
+    profile: AutoTaskDeleteProfile,
+) -> Result<Value, OrbitError> {
+    match profile {
+        AutoTaskDeleteProfile::Tool => serde_json::to_value(report)
+            .map_err(|error| OrbitError::Io(format!("encode auto-task delete report: {error}"))),
+        AutoTaskDeleteProfile::Http => {
+            let mut message = format!("Deleted auto-task {}.", report.name);
+            if report.opted_out {
+                message.push_str(" The shipped default will not be reseeded.");
+            }
+            Ok(json!({
+                "name": report.name,
+                "deleted": true,
+                "opted_out": report.opted_out,
+                "open_tasks": report.open_tasks,
+                "reason": report.reason,
+                "message": message,
+            }))
+        }
+    }
+}
+
+/// A delete refused before anything was removed, stated structurally so a
+/// transport picks its response from the variant, never from message text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AutoTaskDeleteRefusal {
+    /// No definition of this name exists.
+    NotFound {
+        /// The requested definition name.
+        name: String,
+    },
+    /// Minted tasks from the definition are still open and `force` was not set.
+    OpenMintedTasks {
+        /// The requested definition name.
+        name: String,
+        /// Ids of the minted tasks still open.
+        open_tasks: Vec<String>,
+    },
+}
+
+impl AutoTaskDeleteRefusal {
+    /// The refusal as the untyped delete entry point reports it.
+    pub fn message(&self) -> String {
+        match self {
+            Self::NotFound { name } => format!("no such auto-task '{name}'"),
+            Self::OpenMintedTasks { name, open_tasks } => format!(
+                "auto-task '{name}' still has open minted tasks: {}; close them, or pass --force to delete anyway",
+                open_tasks.join(", ")
+            ),
+        }
+    }
+}
+
+impl fmt::Display for AutoTaskDeleteRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message())
+    }
+}
+
+impl From<AutoTaskDeleteRefusal> for OrbitError {
+    fn from(refusal: AutoTaskDeleteRefusal) -> Self {
+        OrbitError::InvalidInput(refusal.message())
+    }
+}
+
+/// Why a typed delete failed: a pre-removal refusal, or any other error the
+/// delete raised (including the untyped delivery-consumer teardown refusal).
+#[derive(Debug)]
+pub enum AutoTaskDeleteError {
+    /// The delete was refused before anything was removed.
+    Refusal(AutoTaskDeleteRefusal),
+    /// Any other failure; carries the error the untyped entry point reports.
+    Other(OrbitError),
+}
+
+impl fmt::Display for AutoTaskDeleteError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Refusal(refusal) => fmt::Display::fmt(refusal, formatter),
+            Self::Other(error) => fmt::Display::fmt(error, formatter),
+        }
+    }
+}
+
+impl From<AutoTaskDeleteRefusal> for AutoTaskDeleteError {
+    fn from(refusal: AutoTaskDeleteRefusal) -> Self {
+        Self::Refusal(refusal)
+    }
+}
+
+impl From<OrbitError> for AutoTaskDeleteError {
+    fn from(error: OrbitError) -> Self {
+        Self::Other(error)
+    }
+}
+
+impl From<AutoTaskDeleteError> for OrbitError {
+    fn from(error: AutoTaskDeleteError) -> Self {
+        match error {
+            AutoTaskDeleteError::Refusal(refusal) => refusal.into(),
+            AutoTaskDeleteError::Other(error) => error,
+        }
+    }
+}
+
+/// The locked phase of a delete: it either removed the definition's state or
+/// refused before removing anything.
+enum LockedDelete {
+    Refused(AutoTaskDeleteRefusal),
+    Done((Vec<String>, RemovedState)),
+}
+
 impl OrbitRuntime {
     /// Delete a definition, its scheduler cursor and any delivery consumer
     /// state, and write an audit record.
@@ -88,6 +214,17 @@ impl OrbitRuntime {
         &self,
         params: AutoTaskDeleteParams,
     ) -> Result<AutoTaskDeleteReport, OrbitError> {
+        Ok(self.auto_task_delete_command(params)?)
+    }
+
+    /// [`Self::auto_task_delete`] with its pre-removal refusals stated as
+    /// [`AutoTaskDeleteRefusal`] variants. Every other failure is
+    /// [`AutoTaskDeleteError::Other`], carrying the error
+    /// [`Self::auto_task_delete`] reports for it.
+    pub fn auto_task_delete_command(
+        &self,
+        params: AutoTaskDeleteParams,
+    ) -> Result<AutoTaskDeleteReport, AutoTaskDeleteError> {
         self.ensure_coordination_task_write_permitted()?;
         let name = params.name.as_str();
         let path = definition_path(&self.paths().local_dir, name);
@@ -105,67 +242,74 @@ impl OrbitRuntime {
         // Check refusals here so a task minted by a preceding pass or an
         // overlapping manual mint is visible, and finish the delete under it
         // so no pass observes a definition that is half removed.
-        let (open_tasks, removed) = with_cursor_lock(
-            &cursor_state_path(&self.paths().state_dir),
-            |session| {
-                let definition = self.require_validated_auto_task(name)?;
-                let open_tasks = open_auto_task_instances(self, name)?;
-                if !open_tasks.is_empty() && !params.force {
-                    return Err(OrbitError::InvalidInput(format!(
-                        "auto-task '{name}' still has open minted tasks: {}; close them, or pass --force to delete anyway",
-                        open_tasks.join(", ")
-                    )));
-                }
-                let refusals = consumer_teardown_refusals(self, &definition, params.force, now)?;
-                if !refusals.is_empty() {
-                    return Err(OrbitError::InvalidInput(format!(
-                        "auto-task '{name}' has delivery consumer state its reset refuses to drop ({}); preview it with `orbit auto-task reset {name}`, or pass --force to abandon an executing action",
-                        refusals.join(", ")
-                    )));
-                }
-                let original = std::fs::read_to_string(&path)
-                    .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
-                std::fs::remove_file(&path).map_err(|error| {
-                    OrbitError::Io(format!(
-                        "delete auto-task '{name}' at {}: {error}",
-                        path.display()
-                    ))
-                })?;
-                let removed = remove_definition_state(
+        let locked = with_cursor_lock(&cursor_state_path(&self.paths().state_dir), |session| {
+            let Some(definition) = self.find_validated_auto_task(name)? else {
+                return Ok(LockedDelete::Refused(AutoTaskDeleteRefusal::NotFound {
+                    name: name.to_string(),
+                }));
+            };
+            let open_tasks = open_auto_task_instances(self, name)?;
+            if !open_tasks.is_empty() && !params.force {
+                return Ok(LockedDelete::Refused(
+                    AutoTaskDeleteRefusal::OpenMintedTasks {
+                        name: name.to_string(),
+                        open_tasks,
+                    },
+                ));
+            }
+            let refusals = consumer_teardown_refusals(self, &definition, params.force, now)?;
+            if !refusals.is_empty() {
+                return Err(OrbitError::InvalidInput(format!(
+                    "auto-task '{name}' has delivery consumer state its reset refuses to drop ({}); preview it with `orbit auto-task reset {name}`, or pass --force to abandon an executing action",
+                    refusals.join(", ")
+                )));
+            }
+            let original = std::fs::read_to_string(&path)
+                .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
+            std::fs::remove_file(&path).map_err(|error| {
+                OrbitError::Io(format!(
+                    "delete auto-task '{name}' at {}: {error}",
+                    path.display()
+                ))
+            })?;
+            let removed = remove_definition_state(
+                self,
+                session,
+                &definition,
+                reason.as_deref().unwrap_or(DEFAULT_DELETE_REASON),
+                params.force,
+                now,
+            )
+            .map_err(|error| restore_after_failure(&path, &original, error))?;
+            // Deleting the definition drops its condition edge memory and
+            // `self` history (§2).
+            if matches!(
+                definition.schedule,
+                orbit_types::workflow::AutoTaskSchedule::Condition { .. }
+            ) {
+                crate::application::automation::condition::forget_condition_state(
                     self,
-                    session,
-                    &definition,
-                    reason.as_deref().unwrap_or(DEFAULT_DELETE_REASON),
-                    params.force,
-                    now,
-                )
-                .map_err(|error| restore_after_failure(&path, &original, error))?;
-                // Deleting the definition drops its condition edge memory and
-                // `self` history (§2).
-                if matches!(
-                    definition.schedule,
-                    orbit_types::workflow::AutoTaskSchedule::Condition { .. }
-                ) {
-                    crate::application::automation::condition::forget_condition_state(
-                        self,
-                        orbit_automation::condition::ConditionCarrier::AutoTask,
-                        name,
-                    );
-                }
-                // The definition is gone; a leftover settings entry would only
-                // resurface on a later restore or same-named add, which both
-                // drop it again.
-                if let Err(error) = self.drop_auto_task_settings(name) {
-                    tracing::warn!(
-                        target: "orbit.core.auto_tasks",
-                        auto_task = name,
-                        %error,
-                        "deleted auto-task kept its settings entry"
-                    );
-                }
-                Ok((open_tasks, removed))
-            },
-        )?;
+                    orbit_automation::condition::ConditionCarrier::AutoTask,
+                    name,
+                );
+            }
+            // The definition is gone; a leftover settings entry would only
+            // resurface on a later restore or same-named add, which both
+            // drop it again.
+            if let Err(error) = self.drop_auto_task_settings(name) {
+                tracing::warn!(
+                    target: "orbit.core.auto_tasks",
+                    auto_task = name,
+                    %error,
+                    "deleted auto-task kept its settings entry"
+                );
+            }
+            Ok(LockedDelete::Done((open_tasks, removed)))
+        })?;
+        let (open_tasks, removed) = match locked {
+            LockedDelete::Refused(refusal) => return Err(refusal.into()),
+            LockedDelete::Done(done) => done,
+        };
 
         let report = AutoTaskDeleteReport {
             name: name.to_string(),

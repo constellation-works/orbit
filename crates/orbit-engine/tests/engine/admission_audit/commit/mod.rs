@@ -1,5 +1,6 @@
 mod candidate_paths;
 mod git_ops;
+mod settled_review;
 mod test_support;
 
 use orbit_common::OrbitError;

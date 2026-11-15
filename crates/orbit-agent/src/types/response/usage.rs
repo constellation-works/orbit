@@ -24,47 +24,42 @@ enum UsageKeyMode {
 // Visible through the `response` module to sibling-layout tests.
 pub(in crate::types) fn sum_usage(documents: &[Value]) -> TokenUsage {
     let mut usage = TokenUsage::default();
+    let mut declared = TokenUsage::default();
+    let mut has_provider_usage = false;
     for document in documents {
-        collect_usage(document, &mut usage);
+        has_provider_usage |= collect_usage(document, &mut usage, &mut declared);
     }
-    usage
+    if has_provider_usage { usage } else { declared }
 }
 
 // Provider metadata and assistant-declared usage have separate boundaries.
 // Never search arbitrary payloads or decode strings as provider events: tools
 // and quoted transcripts can contain exactly the same counter names.
-fn collect_usage(value: &Value, usage: &mut TokenUsage) {
+fn collect_usage(value: &Value, usage: &mut TokenUsage, declared: &mut TokenUsage) -> bool {
     match value {
         Value::Object(map) => {
             if is_payload(map) {
-                return;
-            }
-            if collect_local_usage(map, usage) {
-                return;
+                return false;
             }
             if is_response_envelope(map) {
-                collect_result_usage(map, usage);
-                return;
+                collect_declared_usage(value, declared);
+                return false;
             }
+            if collect_local_usage(map, usage) {
+                return true;
+            }
+            let mut has_provider_usage = false;
 
             // These are provider frame containers, not conversation histories.
             for key in ["data", "message", "item", "stats"] {
                 if let Some(child) = map.get(key).filter(|child| child.is_object()) {
-                    collect_usage(child, usage);
+                    has_provider_usage |= collect_usage(child, usage, declared);
                 }
             }
-            let has_model_token_usage = map
-                .get("tokens")
-                .and_then(Value::as_object)
-                .and_then(|tokens| usage_from_map(tokens, UsageKeyMode::TokenBlock))
-                .is_some();
             for key in ["models", "roles"] {
-                if key == "roles" && has_model_token_usage {
-                    continue;
-                }
                 if let Some(entries) = map.get(key).and_then(Value::as_object) {
                     for entry in entries.values() {
-                        collect_usage(entry, usage);
+                        has_provider_usage |= collect_usage(entry, usage, declared);
                     }
                 }
             }
@@ -82,21 +77,25 @@ fn collect_usage(value: &Value, usage: &mut TokenUsage) {
                 "content",
             ] {
                 if let Some(answer) = map.get(key)
-                    && collect_declared_usage(answer, usage)
+                    && collect_declared_usage(answer, declared)
                 {
                     break;
                 }
             }
+            has_provider_usage
         }
         Value::Array(items) => {
+            let mut has_provider_usage = false;
             for item in items {
-                collect_usage(item, usage);
+                has_provider_usage |= collect_usage(item, usage, declared);
             }
+            has_provider_usage
         }
         Value::String(_) => {
-            collect_declared_usage(value, usage);
+            collect_declared_usage(value, declared);
+            false
         }
-        _ => {}
+        _ => false,
     }
 }
 
@@ -123,33 +122,35 @@ fn is_payload(map: &JsonMap) -> bool {
     )
 }
 
-// Returns true when direct counters are the rollup for this object; callers
-// must not descend into its detail breakdown and count it again.
+// Direct counters, named blocks and modelUsage are all provider rollups.
+// Their presence (even explicit zeroes) stops descent into duplicate details
+// and declared-answer compatibility counters.
 fn collect_local_usage(map: &JsonMap, usage: &mut TokenUsage) -> bool {
     if let Some(found) = usage_from_map(map, UsageKeyMode::Standard) {
         add_usage(usage, found);
         return true;
     }
+    let mut found_usage = false;
     for &key in USAGE_CHILD_KEYS {
         if let Some(mode) = usage_key_mode(key)
             && let Some(child) = map.get(key).and_then(Value::as_object)
             && let Some(found) = usage_from_map(child, mode)
         {
             add_usage(usage, found);
+            found_usage = true;
         }
     }
     // Claude's usage and modelUsage describe the same billed totals. Keep
     // the rollup, including its cache TTL split (ORB-10906 / F2026-08-031).
-    if !sibling_usage_rollup_present(map)
-        && let Some(models) = map.get("modelUsage").and_then(Value::as_object)
-    {
+    if !found_usage && let Some(models) = map.get("modelUsage").and_then(Value::as_object) {
         for model in models.values().filter_map(Value::as_object) {
             if let Some(found) = usage_from_map(model, UsageKeyMode::Standard) {
                 add_usage(usage, found);
+                found_usage = true;
             }
         }
     }
-    false
+    found_usage
 }
 
 fn is_response_envelope(map: &JsonMap) -> bool {
@@ -199,18 +200,6 @@ fn add_usage(usage: &mut TokenUsage, found: TokenUsage) {
     usage.cache_create = usage.cache_create.saturating_add(found.cache_create);
     usage.cache_create_1h = usage.cache_create_1h.saturating_add(found.cache_create_1h);
     usage.output = usage.output.saturating_add(found.output);
-}
-
-fn sibling_usage_rollup_present(map: &JsonMap) -> bool {
-    USAGE_CHILD_KEYS.iter().any(|&key| {
-        let Some(mode) = usage_key_mode(key) else {
-            return false;
-        };
-        map.get(key)
-            .and_then(Value::as_object)
-            .and_then(|child| usage_from_map(child, mode))
-            .is_some()
-    })
 }
 
 fn usage_key_mode(key: &str) -> Option<UsageKeyMode> {

@@ -8,7 +8,7 @@ use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{
     ArtifactManifestFileV2, ArtifactManifestV2, TASK_ARTIFACT_SCHEMA_VERSION,
     TASK_ARTIFACTS_DIR_NAME, TASK_COMMENTS_FILE_NAME, TaskArtifact, TaskCommentRowV2, TaskRelation,
-    TaskRelationType,
+    TaskRelationType, push_external_ref_if_missing,
 };
 use orbit_types::workflow::REVIEW_REPORT_HISTORY_ARTIFACT;
 use orbit_types::workflow::automation::{
@@ -19,10 +19,49 @@ use super::super::{TaskCommitBoundary, TaskCommitIntent};
 use super::invalid;
 use crate::contracts::{ClaimCommitEffects, ClaimEvidence, ClaimRun};
 use crate::driver::file::task_bundle::truncate_jsonl_file;
-use crate::repository::task::v2::{normalize_v2_artifact_path, review_report_history};
+use crate::repository::task::v2::{
+    normalize_v2_artifact_path, review_report_history, task_from_bundle,
+};
 use crate::repository::task::v2_bundle::{TaskBundleV2, TaskDocumentV2};
 
 impl TaskCommitBoundary {
+    /// Measure the failure's committed task, while its bundle is still locked,
+    /// and stamp the receipt rows written by that same journal transaction.
+    pub(in super::super) fn stamp_failure_revision(
+        &self,
+        rows: &mut [crate::contracts::TaskCoordinationRow],
+        bundle: &TaskBundleV2,
+        intent: &TaskCommitIntent,
+    ) -> Result<(), OrbitError> {
+        let mut failed = bundle.clone();
+        failed.envelope = intent.envelope.clone();
+        failed.events.extend(intent.events.iter().cloned());
+        failed
+            .comments
+            .extend(intent.evidence.comments.iter().cloned());
+        if let Some(plan) = &intent.evidence.plan {
+            failed.plan = plan.clone();
+        }
+        let comments = failed
+            .comments
+            .iter()
+            .cloned()
+            .map(crate::repository::task::v2::task_comment_from_row)
+            .collect::<Vec<_>>();
+        let history = crate::repository::task::v2::task_history_from_events(failed.events.clone());
+        let task = task_from_bundle(failed);
+        let revision = crate::contracts::FinalRecoveryTaskRevision::of(&task, &comments, &history);
+        for row in rows
+            .iter_mut()
+            .filter(|row| row.kind == super::codec::RECEIPT)
+        {
+            let mut receipt: super::MutationReceipt = super::decode(&row.payload_json)?;
+            receipt.result.failure_revision = Some(revision.clone());
+            row.payload_json = super::encode(&receipt)?;
+        }
+        Ok(())
+    }
+
     pub(in super::super) fn prepare_claim_evidence(
         &self,
         intent: &mut TaskCommitIntent,
@@ -32,6 +71,15 @@ impl TaskCommitBoundary {
         actor: &str,
         effects: &ClaimCommitEffects,
     ) -> Result<(), OrbitError> {
+        // Only a host update may publish this record; release/failure
+        // payloads are ordinary worker claims, not gate publications.
+        if evidence.review_settlement.is_some()
+            && (effects.worker_update.is_none() || evidence.comment.is_none())
+        {
+            return Err(invalid(
+                "review settlement metadata requires a host verdict comment",
+            ));
+        }
         let origin = effects.execution_origin.as_ref();
         if let Some(update) = &effects.worker_update {
             intent.evidence.plan = update.plan.clone();
@@ -39,9 +87,7 @@ impl TaskCommitBoundary {
                 intent.envelope.context_files = context.clone();
             }
             for reference in &update.external_refs {
-                if !intent.envelope.external_refs.contains(reference) {
-                    intent.envelope.external_refs.push(reference.clone());
-                }
+                push_external_ref_if_missing(&mut intent.envelope.external_refs, reference.clone());
             }
             intent.envelope.validate()?;
         }
@@ -67,7 +113,20 @@ impl TaskCommitBoundary {
             intent.envelope.job_run_machine = origin.cloned();
         }
         intent.evidence.summary = evidence.summary.clone();
-        if let Some(message) = &evidence.comment {
+        let comments: Vec<(&str, &String)> = evidence
+            .comment
+            .iter()
+            .map(|message| (actor, message))
+            // An observation is automation's record, whoever settles the
+            // claim: its author must never read as operator steering.
+            .chain(
+                effects
+                    .observation_comments
+                    .iter()
+                    .map(|message| ("system", message)),
+            )
+            .collect();
+        if !comments.is_empty() {
             let path = self
                 .bundle_store
                 .bundle_path(&intent.task_id)?
@@ -79,16 +138,40 @@ impl TaskCommitBoundary {
             });
             let next =
                 crate::repository::task::v2::sequencing::next_sequence(&bundle.comments, "C-");
-            let comment = TaskCommentRowV2 {
-                schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
-                comment_id: format!("C-{next:04}"),
-                at: Utc::now(),
-                by: actor.into(),
-                body: message.clone(),
-                operation_id: None,
-            };
-            comment.validate()?;
-            intent.evidence.comments.push(comment);
+            for (offset, (by, message)) in comments.into_iter().enumerate() {
+                let comment = TaskCommentRowV2 {
+                    schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                    comment_id: format!("C-{:04}", next + offset),
+                    at: Utc::now(),
+                    by: by.into(),
+                    body: message.clone(),
+                    operation_id: None,
+                };
+                comment.validate()?;
+                if offset == 0
+                    && evidence.comment.is_some()
+                    && let Some(settlement) = &evidence.review_settlement
+                {
+                    let entry = settlement.history_entry(comment.at, by);
+                    let next_event = crate::repository::task::v2::sequencing::next_sequence(
+                        &bundle.events,
+                        "EV-",
+                    ) + intent.events.len();
+                    intent.events.push(orbit_types::task::TaskEventRowV2 {
+                        schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                        event_id: format!("EV-{next_event:04}"),
+                        at: entry.at,
+                        by: entry.by,
+                        event_type: entry.event,
+                        note: entry.note,
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision: entry.decision,
+                    });
+                }
+                intent.evidence.comments.push(comment);
+            }
         }
         if !evidence.artifacts.is_empty() {
             let mut files: BTreeMap<_, _> = bundle

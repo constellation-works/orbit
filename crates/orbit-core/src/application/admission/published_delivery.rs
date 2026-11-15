@@ -34,6 +34,7 @@ use std::time::{Duration, Instant};
 use orbit_common::OrbitError;
 use orbit_store::contracts::TaskLockConflict;
 use orbit_tools::ReservationOwnerContext;
+use orbit_types::task::ReservationOwnerMetadata;
 use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 
@@ -56,9 +57,12 @@ const DEFAULT_FOOTPRINT_WAIT_SECONDS: u64 = 3600;
 /// gate's own default poll interval.
 const DEFAULT_FOOTPRINT_POLL_SECONDS: u64 = 30;
 
-/// The leaf's footprint reservation lasts as long as a reservation may; the
-/// run's terminal cleanup releases it sooner.
-const FOOTPRINT_TTL_SECONDS: u32 = 14400;
+/// The leaf's footprint reservation covers the longest edit it may protect:
+/// the gate's child dispatch wait in `task_gate_pipeline.yaml` (the 12h
+/// workspace implementation override plus a 1h delivery/review tail), so a
+/// resumed run editing past 4h never loses its files mid-activity [ORB-23568];
+/// the run's terminal cleanup releases it sooner.
+const FOOTPRINT_TTL_SECONDS: u32 = 46800;
 
 /// The decision-only activity that edits nothing, so never waits on locks.
 const FINAL_RECOVERY_ACTIVITY: &str = "final_recovery";
@@ -83,7 +87,9 @@ impl OrbitRuntime {
         let ReservationOutcome::Denied { conflicts } = denied else {
             return Ok(None);
         };
-        if input.get("delivery_job").and_then(Value::as_str) != Some("task_pr_pipeline") {
+        if input.get("delivery_job").and_then(Value::as_str)
+            != Some(orbit_types::workflow::TASK_PR_PIPELINE_JOB)
+        {
             return Ok(None);
         }
         let task_ids = parse_task_ids(input)?;
@@ -146,9 +152,13 @@ impl OrbitRuntime {
         );
         let owner = ReservationOwnerContext {
             owner_run_id: run_id.to_string(),
-            owner_metadata_json: Some(
-                json!({"deferred_footprint": true, "activity": activity_name}).to_string(),
-            ),
+            owner_metadata: Some(ReservationOwnerMetadata {
+                extra: serde_json::Map::from_iter([
+                    ("deferred_footprint".to_string(), json!(true)),
+                    ("activity".to_string(), json!(activity_name)),
+                ]),
+                ..Default::default()
+            }),
         };
         let started = Instant::now();
         loop {

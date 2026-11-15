@@ -1,8 +1,8 @@
 ---
 title: "Scope: Task risk relative to model capability"
 owner: codex
-last_updated: 2026-10-30
-last_validated: 2026-10-30
+last_updated: 2026-11-07
+last_validated: 2026-11-07
 status: Draft
 stage: designing
 next: "Review estimands and evidence prerequisites before authorizing implementation."
@@ -59,7 +59,11 @@ size-response figures to this document. The [dated evidence report](references/2
 records the input hash, cohort, joins, cutoffs, exclusions, uncertainty and
 provenance limits. These are descriptive seven-day observations and exploratory
 temporal comparisons, not the proposed primary 30-day validation or a causal
-capability study.
+capability study. A separate display-only panel ([ORB-20380]) plots the same
+kind of seven-day escaped-regression rate against landed size on Analytics ›
+Agents › Implementers (`application::agents::roles::implementers::size_curves`).
+It does not install the proposed `task_risk` payload, change `riskiness`, or
+authorize scoring, routing or admission.
 
 The task's 06:29 UTC evidence update identifies source-policy changes, confirmed
 against their git diffs: `09e60b0757811368879fd0885f36950f586c0aa0`
@@ -355,7 +359,7 @@ comparison above even when predictive gates pass.
 ### Configuration
 
 These are proposed study/serving controls, not new configuration keys or defaults
-installed by this document. Keep current `workflow.regression_risk` semantics.
+installed by this document. Keep the riskiness model's window and support semantics (fixed at 30 days and 5 since [ORB-22806]).
 
 | Control | Initial proposal | Meaning |
 | --- | --- | --- |
@@ -434,7 +438,9 @@ backlog dispatch. Core contracts remain generic and provider names remain data.
 
 1. **Evidence audit and study manifest.** Inventory run/claim, review, regression
    relation and landed-diff sources against the ledger above. Consume the
-   [ORB-20094] receipts when available. Deliver coverage/attrition tables and an
+   completed [ORB-20094] receipts owned by [ORB-20095] and the supplementary
+   [ORB-20107] evidence above. Those exploratory outputs do not complete this
+   prospective evidence audit. Deliver coverage/attrition tables and an
    exact replayable export with hashes; verify sampled joins and identify which
    outcomes can actually be fitted. No numerical claim ships from summaries alone.
 2. **Prospective snapshots and labels.** Add immutable assignment rubric,
@@ -483,6 +489,7 @@ backlog dispatch. Core contracts remain generic and provider names remain data.
 
 ## Task References
 
+- [ORB-20380] — shows display-only escaped-regression size curves on the Implementers panel; it does not install the proposed estimator.
 - [ORB-20107] — adds the exploratory backtest, within-tier curves and evidence report.
 - [ORB-20095] — requests this model-relative task-risk Draft and generated index.
 - [ORB-20094] — authorized the authoring-session backtest and owns its receipts.

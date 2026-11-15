@@ -11,7 +11,7 @@ use crate::contracts::MigrationCompatibility;
 
 /// Highest workspace-layout version this binary knows how to produce.
 /// Bump together with a new `LAYOUT_MIGRATIONS` entry — never without one.
-pub const SUPPORTED_LAYOUT_VERSION: u32 = 6;
+pub const SUPPORTED_LAYOUT_VERSION: u32 = 9;
 
 /// One entry in the layout-migration registry.
 pub(crate) struct LayoutMigration {
@@ -91,6 +91,40 @@ pub(crate) const LAYOUT_MIGRATIONS: &[LayoutMigration] = &[
         description: "fence clients without live visual final-candidate gates and strict visual-resolution records; preserve existing records unchanged",
         // New visual dispositions affect landing authority; old readers either
         // ignore manifest obligations or cannot decode populated strict records.
+        compat: MigrationCompatibility::Breaking,
+        apply: apply_baseline_layout,
+    },
+    LayoutMigration {
+        version: 7,
+        name: "auto-task-job-checkpoints",
+        description: "fence clients that cannot preserve parked auto-task job runs, step bindings, receipts and partial parallel branches; preserve existing records unchanged",
+        // ORB-20158: a run of an auto-task job carries a versioned checkpoint
+        // with pending obligations. An older binary deserializes run state
+        // without it and its next checkpoint write would silently drop it,
+        // and it would report a deliberately parked run as interrupted.
+        compat: MigrationCompatibility::Breaking,
+        apply: apply_baseline_layout,
+    },
+    LayoutMigration {
+        version: 8,
+        name: "script-output-set-checkpoints",
+        description: "fence clients that cannot preserve kept script output file references and parallel script-branch checkpoints; preserve existing records unchanged",
+        // ORB-20866: run state may carry `script_output_sets` and a parallel
+        // branch checkpointed as a `script_branch` envelope. An older binary
+        // deserializes run state without the sets, so its next checkpoint
+        // write silently drops the run's only references to the kept files,
+        // and it reads the envelope as the branch's own output on resume.
+        compat: MigrationCompatibility::Breaking,
+        apply: apply_baseline_layout,
+    },
+    LayoutMigration {
+        version: 9,
+        name: "skipped-step-checkpoints",
+        description: "fence clients that cannot preserve skipped-step checkpoint markers; preserve existing records unchanged",
+        // A when-skipped step checkpoints success and null; skipped_steps
+        // keeps that null distinct from an executed step's actual output.
+        // Older writers drop the marker, and older readers restore the null
+        // as an output on resume, changing downstream template behavior.
         compat: MigrationCompatibility::Breaking,
         apply: apply_baseline_layout,
     },

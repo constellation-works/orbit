@@ -7,7 +7,6 @@ use orbit_engine::{ReviewLandingRequest, RuntimeHost};
 use orbit_types::task::{
     ArtifactManifestV2, ArtifactWriter, MAX_TASK_ARTIFACT_CONTENT_BYTES,
     TASK_ARTIFACT_MANIFEST_FILE_NAME, TASK_ARTIFACTS_DIR_NAME, TaskArtifact,
-    VISUAL_CAPTURE_ARTIFACT,
 };
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
@@ -140,8 +139,6 @@ fn local_artifact_writers_cannot_forge_or_pin_review_certificates() {
         REVIEW_BASELINE_ARTIFACT,
         REVIEW_REPORT_HISTORY_ARTIFACT,
         "review-future.json",
-        VISUAL_CAPTURE_ARTIFACT,
-        "visual/checkout/capture.png",
     ] {
         for path in [
             reserved.to_string(),
@@ -522,9 +519,11 @@ fn artifact_errors_explain_the_source_file_listing_and_size_remedies() {
 /// candidate, including its required manifest read and one optional listing.
 fn read_review_evidence(fixture: &Fixture) -> Vec<String> {
     let call = |tool: &str, input: Value| {
+        // A session names a family action through its family.
+        let (tool, input) = orbit_types::tool::tool_family_call(tool, input);
         fixture
             .runtime
-            .execute_tool_command(tool, input, None, Some("codex".into()))
+            .execute_tool_command(&tool, input, None, Some("codex".into()))
             .unwrap()
     };
     call(
@@ -648,8 +647,9 @@ fn doc_duties_discovery_fetches_only_listed_ledgers() {
     // metadata-only artifacts projection, fetch only listed ledgers, and
     // stop at the first cumulative (schema_version 2) ledger.
     let call = |tool: &str, input: Value| {
+        let (tool, input) = orbit_types::tool::tool_family_call(tool, input);
         runtime
-            .execute_tool_command(tool, input, None, Some("codex".into()))
+            .execute_tool_command(&tool, input, None, Some("codex".into()))
             .unwrap()
     };
     let mut fetched: Vec<(String, Value)> = Vec::new();
@@ -718,8 +718,8 @@ fn doc_duties_discovery_fetches_only_listed_ledgers() {
     // The MCP surface keeps its own tool-call spelling for the same refusal.
     let mcp_error = runtime
         .execute_tool_command_dispatch_with_session_context(
-            "orbit.task.artifact.get",
-            json!({"id": middle, "path": "doc-duties-ledger.json"}),
+            "orbit.task.artifact",
+            json!({"action": "get", "id": middle, "path": "doc-duties-ledger.json"}),
             None,
             Some("codex".into()),
             orbit_core::adapter::command::ToolEntryPoint::Mcp,
@@ -800,7 +800,10 @@ fn unknown_task_tools_preserve_audit_classification_and_suppress_disabled_hints(
         .runtime
         .execute_tool_command("orbit.task.get", json!({}), None, Some("codex".into()))
         .expect_err("a disabled replacement must not be suggested");
-    assert_eq!(error.to_string(), "tool not found: orbit.task.get");
+    assert_eq!(
+        error.to_string(),
+        "tool not found: orbit.task.get; see `orbit tool list` or MCP `tools/list` for valid tool names"
+    );
 }
 
 crate::scenario_table!(
@@ -947,7 +950,7 @@ fn refuse_bulk_artifact_symlink() {
 }
 
 #[cfg(unix)]
-fn find_artifact_blob(
+pub(super) fn find_artifact_blob(
     root: &std::path::Path,
     task_id: &str,
     logical_path: &str,
@@ -969,6 +972,46 @@ fn find_artifact_blob(
         }
     }
     panic!("artifact blob for {logical_path} on task {task_id}");
+}
+
+/// Remove one logical file from its task's artifact manifest and leave its
+/// blob in place. A restore without attachments rebuilds a task this way: the
+/// receipt still names the path, and the artifact read finds nothing.
+pub(super) fn drop_artifact_manifest_entry(
+    root: &std::path::Path,
+    task_id: &str,
+    logical_path: &str,
+) {
+    let workspaces = root.join("tasks/workspaces");
+    for workspace in std::fs::read_dir(&workspaces)
+        .expect("task workspaces")
+        .flatten()
+    {
+        let manifest_path = workspace
+            .path()
+            .join(task_id)
+            .join(TASK_ARTIFACTS_DIR_NAME)
+            .join(TASK_ARTIFACT_MANIFEST_FILE_NAME);
+        let Ok(raw) = std::fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        let mut manifest: ArtifactManifestV2 =
+            serde_yaml::from_str(&raw).expect("parse artifact manifest");
+        let before = manifest.files.len();
+        manifest.files.retain(|file| file.path != logical_path);
+        assert_eq!(
+            manifest.files.len() + 1,
+            before,
+            "manifest must name {logical_path} on task {task_id}"
+        );
+        std::fs::write(
+            &manifest_path,
+            serde_yaml::to_string(&manifest).expect("serialize artifact manifest"),
+        )
+        .expect("write artifact manifest");
+        return;
+    }
+    panic!("artifact manifest for {logical_path} on task {task_id}");
 }
 
 crate::scenario_table!(

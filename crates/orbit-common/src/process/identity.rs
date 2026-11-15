@@ -176,37 +176,31 @@ pub enum ProbeOutcome {
 
 #[cfg(unix)]
 use std::io;
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 use std::process::Command;
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 use std::time::Duration;
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 use super::bounded::{BoundedRunError, run_bounded_capped_typed};
 
 /// A `ps -o lstart=` for one pid answers in milliseconds; a `ps` that does not
 /// is unreadable identity, which callers already treat as unavailable.
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 const PS_TIMEOUT: Duration = Duration::from_secs(5);
 /// One `lstart` line is under 40 bytes.
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 const PS_OUTPUT_LIMIT: usize = 4096;
 
-#[cfg(unix)]
-fn lstart_raw(pid: u32, stable_env: bool) -> Result<Option<String>, io::Error> {
-    #[cfg(target_os = "linux")]
-    if stable_env {
-        return linux_lstart_utc(pid);
-    }
+#[cfg(all(unix, not(target_os = "linux")))]
+fn lstart_raw(pid: u32) -> Result<Option<String>, io::Error> {
     #[cfg(target_os = "macos")]
-    if stable_env && let Some(lstart) = darwin_lstart_utc(pid) {
+    if let Some(lstart) = darwin_lstart_utc(pid) {
         return Ok(Some(lstart));
     }
     let mut cmd = Command::new("ps");
     cmd.args(["-o", "lstart=", "-p", &pid.to_string()]);
-    if stable_env {
-        cmd.env("TZ", "UTC").env("LC_ALL", "C").env("LANG", "C");
-    }
+    cmd.env("TZ", "UTC").env("LC_ALL", "C").env("LANG", "C");
     let output = run_bounded_capped_typed(&mut cmd, PS_TIMEOUT, PS_OUTPUT_LIMIT).map_err(
         |error| match error {
             BoundedRunError::Spawn(error) => error,
@@ -220,6 +214,12 @@ fn lstart_raw(pid: u32, stable_env: bool) -> Result<Option<String>, io::Error> {
     Ok((!token.is_empty()).then_some(token))
 }
 
+/// Linux reads the start time from `/proc` without executing `ps`.
+#[cfg(target_os = "linux")]
+fn lstart_raw(pid: u32) -> Result<Option<String>, io::Error> {
+    linux_lstart_utc(pid)
+}
+
 /// Linux uses the same integer-second calculation as procps `lstart`:
 /// `/proc/stat`'s `btime` + `/proc/<pid>/stat`'s `starttime` / clock ticks.
 /// Only a missing process record means `NoProcess`; unreadable or malformed
@@ -231,12 +231,8 @@ fn linux_lstart_utc(pid: u32) -> io::Result<Option<String>> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    // comm (field 2) can contain spaces and ')', so split at its last ')'.
-    // The tail starts at field 3; starttime is field 22 (index 19).
-    let start_ticks = stat
-        .rsplit_once(')')
-        .and_then(|(_, tail)| tail.split_whitespace().nth(19))
-        .and_then(|field| field.parse::<u64>().ok())
+    let start_ticks = parse_linux_process_stat(&stat)
+        .map(|parsed| parsed.start_ticks)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid process starttime"))?;
     // Safety: sysconf only queries the host's clock-tick rate.
     let ticks_per_second = u64::try_from(unsafe { libc::sysconf(libc::_SC_CLK_TCK) })
@@ -284,7 +280,7 @@ pub(crate) fn format_lstart_utc(seconds: i64) -> String {
 /// stable probe cannot produce a token for the current process, if any.
 #[cfg(unix)]
 pub(crate) fn self_start_identity_probe_blocker() -> Option<String> {
-    match lstart_raw(std::process::id(), true) {
+    match lstart_raw(std::process::id()) {
         Ok(Some(_)) => None,
         Ok(None) => Some(
             if cfg!(target_os = "linux") {
@@ -312,7 +308,7 @@ pub(crate) fn self_start_identity_probe_blocker() -> Option<String> {
 /// Probe a running process and classify the outcome.
 #[cfg(unix)]
 pub fn probe_process_start_identity(pid: u32) -> ProbeOutcome {
-    match lstart_raw(pid, true) {
+    match lstart_raw(pid) {
         Ok(Some(raw)) => {
             let namespace = current_pid_namespace().unwrap_or(UNKNOWN_PID_NAMESPACE);
             ProbeOutcome::Token(format!(
@@ -338,33 +334,6 @@ pub fn process_start_identity_token(pid: u32) -> Option<String> {
         ProbeOutcome::Token(s) => Some(s),
         ProbeOutcome::NoProcess | ProbeOutcome::Unavailable => None,
     }
-}
-
-/// Returns true when `persisted` is a legacy unversioned token whose value
-/// matches either the caller-environment `ps -o lstart=` output or the
-/// stable-environment one for this PID. Versioned tokens always return false
-/// here so callers route them through [`process_start_identity_token`].
-#[cfg(unix)]
-pub fn legacy_lstart_matches(pid: u32, persisted: &str) -> bool {
-    if is_stable_token(persisted) {
-        return false;
-    }
-    if let Ok(Some(stable_raw)) = lstart_raw(pid, true)
-        && stable_raw == persisted
-    {
-        return true;
-    }
-    if let Ok(Some(ambient)) = lstart_raw(pid, false)
-        && ambient == persisted
-    {
-        return true;
-    }
-    false
-}
-
-#[cfg(not(unix))]
-pub fn legacy_lstart_matches(_pid: u32, _persisted: &str) -> bool {
-    false
 }
 
 /// Liveness of a PID recorded earlier in a run, judged against the identity
@@ -512,6 +481,10 @@ pub fn linux_process_state(pid: u32) -> Option<(char, libc::pid_t)> {
 }
 
 /// The `/proc/<pid>/stat` fields a process-tree walk needs.
+///
+/// Single owner for `/proc/<pid>/stat` field offsets: every Linux caller
+/// parses through [`parse_linux_process_stat`] so a miscounted field cannot
+/// be wrong in one copy only.
 #[cfg(target_os = "linux")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LinuxProcessStat {
@@ -523,6 +496,14 @@ pub struct LinuxProcessStat {
     /// Start time in clock ticks after boot. With the pid it names one
     /// process: a reused pid starts later.
     pub start_ticks: u64,
+    /// Own user CPU time in clock ticks (`utime`, field 14).
+    pub utime_ticks: u64,
+    /// Own system CPU time in clock ticks (`stime`, field 15).
+    pub stime_ticks: u64,
+    /// Waited-for children's user CPU time in clock ticks (`cutime`, field 16).
+    pub cutime_ticks: u64,
+    /// Waited-for children's system CPU time in clock ticks (`cstime`, field 17).
+    pub cstime_ticks: u64,
 }
 
 /// Parse `/proc/<pid>/stat`. `None` when the process is gone or its record
@@ -533,15 +514,29 @@ pub fn linux_process_stat(pid: u32) -> Option<LinuxProcessStat> {
     parse_linux_process_stat(&stat)
 }
 
+/// Parse one `/proc/<pid>/stat` line into its kernel fields.
+///
+/// The single owner for stat field offsets. Callers that read through an
+/// injected proc root, or that must tell "gone" from "unreadable", keep doing
+/// their own read and pass the text in here.
 #[cfg(target_os = "linux")]
-fn parse_linux_process_stat(stat: &str) -> Option<LinuxProcessStat> {
+pub fn parse_linux_process_stat(stat: &str) -> Option<LinuxProcessStat> {
     // comm (field 2) can contain spaces and ')', so split at its last ')'.
+    // The tail starts at field 3: state (0), ppid (1), pgrp (2), session
+    // (3), tty_nr (4), tpgid (5), flags (6), minflt (7), cminflt (8), majflt
+    // (9), cmajflt (10), utime (11), stime (12), cutime (13), cstime (14),
+    // priority (15), nice (16), num_threads (17), itrealvalue (18),
+    // starttime (19).
     let (_, tail) = stat.rsplit_once(')')?;
     let fields = tail.split_whitespace().collect::<Vec<_>>();
     Some(LinuxProcessStat {
         state: fields.first()?.chars().next()?,
         parent_pid: fields.get(1)?.parse().ok()?,
         process_group: fields.get(2)?.parse().ok()?,
+        utime_ticks: fields.get(11)?.parse().ok()?,
+        stime_ticks: fields.get(12)?.parse().ok()?,
+        cutime_ticks: fields.get(13)?.parse().ok()?,
+        cstime_ticks: fields.get(14)?.parse().ok()?,
         start_ticks: fields.get(19)?.parse().ok()?,
     })
 }

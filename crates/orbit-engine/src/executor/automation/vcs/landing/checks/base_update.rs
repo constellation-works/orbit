@@ -8,11 +8,8 @@ use super::super::super::git::{git_command_success, git_output};
 use super::super::super::pr::PullRequestStatus;
 
 pub(super) fn contains(workspace: &Path, ancestor: &str, descendant: &str) -> bool {
-    git_command_success(
-        workspace,
-        &["merge-base", "--is-ancestor", ancestor, descendant],
-    )
-    .unwrap_or(false)
+    crate::executor::automation::vcs::git::is_ancestor(workspace, ancestor, descendant)
+        .unwrap_or(false)
 }
 
 /// Whether `head` is a provider branch update of the validated `candidate`:

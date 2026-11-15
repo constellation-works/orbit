@@ -90,8 +90,8 @@ fn combined_findings_remain_readable_with_near_limit_results_and_json_escaping()
             fixture
                 .runtime
                 .execute_tool_command(
-                    "orbit.task.artifact.get",
-                    json!({"id": fixture.task_id, "path": path}),
+                    "orbit.task.artifact",
+                    json!({"action": "get", "id": fixture.task_id, "path": path}),
                     None,
                     Some("codex".into()),
                 )

@@ -54,6 +54,7 @@ pub struct Column {
     sizing: Sizing,
     overflow: Overflow,
     keep_when_uniform: bool,
+    neutral_when_filtered: bool,
 }
 
 impl Column {
@@ -69,6 +70,7 @@ impl Column {
             sizing: Sizing::Flexible,
             overflow: Overflow::Tail,
             keep_when_uniform: false,
+            neutral_when_filtered: false,
         }
     }
 
@@ -97,12 +99,22 @@ impl Column {
         self
     }
 
-    /// Keep this column even when every row carries the same value. Pass the
-    /// filter's presence: a user who asked for `--status done` expects `STATUS`
-    /// to stay on screen even though it now carries no information.
+    /// Keep this column when every row carries the same value because the
+    /// caller filtered on it. The table also renders its cells neutrally.
     #[must_use]
     pub fn filtered(mut self, filtered: bool) -> Self {
-        self.keep_when_uniform = filtered;
+        if filtered {
+            self.keep_when_uniform = true;
+        }
+        self.neutral_when_filtered = filtered;
+        self
+    }
+
+    /// Keep this column when every row carries the same value for a reason
+    /// other than a caller filter.
+    #[must_use]
+    pub fn keep_when_uniform(mut self, keep: bool) -> Self {
+        self.keep_when_uniform = keep;
         self
     }
 }
@@ -177,8 +189,9 @@ impl Table {
     }
 
     /// Write the list to stdout in the sink's mode, or the empty-state line to
-    /// stderr when there are no records. Notices about dropped columns go to
-    /// stderr so that they never land in a consumer's record stream. This
+    /// stderr when there are no records. Notices about dropped columns and
+    /// terminal overflow go to stderr so that they never land in a consumer's
+    /// record stream. This
     /// table's own trailing notices (a truncation count, say) are printed to
     /// stderr after the body in both table and plain modes (ORB-12206), and
     /// after the empty-state line when there is no body.
@@ -188,9 +201,9 @@ impl Table {
     /// payload rather than emitting one itself.
     pub(crate) fn emit(&self, sink: &OutputSink) -> bool {
         if self.rows.is_empty() {
-            eprintln!("{}", self.empty_message);
+            eprintln!("{}", sink.wrap_prose(&self.empty_message));
             for notice in &self.trailing_notices {
-                eprintln!("{notice}");
+                eprintln!("{}", sink.wrap_prose(notice));
             }
             return false;
         }
@@ -198,7 +211,7 @@ impl Table {
             println!("{}", self.render_plain(sink));
             std::io::stdout().flush().ok();
             for notice in &self.trailing_notices {
-                eprintln!("{notice}");
+                eprintln!("{}", sink.wrap_prose(notice));
             }
             return false;
         }
@@ -208,12 +221,12 @@ impl Table {
             sink.suppress_uniform_columns(),
         );
         for notice in &rendered.notices {
-            eprintln!("{notice}");
+            eprintln!("{}", sink.wrap_prose(notice));
         }
         println!("{}", rendered.body);
         std::io::stdout().flush().ok();
         for notice in &self.trailing_notices {
-            eprintln!("{notice}");
+            eprintln!("{}", sink.wrap_prose(notice));
         }
         rendered.truncated
     }
@@ -271,7 +284,7 @@ impl Table {
         let (layout, dropped) = self.resolve_widths(&visible, &natural, sink_width);
 
         let mut grid = Grid::new();
-        grid.load_preset(presets::NOTHING);
+        grid.load_style(presets::NOTHING);
         grid.set_content_arrangement(ContentArrangement::Disabled);
         grid.set_truncation_indicator(ELLIPSIS);
         // Told, never asked. Left to itself `comfy_table` probes stdout and
@@ -324,7 +337,7 @@ impl Table {
         } else {
             body
         };
-        let notices = if dropped.is_empty() {
+        let mut notices = if dropped.is_empty() {
             Vec::new()
         } else {
             vec![format!(
@@ -332,6 +345,18 @@ impl Table {
                 dropped.join(", ")
             )]
         };
+        // An all-fixed layout can still be wider than the sink: nothing was
+        // squeezed or hidden, so say the table does not fit and where the
+        // full row lives. Fixed cells are never cut, so identifiers stay
+        // whole; the plain and JSON forms carry them untruncated.
+        if let Some(limit) = sink_width {
+            let width = total_width(&layout);
+            if width > limit {
+                notices.push(format!(
+                    "table wider than the terminal ({width} columns for a {limit}-column terminal): use --format plain or --json for the full row"
+                ));
+            }
+        }
         let truncated = !dropped.is_empty()
             || layout.iter().any(|(index, width)| {
                 visible
@@ -385,7 +410,7 @@ impl Table {
     /// in grapheme clusters by the same code that lays the grid out.
     fn natural_widths(&self, visible: &[usize]) -> Vec<usize> {
         let mut probe = Grid::new();
-        probe.load_preset(presets::NOTHING);
+        probe.load_style(presets::NOTHING);
         probe.set_content_arrangement(ContentArrangement::Disabled);
         probe.set_header(
             visible
@@ -460,6 +485,11 @@ impl Table {
     /// mode.
     fn cell(&self, row: &[Cell], index: usize, width: usize) -> Cell {
         let cell = cell_at(row, index);
+        let cell = if self.columns[index].neutral_when_filtered {
+            Cell::new(cell.content())
+        } else {
+            cell
+        };
         if self.columns[index].overflow != Overflow::Middle {
             return cell;
         }
@@ -487,7 +517,7 @@ fn cell_at(row: &[Cell], index: usize) -> Cell {
 /// separator: backslash, tab, line feed, and carriage return become `\\`,
 /// `\t`, `\n`, and `\r`. Escaping the backslash keeps the encoding reversible;
 /// a value with none of the four is returned unchanged.
-fn escape_plain(value: &str) -> String {
+pub(crate) fn escape_plain(value: &str) -> String {
     if !value.contains(['\\', '\t', '\n', '\r']) {
         return value.to_string();
     }

@@ -33,6 +33,7 @@ mod config_set_root;
 mod deployment_gc;
 #[cfg(unix)]
 mod doctor_confirm;
+mod doctor_providers_tool_telemetry;
 mod doctor_runtime;
 mod generation_root;
 mod git_fixture_isolation;
@@ -45,11 +46,13 @@ mod host_registry;
 #[cfg(unix)]
 mod host_routing;
 mod init_force_identity;
+mod init_human_crew;
 mod init_interactive_stdin;
 #[cfg(all(target_os = "linux", target_endian = "little"))]
 mod init_linux_sandbox;
 mod init_minted_prefix;
 mod init_workspace_seed;
+mod isolated_home;
 mod layout_version;
 mod replica_routines;
 mod routine_root;
@@ -70,4 +73,5 @@ mod workspace_selector;
 mod workspace_ship_mode;
 mod workspace_source_remote;
 mod workspace_sync;
+mod workspace_sync_all;
 mod worktree_gc_routing;

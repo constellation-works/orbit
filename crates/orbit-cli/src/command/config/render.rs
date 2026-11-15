@@ -28,6 +28,8 @@ use orbit_config::{
 use orbit_core::OrbitRuntime;
 use serde_json::{Map, Value as JsonValue, json};
 
+use crate::output::payload::ConfigShow;
+
 /// Rendered in place of a value that does not exist, so an unset key is not an
 /// empty column that reads as an empty string.
 const NO_VALUE: &str = "–";
@@ -36,9 +38,11 @@ const NO_VALUE: &str = "–";
 /// headings, so the blurbs line up under each other.
 const HEADING_WIDTH: usize = 28;
 
-/// Upper bounds on the aligned columns. A longer cell is never truncated —
-/// it pushes the rest of its own line right — but one very long value does
-/// not indent every other row off the screen.
+/// Upper bounds on the aligned columns. A longer cell is never truncated in
+/// the text this module builds — it pushes the rest of its own line right —
+/// but one very long value does not indent every other row off the screen.
+/// The output renderer fits this text to the terminal width on a terminal
+/// (see `Block::ConfigShow`); piped and plain output keeps every line whole.
 const MAX_LABEL_WIDTH: usize = 32;
 const MAX_VALUE_WIDTH: usize = 20;
 
@@ -78,7 +82,7 @@ impl Layout {
         }
     }
 
-    fn write_row(&self, out: &mut String, row: &Row) {
+    fn write_row(&self, out: &mut ConfigShow, row: &Row) {
         let _ = write!(
             out,
             "  {:<label$}  {:<value$}  {:<state$}",
@@ -90,10 +94,16 @@ impl Layout {
             state = self.state,
         );
         if !row.description.is_empty() {
-            let _ = write!(out, "  {}", row.description);
+            out.push_str("  ");
+            out.mark_trailing_column();
+            out.push_str(&row.description);
         }
         if let Some(note) = &row.note {
-            let _ = write!(out, "  {note}");
+            out.push_str("  ");
+            if row.description.is_empty() {
+                out.mark_trailing_column();
+            }
+            out.push_str(note);
         }
         let _ = writeln!(out);
     }
@@ -105,21 +115,29 @@ pub(super) fn effective_text(
     runtime: &OrbitRuntime,
     values: &[EffectiveConfigValue],
     all: bool,
-) -> String {
-    let mut out = String::new();
+) -> ConfigShow {
+    let mut out = ConfigShow::default();
     let global_path = runtime.global_root().join("config.toml");
     let workspace_path = runtime.shared_root().join("config.toml");
-    let workspace_file_exists = workspace_path.exists();
+    let has_workspace_layer = super::support::runtime_config_roots(runtime).has_workspace_layer();
+    let workspace_file_exists = has_workspace_layer && workspace_path.exists();
 
     let _ = writeln!(out, "orbit config — effective{}", workspace_suffix(runtime));
     let _ = writeln!(out);
-    let _ = writeln!(
+    let _ = write!(
         out,
-        "{:<HEADING_WIDTH$} built-in defaults → global {} → workspace {}",
+        "{:<HEADING_WIDTH$} built-in defaults → global {}",
         "Layers (later wins)",
-        display_path(&global_path, global_path.exists()),
-        display_path(&workspace_path, workspace_file_exists),
+        display_path(&global_path, global_path.exists())
     );
+    if has_workspace_layer {
+        let _ = write!(
+            out,
+            " → workspace {}",
+            display_path(&workspace_path, workspace_file_exists)
+        );
+    }
+    let _ = writeln!(out);
     // A workspace file holding only `[plugin_enablement]` is not a policy
     // layer, so the exception is not in force for it.
     if workspace_file_exists && orbit_config::workspace_config_sets_policy(&workspace_path) {
@@ -156,8 +174,8 @@ pub(super) fn scoped_text(
     snapshot: &ConfigSnapshot,
     settings: &[(&'static str, JsonValue)],
     all: bool,
-) -> String {
-    let mut out = String::new();
+) -> ConfigShow {
+    let mut out = ConfigShow::default();
     let _ = writeln!(
         out,
         "orbit config — {} scope{}",
@@ -201,6 +219,7 @@ pub(super) fn effective_provenance_json(entry: &EffectiveConfigValue) -> JsonVal
     object.insert("section".to_string(), section_token(&entry.key));
     object.insert("tier".to_string(), tier_json(&entry.key));
     object.insert("description".to_string(), description_json(&entry.key));
+    object.insert("allowed".to_string(), allowed_json(&entry.key));
     object.insert("state".to_string(), json!(entry.state().label()));
     object.insert(
         "shadowed_by".to_string(),
@@ -235,6 +254,7 @@ pub(super) fn scoped_provenance_json(
         "section": section_token(key),
         "tier": tier_json(key),
         "description": description_json(key),
+        "allowed": allowed_json(key),
         "state": scoped_state(store, key, value).1,
         "shadowed_by": JsonValue::Array(Vec::new()),
     })
@@ -255,7 +275,7 @@ pub(super) fn workspace_binding_json(runtime: &OrbitRuntime) -> JsonValue {
 }
 
 fn write_sections(
-    out: &mut String,
+    out: &mut ConfigShow,
     rows: &[SectionRows],
     values: &[EffectiveConfigValue],
     all: bool,
@@ -378,7 +398,7 @@ fn effective_rows(
                     } else {
                         effective_state(entry)
                     },
-                    description: descriptor.description.to_string(),
+                    description: described(descriptor),
                     note: shadow_note(entry),
                 };
                 if is_show_identity_key(&entry.key) {
@@ -442,7 +462,7 @@ fn scoped_rows(
                 } else {
                     scoped_state(store, key, value).1.to_string()
                 },
-                description: descriptor.description.to_string(),
+                description: described(descriptor),
                 note: None,
             };
             if is_show_identity_key(key) {
@@ -468,7 +488,7 @@ fn scoped_rows(
 }
 
 /// Identity facts lead the text view, outside the Machine key rows.
-fn write_identity(out: &mut String, layout: &Layout, rows: &[Row]) {
+fn write_identity(out: &mut ConfigShow, layout: &Layout, rows: &[Row]) {
     if rows.is_empty() {
         return;
     }
@@ -498,7 +518,7 @@ fn env_inherit_row(inherit: bool) -> Row {
     }
 }
 
-fn write_crews(out: &mut String, values: &[EffectiveConfigValue], section: &SectionRows) {
+fn write_crews(out: &mut ConfigShow, values: &[EffectiveConfigValue], section: &SectionRows) {
     let crews = crew_table(values);
     if crews.is_empty() {
         let _ = writeln!(
@@ -548,13 +568,18 @@ fn write_crews(out: &mut String, values: &[EffectiveConfigValue], section: &Sect
             widths[index] = widths[index].max(cell.chars().count());
         }
     }
-    let write_cells = |out: &mut String, cells: &[String; 7], trailing: &str| {
+    let write_cells = |out: &mut ConfigShow, cells: &[String; 7], trailing: &str| {
         let mut line = String::new();
         for (index, cell) in cells.iter().enumerate() {
             let _ = write!(line, "  {:<width$}", cell, width = widths[index]);
         }
-        let line = line.trim_end().to_string();
-        let _ = writeln!(out, "{line}{trailing}");
+        if let Some(trailing) = trailing.strip_prefix("  ") {
+            let _ = write!(out, "{line}  ");
+            out.mark_trailing_column();
+            let _ = writeln!(out, "{trailing}");
+        } else {
+            let _ = writeln!(out, "{}", line.trim_end());
+        }
     };
     write_cells(out, &columns.map(str::to_string), "  DESCRIPTION");
     for crew in &crews {
@@ -653,10 +678,21 @@ fn crew_table(values: &[EffectiveConfigValue]) -> Vec<CrewRow> {
             if default_crew.as_deref() == Some(name.as_str()) {
                 annotation.push("workflow.default_crew");
             }
+            // A human crew has no provider or model: it names an operator.
+            let human = crew
+                .get("kind")
+                .is_some_and(|(kind, _)| kind == orbit_types::identity::HUMAN_CREW_KIND);
+            if human {
+                annotation.push("human crew: operator work, never dispatched");
+            }
             CrewRow {
                 enabled: cell("enabled"),
                 layer: layers.join("+"),
-                provider: cell("provider"),
+                provider: if human {
+                    orbit_types::identity::HUMAN_CREW_KIND.to_string()
+                } else {
+                    cell("provider")
+                },
                 model: cell("model"),
                 effort: cell("effort"),
                 tags: cell("tags"),
@@ -680,7 +716,7 @@ fn crew_table(values: &[EffectiveConfigValue]) -> Vec<CrewRow> {
 /// and its single-line `persistence` JSON blob. The rows themselves come from
 /// `orbit_core::application::config`, so this view and the dashboard's Paths
 /// grid name the same locations.
-fn write_paths(out: &mut String, runtime: &OrbitRuntime, config_path: Option<&Path>) {
+fn write_paths(out: &mut ConfigShow, runtime: &OrbitRuntime, config_path: Option<&Path>) {
     let rows = orbit_core::application::config::path_rows(runtime, config_path);
     let width = rows
         .iter()
@@ -690,7 +726,9 @@ fn write_paths(out: &mut String, runtime: &OrbitRuntime, config_path: Option<&Pa
     let _ = writeln!(out);
     let _ = writeln!(out, "Paths");
     for (label, value) in rows {
-        let _ = writeln!(out, "  {label:<width$}  {value}");
+        let _ = write!(out, "  {label:<width$}  ");
+        out.mark_trailing_column();
+        let _ = writeln!(out, "{value}");
     }
 }
 
@@ -738,6 +776,20 @@ fn description_json(key: &str) -> JsonValue {
     match describe_config_key(key) {
         Some(descriptor) => json!(descriptor.description),
         None => JsonValue::Null,
+    }
+}
+
+/// The key's accepted values, in the shape `orbit config keys --json` uses.
+fn allowed_json(key: &str) -> JsonValue {
+    describe_config_key(key).map_or(JsonValue::Null, |descriptor| descriptor.allowed.to_json())
+}
+
+/// A row's description with its accepted values appended in brackets, so the
+/// text view shows them beside the setting [ORB-22809].
+fn described(descriptor: &orbit_config::ConfigKeyDescriptor) -> String {
+    match descriptor.allowed.summary() {
+        Some(allowed) => format!("{} [{allowed}]", descriptor.description),
+        None => descriptor.description.to_string(),
     }
 }
 

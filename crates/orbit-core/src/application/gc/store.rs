@@ -7,7 +7,8 @@
 //! Each plans by default and deletes only when asked. Deletes run in batches of
 //! [`RETENTION_BATCH_ROWS`], each its own short write transaction, with a
 //! pause between them so other writers are not starved while a long history
-//! is pruned. Neither runs `VACUUM`: freed pages stay on the freelist, which
+//! is pruned. Busy batches retry for up to a minute, releasing the connection
+//! between attempts. Neither runs `VACUUM`: freed pages stay on the freelist, which
 //! each report shows.
 
 use std::collections::{HashMap, HashSet};
@@ -17,8 +18,8 @@ use chrono::{DateTime, Utc};
 use orbit_common::storage::blob_sweep::{self, AuditBlobRoot, SweepEntry, SweepOutcome};
 use orbit_store::contracts::{
     AuditRetentionTable, JournalRetentionCandidates, ResourceHistoryKeep, ResourceMinutesTable,
-    ResourceUsageStoreBackend, RetentionIdSource, RetentionSelection, RetentionWorkspaceScope,
-    StoreRetentionBackend, StoreSpace,
+    RetentionIdSource, RetentionSelection, RetentionWorkspaceScope, StoreRetentionBackend,
+    StoreSpace,
 };
 use serde::Serialize;
 
@@ -30,12 +31,21 @@ use crate::{OrbitError, OrbitRuntime};
 const RETENTION_BATCH_ROWS: usize = 1_000;
 /// Pause between batches, so a queued writer gets the lock.
 const BATCH_PAUSE: Duration = Duration::from_millis(20);
+/// Contention window for one batch, including SQLite's own busy waits.
+const BATCH_BUSY_WINDOW: Duration = Duration::from_secs(60);
 /// Per-minute run and host resource history, and the admission forecasts
 /// checked against it, are kept at least this long. Older rows stay while
 /// they belong to the newest deliveries of their profile key or the newest
 /// forecasts ([`ResourceHistoryKeep`]), so a break never empties the history
 /// profiles and the accuracy report read.
 pub const RESOURCE_MINUTES_RETENTION_DAYS: u32 = 30;
+/// Days after a task commit is applied before its journal row may be
+/// deleted. Recovery never reads an applied journal row, so the window only
+/// keeps recent commit decisions for diagnosis; at about 600 rows of about
+/// 80 KB a day, 60 days would let the table pass 2.5 GiB before anything went.
+///
+/// The former `retention.journal_days` default, fixed when the key was removed [ORB-22808].
+pub const JOURNAL_RETENTION_DAYS: u32 = 14;
 /// A blob written or reused this recently is never swept, whatever the
 /// reference scan saw: it covers a write published while the scan ran.
 const BLOB_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
@@ -202,7 +212,7 @@ impl OrbitRuntime {
         Ok(RetentionDays {
             audit: config.snapshot.retention_audit_days,
             runs: config.snapshot.retention_runs_days,
-            journal: config.snapshot.retention_journal_days,
+            journal: JOURNAL_RETENTION_DAYS,
         })
     }
 
@@ -339,7 +349,7 @@ impl OrbitRuntime {
         };
         let resource_cutoff = cutoff_for(RESOURCE_MINUTES_RETENTION_DAYS)?;
         let keep = ResourceHistoryKeep {
-            deliveries_per_key: usize::try_from(self.auto_concurrency_settings().profile_window)
+            deliveries_per_key: usize::try_from(orbit_config::AUTO_CONCURRENCY_PROFILE_WINDOW)
                 .unwrap_or(usize::MAX)
                 .max(RESOURCE_HISTORY_DELIVERIES_PER_KEY),
             forecasts: ACCURACY_FORECASTS_KEPT,
@@ -350,19 +360,21 @@ impl OrbitRuntime {
             ResourceMinutesTable::Host,
             ResourceMinutesTable::AdmissionForecast,
         ] {
-            let rows = store.resource_minutes_older_than(table, resource_cutoff, keep)?;
-            let rows_removed = if apply && rows > 0 {
-                run_batches(&mut writes, || {
-                    store.prune_resource_minutes_batch(
-                        table,
-                        resource_cutoff,
-                        keep,
-                        RETENTION_BATCH_ROWS,
-                    )
-                })?
-            } else {
-                0
-            };
+            // Rank once, without the writer lock. Repeating the ranking in
+            // every DELETE made a large history monopolize the host store.
+            let candidates = store.resource_retention_candidates(table, resource_cutoff, keep)?;
+            let rows = candidates.len() as u64;
+            let mut rows_removed = 0;
+            if apply {
+                for (index, batch) in candidates.chunks(RETENTION_BATCH_ROWS).enumerate() {
+                    if index > 0 {
+                        std::thread::sleep(BATCH_PAUSE);
+                    }
+                    rows_removed += timed_batch(&mut writes, || {
+                        store.delete_resource_retention_rows(table, batch)
+                    })? as u64;
+                }
+            }
             resource_minutes.push(ResourceMinutesRetentionReport {
                 table: table.table_name(),
                 retention_days: RESOURCE_MINUTES_RETENTION_DAYS,
@@ -397,7 +409,7 @@ impl OrbitRuntime {
     /// Another registered workspace keeps its own window. The rows are
     /// selected once, by a read, then deleted by primary key in batches of
     /// `RETENTION_BATCH_ROWS`, so no write transaction scans the table.
-    /// `retention_days` overrides `retention.journal_days`.
+    /// `retention_days` overrides `JOURNAL_RETENTION_DAYS`.
     pub fn gc_journal(
         &self,
         apply: bool,
@@ -661,16 +673,32 @@ fn run_batches(
     }
 }
 
-/// Run one write transaction, recording its duration.
+/// Retry only lock contention, with no transaction or writer mutex held during
+/// the pause. A failed store batch rolls back before returning, so retrying it
+/// cannot double-count committed rows. Report the successful attempt's elapsed
+/// time separately from retry backoff.
 fn timed_batch(
     writes: &mut BatchReport,
-    batch: impl FnOnce() -> Result<usize, OrbitError>,
+    mut batch: impl FnMut() -> Result<usize, OrbitError>,
 ) -> Result<usize, OrbitError> {
-    let started = Instant::now();
-    let removed = batch()?;
-    writes.batches += 1;
-    writes.max_batch_ms = writes.max_batch_ms.max(elapsed_ms(started));
-    Ok(removed)
+    let deadline = Instant::now() + BATCH_BUSY_WINDOW;
+    loop {
+        let started = Instant::now();
+        match batch() {
+            Ok(removed) => {
+                writes.batches += 1;
+                writes.max_batch_ms = writes.max_batch_ms.max(elapsed_ms(started));
+                return Ok(removed);
+            }
+            Err(error) if error.is_lock_busy() && Instant::now() < deadline => {
+                tracing::debug!(%error, "store retention batch busy; retrying");
+                std::thread::sleep(
+                    BATCH_PAUSE.min(deadline.saturating_duration_since(Instant::now())),
+                );
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn elapsed_ms(started: Instant) -> u64 {

@@ -6,6 +6,7 @@ use crate::context::{
     StepRecoveryAdmission, StepRecoveryDecisionRead, StepRecoveryDecisionSlot, StepRecoveryVerdict,
 };
 use orbit_types::workflow::AgentBlocker;
+use orbit_types::workflow::PR_CONFLICT_RECOVERY_ACTIVITY;
 use orbit_types::workflow::activity_job::StepRecoveryDecisionRecord;
 
 /// What a recovery invocation admits for its failed step.

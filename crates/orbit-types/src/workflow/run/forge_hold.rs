@@ -16,9 +16,11 @@
 //! that window releases the claim carrying this hold, which names the head
 //! kept and blames neither the crew nor the host [ORB-14634].
 //!
-//! The push operation writes the hold as JSON straight after
-//! [`FORGE_UNAVAILABLE_MARKER`] in its failure text, the form the engine
-//! reads it back from.
+//! The hold travels from the push to the engine as a typed error, and
+//! `PipelineState.pull_drain.forge_hold` stores it. Its failure text still
+//! carries it as JSON straight after [`FORGE_UNAVAILABLE_MARKER`], for the
+//! records and displays that keep that form; only a record with no structured
+//! hold reads it back, through [`ForgeUnavailableHold::from_text`].
 
 use super::failure_classification_text;
 use chrono::{DateTime, Utc};
@@ -36,6 +38,7 @@ pub const FORGE_UNAVAILABLE_MARKER: &str = "[forge_unavailable]";
 pub const FORGE_UNAVAILABLE_EXPIRED_EVENT: &str = "forge_unavailable_expired";
 
 /// Whether a step failure says the forge refused its push past the budget.
+/// The code decides; the marker classifies records written without one.
 #[must_use]
 pub fn is_forge_unavailable(error_code: Option<&str>, message: Option<&str>) -> bool {
     error_code == Some(FORGE_UNAVAILABLE_ERROR_CODE)
@@ -70,14 +73,18 @@ pub struct ForgeUnavailableHold {
 }
 
 impl ForgeUnavailableHold {
-    /// `detail` prefixed with the marker and this hold.
+    /// `detail` prefixed with the marker and this hold, for display and for
+    /// the step records that keep this form. Live code reads the typed hold,
+    /// never this text.
     #[must_use]
     pub fn text(&self, detail: &str) -> String {
         let hold = serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string());
         format!("{FORGE_UNAVAILABLE_MARKER} {hold} {}", detail.trim())
     }
 
-    /// The hold a failure message carries, if any.
+    /// Legacy adapter: the hold an old step or diagnostic message carries, if
+    /// any. A malformed marker carries none. Read this only for a record with
+    /// no structured hold.
     #[must_use]
     pub fn from_text(text: &str) -> Option<Self> {
         let text = failure_classification_text(text);

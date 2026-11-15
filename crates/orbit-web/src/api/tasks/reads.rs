@@ -1,11 +1,13 @@
 //! Task list, detail, locks and completion reads.
 
+use crate::api::helpers;
 use crate::api::pagination::TaskPageQuery;
 use crate::api::{bad_request, blocking, server_error, validate_id};
 use crate::projections::{TaskListProjection, cached_riskiness_model, task_detail_json};
 use crate::state::{DashboardState, Ws};
 use axum::extract::{Path, RawQuery, State};
 use axum::response::{IntoResponse, Json, Response};
+use orbit_core::application::task::DashboardPageReads;
 use orbit_core::{OrbitRuntime, Task, TaskStatus};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -66,7 +68,32 @@ use std::sync::Arc;
 /// than the first page do not disturb an existing continuation. Changing a
 /// task's `created_at`, ID, or filter membership while paging may move it across
 /// the boundary; clients that need a new live snapshot restart without a cursor.
-/// The cross-workspace `/api/tasks/all` aggregate uses the same contract.
+/// The cross-workspace `/api/tasks/all` aggregate shares the filters and the
+/// envelope, but not this order: it cuts pages workspace by workspace in
+/// `/api/workspaces` order, and its cursor names the workspace it resumes in
+/// (see `list_all_tasks` in `api/workspaces/all_tasks.rs`).
+///
+/// ## Per-status form (`group=status`)
+///
+/// With `group=status` the read answers one section per requested status
+/// (request order; every status when `status` is omitted) instead of one page
+/// across them, so a status never splits across pages:
+///
+/// ```json
+/// { "group": "status", "total": 212, "limit": 25,
+///   "sections": [ { "status": "backlog", "items": [ … ], "total": 180,
+///                   "limit": 25, "offset": 0, "truncated": true,
+///                   "next_cursor": "..." } ],
+///   "detail": { /* when requested and on a section's rows */ } }
+/// ```
+///
+/// A section's `total` counts every task in that status under the request's
+/// filters, whether or not its rows are loaded, and it is listed even at 0.
+/// `limit` is each section's first-read size; `status_limit=<status>:<n>`
+/// (repeatable or comma-separated) overrides it per status. A section's
+/// `next_cursor` continues that status alone: pass it back with
+/// `group=status`, that one `status`, the same filters and any `limit`. The
+/// form is opt-in; a read without `group` keeps the envelope above.
 pub(in crate::api) async fn list_tasks(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
@@ -88,6 +115,9 @@ pub(in crate::api) async fn list_tasks(
         query
             .bind_cursor(&scope)
             .map_err(orbit_core::OrbitError::InvalidInput)?;
+        if query.groups_by_status() {
+            return Ok(status_sections_json(&runtime, &query, &scope, riskiness));
+        }
         Ok(task_list_page_json(&runtime, &query, &scope, riskiness))
     })
     .await
@@ -96,6 +126,36 @@ pub(in crate::api) async fn list_tasks(
         Ok(Err(e)) => server_error(e),
         Err(response) => *response,
     }
+}
+
+/// Build the `group=status` answer for `GET /api/tasks`: one
+/// [`task_list_page_json`] page per status, each bound to that status alone.
+fn status_sections_json(
+    runtime: &OrbitRuntime,
+    query: &TaskPageQuery,
+    scope: &str,
+    riskiness: Option<Arc<orbit_core::application::codebase::TaskRiskinessModel>>,
+) -> Result<Value, orbit_core::OrbitError> {
+    let mut result = json!({ "group": "status", "limit": query.limit() });
+    let mut sections = Vec::new();
+    let mut total = 0_u64;
+    for (status, section_query) in query.status_section_queries() {
+        let mut section = task_list_page_json(runtime, &section_query, scope, riskiness.clone())?;
+        if let Value::Object(map) = &mut section {
+            // The selected task's detail sits on whichever section holds it.
+            for key in ["detail", "detail_runs", "detail_runs_error"] {
+                if let Some(value) = map.remove(key) {
+                    result[key] = value;
+                }
+            }
+            map.insert("status".to_string(), json!(status.cli_name()));
+        }
+        total = total.saturating_add(section["total"].as_u64().unwrap_or(0));
+        sections.push(section);
+    }
+    result["sections"] = json!(sections);
+    result["total"] = json!(total);
+    Ok(result)
 }
 
 /// Build the `{ items, total, limit, truncated }` page for `GET /api/tasks`.
@@ -149,8 +209,18 @@ fn task_list_page_json(
     if let Some(detail_id) = query.detail_id()
         && let Some(row) = page.items.iter().find(|row| row.task.id == detail_id)
     {
+        // The page's rows already read the workspace-wide triage, pilot
+        // preparation, pull-request links and delivery attention this detail
+        // shows; it borrows them rather than reading each again [ORB-21825].
+        let page_reads = projection.detail_page_reads();
         match dashboard_status_index(runtime, &row.task).and_then(|statuses| {
-            task_detail_json(runtime, row, &statuses, detail_riskiness.as_deref())
+            task_detail_json(
+                runtime,
+                row,
+                &statuses,
+                detail_riskiness.as_deref(),
+                &page_reads,
+            )
         }) {
             Ok(detail) => result["detail"] = detail,
             Err(error) => tracing::debug!(
@@ -210,8 +280,17 @@ pub(in crate::api) async fn get_task(
     let riskiness = cached_riskiness_model(&state, &runtime).await;
     match blocking("task detail", move || {
         let row = runtime.get_task_row(&id)?;
-        Ok(dashboard_status_index(&runtime, &row.task)
-            .and_then(|statuses| task_detail_json(&runtime, &row, &statuses, riskiness.as_deref())))
+        Ok(
+            dashboard_status_index(&runtime, &row.task).and_then(|statuses| {
+                task_detail_json(
+                    &runtime,
+                    &row,
+                    &statuses,
+                    riskiness.as_deref(),
+                    &DashboardPageReads::default(),
+                )
+            }),
+        )
     })
     .await
     {
@@ -225,18 +304,15 @@ pub(in crate::api) async fn get_task(
 /// band. Counts come from the generated task index — no per-request YAML reads.
 pub(in crate::api) async fn completion_by_complexity(Ws(runtime): Ws) -> Response {
     let runtime_clone = runtime.clone();
-    let rows =
-        match tokio::task::spawn_blocking(move || runtime_clone.task_completion_by_complexity())
-            .await
-        {
-            Ok(Ok(rows)) => rows,
-            Ok(Err(e)) => return server_error(e),
-            Err(join_err) => {
-                return server_error(orbit_core::OrbitError::Execution(format!(
-                    "completion-by-complexity aggregation panicked: {join_err}"
-                )));
-            }
-        };
+    let rows = match helpers::blocking_join("completion-by-complexity aggregation", move || {
+        runtime_clone.task_completion_by_complexity()
+    })
+    .await
+    {
+        Ok(Ok(rows)) => rows,
+        Ok(Err(e)) => return server_error(e),
+        Err(response) => return *response,
+    };
 
     const REQUIRED_STATUSES: &[&str] = &["done", "rejected", "archived"];
     let by_complexity: Vec<Value> = rows

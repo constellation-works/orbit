@@ -5,15 +5,17 @@ use std::path::Path;
 
 use orbit_types::identity::Crew;
 
+use crate::config_document;
+use crate::crew_defaults::builtin_default_crews;
 use crate::registry::ConfigSnapshot;
-use crate::resolved::{ResolvedConfig, crews_from_raw, default_crews};
+use crate::resolved::{ResolvedConfig, crews_from_raw};
 
 use super::document::{crew_entry, empty_document, merge_tables};
 use super::load::ConfigDocument;
 use super::{
     ConfigFallback, ConfigValueSource, ConfigValueSourceKind, DEFAULT_CREW_KEY,
     DEFAULT_PROVIDER_ENV, EffectiveConfigValue, ShadowReason, ShadowedConfigValue,
-    WORKSPACE_REPLACE_ONLY_KEYS, value_at_path,
+    WORKSPACE_REPLACE_ONLY_KEYS,
 };
 
 pub(super) fn effective_values(
@@ -29,7 +31,7 @@ pub(super) fn effective_values(
         .map(|(key, value)| {
             let source = source_for_key(key, global, workspace);
             let global_value = global.and_then(|document| {
-                value_at_path(&document.value, key)?;
+                config_document::config_value_at_path(&document.value, key)?;
                 if source.kind() == ConfigValueSourceKind::Global {
                     return Some(value.clone());
                 }
@@ -77,6 +79,35 @@ pub(super) fn effective_values(
             });
         }
     }
+    // A human crew lists its few fields like an agent crew's, `kind` always,
+    // so `config get crews.<name>.kind` and the listing say what it is.
+    for (name, human) in &resolved.human_crews {
+        let mut fields = vec![(
+            "kind",
+            serde_json::json!(orbit_types::identity::HUMAN_CREW_KIND),
+        )];
+        if let Some(description) = &human.description {
+            fields.push(("description", serde_json::json!(description)));
+        }
+        if !human.tags.is_empty() {
+            fields.push(("tags", serde_json::json!(human.tags)));
+        }
+        for (field, value) in fields {
+            let source = source_for_crew_field(name, field, global, workspace);
+            values.push(EffectiveConfigValue {
+                shadowed_by: shadowed_for_crew_field(name, field, &source, global),
+                fallback: None,
+                global_value: global
+                    .and_then(|document| crew_entry(&document.value, name))
+                    .and_then(|entry| entry.get(field))
+                    .map(json_from_toml),
+                built_in: serde_json::Value::Null,
+                source,
+                key: format!("crews.{name}.{field}"),
+                value,
+            });
+        }
+    }
     // `[plugins.<ns>]` rows layer like crews: one row per key actually present
     // in a layer, with the file that supplied it. A key the plugin defaults
     // but no file sets is reported by `orbit plugin show`, not here — this
@@ -89,7 +120,7 @@ pub(super) fn effective_values(
             let key = format!("plugins.{namespace}.{field}");
             let source = source_for_key(&key, global, workspace);
             let global_value = global
-                .and_then(|document| value_at_path(&document.value, &key))
+                .and_then(|document| config_document::config_value_at_path(&document.value, &key))
                 .map(json_from_toml);
             values.push(EffectiveConfigValue {
                 shadowed_by: shadowed_for_key(&key, &source, global, workspace),
@@ -160,7 +191,7 @@ impl BelowFiles {
             .and_then(|snapshot| snapshot.value_for(DEFAULT_CREW_KEY));
         Self {
             shipped: ConfigSnapshot::default(),
-            shipped_crews: default_crews(),
+            shipped_crews: builtin_default_crews(),
             configured: admit(None),
             environment_default_crew,
         }
@@ -229,7 +260,7 @@ fn fallback_for_key(
         }
         ConfigValueSourceKind::Workspace => {
             if global
-                .and_then(|document| value_at_path(&document.value, key))
+                .and_then(|document| config_document::config_value_at_path(&document.value, key))
                 .is_some()
             {
                 global_value.map(|value| ConfigFallback {
@@ -314,7 +345,7 @@ fn shadowed_for_key(
     let Some(document) = global else {
         return Vec::new();
     };
-    let Some(value) = value_at_path(&document.value, key) else {
+    let Some(value) = config_document::config_value_at_path(&document.value, key) else {
         return Vec::new();
     };
     // Mirrors the order `source_for_key` refuses the global value in, so the
@@ -369,7 +400,7 @@ fn source_for_key(
     workspace: Option<&ConfigDocument>,
 ) -> ConfigValueSource {
     if let Some(document) = workspace
-        && value_at_path(&document.value, key).is_some()
+        && config_document::config_value_at_path(&document.value, key).is_some()
     {
         return file_source(ConfigValueSourceKind::Workspace, &document.path);
     }
@@ -377,7 +408,7 @@ fn source_for_key(
         return built_in_source();
     }
     if let Some(document) = global
-        && value_at_path(&document.value, key).is_some()
+        && config_document::config_value_at_path(&document.value, key).is_some()
     {
         return file_source(ConfigValueSourceKind::Global, &document.path);
     }

@@ -2,8 +2,8 @@ use orbit_types::identity::OrbitId;
 
 use super::paths::ContextCreationAuthorization;
 use orbit_types::task::{
-    ExternalRef, TaskArtifact, TaskComment, TaskComplexity, TaskDecision, TaskHistoryEntry,
-    TaskOrigin, TaskPriority, TaskRelation, TaskStatus, TaskType,
+    CrewSource, ExternalRef, TaskArtifact, TaskComment, TaskComplexity, TaskDecision,
+    TaskHistoryEntry, TaskOrigin, TaskPriority, TaskRelation, TaskStatus, TaskType,
 };
 
 #[derive(Default, Clone)]
@@ -38,11 +38,13 @@ pub(crate) struct TaskRecordUpdateParams {
     pub(crate) source_task_id: Option<Option<String>>,
     pub(crate) job_run_id: Option<Option<String>>,
     pub(crate) crew: Option<Option<String>>,
-    pub(crate) crew_source: Option<Option<String>>,
+    pub(crate) crew_source: Option<Option<CrewSource>>,
     pub(crate) orchestrator: Option<Option<String>>,
     pub(crate) origin: Option<TaskOrigin>,
     pub(crate) status_event: Option<String>,
     pub(crate) status_note: Option<String>,
+    /// Typed decision recorded on the status event; set only with one.
+    pub(crate) status_decision: Option<TaskDecision>,
     pub(crate) append_history: Vec<TaskHistoryEntry>,
     pub(crate) append_comments: Vec<TaskComment>,
     pub(crate) upsert_artifacts: Vec<TaskArtifact>,
@@ -60,6 +62,24 @@ pub(crate) struct TaskRecordUpdateParams {
 
 impl TaskRecordUpdateParams {
     pub(super) fn has_document_changes(&self) -> bool {
+        self.has_attribution_changes() || self.has_non_attribution_document_changes()
+    }
+
+    pub(super) fn has_attribution_changes(&self) -> bool {
+        self.planned_by.is_some() || self.implemented_by.is_some()
+    }
+
+    /// A write whose document change is only attribution publishes it in the
+    /// history commit: one durable commit, with no refused or half-applied
+    /// attribution ahead of a transition the store then refuses.
+    pub(super) fn attribution_joins_history_commit(&self) -> bool {
+        self.has_attribution_changes()
+            && self.has_history_changes()
+            && !self.has_non_attribution_document_changes()
+            && self.context_creation.is_empty()
+    }
+
+    fn has_non_attribution_document_changes(&self) -> bool {
         self.title.is_some()
             || self.description.is_some()
             || self.acceptance_criteria.is_some()
@@ -73,8 +93,6 @@ impl TaskRecordUpdateParams {
             || self.execution_summary.is_some()
             || self.context_files.is_some()
             || self.created_by.is_some()
-            || self.planned_by.is_some()
-            || self.implemented_by.is_some()
             || self.priority.is_some()
             || self.complexity.is_some()
             || self.task_type.is_some()
@@ -136,7 +154,7 @@ pub struct TaskAddParams {
     pub crew: Option<String>,
     /// Provenance recorded for `crew` when the system chose it from a
     /// setting rather than the caller naming it; `None` records `explicit`.
-    pub crew_source: Option<String>,
+    pub crew_source: Option<CrewSource>,
     /// Named crew responsible for orchestration attribution, not execution.
     pub orchestrator: Option<String>,
     /// The orchestrator's model when the session runs one other than the
@@ -215,6 +233,8 @@ pub struct TaskUpdateParams {
     pub plan: Option<String>,
     pub execution_summary: Option<String>,
     pub comment: Option<String>,
+    /// Gate-owned metadata; never populated by public task input parsing.
+    pub review_settlement: Option<orbit_types::task::RecordedReviewSettlement>,
     pub status: Option<TaskStatus>,
     /// Replacement dispatch priority. `None` leaves the task's priority
     /// untouched; the record layer has always been able to persist it
@@ -269,6 +289,7 @@ impl TaskUpdateParams {
             plan,
             execution_summary,
             comment,
+            review_settlement,
             status,
             priority,
             complexity,
@@ -286,6 +307,7 @@ impl TaskUpdateParams {
             discard_candidate,
         } = self;
         comment.is_some()
+            && review_settlement.is_none()
             && title.is_none()
             && description.is_none()
             && acceptance_criteria.is_none()

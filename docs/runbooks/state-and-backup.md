@@ -13,6 +13,40 @@ last_validated: 2026-10-19
 Use this runbook to determine what Orbit state is authoritative, choose what to back up,
 restore a store database, or move task bundles between machines.
 
+SQLite observation reads the main-file header through SQLite's own VFS handle before
+starting a schema query. It never opens an ordinary extra database descriptor for this
+inspection. Published WAL/SHM sets remain live; incomplete sidecars still refuse or yield
+the explicitly warned main-file-only observation described by the storage API.
+
+## Private SQLite permissions
+
+Already-private `0600` writable files and `0400` read-only publications need no online
+permission change. New databases are published privately only after their staging data
+descriptor is closed, including when another constructor wins the publication race.
+
+Repairing an existing permissive SQLite database or sidecar now requires a safe pinned
+path-only mechanism. Linux x86-64 uses `O_PATH` plus `fchmodat2(AT_EMPTY_PATH)`; kernels
+without that operation and other Unix platforms/architectures, including macOS and
+Linux ARM64, refuse the repair before
+mutation. This is an intentional breaking change from automatic ordinary-descriptor
+repair. It does not change generic lock-file permission repair.
+
+| Platform | Already-private `0600` / `0400` | Existing permissive SQLite file |
+|---|---|---|
+| Linux x86-64 | Available | Pinned online repair when `fchmodat2` is supported; otherwise explicit offline-repair refusal |
+| Other Unix, including macOS and Linux ARM64 | Available | Explicit offline-repair refusal before mutation |
+| Non-Unix | Existing platform policy | No new Unix-mode repair policy |
+
+If Orbit reports that safe SQLite permission repair is unavailable, stop every process
+using the database first. Then, offline, restrict the main file and each existing WAL/SHM
+sidecar to owner-only access (`chmod 600` for writable state, or retain `chmod 400` for a
+read-only publication). Do not create missing sidecars. Restart only after checking the
+actual file set; do not substitute an ordinary-descriptor fallback while clients run.
+An operator's pre-upgrade permission preflight runs separately from SQLite: after
+quiescence, pin each known regular file without following symlinks, verify the opened
+inode with `fstat`, and change its mode through that handle. This is not an in-library
+fallback or permission to inspect arbitrary paths from a SQLite connection process.
+
 ## State inventory
 
 Two roots hold Orbit state. **Workspace state** lives in `<repo>/.orbit/`;
@@ -32,9 +66,9 @@ registry sweeps, and MCP setup use this same path interpretation.
 
 `orbit workspace init` scaffolds `.orbit/resources/` plus
 `.orbit/state/{audit,job-runs,logs,worktrees}`. It does not create
-`.orbit/knowledge` or `.orbit/state/diagnostics`; leftover empty copies from
-older inits are unused and may be `rmdir`'d. Init tolerates both absence and
-presence. Path fields live on `WorkspacePaths` in
+`.orbit/knowledge` or `.orbit/state/diagnostics`; leftover copies from
+older inits are unused. Empty directories may be `rmdir`'d. Init tolerates
+both absence and presence. Path fields live on `WorkspacePaths` in
 `crates/orbit-types/src/workspace/registry.rs`.
 
 | Path | What it is | Authoritative or regenerable |
@@ -78,26 +112,26 @@ by themselves. On a large store, `retention.runs_days = 30` can reclaim more ter
 run state than the default. Values below 30, including the `--older-than-days` override,
 are refused: Reliability > Pipeline echo dedupe and forecast-accuracy per-drain limiter
 shares still read 30 days of run state. Audit retention can stay at 60.
-`orbit gc audit --apply` prunes old
+`orbit gc audit --confirm` prunes old
 command-audit rows, this workspace's run-audit rows, run-audit rows whose workspace id is
 no longer registered, and audit blobs no remaining row or pending write references.
-Another registered workspace keeps its own window. `orbit gc runs --apply` drops pipeline
+Another registered workspace keeps its own window. `orbit gc runs --confirm` drops pipeline
 state for terminal runs past the run window, including those unregistered ids, while
 keeping their run and step rows, and prunes the per-minute run and host resource history
 (`run_resource_minutes`, `host_resource_minutes`) and the admission forecasts checked
 against it (`admission_forecasts`) older than 30 days, except rows kept at any age by
-count: the newest `max(200, machine.auto_concurrency.profile_window)` deliveries per
+count: the newest 200 deliveries per
 workspace, work class and complexity, the newest 10,000 forecasts, and host minutes
-from the oldest kept forecast onward. `orbit gc journal --apply` deletes
+from the oldest kept forecast onward. `orbit gc journal --confirm` deletes
 applied rows of the task commit journal (`task_commit_journal`) older than
-`retention.journal_days` (default 14), for this workspace and unregistered ids. Recovery
+14 days, for this workspace and unregistered ids. Recovery
 replays only prepared and committed rows, so those, aborted rows and each task's newest
 applied row stay. The journal grows fastest, at about 600 rows of about 80 KB a day, which
 is why its window is shorter than the others; the `store_gc` routine does not run it. The
 seeded `store_gc` routine is disabled by default,
 so cleanup happens only after an operator applies a GC command or enables that routine.
-`orbit doctor` warns when the store file exceeds `retention.store_warn_bytes` (default
-1 GiB) and that routine is not enabled. Freed pages stay in the file until `VACUUM`.
+`orbit doctor` warns when the store file exceeds 1 GiB and that routine is not
+enabled. Freed pages stay in the file until `VACUUM`.
 See [runtime configuration](../CONFIG.md) for the retention settings.
 
 The cost of each retention setting:
@@ -115,9 +149,8 @@ The cost of each retention setting:
   days are pruned except rows kept at any age by count, so older raw samples outside
   those counts disappear; auto-concurrency profiles and forecast accuracy keep working
   on the rows the counts keep.
-- `retention.journal_days`: older applied transition diagnostics disappear, while
-  published task history and recovery inputs stay.
-- `retention.store_warn_bytes`: only controls a doctor warning; it prunes nothing.
+- The fixed 14-day journal window: older applied transition diagnostics disappear,
+  while published task history and recovery inputs stay.
 
 Across these settings, Cost, the task-store Codebase rankings, `orbit task flow` and
 friction stats keep working. These read retained invocation, task, reservation and
@@ -414,8 +447,12 @@ private file permissions; replacing a regular backup preserves its permissions.
 Task publication is an explicit, task-only durability channel. It does not
 replace the global-root/database backup above: audit events, run history,
 claims, reservations, configuration, machine identity, and runtime caches are not
-published. No task mutation publishes automatically, and v1 seeds no publication
-routine. A future routine trigger must be configured separately.
+published. No task mutation publishes automatically. `orbit workspace init`
+seeds the weekly `task-publication-<workspace>` routine disabled, and
+`orbit workspace sync` adds it to existing workspaces disabled. After reviewing
+the bound repository, credentials, and attachment policy, opt in by setting
+`enabled: true` in `.orbit/routines/task_publication.yaml`; it runs Sundays at
+04:47 host-local time.
 
 Follow [Publish Orbit Tasks to a Dedicated Repository](./task-publication.md) for the complete
 binding, SSH and HTTPS authentication, attachment policy, status verification, inspection,

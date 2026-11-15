@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use orbit_core::application::contracts::{ClaimedLeafStage, DrainClaimedLeaf};
 use orbit_core::application::job::{
     RunFailureCause, RunFailureContextProfile, RunFailureRead, agent_invoke_result,
+    display_steps_with_agent_execution_to_json,
 };
 use orbit_core::runtime::audit::run::{RunProviderProcess, RunScriptExecution};
 use orbit_core::{CatalogReferenceLayer, JobRun, OrbitError, OrbitRuntime};
@@ -13,7 +14,8 @@ use serde_json::{Value, json};
 use crate::command::{Block, CommandOut, Execute, Payload};
 
 use super::drain_summary::{
-    pass_refusal_line, pass_throttle_line, pass_waiting_lines, summarize_drain_leaves,
+    held_review_leaf, pass_refusal_line, pass_throttle_line, pass_waiting_lines,
+    summarize_drain_leaves,
 };
 use super::format::{
     WaitingTaskFormatter, format_backlog_exclusion_lines, format_root_cause_lines,
@@ -21,7 +23,7 @@ use super::format::{
 use super::job::cli_job_run_to_json_with_activity_provenance;
 use super::lock_holders::waiting_lock_holders;
 use super::steps::{
-    RunDisplaySteps, RunRead, StepSource, activity_provenance_lines, resolve_run, resolve_run_step,
+    RunRead, StepSource, activity_provenance_lines, resolve_run, resolve_run_step,
     run_display_steps, run_header_text_with_lock_holders, step_record_payload, step_summary_table,
 };
 
@@ -30,13 +32,13 @@ const SHIPPED_CATALOG_LAYER: &str = "shipped";
 
 #[derive(Args)]
 #[command(
-    after_help = "JSON: {\"run\":<job-run>,\"pull_claim\":…,\"crew_window\":…,\"catalog_layers\":[…],\"pipeline_state\":…,\"steps\":[…],\"steps_source\":\"record|audit\",\"provider_processes\":[…],\"script_executions\":[…]}, or {\"run_id\",\"job_id\",\"step\",\"step_output\"} with -s.\nThe State: line is `.run.state`. Table step numbers are one-based; JSON `step_index` is zero-based and durations are milliseconds.\n\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
+    after_help = "JSON shape, step index base and duration units: installed orbit-orchestrate skill `references/run-debugging.md`.\n\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
 )]
 pub struct RunShowArgs {
     /// Run ID to inspect. Defaults to the most recently scheduled run globally.
     pub run_id: Option<String>,
 
-    /// Show a single activity step.id from the v2 job YAML; legacy target ID and index still work
+    /// Show a single activity step.id from the v2 job YAML
     #[arg(short = 's', long = "step")]
     pub step_id: Option<String>,
 
@@ -120,23 +122,27 @@ pub(crate) fn run_show_payload(
             orbit_core::runtime::audit::tag_instructions::RunTagInstructions::unavailable()
         });
 
-    let RunDisplaySteps {
-        records: steps,
-        source: steps_source,
-    } = run_display_steps(&run, audit.steps);
+    let display_steps = run_display_steps(&run, audit.steps);
+    let steps_source = display_steps.source;
     let root_causes = collect_failed_leaf_causes(runtime, &run, state.as_ref(), read)?;
     // Who holds the locks a waiting run is blocked on, read live: the run
     // only persists the selectors.
     let lock_holders = waiting_lock_holders(runtime, &run, state.as_ref());
-    let mut drain_summary = summarize_drain_leaves(&run, state.as_ref(), |child_run_id| {
-        read.show(runtime, child_run_id).ok()
-    });
+    let mut drain_summary = summarize_drain_leaves(
+        &run,
+        state.as_ref(),
+        |child_run_id| read.show(runtime, child_run_id).ok(),
+        |leaf| held_review_leaf(runtime, leaf),
+    );
     if let Some(summary) = drain_summary.as_mut() {
         for leaf in &mut summary.failed_leaves {
             leaf.resume_run_id = leaf_resume_target(runtime, &leaf.run_id, read);
         }
     }
 
+    let rescue_candidate = state
+        .as_ref()
+        .and_then(|state| state.pipeline.get("rescue_candidate").cloned());
     let mut run_projection =
         cli_job_run_to_json_with_activity_provenance(runtime, &run, state.as_ref());
     // [ORB-13899] The same audit scan holds the invocation's child: its live
@@ -198,10 +204,11 @@ pub(crate) fn run_show_payload(
             .map(CatalogReferenceLayer::to_json)
             .collect::<Vec<_>>(),
         "pipeline_state": state,
+        "rescue_candidate": rescue_candidate,
         // The steps the view below renders, whichever source answered. The
         // record's own `run.steps` stay exactly as stored, so a caller can
         // still tell the two apart [ORB-12113].
-        "steps": steps.iter().map(|step| step.to_json_with_agent_execution(state.as_ref(), &effort_evidence)).collect::<Vec<_>>(),
+        "steps": display_steps_with_agent_execution_to_json(&display_steps, state.as_ref(), &effort_evidence),
         "steps_source": steps_source.as_str(),
         // What a drain's leaves did; null for any run that is not a drain.
         // The drain's own `state` only says the coordinator ran.
@@ -279,18 +286,19 @@ pub(crate) fn run_show_payload(
             effort
         ));
     }
+    if let Some(record) = &rescue_candidate
+        && let Some(reference) = record["rescue_ref"].as_str()
+    {
+        header.push_str(&format!(
+            "\n{} {} (commit {})",
+            crate::output::color::bold("Rescue candidate:"),
+            reference,
+            record["rescue_commit"].as_str().unwrap_or_default(),
+        ));
+    }
     if let Some(line) = review_layer_line(&doc["run"]["review_layer"]) {
         header.push('\n');
         header.push_str(&line);
-    }
-    // A `verify-mock-ui` delivery's visual review: what was captured and
-    // checked, or why it is not established; never a pass by omission.
-    if let Some(summary) = visual_review_summary(state.as_ref()) {
-        header.push_str(&format!(
-            "\n{} {summary}",
-            crate::output::color::bold("Visual review:")
-        ));
-        doc["visual_review"] = json!({ "summary": summary });
     }
 
     for attempt in &recovery.attempts {
@@ -304,6 +312,29 @@ pub(crate) fn run_show_payload(
                 .as_ref()
                 .map(|detail| format!("; {detail}"))
                 .unwrap_or_default(),
+        ));
+    }
+    // The run's final-recovery decision and whose fault it found the failure
+    // to be; `pipeline_state.final_recovery` carries the same in JSON.
+    if let Some(checkpoint) = state
+        .as_ref()
+        .and_then(|state| state.final_recovery.as_ref())
+        && let Some(decision) = &checkpoint.decision
+    {
+        header.push_str(&format!(
+            "\nFinal recovery: {} ({}); fault: {}{}",
+            decision.kind(),
+            checkpoint
+                .outcome
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "not applied".to_string()),
+            checkpoint.fault.fault,
+            if checkpoint.fault.fault_evidence.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", checkpoint.fault.fault_evidence)
+            },
         ));
     }
     if let Some(assignments) = run
@@ -515,7 +546,7 @@ pub(crate) fn run_show_payload(
             ));
         }
     }
-    if steps_source == StepSource::Audit && !steps.is_empty() {
+    if steps_source == StepSource::Audit && !display_steps.records.is_empty() {
         header.push_str(&format!(
             "\n{} reconstructed from the run audit trail; the run record holds no per-step history",
             crate::output::color::bold("Steps:"),
@@ -541,8 +572,8 @@ pub(crate) fn run_show_payload(
     Ok(Payload::blocks(
         doc,
         vec![
-            Block::text(header),
-            Block::table(step_summary_table(&steps)),
+            Block::prose(header),
+            Block::table(step_summary_table(&display_steps.records)),
         ],
     )
     .into())
@@ -561,26 +592,6 @@ fn review_layer_line(layer: &Value) -> Option<String> {
         "{} {timing} ({origin})",
         crate::output::color::bold("Review:")
     ))
-}
-
-/// The settled visual review summary, else the capture's (a run held
-/// before settling still says why its capture is not established).
-fn visual_review_summary(state: Option<&PipelineState>) -> Option<String> {
-    let state = state?;
-    if let Some(summary) = state
-        .pipeline_step_output("visual_settle")
-        .and_then(|output| output["summary"].as_str())
-        .filter(|summary| !summary.is_empty())
-    {
-        return Some(summary.to_string());
-    }
-    let capture = state.pipeline_step_output("visual_capture")?;
-    let summaries = capture["captures"]
-        .as_array()?
-        .iter()
-        .filter_map(|entry| entry["summary"].as_str())
-        .collect::<Vec<_>>();
-    (!summaries.is_empty()).then(|| summaries.join("; "))
 }
 
 /// Where to resume a failed pipeline run whose failure came from a child run.

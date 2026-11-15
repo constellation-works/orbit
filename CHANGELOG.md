@@ -2,6 +2,216 @@
 
 ## Unreleased
 
+## 0.50.0 — 2026-11-15
+
+### Breaking Changes
+
+- **Plugin exact-file writes**: Plugin manifests can declare a persisted `write_files` field for narrow regular-file writes, which older Orbit binaries reject when loading the manifest. ([ORB-24200])
+  Manifests declaring `write_files` refused by older binaries → use Orbit 0.50.0+ on hosts loading them
+- **One-field MCP projections keyed**: A one-element `fields` projection now returns the same keyed shape as a multi-field one instead of a `{value}` or `{items}` wrapper. ([ORB-24275])
+  `{value}`/`{items}` wrappers removed → read `result[field]`, or use the `field` alias for a bare value
+- **Store schema 89**: The `task_reservations` migration adds partial indexes; it is additive, so older binaries keep reading and writing the store and no user migration is needed. ([ORB-24410])
+- **Store schema 90**: The `task_coordination_rows` migration adds indexes; it is additive, so older binaries keep reading and writing the store and no user migration is needed. ([ORB-24411])
+- **Codebase layer names configured**: The compiled-in `orbit codebase {show,analytics} --layer` value list, including `ci_tests`, is gone; accepted names now come from workspace configuration. ([ORB-24520])
+  Compiled-in `--layer` values removed → define names in `workflow.regression_layers`
+- **Agent-facts schema 91**: A new additive cache table raises the store schema; older binaries keep reading and writing the store and no user migration is needed. ([ORB-24423])
+- **Friction tags constrained**: Arbitrary `orbit_friction` tag strings are refused; tags must come from the active workspace taxonomy the tool advertises. ([ORB-24579])
+  Free-form friction tags refused → choose a tag from the advertised `tags.items.enum`
+- **Destructive-command confirmation flag**: The canonical confirmation flag for `orbit gc audit`, `orbit gc runs`, `orbit gc journal` and `orbit plugin remove` is now `--confirm`; the old spellings remain as visible aliases.
+  `--apply`/`--yes` deprecated → use `--confirm`
+- **Doctor retired-backend fix removed**: `orbit doctor --fix-retired-activity-backends` is retired, so affected activity files must be cleaned up by hand before the doctor passes.
+  `--fix-retired-activity-backends` removed → delete obsolete `spec.backend: http|auto` manually, then rerun `orbit doctor`
+- **Host-wide job-run IDs**: Job-run IDs are allocated uniquely across every workspace on a host, and schema 92 adds indexes only, so old IDs stay readable with no user migration. ([ORB-24769])
+  Run IDs now host-wide → use the host-wide run ID the updated Orbit returns
+
+### Highlights
+
+- **Find tasks and runs anywhere**: Global dashboard search finds tasks across statuses and workspaces and opens full task and run pages, while board paging and navigation keep the selected view and history. ([ORB-24679])
+- **Rankings easier to read**: The agent rank board opens on the leading rows and reveals the rest or unranked rows on demand, and scorecards attribute effort whenever the crew label or launch evidence supplies it. ([ORB-24177])
+- **Pause and resume experiments**: Operators can pause a running experiment or resume a paused one from its dashboard page, with the change recorded in the event log. ([ORB-24173])
+- **Clearer CLI and MCP inspection**: Run-inspection help shows JSON shapes and fields, one-field task projections match the multi-field keyed shape, and `orbit_friction` advertises the workspace tag taxonomy. ([ORB-24275])
+
+## 0.49.0 — 2026-11-12
+
+### Breaking Changes
+
+- **Operator-granted crew-memory reads**: Auto-task definitions and settings gain `granted_tools`, so an older binary refuses a definition or settings file that sets a grant. ([ORB-23818])
+  Older binaries refuse granted definitions → upgrade every host before setting a grant
+
+### Highlights
+
+- **Read-only crew-memory grants**: An operator can grant a task `orbit.memory.show` or `orbit.memory.history` for any space, read-only, and an auto-task definition can declare the grant so minted tasks carry it. ([ORB-23818])
+- **Multi-workspace dashboard**: The rail's All workspaces entry opens an aggregate board whose Tasks chip row narrows it to chosen workspaces, alongside a host-selectable Auto-drain card with start and stop controls and a Fleet tab, without server fan-out. ([ORB-23882])
+- **Grouped fleet task list**: Under All workspaces, each status section is grouped by workspace in picker order with colour-coded workspace pills, and paging walks the selected workspaces in that order. ([ORB-23884])
+- **Blind regression-label audit**: A disabled `regression-label-audit` auto-task samples recorded regression labels blind across model families, so recorded accuracy can be checked without the auditor seeing the labels. ([ORB-23842])
+- **Owner can land a held green PR**: A block decision now offers Approve and land for a green handoff PR, merging the exact reviewed head under the usual forge protections. ([ORB-23815])
+- **Long Claude requests priced by tier**: Claude runs now capture each request's final usage, so requests of 100,000 or more prompt tokens are priced at their long-context tier, and an incomplete stream leaves the cost unknown rather than understated. ([ORB-23935])
+
+## 0.48.0 — 2026-11-09
+
+### Breaking Changes
+
+- **MCP tool families consolidated**: Related tools now share one tool with an `action` field, cutting the surface from 43 to about 21 tools, and stored pre-family tool names migrate on upgrade. ([ORB-23280])
+  `orbit_friction_add`/`_update`, `orbit_task_artifact_get`/`_put` and similar removed → call the family tool with `action`
+- **MCP core and operator profiles**: `orbit mcp serve` advertises a core profile of tasks, artifacts, friction, search, attention and workspace discovery by default. Auto-task, automation, codebase and decision tools need a role or the operator profile. ([ORB-23279])
+  Operator tools no longer listed by default → use `orbit mcp serve --operator` or `orbit mcp init --operator`
+- **MCP task schemas slimmed**: Task add, update and list take arrays only, and the nested relation and verdict schemas are gone from the tool descriptions. ([ORB-23278])
+  String-or-array fields removed → send arrays
+- **MCP model provenance and aliases dropped**: The per-call `model` input, the `orbit_task_list` `agent` alias and the `context` alias on task add and update are removed. ([ORB-23277])
+  Per-call `model` and aliases removed → use session crew config or MCP clientInfo, and `context_files`
+- **Orchestrator scorecard removed**: `orbit orchestrator`, `--role orchestrators` on `orbit agents scorecard` and `show`, its MCP tool and `/api/agents/orchestrators` are gone, and the dashboard Orchestrators tab is replaced by Rank. ([ORB-23582])
+  Orchestrator scorecard removed → no replacement
+- **State schema 88**: Crew memory and the MCP provenance removal raise the SQLite schema from 86 to 88, and captured experiments gain a `memory` field, so older binaries and follower hosts refuse the new state. ([ORB-23113])
+  Older binaries refuse upgraded state → upgrade every host in lockstep
+
+### Highlights
+
+- **Crew memory**: Per-model memory spaces with write rules, an `orbit memory` CLI, a weekly `crew_memory_dream` reflection routine operator-reviewed global-memory proposals and a read-only dashboard Knowledge › Memory tab, behind `crew_memory.enabled` and a shadow experiment. ([ORB-23113])
+- **Holistic model ranking**: `orbit agents rank` and the dashboard Agents › Rank tab rank implementer models by escaped regressions, review outcome and rework against size-adjusted expectations, with tie bands and a per-tier score-versus-cost chart. Models working a single tier are ranked and flagged. ([ORB-23302])
+- **Longer implement budget**: The `agent_implement` wall-clock timeout defaults to 6 hours and is configurable per workspace through `workflow.activity_timeouts`. ([ORB-23544])
+- **Host-health updates**: The host-health auto-task runs weekly by default and reports available Orbit updates and pending migrations. ([ORB-23373])
+- **Claim recovery**: Recover claim lets the operator choose any valid target status, and the dashboard offers it for failed claims and confirms forced status changes and deletes. ([ORB-23540])
+
+## 0.47.0 — 2026-11-08
+
+### Breaking Changes
+
+- **Config surface trimmed**: 108 unused or tuning config keys, including the `[assistance]` table, are ignored with a deprecation warning and stop being recognised after 2026-12-08. Path leases, decision assistance, browser sessions and selective review are gone. ([ORB-22808])
+  `orbit decision assist`, `orbit lease`, `orbit web open` and the `orbit.decision.assist_*` / `orbit.lease.*` tools removed → delete the keys from config
+- **Crew ladder removed**: `orbit agents ladder`, `orbit crew ladder` and the `orbit.crew.ladder` tool are retired, and `workflow.crew_ladder.*` keys warn and are ignored. ([ORB-22803])
+  `orbit agents ladder` removed → no replacement; delete the `workflow.crew_ladder.*` keys
+- **Crew-performance weighting removed**: Crew draws no longer weight by performance, and `workflow.crew_performance*` keys warn and are ignored. The task-type list moves to `workflow.task_types`. ([ORB-22804])
+  `orbit agents scorecard --shadow` removed → no replacement; rename `crew_performance_types` to `workflow.task_types`
+- **Explore brief removed**: `workflow.explore_brief.*` keys warn and are ignored, and `orbit run show --json` no longer reports `tag_instructions.explore_briefs`. ([ORB-22805])
+  Explore-brief keys and fields removed → no replacement
+- **Regression-risk prompt marks removed**: `workflow.regression_risk.*` keys warn and are ignored, and analytics drop the `risk_marks` field. Riskiness scores remain. ([ORB-22806])
+  `risk_marks` removed → no replacement
+- **Visual review removed**: `orbit visual`, the `orbit.visual.*` tools, mock comparison and the visual-review metrics and JSON fields are gone, and `visual_review.*` keys warn and are ignored. ([ORB-22807])
+  `orbit visual` removed → no replacement; delete the `visual_review.*` keys
+- **Four routines retired**: The evolution-pass, ux-rules, finding-verification and pilot-warning-triage routines and their jobs and activities are removed. Their config keys warn and are ignored. ([ORB-22844])
+  Retired routines removed → no replacement; delete `ux_rules.*`, `review.verify_findings` and the retired `resident.evolution.*` keys
+
+### Highlights
+
+- **MCP listener checks who connects**: `orbit mcp listen` grants Agent authority only to a local peer running as the listener's own user, on Linux and macOS. ([ORB-23052])
+- **Resource forecast on the dashboard**: The dashboard shows the admission resource forecast, and the drain card's forecast opens it. ([ORB-22973])
+- **Config keys explain themselves**: Config listings show each key's allowed values and a short description. ([ORB-22809])
+- **Fresh defaults for new installs**: New installs seed the revised config and routine defaults. ([ORB-22802])
+- **Audit rows mask keyed credentials**: Values under `authorization`, `x-api-key` and `api_key`-style JSON keys are masked in v2 audit rows and step errors, and the stored payload stays valid JSON. ([ORB-23084])
+- **Faster dashboard pages**: Multi-second stalls are gone from the friction list and stats, and the Jobs catalogue, decisions and audit-incident reads are bounded. ([ORB-22914])
+
+## 0.46.0 — 2026-11-07
+
+### Breaking Changes
+
+- **Explorer and agent invocation removed**: `orbit run agent`, the `orbit.agent.invoke` tool, the `agent-invoke` MCP toolset and explorer delegation are gone. The `workflow.explore.*` and `workflow.purpose_crews.explorer` keys are deprecated and warn. ([ORB-20383])
+  `orbit run agent` removed → use task workflows or a provider CLI; delete the explorer keys and `agent-invoke` from `machine.mcp.toolsets`
+- **Root help regrouped**: `orbit --help` now lists commands under Setup, Work, Operate, Observe, Analytics, Scheduler, Services and Advanced. Two commands move; their old paths still work, warn on stderr and stay for the compatibility window. ([ORB-22572])
+  `orbit crew ladder` renamed → use `orbit agents ladder`; `orbit browser-kit` renamed → use `orbit config browser-kit`
+- **Finding rejections bind to the finding**: A report rejecting a task's review finding now records which finding it judged, so a task edited since is not rejected. ([ORB-22588])
+  A rejection report written by 0.45.x no longer verifies → re-run the task to judge the finding again
+- **Auto-task completion contracts**: Auto-task definitions take an optional `completion` contract that their job step is held to. Orbit 0.45.x refuses to load a definition that sets one. ([ORB-20165])
+  Upgrade every host before adding `completion` to a definition
+
+### Highlights
+
+- **Effort picked per task**: A `<crew>@auto` reference in an implementer, task-pilot or reviewer pool picks the effort level at admission from the crew's configured effort bands. Orbit refuses it until bands are set. ([ORB-20386])
+- **Release-readiness job**: An example job runs QA, security review and release preparation as one gated run with validated evidence. Steps can reuse a recent accepted result, and routine conditions can read named accepted history. ([ORB-20166])
+- **Task pilot holds what a leaf can't satisfy**: Acceptance criteria that need owner-only evidence, and explicit start prerequisites, now hold a task at piloting instead of failing it later in a worker. ([ORB-22621])
+- **Hosted CI hiccups stop failing deliveries**: CI artifact download failures count as infrastructure and are retried longer, and a CI rerun waits for a workflow that is still running instead of escalating. ([ORB-22620])
+- **Dashboard fits more screens**: Long Routines, crew settings and plugin tool lists are bounded and searchable, task actions move to the top bar, and narrow widths gain a Drain rail item. ([ORB-22551])
+- **Doctor suggests a way back**: `orbit doctor --check` with an unknown name now offers a recovery command, and diagnostic summaries and failed-run headers wrap to the terminal. ([ORB-22544])
+
+## 0.45.1 — 2026-11-06
+
+### Highlights
+
+- **Dashboard pages built around the job**: Automation > Residents, Notices, Health > Doctor and Analytics > Agents now open on what needs you, with fewer words: a supervised resident list, one-line notices, a Doctor work queue beside its fix pane, and the crew ranking first. ([ORB-22357])
+- **Experiment details that load**: The page leads with the verdict and shows the experiment immediately, while the readout loads beside it with its own Retry. Readouts that outlasted the dashboard's request limit and failed the page now finish far sooner. ([ORB-22359])
+- **Forecast in three tabs**: Analytics > Forecast splits into Forecast, Accuracy and Data gaps, with one scenario switch for the current backlog, proposed tasks or new arrivals, and a one-line-per-task table in dispatch order. ([ORB-22329])
+- **Residents say why they stalled**: `orbit routine enable` and `orbit routine disable` control the cycle routine from the CLI, and a resident stalled by a disabled routine now names it. Invalid mandates refuse every control action except stop. ([ORB-22379])
+- **Fewer deliveries stopped by transient states**: Landing rechecks a PR that reads blocked just after its checks pass, GitHub's internal push rejections retry, and a claimed implementer that finds the defect already fixed settles instead of blocking. ([ORB-22350])
+- **Malformed agent replies get a second chance**: Read-only activities such as the task pilot now get one bounded correction round when a reply contradicts itself or ends without its completion envelope, rather than failing the run. ([ORB-22426])
+
+## 0.45.0 — 2026-11-06
+
+### Breaking Changes
+
+- **Implementer scorecard nulls**: A review term with no reviewed deliveries now reports `per_100` as null instead of a numeric zero, so an unmeasured term no longer reads as a clean score. ([ORB-21946])
+  numeric zero removed → read null with `reviewed_units` and `term_units`
+- **Visual contract schema**: Claimed-live visual contracts can now carry `resolution_schema`, which older strict readers refuse. ([ORB-21963])
+  old strict visual-contract compatibility removed → run matching owner and executor builds
+
+### Highlights
+
+- **Residents finish their own work**: A resident can raise decisions from inside its cycle sandbox, dispatch with its ship right and complete its own assignment lifecycle. ([ORB-21984])
+- **Fewer false run failures**: Upgrade-quiesce interruptions no longer count as run failures, recurring Orbit-origin worker SIGTERMs are fixed, and a landing stop after base-suspect CI cycles holds instead of failing. ([ORB-21876])
+- **CI sweeps survive claimed owners**: A matching compiler or repair owner under an execution claim no longer aborts the sweep. Its receipt lands when the claim settles, and independent failures still file. ([ORB-22211])
+- **Forecast calibration**: Calibration scores the baseline forecast while adjusted totals are withheld, keeping adjusted scoring separate and labeled. ([ORB-21950])
+- **Dashboard on phones and long settings**: The phone layout gives task content more room, and long Workflow settings gain section jumps, collapse controls and key search. ([ORB-21961])
+- **A CLI that explains itself**: Help is shorter with policy moved to installed references, and unknown config keys, malformed durations and not-found errors now say what to do next. ([ORB-21990])
+
+## 0.44.1 — 2026-11-04
+
+### Highlights
+
+- **Faster dashboard and task reads**: main views stay within ten API reads per poll, the fleet task list scans workspaces concurrently again, and task detail, auto-task, failed-run and host-list reads stay bounded on large stores. ([ORB-21829])
+- **Minted auto-tasks face the pilot**: an auto-task without `no-diff-expected` now lands `proposed` instead of `backlog`, including from existing workspace definitions, so the task pilot assesses it before dispatch. ([ORB-21785])
+- **Implementer scores count delivery review**: scorecards now score escaped regressions against the expected rate for a change's size. ([ORB-21789])
+- **Clear plugin callback refusals**: a confined plugin calling into another workspace or host is refused up front with the reason, instead of failing with an SSH or migration error. ([ORB-21384])
+- **Delivery recovers on its own more often**: an implementer that reports unfinished work continues within its activity budget, and a landing merge retries when the base branch moved. ([ORB-21837])
+- **Quicker retention sweeps**: store-retention local work drops from about a minute to under 25 seconds on large stores, with the same counts reclaimed and retained. ([ORB-21830])
+
+## 0.44.0 — 2026-11-03
+
+### Breaking Changes
+
+- **Commit trailers retired**: Orbit no longer writes Planned-By or Implemented-By commit trailers, and `commit.planned_by_trailer` and `commit.implemented_by_trailer` are deprecated → read the implementer from Co-authored-by or the task's planned_by/implemented_by. ([ORB-21285])
+- **Layout version 9**: skipped-step resume markers and source-repair bindings gain fields that older binaries refuse, and layout-v8 clients are fenced from upgraded workspaces → upgrade every host in lockstep before opening one. ([ORB-21604])
+
+### Highlights
+
+- **Resident orchestrator**: a standing orchestrator runs under a mandate with operator-only grants, structured checkpoints, `orbit resident metrics` and an evolution pass, and the dashboard Residents view sets mandates up. ([ORB-21244])
+- **`orbit attention`**: one read-only list of everything waiting on an operator, from pilot holds and blocked tasks to failed runs, red CI, untriaged frictions, notices and unhealthy hosts, across workspaces and hosts with a delta cursor. ([ORB-21168])
+- **Fleet notices**: managed agents post and close notices, reads federate across hosts, and the dashboard shows a banner and a Notices view. ([ORB-21213])
+- **Script steps**: declared file inputs, script-grant decision requests, Linux network grants with redaction of passed values, and a macOS sandbox profile with resource limits. ([ORB-21298])
+- **Precedent decisions**: decision categories can be enabled one at a time, answer themselves from precedent, and be demoted. ([ORB-21097])
+- **host-health on by default**: the host-health auto-task now ships enabled. ([ORB-21596])
+
+## 0.43.0 — 2026-11-02
+
+### Breaking Changes
+
+- **Visual capture flag renamed**: `orbit visual capture` takes the task as `--id`, matching its MCP tool. `orbit visual capture --task <id>` removed → use `--id <id>`. ([ORB-20890])
+- **Layout version 8**: kept script output files and parallel script-branch checkpoints are stored as durable run artifacts, and older binaries refuse an upgraded workspace → upgrade every host in lockstep before opening it. ([ORB-20866])
+- **New persisted fields**: application consent scopes and operations, decision options and assistance questions gain fields that older binaries, followers included, refuse → upgrade followers together with the owner. ([ORB-21038])
+- **Explicit re-pilot**: the first pilot still runs automatically, but a material edit now holds dispatch as stale instead of re-piloting. Automatic re-piloting removed → use `orbit task repilot <id>` or Readiness "Skip pilot". ([ORB-21073])
+- **SQLite permission repair**: where safe descriptor handling is unavailable, Orbit no longer repairs database permissions in place. Unsafe automatic repair removed → quiesce database users and repair offline, then retry. ([ORB-20977])
+
+### Highlights
+
+- **Application consent v2**: apps declare named, rate-limited scopes with field-level operation bounds, validated at consent time. Callbacks, including auto-task callbacks, are bound to the approved payload, and every admission is audited. ([ORB-21038])
+- **Pilot control**: a held assessment is re-checked only where it went stale, a `no-pilot` tag opts a ready task out, and Readiness offers an operator "Skip pilot". ([ORB-21238])
+- **Fleet notices**: an opt-in `notice` MCP toolset and `orbit notice` CLI post fleet-wide notices with expiry and linked-task closure. ([ORB-21211])
+- **Precedent-answered decisions**: decision requests carry a per-answer risk tier, and a precedent provider and shadow consumer predict answers from recorded decisions without acting on them yet. ([ORB-21089])
+- **Visual review**: the reviewer flags design-rule and quality issues, and UX findings are grouped by underlying defect across screen sizes. ([ORB-21111])
+
+## 0.42.0 — 2026-11-01
+
+### Breaking Changes
+
+- **Blocked-task triage retired**: `orbit.task.block_triage` no longer accepts `subject: block`, the `requeue`/`resume_run`/`rerun_ci`/`friction_reported` actions or the `blocker`, `run_id`, `head_sha` and `friction_*` fields → use final recovery's mechanical steps and `decide` decision. The seeded `blocked_task_triage` routine and `block_escalated` trigger are removed; old routine files load inert. ([ORB-20629])
+- **Fewer shipped auto-task defaults**: 8 auto-task definitions (backlog-hygiene, ci-budget-watch, crew-ladder-review, design-sync, flaky-test-hunt, structure-sweep, suppression-ratchet, workflow-health-audit) are no longer shipped, and 19 remain. Existing workspace copies keep working as workspace-local definitions → re-add a dropped one with `orbit auto-task add`. ([ORB-20704])
+
+### Highlights
+
+- **Decision requests**: agents raise multiple-choice decision requests to humans, and the dashboard shows them in a human-task view with copy-paste commands and one-click decisions. ([ORB-20736])
+- **Human-crew tasks**: the operator can move them to any status, and they use a short format with copy-paste commands. ([ORB-20727])
+- **`workspace sync --all`**: converges every workspace registered on the host in one command. ([ORB-20660])
+- **`no-drain` tag**: drains, followers and drain auto-approval skip tasks that carry it. ([ORB-20612])
+- **Better backlog forecasts**: forecast bias and quantiles are corrected from scored residuals, with a residual time-series chart under Analytics › Forecast. ([ORB-20673])
+- **Dashboard bounds**: Health Errors paginates, Frictions and Settings keys stay bounded, and the CLI wraps help text to the terminal width. ([ORB-20742])
+
 ## 0.39.0 — 2026-10-29
 
 ### Breaking Changes

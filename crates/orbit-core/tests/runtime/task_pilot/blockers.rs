@@ -311,11 +311,70 @@ fn a_pilot_dependency_cycle_refuses_the_entire_assessment() {
     }
 }
 
+fn non_orb_prefixed_blockers_become_dependencies_in_a_non_orb_workspace() {
+    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+
+    let workspace = Workspace::new();
+    TaskRegistryStore::open(&task_registry_path(&workspace.runtime.global_root()))
+        .unwrap()
+        .set_task_prefix("DANI")
+        .unwrap();
+    let blocker = target(&workspace, TaskStatus::Backlog);
+    assert_eq!(
+        orbit_types::task::task_id_prefix(&blocker.id),
+        Some("DANI"),
+        "the fixture workspace must mint non-ORB ids: {}",
+        blocker.id
+    );
+    let task = workspace.task("Repair after the non-ORB prerequisite");
+    let warnings = vec![format!("Wait for `{}` to land.", blocker.id)];
+    apply(&workspace, &task, &warnings);
+    assert_eq!(
+        workspace.runtime.get_task(&task.id).unwrap().dependencies(),
+        std::slice::from_ref(&blocker.id),
+        "a named non-ORB blocker must become a dependency"
+    );
+    assert_eq!(
+        workspace
+            .runtime
+            .task_pilot_blocker_warnings(&task.id)
+            .unwrap(),
+        warnings
+    );
+    workspace
+        .runtime
+        .approve_task(&task.id, None, None)
+        .unwrap();
+    let waiting = readiness(&workspace, &task);
+    assert_eq!(waiting["eligible"], false, "{waiting}");
+    assert_eq!(waiting["reason"], "unmet_dependency", "{waiting}");
+
+    // A non-numeric suffix names no task: it stays a warning and adds no edge.
+    let free = workspace.task("Warning-only non-ORB prose");
+    apply(&workspace, &free, &["Await DANI-abc".to_string()]);
+    assert!(
+        workspace
+            .runtime
+            .get_task(&free.id)
+            .unwrap()
+            .dependencies()
+            .is_empty()
+    );
+    assert_eq!(
+        workspace
+            .runtime
+            .task_pilot_blocker_warnings(&free.id)
+            .unwrap(),
+        ["Await DANI-abc"]
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     named_unfinished_blockers_survive_approval_and_repilot_until_done_scenarios,
     named_unfinished_blockers_survive_approval_and_repilot_until_done,
     terminal_missing_foreign_and_free_text_blockers_remain_warnings,
     self_blockers_are_dropped_with_a_warning_and_other_metadata_applies,
-    a_pilot_dependency_cycle_refuses_the_entire_assessment
+    a_pilot_dependency_cycle_refuses_the_entire_assessment,
+    non_orb_prefixed_blockers_become_dependencies_in_a_non_orb_workspace
 );

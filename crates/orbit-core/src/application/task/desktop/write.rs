@@ -8,7 +8,6 @@ use orbit_common::{
 use orbit_store::contracts::{AtomicTaskMutationOutcome, DesktopTaskMutationParams};
 use orbit_types::{
     desktop::*,
-    record::OrbitEvent,
     task::{DesktopMutationReceipt, Task, TaskDecision, TaskHistoryEntry, TaskStatus},
     tool::ToolSessionContext,
 };
@@ -220,11 +219,6 @@ impl OrbitRuntime {
                                 "proposal approval cannot be combined with field edits",
                             ));
                         }
-                        // A desktop edit carries no tags or artifacts, so the stored
-                        // ones are the state this approval leaves for the mock check.
-                        if task.status == TaskStatus::Proposed && target == TaskStatus::Backlog {
-                            self.ensure_backlog_mock_admission(&task, None)?;
-                        }
                         status = Some(target);
                     }
                     if let Some(v) = &f.title {
@@ -260,6 +254,9 @@ impl OrbitRuntime {
                     )?;
                     crew_source = validated.crew_source;
                     let v = validated.params;
+                    if let Some(edit) = self.pilot_requirement_edit_history(&task, &v, &actor)? {
+                        append_history.push(edit);
+                    }
                     fields = DesktopTaskFields {
                         status: None,
                         title: v.title,
@@ -291,7 +288,6 @@ impl OrbitRuntime {
                         {
                             return Err(invalid(reason));
                         }
-                        self.ensure_resolves_are_workspace_local(&task)?;
                         status = Some(TaskStatus::Done);
                         // Committed with the receipt, so a replay retries
                         // targets the first call never reached.
@@ -315,32 +311,20 @@ impl OrbitRuntime {
                 }
                 DesktopTaskOperation::Create { .. } => unreachable!(),
             }
-            outcome = Some(self.with_mutation(|| {
-                let result = self.stores().tasks().apply_desktop_task_mutation(
-                    &id,
-                    &DesktopTaskMutationParams {
-                        actor: actor.clone(),
-                        request_id: request.request_id.clone(),
-                        payload_digest: digest.clone(),
-                        expected_revision: expected_revision.clone(),
-                        fields,
-                        crew_source,
-                        comment,
-                        status,
-                        append_history,
-                    },
-                )?;
-                let event =
-                    if task.status == TaskStatus::Proposed && status == Some(TaskStatus::Backlog) {
-                        OrbitEvent::TaskProposalApproved {
-                            id: id.clone(),
-                            approved_by: actor.clone(),
-                        }
-                    } else {
-                        OrbitEvent::TaskUpdated { id: id.clone() }
-                    };
-                Ok((result, event))
-            })?);
+            outcome = Some(self.stores().tasks().apply_desktop_task_mutation(
+                &id,
+                &DesktopTaskMutationParams {
+                    actor: actor.clone(),
+                    request_id: request.request_id.clone(),
+                    payload_digest: digest.clone(),
+                    expected_revision: expected_revision.clone(),
+                    fields,
+                    crew_source,
+                    comment,
+                    status,
+                    append_history,
+                },
+            )?);
             Ok(())
         })?;
         if outcome == Some(AtomicTaskMutationOutcome::Stale) {
@@ -369,7 +353,6 @@ impl OrbitRuntime {
     ) -> Result<DesktopTaskWriteResult, OrbitError> {
         let refresh = || {
             let task = self.desktop_side_effect_task(id)?;
-            self.schedule_task_quality_after_commit(&task);
             self.stores().task_records().index_task(&task);
             if let Some(request_id) = request_id {
                 self.desktop_close_transition_prs(request_id, &task);

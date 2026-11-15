@@ -1,198 +1,223 @@
 # Orbit Website — Design
 
-The design contract for `orbit-cli.com`: what the site is for, how it looks, how it is organized and how its pages are written. Read it before changing the site's look, navigation or homepage.
+The design contract for `orbit-cli.com`: who the site is for, how it is organized, how it
+looks and how its pages are written. Read it before changing the site's navigation, look or
+homepage, and update it in the same pull request.
 
----
+## 1. Purpose and audience
 
-## 1. Purpose & Audience
+The site is documentation, not marketing. It serves one reader in two moods:
 
-The Orbit website is a **documentation site**, not a marketing site. It exists to host:
+- **Evaluating.** An engineer who already uses a coding-agent CLI and wants to know what
+  Orbit does and what it costs to try. They read the homepage and the Quickstart.
+- **Operating.** The same engineer, later, with one job in mind: drain a backlog, fix a
+  blocked run, look up a config key. They arrive from search or the sidebar and leave when
+  the job is done.
 
-- Reference documentation (CLI commands, activity/job YAML schemas, policy formats)
-- How-to guides (task lifecycle, delivery windows, recurring work, task publication)
-- Conceptual explainers (activity/job model, task lifecycle, agent runtimes)
+Every page is written for that reader doing one job. A page that restates another page,
+documents internals a user never touches, or pads a thin point is merged or removed.
 
-**Primary audience:** engineers evaluating or actively using Orbit. They arrive via search, know roughly what they want, and leave as soon as they have it. The site optimizes for that path.
+Non-goals: lead generation, a blog, release announcements (the changelog is the record),
+live demos, analytics, versioned docs, localization, comments, gated content, and
+contributor internals (crate layout, CI policy), which live in the repository.
 
-**Non-goals:**
-- Lead generation, conversion funnels, email capture
-- Blog, changelog-as-narrative, release announcements (those live in `CHANGELOG.md` and git)
-- Interactive playgrounds or live demos (revisit if Orbit grows a hosted offering)
+## 2. Information architecture
 
----
+The sidebar follows the reader from setup to lookup. Labels are short and name the job.
 
-## 2. Design Principles
+| Group | Pages | Job |
+|---|---|---|
+| **Get started** | Quickstart, Install, Connect your agent, Ship a first task, Delivery workflows | From nothing to a shipped task. |
+| **Concepts** | Overview, Tasks, Agents and crews, Activities and jobs, Routines and auto-tasks | The model to hold in your head. |
+| **Guides** | Overview, then six sub-groups: Deliver, Interfaces, Improve, Multiple machines, Maintain, Extend | One job per page. |
+| **Reference** | CLI, Configuration, the YAML formats, Policies, Where state lives, Application consent, Resident mandates | Lookup. |
+| **Project** | Changelog, Contributing, Privacy | About the project. |
 
-1. **Reference-heavy, search-first.** Users land via `⌘K` or Google. Every page must be findable and self-contained.
-2. **Minimalism as a feature.** Restraint is the aesthetic. One accent color, one type family per role, no decorative motion in docs content.
-3. **Legibility over personality.** The orbit metaphor shows up structurally (logo, section glyphs) — never at the cost of reading comfort.
-4. **Static and fast.** Content is rendered at build time. Small browser scripts
-   support search, the theme toggle, and the homepage's narrow-viewport Menu;
-   they should not delay the page's readable state.
-5. **Dark-default, light-available.** First-time visitors see dark whatever their OS prefers; the theme toggle persists an explicit choice, and a stored light choice wins. Neither mode is an afterthought.
+Rules:
 
-Visual reference: the Radix Primitives docs. Density reference: the Tailwind docs.
+- The header carries the logo (home), the latest-release badge (changelog), the four
+  section links and Changelog, search, GitHub and the theme toggle. The homepage is not in
+  the sidebar.
+- Guides sub-groups other than Deliver start collapsed, so the sidebar fits one screen.
+- Section index pages (`/concepts/`, `/how-to/`, `/reference/`) exist because the header
+  links to them. They list their pages once, with one line each, and carry no other prose
+  that a child page owns.
+- A page's URL never changes when it moves between groups. A removed or merged page gets a
+  line in `public/_redirects`.
+- No "coming soon" pages. `src/content/docs/metrics/` is reserved; do not author there.
 
----
+### URLs other things depend on
 
-## 3. Visual System
+These are linked from the repository `README.md`, the npm page, CLI output or pull requests.
+Keep the page and the heading text, or add a redirect (anchors cannot be redirected):
 
-### 3.1 Palette (dark, default)
+- `/getting-started/install/#install-as-an-agent-plugin`, `/getting-started/first-task/#from-the-terminal`,
+  `/getting-started/workflows/`
+- `/how-to/mcp-integration/#connect`, `/how-to/mcp-integration/#register-the-federated-mux`,
+  `/how-to/experiments/#read-the-readout`
+- `/concepts/#plan-and-govern`, `/concepts/#execute-safely-in-parallel`,
+  `/concepts/#run-unattended`, `/concepts/#observe-and-extend`
+- `/reference/config/#workspace-presets`, `/reference/scoping/#where-state-lives`
+- `/changelog/`, and `/tasks/<id>`, which `_redirects` lands on `/tasks/`
 
-| Role              | Value       | Notes                                      |
-|-------------------|-------------|--------------------------------------------|
-| Background        | `#0A0A0A`   | Reading surface; avoids pure-black eye strain |
-| Surface           | `#17171A`   | Cards, code blocks, sidebar hover          |
-| Border            | `#26262B`   | Structural only; never decorative          |
-| Body text         | `#EDEDF0`   | High contrast on the reading surface       |
-| Muted text        | `#9B9BA3`   | Metadata, captions, inactive nav           |
-| Accent            | `#6E9FFF`   | Links, active nav, focus                   |
-| Accent (hover)    | `#8AB3FF`   | One step brighter                          |
+## 3. Visual system
 
-Light mode keeps the same roles on a `#FFFFFF` background with `#17171A` body
-text and a darker `#2F67D8` accent for AA contrast. `:root` in `custom.css`
-carries the dark tokens, so a page renders dark even without JavaScript;
-`:root[data-theme='light']` overrides them. The inline script in
-`ThemeProvider.astro` sets `data-theme` before first paint: light only when the
-visitor's stored choice (`orbit-theme-choice`) is `light`, dark otherwise,
-regardless of `prefers-color-scheme`. A plain page load does not save a theme
-preference; the toggle saves an explicit light or dark choice.
+Dark is the default theme and light is available; neither is an afterthought. One accent
+colour, one type family per role, no decoration. All values are tokens in
+`src/styles/tokens.css`; no other stylesheet declares a colour, a type size or a spacing
+step of its own.
 
-### 3.2 Typography
+### 3.1 Palette
 
-| Role              | Family                         | Size / Line-height      |
-|-------------------|--------------------------------|--------------------------|
-| Body              | Geist (self-hosted)            | 16px / 1.65              |
-| Headings          | Same sans, tighter tracking    | h1 2rem · h2 1.5rem · h3 1.25rem |
-| Code (inline/block) | Geist Mono (self-hosted)     | 14px / 1.6               |
-| UI (nav, search)  | Same sans as body              | 14px                     |
+| Role | Dark | Light | Notes |
+|---|---|---|---|
+| Background | `#0A0A0A` | `#FFFFFF` | Reading surface. |
+| Surface | `#17171A` | `#F4F5F8` | Code, tables, command surfaces, row hover. |
+| Line | `#26262B` | `#D8DBE2` | Structural hairlines only. |
+| Text | `#EDEDF0` | `#17171A` | Headings and emphasised text. |
+| Text, secondary | `#C7C7CC` | `#30313A` | Prose. |
+| Text, muted | `#9B9BA3` | `#5F606B` | Metadata, captions, eyebrows. |
+| Accent | `#6E9FFF` | `#2F67D8` | Links, the active page, focus, the primary button. |
 
-No display font. No serif anywhere. Both families ship as npm packages
-(`@fontsource-variable/geist`, `@fontsource-variable/geist-mono`) listed in
-`customCss`, so the site loads no fonts from other domains.
+A colour means one thing: the accent marks what you can follow or what is current, and
+amber appears only on the changelog's breaking-changes panel.
 
-### 3.3 Orbit motif (sparing use)
+`:root` carries the dark tokens, so a page renders dark without JavaScript;
+`:root[data-theme='light']` overrides them. The inline script in `ThemeProvider.astro`
+sets `data-theme` before first paint: light only when the visitor's stored choice
+(`orbit-theme-choice`) is `light`, dark otherwise, whatever the OS prefers. A plain page
+load saves nothing; the toggle saves an explicit choice.
 
-- **Logo:** a single thin ring with an offset dot. Must be legible at 16px favicon size.
-- **Section dividers** in long pages: 1px rule with a small ring glyph centered.
-- **Landing page:** the hero carries one demo video, a tour of the real dashboard (see 3.5), not an orbit diagram. It is the only motion on the site and stops for readers who ask for reduced motion.
-- No starfields, parallax, planet illustrations, or animation anywhere inside docs content.
+### 3.2 Type
+
+Geist for text and Geist Mono for code, both self-hosted from `@fontsource-variable`, so the
+site loads no fonts from other domains. One scale:
+
+| Token | Size | Used for |
+|---|---|---|
+| `--orbit-text-xs` | 12px | Eyebrows (sidebar group labels, "On this page"), badges, state pills. |
+| `--orbit-text-sm` | 13px | Captions and metadata. |
+| `--orbit-text-ui` | 14px | Navigation, code, tables, secondary copy. |
+| `--orbit-text-body` | 16px | Prose (line-height 1.65). |
+| `--orbit-text-lede` | 18px | `h3` and the homepage lede. |
+| `--orbit-text-h2` | 22px | `h2`. |
+| `--orbit-text-h1` | 32px | Page titles. |
+| `--orbit-text-display` | 44px | The homepage headline, and nothing else. |
+
+Elements of the same kind share a size and weight wherever they appear.
+
+### 3.3 Space and shape
+
+One spacing scale, `--orbit-space-1` to `-8` (4, 8, 12, 16, 24, 32, 48, 72px). Sibling
+elements share padding and gaps. Radius is 8px for surfaces and 4px for inline code.
+Nothing has a shadow. A surface does not sit inside another surface.
 
 ### 3.4 Layout
 
-Three-column, fixed:
+Documentation pages use Starlight's three columns: sidebar, a content column of about
+46rem, and an "On this page" rail.
 
-```
-┌──────────────────────────────────────────────────────┐
-│  Logo           Search (⌘K)                      ☾   │
-├──────────┬───────────────────────────┬───────────────┤
-│  Nav     │  Content (max ~720px)     │  On this page │
-│  (left)  │                           │  (right)      │
-│          │                           │               │
-└──────────┴───────────────────────────┴───────────────┘
-```
+- The sidebar's group labels are small uppercase eyebrows; the links under them are what a
+  reader scans. The active page has a 2px accent bar on its left edge.
+- Each `h2` opens with a hairline and a fixed step of space above it, so a long page reads
+  as a list of sections. The first heading on a page has neither.
+- Tables keep their rows readable at 375px: the configuration and CLI tables have their own
+  wrapping rules in `prose.css` and the markup hooks in `astro.config.mjs`
+  (`documentation-tables`) and `plugins/inline-code.mjs`.
+- No page scrolls sideways at 375px or 1440px. A wide table or code block scrolls inside
+  its own box.
+- Below 50rem the homepage shows a Menu disclosure (`HomeMenu.astro`) for the section links
+  and theme; documentation pages keep Starlight's sidebar menu.
+- The footer is one line: the licence and telemetry statement, and links to GitHub,
+  Changelog, Contributing and Privacy.
 
-- Left nav: collapsible sections. Active page marked with a 2px accent bar on the left edge.
-- Content column: max-width ~720px, measure 65–75ch for prose.
-- Right rail: sticky "On this page" TOC. Muted until the corresponding section is in view.
-- Top bar: logo, latest-release badge (read from `CHANGELOG.md` at build time),
-  section links including Changelog (from 50rem), search, theme toggle. Below 50rem the
-  splash header keeps search and exposes section links plus theme through a Menu
-  disclosure; documentation pages keep Starlight's sidebar Menu.
+### 3.5 Components
 
-### 3.5 Landing page
+Each exists once, in `src/styles/components.css` or `home.css`, and looks the same wherever
+it is used.
 
-The homepage replaces Starlight's auto-rendered title with an in-content hero;
-a CSS rule scoped to the homepage hides the title. Other pages keep Starlight's
-default chrome (auto title, sidebar, TOC).
+| Component | Class | Where |
+|---|---|---|
+| Index list: a title and one line, the row a link | `.orbit-index` | Section indexes, the homepage, `/tasks/`. |
+| Layer stack | `.orbit-stack` | Concepts overview. |
+| Step chain | `.orbit-pipeline` | Routines and auto-tasks. |
+| Command with a copy button | `.orbit-command`, `.orbit-commands` | Homepage. |
+| Release disclosure and breaking-changes panel | `.orbit-release` | Changelog. |
 
-- **Hero:** a release chip linking to the changelog, the headline, a lede that
-  says what Orbit is, the CTAs, a requirements note and the shipped CLI
-  executors as a plain list. A legacy executor is footnoted, never implied
-  current.
-- **Hero video:** the site's only motion, a muted, looping tour of the real
-  dashboard. It stays on its poster frame under
-  `prefers-reduced-motion: reduce`, its caption dates the capture so its counts
-  read as a snapshot, and its `aria-label` narrates it. The source lives in
-  `marketing/media/video/orbit-dashboard-tour-v3`; the site serves a web re-encode
-  from `public/media/`. Public cuts omit production task, friction and run
-  identifiers, including those in source screenshots, address bars and
-  diagnostic prose. Sanitize before camera pans and encoding; inspect decoded
-  frames across every chapter and transition before publishing.
-- **Below the hero:** short sections that take a reader from what Orbit
-  promises, to how it works and runs unattended, to where to go next. Each
-  opens on a two-column head: a mono eyebrow and one-sentence heading, then a
-  short lede. The page ends on a Quickstart whose copy buttons copy exactly
-  the command shown. The footer, not the page, carries the full docs index.
+Cards are not a component. A list of links is an index list; a list of facts is a table or
+a plain list.
+
+### 3.6 Homepage
+
+The homepage answers, in order: what is this, how does it work, what can I rely on, where
+does a run stop, how do I start. It runs on the splash template, 72rem wide, and replaces
+Starlight's title with its own `h1`.
+
+1. **Hero.** A headline that says what Orbit is, a lede that walks one change from request
+   to pull request, the install command with a copy button, two buttons (Quickstart,
+   Connect your agent), the platform line and the agent CLIs Orbit drives. Beside it, the
+   dashboard tour.
+2. **How it works.** An example conversation beside the four steps it maps to, each tagged
+   with the task status it leaves.
+3. **What you can rely on.** Four statements on one grid.
+4. **Choose where a run stops.** A table: the command, where it stops, what `--complete`
+   adds.
+5. **Ship your first task.** The four commands, each with a copy button.
+6. **Go further.** An index list of the next pages.
 
 Rules for the page:
 
-- Commands shown match current CLI behaviour, and illustrative output says it
-  is illustrative.
-- Advertise no unlanded feature and publish no live metric; captured numbers
-  carry their capture date.
-- Scripts stay small and serve only the page's documented interactions: the
-  shared theme script, the Menu's Escape and breakpoint close, the copy
-  buttons, and pausing the hero video under reduced motion. Nothing delays the
-  readable state.
+- No tagline, no feature the CLI does not ship, no live metric. Commands match the CLI;
+  an example says it is an example.
+- The video is the site's only motion: muted, looping, paused on its poster under
+  `prefers-reduced-motion: reduce`, with an `aria-label` that narrates it and a caption
+  that dates the capture. Its source lives in `marketing/media/video/orbit-dashboard-tour-v4`;
+  the site serves a web re-encode from `public/media/`. Public cuts omit production task,
+  friction and run identifiers. Sanitize before encoding and inspect decoded frames before
+  publishing.
+- Only shipped, current agent CLIs are named. A legacy executor is not listed.
+- Scripts are limited to the theme script, the Menu's Escape and breakpoint close, the copy
+  buttons, and pausing the video under reduced motion.
 
----
+## 4. Writing
 
-## 4. Information Architecture
+1. **Lead with what the reader can do.** A page opens with one or two sentences that say
+   what it lets you do. No "this page describes", no history.
+2. **Shortest path first.** The command or the click, then what to expect. Edge cases and
+   recovery come after, under headings that name the situation.
+3. **Plain words, short sentences**, second person, present tense. A table or list beats a
+   paragraph that enumerates. An example beats a description of one.
+4. **Every paragraph changes what the reader does or decides.** Cut implementation
+   internals, exhaustive refusal catalogues, compatibility archaeology, and anything
+   another page owns: link to the owner instead.
+5. **Accurate or absent.** Every command, flag and key shown matches the CLI that ships;
+   check against `orbit <command> --help` from a current build. Removing a claim is fine; a
+   wrong one is not.
+6. No taglines, filler or marketing adjectives. No internal task or friction identifiers
+   (the changelog, which renders `CHANGELOG.md` as is, is the one exception), no
+   source-tree paths, no links to repository design docs.
 
-Top-level sections (left nav, in order), following the reader from setup to
-lookup:
+Mechanics:
 
-1. **Get started** — what Orbit is, quickstart, install, connect your agent
-   (MCP), first task, delivery workflows
-2. **Concepts** — tasks, agents and crews, activities and jobs, routines and
-   auto-tasks, policies
-3. **Guides** — task-oriented recipes for everyday use, including backup and
-   restore and multi-machine drains
-4. **Reference** — CLI, configuration, YAML schemas, policy format, scoping
-5. **Project** — changelog, contributing (collapsed), privacy
+- Frontmatter needs `title` and `description`; the description is one plain sentence.
+- Content headings start at `h2`. A heading's text is its anchor, so renaming a heading
+  breaks links to it: check §2's list and search the site before you rename.
+- Links are site-relative with a trailing slash (`/how-to/dashboard/#tasks`).
+- Code fences always name a language. Asides (`:::note`, `:::tip`, `:::caution`) are for
+  something the reader would be hurt by missing: at most one or two a page.
+- Pages are Markdown, written by hand. Two routes under `src/pages/` are the exceptions:
+  `/changelog/` renders the repository's `CHANGELOG.md`, and `/tasks/` is the landing for
+  the task links Orbit mints into pull requests.
 
-Sidebar labels match page titles (section indexes read "Overview"). Moving a page between groups never moves
-its URL.
+## 5. Stack
 
-Each section has an index page that lists its children with one-line descriptions. No "coming soon" placeholders — sections appear only when populated.
-
----
-
-## 5. Tech Stack
-
-- **Framework:** [Astro Starlight](https://starlight.astro.build)
-- **Search:** Pagefind (built into Starlight, static, offline, no third-party account)
-- **Content:** Markdown (`.md`) in `src/content/docs/`
-- **Styling:** Starlight's CSS custom properties, overridden in a single `custom.css`
-- **Hosting:** The public edge and DNS are on Cloudflare. Daniel manually
-  publishes the static output; the `orbit-cli.com` DNS remains externally
-  managed, and this repository neither provisions hosting nor edits DNS.
-  Cloudflare Pages applies the repository-owned `public/_headers` policy to
-  HTTPS responses; the externally managed Cloudflare zone owns HTTP-to-HTTPS
-  redirection.
-- **Repo layout:** `website/`, independent of the Rust workspace
-
----
-
-## 6. Content Conventions
-
-- **Page frontmatter:** `title`, `description` required; `sidebar.order` optional.
-- **Headings:** start at `h2` within content (Starlight renders `h1` from frontmatter).
-- **Code blocks:** always language-tagged. Long examples collapsible.
-- **Cross-links:** relative paths only; no hardcoded domains.
-- **Internal references:** do not publish repository-internal artifact identifiers in docs pages. The one exception is the changelog page: it renders `CHANGELOG.md` as-is, and its bracketed task IDs stay because they are the pointer from a release note to the pull request that delivered it.
-- **Voice:** terse, declarative, second-person ("you run", not "the user runs"). No marketing adjectives.
-
----
-
-## 7. Out of Scope
-
-- Interactive code playgrounds
-- Authenticated / gated content
-- Localization (revisit if Orbit gains non-English contributors at scale)
-- Comments, discussions, or embedded social
-- A blog
-- Analytics, unless there is a decision to measure something specific
-- Versioned docs, until release-specific documentation is needed
-- Crate boundaries and dependency direction: contributor material that lives in the repository's `ARCHITECTURE.md`
+- **Framework:** Astro with Starlight. Content is rendered at build time.
+- **Search:** Pagefind, built into Starlight: static, no third-party account.
+- **Styles:** `src/styles/tokens.css` (tokens), `prose.css` (page chrome and prose),
+  `components.css` (shared components) and `home.css` (the homepage), loaded in that order
+  through `customCss` in `astro.config.mjs`.
+- **Components:** overrides of Starlight's `Header`, `SiteTitle`, `ThemeProvider`,
+  `ThemeSelect`, `Footer` and `PageTitle` in `src/components/`.
+- **Hosting:** Cloudflare serves the static output; Daniel publishes it by hand. DNS is
+  managed outside this repository. Cloudflare Pages applies `public/_headers` and
+  `public/_redirects`.

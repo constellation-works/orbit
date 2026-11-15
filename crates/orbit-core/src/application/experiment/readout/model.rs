@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::application::experiment::readout::stats::Interval;
 
 /// The readout shape's version; bump it on any breaking change.
-pub const EXPERIMENT_READOUT_SCHEMA_VERSION: u32 = 1;
+pub(crate) const EXPERIMENT_READOUT_SCHEMA_VERSION: u32 = 1;
 /// Below this sample-ratio p-value the assignment is suspect.
 pub(super) const SAMPLE_RATIO_ALPHA: f64 = 0.001;
 
@@ -21,6 +21,10 @@ pub struct ExperimentReadout {
     pub sample_ratio: SampleRatio,
     pub lagging: Lagging,
     pub metrics: Vec<ReadoutMetric>,
+    /// The primary metric over delivered runs only, beside the
+    /// intention-to-treat `metrics`; present when a treatment arm's
+    /// delivery is checked.
+    pub per_protocol: Option<PerProtocolReadout>,
     pub guardrails: Vec<GuardrailReadout>,
     pub verdict: Verdict,
     pub warnings: Vec<ReadoutWarning>,
@@ -35,7 +39,15 @@ pub struct ExperimentReadout {
 pub struct PrimaryObservation {
     pub arm: String,
     pub assigned_at: DateTime<Utc>,
+    /// The per-task value for a mean or rate primary. For a per-line
+    /// (ratio) primary this is the task's numerator (`cost_usd` or
+    /// `lead_time`), not a per-task ratio: an arm's value is the sum of
+    /// numerators over the sum of `lines`, never a mean of ratios.
     pub value: f64,
+    /// The task's measured reviewable lines for a per-line primary;
+    /// `None` for a mean or rate primary. Zero-line and
+    /// unavailable-denominator tasks have no observation at all.
+    pub lines: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -49,6 +61,9 @@ pub struct ReadoutExperiment {
     pub guardrails: BTreeMap<String, String>,
     pub min_sample: Option<u32>,
     pub max_days: Option<u32>,
+    /// The fixed 0.9 minimum delivered rate: below it in any
+    /// treatment arm the verdict is withheld.
+    pub min_delivered_rate: f64,
     pub started_at: Option<String>,
     /// `started_at` plus `max_days`.
     pub horizon_at: Option<String>,
@@ -66,6 +81,9 @@ pub struct ReadoutEnrollment {
     /// Tasks excluded at admission because an explicit crew would have
     /// overridden this experiment's crew arms.
     pub explicit_crew_excluded: usize,
+    /// Assigned tasks worked in an interactive session rather than by a
+    /// job, so no arm treated them; left out of every estimate.
+    pub interactive_excluded: usize,
     /// Assigned tasks whose record could not be read.
     pub unreadable: usize,
 }
@@ -79,6 +97,15 @@ pub struct ReadoutArm {
     pub weight: u32,
     pub retired_segment: Option<u32>,
     pub n: usize,
+    /// Analysed tasks that recorded at least one explorer-delegation call
+    /// during an implement invocation at or after assignment. A task counts
+    /// once, however many such calls it recorded.
+    pub tasks_with_explorer_call: usize,
+    /// Analysed tasks with no recorded explorer call whose implement
+    /// invocation at or after assignment lost early tool calls to the bounded
+    /// output capture: their uptake is unknown, so `tasks_with_explorer_call`
+    /// is a lower bound by this many tasks at most.
+    pub tasks_explorer_unobserved: usize,
     pub segments: Vec<SegmentCount>,
     /// Tasks per implementing crew, most first.
     pub crew_mix: Vec<CrewCount>,
@@ -88,6 +115,114 @@ pub struct ReadoutArm {
     pub run_digests: Vec<String>,
     /// More than one digest within the arm: its treatment changed.
     pub drifted: bool,
+    /// Whether the arm's treatment reached its tasks; `None` for the control
+    /// and for an arm whose overlay changes no dispatch (crew or config
+    /// only).
+    pub delivery: Option<ArmDelivery>,
+    /// A memory arm's tasks by the week of the crew memory revision their
+    /// first dispatch received. A memory arm's notes change weekly by
+    /// design, so a revision change is a stratum here, never drift; only a
+    /// renderer change (part of every run digest) drifts the arm.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub memory_strata: Vec<MemoryRevisionStratum>,
+    /// A memory arm's crew memory dreaming cost (design §6.4), already
+    /// added to its tasks' `cost_usd`; absent for every other arm.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dreaming_overhead: Option<DreamingOverhead>,
+    /// Analysed task ids enrolled in this arm, in assignment order by id.
+    pub task_ids: Vec<String>,
+    /// Shadow-mode memory captures per task: what the owner captured for
+    /// the task, not what any dispatch delivered. Empty in live mode,
+    /// where `memory_strata` reports deliveries instead.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub memory_captures: Vec<MemoryTaskCapture>,
+    /// A shadow memory arm's captured tasks by revision week, with the
+    /// distinct captured digests in each week. Captured, not delivered.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub memory_capture_strata: Vec<MemoryRevisionStratum>,
+}
+
+/// One memory-arm task's captured crew memory in a shadow experiment:
+/// the delivery the owner resolved and recorded in the run's
+/// `experiment_capture` (or the admission receipt), labelled captured
+/// because a shadow assignment applies no overlay and delivers nothing.
+#[derive(Debug, Clone, Serialize)]
+pub struct MemoryTaskCapture {
+    pub task_id: String,
+    /// The captured delivery's content digest.
+    pub digest: String,
+    /// The memory key (model) the capture was rendered for.
+    pub model: String,
+    /// Model revision the block was rendered from; `None` when that
+    /// space had no revision yet.
+    pub model_revision: Option<u32>,
+    /// Global revision the block was rendered from; `None` when no
+    /// global revision was included.
+    pub global_revision: Option<u32>,
+    /// Crew memory renderer version covered by the digest.
+    pub renderer_version: u32,
+    /// ISO week of the captured revision, or `None` for an empty block.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub week: Option<String>,
+}
+
+/// The crew memory dreaming cost a memory arm carries: every dreaming task
+/// created while the experiment ran, spread evenly over the memory arms'
+/// tasks with a measured `cost_usd`, so the arm's mean includes memory's
+/// overhead instead of hiding it in the control.
+#[derive(Debug, Clone, Serialize)]
+pub struct DreamingOverhead {
+    /// Dreaming tasks counted.
+    pub dreaming_tasks: usize,
+    /// Of those, tasks with an unpriced invocation; their cost is not
+    /// counted, so `cost_usd` is a lower bound while this is nonzero.
+    pub unpriced_tasks: usize,
+    /// The total dreaming cost counted.
+    pub cost_usd: f64,
+    /// This arm's tasks the cost was spread over.
+    pub spread_over: usize,
+    /// What each of those tasks' `cost_usd` was raised by; `None` while no
+    /// memory-arm task has a measured cost.
+    pub per_task_usd: Option<f64>,
+}
+
+/// The memory-arm tasks whose first delivered crew memory revision was
+/// written in one ISO week.
+#[derive(Debug, Clone, Serialize)]
+pub struct MemoryRevisionStratum {
+    /// ISO week of the delivered revision (`2026-W45`), or `empty` for tasks
+    /// that received an empty block because their model had no revision.
+    pub week: String,
+    pub tasks: usize,
+    /// Distinct memory content digests the stratum's tasks received.
+    pub digests: Vec<String>,
+}
+
+/// How many of an arm's analysed tasks received its treatment: every
+/// activity role the overlay targets had a dispatch that received the
+/// overlay, in a step that then finished successfully.
+#[derive(Debug, Clone, Serialize)]
+pub struct ArmDelivery {
+    /// The activity roles the arm's overlay targets.
+    pub roles: Vec<String>,
+    /// Analysed tasks assigned to the arm.
+    pub assigned: usize,
+    pub delivered: usize,
+    /// Tasks still in flight whose treatment has not been delivered yet;
+    /// left out of `rate`.
+    pub pending: usize,
+    /// `delivered / (assigned - pending)`; `None` while no task is settled.
+    pub rate: Option<f64>,
+}
+
+/// The primary metric over delivered runs only (per-protocol): each
+/// checked treatment arm keeps only its delivered tasks, other arms all
+/// theirs.
+#[derive(Debug, Clone, Serialize)]
+pub struct PerProtocolReadout {
+    /// `per-protocol (delivered runs only)`.
+    pub label: &'static str,
+    pub metric: ReadoutMetric,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -133,12 +268,15 @@ pub struct Lagging {
 #[derive(Debug, Clone, Serialize)]
 pub struct ReadoutMetric {
     pub metric: String,
-    /// `mean` of per-task values, or `rate` of per-task 0/1 outcomes.
+    /// Step-local metrics are exploratory and cannot determine a verdict.
+    pub exploratory: bool,
+    /// `mean` of per-task values, `rate` of per-task 0/1 outcomes, or
+    /// `ratio` of summed numerators over summed reviewable lines.
     pub kind: &'static str,
     /// `lower` or `higher` is better.
     pub better: &'static str,
     pub unit: &'static str,
-    /// `false` while the metric's source series does not exist.
+    /// Always `true`; kept so the dashboard's readout contract holds.
     pub measured: bool,
     pub arms: Vec<ArmEstimate>,
     pub differences: Vec<Difference>,
@@ -156,6 +294,14 @@ pub struct ArmEstimate {
     /// Settled-task cost provenance, present only for `cost_usd`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost_coverage: Option<CostCoverage>,
+    /// Done tasks whose reviewable-line total is zero. Present only for a
+    /// per-line metric, including when the count is zero.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zero_lines_excluded: Option<usize>,
+    /// Done tasks whose reviewable lines were not recorded. Present only for
+    /// a per-line metric, and counted apart from [`Self::zero_lines_excluded`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable_lines_excluded: Option<usize>,
     pub segments: Vec<SegmentEstimate>,
 }
 
@@ -177,7 +323,8 @@ pub struct SegmentEstimate {
 }
 
 /// n, mean and median with 95% intervals: bootstrap for a mean metric,
-/// Wilson for a rate (whose `mean` is the rate).
+/// Wilson for a rate (whose `mean` is the rate), or a ratio of sums whose
+/// `mean` is that ratio and whose interval resamples tasks in pairs.
 #[derive(Debug, Clone, Serialize)]
 pub struct Estimate {
     pub n: usize,
@@ -251,8 +398,119 @@ pub struct Verdict {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ReadoutWarning {
-    /// `sample_ratio`, `drift`, `lagging`, `primary_unmeasured`,
-    /// `first_edit_incomplete`, `crew_mismatch` or `crew_mismatch_unavailable`.
+    /// `sample_ratio`, `drift`, `undelivered`, `lagging`,
+    /// `primary_all_unmeasured`, `first_edit_incomplete`,
+    /// `tool_trace_incomplete`, `explorer_trace_incomplete`, `crew_mismatch` or
+    /// `crew_mismatch_unavailable`.
     pub kind: &'static str,
     pub message: String,
+}
+
+use orbit_types::workflow::TagInstructionRole;
+
+/// One task's value for one metric.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum Outcome {
+    Value(f64),
+    /// Not settled yet: the task is in flight, or its regression window is
+    /// still open.
+    Open,
+    /// Settled, but the records hold no value (no covered invocation, no
+    /// review, nothing landed).
+    Unmeasured,
+}
+
+/// Reviewable added plus deleted lines for one enrolled task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ReviewableDenominator {
+    /// The task is not done, so a denominator is not due.
+    NotDone,
+    /// Done, and no landed-diff row in the read window.
+    Missing,
+    /// Done, with a measured total. Zero is a real zero, not a missing row.
+    Measured(u64),
+    /// Done, but the row has no recoverable denominator.
+    Unavailable,
+}
+
+/// One enrolled, unforced task with its outcomes.
+#[derive(Clone)]
+pub(super) struct TaskOutcome {
+    pub(super) task_id: String,
+    pub(super) arm: String,
+    pub(super) segment: u32,
+    pub(super) complexity: String,
+    /// The crew pool recorded at admission for the task's latest
+    /// delivery, when that evidence exists [ORB-19487]. `None` means the
+    /// historical pool is unavailable, not that the crew mismatched.
+    pub(super) admitted_pool: Option<BTreeSet<String>>,
+    /// What `admitted_pool` is, for a mismatch message.
+    pub(super) admitted_pool_label: Option<String>,
+    /// `task.crew`, the crew of the task's latest delivery [ORB-19416].
+    pub(super) crew: String,
+    pub(super) terminal: bool,
+    /// The task carries at least one review gate settlement comment.
+    pub(super) has_review_settlement: bool,
+    /// Latest admission applied this arm; absent for legacy evidence.
+    pub(super) admitted_treatment: Option<bool>,
+    /// An implement invocation at or after assignment recorded an
+    /// explorer-delegation tool call.
+    pub(super) explorer_call: bool,
+    /// No explorer call was recorded, but an implement invocation at or after
+    /// assignment lost its early tool calls to the bounded output capture, so
+    /// the absence is unproven [ORB-20572].
+    pub(super) explorer_unobserved: bool,
+    /// The task's first implement invocation holds only the suffix of its tool
+    /// calls, so its first-edit score is withheld rather than measured.
+    pub(super) first_edit_trace_incomplete: bool,
+    pub(super) assigned_at: DateTime<Utc>,
+    pub(super) assignment_digest: Option<String>,
+    /// Activity roles in which a dispatch received this task's arm overlay
+    /// and the dispatching step then finished successfully, read from the
+    /// run audit trail (`experiment_overlay_applied` joined to the same
+    /// run's `step_finished`).
+    pub(super) delivered_roles: BTreeSet<TagInstructionRole>,
+    /// The crew memory the task's first memory-bearing dispatch received.
+    pub(super) memory: Option<TaskMemoryDelivery>,
+    /// The crew memory captured for this task (shadow arms), from its
+    /// run's `experiment_capture` or admission receipt; never a delivery.
+    pub(super) captured_memory: Option<TaskMemoryDelivery>,
+    /// Present only for settled tasks with complete invocation cost coverage.
+    pub(super) cost_source: Option<CostSource>,
+    /// Reviewable lines recorded for this task. Per-line metrics read this
+    /// instead of a per-task ratio in `values`.
+    pub(super) reviewable: ReviewableDenominator,
+    pub(super) values: BTreeMap<&'static str, Outcome>,
+}
+
+/// The crew memory one task received (delivered) or had captured for it.
+#[derive(Clone)]
+pub(super) struct TaskMemoryDelivery {
+    /// ISO week of the revision, or `None` for an empty block.
+    pub(super) week: Option<String>,
+    pub(super) digest: String,
+    pub(super) model: String,
+    pub(super) model_revision: Option<u32>,
+    pub(super) global_revision: Option<u32>,
+    pub(super) renderer_version: u32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum CostSource {
+    Reported,
+    Estimated,
+}
+
+/// What the records say about the enrolled tasks.
+pub(super) struct Observed {
+    pub(super) tasks: Vec<TaskOutcome>,
+    /// The shared scan could not confirm tasks' earliest implement invocations.
+    pub(super) first_edit_incomplete: bool,
+    /// Each arm's overlay digests as its runs received them.
+    pub(super) run_digests: BTreeMap<String, BTreeSet<String>>,
+    /// Landed tasks whose regression window is still open.
+    pub(super) open_regression_windows: usize,
+    /// Assigned tasks worked in an interactive session rather than by a
+    /// job: not treated by any arm, so left out of every estimate.
+    pub(super) interactive_excluded: usize,
 }

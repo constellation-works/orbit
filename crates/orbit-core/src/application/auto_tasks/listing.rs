@@ -14,8 +14,8 @@ use super::scheduler::ListedAutoTask;
 use super::state::{AutoTaskCursor, cursor_state_path, load_cursor_state};
 use crate::OrbitRuntime;
 use crate::application::automation::delivery_ownership_refusal;
+use crate::application::contracts::ScheduleDisplayState;
 use crate::application::plugin::is_listed;
-use crate::application::routines::ScheduleDisplayState;
 
 /// Why a listed definition never fires on this host. The file stays exactly
 /// where it is either way.

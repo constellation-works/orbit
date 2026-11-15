@@ -13,11 +13,33 @@ below applies to reviewing a delivered diff, not to these auto-tasks.
 
 `orbit.task.show` for `description`, `acceptance_criteria`, `plan`, and `execution_summary`. Inspect the diff and the changed files. Run the target repo's build and its relevant test commands, taken from that repo's own instructions and configuration. Search relevant title or description terms with `orbit.search` when prior task context is needed.
 
+For each changed attention source, trace every task hydration and history call
+through to its possible recovery effects. An observational metadata read does
+not make a later history read observational. Check deterministic public-boundary
+evidence that actually selects the source with its prerequisites: for CI, an
+origin, authentication, a current-head failure and repair-task history. With a
+pending journal, check fresh and cached paths where caching exists, unchanged
+journal, task and claim state, and explicit degradation when an association
+cannot be read without recovery. Also check that ordinary reads outside
+attention still recover. The existing attention provider and observation
+fixtures illustrate these checks; do not fault live state or relax read-only
+behavior to exercise them.
+
+## Marker-to-type migrations
+
+Replacing message-marker detection with a typed failure changes the contract for every consumer that still reads the error as text. A producer can be correct while a consumer flattens the type on the way to the terminal classifier. Direct-path tests can stay green through those transitions, so passing tests on the direct path are not evidence that the type survives.
+
+Authors and reviewers of such a migration:
+
+- Inventory every error-to-string adapter between the producer and the terminal classifier: `format!`, `to_string`, message or `Display` conversion, and `map_err` into a text-carrying variant. Include post-retry and recovery paths and each step of a compound flow that re-emits another step's error.
+- For each adapter, confirm the typed value survives it, so the classifier still matches the variant rather than text. Check for a test that drives that transition, not only the direct producer call.
+- Remove the marker only after every adapter passes. If one flattens the type, repair it first, or keep the marker and record the gap.
+
 ## Two stages, in order
 
 **Stage 1 — spec compliance.** Does the change satisfy every acceptance criterion? Is anything missing, or added beyond scope? Are there interpretation gaps? If stage 1 fails, report those findings and stop; stage 2 is wasted effort on a change that has to come back anyway.
 
-For a diff that changes something a user sees (dashboard, web pages, docs site, desktop app UI), stage 1 includes the visual evidence required by the workspace guide. List the task's artifacts with `orbit.task.show` (`field: "artifacts"`), fetch the screenshots with `orbit.task.artifact.get` and look at them against the criteria: each changed view, in every theme it supports, and at 375px when the layout is responsive ([task-execution.md](task-execution.md#screenshots-of-a-ui-change)). When screenshots are attached and `pr.screenshot_section` applies, check that the PR's `## Screenshots` table shows the Before/After shots Orbit published. An empty optional section with `No screenshots attached.` is not a required-section gap and must not itself be treated as missing evidence. Missing task-artifact screenshots where the workspace guide requires them remain a spec-compliance finding, whether or not the task is tagged `ui`.
+For a diff that changes something a user sees (dashboard, web pages, docs site, desktop app UI), stage 1 includes the visual evidence required by the workspace guide. List the task's artifacts with `orbit.task.show` (`field: "artifacts"`), fetch the screenshots with `orbit.task.artifact` action `get` and look at them against the criteria: each changed view, in every theme it supports, and at 375px when the layout is responsive ([task-execution.md](task-execution.md#screenshots-of-a-ui-change)). When screenshots are attached and the task is tagged `ui`, check that the PR's `## Screenshots` table shows the Before/After shots Orbit published. An empty optional section with `No screenshots attached.` is not a required-section gap and must not itself be treated as missing evidence. Missing task-artifact screenshots where the workspace guide requires them remain a spec-compliance finding, whether or not the task is tagged `ui`.
 
 **Stage 2 — quality**, only once stage 1 passes: maintainability, patterns, performance, test-coverage gaps, risks, edge cases, security.
 

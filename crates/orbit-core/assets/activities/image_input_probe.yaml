@@ -5,11 +5,12 @@
 # and its `vision` setting before any session starts, renders a fresh canary
 # PNG with a random code into the run's scratch directory, and delivers it
 # the way the executor declares (`native_read` or `attach_args`). A result
-# that does not return the code fails as `image_not_seen`.
+# that does not return the code is reported as `image_not_seen` for this
+# crew and the probe run still completes. A delivery miss still fails its step.
 #
 # The response envelope is required because the canary code is this
 # activity's only product: no task, git or review artifact can show that a
-# model saw an image. It is the one place visual review reads agent output
+# model saw an image. It is the one place image input reads agent output
 # as truth, and it proves delivery only.
 schemaVersion: 2
 kind: Activity
@@ -55,22 +56,23 @@ spec:
     Return exactly one Orbit response envelope:
     {"schemaVersion":1,"status":"success","result":{"canary":"<the code>"},"error":null}
   tool_disallow_list:
-    - orbit.agent.invoke
-    - orbit.auto_task.add
-    - orbit.auto_task.mint
-    - orbit.auto_task.update
+    - orbit.auto_task:add
+    - orbit.auto_task:mint
+    - orbit.auto_task:update
     - orbit.command.exec
     - orbit.pipeline.invoke
     - orbit.routine.control
-    - orbit.workflow.auto
-    - orbit.workflow.run.resume
-    - orbit.workflow.ship
+    - orbit.workflow:auto
+    - orbit.run:resume
+    - orbit.run:show
+    - orbit.workflow:land
+    - orbit.workflow:ship
     - orbit.task.add
     - orbit.task.update
-    - orbit.task.artifact.put
-    - orbit.task.reconcile_review
-    - orbit.friction.add
-    - orbit.friction.update
+    - orbit.task.artifact:put
+    - orbit.task.recover:reconcile_review
+    - orbit.friction:add
+    - orbit.friction:update
     # The probe runs no program.
     - proc.spawn
   on_denial: terminate

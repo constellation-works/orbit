@@ -17,6 +17,14 @@
 //! reset a limit reported, else a backoff that grows with each consecutive
 //! hold.
 //!
+//! [ORB-20400] A hold names the crews these rules select, by registry name or
+//! the run's crew reference, and matches each by family
+//! (`ProviderFailureHold::excludes`): naming `opus` or `opus@medium` excludes
+//! `opus` and every `opus@<effort>` reference, which share its model and
+//! account. So a capacity or unavailability hold after a run as
+//! `opus@medium` excludes the whole `opus` family, but not the account's other
+//! crews.
+//!
 //! The hold is the task's latest status decision; any later status change
 //! supersedes it. While it stands, admission draws the task's crew from the
 //! crews it does not exclude — its own crew or pool, then its complexity
@@ -37,7 +45,12 @@
 //! crews are also recorded as this host's [`ProviderCrewOutage`]s, which
 //! outlive the held task's status: until that failure's backoff ends, this
 //! host's local admission draws no task onto them, whether or not the held
-//! task is still in the backlog.
+//! task is still in the backlog. An authentication failure is its provider
+//! account's, not one model's, so the outage records every crew sharing
+//! that account (the provider's default-login crews, or the one crew that
+//! sets `env` for its own credential): local admission then draws another
+//! account's crew or defers, instead of dispatching the next task onto the
+//! same expired login in turn.
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
@@ -92,7 +105,7 @@ impl RuntimeKernel {
             return Ok(None);
         }
         let history = self.get_task_history(&task.id)?;
-        Ok(latest_status_hold(&history).filter(|hold| hold.stands_at(now)))
+        Ok(standing_provider_hold_from_history(task, &history, now))
     }
 
     /// `Self::standing_provider_hold` as `machine` sees it, for admission:
@@ -109,6 +122,17 @@ impl RuntimeKernel {
                 None
             })?
             .on_machine(machine)
+    }
+
+    /// [`Self::provider_hold_on`] from history the caller already read, so
+    /// an admission pass that has the task's bundle does not read it again.
+    pub fn provider_hold_on_from_history(
+        &self,
+        task: &Task,
+        history: &[TaskHistoryEntry],
+        machine: Option<&str>,
+    ) -> Option<ProviderFailureHold> {
+        standing_provider_hold_from_history(task, history, Utc::now())?.on_machine(machine)
     }
 
     /// The hold a run that failed with `class` places on `task`.
@@ -160,7 +184,26 @@ impl RuntimeKernel {
             now,
         )?;
         if class == ProviderFailureClass::Unavailable {
-            for crew in failure.excluded_crews {
+            // The outage is the failing account's: every configured crew
+            // sharing it, plus any excluded crew the registry no longer
+            // names, so the next admission cannot dispatch onto the same
+            // expired login through a sibling crew of the same account.
+            let registry = self.context.settings().crews();
+            let mut outage_crews: Vec<String> = registry
+                .values()
+                .filter(|crew| {
+                    Some(&crew.assignment.provider) == failure.provider.as_ref()
+                        || failure.provider.as_deref().is_some_and(|provider| {
+                            same_provider(Some(&crew.assignment.provider), Some(provider))
+                        })
+                })
+                .filter(|crew| crew.account() == failure.account.as_deref())
+                .map(|crew| crew.name.clone())
+                .collect();
+            outage_crews.extend(failure.excluded_crews.iter().cloned());
+            outage_crews.sort();
+            outage_crews.dedup();
+            for crew in outage_crews {
                 let outage = ProviderCrewOutage {
                     provider: failure.provider.clone(),
                     crew,
@@ -225,14 +268,13 @@ impl RuntimeKernel {
                     .map(|crew| crew.name)
             });
         let registry = self.context.settings().crews();
-        let run_provider = run_crew
+        let run_crew_config = run_crew
             .as_deref()
-            .and_then(|crew| registry.get(crew))
+            .and_then(|crew| orbit_types::identity::find_crew(crew, registry));
+        let run_provider = run_crew_config
+            .as_ref()
             .map(|crew| crew.assignment.provider.clone());
-        let run_account = run_crew
-            .as_deref()
-            .and_then(|crew| registry.get(crew))
-            .and_then(Crew::account);
+        let run_account = run_crew_config.as_ref().and_then(Crew::account);
         let provider = error_message
             .and_then(failed_provider)
             .map(ToOwned::to_owned)
@@ -393,6 +435,19 @@ pub(crate) fn provider_failure_hold_update(
         ))),
         ..TaskAutomationUpdate::default()
     }
+}
+
+/// The hold `task`'s latest status decision still imposes at `now`, from a
+/// history the caller already read. A task that is not `backlog` has none.
+pub fn standing_provider_hold_from_history(
+    task: &Task,
+    history: &[TaskHistoryEntry],
+    now: DateTime<Utc>,
+) -> Option<ProviderFailureHold> {
+    if task.status != TaskStatus::Backlog {
+        return None;
+    }
+    latest_status_hold(history).filter(|hold| hold.stands_at(now))
 }
 
 /// The hold the task's latest status decision put it under, if it was one.

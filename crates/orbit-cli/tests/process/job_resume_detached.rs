@@ -236,6 +236,78 @@ mod unix {
         }
     }
 
+    #[test]
+    fn same_minute_workspaces_settle_on_their_own_workers() {
+        if crate::workflow_gate::wait_if_requested() {
+            std::process::exit(0);
+        }
+        if crate::isolated_test::run_in_child(
+            "job_resume_detached::unix::same_minute_workspaces_settle_on_their_own_workers",
+        ) {
+            return;
+        }
+        let first = Fixture::new();
+        let temp = tempdir().unwrap();
+        let repo = temp.path().join("second-repo");
+        fs::create_dir_all(&repo).unwrap();
+        crate::git_repo::init(&repo);
+        let second = Fixture {
+            _temp: temp,
+            gate: WorkflowGate::new(),
+            home: first.home.clone(),
+            repo,
+        };
+        second
+            .command()
+            .args(["workspace", "init", "--name", "second-workspace"])
+            .assert()
+            .success();
+        let job = json!({"schemaVersion": 2, "kind": "Job", "metadata": {"name": "second_workspace_fixture"},
+            "spec": {"state": "enabled", "kind": "workflow", "steps": [second.gate.step("nap")]}});
+        fs::write(
+            first
+                .home
+                .join(".orbit/resources/jobs/second_workspace_fixture.yaml"),
+            job.to_string(),
+        )
+        .unwrap();
+
+        // Keep the first worker alive until the other's lifecycle has settled.
+        // A bounded retry only handles crossing a real wall-clock minute.
+        for _ in 0..3 {
+            let a = first.json(&["run", "job", "resume_cli_fixture", "--json"]);
+            let a = a["run_id"].as_str().unwrap();
+            first.gate.wait_ready();
+            let a_running = first.json(&["run", "show", a, "--json"]);
+            let b = second.json(&["run", "job", "second_workspace_fixture", "--json"]);
+            let b = b["run_id"].as_str().unwrap();
+            second.gate.wait_ready();
+            let b_running = second.json(&["run", "show", b, "--json"]);
+            second.gate.fail();
+            second.poll_run(b, "failed", Duration::from_secs(30));
+            let a_after = first.json(&["run", "show", a, "--json"]);
+            first.gate.release();
+            let a_done = first.poll_run(a, "success", Duration::from_secs(30));
+            let b_done = second.json(&["run", "show", b, "--json"]);
+            assert_eq!(a_after["run"]["state"], "running");
+            assert_eq!(a_running["run"]["pid"], a_after["run"]["pid"]);
+            assert_ne!(
+                a_running["run"]["pid"].as_u64().unwrap(),
+                b_running["run"]["pid"].as_u64().unwrap()
+            );
+            assert_eq!(a_done["run"]["state"], "success");
+            assert_eq!(b_done["run"]["state"], "failed");
+            if a.rsplit_once('-').unwrap().0 == b.rsplit_once('-').unwrap().0 {
+                assert_ne!(
+                    a, b,
+                    "same-minute runs in different workspaces must have distinct host identities"
+                );
+                return;
+            }
+        }
+        panic!("could not dispatch both workspaces in one minute");
+    }
+
     /// `orbit web serve` is launched by this same CLI main. Both CLI workflow
     /// entry points must mark the binary before the shared worker spawn path.
     fn ship_and_auto_cli_commands_launch_workers() {
@@ -358,39 +430,53 @@ mod unix {
     }
 
     /// [ORB-13987] `orbit run auto` still starts a drain whose required
-    /// validation cannot use the login shell, and says so at submission.
+    /// validation cannot use the login shell, and says so at submission. The
+    /// fixture home's shell profiles fail, so the probe cannot resolve.
     fn auto_warns_when_required_validation_cannot_use_the_login_shell() {
         let fixture = Fixture::new();
+        for profile in [".bash_profile", ".profile", ".zprofile"] {
+            fs::write(fixture.home.join(profile), "exit 42\n").expect("failing profile");
+        }
+        fs::create_dir_all(fixture.home.join(".config/fish")).expect("fish config dir");
+        fs::write(fixture.home.join(".config/fish/config.fish"), "exit 42\n")
+            .expect("failing fish config");
         fixture.write_pipeline_job("workspace_auto_pipeline");
         let installed = fixture.home.join(".orbit/bin/orbit");
         fs::create_dir_all(installed.parent().expect("installation directory"))
             .expect("create installation directory");
         fs::copy(env!("CARGO_BIN_EXE_orbit"), &installed).expect("install tested binary");
-        for (key, value) in [
-            (
+        fixture
+            .command()
+            .args([
+                "config",
+                "set",
+                "--seed-from-global",
                 "workflow.required_validation_commands",
                 r#"["make ci-fast"]"#,
-            ),
-            ("workflow.validation_env.shell_probe", "off"),
-        ] {
-            fixture
-                .command()
-                .args(["config", "set", "--seed-from-global", key, value])
-                .assert()
-                .success();
-        }
+            ])
+            .assert()
+            .success();
 
         let submitted = fixture.installed_json(&installed, &["run", "auto", "--json"]);
 
         let warning = submitted["warning"].as_str().unwrap_or_default();
         assert!(
-            warning.contains("`workflow.validation_env.shell_probe = off`")
+            warning.contains("could not resolve the login-shell environment")
                 && warning.contains("source: launcher_fallback"),
-            "the submission names the disabled resolution and its fallback: {submitted}"
+            "the submission names the failed resolution and its fallback: {submitted}"
         );
+        // A macOS host still reports its worker-containment note [ORB-19251]; only that independent note may appear.
+        let notes = submitted["note"]
+            .as_str()
+            .unwrap_or_default()
+            .lines()
+            .collect::<Vec<_>>();
         assert!(
-            submitted["note"].is_null(),
-            "configured required validation needs no note: {submitted}"
+            notes.len() == usize::from(cfg!(target_os = "macos"))
+                && notes
+                    .iter()
+                    .all(|note| !note.contains("workflow.required_validation_commands")),
+            "configured required validation needs no note, and a macOS host adds only its worker-containment note: {submitted}"
         );
         let run_id = submitted["run_id"]
             .as_str()
@@ -648,23 +734,37 @@ spec:
     fn resume_wait_exits_nonzero_for_a_failed_detached_run() {
         let fixture = Fixture::new();
         let source = fixture.interrupted_source();
-        let path = fixture
-            .home
-            .join(".orbit/resources/jobs/resume_cli_fixture.yaml");
-        let mut job: Value =
-            serde_json::from_slice(&fs::read(&path).unwrap()).expect("fixture job");
-        job["spec"]["steps"][0]["spec"]["action"] = json!("missing_action");
-        fs::write(&path, job.to_string()).expect("change resumed job definition");
-
-        let output = fixture
-            .command()
-            .args(["job", "resume", &source, "--wait", "--json"])
-            .assert()
-            .failure()
-            .get_output()
-            .stdout
-            .clone();
-        let waited: Value = serde_json::from_slice(&output).expect("failed wait JSON");
+        // The resumed run re-enters the source run's gate step. Failing it at
+        // the gate fails the run at once; left unanswered, the step only
+        // failed when its 120-second FIXTURE_STEP_DEADLINE expired, which set
+        // this row's cost (ORB-21846).
+        let mut command = std::process::Command::new(assert_cmd::cargo::cargo_bin!("orbit"));
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        let output_file = tempfile::NamedTempFile::new().unwrap();
+        let mut child = crate::child_guard::ChildGuard::new(
+            command
+                .current_dir(&fixture.repo)
+                .env("HOME", &fixture.home)
+                .env("USERPROFILE", &fixture.home)
+                .args(["job", "resume", &source, "--wait", "--json"])
+                .stdout(output_file.as_file().try_clone().unwrap())
+                .spawn()
+                .unwrap(),
+        );
+        fixture.gate.wait_ready();
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "--wait returned before execution"
+        );
+        fixture.gate.fail();
+        assert!(
+            !child.wait().unwrap().success(),
+            "--wait must exit nonzero for a failed run"
+        );
+        let waited: Value = serde_json::from_slice(&fs::read(output_file.path()).unwrap())
+            .expect("failed wait JSON");
         assert_eq!(waited["waited"], true);
         assert_eq!(waited["state"], "failed");
         let run_id = waited["run_id"].as_str().expect("resumed run id");

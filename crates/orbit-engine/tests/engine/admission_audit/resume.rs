@@ -8,11 +8,21 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex as StdMutex;
 
-use orbit_types::workflow::{JobRunState, PipelineState};
+use chrono::{Duration, Utc};
+use orbit_types::workflow::{
+    AUTO_TASK_CHECKPOINT_VERSION, AutoTaskReceipt, AutoTaskRunCheckpoint, AutoTaskStepRecord,
+    JobRunState, PipelineState,
+};
 
 use super::job_support::*;
-use orbit_engine::{DispatchError, RuntimeHost, execute_job_with_resume};
-use orbit_types::workflow::activity_job::JobV2StepBody;
+use orbit_engine::{
+    AutoTaskAdmission, AutoTaskObservation, AutoTaskReadiness, AutoTaskStepRequest, DispatchError,
+    JobOutcome, RuntimeHost, execute_job_with_resume,
+};
+use orbit_types::workflow::activity_job::{
+    FanInSpec, FanOutBlock, JobV2, JobV2Step, JobV2StepBody, JoinMode, LoopBlock, ParallelBlock,
+    TargetRef,
+};
 use serde_json::{Value, json};
 
 /// One `checkpoint_step` call: step index, step id, output.
@@ -73,6 +83,10 @@ impl orbit_engine::test_support::NullRuntimeHost for CheckpointHost {
         step_id: &str,
         output: &Value,
         _compound_outputs: &BTreeMap<String, Value>,
+        _: &std::collections::BTreeMap<
+            String,
+            orbit_types::workflow::activity_job::ScriptOutputSet,
+        >,
     ) -> Result<(), DispatchError> {
         self.checkpoints.lock().expect("checkpoints").push((
             step_index,
@@ -185,4 +199,872 @@ fn resume_reexecuted_pr_output_reaches_promotion_and_checkpoint() {
     assert_eq!(checkpoints[0].1, "pr_open");
     assert_eq!(checkpoints[0].2["pr_number"], json!("618"));
     assert_eq!(resume.step_states.get(&1), Some(&JobRunState::Failed));
+}
+
+/// How the waiting auto-task branch answers on the next parked replay.
+#[derive(Clone, Copy)]
+enum CompoundReplayPhase {
+    /// Readiness is still false. The branch parks before admission.
+    Waiting,
+    /// Readiness holds. The branch reserves, admits, and parks on the binding.
+    Admit,
+    /// The bound task has an accepted receipt. The branch settles.
+    Receipt,
+}
+
+/// Host that parks an auto-task step and keeps succeeded parallel-branch
+/// checkpoints, so a later `execute_job_with_resume` can restore them.
+struct CompoundReplayHost {
+    inner: ScriptedHost,
+    phase: StdMutex<CompoundReplayPhase>,
+    branches: StdMutex<BTreeMap<String, BTreeMap<String, Value>>>,
+    records: StdMutex<BTreeMap<String, AutoTaskStepRecord>>,
+    observes: StdMutex<u32>,
+    inputs: StdMutex<Vec<(String, Value)>>,
+}
+
+impl CompoundReplayHost {
+    fn new(inner: ScriptedHost) -> Self {
+        Self {
+            inner,
+            phase: StdMutex::new(CompoundReplayPhase::Waiting),
+            branches: StdMutex::new(BTreeMap::new()),
+            records: StdMutex::new(BTreeMap::new()),
+            observes: StdMutex::new(0),
+            inputs: StdMutex::new(Vec::new()),
+        }
+    }
+
+    fn set_phase(&self, phase: CompoundReplayPhase) {
+        *self.phase.lock().expect("phase") = phase;
+    }
+
+    fn observe_count(&self) -> u32 {
+        *self.observes.lock().expect("observes")
+    }
+
+    fn branches(&self) -> BTreeMap<String, BTreeMap<String, Value>> {
+        self.branches.lock().expect("branches").clone()
+    }
+
+    fn inputs_for(&self, action: &str) -> Vec<Value> {
+        self.inputs
+            .lock()
+            .expect("inputs")
+            .iter()
+            .filter_map(|(recorded, input)| (recorded == action).then_some(input.clone()))
+            .collect()
+    }
+
+    fn resume_state(&self, run_id: &str) -> PipelineState {
+        let now = Utc::now();
+        let mut state =
+            PipelineState::new(run_id.to_string(), "parked-compound".to_string(), json!({}));
+        state.auto_task = Some(AutoTaskRunCheckpoint {
+            version: AUTO_TASK_CHECKPOINT_VERSION,
+            frozen_job: String::new(),
+            frozen_targets: BTreeMap::new(),
+            started_at: now,
+            source_revision: None,
+            expires_at: now + Duration::hours(24),
+            steps: self.records.lock().expect("records").clone(),
+            branches: self.branches(),
+            parked: None,
+        });
+        state
+    }
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for CompoundReplayHost {
+    fn run_deterministic(
+        &self,
+        action: &str,
+        config: &Value,
+        input: &Value,
+        tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        self.inputs
+            .lock()
+            .expect("inputs")
+            .push((action.to_string(), input.clone()));
+        RuntimeHost::run_deterministic(&self.inner, action, config, input, tool_context)
+    }
+
+    fn observe_auto_task_step(
+        &self,
+        _run_id: &str,
+        request: &AutoTaskStepRequest,
+    ) -> Result<AutoTaskObservation, DispatchError> {
+        *self.observes.lock().expect("observes") += 1;
+        let record = self
+            .records
+            .lock()
+            .expect("records")
+            .get(&request.step_id)
+            .cloned();
+        let now = Utc::now();
+        let phase = *self.phase.lock().expect("phase");
+        let (readiness, receipt) = match phase {
+            CompoundReplayPhase::Waiting => {
+                (AutoTaskReadiness::Waiting("board.empty".to_string()), None)
+            }
+            CompoundReplayPhase::Admit => (AutoTaskReadiness::Ready, None),
+            CompoundReplayPhase::Receipt => {
+                let task_id = record
+                    .as_ref()
+                    .and_then(|record| record.task_id.clone())
+                    .unwrap_or_else(|| "T-HOLD".to_string());
+                (
+                    AutoTaskReadiness::Ready,
+                    Some(AutoTaskReceipt {
+                        task_id,
+                        task_status: "done".to_string(),
+                        accepted: true,
+                        settled_at: now,
+                        observed_at: now,
+                        result: None,
+                    }),
+                )
+            }
+        };
+        Ok(AutoTaskObservation {
+            now,
+            record,
+            action_key: format!("run:{}", request.step_id),
+            input_digest: "digest".to_string(),
+            definition_hold: None,
+            receipt,
+            result_hold: None,
+            bound_status: None,
+            deadline: Some(now + Duration::hours(24)),
+            dynamic_expiry: false,
+            expired: None,
+            readiness,
+            recheck_at: now + Duration::seconds(30),
+        })
+    }
+
+    fn checkpoint_auto_task_step(
+        &self,
+        _run_id: &str,
+        step_id: &str,
+        record: &AutoTaskStepRecord,
+    ) -> Result<(), DispatchError> {
+        self.records
+            .lock()
+            .expect("records")
+            .insert(step_id.to_string(), record.clone());
+        Ok(())
+    }
+
+    fn admit_auto_task_step(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+    ) -> Result<AutoTaskAdmission, DispatchError> {
+        Ok(AutoTaskAdmission::Bound {
+            task_id: "T-HOLD".to_string(),
+            minted: true,
+        })
+    }
+
+    fn checkpoint_parallel_branch(
+        &self,
+        _run_id: &str,
+        step_id: &str,
+        branch_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError> {
+        self.branches
+            .lock()
+            .expect("branches")
+            .entry(step_id.to_string())
+            .or_default()
+            .insert(branch_id.to_string(), output.clone());
+        Ok(())
+    }
+
+    fn park_job_run(
+        &self,
+        _run_id: &str,
+        _park: &orbit_types::workflow::ParkedWait,
+    ) -> Result<(), DispatchError> {
+        Ok(())
+    }
+}
+
+fn compound_replay_job() -> JobV2 {
+    let wait = JobV2Step {
+        id: "wait".to_string(),
+        stage: None,
+        when: None,
+        retry: None,
+        recovery_activity: None,
+        resolved_recovery_activity: None,
+        wait_until: Some("board.empty".to_string()),
+        expire_when: None,
+        reuse_when: None,
+        require_result: None,
+        body: JobV2StepBody::TargetRef(TargetRef {
+            target: "auto-task:hold".to_string(),
+            default_input: None,
+            timeout_seconds: 0,
+        }),
+    };
+    let work = JobV2Step {
+        id: "work".to_string(),
+        stage: None,
+        when: None,
+        retry: None,
+        recovery_activity: None,
+        resolved_recovery_activity: None,
+        wait_until: None,
+        expire_when: None,
+        reuse_when: None,
+        require_result: None,
+        body: JobV2StepBody::Loop {
+            loop_: LoopBlock {
+                items: None,
+                max_iterations: 1,
+                timeout_seconds: None,
+                interval_seconds: None,
+                break_when: None,
+                steps: vec![target_step("tick", "counter")],
+            },
+        },
+    };
+    let spread = JobV2Step {
+        id: "spread".to_string(),
+        stage: None,
+        when: None,
+        retry: None,
+        recovery_activity: None,
+        resolved_recovery_activity: None,
+        wait_until: None,
+        expire_when: None,
+        reuse_when: None,
+        require_result: None,
+        body: JobV2StepBody::FanOut {
+            fan_out: FanOutBlock {
+                items: "[\"only\"]".to_string(),
+                max_workers: 1,
+                worker: Box::new(target_step("mark", "label")),
+            },
+            fan_in: FanInSpec {
+                join: JoinMode::All,
+                collect: Some("gathered".to_string()),
+                errors: Some("spread_errors".to_string()),
+            },
+        },
+    };
+    let gate = JobV2Step {
+        id: "gate".to_string(),
+        stage: None,
+        when: None,
+        retry: None,
+        recovery_activity: None,
+        resolved_recovery_activity: None,
+        wait_until: None,
+        expire_when: None,
+        reuse_when: None,
+        require_result: None,
+        body: JobV2StepBody::Parallel {
+            parallel: ParallelBlock {
+                join: JoinMode::All,
+                branches: vec![wait, work, spread],
+            },
+        },
+    };
+    let mut read_back = target_step("read_back", "read_back");
+    if let JobV2StepBody::Target(target) = &mut read_back.body {
+        target.default_input = Some(json!({
+            "ticks": "{{ steps.tick.output.n }}",
+            "iterations": "{{ steps.work.output.iterations }}",
+            "gathered": "{{ steps.gathered.output }}",
+            "errors": "{{ steps.spread_errors.output }}",
+        }));
+    }
+    job_with_steps(vec![gate, read_back])
+}
+
+fn assert_compound_sibling_restored(
+    outcome: &JobOutcome,
+    executions: usize,
+    host: &CompoundReplayHost,
+) {
+    assert!(
+        outcome.parked.is_some(),
+        "an all-join with a still-waiting branch stays parked"
+    );
+    assert!(!outcome.success);
+    assert_eq!(
+        host.inner.call_count("counter"),
+        executions,
+        "a succeeded one-iteration counter must stay at one execution across parked replay"
+    );
+    assert_eq!(
+        host.inner.call_count("label"),
+        executions,
+        "a succeeded fan-out worker must not run again while a sibling is parked"
+    );
+    assert_eq!(outcome.pipeline["tick"]["n"], json!(1));
+    assert_eq!(outcome.pipeline["work"]["iterations"], json!(1));
+    assert_eq!(outcome.pipeline["work"]["last_output"]["n"], json!(1));
+    assert_eq!(outcome.pipeline["gathered"], json!([{"mark": "once"}]));
+    assert_eq!(outcome.pipeline["spread"], json!([{"mark": "once"}]));
+    assert_eq!(outcome.pipeline["spread_errors"], json!([null]));
+}
+
+/// [ORB-20434] A parked all-join must not rerun a succeeded loop or fan-out
+/// sibling. Nested outputs and the fan-in aliases stay available, and the
+/// waiting branch is still observed until it settles.
+#[test]
+fn parked_replay_keeps_succeeded_compound_branch_at_one_execution() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::parked_replay_keeps_succeeded_compound_branch_at_one_execution"
+    )) {
+        return;
+    }
+
+    let host = CompoundReplayHost::new(ScriptedHost::new([
+        (
+            "counter",
+            vec![Action::Ok(json!({"n": 1})), Action::Ok(json!({"n": 2}))],
+        ),
+        (
+            "label",
+            vec![
+                Action::Ok(json!({"mark": "once"})),
+                Action::Ok(json!({"mark": "twice"})),
+            ],
+        ),
+        ("read_back", vec![Action::Ok(json!({"read": true}))]),
+    ]));
+    let job = compound_replay_job();
+    let run_id = "run-parked-compound";
+    let writer = std::sync::Arc::new(test_writer(run_id));
+
+    let first = execute_job_with_resume(&job, Value::Null, run_id, writer.clone(), &host, None)
+        .expect("first pass parks");
+    assert_compound_sibling_restored(&first, 1, &host);
+    assert_eq!(host.observe_count(), 1);
+    let work_checkpoint = host.branches()["gate"]["work"].clone();
+    assert_eq!(work_checkpoint["kind"], json!("compound_branch"));
+    assert_eq!(work_checkpoint["exposed"]["tick"]["n"], json!(1));
+    assert_eq!(
+        work_checkpoint["output"]["iterations"],
+        json!(1),
+        "the loop checkpoint keeps the one iteration that ran"
+    );
+    let spread_checkpoint = host.branches()["gate"]["spread"].clone();
+    assert_eq!(spread_checkpoint["kind"], json!("compound_branch"));
+    assert_eq!(
+        spread_checkpoint["exposed"]["gathered"],
+        json!([{"mark": "once"}])
+    );
+    assert_eq!(spread_checkpoint["exposed"]["spread_errors"], json!([null]));
+    assert!(
+        !host.branches()["gate"].contains_key("wait"),
+        "a waiting branch is not checkpointed as succeeded"
+    );
+
+    let second = execute_job_with_resume(
+        &job,
+        Value::Null,
+        run_id,
+        writer.clone(),
+        &host,
+        Some(&host.resume_state(run_id)),
+    )
+    .expect("second pass parks again");
+    assert_compound_sibling_restored(&second, 1, &host);
+    assert_eq!(
+        host.observe_count(),
+        2,
+        "the unfinished auto-task branch is observed again"
+    );
+
+    host.set_phase(CompoundReplayPhase::Admit);
+    let third = execute_job_with_resume(
+        &job,
+        Value::Null,
+        run_id,
+        writer.clone(),
+        &host,
+        Some(&host.resume_state(run_id)),
+    )
+    .expect("admission still parks on the bound task");
+    assert_compound_sibling_restored(&third, 1, &host);
+    assert_eq!(host.observe_count(), 3);
+
+    host.set_phase(CompoundReplayPhase::Receipt);
+    let done = execute_job_with_resume(
+        &job,
+        Value::Null,
+        run_id,
+        writer,
+        &host,
+        Some(&host.resume_state(run_id)),
+    )
+    .expect("accepted receipt lets the all-join finish");
+    assert!(done.success);
+    assert!(done.parked.is_none());
+    assert_eq!(host.inner.call_count("counter"), 1);
+    assert_eq!(host.inner.call_count("label"), 1);
+    assert_eq!(host.inner.call_count("read_back"), 1);
+    assert_eq!(host.observe_count(), 4);
+    let read_back = &host.inputs_for("read_back")[0];
+    assert_eq!(read_back["ticks"], json!(1));
+    assert_eq!(read_back["iterations"], json!(1));
+    assert_eq!(read_back["gathered"], json!([{"mark": "once"}]));
+    assert_eq!(read_back["errors"], json!([null]));
+    assert_eq!(read_back["step_id"], json!("read_back"));
+    assert_eq!(done.pipeline["tick"]["n"], json!(1));
+    assert_eq!(done.pipeline["gathered"], json!([{"mark": "once"}]));
+}
+
+fn step_with_body(id: &str, body: JobV2StepBody) -> JobV2Step {
+    JobV2Step {
+        id: id.to_string(),
+        stage: None,
+        when: None,
+        retry: None,
+        recovery_activity: None,
+        resolved_recovery_activity: None,
+        wait_until: None,
+        expire_when: None,
+        reuse_when: None,
+        require_result: None,
+        body,
+    }
+}
+
+fn fan_out_branch(
+    id: &str,
+    items: &str,
+    worker_id: &str,
+    action: &str,
+    collect: &str,
+) -> JobV2Step {
+    step_with_body(
+        id,
+        JobV2StepBody::FanOut {
+            fan_out: FanOutBlock {
+                items: items.to_string(),
+                max_workers: 1,
+                worker: Box::new(target_step(worker_id, action)),
+            },
+            fan_in: FanInSpec {
+                join: JoinMode::All,
+                collect: Some(collect.to_string()),
+                errors: None,
+            },
+        },
+    )
+}
+
+/// Seed writes `shared=[]`. The parked all-join then runs an empty fan-out
+/// whose private worker id is that alias, beside the fan-out that actually
+/// publishes `shared`.
+fn alias_collision_replay_job() -> JobV2 {
+    let seed = fan_out_branch("seed", "[]", "seed_worker", "seed_mark", "shared");
+    // Worker id collides with the sibling alias. This branch never writes
+    // parent `shared`; its collection is `b_results`.
+    let empty = fan_out_branch("b", "[]", "shared", "b_mark", "b_results");
+    let producer = fan_out_branch("a", "[\"one\"]", "a_worker", "a_mark", "shared");
+    // Alias equals this fan-out's own worker id, which remains a parent write.
+    let own_alias = fan_out_branch("c", "[\"one\"]", "c_kept", "c_mark", "c_kept");
+    let mut hold = step_with_body(
+        "hold",
+        JobV2StepBody::TargetRef(TargetRef {
+            target: "auto-task:hold".to_string(),
+            default_input: None,
+            timeout_seconds: 0,
+        }),
+    );
+    hold.wait_until = Some("board.empty".to_string());
+    let gate = step_with_body(
+        "gate",
+        JobV2StepBody::Parallel {
+            parallel: ParallelBlock {
+                join: JoinMode::All,
+                branches: vec![empty, producer, own_alias, hold],
+            },
+        },
+    );
+    let mut read_back = target_step("read_back", "read_back");
+    if let JobV2StepBody::Target(target) = &mut read_back.body {
+        target.default_input = Some(json!({
+            "shared": "{{ steps.shared.output }}",
+            "b_results": "{{ steps.b_results.output }}",
+            "kept": "{{ steps.c_kept.output }}",
+        }));
+    }
+    job_with_steps(vec![seed, gate, read_back])
+}
+
+fn resume_alias_collision(host: &CompoundReplayHost, run_id: &str) -> PipelineState {
+    let mut state = host.resume_state(run_id);
+    // The seed fan-out completed before the park. Replaying it would publish
+    // `shared=[]` again; resuming from its checkpoint leaves that inherited
+    // empty collection for the parked block to correct.
+    state.record_step(0, JobRunState::Success, Some(json!([])), None);
+    state
+}
+
+fn assert_alias_collision_preserved(
+    outcome: &JobOutcome,
+    executions: usize,
+    host: &CompoundReplayHost,
+) {
+    assert!(
+        outcome.parked.is_some(),
+        "an all-join with a still-waiting branch stays parked"
+    );
+    assert!(!outcome.success);
+    assert_eq!(
+        host.inner.call_count("a_mark"),
+        executions,
+        "the fan-out that publishes shared must stay at one execution across parked replay"
+    );
+    assert_eq!(
+        host.inner.call_count("c_mark"),
+        executions,
+        "a fan-out whose alias equals its own worker id must stay at one execution"
+    );
+    assert_eq!(
+        host.inner.call_count("b_mark"),
+        0,
+        "the empty fan-out never runs its private worker"
+    );
+    assert_eq!(host.inner.call_count("seed_mark"), 0);
+    assert_eq!(
+        outcome.pipeline["shared"],
+        json!([{"tag": "new"}]),
+        "restoring the empty fan-out must not replace the producer's collection"
+    );
+    assert_eq!(outcome.pipeline["b_results"], json!([]));
+    assert_eq!(outcome.pipeline["c_kept"], json!([{"tag": "kept"}]));
+}
+
+/// [ORB-20452] A fan-in alias may equal another branch's fan-out worker id.
+/// The empty fan-out's checkpoint must not capture the inherited value under
+/// that private id, and replay must keep the real producer's collection no
+/// matter which succeeded branch is restored first. Succeeded compound work
+/// stays at one execution. An alias equal to the publishing fan-out's own
+/// worker id is still checkpointed.
+#[test]
+fn parked_alias_equal_to_sibling_worker_id_keeps_the_producer_collection() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::parked_alias_equal_to_sibling_worker_id_keeps_the_producer_collection"
+    )) {
+        return;
+    }
+
+    let host = CompoundReplayHost::new(ScriptedHost::new([
+        (
+            "a_mark",
+            vec![
+                Action::Ok(json!({"tag": "new"})),
+                Action::Ok(json!({"tag": "reran"})),
+            ],
+        ),
+        (
+            "c_mark",
+            vec![
+                Action::Ok(json!({"tag": "kept"})),
+                Action::Ok(json!({"tag": "reran"})),
+            ],
+        ),
+        ("read_back", vec![Action::Ok(json!({"read": true}))]),
+    ]));
+    let job = alias_collision_replay_job();
+    assert_eq!(job.steps[0].id, "seed");
+    let run_id = "run-alias-worker-checkpoint";
+    let writer = std::sync::Arc::new(test_writer(run_id));
+
+    let first = execute_job_with_resume(&job, Value::Null, run_id, writer.clone(), &host, None)
+        .expect("first pass parks");
+    assert_alias_collision_preserved(&first, 1, &host);
+    assert_eq!(host.observe_count(), 1);
+    let branches = host.branches();
+    let empty_checkpoint = &branches["gate"]["b"];
+    assert_eq!(empty_checkpoint["kind"], json!("compound_branch"));
+    assert_eq!(
+        empty_checkpoint["exposed"],
+        json!({"b_results": []}),
+        "an empty fan-out must not checkpoint the inherited value under its private worker id"
+    );
+    let producer_checkpoint = &branches["gate"]["a"];
+    assert_eq!(
+        producer_checkpoint["exposed"],
+        json!({"shared": [{"tag": "new"}]}),
+        "only the fan-out that writes the alias checkpoints that collection"
+    );
+    let own_alias_checkpoint = &branches["gate"]["c"];
+    assert_eq!(
+        own_alias_checkpoint["exposed"],
+        json!({"c_kept": [{"tag": "kept"}]}),
+        "a fan-in alias equal to the same fan-out's worker id is still a parent entry"
+    );
+    assert!(
+        !branches["gate"].contains_key("hold"),
+        "a waiting branch is not checkpointed as succeeded"
+    );
+    // `b` does not record `shared`, so restoring `b` before or after `a`
+    // cannot put the inherited empty collection back.
+
+    let second = execute_job_with_resume(
+        &job,
+        Value::Null,
+        run_id,
+        writer.clone(),
+        &host,
+        Some(&resume_alias_collision(&host, run_id)),
+    )
+    .expect("second pass parks again");
+    assert_alias_collision_preserved(&second, 1, &host);
+    assert_eq!(host.observe_count(), 2);
+
+    host.set_phase(CompoundReplayPhase::Admit);
+    let third = execute_job_with_resume(
+        &job,
+        Value::Null,
+        run_id,
+        writer.clone(),
+        &host,
+        Some(&resume_alias_collision(&host, run_id)),
+    )
+    .expect("admission still parks on the bound task");
+    assert_alias_collision_preserved(&third, 1, &host);
+    assert_eq!(host.observe_count(), 3);
+
+    host.set_phase(CompoundReplayPhase::Receipt);
+    let done = execute_job_with_resume(
+        &job,
+        Value::Null,
+        run_id,
+        writer,
+        &host,
+        Some(&resume_alias_collision(&host, run_id)),
+    )
+    .expect("accepted receipt lets the all-join finish");
+    assert!(done.success);
+    assert!(done.parked.is_none());
+    assert_eq!(host.inner.call_count("a_mark"), 1);
+    assert_eq!(host.inner.call_count("c_mark"), 1);
+    assert_eq!(host.inner.call_count("b_mark"), 0);
+    assert_eq!(host.inner.call_count("seed_mark"), 0);
+    assert_eq!(host.inner.call_count("read_back"), 1);
+    assert_eq!(host.observe_count(), 4);
+    assert_eq!(done.pipeline["shared"], json!([{"tag": "new"}]));
+    assert_eq!(done.pipeline["b_results"], json!([]));
+    assert_eq!(done.pipeline["c_kept"], json!([{"tag": "kept"}]));
+    let read_back = &host.inputs_for("read_back")[0];
+    assert_eq!(read_back["shared"], json!([{"tag": "new"}]));
+    assert_eq!(read_back["b_results"], json!([]));
+    assert_eq!(read_back["kept"], json!([{"tag": "kept"}]));
+    assert_eq!(read_back["step_id"], json!("read_back"));
+}
+
+/// Host that keeps the run's `PipelineState` the way the production host
+/// writes it (an executed step's output, or a `when:`-skipped step's null and
+/// skip marker), and snapshots it after every checkpoint, so a test can
+/// resume from any point the run reached.
+struct StateHost {
+    inner: ScriptedHost,
+    state: StdMutex<PipelineState>,
+    snapshots: StdMutex<Vec<PipelineState>>,
+    inputs: StdMutex<Vec<(String, Value)>>,
+}
+
+impl StateHost {
+    fn new(inner: ScriptedHost) -> Self {
+        Self {
+            inner,
+            state: StdMutex::new(PipelineState::new(
+                "jrun-source".to_string(),
+                "qa_resume".to_string(),
+                Value::Object(Default::default()),
+            )),
+            snapshots: StdMutex::new(Vec::new()),
+            inputs: StdMutex::new(Vec::new()),
+        }
+    }
+
+    fn record(&self, step_index: u32, step_id: &str, output: &Value, skipped: bool) {
+        let mut state = self.state.lock().expect("state");
+        state.record_step(step_index, JobRunState::Success, Some(output.clone()), None);
+        state.record_step_skipped(step_index, skipped);
+        state.record_pipeline_output(step_id, output.clone());
+        self.snapshots
+            .lock()
+            .expect("snapshots")
+            .push(state.clone());
+    }
+
+    fn snapshot_after(&self, checkpoints: usize) -> PipelineState {
+        self.snapshots.lock().expect("snapshots")[checkpoints - 1].clone()
+    }
+
+    fn inputs_for(&self, action: &str) -> Vec<Value> {
+        self.inputs
+            .lock()
+            .expect("inputs")
+            .iter()
+            .filter(|(recorded, _)| recorded == action)
+            .map(|(_, input)| input.clone())
+            .collect()
+    }
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for StateHost {
+    fn run_deterministic(
+        &self,
+        action: &str,
+        config: &Value,
+        input: &Value,
+        tool_context: orbit_tools::ToolContext,
+    ) -> Result<Value, DispatchError> {
+        self.inputs
+            .lock()
+            .expect("inputs")
+            .push((action.to_string(), input.clone()));
+        RuntimeHost::run_deterministic(&self.inner, action, config, input, tool_context)
+    }
+
+    fn checkpoint_step(
+        &self,
+        _run_id: &str,
+        step_index: u32,
+        step_id: &str,
+        output: &Value,
+        _compound_outputs: &BTreeMap<String, Value>,
+        _: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
+    ) -> Result<(), DispatchError> {
+        self.record(step_index, step_id, output, false);
+        Ok(())
+    }
+
+    fn checkpoint_skipped_step(
+        &self,
+        _run_id: &str,
+        step_index: u32,
+        step_id: &str,
+    ) -> Result<(), DispatchError> {
+        self.record(step_index, step_id, &Value::Null, true);
+        Ok(())
+    }
+}
+
+/// The job behind the skipped-output resume regression: a `when:`-skipped
+/// producer, an executed producer whose output is a genuine JSON null, and
+/// one consumer of each.
+fn skipped_and_null_producer_job() -> JobV2 {
+    let mut optional = target_step("optional", "test_optional");
+    optional.when = Some("false".to_string());
+    let mut null_reader = target_step("null_reader", "test_null_reader");
+    let JobV2StepBody::Target(target) = &mut null_reader.body else {
+        panic!("target step");
+    };
+    target.default_input = Some(json!({"seen": "{{ steps.nullish.output }}"}));
+    let mut optional_reader = target_step("optional_reader", "test_optional_reader");
+    let JobV2StepBody::Target(target) = &mut optional_reader.body else {
+        panic!("target step");
+    };
+    target.default_input = Some(json!({"seen": "{{ steps.optional.output }}"}));
+    job_with_steps(vec![
+        optional,
+        target_step("nullish", "test_nullish"),
+        null_reader,
+        optional_reader,
+    ])
+}
+
+fn null_producer_host() -> StateHost {
+    StateHost::new(ScriptedHost::new([(
+        "test_nullish",
+        vec![Action::Ok(Value::Null)],
+    )]))
+}
+
+#[test]
+fn resume_after_when_false_step_keeps_its_output_absent() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::resume_after_when_false_step_keeps_its_output_absent"
+    )) {
+        return;
+    }
+
+    // ORB-21581: a `when:` false step records no output, so the
+    // uninterrupted run fails where a later step reads it. Resumed from a
+    // checkpoint taken after it, the run must fail the same way rather than
+    // hand the reader a manufactured null, while an executed step's genuine
+    // null output reaches its reader identically in both runs.
+    let job = skipped_and_null_producer_job();
+    let fresh_host = null_producer_host();
+    let fresh = execute_job_with_resume(
+        &job,
+        Value::Null,
+        "run-skip-fresh",
+        std::sync::Arc::new(test_writer("run-skip-fresh")),
+        &fresh_host,
+        None,
+    );
+    let fresh_error = fresh
+        .expect_err("reading a skipped step's output fails the uninterrupted run")
+        .to_string();
+    assert!(
+        fresh_error.contains("no data recorded for step 'optional'"),
+        "{fresh_error}"
+    );
+    let fresh_seen = fresh_host.inputs_for("test_null_reader");
+    assert_eq!(fresh_seen.len(), 1);
+    assert_eq!(fresh_host.inner.call_count("test_optional"), 0);
+    assert_eq!(fresh_host.inner.call_count("test_optional_reader"), 0);
+
+    // Interrupted once both producers had checkpointed.
+    let checkpoint = fresh_host.snapshot_after(2);
+    assert_eq!(
+        checkpoint.step_states.get(&0),
+        Some(&JobRunState::Success),
+        "the skipped step stays a completed step for every other reader",
+    );
+    assert_eq!(checkpoint.step_outputs.get(&0), Some(&Value::Null));
+    assert!(checkpoint.skipped_steps.contains(&0));
+    assert!(!checkpoint.skipped_steps.contains(&1));
+
+    let resumed_host = null_producer_host();
+    let resumed = execute_job_with_resume(
+        &job,
+        Value::Null,
+        "run-skip-resumed",
+        std::sync::Arc::new(test_writer("run-skip-resumed")),
+        &resumed_host,
+        Some(&checkpoint),
+    );
+    let resumed_error = resumed
+        .expect_err("the resumed run fails where the uninterrupted one did")
+        .to_string();
+    assert!(
+        resumed_error.contains("no data recorded for step 'optional'"),
+        "{resumed_error}"
+    );
+    assert_eq!(resumed_host.inner.call_count("test_optional"), 0);
+    assert_eq!(resumed_host.inner.call_count("test_nullish"), 0);
+    assert_eq!(resumed_host.inner.call_count("test_optional_reader"), 0);
+    assert_eq!(
+        resumed_host.inputs_for("test_null_reader"),
+        fresh_seen
+            .into_iter()
+            .map(|mut input| {
+                input["run_id"] = json!("run-skip-resumed");
+                input
+            })
+            .collect::<Vec<_>>(),
+        "a restored genuine null reaches its reader as the executed one did",
+    );
 }

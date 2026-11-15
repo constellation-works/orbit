@@ -30,6 +30,8 @@ use std::ffi::OsStr;
 use std::path::PathBuf;
 
 /// HOME-relative private browser credential tree, including staged writes.
+/// Dashboard browser sessions were removed [ORB-22808]; the tree stays denied
+/// because a host that ran them may still hold `web-session.secret` and launch files.
 pub(crate) const WEB_SESSION_DIRECTORY: &str = ".orbit/run";
 
 /// HOME-relative keychain tree shared by the deny and provider re-allow.

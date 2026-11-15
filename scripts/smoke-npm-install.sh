@@ -6,11 +6,15 @@
 # between the registry contract, npm proxy, and GitHub Release binary.
 #
 # Steps:
-#   1. resolve server.json and launch its versioned npm package
-#        -> exercises postinstall: tarball download + sha256 verification
-#   2. drive `orbit mcp serve` over stdio with a JSON-RPC handshake
-#      (initialize + tools/list) and assert at least one `orbit.*` tool
-#      appears in the response.
+#   1. launch the versioned package and check `orbit --version`
+#        (the published package's postinstall downloads the release tarball
+#        and checks its sha256; --local-binary-check skips npm)
+#   2. `orbit init`, reject an embedded credential, then `orbit workspace init`
+#   3. drive `orbit mcp serve` over stdio (initialize, notifications/initialized,
+#      tools/list, and tools/call) and assert orbit_-prefixed wire names,
+#      including orbit_workspace_list, the advertised orbit_friction tag
+#      taxonomy (ORB-24579), and the keyed one-field `fields` projection
+#      shape (ORB-24275)
 #
 # Pass: exit 0. Fail: non-zero with the relevant stderr captured.
 # Supported: macOS arm64 / x86_64, Linux x86_64 / arm64. Not Windows.
@@ -199,10 +203,37 @@ run_with_timeout() {
 
 echo "--- step 1: $NPM_SPEC --version (local binary: ${LOCAL_BINARY:-no}) ---"
 VERSION_OUT="$TMPDIR_ROOT/version.txt"
-if ! run_orbit --version >"$VERSION_OUT" 2>"$TMPDIR_ROOT/version.err"; then
-  echo "FAIL: $NPM_SPEC --version exited non-zero" >&2
+if run_orbit --version >"$VERSION_OUT" 2>"$TMPDIR_ROOT/version.err"; then
+  :
+else
+  version_rc=$?
+  echo "FAIL: $NPM_SPEC --version exited with code $version_rc" >&2
   echo "--- stderr ---" >&2
   cat "$TMPDIR_ROOT/version.err" >&2
+  if [[ ! -s "$TMPDIR_ROOT/version.err" && -z "$LOCAL_BINARY" ]]; then
+    echo "--- empty npx stderr; rerunning package postinstall for diagnostics ---" >&2
+    # npm rolls back the package directory when postinstall fails. Restore it
+    # without lifecycle scripts, then run postinstall directly so npm cannot
+    # swallow the underlying download/authentication error a second time.
+    if npm exec --yes --ignore-scripts --package="$NPM_SPEC" -- node -e '' >&2; then
+      :
+    else
+      echo "postinstall diagnostic package restore exited with code $?" >&2
+    fi
+    postinstall_found=false
+    while IFS= read -r package_dir; do
+      postinstall_found=true
+      echo "--- postinstall: $package_dir ---" >&2
+      if ( cd "$package_dir" && node scripts/install-binary.js ) >&2; then
+        echo "postinstall diagnostic exited with code 0" >&2
+      else
+        echo "postinstall diagnostic exited with code $?" >&2
+      fi
+    done < <(find "$npm_config_cache/_npx" -type d -path "*/node_modules/$NPM_PKG" -print 2>/dev/null || true)
+    if [[ "$postinstall_found" = false ]]; then
+      echo "postinstall diagnostics unavailable: package not found in $npm_config_cache/_npx" >&2
+    fi
+  fi
   exit 1
 fi
 binary_version="$(sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^orbit[[:space:]]*//' "$VERSION_OUT")"
@@ -317,10 +348,11 @@ cat >"$RPC_IN" <<EOF
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke-npm-install","version":"0.0.1"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized","params":{}}
 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"orbit_workflow_run_list","arguments":{"workspace":"$WORKSPACE_DIR"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"orbit_run","arguments":{"action":"list","workspace":"$WORKSPACE_DIR"}}}
 {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"orbit_task_list","arguments":{}}}
 {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"orbit_workspace_list","arguments":{}}}
 {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"orbit_task_list","arguments":{"workspace":"$WORKSPACE_DIR"}}}
+{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"orbit_task_add","arguments":{"workspace":"$WORKSPACE_DIR","title":"Smoke projection probe","description":"Created by the npm smoke to check one-field projection shapes","complexity":"low","fields":["status"]}}}
 EOF
 
 # Feed the requests, then keep stdin open briefly so the server has time
@@ -383,8 +415,12 @@ if (!/operator/i.test(operatorMessage)) process.exit(1);
 if (!workspaceMessage.includes("orbit_workspace_list") || !workspaceMessage.includes("returned `ws_*` ID") || !workspaceMessage.includes("orbit workspace init") || !workspaceMessage.includes("never infers one from the server process cwd")) process.exit(1);
 if (discovery?.machine_name !== "smoke-npm-install" || discovery.workspaces?.length !== 1 || discovery.workspaces[0].id !== "ws_workspace") process.exit(1);
 if (!tasks || byId[6]?.error || tasks.isError || !Array.isArray(tasks.structuredContent?.tasks)) process.exit(1);
+const frictionTags = tools.find(tool => tool.name === "orbit_friction")?.inputSchema?.properties?.tags?.items?.enum;
+if (!Array.isArray(frictionTags) || frictionTags.length === 0) process.exit(1);
+const added = byId[7]?.result?.structuredContent;
+if (!added || byId[7]?.error || byId[7]?.result?.isError || added.status !== "proposed" || "value" in added || "items" in added) process.exit(1);
 ' "$RPC_OUT"; then
-  echo "FAIL: registry launch did not initialize, list tools, remain agent-only, and fail closed without a workspace" >&2
+  echo "FAIL: registry launch did not initialize, list tools, remain agent-only, fail closed without a workspace, advertise the friction tag taxonomy, and answer a keyed one-field projection" >&2
   cat "$RPC_OUT" >&2
   exit 1
 fi

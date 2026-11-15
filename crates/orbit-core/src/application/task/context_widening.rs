@@ -8,7 +8,6 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::fs::selector::overlaps;
-use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, TaskDecision,
     TaskHistoryEntry,
@@ -55,32 +54,24 @@ impl OrbitRuntime {
                 })?;
                 let mut context_files = task.context_files.clone();
                 context_files.extend(added.iter().cloned());
-                self.with_mutation(|| {
-                    let updated = self.stores().task_records().update(
-                        task_id,
-                        TaskRecordUpdateParams {
-                            actor: SYSTEM_ACTOR_LABEL.to_string(),
-                            context_files: Some(context_files.clone()),
-                            append_history: vec![TaskHistoryEntry {
-                                at: Utc::now(),
-                                by: SYSTEM_ACTOR_LABEL.to_string(),
-                                event: CONTEXT_FILES_WIDENED_EVENT.to_string(),
-                                note: Some(note.clone()),
-                                from_status: None,
-                                to_status: None,
-                                operation_id: None,
-                                decision: Some(TaskDecision::ContextFilesWidened(widening.clone())),
-                            }],
-                            ..Default::default()
-                        },
-                    )?;
-                    Ok((
-                        updated,
-                        OrbitEvent::TaskUpdated {
-                            id: task_id.to_string(),
-                        },
-                    ))
-                })?;
+                self.stores().task_records().update(
+                    task_id,
+                    TaskRecordUpdateParams {
+                        actor: SYSTEM_ACTOR_LABEL.to_string(),
+                        context_files: Some(context_files.clone()),
+                        append_history: vec![TaskHistoryEntry {
+                            at: Utc::now(),
+                            by: SYSTEM_ACTOR_LABEL.to_string(),
+                            event: CONTEXT_FILES_WIDENED_EVENT.to_string(),
+                            note: Some(note.clone()),
+                            from_status: None,
+                            to_status: None,
+                            operation_id: None,
+                            decision: Some(TaskDecision::ContextFilesWidened(widening.clone())),
+                        }],
+                        ..Default::default()
+                    },
+                )?;
                 Ok(())
             })?;
         Ok(added)

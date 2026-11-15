@@ -19,17 +19,16 @@ use std::os::unix::fs::MetadataExt;
 use crate::application::job::log_best_effort;
 use chrono::Utc;
 use orbit_common::fs::io::atomic_write_text;
-use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::security::release::sha256_hex;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::{
-    AuditEventInsertParams, ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams,
-    JobRunStepParams, KeyedJobRunAdmission, KeyedJobRunParams, TaskReservationReleaseReason,
+    ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, KeyedJobRunAdmission,
+    KeyedJobRunParams, TaskReservationReleaseReason,
 };
 use orbit_types::record::OrbitEvent;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
-    JobRun, JobRunStartOutcome, JobRunState, JobRunTrigger, JobScheduleState, JobTargetType,
+    JobRun, JobRunStartOutcome, JobRunState, JobRunTrigger, JobScheduleState,
 };
 use orbit_types::workspace::WorkspacePaths;
 use serde::Serialize;
@@ -37,7 +36,7 @@ use serde_json::{Value, json};
 
 use orbit_engine::activity_job::load_job_asset;
 use orbit_types::workflow::activity_job::{
-    TRUSTED_HOST_ADMISSION_KEY, run_input_declares_trusted_host, validate_job_retired_sessions,
+    TRUSTED_HOST_ADMISSION_KEY, run_input_declares_trusted_host,
 };
 use orbit_types::workflow::{JobV2, run_input_declares_review_reconciliation};
 
@@ -56,12 +55,17 @@ use super::run::CANCELLATION_WORKER_EXIT_AUDIT;
 mod admission;
 mod claude_credential;
 mod notices;
+mod parked;
 mod submit;
 mod wait;
 mod worker;
 
-pub(crate) use admission::{input_hash, pipeline_run_queue_position};
+pub(crate) use admission::input_hash;
 pub use notices::{SubmissionKind, SubmissionNotices};
+pub use submit::{
+    AutoDrainRequest, AutoDrainSubmissionProfile, AutoDrainSubmissionReceipt,
+    AutoDrainSubmissionSource, ShipModeResolutionProfile, ShipRunRequest,
+};
 pub(crate) use submit::{ChildPipelineAdmission, ChildSubmission};
 pub(crate) use submit::{PipelineSubmission, SubmittedDefinition};
 #[cfg(test)]
@@ -72,8 +76,11 @@ pub use wait::{PipelineWaitEntry, PipelineWaitResult, PipelineWaitStatus};
 pub(crate) use worker::command::mark_process_as_pipeline_worker_binary;
 #[cfg(feature = "test-support")]
 pub(crate) use worker::command::worker_command_override;
-pub(crate) use worker::command::{run_definition_snapshot_path, workspace_auto_run_input};
-pub(crate) use worker::exit::reconciled_worker_exit_clause;
+pub(crate) use worker::command::workspace_auto_run_input;
+// Shim for the path's old home; retire it once the remaining callers import
+// `job::run::definition` directly (follow-up).
+#[cfg(test)]
+pub(crate) use super::run::definition::run_definition_snapshot_path;
 #[cfg(test)]
 pub(crate) use worker::log::configure_pipeline_worker_stdio;
 pub(crate) use worker::log::pipeline_worker_log_path;
@@ -81,7 +88,10 @@ pub(crate) use worker::log::pipeline_worker_log_path;
 pub(crate) use worker::log::pipeline_worker_log_test_hook;
 #[cfg(all(feature = "test-support", unix))]
 pub use worker::log::pipeline_worker_log_test_hook::with_pipeline_worker_log_open_hook;
-pub(crate) use worker::scope::{ScriptScopeLauncher, script_scope_launcher};
+pub(crate) use worker::scope::{
+    ScriptScopeLauncher, USER_BUS_LOCATOR_ENV_VARS, script_containment_is_strict,
+    script_scope_launcher,
+};
 pub(crate) use worker::supervisor::WorkerLaunchError;
 #[cfg(feature = "test-support")]
 pub use worker::supervisor::worker_reap_hook::{WorkerReapPhase, install_worker_reap_hook};
@@ -135,7 +145,6 @@ pub(crate) fn reserved_reconciliation_key_error(job_name: &str) -> OrbitError {
 pub(crate) fn reserved_trusted_host_key_error(job_name: &str) -> OrbitError {
     OrbitError::InvalidInput(format!(
         "run input for job '{job_name}' set the reserved `{TRUSTED_HOST_ADMISSION_KEY}` field; \
-         trusted host execution is admitted per invocation by the governed `orbit.agent.invoke` \
-         operation and cannot be requested through ordinary job input"
+         trusted host invocation has been removed and cannot be requested through job input"
     ))
 }

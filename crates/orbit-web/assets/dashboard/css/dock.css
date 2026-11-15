@@ -1,4 +1,4 @@
-/* Tasks dock: Drain, Locks held and Log. */
+/* Tasks dock: Drain, Fleet, Notices, Residents and Log. */
 
 /* The view host: the tabs, then one view. */
 #side-dock {
@@ -12,18 +12,19 @@
 
 /* Underline tabs on a hairline. */
 .dock-head {
+  container-type: inline-size;
   flex: 0 0 auto;
   display: flex;
   align-items: flex-end;
   border-bottom: 1px solid var(--hair);
 }
 
-.dock-seg-group { display: flex; gap: 24px; min-width: 0; }
+.dock-seg-group { display: flex; flex-wrap: nowrap; gap: clamp(6px, 2cqw, 24px); min-width: 0; width: 100%; }
 
 .dock-seg {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   min-width: 0;
   margin-bottom: -1px;
   padding: 0 2px 10px;
@@ -46,8 +47,8 @@
 .dock-seg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 @media (prefers-reduced-motion: reduce) { .dock-seg { transition: none; } }
 
-/* The worst log level present, as a small tinted pill. */
-.dock-seg .dock-log-state:not(:empty) {
+/* A count, or the worst log level, as a small tinted pill. Empty text hides it. */
+.dock-seg .dock-seg-count:not(:empty) {
   padding: 1px 7px;
   border-radius: 10px;
   background: var(--warn-wash);
@@ -60,6 +61,8 @@
 .dock-pane { display: none; flex: 1 1 auto; min-height: 0; flex-direction: column; gap: 12px; }
 #side-dock[data-mode="drain"] .dock-pane[data-pane="drain"] { display: flex; }
 #side-dock[data-mode="log"] .dock-pane[data-pane="log"] { display: flex; }
+#side-dock[data-mode="notices"] .dock-pane[data-pane="notices"],
+#side-dock[data-mode="residents"] .dock-pane[data-pane="residents"] { display: flex; overflow: hidden; }
 
 .dock-pane > .panel {
   flex: 1 1 auto;
@@ -80,302 +83,140 @@
   min-width: 0;
 }
 
-/* Locks held: one row per holding task. The first line carries the id (a
-   link laid over an invisible copy that holds its place), the status, the
-   file count and how many waiting tasks it blocks; the second its title and
-   run. The paths open beneath. */
-#locks-body {
-  max-height: none;
-  padding: 0;
-  overflow: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
-}
-.locks-empty {
-  padding: 14px 18px;
-  color: var(--fg-dim);
-  font-size: 12.5px;
-}
-.lock-task-group {
-  --lock-line: 24px;
-  --lock-pad: 18px;
-  position: relative;
-  border-bottom: 1px solid var(--hair);
-}
-.lock-task-group:last-child {
-  border-bottom: none;
-}
-.lock-task-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 2px 10px;
-  min-width: 0;
-  padding: 10px var(--lock-pad);
-  cursor: pointer;
-  list-style: none;
-}
-.lock-task-header::-webkit-details-marker { display: none; }
-.lock-task-header::before {
-  content: "";
-  width: 6px; height: 6px;
-  margin-right: 2px;
-  border-right: 1.5px solid var(--fg-mute);
-  border-bottom: 1.5px solid var(--fg-mute);
-  transform: rotate(-45deg);
-  transition: transform 0.15s ease;
-  flex: 0 0 auto;
-}
-.lock-task-group > details[open] > .lock-task-header::before { transform: rotate(45deg); }
-.lock-task-header:hover { background: var(--bg-hover); }
-.lock-task-header:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-@media (prefers-reduced-motion: reduce) { .lock-task-header::before { transition: none; } }
-.lock-task-id-space,
-.lock-task-id {
-  font-size: 12.5px;
-  line-height: var(--lock-line);
-  white-space: nowrap;
-}
-.lock-task-id-space {
-  flex: 0 0 auto;
-  height: var(--lock-line);
-  visibility: hidden;
-}
-/* Over its placeholder: the row's padding, the chevron (6px, 2px margin) and
-   one gap in. */
-.lock-task-id {
-  position: absolute;
-  top: 10px;
-  left: calc(var(--lock-pad) + 18px);
-  height: var(--lock-line);
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--accent-hover);
-  text-decoration: none;
-  cursor: pointer;
-}
-.lock-task-id:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 2px;
-}
-.lock-task-id:hover {
-  color: var(--accent-hi);
-  text-decoration: underline;
-}
-.lock-task-header .pill {
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--dot, var(--fg-dim)) 14%, transparent);
-  color: color-mix(in srgb, var(--dot, var(--fg-dim)) 60%, var(--fg));
-  font-size: 12px;
-}
-.lock-task-header .pill::before { display: none; }
-.lock-count {
-  margin-left: auto;
-  color: var(--fg-soft);
-  font-size: 12.5px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.lock-blocks {
-  color: var(--ready-locks);
-  font-size: 12.5px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.lock-task-meta {
-  display: flex;
-  flex: 1 1 100%;
-  align-items: baseline;
-  gap: 10px;
-  min-width: 0;
-  padding-left: 18px;
-}
-.lock-task-title {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--fg);
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.lock-job {
-  flex: 0 0 auto;
-  margin-left: auto;
-  color: var(--fg-mute);
-  font-size: 12px;
-  white-space: nowrap;
-}
-.lock-file-list {
-  padding: 2px var(--lock-pad) 12px 36px;
-  overflow-x: auto;
-}
-.lock-file-row {
-  padding: 2px 0;
-  color: var(--fg-dim);
-  font-size: 12px;
-  white-space: nowrap;
+/* The aggregate-only Fleet view reuses the existing panel and rows. */
+#side-dock[data-mode="fleet"] .dock-pane[data-pane="fleet"] { display: flex; }
+#dock-pane-fleet .panel > header { padding: 14px 18px; border-bottom: 1px solid var(--hair); }
+#fleet-drains-body { min-height: 0; overflow: auto; padding: 16px 18px 18px; }
+
+/* Keep the shared tab strip on one line even when Fleet and counts appear.
+   The log's full state and drain status remain in their accessible names and
+   tooltips when the dock only has room for a short state. */
+@container (max-width: 440px) {
+  .dock-seg { font-size: 12px; }
+  .dock-seg .dock-seg-count:not(:empty) { padding: 1px 4px; font-size: 11px; }
+  .dock-log-state { overflow: hidden; text-overflow: ellipsis; }
+  .dock-drain-state { display: none; }
 }
 
-.lock-reservation-label {
-  color: var(--ready-locks);
-  font-size: 12.5px;
+/* Residents dock: a toolbar (cycle routine, start), a modal start flow,
+   one row per mandate with its detail under the selected row, and ended
+   mandates behind a disclosure. */
+.resident-toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px 12px;
+  flex-wrap: wrap; padding: 2px 10px 10px;
 }
-.lock-reservation-holders {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 10px;
+.resident-toolbar .operation-button.primary { min-height: 30px; padding: 4px 14px; }
+.resident-routine { position: relative; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.resident-routine-label { color: var(--fg-dim); font-size: 12px; }
+.resident-routine .info-hint { margin-left: 0; }
+.operation-button.resident-small { min-height: 0; padding: 2px 8px; font-size: 11px; }
+.resident-list { display: flex; flex-direction: column; min-width: 0; border-top: 1px solid var(--hair); }
+.resident-row {
+  display: grid; align-items: center; gap: 4px 8px; min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "goal state" "activity wake" "needs needs";
+  padding: 8px 10px; border-bottom: 1px solid var(--hair); font-size: 12px; cursor: pointer;
+}
+.resident-row:hover { background: var(--bg-hover); }
+.resident-row.selected { background: var(--bg-selected); }
+.resident-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.resident-row > span { min-width: 0; overflow-wrap: anywhere; }
+.resident-row-goal { grid-area: goal; display: flex; flex-direction: column; gap: 2px; }
+.resident-row-state { grid-area: state; }
+.resident-row-activity { grid-area: activity; }
+.resident-row-wake { grid-area: wake; text-align: right; }
+.resident-goal { overflow-wrap: anywhere; color: var(--fg); font-size: 13px; }
+.resident-id { flex: none; color: var(--fg-mute); font: 11px/1.4 var(--font-mono); }
+.resident-row-activity, .resident-row-wake { color: var(--fg-dim); }
+.resident-row-needs { grid-area: needs; color: var(--fg-mute); }
+.resident-row-needs.needs { color: var(--warn-fg); font-weight: 600; }
+.resident-row.ended .resident-goal, .resident-row.ended > span { color: var(--fg-mute); }
+.resident-detail {
+  display: flex; flex-direction: column; gap: 10px; min-width: 0;
+  padding: 10px 12px 14px; border-bottom: 1px solid var(--hair); background: var(--bg-elev);
+}
+.resident-detail h4 { margin: 0 0 4px; font-size: 11px; color: var(--fg-dim); font-weight: 600; }
+.resident-disclosure h4 { margin-top: 10px; }
+.resident-detail-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px 24px; min-width: 0; }
+.resident-detail-actions { display: flex; flex-direction: column; gap: 8px; }
+.resident-requests { display: flex; flex-direction: column; gap: 6px; }
+.resident-request {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
+  padding: 8px 10px; border: 1px solid var(--warn-line); border-left: 2px solid var(--warn-fg); border-radius: 4px;
+}
+.resident-request-id { font: 600 11px/1.4 var(--font-mono); }
+.resident-request-text { font-size: 12px; overflow-wrap: anywhere; min-width: 0; }
+.resident-request .resident-actions { margin-left: 0; }
+.resident-quote { display: block; flex-basis: 100%; color: var(--fg-dim); font-size: 12px; overflow-wrap: anywhere; }
+.resident-actions, .resident-control { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.resident-actions .operation-button.primary { min-height: 0; padding: 4px 12px; }
+.resident-actions .operation-button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.resident-composer { display: flex; flex-direction: column; gap: 4px; max-width: 640px; }
+.resident-composer .operation-button.primary { min-height: 0; padding: 4px 12px; }
+.resident-control input { flex: 1 1 220px; }
+.resident-disclosure > summary { cursor: pointer; color: var(--fg-dim); font-size: 12px; }
+.resident-ended > summary { padding: 0 10px; }
+.resident-ended { margin-top: 12px; }
+.resident-ended > .resident-list { margin-top: 6px; }
+/* Inset like the toolbar, rows and Ended summary above and below it. */
+.resident-none { margin: 0 0 8px; padding: 0 10px; }
+.resident-start {
   min-width: 0;
-  color: var(--fg-dim);
-  font-size: 12px;
 }
+.resident-start-title { grid-column: 1 / -1; margin: 0; font-size: 13px; font-weight: 600; }
+.resident-step {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 8px 12px;
+  min-width: 0; margin: 0; padding: 8px 10px 10px; border: 1px solid var(--hair); border-radius: 4px;
+}
+.resident-step > legend { padding: 0 4px; color: var(--fg); font-size: 12px; font-weight: 600; }
+.resident-step > .resident-rights, .resident-step-note { grid-column: 1 / -1; }
+.resident-step-note { margin: 0; color: var(--fg-dim); font-size: 12px; }
+.resident-step-note.warn { color: var(--warn-fg); }
+.resident-start-status { flex: 1 1 auto; margin: 0; color: var(--fg-dim); font-size: 12px; }
+.resident-form {
+  display: grid; grid-template-columns: minmax(0, 1fr);
+  gap: 8px 12px; margin-top: 8px;
+}
+.resident-start.resident-form { grid-template-columns: minmax(0, 1fr); margin-top: 0; }
+.resident-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.resident-field-label, .resident-fact-label { color: var(--fg-dim); font-size: 11px; }
+.resident-field-hint { color: var(--fg-dim); font-size: 10px; }
+.resident-field input, .resident-field select, .resident-field textarea,
+.resident-control input {
+  box-sizing: border-box; width: 100%; min-width: 0; padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px;
+  background: var(--bg); color: var(--fg); font: 12px/1.4 var(--font-sans, inherit);
+}
+.resident-form-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.resident-rights { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; padding: 4px 6px; border: 1px solid var(--hair); border-radius: 4px; }
+.resident-rights legend { color: var(--fg-dim); font-size: 11px; padding: 0 4px; }
+.resident-right { display: inline-flex; align-items: center; gap: 4px; font: 11px/1.4 var(--font-mono); }
+.resident-authority-column { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.resident-authority-column > .operation-button, .resident-authority-column > .operation-action-unavailable { align-self: flex-start; }
+.resident-muted { margin: 0; color: var(--fg-dim); font-size: 12px; }
+.resident-stalled { margin: 0; color: var(--state-failed); font-size: 12px; overflow-wrap: anywhere; }
+.resident-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; }
+.resident-fact { display: contents; }
+.resident-fact-value { font: 11px/1.4 var(--font-mono); overflow-wrap: anywhere; }
+.resident-history, .resident-detail ul { margin: 0; padding-left: 18px; font-size: 11px; }
+.resident-history li { overflow-wrap: anywhere; }
+.resident-history-head { font-family: var(--font-mono); }
+.resident-notes { margin: 0 0 6px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 
-/* Docked on Tasks the card is file first: one row per locked path, its
-   holders in the disclosure, and a filter by task. */
-.locks-filter {
-  padding: 10px 18px 0;
+#residents-panel { display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+#residents-panel > .body { flex: 1 1 auto; min-height: 0; min-width: 0; overflow-y: auto; padding: 10px 0; }
+.resident-start-dialog {
+  box-sizing: border-box; width: min(640px, calc(100vw - 32px)); max-width: none;
+  max-height: calc(100dvh - 32px); margin: auto; padding: 16px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-elev); color: var(--fg); overflow-y: auto; overscroll-behavior: contain;
 }
-#locks-filter {
-  width: 100%;
-  height: 32px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--bg-control);
-  color: var(--fg);
-  font-size: 12.5px;
+.resident-start-dialog::backdrop { background: rgb(0 0 0 / 0.6); }
+.resident-start .resident-form-actions {
+  position: sticky; bottom: -16px; padding: 10px 0;
+  background: var(--bg-elev); border-top: 1px solid var(--hair);
 }
-#locks-filter::placeholder { color: var(--fg-mute); font-family: inherit; }
-#locks-filter:focus { border-color: var(--accent); }
-#locks-filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.locks-filter-note {
-  margin: 6px 0 0;
-  color: var(--fg-dim);
-  font-size: 12px;
-}
-.lock-group {
-  --lock-pad: 18px;
-  position: relative;
-  border-bottom: 1px solid var(--hair);
-}
-.lock-group:last-child {
-  border-bottom: none;
-}
-/* A path more than one task holds: a warning rail and count. Admission keeps
-   locked paths exclusive, so this is the row to look at. */
-.lock-group.lock-shared {
-  box-shadow: inset 3px 0 0 var(--warn-line);
-  background: color-mix(in srgb, var(--warn-wash) 45%, transparent);
-}
-.lock-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  padding: 8px var(--lock-pad);
-  cursor: pointer;
-  list-style: none;
-}
-.lock-header::-webkit-details-marker { display: none; }
-.lock-header::before {
-  content: "";
-  width: 6px; height: 6px;
-  margin-right: 2px;
-  border-right: 1.5px solid var(--fg-mute);
-  border-bottom: 1.5px solid var(--fg-mute);
-  transform: rotate(-45deg);
-  transition: transform 0.15s ease;
-  flex: 0 0 auto;
-}
-.lock-group > details[open] > .lock-header::before { transform: rotate(45deg); }
-.lock-header:hover { background: var(--bg-hover); }
-.lock-header:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-@media (prefers-reduced-motion: reduce) { .lock-header::before { transition: none; } }
-/* Long paths keep their file name: the start is clipped, not the end. */
-.lock-path {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--fg);
-  font-size: 12.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  direction: rtl;
-  text-align: left;
-}
-.lock-owner-one {
-  flex: 0 0 auto;
-  color: var(--fg-soft);
-  font-size: 12px;
-  white-space: nowrap;
-}
-.lock-owner-count {
-  flex: 0 0 auto;
-  padding: 1px 8px;
-  border: 1px solid var(--warn-line);
-  border-radius: 10px;
-  background: var(--warn-wash);
-  color: var(--warn-fg);
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.lock-holder-list {
-  margin: 0;
-  padding: 0 var(--lock-pad) 10px 36px;
-  list-style: none;
-}
-.lock-holder {
-  padding: 6px 0;
-  border-top: 1px solid var(--hair);
-}
-.lock-holder:first-child { border-top: none; }
-.lock-holder-line,
-.lock-holder-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 10px;
-  min-width: 0;
-}
-.lock-holder-meta {
-  margin-top: 2px;
-  color: var(--fg-dim);
-  font-size: 12px;
-}
-.lock-holder-id {
-  color: var(--accent-hover);
-  font-size: 12.5px;
-  text-decoration: none;
-  white-space: nowrap;
-}
-a.lock-holder-id { cursor: pointer; }
-a.lock-holder-id:hover { color: var(--accent-hi); text-decoration: underline; }
-a.lock-holder-id:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
-span.lock-holder-id { color: var(--fg-soft); }
-.lock-holder .pill {
-  padding: 1px 8px;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--dot, var(--fg-dim)) 14%, transparent);
-  color: color-mix(in srgb, var(--dot, var(--fg-dim)) 60%, var(--fg));
-  font-size: 11.5px;
-}
-.lock-holder .pill::before { display: none; }
-.lock-holder-tag {
-  color: var(--fg-mute);
-  font-size: 11.5px;
-}
-.lock-holder-self .lock-holder-id { color: var(--fg-soft); }
-.lock-holder-title {
-  flex: 1 1 160px;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--fg);
-  font-size: 12.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.resident-start-status { flex-basis: 100%; overflow-wrap: anywhere; }
+@media (max-width: 1000px) {
+  #residents-panel .operation-button, #residents-panel summary,
+  .resident-start-dialog .operation-button { min-height: 44px; }
 }

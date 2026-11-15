@@ -1,4 +1,4 @@
-use orbit_types::workflow::{FinalRecoveryDecision, FinalRecoveryRepairCommit};
+use orbit_types::workflow::{FaultAttribution, FinalRecoveryDecision, FinalRecoveryRepairCommit};
 
 use crate::context::{FinalRecoveryApplication, FinalRecoveryApplied, TaskAutomationUpdate};
 use crate::executor::automation::vcs::absorbed::AbsorbedCandidate;
@@ -30,6 +30,12 @@ pub(super) fn settle_absorbed(
                 candidate.base_sha, candidate.covering_commit, candidate.base_ref
             ),
         },
+        // The task's change reached the base some other way; nothing here
+        // says whose fault the failed run was.
+        fault: FaultAttribution::unknown(format!(
+            "run {} failed at `{}` on a candidate its base already carries at {}",
+            ctx.run_id, step.id, candidate.covering_commit
+        )),
         resume_step_index: None,
         preserved_steps: Vec::new(),
         repair_commit: None,
@@ -74,7 +80,36 @@ pub(super) fn conclude(
     resume_index: Option<usize>,
     downgrade: Option<&str>,
 ) -> types::FinalRecoveryVerdict {
+    // [ORB-23322] A `complete_no_diff` under completion authority settles in
+    // `review` when a `completion.hold` rule matches the task.
+    let hold = completion_hold(ctx, application);
+    let lowered;
+    let application = match &hold {
+        Some(_) => {
+            lowered = FinalRecoveryApplication {
+                completion_done: false,
+                ..application.clone()
+            };
+            &lowered
+        }
+        None => application,
+    };
     let applied = ctx.host.apply_final_recovery(&ctx.run_id, application);
+    if let (Some(Some(hold)), Ok(FinalRecoveryApplied::Settled { .. })) = (&hold, &applied)
+        && let Err(error) =
+            crate::executor::automation::vcs::completion_hold::record_completion_hold(
+                ctx.host,
+                std::slice::from_ref(&application.task_id),
+                hold,
+            )
+    {
+        tracing::warn!(
+            target: "orbit.engine.job_executor",
+            run_id = %ctx.run_id,
+            error = %error,
+            "final recovery completion hold not recorded on the task"
+        );
+    }
     let kind = Some(application.decision.kind());
     match (applied, resume_index) {
         (Ok(FinalRecoveryApplied::Resume), Some(index)) => {
@@ -151,4 +186,47 @@ pub(super) fn emit_final_recovery_event(
             detail: detail.map(redacted_recovery_diagnostic),
         },
     );
+}
+
+/// The `completion.hold` verdict for a `complete_no_diff` this run is
+/// authorized to settle as `done`: `None` when completion is not authorized,
+/// the decision is another kind or no rule matches; `Some(Some(hold))` when a
+/// rule holds the task; `Some(None)` when the rules could not be evaluated,
+/// which also settles in `review` rather than risk an unheld `done`.
+fn completion_hold(
+    ctx: &ExecCtx<'_>,
+    application: &FinalRecoveryApplication,
+) -> Option<Option<orbit_types::workflow::CompletionHold>> {
+    if !application.completion_done
+        || !matches!(
+            application.decision,
+            FinalRecoveryDecision::CompleteNoDiff { .. }
+        )
+    {
+        return None;
+    }
+    let rules = ctx.host.completion_hold_rules();
+    if rules.is_empty() {
+        return None;
+    }
+    let evaluated = ctx.host.get_task(&application.task_id).and_then(|task| {
+        crate::executor::automation::vcs::completion_hold::evaluate_completion_hold(
+            &rules,
+            std::slice::from_ref(&task),
+            &crate::executor::automation::vcs::completion_hold::ChangedPaths::NoDiff,
+            &ctx.run_id,
+        )
+    });
+    match evaluated {
+        Ok(hold) => hold.map(Some),
+        Err(error) => {
+            tracing::warn!(
+                target: "orbit.engine.job_executor",
+                run_id = %ctx.run_id,
+                error = %error,
+                "completion.hold could not be evaluated; settling in review"
+            );
+            Some(None)
+        }
+    }
 }

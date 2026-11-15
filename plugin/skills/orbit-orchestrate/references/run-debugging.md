@@ -5,7 +5,7 @@ Debug an Orbit job run without guessing. A failed run has multiple layers of evi
 ## Quick Triage
 
 Given a run id `<run_id>`, first read it through the owning host's
-`orbit run show`. The authoritative `orbit_workflow_run_show` (`id`,
+`orbit run show`. The authoritative `orbit_run` action `show` (`id`,
 `workspace`) requires operator authority and is denied for agent sessions.
 Record the owner host and workspace before inspecting evidence:
 
@@ -32,6 +32,102 @@ Record the owner host and workspace before inspecting evidence:
 4. Record before drawing conclusions: `job_id`; `run.state`; `pid` and provider process `liveness`; `input.task_ids`, `input.base_branch`, `input.base_sync`, mode flags; `started_at`/`finished_at`/`duration_ms`; failing `step_id`, `activity_name`, `error_message`, and any recovery attempt.
 
 5. If there are multiple candidate run ids, compare `input.task_ids` first (via `orbit run history --json` or `orbit run show`) — the fastest way to identify which run owns a task.
+
+## Run-audit command output
+
+`orbit run show`, `logs`, `events` and `trace` print the same run through four
+projections. Each `--json` output is one object, except `logs --follow`, which
+is JSONL.
+
+### Step indexes, selectors and units
+
+- In the `orbit run show` summary table, `#` is one-based
+  (`step_index + 1`); `step_index` in JSON is zero-based (`steps[]`,
+  `provider_processes[]` and the `-s` step record).
+- In the `orbit run events` table, `STEP` is the event's textual `step_id`
+  (the activity ID, or `-` when absent), not a one-based step number.
+- `duration_ms` and `lock_wait_ms` are milliseconds. The table prints
+  formatted durations.
+- `-s`/`--step` on `show`, `logs` and `events` accepts an activity `step.id`
+  from the v2 job YAML. A bare number is read as a zero-based step index. A
+  legacy target ID stored on the run also resolves.
+
+### `orbit run show --json`
+
+Without `-s`, the object holds:
+
+- `run`: the job run record. `run.state` is the table's `State:` line.
+  `run.agent_invocation` carries the agent invocation's `outcome`, `answer`
+  and `progress`. An auto pipeline also carries `run.auto_concurrency`.
+- `recovery_attempts` (`state` is `unavailable`, `not_attempted` or
+  `recorded`; see [Inspect recovery evidence](#inspect-recovery-evidence-before-falling-back-to-audit-files)),
+  `tag_instructions`, `pull_claim` and `crew_window`, `claimed_leaves`,
+  `refused_settlements`, `catalog_layers` (each job or activity reference and
+  the layer that resolved it), `drain_summary`, `waiting_on_lock_holders`.
+  Drain, claim and window fields are null or empty for a run that is not a
+  pull drain or claimed leaf.
+- `pipeline_state`: the run's checkpoint. Null when the checkpoint is
+  unreadable; the table then says so.
+- `steps`: one entry per step, with `step_index`, `target_id`, `target_type`,
+  `state`, `started_at`, `finished_at`, `duration_ms`, `lock_wait_ms`,
+  `exit_code`, `error_code`, `error_message`, `outcome` and
+  `agent_response_json`. Each entry also has `agent_executions`, one per
+  launch, with `provider`, `model`, `crew` and `reasoning_effort`.
+  `steps_source` is `record` when the run record holds the steps and `audit`
+  when they were rebuilt from the audit trail.
+- `root_cause` (first failed leaf, or null) and `additional_root_causes`.
+- `provider_processes`: one entry per provider child an agent step spawned:
+  `pid`, `provider`, `step_id`, `step_index`, `liveness` (`alive`, `exited`
+  or `unknown`), `finished`, `exit_code`, `duration_ms` and
+  `stopped_descendants`.
+- `script_executions`: every script-step attempt, refusals included.
+- `worker_resource_limit`: present only when the resource watchdog recorded
+  evidence for the run.
+
+With `-s STEP --json` the object is `{"run_id", "job_id", "step",
+"step_output"}`. `step` holds the step's record fields and `step_output` its
+checkpoint output, or null.
+
+### `orbit run logs --json`
+
+The object is `{"run_id", "job_id", "records"}`. Each record is one provider
+CLI invocation, with `step_id`, `provider`, `stdout_blob_ref`,
+`stderr_blob_ref`, `stdout` and `stderr`. The streams are the full captured
+text, not truncated. Stderr also goes to the terminal's stderr, so stdout
+stays parseable.
+
+When no invocation was audited (the run never reached step execution),
+`records` is `[]`. The object then carries `worker_log_path`, the pipeline
+worker log, or null when none exists.
+
+With `--follow` in a JSON mode, output is JSONL, one record per line:
+`{"run_id", "provider", "stream", "text"}`, where `stream` is `stdout` or
+`stderr`. The worker-log fallback is `provider: "worker"`, `stream: "stderr"`.
+Live lines come from the retained redacted tracing feed, and each completed
+invocation's capture fills in what the feed missed. With `--step`, captures
+are emitted as each invocation finishes. Follow mode stops at any terminal run
+outcome. Ctrl-C stops observing without cancelling the run. Outside JSON
+mode, stdout goes to stdout and stderr to stderr.
+
+### `orbit run events --json`
+
+The object is `{"run_id", "job_id", "events"}`. Each element is a stored v2
+audit event as recorded. `step_id` is added when the stored event lacks one
+and its owning step is known. `--type` matches the exact `event_type`, such
+as `step.started` or `cli.invocation.finished`.
+
+### `orbit run trace --json`
+
+The object is `{"run_id", "job_id", "roots", "orphans"}`. A node is
+`{"event", "children"}`, where `event` is an audit event as `run events`
+prints it. `roots` are events with no parent. Children follow
+`parent_event_id`. An event whose named parent is absent from the run is an
+orphan and roots its own tree in `orphans`. An event that would reappear on
+its own path is a leaf with no children.
+
+Text output prints the same trees indented, with an `Orphans:` section. A run
+with no events prints `No audit events recorded.`, and the JSON keeps empty
+`roots` and `orphans`.
 
 ## Use Orbit Inspection Commands First
 
@@ -66,6 +162,12 @@ Older runs and other recovery activities carry no `decision`. The retried
 step's own result is the `step.post_recovery_attempt` audit event and the
 `orbit.job.step_post_recovery_attempt` log line.
 
+An implementer response refused only for its shape (such as a bare file name in
+`task_artifacts`) is corrected once inside the implement step: the
+`step.contract_correction` audit event (`orbit.job.step_contract_correction` log
+line) names the field, and no recovery event follows when the correction works. A
+response still malformed after it fails with the original refusal.
+
 Keep `error_code` and `error_message` from the run itself as the original
 workflow failure. A recovery attempt is secondary evidence: `succeeded` does
 not rewrite that original failure, and a failed `authorization`, `decision`,
@@ -74,10 +176,10 @@ complete.
 
 ### Tell a working agent from an abandoned wrapper
 
-For a run that is still `running`, the operator-only `orbit_workflow_run_show`
+For a run that is still `running`, the operator-only `orbit_run` action `show`
 (operator authority; denied for agent sessions) carries
 `execution_progress`: the activity step that is open and the provider children
-it spawned. Only `show` carries it — `orbit_workflow_run_list` (also
+it spawned. Only `show` carries it — `orbit_run` action `list` (also
 operator-only) pages many runs and does not pay for an audit scan and a
 liveness probe per row. A session with a shell on the owning host reads the
 same liveness with `orbit run show <run_id> --json` (`provider_processes`).
@@ -92,11 +194,28 @@ step, and a `liveness` of `alive`, `exited`, or `unknown`.
 recycled PID reads `exited` rather than a false `alive`, and a PID recorded in
 another PID namespace reads `unknown` rather than a false `exited`. A child with
 `finished: true` carries its `exit_code` instead. `limit` and `truncated` say
-when a long retry history was bounded; open children are never the ones dropped.
+when a long retry history was bounded. Within the children that survive the
+bounded structural window, open children claim the budget before finished
+ones, but a still-open child spawned before that window never reaches the
+bound at all and can be absent from `provider_processes.items`;
+`provider_processes.truncated` is then `true`.
+
+`execution_progress` itself is served from those bounded windows on every
+`orbit_run` show surface. `steps_complete` is `false` when the step-lifecycle
+prefix (512 rows) does not include every lifecycle row: `active_step` may then
+be null even though a step is open, so a null `active_step` is not by itself
+proof that no step is open. `complete` is `false` when any window overflowed:
+older provider children, their samples, step positions, or the active step
+may be missing. Read a null `active_step` or a missing child as "no open
+step/child" only when the corresponding completeness signal is `true`.
 
 A `running` run whose open step has no `alive` child is the signature of an
-abandoned wrapper. `orbit run show <run_id> --json` reports the same
-`provider_processes` for the owning host.
+abandoned wrapper only when `execution_progress.complete` is `true` (and
+`provider_processes.truncated` is `false`); when it is incomplete or
+truncated, the missing child or step may predate the window, so that reading
+is unavailable from `execution_progress` alone. `orbit run show <run_id>
+--json` reports the same `provider_processes` for the owning host from a
+complete replay of the trail, which does distinguish those cases.
 
 With `view: "bounded"`, progress and the log page come from a fixed audit
 budget rather than a replay of the whole trail: a prefix of step lifecycle
@@ -106,7 +225,11 @@ them, the parents that place them in a step, and the requested log page.
 a full store count, so pagination stays exact. When `audit_metadata.complete`
 is `false`, the history outgrew a budget: children spawned before the window,
 their samples, step positions, or the active step may be missing, and
-`provider_processes.truncated` is `true`. Omit `view` for the full replay.
+`provider_processes.truncated` is `true`. `execution_progress.complete` and
+`execution_progress.steps_complete` carry the same completeness on both the
+bounded and the full `orbit_run` show surfaces; omitting `view` does not turn
+`execution_progress` into a full replay — only the CLI's `provider_processes`
+above replays the whole trail.
 
 ### Verify model routing before reading logs
 
@@ -119,6 +242,13 @@ begun, while `"unavailable"` means it began but no invocation evidence is
 available. Do not infer provider usage or token cost from the requested or
 resolved crew, and do not charge deterministic workflow wrapper steps to a
 model.
+
+Provider token counters take precedence over usage declared in an answer;
+declared usage is only a fallback when provider counters are absent. Codex
+prompt-tier evidence belongs to the latest started rollout turn, so a resumed
+session does not re-charge earlier turns. Missing rollout or turn-boundary
+evidence leaves per-request usage unknown; large invocation totals alone cannot
+prove which requests incurred a premium.
 
 An explicit activity `crew` always wins. Otherwise activities with a
 `crew_config_key` draw from that pool once per run: the task pilot from
@@ -180,6 +310,34 @@ evidence. Treat `checkout_identity.state: incomplete`, `missing`, or
 - **Recovery failure:** the original step failed and `step_failure_recovery` also failed — report both, keep the original step as primary unless recovery caused additional damage.
 - **Parent orchestration failure:** a child run failed and a gate/auto parent is still running or waiting — identify both run ids.
 
+## Bounded response-correction rounds
+
+A read-only activity that declares a `response_correction` policy gets a bounded second chance when its agent reply is rejected for formatting alone. The parser stays the authority: the rejected reply never becomes a result. A fresh invocation with the same crew, tools and sandbox runs inside the unspent part of the activity's wall-clock budget, and only a reply that itself parses succeeds. This is not step recovery and never extends the budget.
+
+Only read-only activities declare it, such as the task pilot, so a correction never repeats a mutation.
+
+The fresh invocation receives one `rejection`:
+
+- `contradictory_reply`: the reply said success and also carried an error object.
+- `missing_envelope`: a clean turn ended in prose with no completion envelope, so nothing in it counts yet.
+- `structured_output_retry_exhausted`: the provider exhausted its formatting retries; the request carries only the terminal diagnostic, not an answer.
+
+A requested correction that cannot start records one `refusal`:
+
+- `rounds_exhausted`: the step already spent its `max_rounds`.
+- `wall_clock_exhausted`: less than the policy's minimum remaining budget was unspent.
+
+### Read a correction without re-running
+
+Do not re-run the activity to see whether a correction happened. Inspect the finished step:
+
+```bash
+orbit run show <run_id> --json
+orbit run show <run_id> -s <step_id> --json
+```
+
+The step output carries `response_correction` with `rounds`, `max_rounds`, `refusal` (null when the last request ran), `original_error` and `original_stdout_blob_ref`. `rounds: 0` with a `refusal` means the first rejection was never corrected; `rounds >= 1` means at least one fresh invocation ran. A still-failing step appends `after N response correction(s)` to its message, plus `(correction refused: <code>)` when a refusal stopped the loop and the original error after `original error before correction:`. The rejected reply's trace and stdout blob stay in the run's captured output, so compare `original_stdout_blob_ref` against the latest invocation before concluding what the agent said.
+
 ## Local required-validation replay
 
 A failed local required command can receive one bounded, isolated replay of
@@ -212,16 +370,16 @@ accepted `flaky` record. Ineligible failures remain failures as well.
 List a task's artifact paths and history first:
 
 ```bash
-orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>","fields":["artifacts","history"]}'
+orbit tool run orbit.task.show --input '{"id":"<task-id>","fields":["artifacts","history"]}'
 ```
 
 For the relevant command index, fetch the original candidate log, its base
 comparison log, and the replay log when present:
 
 ```bash
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"validation/<run-id>/<index>.json","model":"<agent-family>"}'
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"validation/<run-id>/<index>.baseline.json","model":"<agent-family>"}'
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"validation/<run-id>/<index>.rerun.json","model":"<agent-family>"}'
+orbit tool run orbit.task.artifact --input '{"action":"get","id":"<task-id>","path":"validation/<run-id>/<index>.json"}'
+orbit tool run orbit.task.artifact --input '{"action":"get","id":"<task-id>","path":"validation/<run-id>/<index>.baseline.json"}'
+orbit tool run orbit.task.artifact --input '{"action":"get","id":"<task-id>","path":"validation/<run-id>/<index>.rerun.json"}'
 ```
 
 The original log's `candidate_rerun` field links to the last path. The replay
@@ -237,7 +395,26 @@ matches the artifacts before treating delivery as resolved. If the replay
 path or accepted history event is absent, the command has no accepted local
 replay evidence.
 
-This mechanism is separate from [hosted-check diagnosis](#hosted-check-failures-and-inherited-red-bases), which classifies provider jobs and their permitted landing reruns. A red or unproven base follows the separate [red-base hold procedure](../../orbit-setup/references/automation.md#built-in-re-checking-tasks-held-for-a-red-base). The weekly [`flaky-test-hunt` auto-task](../../orbit-setup/references/auto-tasks.md#the-twenty-three-seeded-definitions) analyzes hosted CI history and files tasks; it does not explain this local command replay.
+This mechanism is separate from [hosted-check diagnosis](#hosted-check-failures-and-inherited-red-bases), which classifies provider jobs and their permitted landing reruns. A red or unproven base follows the separate [red-base hold procedure](../../orbit-setup/references/automation.md#built-in-re-checking-tasks-held-for-a-red-base). A workspace-local `flaky-test-hunt` auto-task, where one is defined, analyzes hosted CI history and files tasks; it does not explain this local command replay.
+
+## Whole-run replay from step zero
+
+Use `orbit job resume <run_id>` when the run's successful top-level
+checkpoints are valid and the remaining work should continue from them. Resume
+creates a linked run that reuses those outputs and skips the completed steps.
+
+Use `orbit job replay <run_id>` when checkpoint outputs cannot be trusted or
+the job must restart from the beginning. Replay creates a new run linked to the
+source, uses its persisted input with the current job definition, and executes
+from step zero; it leaves the source run unchanged. Replay runs in the
+foreground and exits nonzero unless the new run succeeds. If you hold the
+workspace claim, pass its token with `--claim-token <token>`.
+
+Replay is refused for a replica checkout or when a task is held by a live
+execution claim. After replay, use the new run ID with
+`orbit run show <new_run_id>` and `orbit run events <new_run_id>` to confirm it
+links to the source, starts its steps from the beginning, and reaches the
+intended terminal state.
 
 ## Hosted-check failures and inherited red bases
 
@@ -257,7 +434,7 @@ alone does not establish a code defect or an abandoned run.
    orbit run show <landing-run-id> --step land --no-reconcile --json
    orbit run events <landing-run-id> --no-reconcile --json
    orbit run logs <landing-run-id> --step land --no-reconcile --json
-   orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>","fields":["status","job_run_id","external_refs","history","comments"]}'
+   orbit tool run orbit.task.show --input '{"id":"<task-id>","fields":["status","job_run_id","external_refs","history","comments"]}'
    ```
 
    Copy actual step IDs when a job is customized. Run JSON uses `.run.state`;
@@ -313,19 +490,23 @@ alone does not establish a code defect or an abandoned run.
 | Class | Decisive evidence and owner-landing behavior |
 |---|---|
 | **Inherited** | The same emitted signature fails on the accepted base, or a moved base tip passes the same workflow/job. Untouched-file failures need the base-suspect procedure below unless matching base failure evidence establishes inheritance. Landing updates the PR branch onto the current base when admitted, then reads checks again; a still-red or unproven base waits without a repair agent. |
-| **Transient** | Emitted logs show runner or network failure. Landing reruns failed jobs once and waits again. A repeated transient failure stops in review, without a code repair. |
+| **Transient** | Emitted logs show runner or network failure. Landing reruns failed jobs within `workflow.ci_infrastructure_retry.max_attempts` (default 3), backing off exponentially from `workflow.ci_infrastructure_retry.backoff_seconds` (default 60). Exhaustion records a transient-class hold with the attempt count; no code repair runs. A set in which every failed job's provider-reported failed step matches `workflow.ci_infrastructure_retry.handoff_steps` (a dependency-handoff step, such as awaiting or downloading another job's artifact) is transient from the step names alone, with no log read, so a truncated or unreadable log cannot make it unknown or inconclusive; one failed job in any other step leaves the set to per-job classification. |
 | **Base-suspect** | The log cites only repository files the candidate did not change and the base does not establish the same failure. Wait for a successful same-check push run on the accepted base ancestry; even a pass predating the PR failure only permits one unchanged-head PR rerun. A passing rerun clears it. Candidate attribution needs the same signature repeated on that rerun. A matching base failure remains inherited. |
-| **Candidate** | A real diagnostic and readable base evidence do not explain the failure, or the unchanged-head PR rerun repeats the base-suspect signature after a same-check base pass. Landing stops for its one automatic repair, or the bounded backlog return when that repair is spent. |
-| **Inconclusive** | Job identity, listing, logs or diagnostic evidence is missing/unreadable; an empty log or signature containing only the step name proves no cause. Stop in review without rerunning, updating or repairing. |
+| **Candidate** | A real diagnostic and readable base evidence do not explain the failure, or the unchanged-head PR rerun repeats the base-suspect signature after a same-check base pass. When the candidate set has no cause evidence (no aggregate, no changed-file citation, and no transient, inherited, unknown or inconclusive job), an eligible set on a head with no prior rerun first gets one unchanged-head classification rerun. It spends the shared once-per-head reservation before sending; a repeat failure returns the task to the backlog with the candidate kept, subject to the landing repair budget. Other candidate failures take the same immediate requeue route. |
+| **Workflow failed before jobs** | A workflow run on the pinned head completed with a non-success conclusion, its complete job listing is empty, and a required context from that workflow remains absent. Completion stops waiting on that poll. If the candidate diff changes the workflow file, `--auto-fix` admits the ordinary candidate repair directly, with the workflow path, run, attempt and readable provider diagnosis; no classification rerun comes first. Without `--auto-fix`, completion stops in review with that failed-check evidence. If the candidate does not change the file, completion uses the existing single cumulative infrastructure rerun for the PR and holds if it fails again, spending no agent repair. A workflow with no jobs that is queued or running stays pending. An absent context never passes, and this evidence never authorizes a merge. Final recovery receives the candidate-owned classification and excludes `rerun_ci`; repair or requeue the candidate through its admitted lane. |
+| **Unknown** | One failed job's log could not be read, including a truncated log without a selected diagnostic. The job is named in the evidence; it does not void the class decided by readable jobs. If no readable job decides, landing stays unclassified and stops in review without spending recovery. A cancelled or timed-out job is transient from its conclusion even without a log. |
+| **Inconclusive** | A read log contains no diagnostic, so its signature is only the step name, or a read classification rests on fails, such as the base jobs or a base log. Stop in review without rerunning, updating or repairing. |
 
 An unchanged-head rerun must be a verified `pull_request` execution for the
 same PR and head, the same workflow run with a later `run_attempt`, starting
 after the earlier attempt completed, with the same check and signature.
 Compare provider evidence with `ci_base_suspect` or `ci_check_rerun`; a
 suspicion note, another push/dispatch run or a green base alone cannot spend
-the repair. The rerunnable untouched-file case can appear as `flaky` in
-`ci_check_rerun.jobs[].classification`. It shares landing's one-rerun budget
-with transient recovery.
+the repair. `ci_check_rerun.jobs[].classification` is `transient`, `flaky`
+(including the rerunnable untouched-file case), or `unattributed` (the
+pre-repair classification rerun). A flaky or unattributed rerun retains one
+shared reservation; only a pure logged transient set can expand to the
+configured infrastructure retry budget.
 
 Every failed required check needs its own evidence. A required aggregate
 check with no answering workflow job is candidate-owned only when its own
@@ -340,7 +521,7 @@ and restarts. After the first update, a newer tip where every inherited job
 passes can permit another update. A red, pending or unproven tip keeps waiting
 within the landing deadline, including when the update budget is spent. Only
 a head already containing that passing tip that still fails earns candidate
-repair. These are verified merges of base advances into the PR branch;
+repair (one automatic repair, or requeue once that repair is spent). These are verified merges of base advances into the PR branch;
 landing does not edit or rebase the candidate to bypass a check.
 
 The `landing_waiting_for_base` note makes that wait visible. At the landing
@@ -348,16 +529,50 @@ deadline, an unresolved base wait stops in review with the reason `the base
 never recovered before the landing deadline`. Base-suspect observations also
 have `max_base_ci_cycles` (default 3) per unchanged head/check/signature;
 exhaustion stops in review naming the check, signature and missing evidence.
+CI retry evidence that stays unreadable (plan authentication or log reads) for
+the same cycle count escalates too: a same-check base pass sends a flaky
+failure to candidate repair (or requeue once its repair is spent). Candidate failures keep their
+immediate backlog requeue route, and inherited failures keep their base update/wait route.
+Other failure classes with unreadable retry evidence stop naming the read
+failure.
 Inspect the effective activity input and recorded deadline instead of
 extending or restarting the wait by assumption.
 
-A conclusive candidate failure stops for one automatic repair leaf with
-fresh validation and a new handoff. Once that repair is spent, the owner
-ends the claim and returns the task to `backlog`, preserving the candidate
-and failure evidence for its next run. Exhausting the task's landing repair
-budget blocks it for an operator. Unreadable evidence and unresolved base
-waits spend no candidate repair. Confirm the actual task and latest landing
+A conclusive candidate failure ends the claim and returns the task to `backlog`
+immediately, preserving the candidate
+and failure evidence for its next run, subject to the landing repair budget.
+That landing run is held as
+`delivery_landing_repair_requeue`, not failed, and the hold is not resumed
+or handed back to completion. Exhausting the task's landing repair
+budget blocks it for an operator. Unresolved base waits and evidence that
+leaves classification undecided keep the candidate in review without ending the claim. Confirm the actual task and latest landing
 attempt state before recommending any action.
+
+### Review deliveries without a handoff
+
+A dashboard ship, `orbit run ship` and an owner drain leaf all deliver through
+the same `task_pr_pipeline`, so they behave the same. Without `--complete` or
+`--auto-fix`, the leaf ends at `review` with its pull request open, and no
+owner landing follows: that runs only for a follower's handoff. Instead the
+leaf submits a detached `task_pr_watch_pipeline` (step `watch`, activity
+`pr_checks_watch`). It records one `landing_checks_observed` entry in the task
+history. Its JSON note holds `state` (`passed`, `failed`, `conflicting`,
+`blocked` or `pending`), `pr_number` and `head_sha`. A `failed` note adds
+`failed_checks`, plus a `classification` and `detail` that use the classes in
+the table above. A watch whose job listing read is rate-limited by the provider
+records classification `deferred`; a non-throttle listing failure or no
+deciding job after log reads records `inconclusive`. An individual non-throttle unreadable
+failed-job log does not void a readable job's classification; a rate-limited failed-job
+log read records `deferred` with the provider's reset evidence. The watch retries authenticated
+transient CI failures using that same bounded policy, then resumes observing.
+To repair a red or conflicting pull
+request, use the dashboard's **Fix PR** or an `--auto-fix` drain under
+[auto-fix authorization](orchestration.md#auto-fix-authorization). Fix PR
+resumes the succeeded leaf at its completion step under the leaf's own
+`completion`. A drain pass still resumes only stopped leaves. A watch that
+ended without an entry (the task left review, or the pull request merged or
+closed) shows `recorded: false` and its `ended` reason in
+`orbit run show <watch-run-id> --step watch --json`.
 
 These outcomes describe existing owner landing, not new operator authority.
 For completion-watcher repairs use [auto-fix authorization](orchestration.md#auto-fix-authorization);
@@ -366,69 +581,51 @@ protected result uses that reference's narrowly proved HTTP-prerequisite
 infrastructure rerun, not this failed-job classification. Local required
 validation failures use [red-base validation holds](../../orbit-setup/references/automation.md#built-in-re-checking-tasks-held-for-a-red-base),
 not hosted landing waits. None of these diagnoses authorizes manual requeue,
-a second drain, weaker checks or a merge. A stopped healthy handoff follows
-the existing operator-only [retry landing](orchestration.md#retry-a-stopped-owner-landing)
-procedure only when its authority and evidence qualify.
+a second drain, weaker checks or a merge. A stopped authorized owner landing
+with typed `waiting_gate` evidence resumes automatically after a fresh
+observation confirms the gate has cleared, subject to fresh candidate and
+authority checks. The owner clock sweep allows at most three retries (landing
+attempts 2–4), with minimum backoffs of 60, 120 and 240 seconds; explicit
+retries count toward that ceiling. Use the operator [retry landing](orchestration.md#retry-a-stopped-owner-landing)
+procedure for other stops and after the automatic retry budget is exhausted.
 
-## Operator Agent Invocations
+## Historical agent invocations
 
-A run of `agent_invoke_pipeline` is not a delivery pipeline. It is one operator
-invocation of an agent for exploration or debugging, submitted with
-`orbit run agent` / `orbit_agent_invoke`, and it changes no task, branch, or
-pull request — so do not look for a worktree, a task lifecycle, or a delivery
-tail when triaging one.
-
-`orbit run show <RUN_ID>` prints an `Invocation:` line for these runs, and
-`--json` carries the same facts under `agent_invocation`:
-
-- `outcome` is the run's own state, never the provider's exit code.
-- `provider_sandbox` is the provider's own inner sandbox at submission
-  (`codex:danger-full-access`, `claude:default`, …), distinct from Orbit's
-  executor sandbox (`sandboxed: false` on the submit result).
-- `envelope_completed: false` on an otherwise-clean exit means the agent stopped
-  mid-turn: exit zero is not evidence the investigation succeeded.
-- `timed_out: true` means the wall-clock bound killed it — resubmit with a
-  longer `--timeout` (the maximum is 7200s) or a narrower prompt.
-- `answer` is the answer: `summary`, `findings`, `next_steps`, any other
-  result field under `extra`, and the bounded `final_message`. `failure_reason`
-  names a missing or malformed response envelope. `orbit run logs <RUN_ID>` has
-  the complete captured output, failed invocations included.
-- `progress` carries the newest `latest_message` and `last_activity_at` while
-  the agent runs; a stale `last_activity_at` on a live child is a quiet agent,
-  not a lost one.
-
-These runs execute their provider subprocess outside the executor sandbox by
-explicit per-invocation operator admission, so a sandbox-denial diagnostic is
-never the explanation for one failing. The run trail records the admission as a
-`trusted_host.execution_admitted` audit event naming the authorizing operator
-and the working directory. For an invocation submitted over SSH it also records
-the forwarded caller machine ID, which is attribution rather than an
-authenticated principal. They are deliberately **not resumable**: the
-admission covered one invocation, so submit a new one rather than resuming.
-
-### Explorer runs
-
-A run of `agent_explore_pipeline` is a read-only explorer an implement or
-review-repair agent delegated through `orbit.agent.invoke`. Its input names the
-caller as `parent_run_id` (with `parent_task_id` and `parent_activity`); the
-caller's run detail lists its explorers with state, crew, duration, tokens,
-cost and paths read. Unlike an operator invocation it runs inside the executor
-sandbox with the reviewer filesystem profile, so a sandbox denial of a write is
-the expected outcome, not a defect. If the executor sandbox is absent or
-explicitly off, the activity fails before the provider starts unless the
-provider has a read-only mode (Codex, which then runs read-only). A refused
-admission never creates a run: the calling agent got the reason as a tool
-error, and the `agent.explore` audit entry records it.
-
-For recurring signatures and known remedies, read [common-failures.md](common-failures.md) after the initial classification — keep this file focused on investigation flow; add new patterns there.
+Operator invocations and delegated explorers are no longer submitted. Stored
+runs retain their answers and captured output through `orbit run show <RUN_ID>`
+and `orbit run logs <RUN_ID>`. An old trusted-host admission cannot authorize
+a new run or a resume; use a task workflow for new work.
 
 ## Check Task State
 
 ```bash
-orbit tool run orbit.task.show --full --input '{"id":"<task_id>","model":"<agent-family>"}'
+orbit tool run orbit.task.show --full --input '{"id":"<task_id>"}'
 ```
 
 Check status/history, plan/execution_summary, comments, workspace_path, external_refs/PR metadata, dependencies/resolved_dependencies. If implementation succeeded but a later workflow step failed, the task may already have a useful execution summary — preserve that context.
+
+### Replay task-pilot assessment (operator only)
+
+When an acceptance criterion depends on task-pilot behavior, replay it through
+the operator path with disposable fixture tasks. File the fixtures through
+the normal task flow so they land in `proposed`; tag each `no-drain` and
+`no-auto-approve`. Include a fixture expected to produce the promotion hold
+and a control whose complete, selectable request should not be held. These
+tags keep automatic drains and proposed-task approval away from the fixtures
+while still allowing pilot assessment.
+
+For each fixture, request a full assessment with operator authority, then
+inspect both the task and the task-level attention view:
+
+```bash
+ORBIT_OPERATOR=1 orbit task repilot <id> --full
+orbit task show <id>
+orbit attention --kind pilot_warning --task <id> --json
+```
+
+Compare the assessment and any `pilot_warning` promotion hold with the
+expected fixture outcome; the control should have no pilot warning. Archive
+all fixtures with `orbit task archive <id>` after recording the results.
 
 ## Decision requests on held work
 
@@ -466,8 +663,8 @@ orbit tool run orbit.task.show --input '{"id":"<task-id>","fields":["status","op
 ```
 
 An agent session reads the same requests through the registered read-only tools
-`orbit.decision.list` (`gate`, `task_id`, `include_closed`) and
-`orbit.decision.show` (`id`).
+`orbit.decision` action `list` (`gate`, `task_id`, `include_closed`) and
+`orbit.decision` action `show` (`id`).
 
 The dashboard's **Why stuck** card links each blocked or held task to the run or
 finding that stopped it, with one-click requeue, settle-merged and
@@ -534,6 +731,77 @@ Look for `input.task_ids` overlap between candidate runs, parent events that inv
 
 A gate or auto run that failed only because its child did records that leaf in its `--json` `root_cause` (`leaf_run_id`, `task_id`, `step`, `code`; null on a run that failed on its own), and `orbit run history --state failed --incidents` shows one row per leaf with the folded parents in `cascaded_run_ids`. `orbit run history --failures` shows one row per task and root cause instead: the root-cause run, its step and crew, the cause's first line in full, and `orbit run show` for that run (`--json`: `failures`). It cannot be combined with `--incidents`. On a drain, `orbit run show` names that same root-cause run in the failed-leaf warning, states each task's current status, and omits the `orbit job resume` line once the task has left `blocked`. A red base or a before-landing review awaiting a decision ends the run `held`, and a cancelled child ends its waiting parents `cancelled`; neither is a failure. A claimed leaf stopped by its provider's usage limit also ends `held`: its step code is `provider_limit`, its message names the provider and the reset, and the claim returns to the owner. A CI sweep whose only gaps are run-scoped retryable collection errors succeeds with outcome `deferred` and a `deferred_count`. Neither lists under `--state failed`; Incidents lists both under the `deferred` class.
 
+A run an Orbit upgrade stopped at a step boundary ends `interrupted` with step code `upgrade_quiesce`, and the clock resumes it once the generation settles. That is a designed pause, not a failure: `--failures` and `--incidents` leave it and any parent echoing it out of their rows and count them in a top-level `upgrade_paused`, present only when nonzero (one per root run, also printed as the `Upgrade-paused, not failures:` line), a plain history row carries `upgrade_paused: true`, and the reliability counts report it as `upgrade_paused` outside the failure rate. A claimed leaf's settlement reports `accounting.outcome: upgrade_paused` with reason `upgrade_quiesce`. A run stopped any other way, such as `process_not_found` for a lost or killed worker, stays a failure, except a recorded host-manager stop: when the supervisor's recorded worker exit shows `systemd` sent the terminating signal with no memory-limit (`oom_kills`) or task-limit (`tasks_refused`) breach, reconciliation settles the orphaned run as `held` with step code `operator_stopped`, and `--failures`, `--incidents`, and the reliability counts leave it out of failures. An unknown or unreadable sender, any other sender (including `orbit`), an exit no signal ended, and a `systemd` signal after a memory- or task-limit breach stay `interrupted` failures, and `operator_stopped` never counts in a failure query even when an earlier writer left the run in a failure state. Classification reads only the exit row already recorded: reconciliation that wins before the supervisor records it still writes `interrupted` / `worker_terminated`, and the later exit note cannot change the terminal state. A run that already held an error when the upgrade stopped it keeps that error as its cause and still counts as failed.
+
+`orbit run history --task <id>` lists runs whose `input.task_ids` array
+contains the task or whose top-level `input.task_id` matches it.
+`orbit run history --json` prints `{"runs":[<job-run>]}`; `--failures` prints
+`{"failures":[{task_id, run_id, step, crew, cause, show}]}` instead; both it and `--incidents` add `upgrade_paused` when an upgrade paused any listed run. ROLE says
+how a run was submitted: top-level directly, child by a parent run; run ids
+minted before role markers existed read as unmarked. `--incidents` folds every
+listed run that echoes the same leaf into one row, the leaf's own when it is
+listed: CASCADED counts the folded runs and `.cascaded_run_ids` names them.
+`--failures` folds the same runs into one row per task and root cause: RUN_ID,
+STEP and CREW are the root-cause run's, and CAUSE is that run's error on one
+line without the plain ERROR column's 60-character cap. `--no-reconcile`
+reports stored records as-is; without it, stale-run reconciliation finalizes
+an orphaned pending or running run as interrupted, releases its task
+reservations, and settles with their owner the pull claims an ended drain or
+leaf left.
+
+## Delivery-refusal holds
+
+A fail-closed delivery decision ends the run `held`, never `failed`. The
+code comes from a typed refusal, never from matching diagnostic wording, so
+read the code rather than the message text. Retry, step recovery, final
+recovery and the failure handoff do not run for these decisions. The refusing
+action keeps its existing task transition and landing evidence; run
+finalization does not change the task's status. Gate and auto parents pass a
+held child. Run history lists the run as `held`, and reliability counts it
+under held, outside the failure rate.
+
+### Read the code on a run
+
+```bash
+orbit run show <run_id> --json
+orbit run history --json
+```
+
+In the run-show response the code is the `run` object's `error_code`, with
+the human-readable detail in `error_message` and the `held` outcome in
+`run.state`. History lists the same run with a `held` state.
+
+### Codes and next steps
+
+Resolve the named refusal before starting a new delivery attempt. Apart from
+`delivery_forge_observation_unavailable`, these holds do not enable a generic
+`orbit job resume`. Under an `--auto-fix` drain, a `review` task held on one of
+the codes marked *auto-fix pass* below is handed back to its completion step
+by a later drain pass (or the dashboard's **Fix PR**), at most 3 times per pull
+request, head and code with a growing wait between passes; once that is
+spent the pass lists the task under `auto_fix.skipped` with the hold code as
+its reason, and the next step is yours.
+
+| Code | Decision | Next step |
+|---|---|---|
+| `delivery_head_changed` | The pull request reports a head different from the one this run published. | Compare the pull-request head against the published candidate, then start a new delivery attempt on the current head. |
+| `delivery_evidence_stale` | Pinned delivery identity is missing or cannot be confirmed, or merge evidence is contradictory. | *Auto-fix pass:* the next pass hands it back and completion re-reads its pins. When the pass reports it spent, re-establish the pinned identity and confirm the merge evidence, then start a new delivery attempt. |
+| `delivery_repair_dispatched` | A repair was already admitted for the blocked head, including a check repair held before execution because recovery was absent, and an in-budget check repair whose recovery ran and did not repair the head. | If a repair is running, let it finish. If none ran because the job lacked `step_failure_recovery`, configure recovery for future heads; if it ran and failed, inspect the recovery attempt. Then repair and publish a new head and start a new delivery attempt. |
+| `delivery_pr_draft` | The pull request is still a draft. | Mark the pull request ready for review, then start a new delivery attempt. |
+| `delivery_pr_closed` | The pull request closed without merging. | Reopen the pull request or open a new one, then start a new delivery attempt. |
+| `delivery_task_not_promotable` | The task's current status refuses promotion. | Move the task to a promotable status, then start a new delivery attempt. |
+| `delivery_landing_conflict` | Landing requires a conflict repair with fresh validation and a new handoff. | Repair the conflict, revalidate, and hand off again. |
+| `delivery_requirements_unsatisfied` | Required reviews or checks are unsatisfied, without a failed check. Pending-only owner landings keep waiting within their check-wait budget instead of stopping on this hold; non-auto-fix completion with readable policy stops on this hold even when only a non-required check is still running, and never arms auto-merge on that head. When current policy is unreadable, completion without auto-fix instead re-polls up to four polls, and an unpinned, ungated run may arm auto-merge while that grace reports pending. | Satisfy the named gate. A stopped authorized owner landing with typed `waiting_gate` evidence resumes automatically after a fresh observation confirms the gate cleared, for at most three retries with 60/120/240-second minimum backoffs; explicit retries count toward that ceiling. Use **Retry landing** or `orbit task retry-handoff` for other stops and after the automatic retry budget is exhausted. *Auto-fix pass:* a held delivery leaf is handed back to completion; other deliveries need a new attempt. |
+| `delivery_base_checks_pending` | Failed checks are inherited from, or suspected to affect, the base; the base's own result comes before candidate recovery. | Wait for the base's own check result; do not run candidate recovery first. *Auto-fix pass:* the next pass hands it back to completion, which reads the base again. |
+| `delivery_completion_budget_expired` | The completion budget expired before completion could be confirmed; the last observed pull-request state was unmerged and the task stays in review. A hold does not cancel auto-merge, and another actor may have merged since, so the forge is authoritative. | *Auto-fix pass:* the next pass hands it back to completion with a fresh budget. Otherwise, or once the pass reports it spent, check the forge for the current pull-request state, then start a new delivery attempt. |
+| `delivery_check_evidence_inconclusive` | An auto-fix stop whose check evidence could not be read conclusively; no repair agent runs. | *Auto-fix pass:* the next `--auto-fix` drain pass hands it back to completion, which rereads the pull-request status. Do not dispatch a repair on that evidence. When the pass reports it spent, read the failed jobs yourself. |
+| `delivery_forge_observation_unavailable` | Read-only forge reads kept failing with a transport error before any completion mutation. Nothing changed on the forge and the task stays in review. | Run `orbit job resume <run_id>`: it reads the forge again and continues completion from its checkpoints. *Auto-fix pass:* an `--auto-fix` drain pass also hands it back. |
+| `delivery_origin_unavailable` | The origin could not be reached while admitting backlog tasks; the run is held without changing those tasks. | Wait for the origin to recover; a later normal admission retries the work. A task already in progress follows ordinary run failure handling instead. |
+| `delivery_check_repair_activity_absent` | An in-budget auto-fix check repair was admitted, and the job has no `step_failure_recovery` to run it. No repair agent runs, but the admission remains in the per-PR ledger and spends one repair attempt. | Adding `step_failure_recovery` and retrying the same head holds again as `delivery_repair_dispatched`; it does not run the repair. Configure recovery for future heads, repair and publish a new head, then start a new delivery attempt. A new head can receive another repair only while the per-PR budget remains; exhausting it still fails the run. |
+| `delivery_check_runs_absent` | The head this run pushed reported no workflow run at all, and no run of any required check, for five minutes. A workflow run the forge already reports for that head, including one `queued`, `pending`, `waiting`, `requested` or `in_progress`, is checks still pending: completion keeps its normal budget and does not re-request checks or take this hold. With no workflow run, completion re-requests hosted checks once (recorded as `pr_checks_retrigger_requested` in the task history; on GitHub by closing and reopening the pull request, which keeps its head, branch and reviews), and holds if no required check run has started five minutes later. The head is unchanged, no repair is spent and the task stays in review. A later completion attempt on the same head holds again without re-triggering. Pending, queued, failed or skipped required checks never take this path. | *Auto-fix pass:* once the unchanged head reports a required check run, the next pass hands the task back to completion. Until then the pass lists it under this code and spends no hand-back. If no check run appears, confirm the forge runs workflows for the repository (Actions enabled, workflow triggers, outages), then start the required checks on that head by hand or push a new head. |
+| `delivery_landing_repair_requeue` | A required check was classified as caused by the candidate. The claim already ended. The task returned to the backlog with the candidate kept, or it is blocked once the landing repair budget is spent. The landing run is held and is not a failure. | The next run repairs that candidate. Do not resume this held run, and do not hand it back to completion. |
+| `owner_signoff_required` | The implementer stopped because recorded owner approval is still missing; no agent can record it. The run is held, the task is blocked with the declared message, and the candidate is committed on the run's branch. The handoff tries to carry it to a durable ref and names it in a system comment and `candidate_held` history entry. No PR was opened. If the push fails, the comment says the candidate is host-local; a run on another host cannot fetch it. | Record the approval on the task, move it back to `backlog` (or `in-progress`), and start a new delivery run. A successful push lets that run resume the candidate from any host. If the comment says host-local, recover or push the named head before routing the run to another host. Do not resume this held run. |
+
 ## Check Git State For Workflow Failures
 
 ```bash
@@ -587,3 +855,5 @@ Keep the report short unless the human asks for a full forensic trace.
 ## Validation Checklist
 
 Before finalizing a diagnosis, verify: you matched the right run id and task id(s); you identified the first failed step, not just the last logged error; you checked recovery events when present; you checked stdout/stderr blobs for the failing invocation when available; you checked live process state for runs marked `running`; you separated root cause from downstream fallout; you recorded friction ([friction.md](../../orbit/references/friction.md)) if Orbit diagnostics or recovery behavior were misleading.
+
+Settlement hydration reads follower runs through the operator-only `orbit.run` action `observe` route, which reads stored records without reconciliation or mutation. The follower opens that route without stale-run reconciliation, including discovery that precedes the read. A nonterminal leaf is a mismatch. Ordinary run inspection is an operator surface: `orbit.run` action `show` requires operator capability and refuses agent sessions. A shell session on the owning host can use `orbit run show <RUN_ID>`; the MCP route requires operator capability. Both reconcile on open. Followers must support the observe route; older followers cannot be hydrated safely.

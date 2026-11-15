@@ -45,7 +45,7 @@ impl OrbitRuntime {
         let Some(run) = self.get_job_run_backend(run_id)? else {
             return Ok(None);
         };
-        if run.job_id != "task_pr_pipeline" {
+        if run.job_id != orbit_types::workflow::TASK_PR_PIPELINE_JOB {
             return Ok(None);
         }
         let tasks = task_ids
@@ -154,7 +154,30 @@ impl OrbitRuntime {
                                     if s.action == "pr_prepare"))
                     })
                 });
-            if !preparation {
+            // A fresh preparation the host issued when the base moved during
+            // `sync_base` is the same routine preparation, refreshed: it still
+            // predates publication, names the exact initial preparation it
+            // supersedes, and leaves the candidate head unchanged. Its newer
+            // base is not drift; the receipts and review below stay bound to
+            // the published head and base, and the resumed `pr_complete`
+            // applies its own base-freshness gates before any merge.
+            let refreshed_preparation = checkpoint["kind"] == "delivery_preparation_refresh"
+                && step_id == "sync_base_preparation"
+                && checkpoint["step_id"] == "sync_base_preparation"
+                && checkpoint["run_id"] == run_id
+                && publication.is_some()
+                && state
+                    .rebase_recovery_checkpoints
+                    .get("prepare_branch")
+                    .is_some_and(|initial| {
+                        checkpoint["source_preparation"] == *initial
+                            && checkpoint["task_ids"] == initial["task_ids"]
+                            && checkpoint["workspace_path"] == initial["workspace_path"]
+                            && checkpoint["head"] == initial["head"]
+                            && checkpoint["head_sha"] == initial["head_sha"]
+                            && checkpoint["head_sha_before"] == initial["head_sha"]
+                    });
+            if !preparation && !refreshed_preparation {
                 return Err(refuse(format!(
                     "rebase recovery checkpoint at `{step_id}` requires governed candidate recovery"
                 )));
@@ -200,20 +223,16 @@ impl OrbitRuntime {
         let (_, _, binding) = self.observe_published_source(source.clone(), task.clone(), false)?;
         let worktree = checkpoint("worktree", "worktree_setup")?;
         let checkout = std::path::Path::new(field(worktree, "workspace_path")?);
-        let git = |args: &[&str]| -> Result<String, OrbitError> {
-            let result = run_git(checkout, args)?;
-            if !result.success {
-                return Err(refuse("completion Git observation failed"));
-            }
-            Ok(result.stdout.trim().to_string())
-        };
         // [ORB-17140] A base that advanced after publication is not drift.
         // The receipts and review below stay bound to the base they judged,
         // and the resumed `pr_complete` applies its own base-freshness and
         // required-check gates to the published head before any merge.
-        if git(&["rev-parse", "HEAD"])? != binding.head_sha
-            || git(&["branch", "--show-current"])? != binding.branch
-            || !git(&["status", "--porcelain"])?.is_empty()
+        if observation::read_git_observation(checkout, &["rev-parse", "HEAD"], true)?
+            != binding.head_sha
+            || observation::read_git_observation(checkout, &["branch", "--show-current"], true)?
+                != binding.branch
+            || !observation::read_git_observation(checkout, &["status", "--porcelain"], true)?
+                .is_empty()
         {
             return Err(refuse("completion candidate or checkout changed"));
         }
@@ -339,8 +358,18 @@ impl OrbitRuntime {
                         && entry.sha256 == sha256_hex(&artifact.content)
                         && entry.writer == Some(ArtifactWriter::System)
                 })
-                || cert.final_candidate.tree != git(&["rev-parse", "HEAD^{tree}"])?
-                || cert.base.tree != git(&["rev-parse", &format!("{}^{{tree}}", binding.base_sha)])?
+                || cert.final_candidate.tree
+                    != observation::read_git_observation(
+                        checkout,
+                        &["rev-parse", "HEAD^{tree}"],
+                        true,
+                    )?
+                || cert.base.tree
+                    != observation::read_git_observation(
+                        checkout,
+                        &["rev-parse", &format!("{}^{{tree}}", binding.base_sha)],
+                        true,
+                    )?
                 || !cert.verdict.passed()
                 || !cert.validation_complete
                 || cert.final_candidate.commit != binding.head_sha

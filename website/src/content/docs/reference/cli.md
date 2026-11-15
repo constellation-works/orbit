@@ -1,146 +1,113 @@
 ---
 title: CLI commands
 description: "A map of the Orbit CLI command surface, grouped the way orbit --help groups it."
-sidebar:
-  order: 2
 ---
 
-This page maps the command surface. For a command's exact options, run
-`orbit <command> --help`.
+Find the command for a job and see its shape. `orbit <command> --help` is the
+full reference for every argument and option.
 
 ## Global options
 
 | Option | Effect |
 |---|---|
-| `--root <ROOT>` | Override the Orbit root directory. Highest precedence. |
-| `--workspace <SELECTOR>` | Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Only an active workspace can be selected. Unlike `--root`, it does not change the root directory. |
-| `--format <MODE>` | `auto` (default: a table on a terminal, plain text when piped), `table`, `plain` (full tab-separated values on any sink), `json`, or `ndjson`. |
-| `--json` | Shorthand for JSON output, always pretty-printed. Accepted throughout the command tree, including plugin groups. Plugin-derived `--json` tool-input flags keep their own meaning; select output JSON at the root/group or with `--format json`. A conflicting `--format` produces a JSON usage error on stderr and exit 2. |
-| `--header` | Start `plain` output with a tab-separated header row. Table output always has one. |
+| `--root <ROOT>` | Use this Orbit data directory. Overrides every other source. |
+| `--workspace <SELECTOR>` | Select an active workspace by registered name, `ws_*` ID or checkout path. |
+| `--format <MODE>` | `auto` (a table on a terminal, plain text when piped), `table`, `plain`, `json` or `ndjson`. |
+| `--json` | Shorthand for `--format json`. |
+| `--header` | Start `plain` output with a header row. |
 
-Every subcommand accepts these options too, so `orbit --workspace ws_x task list`
-and `orbit task list --workspace ws_x` are equivalent. This site puts them
-before the subcommand. `audit export` keeps its command-local `--format json|csv`
-for the exported file; `--json` selects the output mode independently and
-leaves the existing export confirmation unchanged.
+Every subcommand accepts these options, before or after it.
 
-## Environment
+## Setup
 
 | Command | Purpose |
 |---|---|
-| `orbit init` | Set up the global Orbit root, this machine's `[machine]` identity and task-ID prefix, and the default skills. `--machine-name <NAME>` and `--task-prefix <PREFIX>` choose a fresh identity. `--force` resets the global root to shipped defaults, including the machine identity, and creates a new machine ID. `--non-interactive` skips prompts and requires both identity flags on a fresh machine or forced reset; missing or invalid flags are refused before deleting the root. Ordinary re-init preserves the identity. `--skip-host-prerequisites` (or `ORBIT_SKIP_HOST_PREREQUISITES`) leaves the Linux Bubblewrap and AppArmor setup to the host's administrator. |
-| `orbit workspace init` | Register the current repository as a workspace. `--name`, `--base-branch`, `--ship-mode pr\|local`, `--role owner\|replica` (`replica` requires `--owner <machine_id>`), `--task-id-start <N>`, `--mcp`, `--inject-agent-rules`, `--preset <file>` (see [workspace presets](../config/#workspace-presets)); `--force` reconciles an already registered workspace. |
-| `orbit workspace list` \| `show` \| `sync` \| `role` | List and show registered workspaces, converge managed artifacts (`sync`), and validate this checkout's role (`role`). |
-| `orbit workspace ship-mode [pr\|local]` | Print the workspace's ship mode, or rebind it in the workspace registry without re-running init. Config files and managed defaults are left untouched. |
-| `orbit workspace source-remote show` \| `rebind` | Show the workspace's source-repository identity, or replace the source remote after a repository transfer (`rebind --remote <URL>`; try `--dry-run` first). Use a credential-free Git origin and a credential helper: fresh registration refuses origins containing embedded credentials. |
-| `orbit workspace publication bind` \| `show` \| `rebind` \| `remove` | Manage this owner's binding to a dedicated task-publication repository. See [Publish and Restore Tasks](../../how-to/task-publication/). |
-| `orbit workspace remove` \| `teardown` | `remove` deregisters a workspace; `teardown` removes Orbit artifacts from it. |
-| `orbit config show` \| `get` \| `set` \| `keys` \| `path` | Read and write configuration, including this machine's identity under `machine.*`. Rename the machine with `orbit config set --global machine.name <value>`. See [Configuration](../config/). |
-| `orbit host add` \| `list` \| `show` \| `rename` \| `remove` | Register and inspect the remote Orbit hosts this machine reaches over SSH. `add <ssh-target> [--name]` reads the host's machine ID, name and task prefix from the host; `list [--no-probe]` and `show <host>` read reachability, version, pull protocol and workspaces live; `remove --force` drops a host a replica or pull drain still uses. Federated MCP, pull drains and replica worktree GC route to these hosts. |
-| `orbit browser-kit status` \| `install` \| `verify` \| `remove` | Install, verify and remove the headless browser kit that workers use to check UIs. The kit lives in `~/.local/chromium-deps` (Playwright at the version this release pins, plus Chromium's headless shell, downloaded from Playwright's CDN) and needs Node installed. Once `verify` passes, every agent receives `PLAYWRIGHT_BROWSERS_PATH`, `PLAYWRIGHT_MODULE` and `ORBIT_BROWSER_KIT_ENV`. Run it on the host, as the user who runs workers. |
-| `orbit plugin add` \| `list` \| `show` \| `upgrade` \| `enable` \| `disable` \| `remove` \| `doctor` \| `sync` | Install and manage plugins. See [Install and grant plugins](../../how-to/plugins/) for the install, grant and enable workflow. `validate`, `test`, `scaffold`, and `migrate` support plugin authoring. Installed plugins' command groups appear under `Plugins:` in `orbit --help`. |
-| `orbit plugin secret set` \| `list` \| `rm` | Manage the secrets a plugin declares in `spec.secrets`. `set <plugin> <name>` reads the value from stdin or a no-echo prompt, never from an argument. `list <plugin>` shows whether each secret is set, never its value. `rm <plugin> <name>` deletes one. |
-| `orbit migrate` | List pending `.orbit` layout and store migrations; `--confirm` applies them. `--backfill-task-crews` repairs historical crew attribution ([guide](../../how-to/workspace-maintenance/#repair-historical-crew-attribution)). `--adopt-authority <path>` records which home or `--root` protects a workspace that recorded none ([guide](../../how-to/workspace-maintenance/#adopt-a-workspace-that-recorded-no-authority)). |
-| `orbit update` | Install a published release and converge to it. `--check`, `--version`, `--allow-downgrade`. `--preflight` checks whether running Orbit processes prevent an upgrade without opening stores, and `--contract` describes the executable admission protocol without opening state. `--local-candidate <PATH> --source-commit <SHA>` installs an operator-attested local build pinned to a full commit, with `--write-candidate-manifest`, then `--candidate-manifest` and `--install-target`. |
+| `orbit init` | Set up the global Orbit root (`~/.orbit`), this machine's identity and task-ID prefix, and a [human crew](/reference/config/#human-crews). `--non-interactive` skips prompts; `--force` resets the root to shipped defaults. |
+| `orbit workspace init` | Register the current repository as a workspace. Common options: `--name`, `--base-branch`, `--ship-mode pr\|local`, `--role owner\|replica`, `--mcp`, `--preset <file>` ([presets](/reference/config/#workspace-presets)). |
+| `orbit workspace list\|show` | List registered workspaces, or show the current one. |
+| `orbit workspace sync [--check] [--all]` | [Converge managed artifacts](/how-to/workspace-maintenance/#synchronize-shipped-defaults) on the defaults this binary ships. `--check` writes nothing; `--all` covers every workspace on this host. |
+| `orbit workspace role <workspace> <owner\|replica>` | Validate or reassert this checkout's role. |
+| `orbit workspace ship-mode [pr\|local]` | Print the workspace's ship mode, or change it. |
+| `orbit workspace source-remote show` \| `rebind --remote <URL>` | Show the source-repository identity, or replace the remote after a repository transfer. |
+| `orbit workspace publication bind\|show\|rebind\|remove` | Manage the binding to a [task-publication repository](/how-to/task-publication/). |
+| `orbit workspace remove\|teardown <workspace>` | `remove` deregisters a workspace and keeps its `.orbit`; `teardown --confirm` removes all Orbit artifacts from it. |
+| `orbit config show\|keys\|path` \| `get <key>` \| `set <key> <value>` | Read and write [configuration](/reference/config/). `set --global` targets `~/.orbit/config.toml`. |
+| `orbit config browser-kit status\|install\|verify\|remove` | Manage the headless browser kit that workers use to check UIs. |
+| `orbit host add <ssh-target>` \| `list` \| `show <host>` \| `rename <host> <new-name>` \| `remove <host>` | Register and inspect the [remote Orbit hosts](/how-to/multi-host/) this machine reaches over SSH. |
+| `orbit plugin add <source>` \| `upgrade\|enable\|disable\|remove\|show <name>` \| `list\|doctor\|sync` | [Install, grant and manage plugins](/how-to/plugins/). |
+| `orbit plugin secret set\|rm <plugin> <name>` \| `list <plugin>` | Manage a plugin's [declared secrets](/how-to/plugins/#set-secrets); values are never shown. |
+| `orbit plugin validate\|test <dir>` \| `scaffold <namespace>` \| `migrate <binary>` | [Author a plugin](/reference/plugin-manifest/): check a source, run its conformance cases, generate a starter, or convert v1 tool sidecars. |
+| `orbit migrate` | List pending `.orbit` migrations; `--confirm` applies them. The `--backfill-*` and `--adopt-authority` options are [repairs](/how-to/workspace-maintenance/). |
+| `orbit update` | [Install the newest published release](/getting-started/install/#stay-current), or `--version <version>`. `--check` only reports what is available. |
 
-A plugin source keeps its plugin in a `.orbit-plugin/` directory that holds
-`plugin.yaml`. That directory is the plugin root and the only tree installed.
-`plugin add`, `validate`, `test`, `sync`, and `upgrade` refuse a top-level
-`plugin.yaml`, with no fallback: move `plugin.yaml` and its tree into
-`.orbit-plugin/`, or run `orbit plugin scaffold` to create the current layout.
-Plugins install once per machine; a checkout pins the plugins it uses in
-`.orbit/plugins.yaml`, which git ignores with the rest of `.orbit/`.
+Installed plugins add command groups under `Plugins:` in `orbit --help`.
 
-## Knowledge
+## Work
 
 ### Tasks
 
-A task ID's prefix names the host that holds it. A command that addresses one
-task by ID (`show`, `update`, `artifact get` and `put`, `review-reset`,
-`reconcile-review`, and `orbit tool run` of those tools) goes to that host when
-it names no `--workspace`. An ID with this machine's prefix runs here; a
-registered host's prefix is answered by that host; any other prefix is refused
-with `unknown_task_prefix`. If the holder does not answer, the command fails
-with `owner_unreachable` rather than reading a local copy. To read a local
-mirror, pass `--workspace` explicitly. `--host <host>` names the host for
-`--workspace`, by name or machine ID, so you can write `--host alpha
---workspace orbit` instead of the selector `alpha` lists.
+A task ID's prefix names the host that holds the task, and a command given a
+task ID goes to that host. Pass `--workspace` to read that workspace instead,
+with `--host <host>` when it is on another host. An unknown prefix fails with
+`unknown_task_prefix`, an unreachable holder with `owner_unreachable`.
 
 | Command | Purpose |
 |---|---|
-| `orbit task add` | Create a task. `--title` and `--complexity` are required. `--origin` records why it was filed: `operator_request`, `orchestrator_initiative` or `automation`. |
-| `orbit task update <id>` | Update fields. `--approve` takes the next approval step (`proposed → backlog`, `review → done`) and is refused while a non-terminal local run lists the task. `--status` follows the [lifecycle table](../../concepts/tasks/#transition-rules); `--force` overrides it. |
-| `orbit task list` | List tasks of every status by default. Filter with `--status`, `--tag`, `--origin`, `--path`, `--ready`, `--ref`. `--scheduled` lists future schedules soonest first, including proposed tasks labelled by status. `--not-before-from` and `--not-before-until` accept inclusive RFC 3339 bounds. |
-| `orbit task eligible` | List `backlog` and `proposed` tasks whose context-file lock surface overlaps no `in-progress` or `review` task, by the same lock test automatic dispatch uses. Nothing else is checked: not dependencies, complexity, groups, crew, or overlap between candidates. `--status backlog\|proposed`, `--path`, `--limit`; `--explain` also lists held-back candidates with the overlapping file and the task holding it. Read-only. JSON shape: [Response shapes](../../how-to/mcp-integration/#response-shapes). |
-| `orbit task show <id>` | Show one task: on this machine, found by ID across registered workspaces, or on the host its prefix names. A proposed or backlog task gets a `Readiness:` line naming what blocks drain approval or admission, with a fix for each gap. A task a failed run left blocked prints a `Next:` line, and a recorded final-recovery decision prints `Final Recovery:`; a routed show uses the same words. `--json` carries `next_step` and `final_recovery`. `--fields` selects specific fields. |
-| `orbit task archive <id>` | Archive an open task. `done` and `rejected` tasks cannot transition to archived. Archived is terminal; a human can restore it with `task update <id> --status <status> --force`. |
-| `orbit task artifact` | Manage task artifact files. See [Task artifacts](../../concepts/tasks/#task-artifacts). |
-| `orbit task lint [id]` | Flag context declarations that need repair and vague acceptance criteria. Without an ID, sweeps active tasks; `--status` narrows the sweep. `--restore-pruned` re-declares `context_files` entries that an earlier prune recorded in task history. |
-| `orbit task reconcile-review inspect <id>` \| `submit <id> --request <KEY>` \| `status <id>` \| `accept-baseline <id>` | Let a `review` task complete when a recovered follower's delivery has already merged. `inspect` shows whether the merged delivery can be reconciled, and why not. `submit` validates and independently reviews the merged head; resubmitting the same `--request` key replays the same reconciliation. `status` shows reconciliation outcomes, their runs, and the next step (`--reconciliation` narrows it to one). `accept-baseline` records an audited disposition of a required command that already fails at the base: `--reconciliation`, `--command`, `--remediation <commit>` (a commit on the landing branch that remediates the failure), and `--reason` are all required. |
+| `orbit task add --title <title> --complexity <low\|medium\|hard\|xhard>` | Create a task. Common options: `--description`, `--acceptance-criteria`, `--context`, `--crew`. |
+| `orbit task update <id>` | Update fields or append a `--comment`. `--approve` takes the next approval step; `--status` follows the [transition rules](/concepts/tasks/#transition-rules) unless you add `--force`. |
+| `orbit task repilot <id>` | Request one new pilot assessment. `--full` runs a full assessment instead of a re-check. |
+| `orbit task archive <id>` | Archive a task in any status. Restore it with `orbit task update <id> --status <status> --force`. |
+| `orbit task list` | List tasks, 50 by default. Filter with `--status`, `--tag`, `--type`, `--path`, `--ready` or `--scheduled`. |
+| `orbit task eligible` | List `backlog` and `proposed` tasks whose files overlap no `in-progress` or `review` task. `--explain` shows what holds the rest. |
+| `orbit task show <id>` | Show one task. `--fields <a,b>` prints only those fields. |
+| `orbit task artifact put <id> <source-path>` \| `get <id> <path>` | Store or read a [task artifact](/concepts/tasks/#task-artifacts). |
+
+#### Health
+
+| Command | Purpose |
+|---|---|
+| `orbit task lint [id]` | Flag context declarations that need repair and vague acceptance criteria. Without an ID it sweeps active tasks. |
 | `orbit task flow` | Show filed-versus-closed rates over time, to tell whether the backlog is draining. |
-| `orbit task recheck-blocked` | List tasks blocked by a missing provider launcher or transient infrastructure (such as a busy lock), and whether the cause has cleared. `--confirm` returns cleared tasks to `backlog`. A transient block also requires a stopped run, writable store, and free task lock; a stopped unpublished run can requeue when those checks pass, while a published candidate requires an authenticated handoff. Unbound or unauthenticated publications and later human intervention leave it for `task requeue`. Each published candidate (or unpublished task) is automatically requeued at most twice. Tasks blocked by their own failure stay blocked. The launcher is resolved from the invoking shell's `PATH` and `HOME`. |
-| `orbit task review-reset <id>` | Reset one review lineage's budget with an audited reason. `--lineage` and `--reason` are required; `--adopt-configured-budget` takes the current configured budget instead of the captured one. |
-| `orbit task requeue <id> --reason <TEXT>` | Return a blocked task to the queue onto its published candidate, with an audited reason. `--discard-candidate` reruns it from scratch instead. |
-| `orbit task retry-handoff <handoff_id>` | Retry a stopped authorized handoff through normal owner landing. Every expectation is required, so a stale view is refused: `--owner-workspace`, `--candidate`, `--base`, `--attempt`, `--state stopped\|dispatched`, `--reason`, and a `--request` key that replays a retry after a lost reply. |
-| `orbit task recover-claim <claim_id>` | Operator only, on the owner: recover a live follower claim to `blocked` or `backlog`, fencing its attempt and releasing its reservation. `--phase`, `--status`, `--reason` and `--request` are required; reuse the request key after a lost reply. |
-| `orbit task revoke-handoff <handoff_id>` | Operator only, on the owner: revoke an accepted handoff's completion authority while its task stays in `review`. `--candidate`, `--base`, `--reason` and `--request` are required; an unresolved external merge intent refuses revocation. |
-| `orbit task settle-merged [id]` | Settle a `blocked`, `in-progress` or `review` task to `done` when its Orbit delivery pull request was merged outside Orbit and no run or claim of its own is live. It records a landing note naming the pull request and merge commit and starts no work. Without an ID, it matches every candidate task against recently merged pull requests; each `orbit run auto` pass does the same. |
-| `orbit task settle-merged <id> --recovered-claim <claim-id> --pull-request <number> --published-head <commit>` | Settle an owner-recovered follower claim's merged delivery when its handoff was refused and its PR was rescued by hand. Supply the full original published head. The owner verifies the admission's landing branch and delivery identity, records the operator-reported original head, merged head and merge commit as `operator-rescued`, and moves the task to `done` without force. The recovered claim stays revoked. |
-| `orbit task locks list` \| `contention` \| `reserve` \| `release` | Inspect and manage the file locks that gate parallel dispatch. |
-| `orbit task export` \| `import` \| `reindex` | Export and import portable `tar.zst` task bundles, and rebuild the task index. |
-| `orbit task publication publish` \| `status` \| `inspect` \| `restore` | Publish, check, read, or restore a task snapshot. Nothing publishes automatically. |
+| `orbit task locks list\|contention\|reserve` \| `release <reservation_id>` | Inspect, reserve and release the file locks that gate parallel dispatch. |
+| `orbit task requeue <id> --reason <text>` | Return a blocked task to the queue onto its published candidate. `--discard-candidate` reruns it from scratch. |
+| `orbit task recheck-blocked` | List tasks blocked by a missing provider launcher or transient infrastructure. `--confirm` returns the cleared ones to `backlog`. |
+| `orbit task settle-merged [id]` | Settle tasks to `done` whose delivery pull request was merged outside Orbit. `--recovered-claim` settles a follower delivery rescued by hand. |
+| `orbit task review-reset <id> --lineage <lineage> --reason <text>` | Reset one review lineage's budget. |
+| `orbit task reconcile-review inspect\|status <id>` \| `submit <id> --request <key>` \| `accept-baseline <id>` | Let a `review` task complete when a recovered follower's delivery has already merged. `accept-baseline` records a required command that already fails at the base. |
+| `orbit task retry-handoff <handoff_id>` | Retry a stopped authorized handoff through normal owner landing. |
+| `orbit task recover-claim <claim_id>` | Operator only, on the owner: recover a live follower claim to a lifecycle-valid status. |
+| `orbit task revoke-handoff <handoff_id>` | Operator only, on the owner: revoke an accepted handoff's completion authority. |
+
+For when to use the recovery commands, see
+[Recover from a failed delivery](/how-to/continuous-delivery/#7-recover-from-a-failed-delivery)
+and [Stop, cancel and settle](/how-to/distributed-drain/#stop-cancel-and-settle).
+
+#### Bundles
+
+| Command | Purpose |
+|---|---|
+| `orbit task export --output <archive>` \| `import <archive>` | Export and import portable `tar.zst` [task bundles](/how-to/state-and-backup/#restore-tasks-or-move-them). |
+| `orbit task publication publish\|status\|inspect\|restore` | Publish, check, read or restore a [task snapshot](/how-to/task-publication/). |
+| `orbit task reindex` | Rebuild the task index from on-disk task bundles. |
 
 ### Scheduled tasks
 
-Set a task's earliest start with `orbit task update <id> --not-before <time>`;
-clear it with `--clear-not-before`. The CLI accepts RFC 3339 with an offset or
-a local `YYYY-MM-DDTHH:MM`. `orbit task list --scheduled` shows future times
-in schedule order in text and JSON, including proposed tasks. Approval and
-dispatch remain separate; the schedule is an earliest start, not an exact-time
-promise. `orbit task show <id>` shows Scheduled and Actual start separately;
-`--fields not_before,started_at --json` selects those values.
-
-An operator can start named tasks early with
-`orbit run ship <id> --ignore-schedule`. It records a `schedule_overridden`
-history event for that scheduled time; changing `not_before` reinstates the
-hold for the new time. The override is available only on the CLI.
-
-The dashboard task detail has the same Scheduled value and actual first start.
-Its editor accepts RFC 3339 with an offset and clears on an empty save. A
-backlog card shows a Scheduled chip while its hold applies. The forecast
-waits for the scheduled instant before admitting the task.
-
-### Decision requests
-
-With `decision_channel.enabled` on (see [Configuration](../config/)), work
-held on a human decision — a blocked-task triage proposal or a task-pilot
-admission hold — raises a decision request. `orbit task show` lists a task's
-open requests in `open_decisions`.
+A [schedule](/concepts/scheduling/#scheduled-tasks) is an earliest start, not
+an exact time.
 
 | Command | Purpose |
 |---|---|
-| `orbit decision list` | List open decision requests. `--gate block_triage\|pilot_admission\|proposed_approval\|review_approval` and `--task <id>` filter; `--all` also shows answered, superseded and expired requests. The MCP tool `orbit.decision.list` returns the same. |
-| `orbit decision show <id>` | Show one request with its allowed answers, binding, expiry and resolution. The MCP tool is `orbit.decision.show`. |
-| `orbit decision answer <id> <answer>` | Answer one open request as the operator; `--note` keeps evidence with the answer (a pilot-admission verdict uses it as its evidence). The answer lands as a human write and the request then reads `answered`. A superseded or expired request is refused and nothing changes. There is no answering tool: an agent can list a request but cannot answer it. The dashboard's task detail offers the same answers as buttons. |
-| `orbit decision submit <id> <answer>` | Submit a human's answer through a registered decision channel: `--channel` and that request's `--token` are required; `--note` keeps evidence with it. |
-| `orbit decision digest --channel <channel>` | Raise any missing approval requests for a channel and show its decision digest. |
-| `orbit decision channel register` \| `list` \| `revoke` \| `rotate-key` | Register, list, revoke and rotate this host's decision channels. |
-
-For channel setup, plugin authentication and token recovery, see
-[Decision channels](../../how-to/decision-channels/).
-
-With `task show --fields ... --json`, a single field returns its bare JSON value,
-whether read locally or from another host. The `terminal` field stays keyed as
-`{"terminal": true}` or `{"terminal": false}`. Multiple fields return an object
-keyed by the requested field names.
+| `orbit task update <id> --not-before <time>` | Set the earliest start: an RFC 3339 instant or a local `YYYY-MM-DDTHH:MM`. `--clear-not-before` clears it. |
+| `orbit task list --scheduled` | List future schedules, soonest first. |
+| `orbit run ship <id> --ignore-schedule` | Start the named tasks before their scheduled time. Records a `schedule_overridden` history event. |
 
 ### Friction and search
 
 | Command | Purpose |
 |---|---|
-| `orbit friction add` \| `list` \| `show` \| `stats` \| `tags` \| `update` \| `resolve` \| `rehome` | Report and triage friction records. `rehome <id> --to-workspace <workspace>` moves a record to the registered workspace that owns it. |
-| `orbit search <query>` | Lexical search over tasks and frictions. Task fields use FTS5 BM25 ranking, and query terms need not be adjacent. `--workspaces <SELECTOR>` (repeatable) adds other registered checkouts and is separate from the global `--workspace`; `--all-workspaces` searches every active workspace on this machine. |
-| `orbit search reindex` | Rebuild the lexical task index after an import or restore. Reports task and chunk counts. |
+| `orbit friction add --body <text> --model <model>` \| `list\|stats\|tags` \| `show\|update\|resolve <id>` \| `rehome <id> --to-workspace <workspace>` | [Report and triage friction](/how-to/friction/) records. `rehome` moves a record to the workspace that owns it. |
+| `orbit search <query>` | Search tasks and frictions. `--all` includes every status; `--workspaces <selector>` or `--all-workspaces` searches other registered workspaces. |
+| `orbit search reindex` | Rebuild the task search index after an import or restore. |
 
 ## Operate
 
@@ -148,143 +115,179 @@ keyed by the requested field names.
 
 | Command | Purpose |
 |---|---|
-| `orbit run ship [task_id ...]` | Ship the selected tasks, or the ready backlog, through the gated pipeline. Returns a run ID immediately. `--base`, `--allow-crew`, `--strict-worker-containment`, `--claim-token`. |
-| `orbit run ship --mode local` | Deliver in place instead of opening a pull request. |
-| `orbit run auto [--for <duration>]` | Drain the backlog for a time window. `--concurrency`; `--allow-crew`; `--low-complexity-crews`, `--medium-complexity-crews`, `--hard-complexity-crews`, `--xhard-complexity-crews` (crew pools for tasks with no crew, as `crew` or `crew:weight`, overriding the `[workflow]` pools); `--strict-worker-containment` (require a systemd user scope for the coordinator and every worker, overriding `machine.worker_containment` with `strict` for this drain); `--auto-concurrency off\|shadow\|enforce` (forecast admission mode for this local drain, overriding `machine.auto_concurrency.mode`; pull drains inherit their host's mode and refuse it); `--claim-token` when another operator holds the workspace claim. |
-| `orbit run auto --approve-proposed` | Authorize every pass of a local drain to pilot and approve qualifying `proposed` tasks, including tasks filed during the window. Qualifies with `no-diff-expected`, or context files and an assessed complexity; duplicate, already-landed, conflict or warning findings keep it proposed. `no-auto-approve` opts out. Off by default; approval is separate from `--complete`. See [Authorize the backlog](../../how-to/continuous-delivery/#2-authorize-the-backlog). |
-| `orbit run auto --pull <SELECTOR>` | On a replica checkout, pull work from the owner named by the host-qualified selector, or by `--pull <workspace> --host <owner>`. Each claim runs as a leaf that ends at a pull request handed back to the owner, which keeps landing authority. Takes `--for` and `--concurrency`; `--allow-crew` limits which crews' tasks are claimed. Conflicts with `--complete`, `--approve-proposed`, `--strict-worker-containment`, the crew-pool flags, `--claim-token`, and `--stop`. See [Set Up a Distributed Drain](../../how-to/distributed-drain/). |
-| `orbit run auto --stop` | Stop new admissions for this workspace's active auto coordinator. Admitted workers keep running; this is not cancellation. On a replica it also delivers any recorded pull settlements to the owner, even with no active drain. |
-| `orbit run auto --auto-fix` | Authorize a local drain to repair the pull requests its runs opened when a required check fails or the branch conflicts with its base, using a crew from `workflow.purpose_crews.auto_fix`, else `workflow.low_complexity_crews`. Pending checks wait. Approvals, permissions, admin rules, unknown status and optional-check failures get no agent. At most three repairs per PR. Never merges; add `--complete` for that. Off by default; conflicts with `--pull` and `--stop`. See [Repair blocked pull requests](../../how-to/continuous-delivery/#repair-blocked-pull-requests). |
-| `orbit run ship --review <layer>` / `orbit run auto --review <layer>` | Add `before-pr` or `before-landing` review to this run when workspace policy applies none. The layer `review.timing` already applies is accepted unchanged. The other layer, a workspace that sets neither `workflow.purpose_crews.pre_landing_review` nor `workflow.purpose_crews.review`, and local-only delivery are refused before the run starts. Conflicts with `--pull` and `--stop`. Children and resumes keep the captured layer. See [Review layers](../../concepts/tasks/#adding-review-to-one-run). |
-| `orbit run ship --complete` / `orbit run auto --complete` | Also authorize the run to finish delivery and move the tasks it ships from `review` to `done`. Off by default. |
-| `orbit run readiness [task_id ...]` | Explain, read-only, why backlog tasks can or cannot start. `--concurrency` overrides the ceiling; omit it to use the live local drain's ceiling, else a live pull drain's (including `orbit run concurrency --set`), else 5. `--json` names that choice as `capacity.limit_source` and carries weekly usage pressure per provider account and crew (`provider_pressures`, `crew_pressures`). `--allow-crew`, `--limit`. |
-| `orbit run task-pilot [task_id ...]` | Preflight `proposed` and `backlog` tasks and save validated selectors. Omit IDs to discover tasks automatically. `--base-branch`, `--max-tasks`, `--max-partition-size`, `--wait`. |
-| `orbit run job <job_id>` | Run any job by ID or YAML path. `--input key=value`, `--wait`. |
-| `orbit run agent <prompt>` | Operator only. Run an agent on the host to investigate and report. It runs outside the filesystem sandbox, changes no task, and dispatches nothing. `--cwd`, `--crew`, `--timeout` (default 1800 s, max 7200), `--wait`, `--idempotency-key`, `--provider-sandbox`. Returns a run ID to read with `orbit run show` or `logs`; `--wait` blocks and prints the answer instead. |
-
-See [Delivery Workflows](../../getting-started/workflows/).
-
-`--allow-crew` accepts a named crew or an alias with the same provider, model
-and provider account. A crew with its own `env` has a separate account, so
-allow it explicitly even when its model matches another permitted crew.
-
-Pull drains with before-landing review can admit replacements while leaves
-are reviewing: at an unchanged concurrency of N, at most N leaves implement
-and at most 2N are occupied, absent pre-existing excess. Lowering the ceiling
-keeps running leaves. `orbit run show` reports the claim stages.
+| `orbit run ship [task_id ...]` | [Ship](/getting-started/workflows/) the named tasks, or the ready backlog, through the gated pipeline. `--mode pr\|local` chooses a pull request or in-place delivery. |
+| `orbit run auto [--for <duration>] [--concurrency <n>]` | [Drain the backlog](/how-to/continuous-delivery/) for a time window; one pass without `--for`. |
+| `orbit run auto --approve-proposed` | Also [approve `proposed` tasks](/how-to/continuous-delivery/#2-authorize-the-backlog) that pass task-pilot verification. |
+| `orbit run auto --auto-fix` | Also [repair failing checks and conflicts](/how-to/continuous-delivery/#repair-blocked-pull-requests) on the pull requests the drain opens. |
+| `orbit run auto --pull <selector>` | On a replica, [claim work from the owner's backlog](/how-to/distributed-drain/) and hand results back as pull requests. |
+| `orbit run auto --stop` | Stop admitting new work. Running tasks continue. |
+| `orbit run ship\|auto --complete` | Also [finish delivery](/getting-started/workflows/#completing-work-with---complete) and move shipped tasks to `done` instead of `review`. |
+| `orbit run ship\|auto --review <layer>` | [Add `before-landing` review](/concepts/tasks/#adding-review-to-one-run) to this run when workspace policy applies none. |
+| `orbit run ship\|auto --allow-crew <crew>` | Restrict the run to tasks on these crews. |
+| `orbit run readiness [task_id ...]` | [Explain](/how-to/continuous-delivery/#3-check-what-will-actually-start), read-only, why backlog tasks can or cannot start. |
+| `orbit run task-pilot [task_id ...]` | Preflight `proposed` and `backlog` tasks and save validated selectors. Omit IDs to discover tasks automatically. |
+| `orbit run job <job_id>` | Run any job by ID or YAML path, with `--input key=value`. |
 
 ### Run inspection
 
 | Command | Purpose |
 |---|---|
-| `orbit run history` | Recent job runs. `-j <job_id>`, `--task <id>`, `--state <states>` (comma-separated) and `--since <time\|duration>` filter; `--limit` defaults to 50. `--incidents` shows one row per incident, folding runs that failed only because a child failed into the run that failed on its own. `--failures` shows one row per task and root cause: the root-cause run, its step and crew, the cause's first line, and the `orbit run show` command for that run. `--no-reconcile` reports stored records as they are. |
-| `orbit run show [run_id]` | State and step summary for a run; defaults to the most recent. `-s <step_id>` shows one step. A delivery run with a review layer prints a `Review:` line with the layer and its origin: the run's `--review` option, workspace policy (with the key's source), or the owner's claim. A worktree GC run lists each worktree it kept, with the reason and `retained_bytes`, and each dirty worktree it removed, with where the candidate went. |
-| `orbit run logs [run_id]` | Raw stdout and stderr captured for a run. `--follow` streams until the run ends. |
-| `orbit run events [run_id]` | Audit events recorded for a run. |
-| `orbit run trace [run_id]` | Parent/child tree of a run's audit events. |
-| `orbit run profiles` | This host's delivery resource profiles, one row per workspace, work class and complexity (`auto-task:<template>` profiles have none): completed deliveries, horizon, peak CPU and memory with the minute each occurs, the nearest-rank p50 and p90 of each delivery's own single-minute peak CPU and memory (these stay high when peaks fall in different minutes, and a sparse profile still shows them), and how much deliveries spread around them. Flags no-diff work that used more than 1 core for 2 minutes and names those deliveries; templates that build by design, such as `qa-sweep`, are exempt. `--json` adds the full per-minute series and those quantiles (`delivery_peak_cpu`, `delivery_peak_memory_bytes`). `--accuracy` instead compares the forecasts drains in `shadow` or `enforce` recorded (by default the newest 5000 forecasts, whatever their age; `--last <N>` another count, `--since` a time bound) with the host's measured CPU and memory at +5, +10, +20 and +30 minutes (mean error, how often the forecast was under, worst miss), and counts per drain the tasks shadow would have held or added plus the tasks enforce admitted, the tasks gap fit held and the enforce pull requests held; with `--json` it adds the raw pairs and the held task ids. |
-| `orbit run settlements` | On an owner, the failure and release settlements that claimed leaves on follower hosts sent it, newest first, with each one's evidence class. Those leaves never appear in the owner's `run history`. `--since <time\|duration>`, `--json`, `--no-reconcile`. |
-
-### Leases
-
-| Command | Purpose |
-|---|---|
-| `orbit lease request` / `renew` / `expand` / `release` | Request or manage a workspace path lease. |
-| `orbit lease list` / `show` / `check` / `notices` | Inspect leases, conflicts and notices. |
-| `orbit lease token create` / `list` / `revoke` | Manage scoped listener tokens as the listener user. |
-| `orbit lease listen` | Run the token-only network listener as the listener user. |
-
-See [Hold paths with leases](../../how-to/path-leases/) for setup, scope,
-listener authentication and examples.
+| `orbit run history` | Recent job runs. Filter with `-j <job_id>`, `--task`, `--state` and `--since`; `--failures` shows one row per task and root cause. |
+| `orbit run show [run_id]` | State and step summary for a run, the most recent by default. `-s <step_id>` shows one step. |
+| `orbit run logs [run_id]` | Raw stdout and stderr captured for a run. `--follow` streams it. |
+| `orbit run events\|trace [run_id]` | Audit events recorded for a run, as a list or as a parent/child tree. |
+| `orbit run profiles` | What each kind of delivery costs on this host in CPU and memory, minute by minute. `--accuracy` compares recorded admission forecasts with the measured load. |
+| `orbit run settlements` | On an owner, the failure and release settlements that claimed leaves on follower hosts sent it. |
+| `orbit run settlements-hydrate --follower-workspace <workspace>` | Operator only, on the owner: keep each settled claim's leaf run, read from its follower, as evidence. Narrow with `--claim`, `--task`, `--machine` and `--since`. |
 
 ### Maintenance
 
+Each `orbit gc` command reports what it would remove; `--confirm` removes it.
+
 | Command | Purpose |
 |---|---|
-| `orbit run cancel <run_id> --confirm` | Cancel a pending or running job run and release its task reservations. A task leaf returns to `backlog` with its candidate resumable; `--block` keeps it blocked for manual recovery. `--reason <TEXT>` records a note with the cancellation audit event. A pull drain cancels gracefully: unlaunched claims return to the owner's backlog, and launched leaves finish and settle. `--force` also stops a drain's in-flight leaves. |
-| `orbit run extend <run_id> --for <duration>` | Move a live `orbit run auto` window, or a replica's `--pull` drain, to the later of its current deadline and now plus `--for`, without restarting it: the run ID, completion authorization and in-flight tasks carry over. It never shortens a window, and refuses a drain stopped with `--stop`, one being cancelled, and one started without `--for`. `--concurrency` also sets the admission ceiling; `--reason`; `--claim-token` as for `run concurrency`. |
-| `orbit run concurrency <run_id> --set N` | Change how many tasks a live drain keeps in flight. `--reason`, `--if-revision`. `--claim-token <TOKEN>` (or `ORBIT_WORKSPACE_CLAIM_TOKEN`) supplies this workspace's exclusive claim when another operator holds one. |
-| `orbit gc worktrees` | Report job-run worktrees whose task has settled; `--confirm` reaps them. `--run <ID>` limits to one run; `--older-than-hours <N>` to runs finished at least that long ago. A whole-worktree dry run skips the size estimate unless you pass `--estimate-bytes`. `--reclaim` reports bytes per declared `worktree.reclaim` pattern and reclaims those paths with `--confirm`, keeping the checkout. Terminal runs, registration, worker liveness, confinement, symlinks and Git content are checked. `--target-only` remains an alias. A kept worktree reports `retained_bytes`, its remaining size, with `--confirm` or `--estimate-bytes`. A manual pass keeps every dirty worktree (`skipped:dirty_rescue_candidate`); only the scheduled `worktree_gc_pipeline` removes a settled run's dirty worktree, after it preserves the candidate. |
-| `orbit gc deployments` | Report deployment directories in `~/.orbit/deployments`, replaced-executable copies in `~/.orbit/bin` and `~/.orbit/orbit.db.bak*` store copies beyond the newest of each class; `--confirm` removes them. `--keep <N>` (default 2) sets how many of each class stay. The installed executable and every `.previous` rollback copy are never removed. |
-| `orbit gc audit` | Report audit rows older than `retention.audit_days` (host-wide command audit, this workspace's run audit, and run audit of workspace ids that are no longer registered) and the audit blobs no remaining row names, with rows and bytes per table and blob root; `--apply` deletes them in batches of 1,000 rows. Another registered workspace keeps its own window. A blob written in the last 24 hours or marked pending by a write in progress is kept. Reports the store file's freelist; run `VACUUM` yourself to return it. `--older-than-days <N>`. |
-| `orbit gc runs` | Report terminal runs older than `retention.runs_days` that still keep pipeline state, for this workspace and for workspace ids that are no longer registered; `--apply` drops that state and stamps the run archived. Another registered workspace keeps its own window. The run, its steps and its summary stay, so `run show` and run history keep working. Held and non-terminal runs are never touched. The host's per-minute resource history and recorded admission forecasts older than 30 days go in the same pass, except rows kept at any age by count: each workspace, work class and complexity's newest `max(200, machine.auto_concurrency.profile_window)` deliveries, the newest 10,000 forecasts, and host minutes from the oldest kept forecast onward. `--older-than-days <N>`. |
-| `orbit gc journal` | Report applied task commit journal rows older than `retention.journal_days` (default 14), for this workspace and for workspace ids that are no longer registered, with rows and bytes; `--apply` deletes them. Each task's newest applied row, every prepared or committed row recovery may replay, and aborted rows are kept. Another registered workspace keeps its own window. The rows are selected by one read that holds no write lock, then deleted by key in batches of 1,000. `--older-than-days <N>`. |
-| `orbit gc tmp` | Report this workspace checkout's scratch contents (`.orbit/tmp/`) and empty it with `--confirm`, keeping the directory. `--confirm` refuses while any job run is pending, running, or retrying, and the command needs Linux or macOS. Without `--confirm` it only reports; `--dry-run` requests that default explicitly. |
-
-On a replica, `orbit gc worktrees` reaps a claimed run whose claim is already
-settled with the owner without checking its task. For any other run, it asks
-the owner machine for the task's status. A failed lookup is skipped and
-reported as `skipped:owner_unreachable` (transport failure),
-`skipped:owner_lookup_failed` (any other lookup failure), or
-`skipped:no_owner_route` (no route to the owner), with the reason in `detail`.
+| `orbit run cancel <run_id> --confirm` | Cancel a pending or running run. A cancelled task returns to `backlog` unless you pass `--block`. |
+| `orbit run extend <run_id> --for <duration>` \| `concurrency <run_id> --set <n>` | Lengthen a live drain's window, or change how many tasks it keeps in flight, without restarting it. |
+| `orbit gc worktrees` | Job-run worktrees whose task has settled. `--reclaim` targets only the `worktree.reclaim` paths and keeps the checkout. |
+| `orbit gc tmp` | This checkout's scratch contents (`.orbit/tmp/`), when no job runs are active. |
+| `orbit gc deployments` | Deployment directories, executable backups and store backups beyond the newest `--keep <n>` (default 2) of each. |
+| `orbit gc audit` | Audit rows older than `retention.audit_days`. |
+| `orbit gc runs` | Pipeline state of terminal runs older than `retention.runs_days`. The run and step rows stay. |
+| `orbit gc journal` | Applied task commit journal rows older than 14 days, except each task's newest. |
 
 ### Jobs and tools
 
 | Command | Purpose |
 |---|---|
-| `orbit job list` \| `show` \| `run` \| `replay` \| `resume` | List job definitions and the activity each step runs. Run a job by ID or YAML path, replay a previous run from step 0, or resume an interrupted run from its step checkpoints. See [Activities and Jobs](../../concepts/activities-jobs/). |
-| `orbit tool list` \| `show` \| `run` \| `add` \| `scaffold` \| `remove` \| `enable` \| `disable` \| `doctor` | List, inspect, and run registered tools; manage external tools and MCP plugins; check tool health. `scaffold` is a deprecated alias for `orbit plugin scaffold`. |
-| `orbit script list` \| `show` \| `grant` \| `revoke` \| `history` | Grant and inspect workspace scripts that a job step may run. A script is a manifest under `.orbit/resources/scripts/` whose `entry` names a program file, and a job step selects it with `target: script:<name>`. `grant` consents on this host to the current manifest and entry digests; editing either file makes the grant stale until granted again. A granted script step runs on Linux under a sandbox with no network. See [Script steps](../activity-job-yaml/#script-steps). |
-| `orbit visual capture --task <ID>` | Capture the working tree beside each of a task's mocks. For each mock it writes `mock.png`, `capture.png` and `side-by-side.png` under `--out`, plus `rules.json` with the workspace's UI rule results. `--mock <MOCK>` captures one mock artifact instead of all of them. Needs a verified browser kit (`orbit browser-kit install`) and a view manifest in `visual_review.manifests`. The captures are a self-check aid, not evidence of record. |
+| `orbit job list` \| `show\|run <job_id>` \| `replay\|resume <run_id>` | List and show [job definitions](/concepts/activities-jobs/), run one, replay a run from step 0, or resume an interrupted run from its checkpoints. |
+| `orbit tool list` \| `show\|run <name>` \| `doctor [name]` | List, inspect, run and health-check registered tools. `run --input '<json>'` passes the tool input. |
+| `orbit tool add <path>` \| `remove\|enable\|disable <name>` | Register, remove, enable or disable an external tool. |
+| `orbit script list` \| `show\|grant\|revoke\|history <name>` | Grant and inspect the [workspace scripts](/reference/activity-job-yaml/#script-steps) a job step may run. Editing a script makes its grant stale. |
 
-### Experiments
+### Fleet notices
 
 | Command | Purpose |
 |---|---|
-| `orbit experiment create <name>` \| `update <id>` \| `clone <id> --name <name>` | Define a draft experiment: `--arms` (a JSON array of `{name, control, weight, overlay}` with exactly one control), `--hypothesis`, `--population`, `--primary-metric`, `--guardrails`, `--min-sample`, `--max-days` and `--mode shadow\|live`. Only a draft can be edited; `clone` copies a definition into a new draft. |
-| `orbit experiment start` \| `pause` \| `resume` \| `reweight` \| `conclude` \| `abandon <id>` | Move an experiment through its lifecycle. `start` needs `experiments.enabled` and a free `experiments.max_running` slot; `reweight --weights '{"arm":2}'` or `--retire <arm>` opens a new segment. `conclude --arm <arm>` records the chosen arm, stores the readout at that moment and files one proposed task naming the experiment, arm, verdict and overlay; omitting `--arm` records no winner and files nothing. Concluding changes no configuration or repository file. `pause`, `reweight`, `conclude` and `abandon` require `--reason`. Only an operator may run these. |
-| `orbit experiment assign <id> --task <task> --arm <arm>` | Force a nonterminal task into an active arm of a running experiment, shadow or live. The task must have no arm assignment or an `explicit_crew` exclusion for this experiment; that exclusion is replaced. Records `forced: true`; existing arm assignments and other exclusions for the experiment stay sticky, and overlapping surfaces owned by another experiment are refused. Forced assignments are left out of the readout. Operator only. See [Run an experiment](../../how-to/experiments/). |
-| `orbit experiment readout <id>` | Show per-arm outcomes computed now, intention-to-treat with forced assignments left out and counted: `n`, mean and median with 95% bootstrap intervals (fixed seed) or Wilson intervals for rates, open (lagging) outcomes, crew mix, each arm's difference from control post-stratified by complexity, guardrail status, a sample-ratio chi-square against the weights (verdict withheld below p = 0.001), and overlay-digest drift. The verdict is `collecting` until every arm reaches `--min-sample` or `--max-days` passes, then `winner <arm>`, `no difference`, or `inconclusive`. `--metric <metric>` reports only that metric; the verdict is still read on the primary metric and guardrails. The shape carries `schema_version`. Read-only; agents may call `orbit.experiment.readout`. |
-| `orbit experiment show <id>` \| `list` | Show one experiment with its arms and every event in order, with actor, time and reason, or list the workspace's experiments (`--status` filters). Agents may call `orbit.experiment.show`, `orbit.experiment.list`, and `orbit.experiment.readout`. |
+| `orbit notice post --kind <incident\|maintenance\|info> --title <title>` | Post a [fleet notice](/how-to/fleet-notices/), or update the open one with the same key. |
+| `orbit notice close [id] --reason <text>` | Close a notice by ID or `--dedupe-key`. |
+| `orbit notice list` \| `show <id>` | List open notices, or show one. |
 
 ## Observe
 
 | Command | Purpose |
 |---|---|
-| `orbit audit list` \| `show` \| `prune` \| `export` \| `stats` | Query the audit event log. |
-| `orbit codebase analytics` | Rank repository paths by how often done tasks regressed at a recorded site under them, how often the tasks that declared them widened their footprint onto them, were blocked by a run failure or were rejected after a run, plus lock contention and paths reserved together, and list the paths in several rankings. A done task counts as regressed under a path only where a `regression_from` link to it records a defect site (`regression.sites`) under that path, not against its whole footprint. A regressed task none of whose links record a site counts under no path; the Regressions ranking reports it as `unsited`. Its denominator is the done tasks that declared the path or were sited under it, so a task whose site names a path it never declared adds that task there. Each rate shows its numerator and denominator. `--window 7d\|30d\|90d\|all` (default `90d`), `--min-support <N>` (smallest denominator a ranked row needs, default 15) and `--rollup file\|dir\|crate`. The table shows each ranking's top rows; `--json` is the dashboard's Codebase payload. The MCP tool `orbit.codebase.analytics` returns the same. |
-| `orbit codebase show <path>` | One path's rate, numerator, denominator and place in every ranking, with the task IDs behind each numerator (refused requesters for lock contention, and the requesters behind each coupled pair). The Regressions ranking also lists the defect sites recorded under the path with the regressed tasks that name each, and counts the regressed tasks that declared the path but record no site. Takes the same selection flags; the path is a key at the chosen rollup. The MCP tool is `orbit.codebase.show`. |
-| `orbit codebase related <path>` | List files that usually change alongside one repository file, from tasks that landed together. `--window 7d\|30d\|90d\|all` (default `30d`), `--min-support <N>` (shared landed tasks, default 15) and `--top <N>` (1–100, default 10). |
-| `orbit agents scorecard --role <role>` | Rank one agent role's crews and models: `orchestrators` (by tasks' `orchestrator` attribution, with `model unknown`), `implementers`, `reviewers` or `pilots`. Each term's count per 100 units of the role's work is weighted and summed, then pulled down toward the fleet average when above it; the table shows rank (`below` under the minimum support), crew, model, units, score and each term's count, then the weights. A role not computed yet says so. `--window 1h\|24h\|7d\|30d\|90d\|all\|last50\|last200\|last500\|last1000` (default `30d`; `all` is served as 90 days; `lastN` reaches back to the start of the newest N delivery attempts within the 90-day scan, whatever their age) and `--min-support <N>` (the units a row needs before it is ranked, default 10). Each call scans once and reports `cache_ttl_seconds: 0`. `--json` is the dashboard's `/api/agents/<role>/scorecard` payload; the MCP tool `orbit.agents.scorecard` returns the same. Implementers only: `--by-type` splits rows by task type within each complexity tier; `--by-type --shadow` (for example `orbit agents scorecard --role implementers --by-type --shadow`) compares recorded draw shares with the shares the crew-performance factor would have given, and `--shadow` requires `--by-type`; `--per-task` exports one row per implemented task (use `--json` for the machine-readable export) and cannot be combined with `--by-type` or `--shadow`. |
-| `orbit agents show --role <role> --crew <crew>` | One row's terms, each with its weight, count, rate and contribution, and the tasks behind every count with the records that made it. `--model <model>` picks the row when the crew has several. Takes the same selection flags; the MCP tool is `orbit.agents.show` (the row's model is `row_model` there). |
-| `orbit agents vision-probe` | Check that each crew's model sees images: run the canary per crew outside any delivery, one `image_input_probe_pipeline` run each, and print one row per crew with its executor, declared mode, result and any visual hold. `--crew <NAME>` (repeatable) probes only those crews, and fails before launching anything when a named crew cannot take images; without it, every enabled crew is probed and a crew that cannot take images is reported as a row. `--timeout-seconds <SECONDS>` bounds the wait (default `900`). Results are `seen`, `image_not_seen`, `no_image_input`, `vision_off`, `no_cli_runtime`, `failed` or `timeout`. Declare `image_input` on an executor only after its probe passes. See [Image input](../executor-yaml/#image-input). |
-| `orbit crew ladder` | The crew ladder (`workflow.crew_ladder`): for each complexity tier, its pool, its floor (the cheapest rung that is an enabled, weighted member of the pool), the candidate rung below it, and its shadow trial with status and would-be count (tasks assigned to the candidate arm), or the reason it has none (`mode_off`, `tier_not_listed`, `no_ladder_rung`, `floor_is_bottom_rung`, `operator_experiment`, `experiments_disabled`, `max_running`, or `pending` until the next delivery admission). Read-only; `--json` is the payload of the MCP tool `orbit.crew.ladder`. The keys are under `workflow.crew_ladder.*` in [Configuration](../config/). How the ladder and its trials work is in [Crew ladder](../../concepts/agents/#crew-ladder). |
-| `orbit orchestrator scorecard` \| `show <name>` | Deprecated aliases of `orbit agents scorecard\|show --role orchestrators`, removed in the next release. They print a note naming the replacement to stderr; `--json` and the `orbit.orchestrator.*` tools carry it as `deprecation`. |
-| `orbit log tail` | Tail the unified Orbit log feed. |
-| `orbit doctor` | Check workspace health: config, database, disk, indexes, locks, runs, and tasks blocked by a missing provider launcher (`infra-blocked-tasks`). Rows are ordered by severity: errors, warnings, ok, info, then skipped. The failure and warning count is written to stderr before the report, so it appears above a terminal table without becoming a plain stdout record; plain output remains tab-separated rows and JSON remains the full unfiltered array. `--problems` limits the human report to errors and warnings. Terminal tables are followed by full non-ok findings, with messages and `Fix:` actions wrapped to the sink width and ordered errors, warnings, then skipped. Truncated tables with findings point to `--format plain` or `--json`; all-ok output has no findings or hint. The `--fix-*` flags are opt-in repairs, and `--remove-graph` removes retired graph state from this worktree and the shared workspace. `--confirm` authorizes the destructive repairs, such as `--fix-orphan-task-stores`. |
-| `orbit doctor admission-receipts [--compact]` | Show owner admission receipt counts and logical payload bytes, with claim-mutation receipts reported separately. `--compact` replaces idle receipts, landed claim receipts and receipts of failed or revoked claims without a preserved PR with permanent tombstones keeping the machine ID, request ID and input digest; a tombstoned request is refused on replay and never admits again. Failed and revoked claims with a preserved PR keep full receipts for later external-merge settlement, even if no handoff was accepted. Claimed, running, handed-off and repair-pending claims keep full receipts; a missing claim also keeps its receipt. |
-| `orbit doctor providers` | Show each executor's provider CLI, whether dispatch can find it (and where), and its resolved `sandbox` mode. |
-| `orbit doctor fs-access <profile> <path>` | Dry-run a workspace-relative path against a filesystem profile's read and modify rules. See [Policy Format](../policy-format/) and [Scoping](../scoping/). |
+| `orbit attention` | [List what waits on an operator](/how-to/attention/): pilot holds, blocked tasks, failed runs, open decisions, review waits, red CI and more. `--all` reads every workspace and registered host. |
+| `orbit audit list\|stats` \| `show <id>` \| `export --output <file>` \| `prune --older-than <duration>` | Query, export and prune the audit event log. |
+| `orbit log tail` | Print recent lines of the unified Orbit log feed. `-f` follows it. |
+| `orbit doctor` | Check workspace health: config, database, disk, indexes, locks and runs. `--problems` prints only failures and warnings; the `--fix-*` flags run opt-in repairs. |
+| `orbit doctor providers` | Show each executor's provider CLI, sandbox readiness and usage limits. |
+| `orbit doctor fs-access <profile> <path>` | Dry-run a path against a [filesystem profile's](/reference/policy-format/) read and modify rules. |
+| `orbit doctor admission-receipts [--compact]` | Show owner admission receipt counts and sizes; `--compact` replaces idle and settled receipts with tombstones. |
+
+See [Investigate failures from the terminal](/how-to/diagnostics/).
+
+## Analytics
+
+The [dashboard](/how-to/dashboard/) shows the same rankings.
+
+| Command | Purpose |
+|---|---|
+| `orbit agents scorecard --role <implementers\|reviewers\|pilots>` | Score one role's rows by model and recorded effort. `--window` (default `30d`), `--until` and `--min-support` select; `--by-type` and `--per-task` break implementers down. |
+| `orbit agents show --role <role> --crew <crew>` | One row's terms and the tasks behind each count. |
+| `orbit agents rank` \| `rank calibrate` | Rank implementer models by quality and reliability, in tie bands; `--live` skips the settle lag and is provisional. `calibrate` freezes a new season's noise scales. |
+| `orbit agents ci-failures` | List required-check failures on candidate heads by cause: `code`, `flaky`, `infrastructure` or `unknown`. |
+| `orbit agents vision-probe` | Check that each crew's model [sees images](/reference/executor-yaml/#image-input), with one probe run per crew. |
+| `orbit codebase analytics` \| `show <path>` | Rank the repository paths that are risky for agents to change, or show one path's place in every ranking with the tasks behind each count. `--window` (default `90d`), `--min-support` and `--rollup file\|dir\|crate` select. |
+| `orbit codebase related <path>` | List files that usually change alongside one file. |
 
 ## Scheduler
 
 | Command | Purpose |
 |---|---|
-| `orbit clock tick` | Run one scheduler pass: fire due routines and mint due auto-tasks. `--dry-run`, `--verbose`. The global `--workspace <SELECTOR>` limits the pass to one registered workspace. |
-| `orbit sweep` | Alias for `orbit clock tick`, with the same arguments and output. |
-| `orbit routine list` \| `show` \| `pause` \| `resume` | Inspect routines, and pause or resume them on this host only. `list --include-inactive-plugins` (alias `--all`) also shows routines seeded by a plugin that is switched off, marked inactive with the reason. |
-| `orbit clock status` \| `pause` \| `enable` \| `set` | Control the host OS scheduler clock. |
-| `orbit clock repair` | Rewrite the installed clock unit when it names a missing, moved, or stale program, then re-register it. `orbit update` runs this as its last step. |
+| `orbit clock tick` | Run one scheduler pass: fire due routines and mint due auto-tasks. `--dry-run` only reports. Alias: `orbit sweep`. |
+| `orbit clock status\|pause\|enable\|repair` \| `set --cadence-seconds <n>` | Inspect and control the host scheduler clock. `repair` rewrites a clock unit that names a missing, moved or stale program. |
+| `orbit routine list` \| `show <name>` | List routines with their next-due time and last fire, or show one. |
+| `orbit routine enable\|disable\|pause\|resume <name>` | `enable` and `disable` change the routine's versioned definition (operator only); `pause` and `resume` act on this host only. |
 | `orbit routine init [--install-clock]` | Read this machine's identity; `--install-clock` also installs the OS clock unit. |
-| `orbit auto-task add` \| `list` \| `show` \| `update` \| `toggle` \| `mint` | Define recurring auto-task templates and mint tasks from them. `toggle <name> on --dry-run` previews enabling a condition auto-task: the match count and the subjects it would baseline or fire, writing nothing. `list --include-inactive-plugins` (alias `--all`) also shows definitions seeded by a plugin that is switched off, marked inactive with the reason. |
-| `orbit auto-task delete` \| `restore` | `delete` removes a definition with its scheduler cursor and delivery consumer state (`--force` works even while a minted task is open). `restore` reinstates a deleted shipped default with its shipped content. A deleted shipped default stays out of later reseeds. |
-| `orbit auto-task recover` \| `reset` | Preview or apply an audited repair of a delivery consumer. `recover` unsticks one stalled by a settings change and keeps its coverage debt; `reset` forgets the debt and re-baselines at the branch head. |
-| `orbit automation explain <definition>` | Evaluate one routine's or auto-task's condition trigger over live state without writing anything: scope, prefilter, ownership verdict, up to 20 matches, up to 20 closest misses (subjects failing exactly one top-level clause), and one subject's clause tree with each clause's value and the values it read. `--subject <task ID>` picks the subject; `routine:<name>` or `auto-task:<name>` disambiguates a shared name. `--json` is the payload of the MCP tool `orbit.automation.explain`. Each match shows its arm state and remaining hold, and tracking shows any stall, the last pass and skip, recent fires with their upstream chain, and `self`. See [Condition triggers](../scheduling-yaml/#condition-triggers). `job:<name>` instead shows a job's auto-task steps as checked at load, with each named auto-task resolved; see [Auto-task steps](../activity-job-yaml/#auto-task-steps-defined-and-explained-not-run). |
-| `orbit automation clear-stall <definition> --reason <text>` | Operator only. Clear a condition's stall (`match_storm`, `too_many_matches`, `loop_suspected` or `oscillating`) on the workspace owner, recorded in the condition's audit. Nothing fires here; the next clock pass evaluates the condition again. |
+| `orbit auto-task add --name <name> --title <title>` \| `list` \| `show\|update <name>` | Define and inspect auto-task templates. |
+| `orbit auto-task toggle <name> <on\|off>` | Enable or disable a definition. |
+| `orbit auto-task mint <name>` | Mint a task from a definition now, ignoring schedule, dedupe and `enabled`. |
+| `orbit auto-task delete\|restore <name>` | Delete a definition, or reinstate a deleted shipped default. |
+| `orbit auto-task recover\|reset <name>` | Preview or apply an [audited repair](/how-to/recurring-work/#repair-a-delivery-triggered-definition) of a delivery-triggered definition. |
+| `orbit automation explain <definition>` | Show what a routine's or auto-task's [condition trigger](/reference/scheduling-yaml/#condition-triggers) matches over live state, writing nothing. |
+| `orbit automation clear-stall <definition> --reason <text>` | Clear a stalled condition on the workspace owner. |
 
-See [Schedule Recurring Work](../../how-to/recurring-work/).
+See [Schedule recurring work](/how-to/recurring-work/).
 
 ## Services
 
 | Command | Purpose |
 |---|---|
-| `orbit mcp init` / `orbit mcp remove` | Register or unregister an MCP client integration. Clients: `claude`, `codex`, `gemini`, `antigravity`, `grok`, `cursor`, `vscode`, `windsurf`, or `--all`. `--scope workspace` (default, repo-local) or `home` (user-level). `--federated` manages the mux entry separately. |
-| `orbit mcp serve` | Serve the MCP tool surface over stdio, or act as a client with `--mode remote <SSH_HOST>` or `--mode federated`. `--operator` serves operator authority; in a client mode it is also the operator statement for every SSH destination opened. `--orchestrator <crew>` sets the orchestrator recorded on tasks the session creates and grants nothing. `--toolset <a,b>` adds opt-in toolsets (`leases`, `experiments`, `analytics`, `decision-channel`, or `all`) beside the default one; see [MCP toolsets](../../how-to/mcp-integration/#toolsets). |
-| `orbit mcp listen [ADDR]` | Serve the same surface on a TCP socket. Binds `127.0.0.1:7879` unless you pass `--allow-non-loopback`. `--workspace <selector>` binds each accepted session to that workspace by default. `--toolset` works as for `orbit mcp serve`. |
-| `orbit web serve` | Serve the Orbit dashboard for the registry under the resolved root, so `orbit --root <ROOT> web serve` shows only `<ROOT>`'s workspaces. `--workspace <SELECTOR>` preselects one. `--operator` enables Operations controls without a TTY or `ORBIT_OPERATOR`. |
-| `orbit web connect` | Open a remote workspace's dashboard over an SSH tunnel. `--workspace <SELECTOR>` preselects the remote workspace; `--root` is refused. The remote server starts with `--operator` unless you pass `--no-operator`, which keeps Operations read-only. |
-| `orbit web open` | Reopen a running, session-enabled local dashboard with a fresh private URL. `--no-open` prints the URL without opening a browser; treat it as a credential. See [Private browser sessions](../../how-to/dashboard/#private-browser-sessions). |
+| `orbit mcp init\|remove` | Register or unregister an [MCP client integration](/how-to/mcp-integration/): `--client <name>`, `--all` or `--auto`, with `--scope workspace\|home`. `init --operator` registers operator authority. |
+| `orbit mcp serve` | Serve the MCP tool surface over stdio. `--mode remote <ssh-host>` or `--mode federated` relays to other Orbit servers; `--role` and `--toolset` choose the surface ([roles](/how-to/mcp-integration/#roles), [toolsets](/how-to/mcp-integration/#toolsets)). |
+| `orbit mcp listen [addr]` | Serve the same surface on a TCP socket, `127.0.0.1:7879` by default. |
+| `orbit web serve` | Serve the [dashboard](/how-to/dashboard/) on `127.0.0.1:7878`. `--operator` grants operator capability for the governed controls. |
+| `orbit web connect <ssh-host>` | Open a remote host's dashboard over an SSH tunnel. |
 
-See [Use the Dashboard](../../how-to/dashboard/) for connection, workspace
-scope, Operations controls, and authorization. See
-[Connect Your Agent](../../how-to/mcp-integration/) for the agent tool surface.
+## Advanced
+
+### Applications
+
+| Command | Purpose |
+|---|---|
+| `orbit application consent --input-file <file> --credential-file <file>` | Operator only. Approve a [consent request](/reference/application-consent/) so a Unix service or CLI child can make scoped calls into a workspace. |
+| `orbit application rotate\|revoke <consent_id>` | Replace a consent's credential (same two files as `consent`), or revoke the consent. |
+
+### Decision requests
+
+With `decision_channel.enabled` on, work held on a human decision raises a
+[decision request](/how-to/decision-channels/).
+
+| Command | Purpose |
+|---|---|
+| `orbit decision list` \| `show <id>` \| `answer <id> <answer>` | List open decision requests (`--all` adds answered, superseded and expired ones), show one with its allowed answers, or answer one as the operator. |
+| `orbit decision raise --task <id> --question <text> --options <json>` | [Raise a multiple-choice decision](/how-to/decision-channels/#decisions-an-agent-raises-on-a-human-task) on a human-crew task. |
+| `orbit decision reverse <id>` | Re-open a request that a precedent or a model answer settled. Operator only. |
+| `orbit decision rule-auto <rule> <on\|off>` | Turn auto on or off for one corpus rule. |
+| `orbit decision consolidate [--since <YYYY-MM-DD>]` | Propose corpus rule edits from human answers. Writes nothing. |
+| `orbit decision submit <id> <answer> --channel <channel> --token <token>` | Submit a human's answer through a registered decision channel. |
+| `orbit decision digest --channel <channel>` | Raise any missing approval requests for a channel and show its decision digest. |
+| `orbit decision channel register <channel> --human <human> --plugin <plugin>` \| `list` \| `revoke\|rotate-key <channel>` | Register, list, revoke and rotate this host's decision channels. |
+
+### Experiments
+
+| Command | Purpose |
+|---|---|
+| `orbit experiment create <name>` \| `update <id>` \| `clone <id> --name <name>` | Define, edit or copy a draft [experiment](/how-to/experiments/): `--arms <json>`, `--hypothesis`, `--primary-metric`, `--mode shadow\|live` and more. |
+| `orbit experiment start\|pause\|resume\|reweight\|conclude\|abandon <id>` | Move an experiment through its lifecycle. Operator only. `start` needs `experiments.enabled`; `conclude --arm <arm>` records the chosen arm. |
+| `orbit experiment assign <id> --task <task> --arm <arm>` | Force a task into an active arm of a running experiment. |
+| `orbit experiment readout <id>` | Show per-arm outcomes, intervals and the [verdict](/how-to/experiments/#read-the-readout). |
+| `orbit experiment show <id>` \| `list` | Show one experiment with its arms and event log, or list the workspace's experiments. |
+| `orbit experiment delete <id> --reason <text>` | Delete a finished experiment that never applied a treatment. |
+
+### Crew memory (experimental)
+
+[Crew memory](/how-to/crew-memory/) is off by default. Until
+`crew_memory.enabled` is `true`, only `show`, `history` and `export` work. An
+operator can
+[grant an agent read access](/how-to/crew-memory/#grant-an-agent-read-access).
+
+| Command | Purpose |
+|---|---|
+| `orbit memory show [<key>\|global] [--revision <n>]` \| `history <key>` | Show a memory space or summarise every space, or list a space's revisions and audit events. A space is keyed by model ID. |
+| `orbit memory export [--dir <dir>]` | Write every current space to Markdown files, in `.orbit/memory` by default. |
+| `orbit memory write <key> --file <path>` \| `reset <key>` \| `copy <from> <to>` | Replace a space with the given files, empty it, or copy one model's space to another. Operator only. |
+| `orbit memory proposals` \| `proposal accept <id> [--edit <file>]` \| `proposal reject <id> --reason <text>` | List open global-memory proposals with their evidence, accept one into a new global revision, or reject it with a reason. |
+
+### Residents and evolution
+
+| Command | Purpose |
+|---|---|
+| `orbit resident show <task>` \| `list` | Show a [mandate](/reference/resident-mandates/) with its authority and grant history, or list mandates. |
+| `orbit resident grant <task>` | Widen (`--add`, `--add-workspace`) or narrow (`--remove`, `--drop-workspace`, `--deadline`) a mandate's authority. |
+| `orbit resident relay <task> --quote <words> --source <json>` | Relay a human's words to a resident, verbatim. It never changes authority. |
+| `orbit resident control <task> <pause\|resume\|stop\|wake\|takeover\|release> --reason <why>` | Change whether a resident fires. `stop` ends the mandate. |
+| `orbit resident checkpoint <task> --record <json>` | Append the live cycle's checkpoint record. |
+| `orbit resident metrics\|digest` | Report the resident [metrics or digest](/reference/resident-mandates/#digest-and-metrics): interventions, escalations, reversals, top pains and open proposals. |
+| `orbit evolution add --event <json>` \| `list` \| `show <id>` | Record an interactive cost event, list evolution signatures with summed costs, or show one record with its occurrences. |
+| `orbit evolution decline <id> [--days <n>]` | Operator only: suppress proposals for a signature. |

@@ -3,13 +3,13 @@ use orbit_core::OrbitRuntime;
 
 use crate::command::{CommandOut, Execute};
 
-use super::agent::RunAgentArgs;
 use super::auto;
 use super::cancel::RunCancelArgs;
 use super::concurrency::RunConcurrencyArgs;
 use super::events::RunEventsArgs;
 use super::extend::RunExtendArgs;
 use super::history::RunHistoryArgs;
+use super::hydrate_settlements::RunHydrateSettlementsArgs;
 use super::job::JobRunArgs;
 use super::logs::RunLogsArgs;
 use super::profiles::RunProfilesArgs;
@@ -21,35 +21,16 @@ use super::task_pilot;
 use super::trace::RunTraceArgs;
 
 const RUN_AFTER_HELP: &str = "\
-Workflow entrypoints:
-  orbit run auto [--for 30m] [--concurrency <N>] [--complete]
-  orbit run auto --stop
-  orbit run ship [task_id ...] [--complete]
-  orbit run task-pilot [task_id ...]
+Examples:
+  orbit run auto --for 2h --concurrency 8
+  orbit run ship <task_id>
   orbit run job <job_id> [--input key=value] [--json]
-  orbit run agent <prompt> [--cwd DIR] [--crew NAME] [--timeout SECONDS] [--provider-sandbox MODE]
-
-Run history:
-  orbit run history [--task <id>] [--state failed,held] [--since 24h] [--limit 50] [--failures]
-  orbit run history -j <job_id>
-  orbit run show [run_id] [-s step_id] [--json]
-  orbit run logs [run_id] [-s step_id] [--json]
-  orbit run events [run_id] [-s step_id] [--type event_type] [--json]
-  orbit run trace [run_id] [--json]
-  orbit run settlements [--since 7d] [--json]
-
-Maintenance:
+  orbit run history --state failed --since 24h
+  orbit run show <run_id>
   orbit run cancel <run_id> --confirm
-  orbit run concurrency <run_id> --set 7
-  orbit run extend <run_id> --for 2h [--concurrency <N>]
-  orbit run profiles [--accuracy] [--json]
 
-Owner/local drains count every in-flight child against N. Pull drains grant capped replacement
-credit for leaves in before-landing review: admission counts occupied - min(reviewing, N)
-against N. Reviewing leaves can exceed N as replacements reach review; with an unchanged N and
-no pre-existing excess, total occupied is at most 2N and implementing at most N. Lowering N
-preserves running leaves, so existing excess can remain temporarily. orbit run show reports
-stage counts, and review rebuilds still use repository build-budget slots.
+`orbit run <COMMAND> -h` lists a command's flags. Drain admission, concurrency
+and window rules: installed orbit-orchestrate skill `references/orchestration.md`.
 ";
 
 #[derive(Args)]
@@ -58,37 +39,7 @@ stage counts, and review rebuilds still use repository build-budget slots.
     arg_required_else_help = true,
     subcommand_required = true,
     override_usage = "orbit run <COMMAND>",
-    after_help = RUN_AFTER_HELP,
-    help_template = "\
-{about}
-
-{usage-heading} {usage}
-
-Workflows:
-  auto         Drain the workspace backlog for a window; --stop ends new admissions
-  ship         Ship backlog or explicitly selected tasks through the gated task pipeline
-  task-pilot   Preflight proposed/backlog tasks and persist validated selectors
-  job          Run an arbitrary job by ID
-  agent        Invoke an agent on the host for exploration or debugging (operator only)
-
-Audits:
-  history      Show recent job runs filtered by job, task, state or time
-  show         Show structured state and step summary for a job run
-  logs         Print raw stdout/stderr captured for a job run
-  events       Show audit events recorded for a job run
-  trace        Show audit event parent/child trace for a job run
-  settlements  Show failure and release settlements claimed leaves sent this owner
-
-Maintenance:
-  cancel       Cancel a pending or running job run
-  concurrency  Retune a running drain's admission ceiling
-  extend       Lengthen a running drain's window, and optionally retune it
-  readiness    Explain why backlog tasks are waiting in auto-drain
-  profiles     Show what each kind of delivery costs on this host, minute by minute
-
-Options:
-{options}
-{after-help}"
+    after_help = RUN_AFTER_HELP
 )]
 pub struct RunCommand {
     #[command(subcommand)]
@@ -126,6 +77,9 @@ pub enum RunSubcommand {
     Trace(RunTraceArgs),
     /// Show failure and release settlements claimed leaves sent this owner
     Settlements(RunSettlementsArgs),
+    /// Keep a settled claim's leaf run evidence, read from its follower (operator)
+    #[command(name = "settlements-hydrate")]
+    SettlementsHydrate(RunHydrateSettlementsArgs),
     /// Cancel a pending or running job run
     Cancel(RunCancelArgs),
     /// Retune a running drain's admission ceiling
@@ -134,8 +88,6 @@ pub enum RunSubcommand {
     Extend(RunExtendArgs),
     /// Run an arbitrary job by ID
     Job(JobRunArgs),
-    /// Invoke an agent on the host for exploration or debugging (operator only)
-    Agent(RunAgentArgs),
 }
 
 impl Execute for RunSubcommand {
@@ -152,11 +104,11 @@ impl Execute for RunSubcommand {
             RunSubcommand::Events(command) => command.execute(runtime),
             RunSubcommand::Trace(command) => command.execute(runtime),
             RunSubcommand::Settlements(command) => command.execute(runtime),
+            RunSubcommand::SettlementsHydrate(command) => command.execute(runtime),
             RunSubcommand::Cancel(command) => command.execute(runtime),
             RunSubcommand::Concurrency(command) => command.execute(runtime),
             RunSubcommand::Extend(command) => command.execute(runtime),
             RunSubcommand::Job(command) => command.execute(runtime),
-            RunSubcommand::Agent(command) => command.execute(runtime),
         }
     }
 }

@@ -52,7 +52,7 @@ window.OrbitDrain = ({el,ui,tool,open,current}) => {
     const workspace=current(), g=++revision;
     fresh=false;controls();
     try{
-      const payload=await tool('orbit_workflow_auto',{workspace,action:'status'});
+      const payload=await tool('orbit_workflow',{workspace,action:'auto',mode:'status'});
       if(g!==revision||workspace!==current())return;
       if(payload.schema_version!==1||payload.workspace!==workspace||!payload.capacity||!Array.isArray(payload.tasks)||payload.controls_authorized!==true)throw new Error('Drain readiness is unavailable for this destination.');
       data=payload;fresh=true;render(payload);
@@ -68,7 +68,7 @@ window.OrbitDrain = ({el,ui,tool,open,current}) => {
     const button=el(action==='start'?'drain-start':'drain-stop');
     if(button.disabled||!fresh||busy)return;
     const workspace=current(), g=revision;
-    const args={workspace,action};
+    const args={workspace,action:'auto',mode:action};
     if(action==='start'){
       if(!el('drain-form').reportValidity())return;
       args.for_seconds=Number(el('drain-duration').value);
@@ -79,7 +79,7 @@ window.OrbitDrain = ({el,ui,tool,open,current}) => {
     const pending=action==='start'?'Starting window…':'Stopping new admissions and settling recorded work…';
     message(pending);
     try{
-      const result=await tool('orbit_workflow_auto',args);
+      const result=await tool('orbit_workflow',args);
       if(result.schema_version!==1||result.workspace!==workspace||result.action!==action||(action==='start'&&(typeof result.run_id!=='string'||!['submitted','queued'].includes(result.state)))||(action==='stop'&&(!['stopped','idle','cancelled_queued'].includes(result.outcome)||!Array.isArray(result.coordinators))))throw new Error('Unrecognized drain receipt');
       uncertain.delete(workspace);
       const resultText=action==='start'?`Window ${result.run_id} ${result.state}. Completion: ${result.completion}.`:

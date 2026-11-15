@@ -3,7 +3,7 @@
 Use this when the user's machine runs Windows. Orbit has no native Windows
 build; it runs as the Linux build inside one WSL2 distribution, as one Linux
 user, and every other reference in this skill applies inside that
-distribution. Native Windows is compile-checked only. The full procedure,
+distribution. Native Windows is not built or checked in CI. The full procedure,
 Microsoft sources and verification matrix are in the
 [Windows WSL2 runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/windows-wsl2.md).
 

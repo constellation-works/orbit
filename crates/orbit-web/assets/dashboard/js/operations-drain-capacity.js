@@ -1,8 +1,8 @@
 import { cpuReadingLabel, cpuReadingValue } from './host-resources.js';
-import { drainReason, drainReadinessView, DRAIN_LOCK_REASONS } from './drain-waits.js';
+import { drainReason, DRAIN_LOCK_REASONS } from './drain-waits.js';
 import { drainCheckout } from './drain-start.js';
-import { autoDrainNumber, $, operationsState, runLink, time, workspaceReadOnlyReason, workspaceSelectionReason } from './operations-shared.js';
-import { el, isAggregateView } from './common.js';
+import { autoDrainNumber, $, runLink, time, workspaceReadOnlyReason, workspaceSelectionReason } from './operations-shared.js';
+import { el, infoHint, isAggregateView, pinnedInfoHint } from './common.js';
 
 // ORB-11250: bounded backlog auto-drain window ("orbit run auto --for
 // <duration> [--complete]" from the dashboard). One workspace-scoped action,
@@ -31,8 +31,7 @@ export function autoDrainLiveWindow(payload) {
 }
 
 // The status card and Start card share workspace and authority refusals.
-export function autoDrainReasons(payload) {
-  const workspaceReason = workspaceReadOnlyReason();
+export function autoDrainReasons(payload, workspaceReason = workspaceReadOnlyReason()) {
   return {
     submit: workspaceReason,
     complete: workspaceReason || (drainCheckout(payload).replica
@@ -96,9 +95,8 @@ export function autoDrainTimeLeft(endsAt) {
 }
 
 export function updateDrainIndicators(phase, label) {
-  const aggregate = isAggregateView();
-  const indicatorPhase = aggregate ? "fleet" : phase;
-  const indicatorLabel = aggregate ? "Fleet drains" : label;
+  const indicatorPhase = phase;
+  const indicatorLabel = label;
   const tab = document.querySelector?.('#dock-mode-toggle [data-mode="drain"]');
   const tabState = $("dock-drain-state");
   if (tab) {
@@ -110,11 +108,10 @@ export function updateDrainIndicators(phase, label) {
     tab.setAttribute("aria-label", `${name}: ${indicatorLabel}`);
     tab.title = indicatorLabel;
   }
-  if (tabState) tabState.textContent = aggregate ? "fleet" : phase === "winding_down" ? label : "";
+  if (tabState) tabState.textContent = phase === "winding_down" ? label : "";
 }
 
-// The card and dock tab describe the selected workspace. The top-bar pill
-// separately describes the fleet, including work outside that selection.
+// The card and dock tab describe the selected workspace.
 export function autoDrainPhase(payload) {
   const live = autoDrainLiveWindow(payload);
   const capacity = payload.capacity || {};
@@ -124,45 +121,40 @@ export function autoDrainPhase(payload) {
     : phase === "winding_down" ? "Winding down" : "idle";
   // A replica's pull drain has its own indicator; the owner's phase stays
   // "idle" here, so the header and the announcement below keep their wording.
-  const pulling = phase === "idle" && Boolean(live.pullRunId) && !workspaceSelectionReason();
+  const pulling = phase === "idle" && Boolean(live.pullRunId) && (isAggregateView() || !workspaceSelectionReason());
   const pullLabel = live.pullAdmissionsStopped ? "Pull drain · admissions stopped" : "Pull drain";
   return { live, capacity, phase, running, label, pulling, pullLabel };
 }
 
-export function autoDrainCapacity(capacity, counts, blocked) {
+export function autoDrainCapacity(capacity, counts, blocked, { pull = false } = {}) {
   const busy = autoDrainNumber(capacity.active_leaf_runs ?? capacity.occupancy?.active_leaf_runs);
   const limit = autoDrainNumber(capacity.max_active_leaf_runs);
   const free = autoDrainNumber(capacity.free_slots);
   const known = Number.isFinite(busy) && Number.isFinite(limit) && limit > 0;
-  const admits = Number.isFinite(free) ? Math.max(0, Math.min(free, counts.eligible)) : counts.eligible;
-  let summary;
-  if (capacity.host_shutdown && capacity.host_shutdown_holding !== false) {
-    summary = "New tasks cannot start while a host shutdown is scheduled.";
-  } else if (capacity.host_shutdown) {
-    const mode = capacity.host_shutdown.mode || "shutdown";
-    const at = capacity.host_shutdown.scheduled_at || "a later time";
-    summary = `A host ${mode} is scheduled for ${at}. Admissions continue until the hold horizon.`;
-  } else if (capacity.resource_throttle) {
-    const resources = Array.isArray(capacity.resource_throttle.resources)
-      ? capacity.resource_throttle.resources.map(item => item.resource).join(", ") : "";
-    summary = `New tasks cannot start until the host resource throttle clears${resources ? ` (${resources})` : ""}.`;
-  } else if (capacity.admissions_stopped === true) {
-    summary = "This window has stopped starting new tasks. Tasks already admitted keep running.";
+  // Each message is short enough for one line at the 336px dock and the 375px
+  // phone dock. Detail the short wording drops is `detail`: it shows as focusable
+  // hover help beside the message, so it reads without a mouse. With eligible work
+  // and free slots there is nothing to explain, so no line shows.
+  let summary = "";
+  let detail = "";
+  const hold = autoDrainAdmissionHold(capacity, { pull });
+  if (hold) {
+    summary = hold.summary;
+    detail = hold.detail;
   } else if (Number.isFinite(free) && free <= 0 && known && busy >= limit) {
     const toClear = busy - limit + 1;
-    summary = `The workspace leaf limit is reached; ${autoDrainPlural(toClear, "occupied slot")} must clear before another task can start.`;
+    summary = `Leaf limit: ${autoDrainPlural(toClear, "slot")} must clear.`;
+    detail = `The workspace leaf limit is reached; ${autoDrainPlural(toClear, "occupied slot")} must clear before another task can start.`;
   } else if (Number.isFinite(free) && free <= 0) {
-    summary = "No admissions are available in this readiness snapshot.";
+    summary = "No admissions in this snapshot.";
   } else if (counts.eligible === 0) {
     if (blocked > 0) {
-      summary = `No tasks are eligible yet; ${autoDrainPlural(blocked, "pool task")} ${blocked === 1 ? "waits" : "wait"} on task locks or live claims.`;
+      summary = `${autoDrainPlural(blocked, "task")} ${blocked === 1 ? "waits" : "wait"} on locks or claims.`;
     } else {
       summary = counts.waiting > 0
-      ? `Nothing is eligible yet; ${autoDrainPlural(counts.waiting, "task")} ${counts.waiting === 1 ? "waits" : "wait"} in the pool.`
-      : "Nothing is waiting in the backlog.";
+      ? `None eligible; ${autoDrainPlural(counts.waiting, "task")} waiting.`
+      : "Backlog is empty.";
     }
-  } else {
-    summary = `A window started now admits up to ${autoDrainPlural(admits, "task")}.`;
   }
   const label = known ? `Workspace: ${busy} of ${limit} leaf slots in use` : "Workspace: capacity unknown";
   const full = Number.isFinite(free) && free <= 0;
@@ -197,19 +189,16 @@ export function autoDrainCapacity(capacity, counts, blocked) {
   // A shortfall the operator should notice reads amber; a stopped window is
   // the operator's own choice and does not.
   const held = full && capacity.admissions_stopped !== true;
-  const count = el("span", {
-    class: `drain-capacity-count mono${full ? " full" : ""}`,
-    text: known ? `${busy}/${limit} slots` : "capacity unknown",
-    title: [label, Number.isFinite(free) ? `${Math.max(0, free)} free` : "", ...byPipeline].filter(Boolean).join("\n"),
-  });
-  const result = el("div", { class: "drain-capacity" }, [
-    bar,
-    el("div", { class: "drain-capacity-line" }, [
-      el("p", { class: `drain-slots${held ? " held" : ""}`, text: summary }),
-      count,
-    ]),
-  ]);
-  // One pipeline holding every slot is already in the count's tooltip; a mix
+  // The slot bar opens the free-slot and per-pipeline breakdown on hover, focus and tap.
+  const breakdown = pinnedInfoHint([label, Number.isFinite(free) ? `${Math.max(0, free)} free` : "", ...byPipeline].filter(Boolean).join("\n"));
+  breakdown.classList.add("drain-capacity-hint");
+  breakdown.prepend(bar);
+  const result = el("div", { class: "drain-capacity" }, [breakdown]);
+  if (summary) {
+    const message = el("p", { class: `drain-slots${held ? " held" : ""}`, text: summary });
+    result.appendChild(el("div", { class: "drain-slots-row" }, detail ? [message, infoHint(detail)] : [message]));
+  }
+  // One pipeline holding every slot is already in the bar's breakdown; a mix
   // is worth a visible line.
   if (pipelines.length > 1) {
     const list = el("ul", { class: "drain-pipeline-occupancy" }, byPipeline.map(text => el("li", { class: "drain-pipeline mono", text })));
@@ -254,6 +243,90 @@ export function throttleNames(resources) {
   return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0] || "";
 }
 
+// Explain what the current throttle allows for this admission route. Readiness
+// sets `applies` only for the local CPU-only light gate; pull drains never use
+// that budget, even when the same host snapshot has reserved slots available.
+export function autoDrainThrottleCopy(capacity, { pull = false } = {}) {
+  const resources = throttledResources(capacity);
+  const names = throttleNames(resources);
+  const cpuOnly = resources.length === 1 && resources[0].resource === "cpu";
+  if (pull) {
+    return {
+      summary: `Pull drain held by ${names} throttle.`,
+      detail: `New pull tasks cannot start until the host ${names} throttle clears. Pull drains do not use reserved CPU-light slots.`,
+    };
+  }
+  if (cpuOnly) {
+    const budget = capacity?.cpu_light_budget || {};
+    const remaining = autoDrainNumber(budget.remaining);
+    const reserved = autoDrainNumber(budget.reserved);
+    const free = autoDrainNumber(capacity?.free_slots);
+    if (budget.applies === true && remaining > 0 && free > 0) {
+      const available = Math.min(remaining, free);
+      return {
+        summary: "CPU throttle: eligible CPU-light tasks may start.",
+        detail: `CPU pressure holds other tasks. Eligible CPU-light tasks may use up to ${autoDrainPlural(available, "free reserved slot")} while workspace capacity is available.`,
+      };
+    }
+    if (budget.applies === true && remaining <= 0) {
+      return {
+        summary: "CPU throttle: CPU-light budget exhausted.",
+        detail: `All ${Number.isFinite(reserved) ? reserved : "reserved"} CPU-light slots are in use. New tasks wait until a slot frees or CPU pressure clears.`,
+      };
+    }
+    if (budget.applies === true && free === 0) {
+      return {
+        summary: "CPU throttle: no free leaf slots.",
+        detail: "CPU pressure holds ordinary tasks, and no workspace leaf slots are free for CPU-light tasks.",
+      };
+    }
+    if (Number.isFinite(reserved) && reserved === 0) {
+      return {
+        summary: "CPU throttle: CPU-light admission disabled.",
+        detail: "The CPU-light budget is disabled, so new tasks wait until CPU pressure clears.",
+      };
+    }
+  }
+  const compactNames = names.replace(/ and /g, "/");
+  return {
+    summary: `${compactNames} throttle holds new tasks.`,
+    detail: `New tasks cannot start until the host ${names} throttle clears.`,
+  };
+}
+
+// Holds that apply to the current capacity view. Shutdown and explicit stops
+// precede resource pressure so a secondary throttle cannot hide the real hold.
+export function autoDrainAdmissionHold(capacity, { pull = false } = {}) {
+  if (capacity?.host_shutdown && capacity.host_shutdown_holding !== false) {
+    return {
+      summary: "Host shutdown holds new tasks.",
+      detail: "The host shutdown hold prevents new tasks from starting.",
+    };
+  }
+  if (pull && capacity?.pull_drain_admissions_stopped === true) {
+    return {
+      summary: "Pull drain admissions stopped.",
+      detail: "This pull drain has stopped claiming new tasks. Tasks already claimed keep running.",
+    };
+  }
+  if (!pull && capacity?.admissions_stopped === true) {
+    return {
+      summary: "Window admissions stopped.",
+      detail: "This window has stopped starting new tasks. Tasks already admitted keep running.",
+    };
+  }
+  if (capacity?.resource_throttle) return autoDrainThrottleCopy(capacity, { pull });
+  if (capacity?.host_shutdown) {
+    const mode = capacity.host_shutdown.mode || "shutdown";
+    const at = capacity.host_shutdown.scheduled_at || "a later time";
+    return {
+      summary: `Host ${mode}; holds later.`,
+      detail: `A host ${mode} is scheduled for ${at}. Admissions continue until the hold horizon.`,
+    };
+  }
+  return null;
+}
+
 // The current readings, stop thresholds and resume thresholds of a throttle.
 function throttleSentence(resources) {
   const held = resources
@@ -268,18 +341,6 @@ export function autoDrainThrottleLine(capacity) {
   const note = el("p", { class: "operation-control-note drain-throttle-line", text: throttleSentence(resources) });
   note.setAttribute("role", "status");
   return note;
-}
-
-// How many waiting tasks name each task as their lock holder, from the last
-// readiness snapshot of the selected workspace.
-export function drainHolderCounts() {
-  const counts = new Map();
-  const tasks = Array.isArray(operationsState.lastAutoDrain?.tasks) ? operationsState.lastAutoDrain.tasks : [];
-  for (const entry of tasks) {
-    if (!entry || entry.eligible === true) continue;
-    for (const holder of drainReadinessView(entry).badge?.holders || []) counts.set(holder, (counts.get(holder) || 0) + 1);
-  }
-  return counts;
 }
 
 // A dismissed provider-limit note stays hidden in this browser until its set
@@ -375,5 +436,3 @@ export function autoDrainProviderAuth(failures) {
   }
   return list;
 }
-
-// A recorded forecast object, or null when the field is absent or not an object.

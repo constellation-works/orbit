@@ -3,17 +3,8 @@
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-//! Provider CLI runtimes and audit contracts for Orbit.
-//!
-//! Provider adapters build command descriptors (program, arguments and stdin)
-//! that `orbit-engine` executes through `orbit-exec`. Response helpers project
-//! provider stdout into Orbit envelopes and diagnostics.
-//!
-//! [`loop_engine::audit`] retains the structured events and redacted blob sinks
-//! that the engine persists, including historical event variants.
-//!
-//! # Dependency direction
-//! `orbit-common` / `orbit-types` → `orbit-agent` → `orbit-engine`
+#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
+//! Provider CLI runtimes, response projections and audit contracts for Orbit.
 
 mod agent;
 pub mod loop_engine;
@@ -25,12 +16,15 @@ pub use agent::{Agent, AgentConfig};
 pub use providers::{
     antigravity_background_task_diagnostic, antigravity_print_timeout_diagnostic,
     antigravity_terminal_error_diagnostic, apply_antigravity_print_timeout,
-    latest_assistant_message, muse_terminal_failure_diagnostic, normalize_cli_stdout,
-    project_cli_response, provider_long_prompt_requests, provider_usage_windows,
+    assign_recorded_tool_calls, latest_assistant_message, muse_terminal_failure_diagnostic,
+    normalize_cli_stdout, project_cli_response, provider_long_prompt_requests,
+    provider_supports_continuity, provider_usage_windows, recorded_tool_calls,
 };
-pub use types::{AgentOperation, AgentRequest, AgentResponseStatus};
+pub use types::{AgentRequest, AgentResponseStatus};
 pub use types::{
-    DeclaredResponseFailure, ParsedStdout, provider_authentication_failure,
-    provider_capacity_exhausted, provider_content_refusal, provider_invocation_diagnostic,
-    provider_usage_limit, provider_usage_limit_details,
+    DeclaredResponseFailure, IMPLEMENTATION_INCOMPLETE_CODE, IncompleteContinuationRequest,
+    ParsedStdout, is_missing_envelope_violation, is_success_carrying_error_violation,
+    provider_authentication_failure, provider_capacity_exhausted, provider_content_refusal,
+    provider_invocation_diagnostic, provider_quota_exceeded, provider_usage_limit,
+    provider_usage_limit_details, response_envelope_json_schema, response_envelope_json_schema_arg,
 };

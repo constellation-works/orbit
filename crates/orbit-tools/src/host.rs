@@ -1,5 +1,6 @@
 //! Orbit host surface a builtin tool calls instead of respawning the CLI.
 
+use orbit_common::governance::attention::AttentionVerb;
 use std::path::PathBuf;
 
 use orbit_common::OrbitError;
@@ -7,16 +8,14 @@ use orbit_common::governance::agents::AgentsVerb;
 use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::automation::AutomationVerb;
 use orbit_common::governance::codebase::CodebaseVerb;
-use orbit_common::governance::crew::CrewVerb;
 use orbit_common::governance::decision::DecisionVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::experiment::ExperimentVerb;
 use orbit_common::governance::friction::FrictionVerb;
-use orbit_common::governance::lease::LeaseVerb;
-use orbit_common::governance::orchestrator::OrchestratorVerb;
+use orbit_common::governance::notice::NoticeVerb;
+use orbit_common::governance::resident::ResidentVerb;
 use orbit_common::governance::search::SearchVerb;
 use orbit_common::governance::task::TaskVerb;
-use orbit_common::governance::visual::VisualVerb;
 use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use serde_json::Value;
@@ -100,23 +99,22 @@ pub fn prepare_remote_task_artifact_put(
         },
         ..ToolContext::default()
     };
-    crate::builtin::orbit::task::artifact_put::prepare_remote_payload(input, &ctx)
+    crate::artifact_materialize::prepare_remote_payload(input, &ctx)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrbitBuiltinAction {
     /// Auto-task verbs are registry data, like friction's.
     AutoTask(AutoTaskVerb),
-    AgentInvoke,
     /// Read-only agent scorecard verbs.
     Agents(AgentsVerb),
     /// Read-only automation verbs: condition explain.
     Automation(AutomationVerb),
     /// Read-only codebase analytics verbs.
     Codebase(CodebaseVerb),
+    /// Read-only operator attention feed.
+    Attention(AttentionVerb),
     CommandExec,
-    /// Read-only crew verbs: the crew ladder report.
-    Crew(CrewVerb),
     /// Human decision-request verbs.
     Decision(DecisionVerb),
     DesktopRead,
@@ -130,8 +128,6 @@ pub enum OrbitBuiltinAction {
     /// ADR-0209 bearing 1 [ORB-10358]: friction verbs are registry data, so one
     /// action variant carries the verb instead of one variant per verb.
     Friction(FrictionVerb),
-    /// The deprecated orchestrator scorecard aliases of [`Self::Agents`].
-    Orchestrator(OrchestratorVerb),
     PipelineInvoke,
     PipelineWait,
     /// Shared lexical search operation.
@@ -143,10 +139,14 @@ pub enum OrbitBuiltinAction {
     Workflow(WorkflowVerb),
     /// Workspace coordination-hold verbs.
     WorkspaceClaim(WorkspaceClaimVerb),
-    /// Principal-held path leases on the workspace owner.
-    Lease(LeaseVerb),
-    /// Visual capture verbs: the implementer's mock self-check.
-    Visual(VisualVerb),
+    /// Fleet notices held by the home workspace's owner.
+    Notice(NoticeVerb),
+    /// Resident mandates: authority grants and mandate reads.
+    Resident(ResidentVerb),
+    /// Capability-gap costs and evolution records.
+    Evolution(orbit_common::governance::evolution::EvolutionVerb),
+    /// Crew memory spaces: operator reads, export and writes.
+    Memory(orbit_common::governance::memory::MemoryVerb),
 }
 
 impl From<DecisionVerb> for OrbitBuiltinAction {
@@ -173,27 +173,9 @@ impl From<AutomationVerb> for OrbitBuiltinAction {
     }
 }
 
-impl From<CrewVerb> for OrbitBuiltinAction {
-    fn from(verb: CrewVerb) -> Self {
-        Self::Crew(verb)
-    }
-}
-
-impl From<VisualVerb> for OrbitBuiltinAction {
-    fn from(verb: VisualVerb) -> Self {
-        Self::Visual(verb)
-    }
-}
-
 impl From<AgentsVerb> for OrbitBuiltinAction {
     fn from(verb: AgentsVerb) -> Self {
         Self::Agents(verb)
-    }
-}
-
-impl From<OrchestratorVerb> for OrbitBuiltinAction {
-    fn from(verb: OrchestratorVerb) -> Self {
-        Self::Orchestrator(verb)
     }
 }
 
@@ -203,9 +185,15 @@ impl From<DrainVerb> for OrbitBuiltinAction {
     }
 }
 
-impl From<LeaseVerb> for OrbitBuiltinAction {
-    fn from(verb: LeaseVerb) -> Self {
-        Self::Lease(verb)
+impl From<ResidentVerb> for OrbitBuiltinAction {
+    fn from(verb: ResidentVerb) -> Self {
+        Self::Resident(verb)
+    }
+}
+
+impl From<NoticeVerb> for OrbitBuiltinAction {
+    fn from(verb: NoticeVerb) -> Self {
+        Self::Notice(verb)
     }
 }
 
@@ -294,7 +282,7 @@ pub trait OrbitToolHost: Send + Sync {
     }
 
     /// Run one callback a plugin backend's child forwarded over its host
-    /// route (`plugin::HOST_ROUTED_CALLBACK_TOOLS`), through the same audited
+    /// route (`plugin::is_host_routed_callback_tool`), through the same audited
     /// dispatch a callback the child ran itself would take.
     ///
     /// The route calls this with the child's callback session resolved for
@@ -309,10 +297,35 @@ pub trait OrbitToolHost: Send + Sync {
     }
 
     fn task_scope(&self) -> OrbitTaskScope;
+
+    /// Whether this host's task scope is a resident cycle's run, whose
+    /// dispatch its cycle guard decides. Grants nothing: the guard still runs
+    /// on the call.
+    fn scope_is_resident_cycle(&self) -> bool {
+        false
+    }
 }
 
 impl From<SearchVerb> for OrbitBuiltinAction {
     fn from(verb: SearchVerb) -> Self {
         Self::Search(verb)
+    }
+}
+
+impl From<orbit_common::governance::evolution::EvolutionVerb> for OrbitBuiltinAction {
+    fn from(verb: orbit_common::governance::evolution::EvolutionVerb) -> Self {
+        Self::Evolution(verb)
+    }
+}
+
+impl From<AttentionVerb> for OrbitBuiltinAction {
+    fn from(verb: AttentionVerb) -> Self {
+        Self::Attention(verb)
+    }
+}
+
+impl From<orbit_common::governance::memory::MemoryVerb> for OrbitBuiltinAction {
+    fn from(verb: orbit_common::governance::memory::MemoryVerb) -> Self {
+        Self::Memory(verb)
     }
 }

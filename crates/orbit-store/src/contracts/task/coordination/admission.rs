@@ -2,39 +2,21 @@
 
 use std::collections::BTreeMap;
 
+use orbit_types::identity::same_crew_family;
 use serde::{Deserialize, Serialize};
 
 use super::{ClaimCandidateRef, ExecutionClaim};
 
 pub use orbit_types::task::ExecutionLocation;
 
-/// The owner's current explore brief and the policy its pilot evaluated.
-/// Captured only for the admitted task; dispatch needs no owner artifact or
-/// pilot-run read. The follower recomputes material before classifying drift.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct CapturedExploreBrief {
-    pub task_id: String,
-    /// The complete stored document, including its inspection revision.
-    pub document: String,
-    pub status_neutral_fingerprint: Option<String>,
-    pub eligibility: orbit_types::workflow::automation::members::PreparationEligibility,
-    pub freshness: orbit_types::workflow::automation::members::PreparationFreshness,
-    /// The owner's `enabled && deliver`, including shadow-mode captures.
-    pub deliver: bool,
-}
-
 /// Task-specific guidance captured immediately before claim persistence.
 #[derive(Debug, Clone)]
 pub struct AdmissionTaskGuidance {
     pub experiments: orbit_types::workflow::CapturedExperiments,
-    pub explore_brief: Option<CapturedExploreBrief>,
     /// System artifacts the owner publishes in the same commit as the
-    /// claim (for example the frozen `verify-mock-ui` mock digests). They
-    /// ride the claim commit's evidence because an ordinary task write is
-    /// refused once the claim protects the task.
+    /// claim. They ride the claim commit's evidence because an ordinary task
+    /// write is refused once the claim protects the task.
     pub artifacts: Vec<orbit_types::task::TaskArtifact>,
-    /// The admitted `verify-mock-ui` task's visual review contract.
-    pub visual_review: Option<orbit_types::task::VisualReviewContract>,
 }
 
 /// Owner-side facts admission reads, separate from the executor's wire
@@ -42,7 +24,7 @@ pub struct AdmissionTaskGuidance {
 #[derive(Debug, Default)]
 pub struct AdmissionOrdering {
     /// How far work only the requester can run reaches in the order
-    /// (`workflow.admission_affinity`) [ORB-17304].
+    /// [ORB-17304]; fixed at `band` since [ORB-22808].
     pub affinity: orbit_types::task::AdmissionAffinityReach,
     /// The live executors the requester's candidates are ordered against,
     /// the requester among them. `None`, when the census could not be read
@@ -60,6 +42,8 @@ pub struct AdmissionOrdering {
     /// it. Empty leaves admission on the task's `os:` tags alone. Not part of
     /// the follower's request, so it does not change the request fingerprint.
     pub executor_host_os: BTreeMap<String, orbit_types::task::ExecutorOsLimit>,
+    /// The owner's configured tag-to-host-capability policy, never the follower's.
+    pub tag_label_requirements: orbit_types::task::TagLabelRequirements,
     /// Offer only a pending landing repair, never a backlog task: the
     /// owner's own repair pull, which its `orbit run auto` drain starts once
     /// a repair's fallback window has passed.
@@ -130,9 +114,12 @@ pub struct AdmissionShipContract {
     pub before_landing: bool,
     pub completion: String,
     pub authorization_reference: Option<String>,
-    /// The owner's captured review contract: present exactly when
-    /// `before_pr` [ORB-13895] or `before_landing` [ORB-14849] is on. A
-    /// handoff's review evidence is judged against it, never against the
+    /// The owner's captured review contract: present when `before_pr`
+    /// [ORB-13895] or `before_landing` [ORB-14849] is on, and also on a
+    /// claim an earlier owner captured for selective review alone (both
+    /// timing flags false). That retained contract is not a review
+    /// requirement [ORB-22966]. A handoff's review evidence is judged
+    /// against a before-PR or before-landing contract, never against the
     /// owner's settings at handoff time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<AdmissionReviewContract>,
@@ -172,10 +159,10 @@ pub struct AdmissionReviewContract {
     /// synthesizes as requirements whatever its reviewer reports.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host_evidence: Vec<orbit_types::workflow::HostEvidenceRule>,
-    /// The owner's frozen selective before-landing policy, when active.
-    /// The leaf evaluates its pinned candidate against it and the owner
-    /// verifies the receipt's digest and identities at acceptance. Absent
-    /// on contracts captured before the feature: no selective scan.
+    /// [ORB-22808] The selective before-landing policy an earlier owner
+    /// captured. Selective review was removed: never produced and ignored,
+    /// but it participates in the request fingerprint, so it stays until
+    /// 2026-12-08 for older contracts to parse and the fingerprint to hold.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selective_before_landing: Option<orbit_types::workflow::SelectiveBeforeLandingPolicy>,
 }
@@ -194,34 +181,25 @@ impl AdmissionShipContract {
         }
     }
 
-    /// The selective policy this contract captured, when active.
-    #[must_use]
-    pub fn selective_policy(&self) -> Option<&orbit_types::workflow::SelectiveBeforeLandingPolicy> {
-        self.review
-            .as_ref()
-            .and_then(|review| review.selective_before_landing.as_ref())
-            .filter(|policy| policy.is_active())
-    }
-
     /// Whether `review` matches the captured timing and is itself well
     /// formed.
+    ///
+    /// A retained selective-only contract — `review` present,
+    /// `selective_before_landing` present, and both timing flags false —
+    /// is well formed and is not a review requirement [ORB-22966].
+    /// Before-PR and before-landing still require exactly one of those
+    /// flags and a well-formed contract. A review contract with neither
+    /// timing nor a selective field is not consistent.
     #[must_use]
     pub fn review_contract_consistent(&self) -> bool {
         match &self.review {
             None => !self.before_pr && !self.before_landing,
             Some(review) => {
-                let selective = review
-                    .selective_before_landing
-                    .as_ref()
-                    .filter(|policy| policy.is_active());
-                let timing_matches = if selective.is_some() {
-                    // Selective review is its own layer beside an off
-                    // timing, or strengthens under an explicit
-                    // before-landing capture; never beside before-PR.
-                    !self.before_pr
-                } else {
-                    self.before_pr != self.before_landing
-                };
+                let retained_selective_only = !self.before_pr
+                    && !self.before_landing
+                    && review.selective_before_landing.is_some();
+                let timing_matches =
+                    retained_selective_only || self.before_pr != self.before_landing;
                 timing_matches
                     && review.contract_version == orbit_types::workflow::REVIEW_CONTRACT_VERSION
                     && review
@@ -229,7 +207,6 @@ impl AdmissionShipContract {
                         .as_deref()
                         .is_none_or(|crew| !crew.trim().is_empty())
                     && review.required_validation_commands.is_some()
-                    && selective.is_none_or(|policy| policy.validate().is_ok())
             }
         }
     }
@@ -321,10 +298,10 @@ pub enum AdmissionRefusal {
     /// landing.
     #[serde(alias = "review_policy_unsupported")]
     BeforePrUnsupported,
-    /// The owner captured an active selective before-landing policy and
-    /// the executor does not declare selective-review capability on the
-    /// PR route. An older executor must refuse the contract, never drop
-    /// the policy into an unreviewed path.
+    /// [ORB-22808] An earlier owner's refusal for an active selective
+    /// before-landing policy. Selective review was removed and this build
+    /// never refuses with it; it stays until 2026-12-08 so receipts those
+    /// owners recorded still load.
     SelectiveUnsupported,
 }
 
@@ -383,7 +360,10 @@ pub struct AdmissionCrewCapability {
 
 impl AdmissionCrewCapability {
     /// Why a task whose own crew is `task_crew` cannot run on this executor,
-    /// or `None` when it can.
+    /// or `None` when it can. [ORB-20400] Names match by crew family: an
+    /// exclusion or runnable entry for `opus` covers `opus@medium` too, and
+    /// one for `opus@medium` covers `opus`, since they share a model and
+    /// account.
     #[must_use]
     pub fn unrunnable_reason(&self, task_crew: Option<&str>) -> Option<String> {
         let named = task_crew.map(str::trim).filter(|crew| !crew.is_empty());
@@ -400,7 +380,7 @@ impl AdmissionCrewCapability {
         if let Some(exclusion) = self
             .excluded
             .iter()
-            .find(|exclusion| exclusion.crew == crew)
+            .find(|exclusion| same_crew_family(&exclusion.crew, crew))
         {
             return Some(format!(
                 "crew `{crew}`{via} is excluded on the executor: {}",
@@ -408,9 +388,9 @@ impl AdmissionCrewCapability {
             ));
         }
         match &self.runnable {
-            Some(runnable) if !runnable.iter().any(|name| name == crew) => Some(format!(
-                "crew `{crew}`{via} is not runnable on the executor"
-            )),
+            Some(runnable) if !runnable.iter().any(|name| same_crew_family(name, crew)) => Some(
+                format!("crew `{crew}`{via} is not runnable on the executor"),
+            ),
             _ => None,
         }
     }
@@ -561,12 +541,19 @@ pub struct AdmissionRequest {
     /// `review.timing = before_pr` admits only an executor that declares it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub review_gate: bool,
-    /// Whether the executor's leaf evaluates a captured selective
-    /// before-landing policy and returns its selection receipt. Absent
-    /// (an older executor) reads as not capable: an owner with an active
-    /// selective policy refuses it rather than dropping the policy.
+    /// [ORB-22808] Whether an earlier executor's leaf evaluated a captured
+    /// selective before-landing policy. Selective review was removed: this
+    /// build never declares it and ignores it, but it participates in the
+    /// request fingerprint, so it stays until 2026-12-08.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub selective_review: bool,
+    /// [ORB-22807] The claimed visual-resolution bundle schema an executor
+    /// on an earlier build declares. Visual review was removed and nothing
+    /// reads it, but it participates in the request fingerprint, so it stays
+    /// until 2026-12-07 for those executors' requests to verify. Zero or
+    /// absent from this build.
+    #[serde(default, skip_serializing_if = "is_zero_visual_resolution")]
+    pub visual_resolution: u32,
     pub run_context: AdmissionRunContext,
     pub ship: AdmissionShipContract,
     /// What the executor can run. Absent for an owner-local admission and
@@ -598,6 +585,10 @@ pub struct AdmissionRequest {
     /// complexity is admissible, as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admissible: Option<AdmissionWorkFit>,
+}
+
+fn is_zero_visual_resolution(version: &u32) -> bool {
+    *version == 0
 }
 
 impl AdmissionRequest {
@@ -633,7 +624,7 @@ pub struct AdmissionTaskSummary {
     /// from an older owner and on legacy tasks with no recorded source:
     /// both read as not automatic.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub crew_source: Option<String>,
+    pub crew_source: Option<orbit_types::task::CrewSource>,
     pub context_files: Vec<String>,
     /// [ORB-14257] The candidate an earlier claim of the task preserved,
     /// for this claim's leaf to resume instead of implementing afresh. The
@@ -697,19 +688,6 @@ pub struct AdmissionReceipt {
     /// capture: followers refuse claims without this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub experiments: Option<orbit_types::workflow::CapturedExperiments>,
-    /// The admitted task's current brief, sealed material and pilot policy.
-    /// Older owners and tasks without a current brief carry none and run cold.
-    /// Like tag instructions, this is outside the request fingerprint.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub explore_brief: Option<CapturedExploreBrief>,
-    /// The owner's visual review contract for an admitted `verify-mock-ui`
-    /// task: its `visual_review` settings, manifests at the base revision
-    /// and the mock digests frozen at admission. The claimed leaf captures
-    /// against this, never its replica's settings, and the owner checks
-    /// the returned capture against it. Outside the request fingerprint,
-    /// like `gates`; absent when the visual phase does not apply.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub visual_review: Option<orbit_types::task::VisualReviewContract>,
     /// [ORB-17304] How the executor census the owner ordered against classes
     /// the admitted task, and the census's machine ids. Absent from an idle
     /// or repair receipt, from an order taken without a census, and from a

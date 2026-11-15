@@ -4,11 +4,19 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use orbit_types::workflow::{
+    CI_BASE_SUSPECT_EVENT, CI_CHECK_RERUN_EVENT, CiBaseSuspectLegacy, CiBaseSuspectRecord,
+    CiCheckRerunRecord,
+};
 
 use super::super::super::super::ci::log_signature;
+use super::super::super::operations::{
+    CiCommitJobEvidence, CiCommitJobsAnswer, CiJobConclusion, CiJobEvent, CiJobObservation,
+    CiJobStatus,
+};
 use super::super::super::{
     git::{git_output, git_output_paths},
     operations,
@@ -34,15 +42,60 @@ pub(super) fn cites_changed_candidate(
     Ok(cited.iter().any(|path| changed.contains(path)))
 }
 
+/// Lossless projection of a numeric job observation into a base-suspect
+/// legacy field: missing, null and malformed observations keep their shape.
+pub(super) fn base_suspect_legacy_number(
+    observation: &CiJobObservation<u64>,
+) -> CiBaseSuspectLegacy<u64> {
+    match observation {
+        CiJobObservation::Missing => CiBaseSuspectLegacy::Missing,
+        CiJobObservation::Null => CiBaseSuspectLegacy::Null,
+        CiJobObservation::Known { value, .. } => CiBaseSuspectLegacy::Known(*value),
+        CiJobObservation::Malformed(wire) => CiBaseSuspectLegacy::Unreadable(wire.clone()),
+    }
+}
+
+/// Lossless projection of a text job observation; see
+/// [`base_suspect_legacy_number`].
+pub(super) fn base_suspect_legacy_text(
+    observation: &CiJobObservation<String>,
+) -> CiBaseSuspectLegacy<String> {
+    match observation {
+        CiJobObservation::Missing => CiBaseSuspectLegacy::Missing,
+        CiJobObservation::Null => CiBaseSuspectLegacy::Null,
+        CiJobObservation::Known { value, .. } => CiBaseSuspectLegacy::Known(value.clone()),
+        CiJobObservation::Malformed(wire) => CiBaseSuspectLegacy::Unreadable(wire.clone()),
+    }
+}
+
+/// Lossless projection of a job-event observation; the recorded token is
+/// the provider's original text.
+pub(super) fn base_suspect_legacy_event(
+    observation: &CiJobObservation<CiJobEvent>,
+) -> CiBaseSuspectLegacy<String> {
+    match observation {
+        CiJobObservation::Missing => CiBaseSuspectLegacy::Missing,
+        CiJobObservation::Null => CiBaseSuspectLegacy::Null,
+        CiJobObservation::Known { wire, .. } => match wire.as_str() {
+            Some(token) => CiBaseSuspectLegacy::Known(token.to_string()),
+            None => CiBaseSuspectLegacy::Unreadable(wire.clone()),
+        },
+        CiJobObservation::Malformed(wire) => CiBaseSuspectLegacy::Unreadable(wire.clone()),
+    }
+}
+
 /// Independently guard the repair evidence path, including job-level recovery.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "suspicion checks the job log, signature and pull number against the candidate diff in one pass"
+)]
 pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
     tasks: &[String],
     head: &str,
     base_branch: Option<&str>,
-    job: &Value,
+    job: &CiCommitJobEvidence,
     log: &str,
     signature: &str,
     pr_number: Option<u64>,
@@ -108,13 +161,21 @@ pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
             // `has_matching_candidate_rerun`, even when no landing or
             // auto-fix pass runs to record it (for example, completion's
             // final recovery with auto-fix disabled).
-            let record = json!({
-                "base": tip.trim(), "head": head, "check": jobs::job_label(job),
-                "signature": signature, "run_id": job["run_id"], "job_id": job["job_id"],
-                "run_attempt": job["run_attempt"], "pr_number": pr_number,
-                "event": job["event"], "started_at": job["started_at"],
-                "completed_at": job["completed_at"], "reason": reason,
-            });
+            let record = CiBaseSuspectRecord {
+                base: Some(tip.trim().to_string()),
+                head: Some(head.to_string()),
+                check: Some(jobs::job_label(job)),
+                signature: Some(signature.to_string()),
+                run_id: base_suspect_legacy_number(&job.run_id),
+                job_id: base_suspect_legacy_number(&job.job_id),
+                run_attempt: base_suspect_legacy_number(&job.run_attempt),
+                pr_number,
+                event: base_suspect_legacy_event(&job.event),
+                started_at: base_suspect_legacy_text(&job.started_at),
+                completed_at: base_suspect_legacy_text(&job.completed_at),
+                reason: Some(reason.clone()),
+                legacy_pull_requests: Vec::new(),
+            };
             // A refused write must keep the hold: an error here would reach
             // completion's final recovery as an unjudged failure. The next
             // observation of this failure records it again.
@@ -165,7 +226,10 @@ fn repository_citations(
 /// Whether a matching base check passes. A pass alone only authorizes one
 /// unchanged-head pull-request rerun; only a repeated signature on that
 /// rerun can attribute the failure to the candidate.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "an untouched failure compares head, base and tip with the job log before any rerun"
+)]
 pub(super) fn stale_untouched_failure<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
@@ -173,7 +237,7 @@ pub(super) fn stale_untouched_failure<H: RuntimeHost + ?Sized>(
     base: &str,
     tip: &str,
     base_branch: &str,
-    job: &Value,
+    job: &CiCommitJobEvidence,
     log: &str,
 ) -> Result<UntouchedBaseEvidence, String> {
     let paths = repository_citations(workspace, head, log)?;
@@ -198,20 +262,22 @@ pub(super) fn is_untouched_failure(
 
 /// Whether `other` started at or after `job` completed. Missing or
 /// unparseable timestamps are never fresh evidence.
-pub(super) fn started_after_completion(job: &Value, other: &Value) -> bool {
-    let completed = job["completed_at"]
-        .as_str()
-        .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok());
-    let started = other["started_at"]
-        .as_str()
-        .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok());
+pub(super) fn started_after_completion(
+    job: &CiCommitJobEvidence,
+    other: &CiCommitJobEvidence,
+) -> bool {
+    let completed = job.completed_time;
+    let started = other.started_time;
     match (completed, started) {
         (Some(completed), Some(started)) => started >= completed,
         _ => false,
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "base evidence takes the cited paths plus head, base, tip and the job that failed"
+)]
 fn untouched_base_evidence<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
@@ -219,7 +285,7 @@ fn untouched_base_evidence<H: RuntimeHost + ?Sized>(
     base: &str,
     tip: &str,
     base_branch: &str,
-    job: &Value,
+    job: &CiCommitJobEvidence,
     paths: BTreeSet<String>,
 ) -> Result<UntouchedBaseEvidence, String> {
     if paths.is_empty() {
@@ -235,14 +301,14 @@ fn untouched_base_evidence<H: RuntimeHost + ?Sized>(
             json!({"commit":base,"workspace_path":workspace,"latest_push_branch":base_branch,"base_push_tip":tip}),
         )
         .map_err(|error| format!("the base re-check on {tip} could not be read: {error}"))?;
-    let base_jobs = response["jobs"]
-        .as_array()
-        .ok_or("the base re-check carried no job list")?;
+    let base_jobs = CiCommitJobsAnswer::decode_response(response)
+        .ok_or("the base re-check carried no job list")?
+        .jobs;
     if base_jobs.iter().any(|base_job| {
         jobs::same_job(base_job, job)
-            && base_job["run_status"] == "completed"
-            && base_job["status"] == "completed"
-            && base_job["conclusion"] == "success"
+            && base_job.run_status.value() == Some(&CiJobStatus::Completed)
+            && base_job.status.value() == Some(&CiJobStatus::Completed)
+            && base_job.conclusion.value() == Some(&CiJobConclusion::Success)
     }) {
         return Ok(UntouchedBaseEvidence::PassingBaseRun);
     }
@@ -255,47 +321,19 @@ fn untouched_base_evidence<H: RuntimeHost + ?Sized>(
     )))
 }
 
-/// The pull-request numbers a job's provider metadata names, in any of
-/// the shapes the adapter or a history note carries them.
-pub(super) fn pull_request_numbers(job: &Value) -> Vec<u64> {
-    let mut numbers = Vec::new();
-    let mut push = |value: &Value| {
-        if let Some(number) = value
-            .as_u64()
-            .or_else(|| value["number"].as_u64())
-            .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
-        {
-            numbers.push(number);
-        }
-    };
-    for key in ["pull_request_numbers", "pull_requests"] {
-        if let Some(list) = job[key].as_array() {
-            for value in list {
-                push(value);
-            }
-        }
-    }
-    for key in ["pr_number", "pull_request_number", "pr"] {
-        if !job[key].is_null() {
-            push(&job[key]);
-        }
-    }
-    numbers
-}
-
 /// Whether `job` is authenticated provider evidence of a `pull_request`
 /// run for `pr_number` on `head`: the event, the PR association and the
 /// tested head must all agree. Metadata that names no PR, or a different
 /// one, is not a PR rerun.
 pub(super) fn is_verified_pull_request_job(
-    job: &Value,
+    job: &CiCommitJobEvidence,
     pr_number: Option<u64>,
     head: &str,
 ) -> bool {
-    if job["event"].as_str() != Some("pull_request") {
+    if job.event.value() != Some(&CiJobEvent::PullRequest) {
         return false;
     }
-    if let Some(sha) = job["head_sha"].as_str()
+    if let Some(sha) = job.head_sha.text()
         && sha != head
     {
         return false;
@@ -303,7 +341,7 @@ pub(super) fn is_verified_pull_request_job(
     let Some(pr_number) = pr_number else {
         return false;
     };
-    pull_request_numbers(job).contains(&pr_number)
+    job.association.numbers.contains(&pr_number)
 }
 
 /// Whether task history records an earlier failed attempt with this same
@@ -322,7 +360,7 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
     host: &H,
     tasks: &[String],
     head: &str,
-    job: &Value,
+    job: &CiCommitJobEvidence,
     check: &str,
     signature: &str,
     pr_number: Option<u64>,
@@ -330,14 +368,12 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
     if !is_verified_pull_request_job(job, pr_number, head) {
         return false;
     }
-    let current_start = job["started_at"]
-        .as_str()
-        .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok());
+    let current_start = job.started_time;
     let Some(current_start) = current_start else {
         return false;
     };
     let (Some(current_run), Some(current_attempt)) =
-        (job["run_id"].as_u64(), job["run_attempt"].as_u64())
+        (job.run_id.number(), job.run_attempt.number())
     else {
         return false;
     };
@@ -369,10 +405,10 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
             return false;
         }
         for plan in same_head {
-            if job["repository_id"].as_u64() != Some(plan.repository_id)
-                || job["repository"].as_str() != Some(plan.repository.as_str())
-                || job["head_branch"].as_str() != Some(plan.head_branch.as_str())
-                || job["head_sha"].as_str() != Some(head)
+            if job.repository_id.number() != Some(plan.repository_id)
+                || job.repository.text() != Some(plan.repository.as_str())
+                || job.head_branch.text() != Some(plan.head_branch.as_str())
+                || job.head_sha.text() != Some(head)
             {
                 return false;
             }
@@ -380,7 +416,7 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
                 || plan.pr_number.parse::<u64>().ok() != pr_number
                 || plan.run_id != current_run
                 || plan.run_attempt.checked_add(1) != Some(current_attempt)
-                || job["workflow_id"].as_u64() != Some(plan.workflow_id)
+                || job.workflow_id.number() != Some(plan.workflow_id)
             {
                 continue;
             }
@@ -393,7 +429,7 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
                     && root.check == check
                     && root.signature == signature
                     && prior.is_some_and(|prior| {
-                        prior["name"] == job["name"]
+                        job.name.matches_legacy(&prior["name"])
                             && prior["completed_at"]
                                 .as_str()
                                 .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
@@ -404,52 +440,61 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
                 }
             }
         }
-        for entry in history
-            .iter()
-            .filter(|entry| matches!(entry.event.as_str(), "ci_base_suspect" | "ci_check_rerun"))
-        {
-            let Some(note) = entry
-                .note
-                .as_deref()
-                .and_then(|note| serde_json::from_str::<Value>(note).ok())
-            else {
-                continue;
+        for entry in &history {
+            let prior = match entry.event.as_str() {
+                CI_CHECK_RERUN_EVENT => {
+                    let Some(receipt) =
+                        CiCheckRerunRecord::from_history_note(entry.note.as_deref())
+                    else {
+                        continue;
+                    };
+                    // A receipt that names a different PR cannot be this PR's rerun.
+                    if names_other_pull_request(receipt.pull_request_numbers(), pr_number)
+                        || !receipt.reran_pull_request()
+                    {
+                        continue;
+                    }
+                    let Some(rerun) = receipt.jobs.iter().find(|rerun| {
+                        rerun.check.as_deref() == Some(check)
+                            && rerun.signature.as_deref() == Some(signature)
+                    }) else {
+                        continue;
+                    };
+                    PriorFailure {
+                        head: receipt.head.clone(),
+                        run: receipt.run_id,
+                        completed: rerun.completed_time(),
+                        attempt: rerun.run_attempt,
+                    }
+                }
+                CI_BASE_SUSPECT_EVENT => {
+                    let Some(suspect) =
+                        CiBaseSuspectRecord::from_history_note(entry.note.as_deref())
+                    else {
+                        continue;
+                    };
+                    if names_other_pull_request(suspect.pull_request_numbers(), pr_number)
+                        || suspect.check.as_deref() != Some(check)
+                        || suspect.signature.as_deref() != Some(signature)
+                    {
+                        continue;
+                    }
+                    PriorFailure {
+                        head: suspect.head.clone(),
+                        run: suspect.run_id.value().copied(),
+                        completed: suspect.completed_time(),
+                        attempt: suspect.run_attempt.value().copied(),
+                    }
+                }
+                _ => continue,
             };
-            // A note that names a different PR cannot be this PR's rerun.
-            let noted = pull_request_numbers(&note);
-            if !noted.is_empty() && pr_number.is_some_and(|pr_number| !noted.contains(&pr_number)) {
-                continue;
-            }
-            if let Some(event) = note["event"].as_str()
-                && event != "pull_request"
-                && entry.event == "ci_check_rerun"
-            {
-                continue;
-            }
-            let prior = if entry.event == "ci_check_rerun" {
-                note["jobs"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .find(|prior| prior["check"] == check && prior["signature"] == signature)
-                    .map(|prior| (note["head"].as_str(), note["run_id"].as_u64(), prior))
-            } else {
-                (note["check"] == check && note["signature"] == signature).then_some((
-                    note["head"].as_str(),
-                    note["run_id"].as_u64(),
-                    &note,
-                ))
-            };
-            let Some((Some(prior_head), Some(prior_run), prior)) = prior else {
+            let (Some(prior_head), Some(prior_run)) = (prior.head.as_deref(), prior.run) else {
                 continue;
             };
             if prior_head != head || prior_run != current_run {
                 continue;
             }
-            let completed = prior["completed_at"]
-                .as_str()
-                .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok());
-            let Some(completed) = completed else {
+            let Some(completed) = prior.completed else {
                 continue;
             };
             if current_start < completed {
@@ -458,7 +503,7 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
             // A rerun keeps the run identity and advances its attempt.
             // The numeric job id may be reassigned for the new attempt;
             // the workflow/job identity is already bound by `check`.
-            let later_attempt = match prior["run_attempt"].as_u64() {
+            let later_attempt = match prior.attempt {
                 Some(prior_attempt) => current_attempt > prior_attempt,
                 None => current_attempt > 1,
             };
@@ -470,45 +515,61 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
     false
 }
 
+/// The earlier failed attempt a rerun receipt or base-suspect note records.
+struct PriorFailure {
+    head: Option<String>,
+    run: Option<u64>,
+    completed: Option<chrono::DateTime<chrono::FixedOffset>>,
+    attempt: Option<u64>,
+}
+
+/// Whether a note names PR numbers and none of them is `pr_number`.
+fn names_other_pull_request(noted: impl Iterator<Item = u64>, pr_number: Option<u64>) -> bool {
+    let noted = noted.collect::<Vec<_>>();
+    !noted.is_empty() && pr_number.is_some_and(|pr_number| !noted.contains(&pr_number))
+}
+
 /// Surface the base-wide suspicion once per owning task and exact failure,
-/// independent of poll count or PR head. This spends no repair reservation.
+/// keyed by head, check and signature, even when the base advances.
+/// This spends no repair reservation.
 pub(super) fn record_base_suspect<H: RuntimeHost + ?Sized>(
     host: &H,
     tasks: &[String],
-    evidence: &Value,
+    evidence: &CiBaseSuspectRecord,
     handoff_id: Option<&str>,
 ) -> Result<(), OrbitError> {
-    let note = serde_json::to_string(evidence)
+    let note = evidence
+        .to_history_note()
         .map_err(|error| OrbitError::Execution(error.to_string()))?;
     for task in tasks {
         if host
             .get_task_history(task)?
             .iter()
-            .any(|entry| entry.event == "ci_base_suspect" && entry.note.as_deref() == Some(&note))
+            .filter(|entry| entry.event == CI_BASE_SUSPECT_EVENT)
+            .filter_map(|entry| CiBaseSuspectRecord::from_history_note(entry.note.as_deref()))
+            .any(|prior| evidence.same_dedupe_identity(&prior))
         {
             continue;
         }
         if let Some(handoff_id) = handoff_id {
-            host.record_handoff_landing_history(handoff_id, "ci_base_suspect", &note)?;
+            host.record_handoff_landing_history(handoff_id, CI_BASE_SUSPECT_EVENT, &note)?;
         } else {
             host.apply_task_automation_update(
                 task,
                 TaskAutomationUpdate {
-                    append_history: vec![orbit_types::task::TaskHistoryEntry {
-                        at: chrono::Utc::now(),
-                        by: "system".into(),
-                        event: "ci_base_suspect".into(),
-                        note: Some(note.clone()),
-                        from_status: None,
-                        to_status: None,
-                        operation_id: None,
-                        decision: None,
-                    }],
+                    append_history: vec![
+                        orbit_types::task::TaskHistoryEntry::new(
+                            chrono::Utc::now(),
+                            "system",
+                            CI_BASE_SUSPECT_EVENT,
+                        )
+                        .with_note(Some(note.clone())),
+                    ],
                     ..TaskAutomationUpdate::default()
                 },
             )?;
         }
-        tracing::warn!(task, %evidence, "base-suspect: waiting for conclusive same-check base and pull-request rerun evidence; no candidate repair");
+        tracing::warn!(task, evidence = %note, "base-suspect: waiting for conclusive same-check base and pull-request rerun evidence; no candidate repair");
     }
     Ok(())
 }

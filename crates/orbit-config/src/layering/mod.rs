@@ -32,7 +32,7 @@
 //! beneath it, so the merge, the snapshot and `orbit config get` all see the
 //! translated value.
 
-// `load` admits documents, `document` owns TOML helpers, `provenance` attributes
+// `load` admits documents, `document` owns reading and merging, `provenance` attributes
 // values, and `types` defines the effective-config view.
 
 mod document;
@@ -40,13 +40,11 @@ mod load;
 mod provenance;
 mod types;
 
-pub(crate) use document::{set_value_at_path, value_at_path};
 pub use load::load_effective_config;
 pub(crate) use load::{
     LoadedResolvedConfig, load_layered_resolved, reject_workspace_crew_env,
-    reject_workspace_lease_intake, reject_workspace_machine_table, resolve_workspace_file_document,
-    strip_workspace_refused_keys, validate_staged_global_document,
-    validate_staged_workspace_document,
+    reject_workspace_machine_table, resolve_workspace_file_document, strip_workspace_refused_keys,
+    validate_staged_global_document, validate_staged_workspace_document,
 };
 pub use types::{
     ConfigFallback, ConfigValueSource, ConfigValueSourceKind, ConfigValueState, EffectiveConfig,

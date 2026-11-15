@@ -469,82 +469,33 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(self.uploaded_names(), [])
         self.assertEqual({path.name for path in self.remote.iterdir()}, {MACOS_BUNDLE})
 
-    def test_overlapping_same_tag_publishers_wait_and_refuse_an_unlisted_dmg(self):
-        # GitHub holds the concurrency group for the whole job. This lock is
-        # that admission: the full plan cannot enter the publish script while
-        # the Linux-only plan holds the tag, then it refuses before uploading.
+    def test_same_tag_publishers_serialize_and_waiting_full_publish_refuses_unlisted_dmg(self):
+        # GitHub's concurrency group is the cross-run lock: serialization is
+        # proved from the parsed workflow (group follows the tag, queue=max,
+        # cancel-in-progress=false), not from a local threading.Lock that
+        # would exclude by construction for any workflow content. The
+        # publish-refusal half exercises the real publish script sequentially:
+        # a Linux-only publish for the tag, then the full publish that would
+        # have waited, which must refuse the unlisted DMG before uploading.
         self.prepare_desktop()
         group = self.desktop_publish_group("v1.2.3")
+        self.assertEqual(group, self.desktop_publish_group("v1.2.3"))
         self.assertNotEqual(group, self.desktop_publish_group("v9.9.9"))
         self.bindings["${{ needs.desktop-preflight.outputs.macos }}"] = "false"
         (self.root / "dist" / MACOS_BUNDLE).unlink()
-        lock = threading.Lock()
-        holding = threading.Event()
-        excluded = threading.Event()
-        proceed = threading.Event()
-        results = {}
-
-        def run_linux():
-            owns = False
-            try:
-                lock.acquire()
-                owns = True
-                holding.set()
-                if not proceed.wait(self_test_hang.HANG_CEILING_SECONDS):
-                    raise TimeoutError("linux publisher was not released to upload")
-                results["linux"] = self.publish_desktop()
-            except Exception as exc:
-                results["linux_error"] = exc
-            finally:
-                holding.set()
-                if owns:
-                    lock.release()
-
-        def run_full():
-            owns = False
-            try:
-                if not holding.wait(self_test_hang.HANG_CEILING_SECONDS):
-                    raise TimeoutError("linux publisher never held the tag group")
-                acquired = lock.acquire(blocking=False)
-                results["entered_during_linux"] = acquired
-                if acquired:
-                    lock.release()
-                    return
-                excluded.set()
-                lock.acquire()
-                owns = True
-                self.bindings["${{ needs.desktop-preflight.outputs.macos }}"] = "true"
-                (self.root / "dist" / MACOS_BUNDLE).write_bytes(b"signed later")
-                results["full"] = self.publish_desktop()
-            except Exception as exc:
-                results["full_error"] = exc
-            finally:
-                excluded.set()
-                if owns:
-                    lock.release()
-
-        linux = threading.Thread(target=run_linux)
-        full = threading.Thread(target=run_full)
-        linux.start()
-        full.start()
-        try:
-            self.assertTrue(excluded.wait(self_test_hang.HANG_CEILING_SECONDS), results)
-            self.assertFalse(results.get("entered_during_linux"),
-                             "full publisher entered while linux held the tag group")
-        finally:
-            proceed.set()
-            linux.join(self_test_hang.SUBPROCESS_JOIN_SECONDS)
-            full.join(self_test_hang.SUBPROCESS_JOIN_SECONDS)
-        self.assertFalse(linux.is_alive() or full.is_alive(), "publisher thread did not finish")
-        self.assertNotIn("linux_error", results, results.get("linux_error"))
-        self.assertNotIn("full_error", results, results.get("full_error"))
-        self.assertEqual(results["linux"].returncode, 0, results["linux"].stderr)
-        self.assertNotEqual(results["full"].returncode, 0, results["full"].stdout)
+        result = self.publish_desktop()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_desktop_authenticated(LINUX_BUNDLES)
+        published = {path.name: path.read_bytes() for path in self.remote.iterdir()}
+        self.upload_log.write_text("")
+        self.bindings["${{ needs.desktop-preflight.outputs.macos }}"] = "true"
+        (self.root / "dist" / MACOS_BUNDLE).write_bytes(b"signed later")
+        result = self.publish_desktop()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertNotIn(MACOS_BUNDLE, self.uploaded_names(),
                          "the waiting full plan must refuse before uploading the DMG")
         self.assertNotIn(MACOS_BUNDLE, {path.name for path in self.remote.iterdir()})
-        self.assert_desktop_authenticated(LINUX_BUNDLES)
-        published = {path.name: path.read_bytes() for path in self.remote.iterdir()}
+        self.assertEqual({path.name: path.read_bytes() for path in self.remote.iterdir()}, published)
         # A complete Linux-only retry still uploads nothing and keeps those bytes.
         self.upload_log.write_text("")
         self.bindings["${{ needs.desktop-preflight.outputs.macos }}"] = "false"

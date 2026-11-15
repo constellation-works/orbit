@@ -1,9 +1,9 @@
 ---
 title: Orbit MCP — Overview
 owner: codex
-last_updated: 2026-10-28
-last_validated: 2026-10-30
-status: Draft
+last_updated: 2026-11-05
+last_validated: 2026-11-09
+status: Implemented
 stage: shipped
 next: "—"
 feature: mcp-bridge
@@ -38,26 +38,29 @@ non-interactive SSH process whose remote command is equivalent to:
 
 ```text
 ssh -T <host> orbit mcp serve [--operator] \
-    --remote-caller-machine-id <audit-label> [--orchestrator <crew>]
+    --remote-caller-machine-id <audit-label> [--orchestrator <crew>] \
+    [--role <role>] [--toolset <list>]
 ```
 
 Orbit includes `--operator` only when the client has operator authority and is not
 running as an agent. It includes `--orchestrator` when the client has that attribution
-default configured.
+default configured. It includes `--role` and `--toolset` only when the proxy's role or
+toolset selection, from its flags or `machine.mcp.role` and `machine.mcp.toolsets`, sets them.
 
 The proxy inherits stdin, stdout, and stderr. It does not parse MCP frames, open a
 checkout, resolve a workspace, filter tools, make authorization decisions, or
 forward the call through another machine.
 
 `orbit mcp listen` is the socket form of the same server, for deployments that
-need one — typically reached through an SSH tunnel. It binds loopback unless a
-wider bind is asked for explicitly, because the socket authenticates no client.
-Local processes can still connect to loopback without authentication. A browser
-page can also send HTTP to loopback, so the listener closes connections whose
-first byte is not a JSON object start before rmcp sees any message. It is a
-transport adapter only: it adds no broker, checkout preflight, placement
-routing, or client-side capability filter. The listener's server context is
-agent-only, as described below.
+need one — typically reached through an SSH tunnel as this user. It binds
+loopback unless a wider bind is asked for explicitly. A connection is accepted
+only when the peer's user id is the server's; a different user is refused
+before any message is read, and a remote TCP peer has no local user id and is
+refused. A browser page can also send HTTP to loopback, so the listener closes
+connections whose first byte is not a JSON object start before rmcp sees any
+message. It is a transport adapter only: it adds no broker, checkout preflight,
+placement routing, or client-side capability filter. The listener's server
+context is agent-only, as described below.
 
 ## Runtime rule
 
@@ -121,6 +124,7 @@ authorization decision [ORB-12564]. `caller_ip` is likewise observational.
 | Server composition and server-local runtime selection | `orbit-cli` | [ORB-17094] made local server modes honor the selected Orbit root |
 | Domain validation, capability enforcement, sandboxing, audit persistence, and runtime authorization | `orbit-core` (with the session envelope composed by `orbit-mcp`) | [ORB-12564] replaced destination caller policy with argv authority |
 | Canonical builtin tool definitions | `orbit-tools` | [ORB-18559] added policy-filtered recovery hints without aliases |
+| MCP role and toolset surface selection | `orbit-mcp` and `orbit-cli` | [ORB-20234] added opt-in toolsets; [ORB-21263] grouped toolsets into roles |
 | HTTP UI and its own local-forward SSH connection | `orbit-web` | Separate from MCP |
 
 `orbit-web` is a separate application surface. Its HTTP tunnel is not an MCP
@@ -135,9 +139,9 @@ SSH-originated session exactly as for a local one, because an SSH login to the
 destination is ownership of it [ORB-12564] — and Core enforces those effective
 capabilities at the tool boundary. The client is what decides: a proxy started
 with `--operator` composes an operator argv for its destination, and a client
-running as an agent never does. The TCP listener remains a transport only and
-authenticates no client, so it is hardcoded to agent authority and binds
-loopback unless a wider bind is explicitly requested.
+running as an agent never does. The TCP listener remains a transport only. It
+admits only a peer with the server's user id, stays hardcoded to agent
+authority, and binds loopback unless a wider bind is explicitly requested.
 
 Federated mode adds the configured-destination mux as an explicit namespace
 exception. It performs live discovery and host-qualified routing, and the
@@ -154,7 +158,8 @@ response
 with live descriptors for the accepting machine and configured destinations.
 [ORB-11015] implemented selector routing, [ORB-11016] registered federated serve,
 and [ORB-14449] added task-ID prefix routing. These are shipped extensions to
-direct v1; the document's Draft status does not mean they await implementation.
+direct v1. Tool discovery also applies the selected role and toolset surface,
+while Core independently enforces caller authority [ORB-20234] [ORB-21263].
 
 The executable contract and validation map live in
 [`references/conformance-v1.yaml`](./references/conformance-v1.yaml). Detailed
@@ -174,5 +179,7 @@ request flow is in [`2_design.md`](./2_design.md), future work in
 - [ORB-17094] made local MCP server modes honor root selection.
 - [ORB-17223] excluded removed checkouts from workspace discovery.
 - [ORB-18559] added policy-filtered recovery hints for unknown builtin tool names.
+- [ORB-20234] moved selected MCP tools into opt-in toolsets.
+- [ORB-21263] grouped MCP toolsets into selectable roles.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

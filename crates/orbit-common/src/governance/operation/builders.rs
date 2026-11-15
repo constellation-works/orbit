@@ -80,7 +80,7 @@ pub(crate) const fn required(mut param: ParamSpec) -> ParamSpec {
     param
 }
 
-/// Require a parameter's CLI flag although the wire leaves it optional.
+/// Require a CLI argument without making its wire field unconditional.
 pub(crate) const fn cli_required(mut param: ParamSpec) -> ParamSpec {
     if let Some(binding) = &mut param.cli {
         binding.required = true;

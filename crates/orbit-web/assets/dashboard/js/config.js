@@ -10,13 +10,15 @@
 // one key to one file and re-renders that row from the response, so provenance
 // after the write is the server's answer, never a local guess.
 //
-// Topic pages (Workflow, Execution, Review, Machine, All keys) live in
-// config-topics.js; this module owns the tab, Crews and the throttle panel.
+// Topic pages (Workflow, Execution, Review, Machine, Other) live in
+// config-topics.js and the blocks every page shares in settings-ui.js; this
+// module owns the tab, Crews and the throttle panel.
 
-import { captureFocus, captureWorkspaceVisit, el, fetchJson, formatDateTime, getWorkspace, hostWriteRefusal, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
-import { renderAllKeys, renderExecution, renderMachine, renderReview, renderWorkflow, resetTopics, workspacePolicyMissing } from './config-topics.js';
+import { captureFocus, captureWorkspaceVisit, el, fetchJson, formatDateTime, getWorkspace, hostWriteRefusal, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel, teardownNode } from './common.js';
+import { renderExecution, renderMachine, renderOther, renderReview, renderWorkflow, resetTopics, workspacePolicyMissing } from './config-topics.js';
 import { fetchHostResourcePayload, hostReading, hostVerdict, onHostResources } from './host-resources.js';
 import { fetchAndRenderHosts, resetHostsView } from './hosts.js';
+import { renderSettingsBar, settingsEditButton, settingsKeyName, settingsRow, settingsRowSource, settingsSearchField, settingsSection, settingsSource, settingsSourceIsSet } from './settings-ui.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -34,16 +36,16 @@ const SUBTAB_SOURCES = {
   review: { path: "/api/config/effective", scope: "workspace" },
   crews: { path: "/api/config/effective", scope: "workspace" },
   machine: { path: "/api/config/file?scope=global", scope: "global" },
-  "all-keys": { path: "/api/config/effective", scope: "workspace" },
+  other: { path: "/api/config/effective", scope: "workspace" },
   hosts: { path: "/api/hosts", scope: null },
 };
-const LEGACY_SUBTABS = { effective: "workflow", "workspace-file": "all-keys", "global-file": "machine", system: "machine", keys: "all-keys" };
+const LEGACY_SUBTABS = { effective: "workflow", "workspace-file": "other", "global-file": "machine", system: "machine", keys: "other", "all-keys": "other" };
 
 /// The System tab is the resource throttle only: its keys, in display order.
 const THROTTLE_PREFIX = "workflow.resource_throttle.";
 const THROTTLE_RESOURCES = ["cpu", "memory", "disk", "io"];
-// The `io` resource's keys are named for the pressure line they read.
-const THROTTLE_KEY_STEM = { io: "io_full" };
+// The `io` marks are fixed, not configurable [ORB-22808]: [throttle at, resume below].
+const FIXED_THROTTLE_MARKS = { io: [20, 10] };
 
 /// Disk I/O pressure exists only on hosts that report it (Linux with PSI), so
 /// its row appears only when the host's payload carries a reading.
@@ -53,7 +55,6 @@ function throttleResources(host) {
 
 let activeSubtab = "workflow";
 let lastPayload = null;
-let filterText = "";
 // The row (or crew) currently being edited with its draft values. It is
 // operator state, so a background refresh must not discard it.
 let editing = null;
@@ -64,6 +65,7 @@ export function initConfig() {
   unsubscribeWorkspace = onWorkspaceChange(() => {
     lastPayload = null;
     editing = null;
+    resetCrewList();
     resetTopics();
   });
   // Live readings follow the topbar's poll. A rebuild would discard an open
@@ -84,7 +86,6 @@ export function setConfigSubtab(name) {
     if (name === "hosts" || activeSubtab === "hosts") resetHostsView();
   }
   activeSubtab = name;
-  updateConfigChrome();
 }
 
 export function getConfigSubtab() {
@@ -93,13 +94,11 @@ export function getConfigSubtab() {
 
 export async function fetchAndRenderConfig() {
   // The host file is machine-global, so Hosts renders in the aggregate view too.
-  if (activeSubtab === "hosts") {
-    updateConfigChrome();
-    return fetchAndRenderHosts();
-  }
+  if (activeSubtab === "hosts") return fetchAndRenderHosts();
   if (isAggregateView()) {
     renderPanelPlaceholder("config-body");
-    $("config-count").textContent = "—";
+    const bar = $("config-controls");
+    if (bar) bar.hidden = true;
     return;
   }
   const source = SUBTAB_SOURCES[activeSubtab] || SUBTAB_SOURCES.workflow;
@@ -121,7 +120,6 @@ export async function fetchAndRenderConfig() {
       lastPayload = payload;
       render(payload);
     },
-    "config-count",
   );
 }
 
@@ -142,25 +140,28 @@ function render(payload) {
 }
 
 function renderPanels(payload, body) {
+  // replaceChildren detaches without running teardown, so a poll would leave
+  // the previous render's clamp spans observed. Release them first.
+  teardownNode(body);
   body.replaceChildren();
-  updateConfigChrome();
-  renderControls();
   const ctx = viewContext(payload);
+  let bar;
   if (activeSubtab === "crews") {
-    body.appendChild(crewsPanel(payload));
-    $("config-count").textContent = `${(payload.crews || []).length} crews`;
-    return;
-  }
-  if (activeSubtab === "machine") {
-    renderMachine(body, payload, ctx, systemPanel(payload));
-    $("config-count").textContent = `${throttleResources(payload.host).length} resources`;
-    return;
-  }
-  if (activeSubtab === "execution") { renderExecution(body, payload, ctx); $("config-count").textContent = countSummary(payload); return; }
-  if (activeSubtab === "review") { renderReview(body, payload, ctx); $("config-count").textContent = countSummary(payload); return; }
-  if (activeSubtab === "all-keys") { renderAllKeys(body, payload, ctx); $("config-count").textContent = countSummary(payload); return; }
-  renderWorkflow(body, payload, ctx);
-  $("config-count").textContent = countSummary(payload);
+    const crews = crewsPanel(payload);
+    body.appendChild(crews.panel);
+    bar = { lead: crews.lead, actions: [editable(payload) ? addCrewButton() : null] };
+  } else if (activeSubtab === "machine") bar = renderMachine(body, payload, ctx, systemPanel(payload));
+  else if (activeSubtab === "execution") bar = renderExecution(body, payload, ctx);
+  else if (activeSubtab === "review") bar = renderReview(body, payload, ctx);
+  else if (activeSubtab === "other") bar = renderOther(body, payload, ctx);
+  else bar = renderWorkflow(body, payload, ctx);
+  renderSettingsBar({
+    ...bar,
+    onReload: () => {
+      editing = null;
+      fetchAndRenderConfig().catch((error) => console.error("Failed to reload config", error));
+    },
+  });
 }
 
 /// What a sub-view module needs from the tab: whether this session may write
@@ -173,84 +174,6 @@ function viewContext(payload) {
     rerender: () => { if (lastPayload) render(lastPayload); },
     reload: fetchAndRenderConfig,
   };
-}
-
-function countSummary(payload) {
-  const totals = (payload.sections || []).reduce(
-    (acc, section) => {
-      const counts = section.counts || {};
-      acc.set += counts.set || 0;
-      acc.total += counts.total || 0;
-      return acc;
-    },
-    { set: 0, total: 0 },
-  );
-  return `${totals.set} set / ${totals.total} keys`;
-}
-
-// ---------------------------------------------------------------- controls
-
-function renderControls() {
-  const controls = $("config-controls");
-  if (!controls) return;
-  controls.replaceChildren();
-  controls.hidden = ownsControls(activeSubtab);
-  if (controls.hidden) return;
-
-  controls.appendChild(reloadButton());
-  return;
-
-  const filter = el("input", { class: "config-filter" });
-  filter.type = "search";
-  filter.placeholder = "Filter keys…";
-  filter.value = filterText;
-  filter.setAttribute("aria-label", "Filter configuration keys");
-  filter.addEventListener("input", () => {
-    filterText = filter.value.trim().toLowerCase();
-    if (lastPayload) render(lastPayload);
-    $("config-controls").querySelector(".config-filter")?.focus();
-  });
-  controls.appendChild(filter);
-  controls.appendChild(reloadButton());
-}
-
-/// Crews has no controls; the file views carry their own actions.
-function ownsControls(subtab) {
-  return subtab === "crews";
-}
-
-function reloadButton() {
-  const reload = el("button", { class: "config-action", text: "Reload" });
-  reload.type = "button";
-  reload.addEventListener("click", () => {
-    editing = null;
-    fetchAndRenderConfig().catch((error) => console.error("Failed to reload config", error));
-  });
-  return reload;
-}
-
-function updateConfigChrome() {
-  const explainer = $("config-explainer");
-  if (explainer) explainer.hidden = activeSubtab !== "workflow";
-  const controls = $("config-controls");
-  if (controls && ownsControls(activeSubtab)) controls.hidden = true;
-}
-
-function sourceChip(row) {
-  const layer = row.state === "set" ? row.source?.layer || "set" : row.state;
-  const chip = el("span", { class: `config-source ${layer}`, text: layer });
-  if (row.source?.path) chip.title = row.source.path;
-  return chip;
-}
-
-function editButton(onClick, title) {
-  const button = el("button", { class: "config-pencil", text: "✎", title });
-  button.type = "button";
-  button.addEventListener("click", (event) => {
-    event.stopPropagation();
-    onClick();
-  });
-  return button;
 }
 
 function displayValue(value) {
@@ -290,14 +213,19 @@ function cancelEdit() {
   focusEditAffordance(closing);
 }
 
-/// After an editor closes, focus returns to the pencil that opened it.
+/// After an editor closes, focus returns to the Edit control that opened it.
 function focusEditAffordance(session) {
   if (!session) return;
+  // A new crew that was never saved has no row yet: focus the Add button.
+  if (session.kind === "crew" && !session.name) {
+    $("config-controls")?.querySelector(".config-add-crew")?.focus();
+    return;
+  }
   const key = session.kind === "crew" ? `crews.${session.name}` : session.key;
   const rows = $("config-body")?.querySelectorAll("[data-key]") || [];
   for (const row of rows) {
     if (row.dataset.key !== key) continue;
-    row.querySelector(".config-pencil")?.focus();
+    row.querySelector(".settings-edit")?.focus();
     return;
   }
 }
@@ -392,7 +320,7 @@ function clearButton(onClick) {
 }
 
 function actionButton(label, onClick, kind = "") {
-  const button = el("button", { class: `config-action ${kind}`.trim(), text: label });
+  const button = el("button", { class: `settings-btn ${kind}`.trim(), text: label });
   button.type = "button";
   button.disabled = Boolean(editing?.pending);
   button.addEventListener("click", (event) => {
@@ -421,7 +349,7 @@ function bindDraft(input, prop, draft, field, initial) {
 function valueInput(row, draft) {
   const options = row.options || [];
   if (options.length) {
-    const select = el("select", { class: "config-input mono" });
+    const select = el("select", { class: "settings-input mono" });
     for (const option of options) {
       const node = el("option", { text: option });
       node.value = option;
@@ -442,8 +370,13 @@ function valueInput(row, draft) {
     return { node: label, read: () => (sync(), input.checked) };
   }
   if (row.value_type === "integer") {
-    const input = el("input", { class: "config-input mono" });
+    const input = el("input", { class: "settings-input mono" });
     input.type = "number";
+    // The key's declared range bounds the field [ORB-22809].
+    if (row.allowed?.kind === "range") {
+      if (row.allowed.min != null) input.min = String(row.allowed.min);
+      if (row.allowed.max != null) input.max = String(row.allowed.max);
+    }
     const sync = bindDraft(input, "value", draft, "value", row.value == null ? "" : String(row.value));
     return {
       node: input,
@@ -453,7 +386,7 @@ function valueInput(row, draft) {
   if (String(row.value_type || "").startsWith("array")) {
     return chipListInput(Array.isArray(row.value) ? row.value : [], draft, "value");
   }
-  const input = el("input", { class: "config-input mono" });
+  const input = el("input", { class: "settings-input mono" });
   input.type = "text";
   const sync = bindDraft(input, "value", draft, "value", row.value == null ? "" : String(row.value));
   return { node: input, read: () => (sync(), input.value) };
@@ -481,7 +414,7 @@ function chipListInput(initial, draft, field) {
       chip.appendChild(remove);
       node.appendChild(chip);
     });
-    const input = el("input", { class: "config-input mono" });
+    const input = el("input", { class: "settings-input mono" });
     input.type = "text";
     input.placeholder = "add entry, Enter";
     input.value = state.pending;
@@ -538,7 +471,7 @@ async function submitKeyClear(row) {
 /// only on the session that issued it: a workspace switch or Reload while the
 /// write was in flight has already ended that session, and a later edit must
 /// not inherit its error or be closed by its success.
-async function submitConfigMutation(request) {
+async function submitConfigMutation(request, afterWrite) {
   const session = editing;
   if (!session || session.pending || !session.visit.isCurrent()) return;
   const ownsSubmission = () => editing === session && session.visit.isCurrent();
@@ -547,12 +480,6 @@ async function submitConfigMutation(request) {
   if (lastPayload) render(lastPayload);
   try {
     await request(session.visit);
-    if (!ownsSubmission()) return;
-    await fetchAndRenderConfig();
-    if (!ownsSubmission()) return;
-    editing = null;
-    if (lastPayload) render(lastPayload);
-    focusEditAffordance(session);
   } catch (error) {
     // The admission layer's message is the useful part; it names the key, the
     // value, and what was expected instead. The draft is untouched, so the
@@ -561,7 +488,21 @@ async function submitConfigMutation(request) {
     session.pending = false;
     session.error = error.message || String(error);
     if (editing === session && lastPayload) render(lastPayload);
+    return;
   }
+  if (!ownsSubmission()) return;
+  afterWrite?.(session);
+  try {
+    await fetchAndRenderConfig();
+  } catch (_) {
+    // The write landed; only the re-read failed. requestPanel already left
+    // its stale-data note on the panel, so close as a successful save rather
+    // than reporting the re-read error as a refused write.
+  }
+  if (!ownsSubmission()) return;
+  editing = null;
+  if (lastPayload) render(lastPayload);
+  focusEditAffordance(session);
 }
 
 // ------------------------------------------------------------------ system
@@ -612,65 +553,70 @@ function throttleRows(payload) {
   return rows;
 }
 
+const VERDICT_LABELS = { open: "Open", held: "Held", disabled: "Disabled", unknown: "Unknown" };
+
 function systemPanel(payload) {
   const rows = throttleRows(payload);
   const host = payload.host;
   const verdict = hostVerdict(host);
-  const panel = el("section", { class: "panel config-section config-system" });
-  panel.appendChild(
-    el("header", {}, [
-      el("span", {}, [
-        el("span", { class: "config-section-title", text: "Resource throttle" }),
-        el("span", { class: "config-section-prefix mono", text: `${THROTTLE_PREFIX}*` }),
-        el("span", { class: "config-section-blurb", text: "new work is held while a resource stays at its throttle-at mark" }),
-      ]),
-      el("span", { class: "config-header-right" }, [
-        el("span", { class: `config-verdict ${verdict.status}`, text: verdict.status }),
-      ]),
-    ]),
-  );
-  const body = el("div", { class: "config-section-body" });
-  body.appendChild(el("div", { class: "config-strip" }, [
-    el("div", { class: "config-note", text: `Edits write the global file${payload.layers?.global?.path ? ` (${payload.layers.global.path})` : ""}: the topbar readings and admission on this host read it.` }),
-    ...Object.keys(payload.workspace_overrides || {}).length
-      ? [el("div", { class: "config-warning", text: "The workspace file overrides some of these keys; its value wins for this workspace's runtimes." })]
-      : [],
-  ]));
-  body.appendChild(systemVerdict(host, verdict, rows, payload));
-  const head = el("div", { class: "config-sys-grid config-sys-head col-head" }, [
-    el("span", { text: "resource" }),
-    el("span", { text: "live reading" }),
-    el("span", { text: "throttle at" }),
-    el("span", { text: "resume below" }),
-  ]);
-  body.appendChild(head);
-  for (const resource of throttleResources(host)) body.appendChild(systemResource(resource, rows, payload, host));
-  panel.appendChild(body);
-  return panel;
+  const { section, body } = settingsSection("Resource throttle", {
+    state: {
+      text: VERDICT_LABELS[verdict.status] || verdict.status,
+      tone: verdict.status === "open" ? "ok" : verdict.status === "held" ? "bad" : "",
+    },
+  });
+  // The header pill is the verdict; a line under it says why only when the
+  // throttle is not simply open.
+  const detail = verdictDetail(host, verdict);
+  if (detail) body.appendChild(el("div", { class: `settings-note${verdict.status === "held" ? " bad" : ""}`, text: detail }));
+  if (Object.keys(payload.workspace_overrides || {}).length) {
+    body.appendChild(el("div", { class: "settings-note warn", text: "The workspace file overrides some of these keys; its value wins for this workspace's runtimes." }));
+  }
+  const enabled = rows[`${THROTTLE_PREFIX}enabled`];
+  if (enabled) {
+    body.appendChild(throttleEnabledRow(enabled, payload));
+    const editor = openEditor(enabled, payload);
+    if (editor) body.appendChild(editor);
+  }
+  const table = el("div", { class: "settings-table", role: "table", "aria-label": "Resource throttle marks" });
+  table.appendChild(el("div", { class: "settings-table-row col-head", role: "row" },
+    ["Resource", "Live", "Throttle at", "Resume below"].map((text) => el("div", { text, role: "columnheader" }))));
+  for (const resource of throttleResources(host)) table.append(...systemResource(resource, rows, payload, host));
+  body.appendChild(table);
+  return section;
 }
 
-function systemVerdict(host, verdict, rows, payload) {
-  const node = el("div", { class: "config-sys-verdict" });
-  const enabledKey = `${THROTTLE_PREFIX}enabled`;
-  node.appendChild(el("div", { class: "config-sys-enabled" }, [
-    el("span", { class: "config-key mono", text: "enabled" }),
-    rows[enabledKey] ? systemValueCell(rows[enabledKey], payload) : el("span", { class: "config-value mono", text: NO_VALUE }),
-  ]));
-  const pressures = throttleResources(host).flatMap((resource) => hostReading(host, resource).pressures);
-  let text;
+function verdictDetail(host, verdict) {
   if (verdict.status === "held") {
-    text = `Holding new admissions: ${pressures.map(describePressure).join("; ")}`;
-  } else if (verdict.status === "disabled") {
-    text = "Throttle disabled — pressure is still reported but holds nothing.";
-  } else if (verdict.status === "open") {
-    text = "Open — no resource is held.";
-  } else {
-    text = `Verdict unknown — ${verdict.reason}`;
+    const pressures = throttleResources(host).flatMap((resource) => hostReading(host, resource).pressures);
+    return `Holding new admissions: ${pressures.map(describePressure).join("; ")}`;
   }
-  node.appendChild(el("div", { class: `config-sys-verdict-text ${verdict.status}`, text }));
-  const editor = openEditor(rows[enabledKey], payload);
-  if (editor) node.appendChild(editor);
+  if (verdict.status === "disabled") return "Pressure is still reported but holds nothing.";
+  if (verdict.status === "open") return null;
+  return `Verdict unknown: ${verdict.reason}`;
+}
+
+/// `enabled` reads like any other key row; its inline editor opens under it.
+function throttleEnabledRow(row, payload) {
+  const override = payload.workspace_overrides?.[row.key];
+  const node = settingsRow({
+    name: settingsKeyName(row.key, { prefix: THROTTLE_PREFIX, description: "New work is held while a resource stays at its throttle-at mark." }),
+    value: [
+      el("div", { class: "settings-value", text: displayValue(row.value) }),
+      override ? el("div", { class: "settings-meta", title: overrideTitle(row, override) }, ["Workspace: ", el("span", { class: "mono", text: displayValue(override.value) })]) : null,
+    ],
+    source: settingsRowSource(row),
+    action: editable(payload)
+      ? el("div", { class: "settings-act" }, [settingsEditButton(() => startEdit({ kind: "key", key: row.key }), `Edit ${row.key}`)])
+      : null,
+  });
+  if (override) node.classList.add("overridden");
+  node.dataset.key = row.key;
   return node;
+}
+
+function overrideTitle(row, override) {
+  return `The workspace file sets ${row.key} to ${displayValue(override.value)}; that value wins for this workspace's runtimes. The global value shown here applies to this host's topbar and admission.`;
 }
 
 /// The open editor for `row`, or null; it sits under the row it belongs to.
@@ -686,49 +632,42 @@ function describePressure(pressure) {
   return `${pressure.resource} ${Math.round(pressure.percent)}% ≥ ${pressure.high_percent}% since ${formatDateTime(pressure.since)}`;
 }
 
+/// One resource: its table row, then the open editor of either mark.
 function systemResource(resource, rows, payload, host) {
   const reading = hostReading(host, resource);
-  const stem = THROTTLE_KEY_STEM[resource] || resource;
-  const high = rows[`${THROTTLE_PREFIX}${stem}_high_percent`];
-  const resume = rows[`${THROTTLE_PREFIX}${stem}_resume_percent`];
-  const node = el("div", { class: "config-sys-resource" });
-  node.dataset.resource = resource;
-  const live = el("span", { class: `config-sys-reading ${reading.severity}${reading.held ? " throttled" : ""}` }, [
-    el("span", { class: "mono", text: reading.known ? `${reading.reading.percent.toFixed(1)}%` : NO_VALUE }),
-    el("span", { class: "config-sys-severity", text: reading.known ? reading.severity : reading.note }),
-    ...(reading.held ? [el("span", { class: "host-resource-held", text: "held" })] : []),
+  const high = rows[`${THROTTLE_PREFIX}${resource}_high_percent`];
+  const resume = rows[`${THROTTLE_PREFIX}${resource}_resume_percent`];
+  const fixed = FIXED_THROTTLE_MARKS[resource];
+  const markCell = (row, index) => {
+    if (row) return systemValueCell(row, payload, `Edit ${resource} ${index ? "resume-below" : "throttle-at"} mark`);
+    return el("div", { class: "settings-table-cell", role: "cell" }, [
+      el("span", { class: "settings-value", text: fixed ? String(fixed[index]) : NO_VALUE }),
+      fixed ? el("span", { class: "settings-table-note", text: "fixed" }) : null,
+    ]);
+  };
+  const node = el("div", { class: "settings-table-row", role: "row" }, [
+    el("div", { class: "settings-key", text: resource, role: "cell" }),
+    el("div", { class: `settings-table-cell settings-reading ${reading.severity}${reading.held ? " throttled" : ""}`, role: "cell" }, [
+      el("span", { class: "settings-value", text: reading.known ? `${reading.reading.percent.toFixed(1)}%` : NO_VALUE }),
+      el("span", { class: "settings-table-note", text: reading.known ? reading.severity : reading.note }),
+      reading.held ? el("span", { class: "host-resource-held", text: "held" }) : null,
+    ]),
+    markCell(high, 0),
+    markCell(resume, 1),
   ]);
-  node.appendChild(el("div", { class: "config-sys-grid" }, [
-    ["Resource", el("span", { class: "config-key mono", text: resource })],
-    ["Live reading", live],
-    ["Throttle at", high ? systemValueCell(high, payload) : el("span", { class: "config-value mono", text: NO_VALUE })],
-    ["Resume below", resume ? systemValueCell(resume, payload) : el("span", { class: "config-value mono", text: NO_VALUE })],
-  ].map(([label, value]) => el("div", { class: "config-sys-cell-wrap" }, [
-    el("span", { class: "config-sys-label", text: label }),
-    value,
-  ]))));
-  for (const row of [high, resume]) {
-    const editor = openEditor(row, payload);
-    if (editor) node.appendChild(editor);
-  }
-  return node;
+  node.dataset.resource = resource;
+  return [node, ...[high, resume].map((row) => openEditor(row, payload)).filter(Boolean)];
 }
 
-/// One key's value, its default/global source, a marker when the workspace
-/// file overrides it, and the edit pencil.
-function systemValueCell(row, payload) {
+/// One mark: its value, its source where it is not the default, a note when
+/// the workspace file overrides it, and the edit pencil.
+function systemValueCell(row, payload, editLabel) {
   const override = payload.workspace_overrides?.[row.key];
-  const cell = el("span", { class: `config-sys-cell${override ? " overridden" : ""}` }, [
-    el("span", { class: "config-value mono", text: displayValue(row.value) }),
-    sourceChip(row),
-    override
-      ? el("span", {
-          class: "config-source workspace",
-          text: `workspace ${displayValue(override.value)}`,
-          title: `The workspace file sets ${row.key} to ${displayValue(override.value)}; that value wins for this workspace's runtimes. The global value shown here applies to this host's topbar and admission.`,
-        })
-      : null,
-    editable(payload) ? editButton(() => startEdit({ kind: "key", key: row.key }), `Edit ${row.key}`) : null,
+  const cell = el("div", { class: `settings-table-cell${override ? " overridden" : ""}`, role: "cell" }, [
+    el("span", { class: "settings-value", text: displayValue(row.value) }),
+    row.state === "set" ? settingsRowSource(row) : null,
+    override ? el("span", { class: "settings-table-note", text: `Workspace ${displayValue(override.value)}`, title: overrideTitle(row, override) }) : null,
+    editable(payload) ? settingsEditButton(() => startEdit({ kind: "key", key: row.key }), editLabel, { icon: true }) : null,
   ]);
   cell.dataset.key = row.key;
   return cell;
@@ -736,25 +675,79 @@ function systemValueCell(row, payload) {
 
 // ------------------------------------------------------------------- crews
 
-const CREW_COLUMNS = ["Name", "Provider", "Model", "Limit", "Effort", "Tags / fallbacks", "Layer", "Used by", "Actions"];
+// Limit, Effort, Tags / fallbacks, Source and Used by. On a narrow screen they
+// sit behind each row's "Details" control; at desktop width every column shows.
+const CREW_DETAIL_COLUMNS = new Set([3, 4, 5, 6, 7]);
+const CREW_COLUMNS = ["Name", "Provider", "Model", "Limit", "Effort", "Tags / fallbacks", "Source", "Used by", "Actions"];
 
+// The crew list is bounded: the first CREW_PAGE matches render, and the rest
+// stay one control away ("Show more", "Show all"). The filter, the reveal
+// window and each row's open detail group are operator state that survives
+// a background refresh; a workspace switch starts them over.
+const CREW_PAGE = 6;
+let crewQuery = "";
+let crewLimit = CREW_PAGE;
+const crewExpanded = new Set();
+
+function resetCrewList() {
+  crewQuery = "";
+  crewLimit = CREW_PAGE;
+  crewExpanded.clear();
+}
+
+/// Every whitespace-separated term of the query must appear in the crew's
+/// name, provider, model, effort, tags or description.
+function crewMatchesQuery(crew, query) {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return true;
+  const haystack = [crew.name, crew.provider, crew.model, crew.effort, crew.description, ...(Array.isArray(crew.tags) ? crew.tags : [crew.tags])]
+    .filter((value) => value != null)
+    .join(" ")
+    .toLowerCase();
+  return terms.every((term) => haystack.includes(term));
+}
+
+/// The Crews table and the filter that goes in the page bar.
 function crewsPanel(payload) {
   const crews = payload.crews || [];
-  const panel = el("section", { class: "panel config-section config-crews" });
-  const section = (payload.sections || []).find((entry) => entry.kind === "crews");
-  panel.appendChild(
-    el("header", {}, [
-      el("span", {}, [
-        el("span", { class: "config-section-title", text: section?.title }),
-        el("span", { class: "config-section-blurb", text: section?.blurb }),
-      ]),
-      el("span", { class: "config-header-right" }, [
-        el("span", { class: "count", text: `${crews.length} defined` }),
-        editable(payload) ? addCrewButton() : null,
-      ]),
-    ]),
-  );
-  const body = el("div", { class: "config-section-body" });
+  const { section: panel, body } = settingsSection("Crews", { count: "" });
+  panel.classList.add("config-crews");
+  const count = panel.querySelector(".settings-section-count");
+  const list = el("div", { class: "config-crew-list" });
+  const more = el("div", { class: "config-crew-more" });
+  const status = el("span", { class: "config-crew-status" });
+  status.setAttribute("role", "status");
+  const refresh = (revealFrom) => {
+    const matches = crews.filter((crew) => crewMatchesQuery(crew, crewQuery));
+    // A crew being edited stays on screen even when the filter or window hides it.
+    const editingName = editing && editing.kind === "crew" ? editing.name : null;
+    const shown = matches.slice(0, crewLimit);
+    if (editingName && crews.some((crew) => crew.name === editingName) && !shown.some((crew) => crew.name === editingName)) {
+      shown.push(crews.find((crew) => crew.name === editingName));
+    }
+    list.replaceChildren(...shown.map((crew) => crewRow(crew, payload)));
+    if (crewQuery && !matches.length) {
+      list.appendChild(el("div", { class: "settings-empty", text: `No crew matches “${crewQuery}”.` }));
+    }
+    const total = `${crews.length} crew${crews.length === 1 ? "" : "s"}`;
+    count.textContent = crewQuery ? `${matches.length} of ${total}` : total;
+    status.textContent = matches.length ? `Showing ${Math.min(crewLimit, matches.length)} of ${matches.length}${crewQuery ? " matching" : ""} crews` : "";
+    renderCrewMore(more, status, matches.length, () => refresh(), (from) => refresh(from));
+    if (revealFrom != null) list.children[revealFrom]?.focus();
+  };
+  const lead = crews.length
+    ? [settingsSearchField({
+        cls: "config-crew-filter",
+        placeholder: "Filter by name, provider or model",
+        label: "Filter crews by name, provider or model",
+        value: crewQuery,
+        onInput: (input) => {
+          crewQuery = input.value.trim();
+          crewLimit = CREW_PAGE;
+          refresh();
+        },
+      })]
+    : [];
   const head = el("div", { class: "config-crew-cells config-crew-head col-head" });
   head.setAttribute("role", "row");
   for (const label of CREW_COLUMNS) {
@@ -764,18 +757,55 @@ function crewsPanel(payload) {
   }
   body.appendChild(head);
   if (!crews.length && !(editing && editing.kind === "crew" && editing.name === "")) {
-    body.appendChild(el("div", { class: "config-empty", text: "No crew is defined for this workspace." }));
+    body.appendChild(el("div", { class: "settings-empty", text: "No crew is defined for this workspace." }));
   }
   if (editing && editing.kind === "crew" && editing.name === "") {
     body.appendChild(crewEditor({ name: "", tags: [] }, payload, true));
   }
-  for (const crew of crews) body.appendChild(crewRow(crew, payload));
-  panel.appendChild(body);
-  return panel;
+  body.appendChild(list);
+  body.appendChild(more);
+  refresh();
+  return { panel, lead };
+}
+
+/// The reveal controls under the list: the status line, "Show more", "Show all"
+/// and, once the window has grown, "Show fewer". Each keeps every crew reachable.
+function renderCrewMore(container, status, total, onShrink, onReveal) {
+  container.replaceChildren(status);
+  const control = (label, onClick) => {
+    const button = el("button", { class: "settings-btn", text: label });
+    button.type = "button";
+    button.addEventListener("click", onClick);
+    container.appendChild(button);
+    return button;
+  };
+  if (total > crewLimit) {
+    const remaining = total - crewLimit;
+    control(`Show ${Math.min(CREW_PAGE, remaining)} more`, () => {
+      const from = crewLimit;
+      crewLimit += CREW_PAGE;
+      onReveal(from);
+    });
+    if (remaining > CREW_PAGE) {
+      control(`Show all ${total}`, () => {
+        const from = crewLimit;
+        crewLimit = total;
+        onReveal(from);
+      });
+    }
+  }
+  if (crewLimit > CREW_PAGE && total > CREW_PAGE) {
+    const fewer = control("Show fewer", () => {
+      crewLimit = CREW_PAGE;
+      onShrink();
+      container.querySelector("button")?.focus();
+    });
+    fewer.classList.add("config-crew-fewer");
+  }
 }
 
 function addCrewButton() {
-  const button = el("button", { class: "config-action", text: "+ Add crew" });
+  const button = el("button", { class: "settings-btn config-add-crew", text: "Add crew" });
   button.type = "button";
   button.addEventListener("click", () => startEdit({ kind: "crew", name: "" }));
   return button;
@@ -785,6 +815,7 @@ function crewRow(crew, payload) {
   const referenced = crew.referenced_by || [];
   const node = el("div", { class: "config-row config-crew-row" });
   node.dataset.key = `crews.${crew.name}`;
+  node.tabIndex = -1;
   if (referenced.length) node.classList.add("referenced");
   // A table without `enabled` is enabled; only an explicit false disables.
   const disabled = crew.enabled === false;
@@ -824,17 +855,37 @@ function crewRow(crew, payload) {
     crewLimitCell(crew.limit),
     el("span", { class: "config-value mono", text: displayCrewValue(crew.effort) }),
     el("span", { class: "config-value mono", text: displayCrewValue(crew.tags) }),
-    el("span", { class: `config-source ${crew.source}`, text: displayCrewValue(crew.source) }),
+    crew.source ? settingsSource(crew.source, { set: settingsSourceIsSet(crew.source) }) : el("span", { class: "settings-value none", text: EMPTY_ARRAY }),
     usedBy,
-    editable(payload) ? editButton(() => startEdit({ kind: "crew", name: crew.name }), "Edit this crew") : el("span", { text: EMPTY_ARRAY }),
-  ].map((value, index) => el("div", { class: "config-crew-cell" }, [
+    editable(payload) ? settingsEditButton(() => startEdit({ kind: "crew", name: crew.name }), `Edit crew ${crew.name}`) : null,
+  ].map((value, index) => el("div", { class: `config-crew-cell${CREW_DETAIL_COLUMNS.has(index) ? " config-crew-detail" : ""}${value ? "" : " config-crew-blank"}` }, [
     el("span", { class: "config-crew-label", text: CREW_COLUMNS[index] }),
     value,
   ])));
   node.appendChild(cells);
+  node.appendChild(crewDetailToggle(node, crew.name));
   const error = pendingError(node, `crews.${crew.name}`);
   if (error) node.appendChild(error);
   return node;
+}
+
+function crewDetailToggle(node, name) {
+  const open = crewExpanded.has(name);
+  node.classList.toggle("expanded", open);
+  const button = el("button", { class: "config-crew-toggle", text: open ? "Hide details" : "Details" });
+  button.type = "button";
+  button.setAttribute("aria-expanded", String(open));
+  button.setAttribute("aria-label", `${open ? "Hide" : "Show"} details for crew ${name}`);
+  button.addEventListener("click", () => {
+    const next = !crewExpanded.has(name);
+    if (next) crewExpanded.add(name);
+    else crewExpanded.delete(name);
+    node.classList.toggle("expanded", next);
+    button.textContent = next ? "Hide details" : "Details";
+    button.setAttribute("aria-expanded", String(next));
+    button.setAttribute("aria-label", `${next ? "Hide" : "Show"} details for crew ${name}`);
+  });
+  return button;
 }
 
 // A crew's `env` entries (`NAME` or `NAME=SOURCE`): the variables its agents
@@ -906,7 +957,7 @@ function crewEditor(crew, payload, isNew) {
   const fields = {};
   const rows = [];
   if (isNew) {
-    const name = el("input", { class: "config-input mono" });
+    const name = el("input", { class: "settings-input mono" });
     name.type = "text";
     name.placeholder = "crew name";
     const sync = bindDraft(name, "value", draft, "name", "");
@@ -919,7 +970,7 @@ function crewEditor(crew, payload, isNew) {
   for (const field of crewFields) {
     const current = crew[field];
     if (field === "enabled") {
-      const toggle = el("input", { class: "config-input" });
+      const toggle = el("input", { class: "settings-input" });
       toggle.type = "checkbox";
       const was = current !== false;
       const sync = bindDraft(toggle, "checked", draft, field, was);
@@ -936,9 +987,17 @@ function crewEditor(crew, payload, isNew) {
       continue;
     }
     if (field === "env") {
-      // Global config only: an unchanged list is omitted so saving another
-      // field to the workspace file never writes an `env` key it would refuse.
+      // Global config only: `[crews.X].env` is refused as a workspace setting,
+      // so an editor writing the workspace file shows it read-only.
       const was = Array.isArray(current) ? current : [];
+      if (writeScope() !== "global") {
+        rows.push(fieldRow(field, el("span", {
+          class: "config-note mono",
+          text: `${was.length ? was.join(", ") : EMPTY_ARRAY} · set in the global config`,
+        })));
+        continue;
+      }
+      // An unchanged list is omitted so saving another field never rewrites it.
       const list = chipListInput(was, draft, field);
       rows.push(fieldRow(field, list.node));
       fields[field] = () => {
@@ -948,7 +1007,7 @@ function crewEditor(crew, payload, isNew) {
       };
       continue;
     }
-    const input = el("input", { class: "config-input mono" });
+    const input = el("input", { class: "settings-input mono" });
     input.type = "text";
     const sync = bindDraft(input, "value", draft, field, current == null ? "" : String(current));
     rows.push(fieldRow(field, input));
@@ -1002,7 +1061,9 @@ async function submitCrew(crew, fields, isNew, init) {
       scope: writeScope(),
       ...(init ? { init } : {}),
     }, visit),
-  );
+  // Only a landed write earns the typed name, so a refused save keeps the
+  // new-crew editor (keyed by "") open and focus finds the row on success.
+  isNew ? (session) => { session.name = name; } : undefined);
 }
 
 async function submitCrewDelete(crew) {

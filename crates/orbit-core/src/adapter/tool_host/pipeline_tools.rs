@@ -36,7 +36,7 @@ pub(super) fn invoke(
         .unwrap_or_else(|| runtime.actor_label().to_string()),
     )
     .filter(|value| !value.trim().is_empty());
-    let result = match child_admission(reservation_owner)? {
+    let result = match child_admission(reservation_owner) {
         Some(admission) => runtime.submit_child_pipeline_run(
             &job_name,
             payload,
@@ -66,37 +66,15 @@ pub(super) fn invoke(
 
 fn child_admission(
     reservation_owner: Option<ReservationOwnerContext>,
-) -> Result<Option<ChildPipelineAdmission>, OrbitError> {
-    let Some(owner) = reservation_owner else {
-        return Ok(None);
-    };
-    let Some(metadata) = owner.owner_metadata_json else {
-        return Ok(None);
-    };
-    let metadata: Value = serde_json::from_str(&metadata).map_err(|error| {
-        OrbitError::InvalidInput(format!(
-            "invalid trusted reservation owner metadata: {error}"
-        ))
-    })?;
-    let Some(admission) = metadata.get("pipeline_child_admission") else {
-        return Ok(None);
-    };
-    let action = required_string(admission, &["action"], "action")?;
-    let blocking = admission
-        .get("blocking")
-        .and_then(Value::as_bool)
-        .ok_or_else(|| {
-            OrbitError::InvalidInput(
-                "trusted pipeline child admission is missing boolean `blocking`".to_string(),
-            )
-        })?;
-    let parent_step_id = optional_string(admission, "parent_step_id")?;
-    Ok(Some(ChildPipelineAdmission {
+) -> Option<ChildPipelineAdmission> {
+    let owner = reservation_owner?;
+    let admission = owner.owner_metadata.as_ref()?.child_admission()?;
+    Some(ChildPipelineAdmission {
         parent_run_id: owner.owner_run_id,
-        parent_step_id,
-        action,
-        blocking,
-    }))
+        parent_step_id: admission.parent_step_id.clone(),
+        action: admission.action.clone(),
+        blocking: admission.blocking,
+    })
 }
 
 pub(super) fn wait(

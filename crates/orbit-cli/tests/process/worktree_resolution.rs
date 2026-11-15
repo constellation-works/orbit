@@ -1,5 +1,4 @@
 #![allow(missing_docs)]
-#![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::fs;
 #[cfg(unix)]
@@ -735,7 +734,13 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
     assert_definition_source(&shown, &mo, &primary_path);
     for args in [
         vec!["auto-task", "list", "--format", "json"],
-        vec!["tool", "run", "orbit.auto_task.list", "--input", "{}"],
+        vec![
+            "tool",
+            "run",
+            "orbit.auto_task",
+            "--input",
+            r#"{"action":"list"}"#,
+        ],
     ] {
         let listed = f.json(&linked, &args);
         assert!(
@@ -1503,7 +1508,6 @@ fn root_resolution_precedence() {
 
 /// Verify config reports the shared store and checkout-local roots without
 /// the retired root aliases.
-#[allow(clippy::too_many_arguments)]
 fn assert_root_case(
     fixture: &Fixture,
     name: &str,

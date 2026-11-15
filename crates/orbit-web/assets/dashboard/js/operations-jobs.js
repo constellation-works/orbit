@@ -1,6 +1,6 @@
 // Job catalogue and live run operations [ORB-10875, ORB-10876].
 
-import { copyText, el, fetchJson, hostWriteRefusal, postJson, requestPanel, relativeTime } from './common.js';
+import { captureWorkspaceVisit, copyText, el, fetchJson, formatDayHeading, hostWriteRefusal, isAggregateView, postJson, requestPanel, relativeTime } from './common.js';
 
 import {
   $,
@@ -30,34 +30,111 @@ import {
 import { jobIdFromTarget, scopedRoutines, updateRoutineFailureBadge } from './operations-routines.js';
 
 // ---------------------------------------------------------------------------
-// Jobs. The catalogue is projected from routine targets and recent runs.
-// Manual Run submits catalog jobs; delivery pipelines use Ship or Drain.
+// Jobs. The catalogue is projected from routine targets and recent runs,
+// filtered to the jobs the server reports as manual-runnable
+// (`manual_runnable` from /api/jobs, backed by
+// supports_no_input_submission). Delivery and other child-only or
+// task-input jobs never appear there; their runs stay in Live and History.
 
 const JOB_RUN_LIMIT = 100;
 export let lastJobs = null;
-registerOperationsReset(() => { lastJobs = null; });
+registerOperationsReset(() => { lastJobs = null; updateJobFailureBadges([]); });
+
+// Jobs whose recent runs failed in a row, from /api/jobs/failure-streaks.
+// `null` means unknown (not yet read, or the read failed): the catalogue then
+// shows no badge and the rail pills stay as they were.
+let jobFailureRequest = 0;
+
+function failureStreakText(streak) {
+  const count = `${streak.truncated ? "at least " : ""}${streak.count}`;
+  return `Failing: ${count} in a row since ${formatDayHeading(streak.since).replace(/^\w+, /, "")}${streak.truncated ? " or earlier" : ""}`;
+}
+
+function failureStreakSummary(streak) {
+  return `${streak.job_id}: ${failureStreakText(streak)}${streak.same_error ? ` (same error ×${streak.count})` : ""}`;
+}
+
+// The Jobs rail pill counts the failing jobs. It sits beside the pending/running
+// volume count and is display only, visible from every tab.
+export function updateJobFailureBadges(failing) {
+  jobFailureRequest += 1;
+  const jobs = failing || [];
+  const node = $("rail-count-jobs-failing");
+  if (!node) return;
+  node.hidden = jobs.length === 0;
+  node.textContent = jobs.length ? `${jobs.length} failing` : "";
+  node.title = jobs.length ? `${jobs.map(failureStreakSummary).join("; ")}. See Jobs › Catalogue.` : "";
+}
+
+// Keep the rail pill true from every tab, including before Jobs is opened.
+// The dashboard chooses when to call this; Analytics › Metrics reuses the
+// last scoped count between arrivals. A reply from an earlier host or
+// workspace visit must not restore a stale count. Returns false only when
+// this visit's read failed, so the caller can retry it.
+export async function peekJobFailures(read = null) {
+  if (isAggregateView() || !selectedWorkspace()) {
+    updateJobFailureBadges([]);
+    return true;
+  }
+  const visit = captureWorkspaceVisit();
+  const request = ++jobFailureRequest;
+  try {
+    const payload = await (read || fetchJson("/api/jobs/failure-streaks"));
+    if (visit.isCurrent() && request === jobFailureRequest) updateJobFailureBadges(payload?.failing);
+    return true;
+  } catch (_) {
+    // Failed read: leave rail pills as they were (unknown, not zero).
+    return false;
+  }
+}
+
+// The warning on a catalogue row: how long it has failed, whether it is one
+// error or several, the latest error and a link to the newest failed run.
+function jobFailureBadge(streak, workspaceId) {
+  const badge = el("div", { class: "job-failure-badge", role: "status" }, [
+    el("strong", { class: "job-failure-title", text: failureStreakText(streak), title: time(streak.since) }),
+    el("span", { class: "job-failure-kind", text: streak.same_error ? `same error ×${streak.count}` : "errors vary" }),
+    streak.latest_error ? el("span", { class: "job-failure-error mono", text: streak.latest_error, title: streak.latest_error }) : null,
+    runLink(streak.latest_run_id, workspaceId, "Latest failed run"),
+  ].filter(Boolean));
+  badge.dataset.failureCount = String(streak.count);
+  return badge;
+}
 
 function jobFamily(jobId) {
   if (/sweep|gc|pilot|triage|scheduler/.test(jobId)) return "sweep";
-  if (/^(task|workspace|epic)_/.test(jobId)) return "delivery";
   return "other";
 }
 
-function jobCatalog(routinesPayload, runs, workspaceName) {
+// Server-reported runnability: /api/jobs entries carry `manual_runnable`
+// (alias `supports_no_input_submission`). Unknown jobs are not runnable.
+function manualRunnableIds(catalogJobs) {
+  const ids = new Set();
+  for (const job of Array.isArray(catalogJobs) ? catalogJobs : []) {
+    const runnable = job?.manual_runnable ?? job?.supports_no_input_submission ?? job?.run_available;
+    if (runnable === true) ids.add(job.job_id || job.name);
+  }
+  return ids;
+}
+
+function jobCatalog(routinesPayload, runs, workspaceName, catalogJobs) {
+  const runnable = manualRunnableIds(catalogJobs);
   const catalog = new Map();
   const entry = (jobId) => {
+    if (!runnable.has(jobId)) return null;
     if (!catalog.has(jobId)) catalog.set(jobId, { id: jobId, routines: [], runs: [], running: 0, lastRun: null });
     return catalog.get(jobId);
   };
   for (const routine of routinesPayload?.routines || []) {
     if (routine.source !== workspaceName) continue;
     const jobId = jobIdFromTarget(routine.target);
-    if (jobId) entry(jobId).routines.push(routine);
+    if (jobId) entry(jobId)?.routines.push(routine);
   }
   const sorted = [...runs].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
   for (const run of sorted) {
     if (!run.job_id) continue;
     const job = entry(run.job_id);
+    if (!job) continue;
     job.runs.push(run);
     if (run.state === "running" || run.state === "pending") job.running += 1;
     if (!job.lastRun) job.lastRun = run;
@@ -144,14 +221,12 @@ function jobCommand(jobId, workspace) {
   return `orbit run job ${shellWordJob(String(jobId))} --workspace ${targetWord}`;
 }
 
-function jobRow(job, workspace) {
+function jobRow(job, workspace, streak) {
   const detailsKey = `job:${job.id}`;
   const last = job.lastRun;
   const command = jobCommand(job.id, workspace);
   const key = `job:run:${workspace.id}:${job.id}`;
-  const runReason = jobFamily(job.id) === "delivery"
-    ? "Delivery jobs require task input or a delivery window. Use Ship or Drain."
-    : controlReason(operationsState.lastOperations, "job_run");
+  const runReason = controlReason(operationsState.lastOperations, "job_run");
   const pending = pendingOperations.has(key);
   const run = el("button", { class: "operation-button primary job-run", text: pending ? "Submitting…" : "Run ▸", title: runReason || `Run ${job.id} in ${workspace.name}` });
   run.type = "button";
@@ -163,7 +238,7 @@ function jobRow(job, workspace) {
       selection, key, feedbackId: "job-operation-feedback",
       pending: `Submitting ${job.id}…`,
       failure: `Could not run ${job.id}`,
-      render: () => renderJobs(lastJobs),
+      render: () => { if (lastJobs) renderJobs(lastJobs); },
       request: () => postJson(`/api/jobs/${encodeURIComponent(job.id)}/run`, {}),
       refresh: fetchAndRenderJobs,
       success: (result) => `Run ${result.run_id} ${result.state} for ${result.job_id}.`,
@@ -171,7 +246,10 @@ function jobRow(job, workspace) {
   });
   const scheduledBy = job.routines.length
     ? job.routines.map((routine) => {
-      const chip = el("a", { class: `operation-chip ${routine.enabled ? "" : "paused"}`.trim(), text: `${routine.name} · ${routine.trigger?.deliveries_landed ? "on delivery" : routine.trigger?.state ? "on task change" : cronText(routine.cron)}${routine.enabled ? "" : " · paused"}` });
+      const cadence = routine.trigger?.deliveries_landed ? "on delivery"
+        : routine.trigger?.state ? "on task change"
+        : cronText(routine.cron, routine.next_evaluation?.at || routine.next_due);
+      const chip = el("a", { class: `operation-chip ${routine.enabled ? "" : "paused"}`.trim(), text: `${routine.name} · ${cadence}${routine.enabled ? "" : " · paused"}` });
       chip.href = "#operations/routines";
       return chip;
     })
@@ -197,23 +275,23 @@ function jobRow(job, workspace) {
   const recent = job.runs.slice(0, 5);
   const card = el("article", { class: `operation-card operation-row job-card ${jobFamily(job.id)}` });
   card.dataset.job = job.id;
-  card.append(
+  card.append(...[
     el("div", { class: "operation-row-head" }, [
       operationCell("Job", [
         el("div", { class: "operation-identity" }, [el("strong", { class: "mono", text: job.id })]),
-        el("span", { class: "operation-cell-sub", text: `${job.runs.length} recent run${job.runs.length === 1 ? "" : "s"} in this window` }),
       ], "operation-cell-identity"),
       operationCell("Scheduled by", [el("span", { class: "operation-chips" }, scheduledBy)]),
       operationCell("Last run", lastCell),
       operationCell("Active", [el("span", { class: `operation-cell-main mono${job.running ? " live" : " muted"}`, text: job.running ? `${job.running} running` : "idle" })]),
       operationCell("", [explainUnavailable(run, runReason)], "operation-cell-action"),
     ]),
+    streak ? jobFailureBadge(streak, workspace?.id) : null,
     operationDetails(detailsKey, [
       el("div", { class: "operation-command" }, [
         el("code", { class: "mono", text: command }),
         copy,
       ]),
-      el("p", { class: "operation-control-note", text: "Run submits without extra input. Delivery jobs need a task id and are started through Ship or Drain." }),
+      el("p", { class: "operation-control-note", text: "Run submits without extra input." }),
       recent.length
         ? el("ul", { class: "operation-recent-runs" }, recent.map((run) => el("li", {}, [
           outcomeDot(run.state),
@@ -222,11 +300,14 @@ function jobRow(job, workspace) {
         ])))
         : null,
     ]),
-  );
+  ].filter(Boolean));
   return card;
 }
 
 export function renderJobs(payload) {
+  // A workspace change clears the cache mid-flight; a repaint then has
+  // nothing to draw and must not dereference the cleared payload.
+  if (!payload) return;
   if (payload.view !== "live") lastJobs = payload;
   const isLive = payload.view === "live";
   const body = $(isLive ? "jobs-live-body" : "jobs-body");
@@ -267,14 +348,14 @@ export function renderJobs(payload) {
     count.textContent = `${running.length} run${running.length === 1 ? "" : "s"} in flight · ${workspace.name}`;
     return;
   }
-  const catalog = jobCatalog(operationsState.lastOperations, runs, workspace.name);
+  const catalog = jobCatalog(operationsState.lastOperations, runs, workspace.name, payload.catalogJobs);
+  const failing = new Map((payload.failures?.failing || []).map((streak) => [streak.job_id, streak]));
   if (catalog.size === 0) {
-    body.appendChild(el("div", { class: "empty-state", text: "No job has been referenced by a routine or run in this workspace recently." }));
+    body.appendChild(el("div", { class: "empty-state", text: "No manually runnable job has been referenced by a routine or run in this workspace recently." }));
   } else {
     const jobs = [...catalog.values()].sort((a, b) => a.id.localeCompare(b.id));
     const groups = [
       ["accent", "Sweeps", "housekeeping and intake · safe to run by hand", jobs.filter((job) => jobFamily(job.id) === "sweep")],
-      ["delivery", "Delivery", "task and workspace pipelines · started by a ship or a drain, by hand only with a task_id", jobs.filter((job) => jobFamily(job.id) === "delivery")],
       ["", "Other", "", jobs.filter((job) => jobFamily(job.id) === "other")],
     ];
     const columns = ["Job", "Scheduled by", "Last run", "Active", ""];
@@ -282,7 +363,7 @@ export function renderJobs(payload) {
       if (!members.length) continue;
       const group = operationGroup(tone, title, members.length, hint);
       group.appendChild(operationColumns(columns));
-      for (const job of members) group.appendChild(jobRow(job, workspace));
+      for (const job of members) group.appendChild(jobRow(job, workspace, failing.get(job.id)));
       body.appendChild(group);
     }
     body.appendChild(el("p", { class: "operation-control-note", text: `Catalogue projected from routine targets and the last ${JOB_RUN_LIMIT} runs.` }));
@@ -290,7 +371,7 @@ export function renderJobs(payload) {
   $("jobs-count").textContent = `${catalog.size} job${catalog.size === 1 ? "" : "s"} · ${running.length} running · ${workspace.name}`;
 }
 
-export function fetchAndRenderJobs() {
+export function fetchAndRenderJobs({ routinesRead = null } = {}) {
   const live = operationsState.context.getJobsSubtab?.() === "live";
   const bodyId = live ? "jobs-live-body" : "jobs-body";
   const countId = live ? "jobs-live-count" : "jobs-count";
@@ -299,15 +380,23 @@ export function fetchAndRenderJobs() {
   }
   return requestPanel(bodyId, "jobs",
     () => Promise.all([
-      fetchJson(withInactivePlugins("/api/routines")),
+      // The chrome peek and catalogue use the same payload unless this view
+      // explicitly requests the wider plugin-off inventory.
+      routinesRead && withInactivePlugins("/api/routines") === "/api/routines"
+        ? routinesRead : fetchJson(withInactivePlugins("/api/routines")),
       fetchJson(`/api/job-runs?limit=${JOB_RUN_LIMIT}${live ? "&state=active" : ""}`),
-    ]).then(([routines, runs]) => ({ routines, runs, view: live ? "live" : "catalogue" })),
+      // The streak read must not take the catalogue down with it.
+      live ? null : fetchJson("/api/jobs/failure-streaks").catch(() => null),
+      // Server-reported runnability decides which jobs the catalogue shows.
+      live ? null : fetchJson("/api/jobs"),
+    ]).then(([routines, runs, failures, catalogJobs]) => ({ routines, runs, failures, catalogJobs, view: live ? "live" : "catalogue" })),
     (payload) => {
       // Only a fresh catalogue/live read adopts its routines snapshot. A
       // repaint from cached jobs must retain a newer Routines readback.
       operationsState.lastOperations = payload.routines;
       noteCronZone(operationsState.lastOperations);
       updateRoutineFailureBadge(scopedRoutines(operationsState.lastOperations));
+      if (payload.failures) updateJobFailureBadges(payload.failures.failing);
       renderJobs(payload);
     }, countId);
 }

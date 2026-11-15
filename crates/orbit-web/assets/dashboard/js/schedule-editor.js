@@ -3,7 +3,7 @@
 // Only when a definition fires is editable here; every other field stays
 // read-only. The form checks the shape it can see before saving, and the
 // server, which runs the same validation as `orbit.routine.control` and
-// `orbit.auto_task.update`, has the last word: its refusal text is shown in
+// `orbit.auto_task` action `update`, has the last word: its refusal text is shown in
 // the form verbatim and the draft is kept.
 //
 // An open editor holds a draft the 30 s refresh must not discard, so the
@@ -17,6 +17,7 @@ const editors = new Map();
 const ROUTINE_KIND_LABELS = { cron: "Cron schedule", state: "Task state", deliveries_landed: "Deliveries landed" };
 const AUTO_TASK_KIND_LABELS = { cron: "Cron schedule", every_minutes: "Fixed interval", deliveries_landed: "Deliveries landed" };
 const STATE_KIND_LABELS = {
+  resident_due: "Resident mandate due",
   preparation_eligible: "Task ready for preparation",
   finding_unverified: "Review finding unverified",
   pilot_warnings_held: "Pilot warnings held promotion",
@@ -150,10 +151,18 @@ function deliveryDraft(delivery = {}) {
   };
 }
 
+// Guards are outside this timing form. Preserve both presence and exact
+// values; the server validates their compatibility if the trigger kind changes.
+function scheduleGuardFields(value) {
+  return Object.fromEntries(['when', 'guard_miss']
+    .filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]));
+}
+
 /** A routine's trigger as an editor draft. */
 export function routineDraft(trigger = {}) {
   const state = trigger.state || {};
   return {
+    guard: scheduleGuardFields(trigger),
     kind: trigger.state ? "state" : trigger.deliveries_landed ? "deliveries_landed" : "cron",
     cron: trigger.cron || "",
     missed_run: trigger.missed_run || "skip",
@@ -178,6 +187,7 @@ export function routineDraft(trigger = {}) {
 /** An auto-task's schedule as an editor draft. */
 export function autoTaskDraft(schedule = {}) {
   return {
+    guard: scheduleGuardFields(schedule),
     kind: schedule.deliveries_landed ? "deliveries_landed" : schedule.every_minutes != null ? "every_minutes" : "cron",
     cron: schedule.cron || "",
     every_minutes: schedule.every_minutes ?? "",
@@ -198,11 +208,11 @@ function deliveryValue(draft) {
 export function routineTriggerValue(draft) {
   if (draft.kind === "cron") {
     const problem = cronProblem(draft.cron);
-    return problem ? { problem } : { value: { cron: draft.cron.trim().split(/\s+/).join(" "), missed_run: draft.missed_run } };
+    return problem ? { problem } : { value: { ...draft.guard, cron: draft.cron.trim().split(/\s+/).join(" "), missed_run: draft.missed_run } };
   }
   if (draft.kind === "deliveries_landed") {
     const delivery = deliveryValue(draft.delivery);
-    return delivery.problem ? delivery : { value: { deliveries_landed: delivery.value, missed_run: draft.missed_run } };
+    return delivery.problem ? delivery : { value: { ...draft.guard, deliveries_landed: delivery.value, missed_run: draft.missed_run } };
   }
   const state = draft.state;
   if (!state.kind) return { problem: "Choose what task state fires this routine." };
@@ -216,21 +226,21 @@ export function routineTriggerValue(draft) {
     if (extras.eligibility) value.eligibility = extras.eligibility;
     if (extras.freshness && Object.keys(extras.freshness).length) value.freshness = extras.freshness;
   }
-  return { value: { state: value, missed_run: draft.missed_run } };
+  return { value: { ...draft.guard, state: value, missed_run: draft.missed_run } };
 }
 
 /** The schedule an auto-task draft describes, or the first problem with it. */
 export function autoTaskScheduleValue(draft) {
   if (draft.kind === "cron") {
     const problem = cronProblem(draft.cron);
-    return problem ? { problem } : { value: { cron: draft.cron.trim().split(/\s+/).join(" ") } };
+    return problem ? { problem } : { value: { ...draft.guard, cron: draft.cron.trim().split(/\s+/).join(" ") } };
   }
   if (draft.kind === "every_minutes") {
     const minutes = wholeNumber(draft.every_minutes, { min: 1 });
-    return minutes.ok ? { value: { every_minutes: minutes.value } } : { problem: "Interval must be a whole number of minutes, 1 or more." };
+    return minutes.ok ? { value: { ...draft.guard, every_minutes: minutes.value } } : { problem: "Interval must be a whole number of minutes, 1 or more." };
   }
   const delivery = deliveryValue(draft.delivery);
-  return delivery.problem ? delivery : { value: { deliveries_landed: delivery.value } };
+  return delivery.problem ? delivery : { value: { ...draft.guard, deliveries_landed: delivery.value } };
 }
 
 // ---------------------------------------------------------------------------
@@ -319,6 +329,10 @@ function buildEditor({ key, title, note, kinds, fields, value, preview, save, on
   editor.initial ??= JSON.stringify(value(editor.draft).value ?? null);
   const root = el("div", { class: "schedule-editor" });
   root.dataset.editing = "schedule";
+  // Each build owns a root, but the draft, pending flag and refusal live in the
+  // shared `editor`. A repaint (paging or filtering back to this editor) builds
+  // a newer root while an older save is still in flight, so completion
+  // repaints the newest root, never the detached one the click came from.
   const render = () => {
     const draft = editor.draft;
     const status = el("div", { class: "schedule-preview" });
@@ -364,7 +378,7 @@ function buildEditor({ key, title, note, kinds, fields, value, preview, save, on
         if (editors.get(key) !== editor) return;
         editor.pending = false;
         editor.error = failure.message || String(failure);
-        render();
+        editor.paint();
         return;
       }
       if (closeEditor(key, editor)) onClose(true);
@@ -386,6 +400,7 @@ function buildEditor({ key, title, note, kinds, fields, value, preview, save, on
     }
     sync();
   };
+  editor.paint = render;
   render();
   root.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !editor.pending && closeEditor(key, editor)) onClose(false);

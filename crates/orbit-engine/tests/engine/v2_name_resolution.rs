@@ -14,8 +14,7 @@
 //!      (`agent_assess_diff`, `agent_apply_fixes`, `revert_on_red`) and
 //!      excludes retired `promote_agent_main`.
 //!   B) `resolve_job_target_refs` rewrites `target: activity:<name>` refs
-//!      into inline `TargetStep`s using the catalog, including the `session:`
-//!      binding.
+//!      into inline `TargetStep`s using the catalog.
 //!   C) An unknown activity name is `ResolveError::ActivityNotInCatalog`,
 //!      not a silent no-op.
 //!
@@ -420,7 +419,6 @@ fn validation_target(id: &str, when: Option<&str>) -> JobV2Step {
             fs_profile: None,
             default_input: None,
             timeout_seconds: 0,
-            session: None,
         }),
     )
 }
@@ -483,7 +481,7 @@ fn scenario_a_catalog_loads_new_activities() -> Result<(), Box<dyn std::error::E
     println!("  A) catalog retains supported examples and excludes retired promotion");
     let mut catalog = V2ActivityCatalog::new();
     let dir = repo_root().join("crates/orbit-core/assets/activities");
-    catalog.load_dir(&dir)?;
+    catalog.load_dir_skipping_retired_prefer_existing(&dir)?;
 
     for name in ["agent_assess_diff", "agent_apply_fixes", "revert_on_red"] {
         assert!(
@@ -531,8 +529,7 @@ fn scenario_b_target_ref_resolves() -> Result<(), Box<dyn std::error::Error>> {
         );
     };
     assert!(matches!(&t.spec, ActivityV2Spec::AgentLoop(_)));
-    assert_eq!(t.session.as_deref(), Some("assessor"));
-    println!("    resolved ref → inline Target carrying its session binding");
+    println!("    resolved ref → inline Target");
     Ok(())
 }
 
@@ -568,7 +565,7 @@ fn repo_root() -> PathBuf {
 fn load_reference_catalog() -> Result<V2ActivityCatalog, Box<dyn std::error::Error>> {
     let mut catalog = V2ActivityCatalog::new();
     let dir = repo_root().join("crates/orbit-core/assets/activities");
-    catalog.load_dir(&dir)?;
+    catalog.load_dir_skipping_retired_prefer_existing(&dir)?;
     Ok(catalog)
 }
 
@@ -604,7 +601,6 @@ fn synthetic_job_using_ref(target_name: &str) -> JobV2 {
                 target: format!("activity:{}", target_name),
                 default_input: None,
                 timeout_seconds: 0,
-                session: Some("assessor".to_string()),
             }),
         }],
     }
@@ -625,10 +621,11 @@ fn stub_deterministic_activity(name: &str) -> ActivityV2 {
     }
 }
 
-/// [ORB-20157] An `auto-task:` ref survives resolution for Core to inspect,
-/// and execution validation, which runs before any step, refuses the job
-/// for as long as it declares schemaVersion 3 [ORB-20237].
-fn auto_task_steps_resolve_but_never_run() {
+/// [ORB-20157] An `auto-task:` ref survives resolution for Core to inspect.
+/// [ORB-20158] Execution validation, which runs before any step, admits it
+/// in a sequential list and refuses it inside `loop`, where every iteration
+/// would collapse onto the step's one reservation.
+fn auto_task_steps_resolve_and_validate_outside_loops() {
     let catalog = load_reference_catalog().unwrap();
     let mut job = load_job_asset(
         "schemaVersion: 3\nkind: Job\nmetadata:\n  name: readiness\nspec:\n  state: disabled\n  \
@@ -644,23 +641,15 @@ fn auto_task_steps_resolve_but_never_run() {
         panic!("auto-task ref was rewritten: {:?}", job.steps[1].body);
     };
     assert_eq!(reference.target, "auto-task:full-qa-sweep");
-    assert!(
-        matches!(validate_job(&job), Err(DispatchError::JobValidation(_))),
-        "an auto-task job must fail execution validation"
-    );
-
-    job.steps.truncate(1);
-    assert!(
-        matches!(validate_job(&job), Err(DispatchError::JobValidation(_))),
-        "a job `expire_when` must fail execution validation"
-    );
-    job.expire_when = None;
-    assert!(
-        matches!(validate_job(&job), Err(DispatchError::JobValidation(_))),
-        "a schemaVersion 3 job with no auto-task field left must still fail [ORB-20237]"
-    );
-    job.schema_version = 2;
     validate_job(&job).unwrap();
+
+    let auto_task = job.steps.remove(1);
+    job.steps
+        .push(validation_loop("repeat", None, vec![auto_task], None));
+    assert!(
+        matches!(validate_job(&job), Err(DispatchError::JobValidation(_))),
+        "an auto-task step inside a loop must fail execution validation"
+    );
 }
 
 /// Behavior-distinct rows share one bounded family process.
@@ -688,8 +677,8 @@ fn catalog_contracts_1() {
                 validate_job_checks_quorum_bounds,
             ),
             (
-                "auto_task_steps_resolve_but_never_run",
-                auto_task_steps_resolve_but_never_run,
+                "auto_task_steps_resolve_and_validate_outside_loops",
+                auto_task_steps_resolve_and_validate_outside_loops,
             ),
         ]);
     });

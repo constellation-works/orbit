@@ -7,24 +7,27 @@
 //! the operator command's semantics (its screening, `--approve`, `--force`),
 //! which no MCP request can reach.
 
-use orbit_common::OrbitError;
+use std::collections::BTreeSet;
+
 use orbit_common::governance::authorization::agent_context_declared;
 use orbit_common::governance::task::TASK_CLI_OPTIONS_PARAM;
 use orbit_common::protocol::tool_input::{
     optional_csv_or_string_list_alias, optional_raw_string, optional_string,
     optional_string_list_alias, reject_unknown_tool_fields, required_string,
 };
+use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
     ExternalRef, TaskPriority, TaskStatus, is_task_show_projection_field,
     unknown_task_show_field_message,
 };
+use orbit_types::workflow::RESIDENT_MANDATE_ARTIFACT;
 use serde_json::{Map, Value};
 
 use crate::OrbitRuntime;
 use crate::application::task::{
-    ContextCreationAuthorization, ScreenedTaskWrite, TaskAddParams, TaskUpdateAuthority,
-    TaskUpdateParams, TaskWriteResponsePolicy, TaskWriteScreen, is_operator_rescue_close,
-    screened_task_write_response_json,
+    ContextCreationAuthorization, ScreenedTaskWrite, TaskAddParams, TaskFieldProjection,
+    TaskUpdateAuthority, TaskUpdateParams, TaskWriteResponsePolicy, TaskWriteScreen,
+    is_operator_rescue_close, screened_task_write_response_json,
 };
 
 use super::super::dispatch::ToolCaller;
@@ -176,7 +179,11 @@ pub(super) fn add(
                 .iter()
                 .map(|raw| ExternalRef::parse_key(raw))
                 .collect::<Result<Vec<_>, _>>()?,
-            source_task_id: optional_string(options, "source_task_id")?,
+            // The operator command sends `--source-task` through the CLI
+            // options; the tool surface sends `source_task_id` directly.
+            // Only one path ever carries it, so the first present wins.
+            source_task_id: optional_string(options, "source_task_id")?
+                .or(optional_string(input, "source_task_id")?),
             crew: optional_string(input, "crew")?,
             orchestrator: optional_string(input, "orchestrator")?,
             orchestrator_model: optional_string(input, "orchestrator_model")?,
@@ -189,7 +196,7 @@ pub(super) fn add(
         caller.agent,
         caller.model,
     )?;
-    screened_write_response(runtime, written, response_fields.as_deref())
+    screened_write_response(runtime, written, response_fields.as_ref())
 }
 
 /// A status a task may be created in.
@@ -204,6 +211,65 @@ fn creation_status(value: &str) -> Result<TaskStatus, OrbitError> {
 }
 
 pub(super) fn update(
+    runtime: &OrbitRuntime,
+    caller: ToolCaller<'_>,
+    input: &Value,
+    operator: bool,
+) -> Result<TaskWriteOutput, OrbitError> {
+    if !optional_bool_alias(input, &["repilot"])?.unwrap_or(false) {
+        return update_without_repilot(runtime, caller, input, operator);
+    }
+    runtime.admit_operator_operation("orbit.task.repilot", caller.session_context)?;
+    let id = required_string(input, &["id"], "id")?;
+    if optional_string(input, "status")?
+        .is_some_and(|status| !matches!(status.as_str(), "proposed" | "backlog"))
+    {
+        return Err(OrbitError::InvalidInput(
+            "repilot requires the updated task to remain proposed or backlog".into(),
+        ));
+    }
+    if let Some(crew) = optional_string(input, "crew")?
+        && runtime.is_human_crew(Some(&crew))
+    {
+        return Err(OrbitError::InvalidInput(
+            "repilot cannot assign the task to a human crew".into(),
+        ));
+    }
+    let trigger = if caller.session_context.transport.is_some() {
+        orbit_types::workflow::JobRunTrigger::mcp()
+    } else {
+        orbit_types::workflow::JobRunTrigger::cli()
+    };
+    let mut caller = Some(caller);
+    let mut output = None;
+    // Same reentrant task lock as decision answers and direct submission:
+    // another explicit request cannot slip between this edit and its run.
+    runtime
+        .stores()
+        .tasks()
+        .with_task_write_lock(&id, &mut || {
+            // The same stable refusal codes as `orbit task repilot`.
+            runtime
+                .check_explicit_task_pilot(&id)
+                .map_err(OrbitError::from)?;
+            let caller = caller
+                .take()
+                .ok_or_else(|| OrbitError::Execution("repilot update repeated its write".into()))?;
+            let written = update_without_repilot(runtime, caller, input, operator)?;
+            runtime
+                .submit_explicit_task_pilot(&id, None, trigger.clone())
+                .map_err(|error| {
+                    OrbitError::Execution(format!(
+                        "Task edits were saved, but the pilot request failed: {error}"
+                    ))
+                })?;
+            output = Some(written);
+            Ok(())
+        })?;
+    output.ok_or_else(|| OrbitError::Execution("repilot update did not run".into()))
+}
+
+fn update_without_repilot(
     runtime: &OrbitRuntime,
     caller: ToolCaller<'_>,
     input: &Value,
@@ -228,7 +294,15 @@ pub(super) fn update(
     if let Some(target) = requested_status
         && matches!(target, TaskStatus::Backlog | TaskStatus::InProgress)
     {
-        let current = runtime.get_task(&id)?;
+        // Status for the lifecycle gate is one keyed envelope, not a bundle
+        // read. The locked update reads the task itself.
+        let current = runtime
+            .stores()
+            .tasks()
+            .task_envelopes_for_ids(&BTreeSet::from([id.clone()]))?
+            .into_iter()
+            .next()
+            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, id.clone()))?;
         if let Some(kind) = guarded_lifecycle_write(current.status, target, input, operator)? {
             let written = match kind {
                 GuardedLifecycleWrite::Approve => runtime.transition_task_to_backlog_screened(
@@ -251,7 +325,7 @@ pub(super) fn update(
                     )?
                 }
             };
-            return screened_write_response(runtime, written, response_fields.as_deref());
+            return screened_write_response(runtime, written, response_fields.as_ref());
         }
     }
     let note = optional_string(input, "note")?;
@@ -264,7 +338,7 @@ pub(super) fn update(
     params.trusted_artifact_origin = origin;
     let written =
         runtime.update_task_screened_for_tool(&id, params, &screen, agent, model, note)?;
-    screened_write_response(runtime, written, response_fields.as_deref())
+    screened_write_response(runtime, written, response_fields.as_ref())
 }
 
 /// `orbit task update`: the operator command's write. `approve` takes the
@@ -295,7 +369,7 @@ fn cli_update(
             agent,
             model,
         )?;
-        return screened_write_response(runtime, written, response_fields.as_deref());
+        return screened_write_response(runtime, written, response_fields.as_ref());
     }
     if note.is_some() {
         return Err(OrbitError::InvalidInput(
@@ -313,6 +387,7 @@ fn cli_update(
     }
     let mut params = task_update_params_from_input(input, status)?;
     params.upsert_artifacts = parse_artifacts(options)?;
+    sync_resident_mandate_crew(runtime, &id, &mut params)?;
     params.discard_candidate =
         optional_bool_alias(options, &["discard_candidate"])?.unwrap_or(false);
     let authority = if force {
@@ -328,7 +403,7 @@ fn cli_update(
         agent,
         model,
     )?;
-    screened_write_response(runtime, written, response_fields.as_deref())
+    screened_write_response(runtime, written, response_fields.as_ref())
 }
 
 fn reject_fields_for_approve(input: &Value) -> Result<(), OrbitError> {
@@ -364,11 +439,12 @@ pub(super) fn artifact_put(
 ) -> Result<TaskWriteOutput, OrbitError> {
     let origin = runtime.artifact_origin(caller.session_context);
     let id = required_string(input, &["id"], "id")?;
-    let params = TaskUpdateParams {
+    let mut params = TaskUpdateParams {
         trusted_artifact_origin: origin,
         upsert_artifacts: parse_artifacts(input)?,
         ..TaskUpdateParams::default()
     };
+    sync_resident_mandate_crew(runtime, &id, &mut params)?;
     // Preserve the authenticated native operator decision, using the same
     // screened lifecycle write as `task update --artifact`. A transport or
     // worker call keeps the owner-aware tool path even on a human host.
@@ -379,7 +455,11 @@ pub(super) fn artifact_put(
         && caller.session_context.transport.is_none()
         && caller.session_context.worker_invocation.is_none();
     let screen = write_screen(native_operator, false, caller.reservation_owner);
-    let written = if native_operator {
+    let attaches_mandate = params
+        .upsert_artifacts
+        .iter()
+        .any(|artifact| artifact.path == RESIDENT_MANDATE_ARTIFACT);
+    let mut written = if native_operator {
         runtime.update_task_screened(
             &id,
             params,
@@ -398,7 +478,72 @@ pub(super) fn artifact_put(
             None,
         )?
     };
-    screened_write_response(runtime, written, None)
+    if attaches_mandate && let Some(task) = runtime.activate_resident_assignment(&written.task.id) {
+        written.task = task;
+    }
+    let cycle_routine_disabled = if attaches_mandate {
+        runtime.resident_cycle_routine_disabled()
+    } else {
+        None
+    };
+    if let Some(routine_name) = &cycle_routine_disabled {
+        written.warnings.push(format!(
+            "Mandate {} stored, but {}. Enable the routine to let it act.",
+            written.task.id,
+            crate::application::resident::resident_cycle_routine_disabled_reason(routine_name)
+        ));
+    }
+    let mut output = screened_write_response(runtime, written, None)?;
+    if attaches_mandate && let Some(object) = output.response.as_object_mut() {
+        object.insert(
+            "cycle_routine_disabled".to_string(),
+            Value::Bool(cycle_routine_disabled.is_some()),
+        );
+        object.insert(
+            "cycle_routine_name".to_string(),
+            cycle_routine_disabled
+                .clone()
+                .map(Value::String)
+                .unwrap_or(Value::Null),
+        );
+        if let Some(routine_name) = &cycle_routine_disabled {
+            object.insert(
+                "warning".to_string(),
+                Value::String(format!(
+                    "Mandate stored, but {}. Enable the routine to let it act.",
+                    crate::application::resident::resident_cycle_routine_disabled_reason(
+                        routine_name,
+                    )
+                )),
+            );
+        }
+    }
+    Ok(output)
+}
+
+// Keep the assignment's crew in the same screened write as a valid mandate.
+fn sync_resident_mandate_crew(
+    runtime: &OrbitRuntime,
+    id: &str,
+    params: &mut TaskUpdateParams,
+) -> Result<(), OrbitError> {
+    let Some(mandate) = params
+        .upsert_artifacts
+        .iter()
+        .find(|artifact| artifact.path == RESIDENT_MANDATE_ARTIFACT)
+        .and_then(|artifact| runtime.check_resident_mandate(&artifact.content).ok())
+    else {
+        return Ok(());
+    };
+    if runtime
+        .get_task(id)?
+        .tags
+        .iter()
+        .any(|tag| tag == "resident")
+    {
+        params.crew = Some(Some(mandate.crew));
+    }
+    Ok(())
 }
 
 /// The write response in the tool host's compact/projected profile:
@@ -407,7 +552,7 @@ pub(super) fn artifact_put(
 fn screened_write_response(
     runtime: &OrbitRuntime,
     written: ScreenedTaskWrite,
-    fields: Option<&[String]>,
+    fields: Option<&TaskFieldProjection>,
 ) -> Result<TaskWriteOutput, OrbitError> {
     let persisted_id = written.task.id.clone();
     let response = screened_task_write_response_json(
@@ -511,6 +656,7 @@ fn task_update_params_from_input(
     status: Option<TaskStatus>,
 ) -> Result<TaskUpdateParams, OrbitError> {
     Ok(TaskUpdateParams {
+        review_settlement: None,
         trusted_artifact_origin: None,
         title: optional_string(input, "title")?,
         description: input
@@ -549,7 +695,7 @@ fn task_update_params_from_input(
         crew: optional_raw_string(input, "crew")?.map(empty_string_to_none),
         orchestrator: optional_raw_string(input, "orchestrator")?.map(empty_string_to_none),
         origin: parse_optional_task_origin(input, "origin")?,
-        context_files: optional_csv_or_string_list_alias(input, &["context_files", "context"])?,
+        context_files: optional_csv_or_string_list_alias(input, &["context_files"])?,
         // Derived from the core's selector screening, never from tool input.
         context_creation: ContextCreationAuthorization::default(),
         // Inline artifacts come only from the CLI's options and the artifact
@@ -582,7 +728,12 @@ pub(super) struct TaskWriteOutput {
 /// Read-only projection controls are accepted by mutating task tools solely
 /// for shaping their response. In particular, `comments` and `history` are
 /// omitted from the default write response and can be requested explicitly.
-pub(super) fn write_response_fields(input: &Value) -> Result<Option<Vec<String>>, OrbitError> {
+/// A `fields` array keeps even one field keyed by name; the `field` alias
+/// answers that field's bare value.
+pub(super) fn write_response_fields(
+    input: &Value,
+) -> Result<Option<TaskFieldProjection>, OrbitError> {
+    let keyed_single = input.get("fields").is_some();
     let fields = optional_csv_or_string_list_alias(input, &["fields", "field"])?;
     if let Some(fields) = &fields
         && let Some(unknown) = fields
@@ -593,5 +744,5 @@ pub(super) fn write_response_fields(input: &Value) -> Result<Option<Vec<String>>
             unknown,
         )));
     }
-    Ok(fields)
+    Ok(fields.map(|fields| TaskFieldProjection::new(fields, keyed_single)))
 }

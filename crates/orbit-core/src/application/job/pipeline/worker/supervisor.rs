@@ -21,13 +21,17 @@ use chrono::DateTime;
 use orbit_store::contracts::{AuditEventStoreBackend, JobRunStoreBackend};
 
 use super::command::WorkerCommandConfig;
-use super::exit::{
-    WORKER_CLAIM_AUDIT, WORKER_EXIT_AUDIT, WorkerExit, note_exit_after_reconciliation,
-};
-use super::record::{self, PipelineAuditRow};
-use super::scope::{WORKER_RESOURCE_LIMIT_ERROR_CODE, WorkerScopeCgroup};
+use super::exit::note_exit_after_reconciliation;
+use super::scope::WORKER_RESOURCE_LIMIT_ERROR_CODE;
 use super::*;
 use crate::application::job::pipeline::wait::announce_worker_exit;
+use crate::application::job::run::audit_record::{self, PipelineAuditRow};
+use crate::application::job::run::worker_exit::{
+    WORKER_CLAIM_AUDIT, WORKER_EXIT_AUDIT, WorkerExit,
+};
+use crate::application::job::run::worker_scope::WorkerScopeCgroup;
+use orbit_types::workflow::OPERATOR_STOPPED_ERROR_CODE;
+
 use crate::application::job::run::WORKER_TERMINATED_ERROR_CODE;
 use crate::runtime::event_bus::EventLog;
 
@@ -100,6 +104,13 @@ pub(crate) trait PipelineRunHost: Send + Sync {
     /// Whether durable provider evidence proves no provider remains active.
     fn providers_stopped(&self, run_id: &str) -> bool;
 
+    /// Keep the stopped worker's candidate before the run is terminalized,
+    /// returning a clause naming where it is kept. Hosts without a
+    /// worktree to keep return `None`.
+    fn preserve_rescue_candidate(&self, _run_id: &str) -> Option<String> {
+        None
+    }
+
     /// Terminalize `run_id`, releasing the task reservations it owns. Returns
     /// whether this call performed the terminal write.
     fn terminalize_run(
@@ -127,6 +138,11 @@ impl PipelineRunHost for OrbitRuntime {
             run_id,
             &orbit_common::process::identity::probe_process_liveness,
         )
+    }
+
+    fn preserve_rescue_candidate(&self, run_id: &str) -> Option<String> {
+        let run = self.get_job_run_backend(run_id).ok().flatten()?;
+        self.keep_rescue_candidate(&run)
     }
 
     fn terminalize_run(
@@ -288,6 +304,8 @@ impl PipelineWorkerSupervisor {
     ) -> Result<(), OrbitError> {
         #[cfg(feature = "test-support")]
         let worker_pid = child.id();
+        #[cfg(feature = "test-support")]
+        worker_reap_hook::run(worker_reap_hook::WorkerReapPhase::BeforeReap, run_id);
         let settled = self.observe_startup(run_id, child, worker_log, worker_log_reader, actor);
         announce_worker_exit();
         #[cfg(feature = "test-support")]
@@ -457,6 +475,22 @@ impl PipelineWorkerSupervisor {
                     self.note_exit_after_reconciliation(run_id, &worker_exit);
                     return Ok(());
                 }
+                // [ORB-20158] A worker that parked its auto-task run exits
+                // with the run deliberately live: not worker loss.
+                if run.state == JobRunState::Running
+                    && self
+                        .runs
+                        .read_run_state(run_id)?
+                        .is_some_and(|state| state.parked_wait().is_some())
+                {
+                    tracing::info!(
+                        target: "orbit.core.job_run",
+                        run_id,
+                        worker_pid = child_pid,
+                        "pipeline worker exited after parking its run",
+                    );
+                    return Ok(());
+                }
                 let ownership = if run.pid == Some(child_pid) {
                     "after claiming"
                 } else {
@@ -479,8 +513,12 @@ impl PipelineWorkerSupervisor {
                             Some(WORKER_RESOURCE_LIMIT_ERROR_CODE),
                             format!("{}; {exit}{output_detail}", breach.describe()),
                         ),
-                        None => (
-                            {
+                        None => {
+                            let host_stop = run.state == JobRunState::Running
+                                && worker_exit.stopped_by_host_manager();
+                            let code = if host_stop {
+                                Some(OPERATOR_STOPPED_ERROR_CODE)
+                            } else {
                                 #[cfg(unix)]
                                 {
                                     status
@@ -492,14 +530,33 @@ impl PipelineWorkerSupervisor {
                                 {
                                     None
                                 }
-                            },
-                            format!(
-                                "{exit}{output_detail}; verify workspace registration, worker root \
-                             discovery, and action availability"
-                            ),
-                        ),
+                            };
+                            let message = if host_stop {
+                                format!(
+                                    "held because the host manager stopped the worker; \
+                                     {exit}{output_detail}"
+                                )
+                            } else {
+                                format!(
+                                    "{exit}{output_detail}; verify workspace registration, worker \
+                                     root discovery, and action availability"
+                                )
+                            };
+                            (code, message)
+                        }
                     };
-                while !self.finalize_exit_failure(&run, error_code, &message, actor)? {
+                // Rescue eligibility is the signal itself, not the
+                // failure/hold classification in `error_code`: an
+                // unknown-sender SIGKILL classifies as an unclassified
+                // failure below, but its candidate still needs keeping.
+                let externally_signalled = worker_exit.signal.is_some();
+                while !self.finalize_exit_failure(
+                    &run,
+                    error_code,
+                    &message,
+                    externally_signalled,
+                    actor,
+                )? {
                     // Reaping the leader does not prove its independently
                     // grouped providers stopped. Keep the original diagnostic
                     // while waiting; never kill additional processes here.
@@ -605,16 +662,22 @@ impl PipelineWorkerSupervisor {
 
     /// Terminalize a worker process that exited while it still owned a
     /// non-terminal run. `try_wait` has already reaped the process when this is
-    /// called. Pending exits are interrupted startup; a running worker with a
-    /// SIGTERM exit is interrupted like a dead owner found by reconciliation.
-    /// Returns false while provider evidence remains open, so the observer can
-    /// retry with the original diagnostic. A terminal or replaced owner ends
-    /// observation without changing its outcome.
+    /// called. Pending exits are interrupted startup. A running worker the
+    /// host manager stopped is held. A running worker with a SIGTERM exit from
+    /// any other sender is interrupted like a dead owner found by
+    /// reconciliation. `externally_signalled` — the worker died from a
+    /// terminating signal, whatever sender was captured — separately makes
+    /// its candidate eligible for rescue preservation before terminalizing;
+    /// it does not change that classification. Returns false while provider
+    /// evidence remains open, so the observer can retry with the original
+    /// diagnostic. A terminal or
+    /// replaced owner ends observation without changing its outcome.
     fn finalize_exit_failure(
         &self,
         run: &JobRun,
         error_code: Option<&str>,
         message: &str,
+        externally_signalled: bool,
         actor: Option<&str>,
     ) -> Result<bool, OrbitError> {
         let current = self
@@ -634,6 +697,28 @@ impl PipelineWorkerSupervisor {
         if !self.host.providers_stopped(&run.run_id) {
             return Ok(false);
         }
+        // A worker stopped externally leaves its candidate only in its
+        // worktree; keep it under its rescue ref before terminalizing,
+        // while that worktree still exists. Eligibility is the terminating
+        // signal itself, kept separate from the `error_code` classification
+        // above: an unknown-sender SIGKILL is neither `operator_stopped`
+        // nor `worker_terminated`, and must not be relabelled as either to
+        // earn preservation. The cancellation and provider-liveness checks
+        // above still gate this: a cancelling caller owns the outcome, and
+        // preservation waits until providers are conclusively stopped.
+        let message = if externally_signalled
+            || matches!(
+                error_code,
+                Some(OPERATOR_STOPPED_ERROR_CODE) | Some(WORKER_TERMINATED_ERROR_CODE)
+            ) {
+            match self.host.preserve_rescue_candidate(&current.run_id) {
+                Some(clause) => format!("{message}; {clause}"),
+                None => message.to_string(),
+            }
+        } else {
+            message.to_string()
+        };
+        let message = message.as_str();
         let (state, started_at, audit_name) = match current.state {
             JobRunState::Pending => (
                 JobRunState::Interrupted,
@@ -641,7 +726,9 @@ impl PipelineWorkerSupervisor {
                 "pipeline.worker.startup",
             ),
             JobRunState::Running => (
-                if error_code == Some(WORKER_TERMINATED_ERROR_CODE) {
+                if error_code == Some(OPERATOR_STOPPED_ERROR_CODE) {
+                    JobRunState::Held
+                } else if error_code == Some(WORKER_TERMINATED_ERROR_CODE) {
                     JobRunState::Interrupted
                 } else {
                     JobRunState::Failed
@@ -722,7 +809,7 @@ impl PipelineWorkerSupervisor {
         message: &str,
         state: JobRunState,
     ) -> Result<(), OrbitError> {
-        record::diagnostic_step(
+        audit_record::diagnostic_step(
             self.runs.as_ref(),
             run,
             started_at,
@@ -765,7 +852,7 @@ impl PipelineWorkerSupervisor {
         arguments: Value,
         error_message: Option<String>,
     ) -> Result<(), OrbitError> {
-        record::pipeline_audit(
+        audit_record::pipeline_audit(
             self.audit_events.as_ref(),
             self.workspace(),
             PipelineAuditRow {
@@ -780,16 +867,17 @@ impl PipelineWorkerSupervisor {
     }
 }
 
-/// A rendezvous on the startup observer's thread just after it reaps its
-/// worker, around the durable exit record, so a test can let stale-run
-/// reconciliation settle the run first, deterministically.
+/// A rendezvous on the startup observer's thread around reaping and the
+/// durable exit record, for deterministic teardown and reconciliation races.
 #[cfg(feature = "test-support")]
 pub(crate) mod worker_reap_hook {
     use std::sync::{Mutex, PoisonError};
 
-    /// Where the observer stops after reaping its worker.
+    /// Where the observer stops around reaping its worker.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum WorkerReapPhase {
+        /// Before any wait can reap the child, including an already-exited child.
+        BeforeReap,
         /// Before the exit is recorded: reconciliation finds no exit record.
         BeforeExitRecorded,
         /// After the exit is recorded, before the run is settled.

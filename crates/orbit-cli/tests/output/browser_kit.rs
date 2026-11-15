@@ -56,6 +56,7 @@ fn write_kit(home: &Path, kit: &FixtureKit) -> PathBuf {
         let shell = browsers.join(format!("chromium_headless_shell-{REVISION}"));
         fs::create_dir_all(&shell).unwrap();
         fs::write(shell.join("INSTALLATION_COMPLETE"), "").unwrap();
+        fs::write(shell.join("chrome-headless-shell"), "fixture").unwrap();
     }
     fs::write(root.join("env.sh"), "# written by the operator\n").unwrap();
     if let Some(version) = kit.verified_version {
@@ -104,6 +105,47 @@ fn doctor_row(fixture: &WorkCheckout) -> Value {
         .unwrap_or_else(|| panic!("browser-kit doctor row: {rows}"))
 }
 
+/// A stale pass and installation marker cannot admit a missing browser.
+#[test]
+fn missing_executable_invalidates_a_recorded_pass() {
+    let fixture = WorkCheckout::new();
+    fs::create_dir_all(&fixture.work).unwrap();
+    let root = write_kit(
+        &fixture.home,
+        &FixtureKit {
+            version: PLAYWRIGHT_VERSION,
+            browser_installed: true,
+            verified_version: Some(PLAYWRIGHT_VERSION),
+        },
+    );
+    fs::remove_file(root.join(format!(
+        "browsers/chromium_headless_shell-{REVISION}/chrome-headless-shell"
+    )))
+    .unwrap();
+    let layout = KitLayout::for_home(&fixture.home);
+    let inspection = orbit_core::bootstrap::browser_kit::KitInspection::inspect(&layout);
+    assert!(inspection.browser_installed);
+    assert!(!inspection.is_verified());
+    assert!(inspection.worker_env(&layout).is_empty());
+    let output = orbit(&fixture)
+        .args(["config", "browser-kit", "status", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let status = json_stdout(&output);
+    assert_eq!(status["state"], "incomplete");
+    assert_eq!(status["verified"], false);
+    assert_eq!(status["worker_env"], json!([]));
+    assert!(
+        status["problems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|problem| problem["fix"] == "orbit config browser-kit install")
+    );
+    assert_eq!(doctor_row(&fixture)["status"], "warning");
+}
+
 /// Each kit state reaches `status` and `doctor` with the command that fixes
 /// it, and only a kit verified at its installed version is handed to workers.
 #[test]
@@ -142,7 +184,7 @@ fn status_and_doctor_report_each_kit_state_with_its_fix() {
                 verified_version: None,
             }),
             state: "unverified",
-            fixes: &["orbit browser-kit verify"],
+            fixes: &["orbit config browser-kit verify"],
             doctor: "warning",
         },
         Case {
@@ -153,7 +195,7 @@ fn status_and_doctor_report_each_kit_state_with_its_fix() {
                 verified_version: Some(PLAYWRIGHT_VERSION),
             }),
             state: "unverified",
-            fixes: &["orbit browser-kit install"],
+            fixes: &["orbit config browser-kit install"],
             doctor: "warning",
         },
         Case {
@@ -164,7 +206,7 @@ fn status_and_doctor_report_each_kit_state_with_its_fix() {
                 verified_version: Some(PLAYWRIGHT_VERSION),
             }),
             state: "incomplete",
-            fixes: &["orbit browser-kit install"],
+            fixes: &["orbit config browser-kit install"],
             doctor: "warning",
         },
     ];
@@ -177,7 +219,7 @@ fn status_and_doctor_report_each_kit_state_with_its_fix() {
         }
 
         let output = orbit(&fixture)
-            .args(["browser-kit", "status", "--json"])
+            .args(["config", "browser-kit", "status", "--json"])
             .output()
             .unwrap();
         assert!(output.status.success(), "{name}: {output:?}");
@@ -211,7 +253,7 @@ fn status_and_doctor_report_each_kit_state_with_its_fix() {
         let remediation = row["remediation"].as_str().unwrap_or_default();
         if case.kit.is_none() {
             assert!(
-                remediation.contains("orbit browser-kit install"),
+                remediation.contains("orbit config browser-kit install"),
                 "{name}: {row}"
             );
         }
@@ -236,9 +278,9 @@ fn kit_changes_are_refused_inside_a_worker() {
         },
     );
     for args in [
-        &["browser-kit", "install"][..],
-        &["browser-kit", "verify"],
-        &["browser-kit", "remove", "--confirm"],
+        &["config", "browser-kit", "install"][..],
+        &["config", "browser-kit", "verify"],
+        &["config", "browser-kit", "remove", "--confirm"],
     ] {
         let output = orbit(&fixture)
             .env("ORBIT_WORKER_CONTEXT_REQUIRED", "1")
@@ -334,7 +376,7 @@ mod verification_errors {
         fs::set_permissions(&node, fs::Permissions::from_mode(0o755)).unwrap();
         let status = || {
             let output = orbit(&fixture)
-                .args(["browser-kit", "status", "--json"])
+                .args(["config", "browser-kit", "status", "--json"])
                 .output()
                 .unwrap();
             assert!(output.status.success(), "{output:?}");
@@ -357,7 +399,7 @@ mod verification_errors {
             .env("PATH", &bin)
             .env("RUST_LOG", "off")
             .env_remove("ORBIT_FORMAT")
-            .args(["browser-kit", "verify", "--json"]);
+            .args(["config", "browser-kit", "verify", "--json"]);
         deny_probe_spawn(&mut denied);
         let output = assert_cmd::Command::from_std(denied)
             .timeout(test_env::FIXTURE_STEP_DEADLINE)
@@ -385,7 +427,7 @@ mod verification_errors {
 
         let output = orbit(&fixture)
             .env("PATH", &bin)
-            .args(["browser-kit", "verify", "--json"])
+            .args(["config", "browser-kit", "verify", "--json"])
             .output()
             .unwrap();
         assert!(output.status.success(), "{output:?}");
@@ -435,7 +477,7 @@ fn workspace_init_offers_the_kit_for_a_web_ui_without_installing_it() {
     let offer = init(&web);
     assert_eq!(offer["status"], "offered", "{offer}");
     assert_eq!(offer["web_ui"], "site/index.html", "{offer}");
-    assert_eq!(offer["next"], "orbit browser-kit install", "{offer}");
+    assert_eq!(offer["next"], "orbit config browser-kit install", "{offer}");
     assert!(
         !KitLayout::for_home(&web.home).root().exists(),
         "init installed a kit nobody asked for"
@@ -498,7 +540,13 @@ mod library_recovery {
             return;
         }
 
-        for case in ["cached", "failed-extraction", "fresh", "unavailable"] {
+        for case in [
+            "cached",
+            "failed-extraction",
+            "fresh",
+            "unavailable",
+            "missing-browser",
+        ] {
             let fixture = WorkCheckout::new();
             fs::create_dir_all(&fixture.work).unwrap();
             let root = write_kit(
@@ -515,6 +563,13 @@ mod library_recovery {
             ));
             fs::create_dir_all(&shell).unwrap();
             fs::write(shell.join("chrome-headless-shell"), "fixture").unwrap();
+            if case == "missing-browser" {
+                fs::remove_file(shell.join("chrome-headless-shell")).unwrap();
+                fs::remove_file(layout.browsers().join(format!(
+                    "chromium_headless_shell-{REVISION}/chrome-headless-shell"
+                )))
+                .unwrap();
+            }
             fs::create_dir_all(layout.debs()).unwrap();
             let archive = layout.debs().join("libneeded_1_amd64.deb");
             if case == "cached" {
@@ -529,6 +584,9 @@ mod library_recovery {
                 "node",
                 r#"
 case "$2" in
+  install) [ "$5" = --force ] || exit 93
+      echo browser >> "$KIT_TEST_ROOT/calls"
+      : > "$PLAYWRIGHT_BROWSERS_PATH/chromium_headless_shell-1248/chrome-headless-shell" ;;
   install-deps) printf 'Missing system dependencies (1):\n  libneeded\n' ;;
   -e) : > "$ORBIT_BROWSER_KIT_SCREENSHOT"
       printf '{"text":"kit ok","version":"fixture","pngjs":"7.0.0","pixels_ok":true}\n' ;;
@@ -585,7 +643,7 @@ echo 'libneeded.so => not found'"#,
                     .env("KIT_TEST_ROOT", &root)
                     .env("KIT_TEST_CASE", case)
                     .env("KIT_TEST_FAIL", if fail { "1" } else { "0" })
-                    .args(["browser-kit", "install", "--json"])
+                    .args(["config", "browser-kit", "install", "--json"])
                     .output()
                     .unwrap()
             };
@@ -620,7 +678,9 @@ echo 'libneeded.so => not found'"#,
                 assert_eq!(report["status"]["verified"], true);
                 assert_eq!(fs::read_to_string(&archive).unwrap(), "cached package\n");
                 let calls = fs::read_to_string(root.join("calls")).unwrap();
-                let expected = if case == "failed-extraction" {
+                let expected = if case == "missing-browser" {
+                    "browser\ndownload\nextract\n"
+                } else if case == "failed-extraction" {
                     "download\nextract\ndownload\nextract\n"
                 } else {
                     "download\nextract\n"
@@ -776,7 +836,7 @@ echo 'libneeded.so => not found'"#,
                 .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
                 .env("KIT_TEST_ROOT", &root)
                 .env("KIT_TEST_CASE", case)
-                .args(["browser-kit", "install", "--json"])
+                .args(["config", "browser-kit", "install", "--json"])
                 .output()
                 .unwrap();
             assert!(

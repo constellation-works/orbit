@@ -16,8 +16,6 @@ mod rows;
 mod schema;
 mod tokens;
 
-pub use audit::lease_token_actor;
-
 use rusqlite::Connection;
 
 use crate::scope::{LeaseTokenRecord, LeaseTokenRefusal};

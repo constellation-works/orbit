@@ -9,10 +9,12 @@ use orbit_common::fs::io::with_exclusive_file_lock;
 use orbit_common::protocol::yaml::parse_auto_task_yaml;
 use serde::Serialize;
 
+use crate::application::auto_tasks::demoted::release_demoted_auto_tasks;
 use crate::application::auto_tasks::retired::retire_replaced_auto_tasks;
 use crate::application::auto_tasks::settings::migrate_settings_only_forks;
 use crate::application::auto_tasks::{
-    DEFAULT_AUTO_TASK_FILES, auto_tasks_dir, cursor_state_path, render_default_auto_task,
+    DEFAULT_AUTO_TASK_FILES, ENABLED_BY_DEFAULT_AUTO_TASKS, auto_tasks_dir, cursor_state_path,
+    render_default_auto_task,
 };
 use crate::application::job::DEFAULT_JOB_FILES;
 use crate::application::managed_assets::{
@@ -24,6 +26,7 @@ use crate::application::routines::materialize::reconcile_default_routines_for_po
 use crate::application::routines::seed::RoutineSeedIdentity;
 use crate::application::seeding_policy::{seeded_defaults, workspace_seeding_policies};
 use crate::application::skill::{DEFAULT_SKILL_FILES, inject_skill_template_tokens};
+use crate::application::tool_name_migration::heal_workspace_sync_auto_task_catalog;
 use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -157,6 +160,50 @@ pub fn seed_absent_workspace_managed_artifacts(
     )
 }
 
+/// Older workspace initialization seeded activities and jobs locally. Refresh
+/// only their existing managed copies, without materializing a second catalog
+/// or changing retirement/preservation policy. Also used on every runtime open
+/// independently of the host-global defaults stamp.
+pub(crate) fn reconcile_workspace_catalog_copies(
+    global_root: &Path,
+    workspace_orbit_root: &Path,
+    check: bool,
+) -> Result<WorkspaceManagedArtifactSyncReport, OrbitError> {
+    let mut report = WorkspaceManagedArtifactSyncReport {
+        check,
+        ..Default::default()
+    };
+    if global_root == workspace_orbit_root
+        || matches!(
+            (global_root.canonicalize(), workspace_orbit_root.canonicalize()),
+            (Ok(global), Ok(workspace)) if global == workspace
+        )
+    {
+        return Ok(report);
+    }
+    for (kind, directory, files) in [
+        ("activity", "activities", DEFAULT_ACTIVITY_FILES),
+        ("job", "jobs", DEFAULT_JOB_FILES),
+    ] {
+        let copies = reconcile_managed_assets_in_mode(
+            &workspace_orbit_root.join("resources").join(directory),
+            kind,
+            ManagedAssetLayout::YamlStem,
+            files,
+            false,
+            ManagedAssetReconcileMode::RefreshExisting { check },
+            |_, content| Ok(Cow::Borrowed(content)),
+        )?;
+        append_actions(
+            &mut report,
+            ManagedArtifactScope::WorkspaceLocal,
+            kind,
+            copies,
+        );
+    }
+    Ok(report)
+}
+
 fn reconcile_managed_artifacts(
     global_root: &Path,
     workspace_orbit_root: &Path,
@@ -165,7 +212,7 @@ fn reconcile_managed_artifacts(
     mode: ManagedAssetReconcileMode,
     host_global: bool,
 ) -> Result<WorkspaceManagedArtifactSyncReport, OrbitError> {
-    crate::bootstrap::product_profile::ProductProfile::Orbit
+    super::product_profile::ProductProfile::Orbit
         .validate_roots(&[global_root, workspace_orbit_root])?;
     let policies = workspace_seeding_policies(global_root, workspace_orbit_root)?;
     let mut report = WorkspaceManagedArtifactSyncReport {
@@ -179,7 +226,7 @@ fn reconcile_managed_artifacts(
             &global_root.join("skills"),
             "skill",
             ManagedAssetLayout::RelativePath,
-            &DEFAULT_SKILL_FILES,
+            DEFAULT_SKILL_FILES,
             false,
             mode,
             |_, content| {
@@ -222,6 +269,14 @@ fn reconcile_managed_artifacts(
             |_, content| Ok(Cow::Borrowed(content)),
         )?;
         append_actions(&mut report, ManagedArtifactScope::HostGlobal, "job", jobs);
+
+        let copies = reconcile_workspace_catalog_copies(
+            global_root,
+            workspace_orbit_root,
+            mode == ManagedAssetReconcileMode::Check,
+        )?;
+        report.actions.extend(copies.actions);
+        report.warnings.extend(copies.warnings);
     }
 
     // A fork that differs from its bundled body only in operator settings is
@@ -244,6 +299,17 @@ fn reconcile_managed_artifacts(
             base_branch,
             mode,
         )?;
+        // A demoted default's copy is kept: forgetting its provenance first
+        // stops reconciliation below from retiring it as a dropped default.
+        let released = release_demoted_auto_tasks(&auto_tasks_root, mode)?;
+        // Pre-family tool names are rewritten before forks are classified,
+        // and a managed file keeps its provenance, so the rename is never a
+        // fork [ORB-23552].
+        let renamed_tools = if mode.creates_only() {
+            Vec::new()
+        } else {
+            heal_workspace_sync_auto_task_catalog(workspace_orbit_root, mode.writes())?
+        };
         let migrated = if mode.creates_only() {
             Vec::new()
         } else {
@@ -266,15 +332,17 @@ fn reconcile_managed_artifacts(
                         "default auto-task `{name}` failed validation: {error}"
                     ))
                 })?;
-                if definition.name != name || definition.enabled {
+                let ships_enabled = ENABLED_BY_DEFAULT_AUTO_TASKS.contains(&name);
+                if definition.name != name || definition.enabled != ships_enabled {
+                    let state = if ships_enabled { "enabled" } else { "disabled" };
                     return Err(OrbitError::InvalidInput(format!(
-                        "default auto-task `{name}` must have the matching name and ship disabled"
+                        "default auto-task `{name}` must have the matching name and ship {state}"
                     )));
                 }
                 Ok(rendered)
             },
         )?;
-        // One row per migrated or replaced definition: in `Check` mode
+        // One row per migrated, replaced or released definition: in `Check` mode
         // reconciliation still sees the file and would also report it.
         let (superseded, mut kept): (Vec<_>, Vec<_>) = std::mem::take(&mut auto_tasks.actions)
             .into_iter()
@@ -282,6 +350,7 @@ fn reconcile_managed_artifacts(
                 migrated
                     .iter()
                     .chain(&replaced.actions)
+                    .chain(&released.actions)
                     .any(|handled| handled.name == action.name)
             });
         auto_tasks.warnings.retain(|warning| {
@@ -289,10 +358,30 @@ fn reconcile_managed_artifacts(
                 .iter()
                 .any(|action| action.detail.as_ref() == Some(warning))
         });
+        let reported_names = kept
+            .iter()
+            .chain(&migrated)
+            .chain(&replaced.actions)
+            .chain(&released.actions)
+            .map(|action| action.name.clone())
+            .collect::<BTreeSet<_>>();
         kept.extend(migrated);
         kept.extend(replaced.actions);
+        kept.extend(released.actions);
+        kept.extend(
+            renamed_tools
+                .into_iter()
+                .filter(|rewrite| !reported_names.contains(&rewrite.name))
+                .map(|rewrite| ManagedAssetAction {
+                    detail: Some(rewrite.describe()),
+                    name: rewrite.name,
+                    path: rewrite.path,
+                    outcome: ManagedAssetOutcome::Migrated,
+                }),
+        );
         auto_tasks.actions = kept;
         auto_tasks.warnings.extend(replaced.warnings);
+        auto_tasks.warnings.extend(released.warnings);
         Ok::<_, OrbitError>(auto_tasks)
     };
     let auto_tasks = if mode.writes() {

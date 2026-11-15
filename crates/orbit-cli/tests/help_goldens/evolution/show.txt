@@ -1,0 +1,18 @@
+Show an evolution record and its occurrences
+
+Usage: orbit evolution show [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+          Evolution record identifier
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

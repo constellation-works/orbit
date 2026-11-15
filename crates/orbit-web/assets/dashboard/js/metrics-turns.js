@@ -8,66 +8,34 @@
 // local and redraws from the cached payload. The window comes from the
 // shared selector. Chart drawing and tooltips stay in metrics.js.
 
-import { el, fetchJson, getWorkspaceRevision } from './common.js';
+import { el } from './common.js';
+import { OUTCOMES, TERMINAL_TIME_NOTE, axisScale, fmtCompactTotal, option, seriesKey, seriesLabel, tagPicker, tasks, trendSource, undatedNote } from './metrics-running.js';
 
-const COMPLEXITY_LABELS = { low: "Low", medium: "Medium", hard: "Hard", xhard: "Xhard", unset: "Unassessed" };
-const OUTCOMES = [["done", "Done"], ["all", "All closed"]];
 const MEASURES = [["turns", "Turns"], ["bytes", "Result bytes"]];
-const MAX_TAGS = 8;
 
 const filters = { outcome: "done", provider: "", tags: [] };
 /// Local view state. metrics.js includes `measure` in the section hash so
 /// a toggle redraws; the endpoint is not read again.
 export const turnsView = { measure: "turns" };
-let sequence = 0;
+
+const source = trendSource({
+  path: "/api/diagnostics/turns_to_edit",
+  params(windowKey) {
+    const query = new URLSearchParams({ since: windowKey, outcome: filters.outcome });
+    if (filters.provider) query.set("provider", filters.provider);
+    if (filters.tags.length) query.set("tags", filters.tags.join(","));
+    return query;
+  },
+  accepts: (payload) => payload && payload.window && Array.isArray(payload.series),
+  missingText: "This host answered without a turns-to-first-edit trend.",
+  notYetText: "This host's Orbit does not report turns to first edit yet. Upgrade it to see this trend.",
+});
 
 /// The endpoint query for `windowKey` under the current filters.
-export function turnsQuery(windowKey) {
-  const query = new URLSearchParams({ since: windowKey, outcome: filters.outcome });
-  if (filters.provider) query.set("provider", filters.provider);
-  if (filters.tags.length) query.set("tags", filters.tags.join(","));
-  return `/api/diagnostics/turns_to_edit?${query}`;
-}
-
-/// Fetch the trend for `windowKey`. A failed read, or a host whose Orbit
-/// predates the endpoint, answers `{ unavailable }` so the other trends still
-/// render. Every result carries a fence (generation, workspace/host visit
-/// revision, window and complete query) captured at request time; both the
-/// filter refetch and the full-panel refresh share `sequence`, so whichever
-/// starts later retires the other.
-export function fetchTurns(windowKey) {
-  const fence = { generation: ++sequence, revision: getWorkspaceRevision(), windowKey, query: turnsQuery(windowKey) };
-  const query = fence.query;
-  return fetchJson(query).then(
-    (payload) => (payload && payload.window && Array.isArray(payload.series)
-      ? { ...payload, query, turnsFence: fence }
-      : { query, unavailable: "This host answered without a turns-to-first-edit trend.", turnsFence: fence }),
-    (error) => ({
-      query,
-      unavailable: error.status === 404 ? "This host's Orbit does not report turns to first edit yet. Upgrade it to see this trend." : error.message,
-      turnsFence: fence,
-    }),
-  );
-}
-
-/// True only when `payload` is the newest turns request and its visit,
-/// window and complete filter query still match current state. Unavailable
-/// and error replies carry the fence too, so they are gated the same way.
-export function isCurrentTurnsPayload(payload, windowKey) {
-  const fence = payload && payload.turnsFence;
-  if (!fence) return false;
-  return fence.generation === sequence
-    && fence.revision === getWorkspaceRevision()
-    && fence.windowKey === windowKey
-    && fence.query === turnsQuery(windowKey);
-}
-
-/// Refetch after a filter change; `apply` runs only for a current request.
-function refetch(windowKey, apply) {
-  fetchTurns(windowKey).then((payload) => {
-    if (isCurrentTurnsPayload(payload, windowKey)) apply(payload);
-  });
-}
+export const turnsQuery = source.query;
+/// Fetch the trend for `windowKey`, fenced by metrics-running.js `trendSource`.
+export const fetchTurns = source.fetch;
+export const isCurrentTurnsPayload = source.isCurrent;
 
 /// "2.5" or "2". A non-finite value is an em dash.
 export function fmtTurns(value) {
@@ -77,32 +45,11 @@ export function fmtTurns(value) {
 }
 
 /// "1.24M", "860k", "412".
-export function fmtBytes(value) {
-  if (value == null || !Number.isFinite(Number(value))) return "—";
-  const n = Number(value);
-  if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
-  if (n >= 1e6) return `${(n / 1e6).toFixed(n >= 1e7 ? 1 : 2)}M`;
-  if (n >= 1e3) return `${Math.round(n / 1e3)}k`;
-  return String(Math.round(n));
-}
-
-function tasks(n) {
-  return `${n} ${n === 1 ? "task" : "tasks"}`;
-}
-
-function seriesKey(series) {
-  return series.cohort === "all" ? series.complexity : `${series.complexity}-${series.cohort}`;
-}
-
-function seriesLabel(series) {
-  const name = COMPLEXITY_LABELS[series.complexity] || series.complexity;
-  if (series.cohort === "with") return `${name} · with tag`;
-  if (series.cohort === "without") return `${name} · without`;
-  return name;
-}
+export const fmtBytes = fmtCompactTotal;
 
 function excluded(cell) {
   return (cell.excluded_empty_trace || 0)
+    + (cell.excluded_incomplete_trace || 0)
     + (cell.excluded_no_detectable_edit ?? cell.excluded_no_edit ?? 0)
     + (cell.excluded_no_invocation || 0);
 }
@@ -115,7 +62,7 @@ function excludedDescription(cell) {
   if (!coverageCategories(cell)) {
     return `${cell.excluded_no_edit || 0} with no detectable edit (trace category unavailable), ${cell.excluded_no_invocation || 0} with no implement invocation`;
   }
-  return `${cell.excluded_empty_trace} with an empty or unavailable tool trace, ${cell.excluded_no_detectable_edit} with a populated trace but no recognized editor, ${cell.excluded_no_invocation || 0} with no implement invocation`;
+  return `${cell.excluded_empty_trace} with an empty or unavailable tool trace, ${cell.excluded_incomplete_trace || 0} with a tool trace truncated by the output capture, ${cell.excluded_no_detectable_edit} with a populated trace but no recognized editor, ${cell.excluded_no_invocation || 0} with no implement invocation`;
 }
 
 function percent(rate) {
@@ -125,7 +72,11 @@ function percent(rate) {
 function coverageNote(payload) {
   const coverage = payload.coverage;
   if (!coverage) return "Trace coverage categories are unavailable from this host.";
-  return `First-edit coverage: ${coverage.measured} of ${coverage.tasks} tasks measured; ${coverage.empty_trace} had an empty or unavailable tool trace, ${coverage.no_detectable_edit} had a populated trace without a recognized editor, and ${coverage.no_invocation} had no implement invocation.`;
+  const head = `First-edit coverage: ${coverage.measured} of ${coverage.tasks} tasks measured; ${coverage.empty_trace} had an empty or unavailable tool trace, ${coverage.incomplete_trace || 0} had a tool trace truncated by the output capture, ${coverage.no_detectable_edit} had a populated trace without a recognized editor`;
+  // A provider filter keeps only attributed tasks, so coverage.no_invocation is
+  // 0 by construction; report the excluded count instead of that zero.
+  if (payload.provider) return `${head}. ${tasks(payload.excluded_unattributed || 0)} with no implement invocation were excluded by the provider filter and are not counted here.`;
+  return `${head}, and ${coverage.no_invocation} had no implement invocation.`;
 }
 
 function providerCoverageNote(payload) {
@@ -142,20 +93,12 @@ function providerCoverageNote(payload) {
   }).join(" · ")}.`;
 }
 
-/// A 1–2–5 axis from zero past `max`, in about four steps.
-function axisScale(max) {
-  const raw = Math.max(max, 1) * 1.08 / 4;
-  const magnitude = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 5, 10].map((m) => m * magnitude).find((candidate) => candidate >= raw);
-  return { step, max: Math.ceil(Math.max(max, 1) * 1.08 / step) * step };
-}
-
 /// The filter row: outcome, provider, the tag picker, and the local measure.
 export function turnsTools({ segGroup, windowKey, payload, rerender, onChange }) {
   const apply = (update) => {
     Object.assign(filters, update);
     onChange(null);
-    refetch(windowKey, onChange);
+    source.refetch(windowKey, onChange);
   };
   const providers = (payload && payload.available_providers) || [];
   const provider = el("select", { class: "mx-select", "aria-label": "Provider" }, [
@@ -170,40 +113,16 @@ export function turnsTools({ segGroup, windowKey, payload, rerender, onChange })
   ]);
   provider.addEventListener("change", () => apply({ provider: provider.value }));
 
-  const atTagLimit = filters.tags.length >= MAX_TAGS;
-  const available = atTagLimit ? [] : ((payload && payload.available_tags) || []).filter((entry) => !filters.tags.includes(entry.tag));
-  const picker = el("select", { class: "mx-select", "aria-label": "Compare a tag" }, [
-    option("", atTagLimit ? `Maximum of ${MAX_TAGS} tags selected` : filters.tags.length ? "Add a tag…" : "Compare a tag…", true),
-    ...available.map((entry) => option(entry.tag, `${entry.tag} (${entry.tasks})`, false)),
-  ]);
-  picker.addEventListener("change", () => {
-    if (picker.value && filters.tags.length < MAX_TAGS && available.some((entry) => entry.tag === picker.value)) {
-      apply({ tags: [...filters.tags, picker.value].sort() });
-    }
-  });
-  const chips = filters.tags.map((tag) => {
-    const chip = el("button", { class: "mx-chip", type: "button", title: `Stop comparing ${tag}`, "aria-label": `Remove tag ${tag}` }, [tag, el("span", { "aria-hidden": "true", text: "×" })]);
-    chip.addEventListener("click", () => apply({ tags: filters.tags.filter((other) => other !== tag) }));
-    return chip;
-  });
-
   return [
     segGroup("Task outcome", OUTCOMES, filters.outcome, (key) => key !== filters.outcome && apply({ outcome: key })),
     provider,
-    el("div", { class: "mx-tags", role: "group", "aria-label": "Tag cohorts" }, [picker, ...chips]),
+    tagPicker({ tags: filters.tags, offered: payload && payload.available_tags, apply }),
     segGroup("Measure", MEASURES, turnsView.measure, (key) => {
       if (key === turnsView.measure) return;
       turnsView.measure = key;
       rerender();
     }),
   ];
-}
-
-function option(value, text, selected) {
-  const node = el("option", { text });
-  node.value = value;
-  node.selected = selected;
-  return node;
 }
 
 /// The trend model metrics.js draws: cards, chart, table, or an empty state.
@@ -224,7 +143,7 @@ export function turnsModel(payload, { windowKey, shown, bucketTitle, bucketWidth
   const isShown = (key) => shown[key] !== false;
   const total = payload.total || {};
 
-  const cards = series.map((entry) => ({
+  const complexityCards = series.map((entry) => ({
     key: entry.key,
     swatch: entry.complexity,
     dashed: entry.cohort === "without",
@@ -234,17 +153,24 @@ export function turnsModel(payload, { windowKey, shown, bucketTitle, bucketWidth
     value: entry.total.n ? format(entry.total[meanKey]) : "—",
     sub: entry.total.n ? `median ${format(entry.total[medianKey])}` : "no measured first edits",
     foot: coverageCategories(entry.total)
-      ? `${tasks(entry.total.n)} measured · ${entry.total.excluded_empty_trace} empty traces · ${entry.total.excluded_no_detectable_edit} populated without an editor · ${entry.total.excluded_no_invocation || 0} without an invocation`
+      ? `${tasks(entry.total.n)} measured · ${entry.total.excluded_empty_trace} empty traces · ${entry.total.excluded_incomplete_trace || 0} truncated traces · ${entry.total.excluded_no_detectable_edit} populated without an editor · ${entry.total.excluded_no_invocation || 0} without an invocation`
       : `${tasks(entry.total.n)} measured · ${excludedDescription(entry.total)}`,
   }));
+  // Keep every complexity and tag cohort in one visible summary tile. The
+  // shared responsive card grid changes its column count with the viewport;
+  // one composite tile cannot leave a final complexity tile orphaned.
+  const cards = [{ grouped: true, label: "By complexity", entries: complexityCards }];
 
   if (!total.n) {
     const left = excluded(total);
     const other = payload.excluded_other_provider || 0;
+    const unattributed = payload.excluded_unattributed || 0;
     const parts = [];
     if (left) parts.push(`${tasks(left)} outside the measured sample: ${excludedDescription(total)}`);
     if (other) parts.push(`${tasks(other)} on another provider`);
+    if (unattributed) parts.push(`${tasks(unattributed)} with no implement invocation, so no provider`);
     parts.push(coverageNote(payload), providerCoverageNote(payload));
+    if (payload.undated_tasks) parts.push(undatedNote(payload.undated_tasks));
     return {
       blurb,
       cards,
@@ -258,7 +184,7 @@ export function turnsModel(payload, { windowKey, shown, bucketTitle, bucketWidth
   const visible = series.filter((entry) => isShown(entry.key));
   let max = 0;
   for (const entry of visible) for (const point of entry.points) if (point.n) max = Math.max(max, point[meanKey]);
-  const scale = axisScale(max);
+  const scale = axisScale(0, max);
   const y = (value) => 100 - Math.min(value, scale.max) / scale.max * 100;
   const yTicks = [];
   for (let v = 0; v <= scale.max + scale.step / 2; v += scale.step) yTicks.push({ top: 100 - v / scale.max * 100, label: format(v) });
@@ -266,12 +192,13 @@ export function turnsModel(payload, { windowKey, shown, bucketTitle, bucketWidth
   const notes = [
     `${bucketWidthLabel(seconds)}, aligned to the clock`,
     "lines join across buckets where no task closed",
-    "time = the task's last write after it closed",
+    TERMINAL_TIME_NOTE,
     bytes ? "result bytes before the first edit" : "tool calls before the first edit",
   ];
   if (payload.tags.length) notes.push(`with tag = carries ${payload.tags.join(" or ")} now (current tags, not tags at the time); dashed = without`);
-  if (payload.provider) notes.push(`provider ${payload.provider}; ${tasks(payload.excluded_other_provider || 0)} whose first implement invocation ran on another provider`);
+  if (payload.provider) notes.push(`provider ${payload.provider}; ${tasks(payload.excluded_other_provider || 0)} whose first implement invocation ran on another provider; ${tasks(payload.excluded_unattributed || 0)} with no implement invocation, so no provider to match`);
   notes.push(coverageNote(payload), providerCoverageNote(payload));
+  if (payload.undated_tasks) notes.push(undatedNote(payload.undated_tasks));
   if (payload.truncated) notes.push("older implement invocations were left out of this read");
 
   return {

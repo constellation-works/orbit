@@ -80,7 +80,7 @@ impl FrictionCall {
         }
     }
 
-    /// `orbit.friction.add` requires a non-empty `model`; when the caller
+    /// `orbit.friction` action `add` requires a non-empty `model`; when the caller
     /// supplies no attribution, default to the human actor label rather than a
     /// model constant. No other friction verb consumes `model`.
     fn into_tool_call(mut self) -> (String, Value) {
@@ -124,12 +124,12 @@ pub(super) struct FrictionsQuery {
     offset: Option<usize>,
 }
 
-/// Create body for `POST /frictions`. Mirrors the `orbit.friction.add` tool
+/// Create body for `POST /frictions`. Mirrors the `orbit.friction` action `add` tool
 /// schema: `body` is required, `model` provenance and `tags`/`during_task`
 /// are optional. Field parsing and validation stay in the shared runtime add
 /// path so the wire shape and defaults match the native MCP tool exactly.
 /// `model` falls back to the human actor label via [`run_friction_tool`] when
-/// the caller omits it. `orbit.friction.add` rejects
+/// the caller omits it. `orbit.friction` action `add` rejects
 /// a separate `agent` field (attribution was consolidated to `model`-only),
 /// so this body does not accept one. Fields the tool does not declare are
 /// forwarded for the tool entry to report.
@@ -240,7 +240,7 @@ pub(super) async fn list_frictions(
     Json(body).into_response()
 }
 
-/// `POST /frictions` — file a new friction, mirroring `orbit.friction.add`.
+/// `POST /frictions` — file a new friction, mirroring `orbit.friction` action `add`.
 /// The request body is passed through the shared runtime add path so validation
 /// and defaults stay identical to the native MCP tool; the created friction JSON
 /// (same projection the list/get handlers emit) is returned on success.

@@ -3,7 +3,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::isolated_cli_fixture;
 use isolated_cli_fixture::Fixture;
@@ -12,19 +12,12 @@ use isolated_cli_fixture::Fixture;
 #[test]
 fn external_tool_cli_lifecycle_executes_fixture_and_preserves_builtin_catalog() {
     let fixture = Fixture::new();
-    let script = fixture.repo.join("fixture_tool.py");
-    let script = script.to_str().unwrap();
+    let script_path = fixture.repo.join("fixture_tool.py");
+    let script = script_path.to_str().unwrap().to_string();
     let name = "qa.local_echo";
-    let scaffold = fixture.json(&[
-        "tool", "scaffold", script, "--name", name, "--format", "json",
-    ]);
-    assert_eq!(scaffold["tool"], name);
+    write_fixture_tool(&script_path, name);
+    let script = script.as_str();
     let script_bytes = fs::read(script).unwrap();
-    fixture
-        .command(&["tool", "scaffold", script, "--name", name])
-        .assert()
-        .failure();
-    assert_eq!(fs::read(script).unwrap(), script_bytes);
     let added = fixture.json(&["tool", "add", script, "--format", "json"]);
     assert_eq!(added["tool"], name);
     let show = fixture.json(&["tool", "show", name, "--format", "json"]);
@@ -100,4 +93,54 @@ fn external_tool_cli_lifecycle_executes_fixture_and_preserves_builtin_catalog() 
         script_bytes,
         "registry removal must preserve the user's executable"
     );
+}
+
+/// Write the executable and v1 sidecar the removed `orbit tool scaffold`
+/// used to generate, so the lifecycle below covers registration of an
+/// existing sidecar tool (`orbit tool add` keeps that path working).
+#[cfg(unix)]
+fn write_fixture_tool(script_path: &Path, name: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script = format!(
+        "#!/usr/bin/env python3\n\
+         import json\n\
+         import os\n\
+         import sys\n\
+         \n\
+         \n\
+         def main():\n\
+         \x20   payload = json.load(sys.stdin)\n\
+         \x20   subject = payload.get(\"name\") or \"Fixture\"\n\
+         \x20   response = {{\"ok\": True, \"tool\": \"{name}\", \"message\": f\"Hello, {{subject}}!\"}}\n\
+         \x20   if payload.get(\"include_context\"):\n\
+         \x20       response[\"context\"] = {{\"workspace_root\": os.environ.get(\"ORBIT_TOOL_WORKSPACE_ROOT\")}}\n\
+         \x20   json.dump(response, sys.stdout)\n\
+         \x20   sys.stdout.write(\"\\n\")\n\
+         \x20   return 0\n\
+         \n\
+         \n\
+         raise SystemExit(main())\n"
+    );
+    fs::write(script_path, script).unwrap();
+    fs::set_permissions(script_path, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let sidecar = script_path
+        .with_extension("")
+        .with_extension("orbit-tool.yaml");
+    let manifest = format!(
+        "schemaVersion: 1\n\
+         name: {name}\n\
+         description: Fixture echo tool.\n\
+         parameters:\n\
+         \x20 - name: name\n\
+         \x20   description: Greeting target echoed back by the fixture tool.\n\
+         \x20   param_type: string\n\
+         \x20   required: false\n\
+         \x20 - name: include_context\n\
+         \x20   description: When true, include workspace context in the response.\n\
+         \x20   param_type: boolean\n\
+         \x20   required: false\n"
+    );
+    fs::write(&sidecar, manifest).unwrap();
 }

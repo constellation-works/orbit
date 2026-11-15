@@ -1,9 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use orbit_store::contracts::{AdmissionIdentity, AdmissionLookup, ExecutionClaimPhase};
-use orbit_types::task::{GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, names_task_delivery_pull_request};
+use orbit_common::OrbitError;
+use orbit_store::contracts::{
+    AdmissionIdentity, AdmissionLookup, ClaimInspection, ExecutionClaimPhase,
+};
+use orbit_types::task::{
+    GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskStatus, names_task_delivery_pull_request,
+};
 use orbit_types::workflow::ConventionTemplate;
-use orbit_types::workflow::handoff::{HandoffDelivery, LandingAttemptState, LandingStartState};
+use orbit_types::workflow::handoff::{
+    HandoffDelivery, LandingAttemptState, LandingStartState, LandingStopEvidence,
+};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -17,13 +24,14 @@ pub(super) struct Candidate {
     pub(super) task: Task,
     /// Accepted handoff and released claim PRs, each with its landing branch.
     follower_prs: BTreeMap<u64, String>,
-    /// The task's handed-off claim whose completion authority was revoked.
-    /// Only its candidate PR then settles the task, together with the claim.
+    requeued_handoff: Option<u64>,
+    /// The task's handed-off claim whose landing stopped or whose completion
+    /// authority was revoked. Only its candidate PR settles it with the claim.
     pub(super) revoked: Option<RevokedHandoff>,
 }
 
-/// A `handed_off` claim whose accepted handoff's completion authority an
-/// operator revoked, with the PR that handoff delivered.
+/// A `handed_off` claim whose owner landing stopped or whose completion
+/// authority an operator revoked, with the PR that handoff delivered.
 #[derive(Debug, Clone)]
 pub(super) struct RevokedHandoff {
     pub(super) claim_id: String,
@@ -32,14 +40,36 @@ pub(super) struct RevokedHandoff {
     pub(super) landing_branch: String,
     /// A stopped authorized handoff needs independent candidate/head verification.
     pub(super) candidate: Option<orbit_types::workflow::handoff::HandoffCandidate>,
+    /// The latest stopped attempt's readable cause, when authority is pending.
+    pub(super) stopped_reason: Option<String>,
+}
+
+impl RevokedHandoff {
+    pub(super) fn handoff_landing_refusal(&self) -> String {
+        if self.candidate.is_some() {
+            format!(
+                "its owner landing stopped: {}; its handoff still holds completion authority. \
+                 Resume it with the owner's Retry landing action or `orbit task retry-handoff` \
+                 (see `orbit task retry-handoff --help`)",
+                self.stopped_reason
+                    .as_deref()
+                    .unwrap_or("no readable stop reason was recorded")
+            )
+        } else {
+            "an operator revoked its handoff's completion authority".to_string()
+        }
+    }
 }
 
 impl Candidate {
-    /// Every PR Orbit recorded for the task, newest first. A revoked
+    /// Every PR Orbit recorded for the task, newest first. A stopped or revoked
     /// handoff's task has exactly one: the handoff's candidate PR.
     pub(super) fn pr_numbers(&self) -> Vec<u64> {
         if let Some(revoked) = &self.revoked {
             return vec![revoked.pull_request];
+        }
+        if let Some(number) = self.requeued_handoff {
+            return vec![number];
         }
         let mut numbers = self
             .task
@@ -56,7 +86,7 @@ impl Candidate {
     }
 }
 
-/// Why a revoked handoff's task did not settle: its candidate PR, as the
+/// Why a stopped or revoked handoff's task did not settle: its candidate PR, as the
 /// forge returned it (`None` when it is not merged), is not merged, names
 /// another task, or merged into another branch.
 pub(super) fn revoked_handoff_unmerged(
@@ -66,7 +96,17 @@ pub(super) fn revoked_handoff_unmerged(
     task_id: &str,
 ) -> String {
     let number = revoked.pull_request;
-    let prefix = "its handed-off claim's completion authority was revoked, and";
+    if revoked.candidate.is_some() && fetched.is_none() {
+        return format!(
+            "{}; the handoff's pull request #{number} is not merged",
+            revoked.handoff_landing_refusal()
+        );
+    }
+    let prefix = if revoked.candidate.is_some() {
+        "its authorized owner landing stopped, and"
+    } else {
+        "its handed-off claim's completion authority was revoked, and"
+    };
     match fetched {
         None => format!(
             "{prefix} the handoff's pull request #{number} is not merged; if it will not merge, \
@@ -98,29 +138,83 @@ pub(super) fn names_delivery(
     )
 }
 
+/// Lazily-read claim ledger shared by one settlement pass: the outer
+/// `None` means not read yet, the inner `None` means the read failed.
+pub(super) type SettlementClaimsCache = Option<Option<Vec<ClaimInspection>>>;
+
 impl OrbitRuntime {
+    /// The pass-shared ledger, reading it on first use. `None` when the
+    /// ledger cannot be read; callers keep their own failure semantics.
+    fn settlement_claims<'a>(
+        &self,
+        cache: &'a mut SettlementClaimsCache,
+    ) -> Option<&'a [ClaimInspection]> {
+        if cache.is_none() {
+            *cache = Some(self.stores().tasks().inspect_execution_claims().ok());
+        }
+        cache.as_ref().and_then(|claims| claims.as_deref())
+    }
+
     /// `task` as a settlement candidate, or why it is not one.
     pub(super) fn settlement_candidate(
         &self,
         task: Task,
         carried: &BTreeSet<String>,
     ) -> Result<Candidate, String> {
+        let mut cache = None;
+        self.settlement_candidate_with_claims(task, carried, &mut cache)
+    }
+
+    /// [`Self::settlement_candidate`] reusing `cache`'s one ledger read.
+    pub(super) fn settlement_candidate_with_claims(
+        &self,
+        task: Task,
+        carried: &BTreeSet<String>,
+        claims_cache: &mut SettlementClaimsCache,
+    ) -> Result<Candidate, String> {
         if !SETTLEABLE_STATUSES.contains(&task.status) {
             return Err(format!(
-                "it is '{}'; only a blocked, in-progress or review task settles",
+                "it is '{}'; only a blocked, in-progress, review or preserved failure-handoff backlog task settles",
                 task.status
             ));
         }
+        let requeued_handoff = if task.status == TaskStatus::Backlog {
+            let receipt = self.handoff_receipt(&task).map_err(|e| e.to_string())?;
+            match receipt {
+                Some(receipt) => {
+                    let history = self.get_task_history(&task.id).map_err(|e| e.to_string())?;
+                    if super::super::requeue::current_run_requeue_stands(&task, &history)
+                        && self
+                            .task_spec_for_settlement(&task)
+                            .map_err(|error| error.to_string())?
+                            .spec_digest_matches(&receipt.task_spec_digest)
+                    {
+                        Some(
+                            receipt
+                                .pull_request
+                                .parse::<u64>()
+                                .map_err(|e| e.to_string())?,
+                        )
+                    } else {
+                        return Err("backlog task has no preserved failure-handoff requeue".into());
+                    }
+                }
+                _ => return Err("backlog task has no preserved failure-handoff requeue".into()),
+            }
+        } else {
+            None
+        };
         if let Some(live) = self.live_task_run(&task) {
             return Err(format!("{live}; that run lands or fails the task itself"));
         }
-        let revoked = self.revoked_handoff(&task)?;
         if carried.contains(&task.id) {
             return Err(
                 "a live `run auto` leaf carries it; that run lands or fails the task itself"
                     .to_string(),
             );
         }
+        let claims = self.settlement_claims(claims_cache);
+        let revoked = self.revoked_handoff_with_claims(&task, claims)?;
         if let Some(owed) = self.owed_settlement_hold(&task.id) {
             return Err(owed);
         }
@@ -129,13 +223,14 @@ impl OrbitRuntime {
                 BTreeMap::from([(revoked.pull_request, revoked.landing_branch.clone())])
             }
             None => {
-                let mut prs = self.released_claim_pull_requests(&task.id);
-                prs.extend(self.accepted_handoff_pull_requests(&task.id));
+                let mut prs = self.released_claim_pull_requests_with_claims(&task.id, claims);
+                prs.extend(self.accepted_handoff_pull_requests_with_claims(&task.id, claims));
                 prs
             }
         };
         let candidate = Candidate {
             follower_prs,
+            requeued_handoff,
             task,
             revoked,
         };
@@ -145,10 +240,24 @@ impl OrbitRuntime {
         Ok(candidate)
     }
 
-    /// The task's unsettled claim as a revoked handoff that may settle, `None`
-    /// when the task has no unsettled claim, or why its claim refuses.
-    fn revoked_handoff(&self, task: &Task) -> Result<Option<RevokedHandoff>, String> {
-        let Some(claim) = self.unsettled_task_claim(task)? else {
+    /// The task whose description and acceptance criteria the settlement
+    /// digest compares. A backlog candidate may be the envelope only; the
+    /// body is read when a preserved handoff receipt needs the digest.
+    fn task_spec_for_settlement(&self, task: &Task) -> Result<Task, OrbitError> {
+        Ok(self
+            .get_listed_task_row(&task.id)?
+            .map(|row| row.task)
+            .unwrap_or_else(|| task.clone()))
+    }
+
+    /// The task's unsettled claim as a stopped or revoked handoff that may
+    /// settle, `None` when it has no unsettled claim, or why its claim refuses.
+    fn revoked_handoff_with_claims(
+        &self,
+        task: &Task,
+        claims: Option<&[ClaimInspection]>,
+    ) -> Result<Option<RevokedHandoff>, String> {
+        let Some(claim) = Self::unsettled_task_claim_with_claims(task, claims)? else {
             return Ok(None);
         };
         let unsettled = unsettled_claim_reason(&claim);
@@ -178,6 +287,11 @@ impl OrbitRuntime {
             .into_iter()
             .find(|request| request.handoff_id == accepted.handoff_id)
             .map(|request| request.state);
+        let attempt = tasks
+            .landing_attempts()
+            .map_err(unreadable)?
+            .into_iter()
+            .find(|attempt| attempt.handoff_id == accepted.handoff_id);
         match authority {
             Some(LandingStartState::Revoked) => {}
             None => {
@@ -191,14 +305,9 @@ impl OrbitRuntime {
                 ));
             }
             Some(LandingStartState::Pending)
-                if tasks
-                    .landing_attempts()
-                    .map_err(unreadable)?
-                    .iter()
-                    .any(|attempt| {
-                        attempt.handoff_id == accepted.handoff_id
-                            && attempt.state == LandingAttemptState::Stopped
-                    }) => {}
+                if attempt
+                    .as_ref()
+                    .is_some_and(|attempt| attempt.state == LandingAttemptState::Stopped) => {}
             Some(LandingStartState::Pending) => {
                 return Err(format!(
                     "{unsettled}: its handoff holds completion authority, and the owner's \
@@ -215,14 +324,9 @@ impl OrbitRuntime {
                 ));
             }
         }
-        if tasks
-            .landing_attempts()
-            .map_err(unreadable)?
-            .iter()
-            .any(|attempt| {
-                attempt.handoff_id == accepted.handoff_id
-                    && attempt.state == LandingAttemptState::Dispatched
-            })
+        if attempt
+            .as_ref()
+            .is_some_and(|attempt| attempt.state == LandingAttemptState::Dispatched)
         {
             return Err(format!(
                 "{unsettled}: an owner landing job still carries its revoked handoff"
@@ -243,19 +347,30 @@ impl OrbitRuntime {
             pull_request: number,
             landing_branch: candidate.landing_branch.clone(),
             candidate: (authority == Some(LandingStartState::Pending)).then_some(candidate),
+            stopped_reason: (authority == Some(LandingStartState::Pending))
+                .then(|| attempt.and_then(|attempt| attempt.evidence))
+                .flatten()
+                .map(|evidence| match LandingStopEvidence::parse(&evidence) {
+                    LandingStopEvidence::JsonString { decoded, .. } => decoded,
+                    other => other.operator_reason().to_string(),
+                }),
         }))
     }
 
     /// PRs kept with this task's released or failed claim candidates. The
     /// original admission must still prove which branch each claim targeted;
     /// missing, expired or unreadable receipts contribute no authority.
-    fn released_claim_pull_requests(&self, task_id: &str) -> BTreeMap<u64, String> {
-        let tasks = self.stores().tasks();
-        let Ok(claims) = tasks.inspect_execution_claims() else {
+    fn released_claim_pull_requests_with_claims(
+        &self,
+        task_id: &str,
+        claims: Option<&[ClaimInspection]>,
+    ) -> BTreeMap<u64, String> {
+        let Some(claims) = claims else {
             return BTreeMap::new();
         };
+        let tasks = self.stores().tasks();
         claims
-            .into_iter()
+            .iter()
             .filter(|state| {
                 state.claim.task_id == task_id
                     && matches!(
@@ -265,12 +380,14 @@ impl OrbitRuntime {
             })
             .filter_map(|state| {
                 let number = state
-                    .preserved_candidate?
+                    .preserved_candidate
+                    .as_ref()?
                     .candidate
-                    .pull_request?
+                    .pull_request
+                    .as_ref()?
                     .parse::<u64>()
                     .ok()?;
-                let claim = state.claim;
+                let claim = state.claim.clone();
                 let AdmissionLookup::Found { receipt, .. } = tasks
                     .lookup_admission(
                         &AdmissionIdentity::trusted_local(claim.executed_on.clone()),
@@ -312,6 +429,49 @@ impl OrbitRuntime {
             })
     }
 
+    /// Every PR Orbit recorded for `task`, whether or not it may settle: those
+    /// on the task and those its accepted handoffs and kept claims delivered.
+    pub(super) fn recorded_pull_requests(&self, task: &Task) -> BTreeSet<u64> {
+        let claims = self
+            .stores()
+            .tasks()
+            .inspect_task_execution_claims(&task.id)
+            .ok();
+        let claims = claims.as_deref();
+        task.external_refs
+            .iter()
+            .filter(|reference| reference.system == GITHUB_PR_EXTERNAL_REF_SYSTEM)
+            .filter_map(|reference| reference.id.parse::<u64>().ok())
+            .chain(
+                self.released_claim_pull_requests_with_claims(&task.id, claims)
+                    .into_keys(),
+            )
+            .chain(
+                self.accepted_handoff_pull_requests_with_claims(&task.id, claims)
+                    .into_keys(),
+            )
+            .collect()
+    }
+
+    /// Whether a PR of `author` into `base` may deliver the candidate.
+    pub(super) fn delivers_candidate(
+        &self,
+        candidate: &Candidate,
+        number: u64,
+        author: &str,
+        base: &str,
+        authors: &[String],
+    ) -> bool {
+        match candidate.follower_prs.get(&number) {
+            Some(landing) => base == landing,
+            None => {
+                candidate.revoked.is_none()
+                    && authors.contains(&author.to_ascii_lowercase())
+                    && base == self.delivery_target_branch(&candidate.task)
+            }
+        }
+    }
+
     /// The newest of `merged` that delivered the candidate into its target
     /// branch.
     pub(super) fn delivery_merge(
@@ -321,9 +481,13 @@ impl OrbitRuntime {
         authors: &[String],
     ) -> Option<MergedPullRequest> {
         let task = &candidate.task;
-        let target = self.delivery_target_branch(task);
         merged
             .iter()
+            .filter(|merged| {
+                candidate
+                    .requeued_handoff
+                    .is_none_or(|number| merged.pull.number == number)
+            })
             .filter(|merged| {
                 names_delivery(
                     &self
@@ -336,16 +500,15 @@ impl OrbitRuntime {
                     &task.id,
                 )
             })
-            .filter(
-                |merged| match candidate.follower_prs.get(&merged.pull.number) {
-                    Some(landing) => merged.base_branch == *landing,
-                    None => {
-                        candidate.revoked.is_none()
-                            && authors.contains(&merged.pull.author.to_ascii_lowercase())
-                            && merged.base_branch == target
-                    }
-                },
-            )
+            .filter(|merged| {
+                self.delivers_candidate(
+                    candidate,
+                    merged.pull.number,
+                    &merged.pull.author,
+                    &merged.base_branch,
+                    authors,
+                )
+            })
             .max_by_key(|merged| merged.pull.number)
             .cloned()
     }

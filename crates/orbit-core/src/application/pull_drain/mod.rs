@@ -4,6 +4,7 @@
 //! runs over are adapters (`adapter::engine_host::actions::pull`).
 
 mod candidate;
+pub(crate) mod crew_health;
 pub(crate) mod drain;
 mod job_port;
 mod refill;

@@ -12,6 +12,7 @@ fn report(head: &str, location: &str) -> Value {
         "task_id": TASK_ID,
         "run_id": RUN_ID,
         "tested_head": head,
+        "finding_fingerprint": "fingerprint-from-the-prompt",
         "reasoning": "README.md holds one line; nothing parses it twice.",
         "evidence": [{ "location": location, "note": "The only line of the file." }],
     })

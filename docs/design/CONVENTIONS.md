@@ -1,8 +1,8 @@
 ---
 title: Design Doc Conventions
 owner: daniel
-last_updated: 2026-10-25
-last_validated: 2026-10-25
+last_updated: 2026-11-03
+last_validated: 2026-11-03
 status: Accepted
 ---
 
@@ -255,6 +255,7 @@ Retired features are removed from this table along with their folder.
 | Feature | Folder | Lead |
 |---------|--------|------|
 | Activity / Job | [docs/design/activity-job/](./activity-job/) | codex |
+| Application Approvals | [docs/design/application-approvals/](./application-approvals/) | claude |
 | Agent Families | [docs/design/agent-families/](./agent-families/) | grok |
 | Agent Scorecards | [docs/design/agent-scorecards/](./agent-scorecards/) | claude |
 | Auditability | [docs/design/auditability/](./auditability/) | codex |
@@ -263,13 +264,12 @@ Retired features are removed from this table along with their folder.
 | Automation Triggers | [docs/design/automation-triggers/](./automation-triggers/) | codex |
 | Cloud Dispatch | [docs/design/cloud-dispatch/](./cloud-dispatch/) | claude |
 | Crew Credentials | [docs/design/crew-credentials/](./crew-credentials/) | claude |
-| Crew Performance | [docs/design/crew-performance/](./crew-performance/) | claude |
 | Distributed Drain | [docs/design/distributed-drain/](./distributed-drain/) | claude |
 | Experiments | [docs/design/experiments/](./experiments/) | claude |
+| Eval Harness | [docs/design/eval-harness/](./eval-harness/) | claude |
 | Executors | [docs/design/executors/](./executors/) | claude |
-| Explore Brief | [docs/design/explore-brief/](./explore-brief/) | claude |
 | Federated MCP | [docs/design/federated-mcp/](./federated-mcp/) | grok |
-| Finding Verification | [docs/design/finding-verification/](./finding-verification/) | claude |
+| Fleet Notices | [docs/design/fleet-notices/](./fleet-notices/) | claude |
 | Hidden Acceptance (archived) | [docs/design/_archived/hidden-acceptance/](./_archived/hidden-acceptance/) | claude |
 | Host Registry | [docs/design/host-registry/](./host-registry/) | codex |
 | MCP Bridge | [docs/design/mcp-bridge/](./mcp-bridge/) | codex |
@@ -282,6 +282,7 @@ Retired features are removed from this table along with their folder.
 | Process Supervision | [docs/design/process-supervision/](./process-supervision/) | claude |
 | Project Learnings | [docs/design/project-learnings/](./project-learnings/) | claude |
 | Remote Access | [docs/design/remote-access/](./remote-access/) | codex |
+| Resident Orchestrator | [docs/design/resident-orchestrator/](./resident-orchestrator/) | claude |
 | Review Gate | [docs/design/review-gate/](./review-gate/) | codex |
 | Routines | [docs/design/routines/](./routines/) | claude |
 | State Compatibility | [docs/design/state-compatibility/](./state-compatibility/) | claude |
@@ -292,6 +293,20 @@ Retired features are removed from this table along with their folder.
 | Terminal Interface | [docs/design/terminal-interface/](./terminal-interface/) | claude |
 | Usage Pressure | [docs/design/usage-pressure/](./usage-pressure/) | claude |
 | User Interface | [docs/design/user-interface/](./user-interface/) | gemini |
-| Visual Review | [docs/design/visual-review/](./visual-review/) | claude |
+| Backlog Forecast | [docs/design/backlog-forecast/](./backlog-forecast/) | claude |
+| Condition Triggers | [docs/design/condition-triggers/](./condition-triggers/) | claude |
+| Context Index | [docs/design/context-index/](./context-index/) | claude |
+| Conflict Budget | [docs/design/conflict-budget/](./conflict-budget/) | claude |
+| Distributions | [docs/design/distributions/](./distributions/) | claude |
+| Granted Tools | [docs/design/granted-tools/](./granted-tools/) | claude |
+| Human Decision Channel | [docs/design/human-decision-channel/](./human-decision-channel/) | claude |
+| Mid-Run Steering | [docs/design/mid-run-steering/](./mid-run-steering/) | codex |
+| Operator Attention | [docs/design/operator-attention/](./operator-attention/) | claude |
+| Owner Failover | [docs/design/owner-failover/](./owner-failover/) | claude |
+| Plugins | [docs/design/plugins/](./plugins/) | claude |
+| Scheduled Tasks | [docs/design/scheduled-tasks/](./scheduled-tasks/) | claude |
+| Script Steps | [docs/design/script-steps/](./script-steps/) | claude |
+| Task Risk | [docs/design/task-risk/](./task-risk/) | codex |
+| Workspace Agent Corpus | [docs/design/workspace-agent-corpus/](./workspace-agent-corpus/) | Orbit |
 
 Ownership means: the lead is accountable for keeping the folder's docs in sync with implementation, for recording task provenance when decisions change, and for responding to cross-review comments. Ownership does not preclude other agents from editing — it names who's on the hook when things drift.

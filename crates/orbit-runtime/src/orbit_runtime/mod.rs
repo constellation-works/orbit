@@ -3,7 +3,6 @@
 
 mod accessors;
 mod admission_policy;
-pub use admission_policy::CrewLadderControls;
 mod build;
 mod config;
 mod host;
@@ -11,6 +10,7 @@ mod identity;
 mod persistence;
 mod validation_warning;
 
+use std::any::Any;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -91,6 +91,10 @@ pub struct RuntimeKernel {
     /// span more than one workspace. Absent on a standalone runtime, which
     /// then answers only for its own checkout [ORB-11027].
     workspace_catalog: Option<Arc<dyn catalog::WorkspaceCatalog>>,
+    /// Data the registry-owning composition layer already loaded while opening
+    /// this runtime. Opaque here: the kernel does not inspect it and does not
+    /// load config to refill it. Composition downcasts its own snapshot.
+    composition_snapshot: Option<Arc<dyn Any + Send + Sync>>,
     /// Host lifecycle signals unattended admission consults before starting
     /// new work [ORB-12968]. The platform probe by default; tests inject one.
     host_signals: Arc<dyn HostSignalProbe>,
@@ -132,6 +136,12 @@ pub struct RuntimeKernel {
     /// the deterministic first task ID.
     #[cfg(any(test, feature = "test-support"))]
     transition_read_hook: Arc<Mutex<Option<(String, orbit_types::task::TaskStatus)>>>,
+    /// Test-only seam for the dashboard archive race: when set to a task id,
+    /// the archive path inserts a non-terminal local run owning that task
+    /// after the outer ownership pre-check, so the under-lock recheck can
+    /// observe the lost race. Instance-scoped like the read hook above.
+    #[cfg(any(test, feature = "test-support"))]
+    transition_run_hook: Arc<Mutex<Option<String>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

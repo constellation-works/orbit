@@ -113,7 +113,9 @@ pub struct LoadedPlugin {
     /// `spec.config.defaults`, flattened to one entry per declared key.
     pub config_defaults: BTreeMap<String, Value>,
     /// `spec.tests[]` resolved to golden files inside the root, parsed and
-    /// structurally validated (§5). Empty when the manifest ships none.
+    /// structurally validated (§5). Empty when the manifest ships none, or
+    /// when the plugin was loaded with `load_plugin_dir_without_tests`
+    /// (the host serving path, which never reads goldens).
     pub tests: Vec<LoadedPluginTestFile>,
 }
 

@@ -1,4 +1,5 @@
 use super::*;
+use orbit_common::security::token;
 
 /// Count callback session records that no live child can still be using:
 /// those whose recorded process is gone, and those this host's schema cannot
@@ -94,9 +95,18 @@ pub(super) fn session_process_is_live(record: &SessionRecord) -> bool {
     process_start_key(record.pid).is_some_and(|key| key.starttime == record.starttime)
 }
 
+/// The current schema or the previous one, application-bound records
+/// included, so an upgrade keeps running backends' callbacks working.
+fn record_schema_is_readable(record: &SessionRecord) -> bool {
+    matches!(
+        record.schema_version,
+        SESSION_SCHEMA_VERSION | PREVIOUS_SESSION_SCHEMA_VERSION
+    )
+}
+
 pub(super) fn parse_session(bytes: &[u8]) -> Option<SessionRecord> {
     let record: SessionRecord = serde_json::from_slice(bytes).ok()?;
-    (record.schema_version == SESSION_SCHEMA_VERSION
+    (record_schema_is_readable(&record)
         && !record.plugin.trim().is_empty()
         && is_token_hex(&record.token))
     .then_some(record)
@@ -165,20 +175,7 @@ pub(super) fn session_bytes(record: &SessionRecord) -> std::io::Result<Vec<u8>> 
 }
 
 pub(super) fn random_token() -> Result<String, OrbitError> {
-    let mut bytes = [0u8; TOKEN_BYTES];
-    getrandom::fill(&mut bytes)
-        .map_err(|error| OrbitError::Execution(format!("draw plugin callback token: {error}")))?;
-    Ok(hex_encode(&bytes))
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
+    token::random_hex(TOKEN_BYTES)
 }
 
 pub(super) fn is_token_hex(value: &str) -> bool {

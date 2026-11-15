@@ -16,6 +16,21 @@ use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
 
+/// Poll `read` until `ready` holds or the routine health freshness bound (5 s)
+/// plus margin passes, then return the last read. A job run starting or
+/// finishing no longer invalidates the memo at once: the previous body is
+/// served while one background recompute replaces it.
+fn within_routine_freshness(read: impl Fn() -> Value, ready: impl Fn(&Value) -> bool) -> Value {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let value = read();
+        if ready(&value) || std::time::Instant::now() >= deadline {
+            return value;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
 fn state(fixture: &Fixture, kind: &str, name: &str) -> AutomationState {
     let revision = SourceRevision {
         commit: "a".repeat(40),
@@ -298,13 +313,15 @@ fn routine_last_fire_reports_the_newer_state_triggered_run() {
             let definition = routines.join("pilot.yaml");
             let raw = fs::read_to_string(&definition).unwrap();
             fs::write(&definition, raw.replace("enabled: false", "enabled: true")).unwrap();
-            let requests = (0..4)
-                .map(|_| server.get("/api/routines?workspace=ws_http_fixture"))
-                .collect::<Vec<_>>();
+            let barrier = std::sync::Barrier::new(4);
             let responses = std::thread::scope(|scope| {
-                requests
-                    .into_iter()
-                    .map(|request| scope.spawn(move || json_ok(request)))
+                (0..4)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            barrier.wait();
+                            json_ok(server.get("/api/routines?workspace=ws_http_fixture"))
+                        })
+                    })
                     .collect::<Vec<_>>()
                     .into_iter()
                     .map(|thread| thread.join().unwrap())
@@ -386,7 +403,8 @@ fn routine_last_fire_reports_the_newer_state_triggered_run() {
                 )
                 .unwrap();
 
-            let fire = last_fire();
+            let fire =
+                within_routine_freshness(last_fire, |fire| fire["run_id"] == "jrun-state-fire");
             assert_eq!(fire["run_id"], "jrun-state-fire", "{fire}");
             assert_eq!(fire["state"], "succeeded", "{fire}");
             assert_eq!(
@@ -518,7 +536,9 @@ fn routine_last_fire_reports_condition_triggered_runs() {
                     Some(&ok_pipeline),
                 )
                 .unwrap();
-            let row = status();
+            let row = within_routine_freshness(status, |row| {
+                row["last_fire"]["run_id"] == "jrun-cond-ok"
+            });
             assert_eq!(row["last_fire"]["run_id"], "jrun-cond-ok", "{row}");
             assert_eq!(row["last_fire"]["state"], "succeeded", "{row}");
             assert_eq!(row["recent_fires"].as_array().unwrap().len(), 2, "{row}");
@@ -819,6 +839,81 @@ fn routine_streak_merges_automation_history_and_marks_bounded_history() {
                 json!({
                     "count": 100, "since": (start + Duration::minutes(100)).to_rfc3339(), "truncated": true
                 })
+            );
+        },
+    );
+}
+
+/// Audit rows unrelated to routines land in the same database file as fires
+/// and pauses. They must not invalidate the host memo (every busy host would
+/// recompute the whole report per poll), while a recorded fire still must.
+#[test]
+fn routine_health_memo_ignores_unrelated_audit_writes_but_sees_new_fires() {
+    isolated(
+        "automation::routine_health_memo_ignores_unrelated_audit_writes_but_sees_new_fires",
+        || {
+            let fixture = Fixture::new();
+            fixture.job("watch_pipeline");
+            let routines = fixture.work.join("routines");
+            fs::create_dir_all(&routines).unwrap();
+            fs::write(
+                routines.join("watch.yaml"),
+                "schemaVersion: 1\nname: watch\nenabled: true\ntarget: job:watch_pipeline\ntrigger: {cron: '*/20 * * * *'}\n",
+            )
+            .unwrap();
+            let server = fixture.server(false);
+            let read = || json_ok(server.get("/api/routines?workspace=ws_http_fixture"));
+            let first = read();
+            assert!(first["routines"][0]["last_fire"].is_null());
+
+            let database = rusqlite::Connection::open(fixture.global.join("orbit.db")).unwrap();
+            for i in 0..3 {
+                database
+                    .execute(
+                        "INSERT INTO audit_events (execution_id, timestamp, command, role, status, \
+                         exit_code, duration_ms, working_directory, pid) \
+                         VALUES (?1, '2026-11-06T00:00:00Z', 'task', 'agent', 'ok', 0, 1, '/', 1)",
+                        [format!("unrelated-{i}")],
+                    )
+                    .unwrap();
+                assert_eq!(
+                    read()["generated_at"],
+                    first["generated_at"],
+                    "an unrelated audit write is served from the memo"
+                );
+            }
+
+            let store =
+                orbit_store::compose::routine_store(&fixture.global.join("orbit.db")).unwrap();
+            let slot = "2026-10-10T06:00:00+00:00";
+            store
+                .routine_record_fire_intent(&RoutineFireIntentParams {
+                    routine_name: "watch".into(),
+                    slot: slot.into(),
+                    attempt: 1,
+                    source_workspace: "fixture".into(),
+                })
+                .unwrap();
+            store
+                .routine_mark_fire_dispatched("watch", slot, 1, "jrun-new-fire")
+                .unwrap();
+            let after = read();
+            assert_eq!(
+                after["routines"][0]["last_fire"]["run_id"], "jrun-new-fire",
+                "a recorded fire invalidates the memo at once"
+            );
+            store
+                .routine_mark_fire_outcome("watch", slot, 1, RoutineFireState::Succeeded, None)
+                .unwrap();
+            assert_eq!(
+                read()["routines"][0]["last_fire"]["state"],
+                "succeeded",
+                "a fire outcome invalidates the memo at once"
+            );
+            store.routine_pause("watch", "tester").unwrap();
+            assert!(
+                !read()["routines"][0]["paused_at"].is_null(),
+                "a pause invalidates the memo at once"
             );
         },
     );

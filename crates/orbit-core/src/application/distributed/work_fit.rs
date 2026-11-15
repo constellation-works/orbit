@@ -138,7 +138,10 @@ impl OrbitRuntime {
         let workspace = self.workspace_id()?;
         self.admit_against_forecast(|forecast| {
             let outcome = forecast
-                .gap(settings.admit_cpu_percent, settings.admit_memory_percent)
+                .gap(
+                    settings.admit_cpu_percent,
+                    orbit_config::AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT,
+                )
                 .and_then(|gap| work_fit(forecast, &gap, &workspace, enforce, &settings.mode));
             let admitted = outcome
                 .as_ref()
@@ -206,7 +209,10 @@ impl OrbitRuntime {
                         ProfileLookup::unprofiled_template(&workspace, base)
                     }))
                     .collect::<Vec<_>>();
-                let gap = forecast.gap(settings.admit_cpu_percent, settings.admit_memory_percent);
+                let gap = forecast.gap(
+                    settings.admit_cpu_percent,
+                    orbit_config::AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT,
+                );
                 if lookups.iter().any(|lookup| {
                     forecast
                         .profiles
@@ -281,7 +287,10 @@ impl OrbitRuntime {
                         .as_ref()
                         .is_none_or(|profile| {
                             forecast
-                                .gap(settings.admit_cpu_percent, settings.admit_memory_percent)
+                                .gap(
+                                    settings.admit_cpu_percent,
+                                    orbit_config::AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT,
+                                )
                                 .is_none_or(|gap| gap.fit(profile).is_ok())
                         });
                 Ok(ForecastDecision {

@@ -66,6 +66,10 @@ impl std::fmt::Debug for Block {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Text(text) => f.debug_tuple("Text").field(text).finish(),
+            Self::ConfigShow(text) => f.debug_tuple("ConfigShow").field(text).finish(),
+            Self::Prose(text) => f.debug_tuple("Prose").field(text).finish(),
+            Self::Notice(text) => f.debug_tuple("Notice").field(text).finish(),
+            Self::Attention(rows) => f.debug_tuple("Attention").field(rows).finish(),
             Self::Table(_) => f.write_str("Table"),
             Self::DoctorFindings(rows) => f.debug_tuple("DoctorFindings").field(rows).finish(),
         }
@@ -121,6 +125,24 @@ pub enum Block {
     /// Text the command formatted itself. Written verbatim; any color in it
     /// was already gated by the sink when the command built it.
     Text(String),
+    /// `orbit config show` text: aligned label/value/state/description rows
+    /// and section headings the renderer fits to the terminal width in table
+    /// mode (descriptions wrap aligned to their column). Plain and
+    /// machine-readable modes keep the text whole, so no information is lost
+    /// outside terminal fitting.
+    ConfigShow(ConfigShow),
+    /// Human prose, word-wrapped to the sink width in terminal table mode.
+    /// Explicit line breaks survive; pipes and plain mode keep the text whole.
+    Prose(String),
+    /// A non-record notice — health prose, a status or count trailer — that
+    /// is not part of the record stream. The renderer writes it to stderr in
+    /// every mode (`output-modes.md` §5), so a pipe receives only records
+    /// while a human still sees the notice.
+    Notice(String),
+    /// Operator attention rows, wrapped as associated per-item details on a
+    /// terminal and rendered as one escaped tab-separated record per item in
+    /// plain mode.
+    Attention(Vec<AttentionRow>),
     /// A grid the renderer lays out: width, color, header suppression, and the
     /// plain form are applied here, not by the command.
     Table(Box<Table>),
@@ -128,7 +150,97 @@ pub enum Block {
     DoctorFindings(Vec<orbit_cmd::WorkspaceDoctorResult>),
 }
 
+/// The values used to render one operator attention item in human output.
+#[derive(Debug)]
+pub struct AttentionRow {
+    pub(crate) severity: String,
+    pub(crate) kind: String,
+    pub(crate) host: Option<String>,
+    pub(crate) workspace: String,
+    pub(crate) reference: String,
+    pub(crate) age: String,
+    pub(crate) reason: String,
+    pub(crate) next_command: String,
+}
+
+impl AttentionRow {
+    /// Format a labeled item block for terminal display.
+    pub(crate) fn attention_terminal_text(&self) -> String {
+        let mut heading = format!("{} {}", self.severity, self.kind);
+        if let Some(host) = self.host.as_ref().filter(|host| !host.is_empty()) {
+            heading.push_str(&format!(" on {host}"));
+        }
+        if !self.workspace.is_empty() {
+            heading.push_str(&format!(" — {}", self.workspace));
+        }
+        if !self.reference.is_empty() {
+            heading.push_str(&format!(" ({})", self.reference));
+        }
+        if !self.age.is_empty() {
+            heading.push_str(&format!(" [{}]", self.age));
+        }
+
+        let mut text = format!("{heading}\n  Reason: {}", self.reason);
+        if !self.next_command.is_empty() {
+            text.push_str(&format!("\n  Next: {}", self.next_command));
+        }
+        text
+    }
+
+    /// Fields for the stable plain record form, omitting an absent next action.
+    pub(crate) fn attention_plain_fields(&self) -> Vec<&str> {
+        let mut fields = vec![
+            self.severity.as_str(),
+            self.kind.as_str(),
+            self.workspace.as_str(),
+            self.reference.as_str(),
+            self.age.as_str(),
+            self.reason.as_str(),
+        ];
+        if let Some(host) = self.host.as_deref() {
+            fields.insert(2, host);
+        }
+        if !self.next_command.is_empty() {
+            fields.push(self.next_command.as_str());
+        }
+        fields
+    }
+
+    /// The tab-separated plain-form header for `rows`: one label per field
+    /// that [`Self::attention_plain_fields`] emits, so the global `--header`
+    /// labels attention the way it labels every other plain table.
+    pub(crate) fn attention_plain_header(rows: &[AttentionRow]) -> String {
+        let mut labels = vec!["SEVERITY", "KIND"];
+        if rows.iter().any(|row| row.host.is_some()) {
+            labels.push("HOST");
+        }
+        labels.extend(["WORKSPACE", "REF", "AGE", "REASON"]);
+        if rows.iter().any(|row| !row.next_command.is_empty()) {
+            labels.push("NEXT");
+        }
+        labels.join("\t")
+    }
+}
+
 impl Block {
+    /// A summary or explanation that may wrap between words on a terminal.
+    pub(crate) fn prose(text: impl Into<String>) -> Self {
+        let mut text = text.into();
+        if text.ends_with('\n') {
+            text.pop();
+        }
+        Self::Prose(text)
+    }
+
+    /// A `config show` block. Like [`Block::text`], one trailing newline is
+    /// dropped because the renderer adds its own when it prints the block.
+    pub fn config_show(mut text: ConfigShow) -> Self {
+        if text.text.ends_with('\n') {
+            text.text.pop();
+        }
+        Self::ConfigShow(text)
+    }
+
     /// A text block, for the common single-`String` case.
     ///
     /// One trailing newline is dropped: a block built with `writeln!` ends with
@@ -142,9 +254,50 @@ impl Block {
         Self::Text(text)
     }
 
+    /// A stderr notice block, for the common single-`String` case. Like
+    /// [`Block::text`], one trailing newline is dropped because the renderer
+    /// adds its own when it prints the block.
+    pub fn notice(text: impl Into<String>) -> Self {
+        let mut text = text.into();
+        if text.ends_with('\n') {
+            text.pop();
+        }
+        Self::Notice(text)
+    }
+
     /// A grid block.
     pub fn table(table: Table) -> Self {
         Self::Table(Box::new(table))
+    }
+}
+
+/// Aligned configuration text with trailing-prose boundaries supplied by its producer.
+/// Offsets refer to UTF-8 line starts; columns count characters, as the formatter does.
+#[derive(Debug, Default)]
+pub struct ConfigShow {
+    pub(crate) text: String,
+    pub(crate) trailing_columns: std::collections::BTreeMap<usize, usize>,
+}
+
+impl ConfigShow {
+    /// Append verbatim text without changing previously recorded boundaries.
+    pub(crate) fn push_str(&mut self, text: &str) {
+        self.text.push_str(text);
+    }
+
+    /// Mark the current position as this line's trailing prose column.
+    /// Call after writing all padded cells and their final gutter.
+    pub(crate) fn mark_trailing_column(&mut self) {
+        let line_start = self.text.rfind('\n').map_or(0, |index| index + 1);
+        let column = self.text[line_start..].chars().count();
+        self.trailing_columns.insert(line_start, column);
+    }
+}
+
+impl std::fmt::Write for ConfigShow {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        self.push_str(text);
+        Ok(())
     }
 }
 

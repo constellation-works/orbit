@@ -118,7 +118,7 @@ pub struct LeaseInsertParams {
     /// caller may pass only those its answer could show, as long as every
     /// blocked selector keeps at least one.
     pub task_conflicts: Vec<TaskLockConflict>,
-    /// `lease.aging_minutes`: queue age after which an entry moves up one
+    /// The lease policy's aging minutes: queue age after which an entry moves up one
     /// priority level.
     pub aging_minutes: u32,
     /// The bytes the answer has left for `conflicts` and then `queued_ahead`,

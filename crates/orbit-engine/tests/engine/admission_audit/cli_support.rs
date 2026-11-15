@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use orbit_agent::loop_engine::audit::BlobStore;
 use orbit_types::workflow::ExperimentActivityOverlay;
-use orbit_types::workflow::activity_job::{AgentLoopSpec, OnDenial, Provider};
+use orbit_types::workflow::activity_job::{AgentLoopSpec, Provider};
 
 use orbit_engine::ResolvedActivityTools;
 use orbit_engine::V2AuditWriter;
@@ -20,6 +20,7 @@ pub(super) struct TestHost {
     registered_tools: Vec<String>,
     experiment_overlays: Vec<ExperimentActivityOverlay>,
     required_tools: Vec<String>,
+    suppressed_tools: Vec<String>,
 }
 
 impl TestHost {
@@ -34,7 +35,14 @@ impl TestHost {
                 .collect(),
             experiment_overlays: Vec::new(),
             required_tools: Vec::new(),
+            suppressed_tools: Vec::new(),
         }
+    }
+
+    pub(super) fn with_suppressed_tools(mut self, tools: &[&str]) -> Self {
+        self.suppressed_tools
+            .extend(tools.iter().map(|tool| (*tool).to_string()));
+        self
     }
 
     pub(super) fn with_experiment_overlays(
@@ -82,14 +90,16 @@ impl orbit_engine::test_support::NullRuntimeHost for TestHost {
         _activity: &str,
         disallow_list: &[String],
     ) -> Result<ResolvedActivityTools, DispatchError> {
+        let mut effective_tools = orbit_types::workflow::tools_allowed_by_disallow_list(
+            disallow_list,
+            self.registered_tools.iter().map(String::as_str),
+        );
+        effective_tools.retain(|tool| !self.suppressed_tools.contains(tool));
         Ok(ResolvedActivityTools {
             requested_tools: self.required_tools.clone(),
-            effective_tools: orbit_types::workflow::tools_allowed_by_disallow_list(
-                disallow_list,
-                self.registered_tools.iter().map(String::as_str),
-            ),
-            omitted_requirement_notes: Vec::new(),
-            granted_tools: Vec::new(),
+            effective_tools,
+            suppressed_tools: self.suppressed_tools.clone(),
+            ..Default::default()
         })
     }
 
@@ -101,8 +111,7 @@ impl orbit_engine::test_support::NullRuntimeHost for TestHost {
         Ok(ResolvedActivityTools {
             requested_tools: self.required_tools.clone(),
             effective_tools: baseline_tools.to_vec(),
-            omitted_requirement_notes: Vec::new(),
-            granted_tools: Vec::new(),
+            ..Default::default()
         })
     }
 
@@ -111,6 +120,7 @@ impl orbit_engine::test_support::NullRuntimeHost for TestHost {
         _run_id: &str,
         _activity_name: &str,
         _input: &serde_json::Value,
+        _model: Option<&str>,
     ) -> Result<Vec<ExperimentActivityOverlay>, DispatchError> {
         Ok(self.experiment_overlays.clone())
     }
@@ -176,31 +186,7 @@ pub(super) fn test_agent_loop_spec_for(provider: &str, timeout: Duration) -> Age
         "grok" => Provider::Grok,
         other => panic!("unsupported provider for test: {other}"),
     };
-    AgentLoopSpec {
-        crew_name: None,
-        tool_disallow_list: None,
-        instruction: String::new(),
-        steering_instruction: None,
-        regression_risk_instruction: None,
-        explore_instruction: None,
-        explore_brief_instruction: None,
-        tools: Vec::new(),
-        on_denial: OnDenial::Terminate,
-        model: None,
-        reasoning_effort: None,
-        max_iterations: 1,
-        backend: None,
-        provider,
-        wall_clock_timeout_seconds: timeout.as_secs(),
-        require_response_envelope: false,
-        require_completion_envelope: true,
-        proc_allowed_programs: None,
-        proc_disallowed_programs: None,
-        trusted_host_execution: false,
-        crew_env: Vec::new(),
-        crew_account: None,
-        crew_vision_disabled: false,
-    }
+    AgentLoopSpec::for_provider(String::new(), provider, timeout.as_secs())
 }
 
 pub(super) fn write_executable(path: &Path, contents: &str) {

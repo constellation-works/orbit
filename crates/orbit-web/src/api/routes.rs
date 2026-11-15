@@ -16,12 +16,9 @@ pub(crate) fn request_shutdown() {
 
 pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state::DashboardState> {
     Router::new()
-        .route(
-            "/session",
-            get(session::session_identity).post(session::exchange_session),
-        )
         .merge(leases::lease_router(leases::RuntimeLeaseBackend { state }).with_state(()))
         .route("/host/resources", get(host::resources))
+        .route("/dashboard/chrome", get(dashboard_chrome::dashboard_chrome))
         // Settings › Hosts [ORB-14451]: the serving host's host file, through
         // the same operations as `orbit host`.
         .route("/hosts", get(host::list_hosts).post(host::add_host))
@@ -53,12 +50,9 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             "/tasks/completion-by-complexity",
             get(tasks::completion_by_complexity),
         )
-        .route(
-            "/tasks/settle-merged",
-            post(tasks::settle_merged_tasks_action),
-        )
         .route("/tasks/create", post(tasks::create::create_proposal))
         .route("/tasks/all", get(workspaces::list_all_tasks))
+        .route("/tasks/search", get(task_search::search_dashboard_tasks))
         .route("/job-runs/all", get(workspaces::list_all_job_runs))
         .route("/workspaces", get(workspaces::list_workspaces))
         .route("/fleet/drains", get(workspaces::list_fleet_drains))
@@ -66,6 +60,11 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             "/tasks/{id}",
             get(tasks::get_task).patch(tasks::update_task_action),
         )
+        .route(
+            "/notices",
+            get(notices::list_notices).post(notices::post_notice),
+        )
+        .route("/notices/{id}/close", post(notices::close_notice))
         .route("/crews", get(crews::list_crews))
         // Config inspection and editing [ORB-12724]. Workspace-scoped like the
         // rest of the API: `?workspace=` selects which `.orbit/config.toml`
@@ -99,6 +98,16 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         .route("/tasks/{id}/archive", post(tasks::archive_task_action))
         .route("/decisions", get(decisions::list_decisions))
         .route("/decisions/{id}/answer", post(decisions::answer_decision))
+        .route(
+            "/residents",
+            get(residents::list_residents).post(residents::create_resident),
+        )
+        .route("/residents/{id}", get(residents::show_resident))
+        .route("/residents/{id}/grant", post(residents::grant_resident))
+        .route("/residents/{id}/control", post(residents::control_resident))
+        .route("/residents/{id}/relay", post(residents::relay_resident))
+        .route("/scripts", get(scripts::list_scripts))
+        .route("/scripts/{name}/grant", post(scripts::grant_script))
         .route("/tasks/{id}/pilot", post(tasks::pilot::pilot_task_action))
         .route(
             "/tasks/{id}/triage",
@@ -141,7 +150,14 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             "/frictions/{id}/resolve",
             post(frictions::resolve_friction_action),
         )
+        // Knowledge › Memory: crew memory reads only. Accepting, rejecting
+        // and writing memory stay on the operator CLI.
+        .route("/memory/spaces", get(crew_memory::list_memory_spaces))
+        .route("/memory/space", get(crew_memory::show_memory_space))
+        .route("/memory/history", get(crew_memory::memory_history))
+        .route("/memory/proposals", get(crew_memory::list_memory_proposals))
         .route("/jobs", get(jobs::list_jobs))
+        .route("/jobs/failure-streaks", get(jobs::list_job_failure_streaks))
         .route("/jobs/{id}/run", post(jobs::run_job_action))
         .route("/job-runs", get(jobs::list_job_runs))
         .route("/job-runs/{id}/resume", post(jobs::resume_job_run_action))
@@ -196,14 +212,13 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         .route("/routines/clock", post(routines::control_clock))
         .route("/auto-tasks", get(auto_tasks::list_auto_tasks))
         .route("/auto-tasks/toggle", post(auto_tasks::toggle_auto_task))
+        .route("/auto-tasks/delete", post(auto_tasks::delete_auto_task))
         .route(
             "/auto-tasks/schedule",
             post(schedule_edits::set_auto_task_schedule),
         )
         .route("/auto-tasks/mint", post(auto_tasks::mint_auto_task))
         .route("/cost", get(cost::cost))
-        // [ORB-15922] Deprecated alias for /cost; delete after 2026-11-12.
-        .route("/scoreboard", get(cost::scoreboard))
         .route("/metrics/knowledge", get(metrics::knowledge_metrics))
         .route("/metrics/activity", get(metrics::activity_metrics))
         .route("/metrics/tools", get(metrics::tool_metrics))
@@ -260,10 +275,6 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             get(diagnostics::diagnostics_diff_stats),
         )
         .route(
-            "/diagnostics/brief_accuracy",
-            get(diagnostics::diagnostics_brief_accuracy),
-        )
-        .route(
             "/diagnostics/delivery_friction",
             get(diagnostics::diagnostics_delivery_friction),
         )
@@ -271,13 +282,18 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             "/diagnostics/backlog_forecast",
             get(diagnostics::diagnostics_backlog_forecast),
         )
+        .route(
+            "/diagnostics/resource_forecast",
+            get(diagnostics::diagnostics_resource_forecast),
+        )
         // Analytics › Experiments: the list with each arm's enrollment, one
         // experiment with its events, and its per-arm readout (the JSON of
         // `orbit.experiment.readout` plus the primary metric's cumulative
         // series).
-        // Operator authoring: create a draft, edit a draft and start one.
-        // Each handler authorizes its `experiment.*` dashboard operation and
-        // then calls the same core lifecycle function as the CLI.
+        // Operator authoring: create a draft, edit a draft, start one, and
+        // pause or resume a running or paused one. Each handler authorizes its
+        // `experiment.*` dashboard operation and then calls the same core
+        // lifecycle function as the CLI.
         .route(
             "/diagnostics/experiments",
             get(diagnostics::diagnostics_experiments)
@@ -291,6 +307,14 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         .route(
             "/diagnostics/experiments/{id}/start",
             post(diagnostics::diagnostics_experiment_start),
+        )
+        .route(
+            "/diagnostics/experiments/{id}/pause",
+            post(diagnostics::diagnostics_experiment_pause),
+        )
+        .route(
+            "/diagnostics/experiments/{id}/resume",
+            post(diagnostics::diagnostics_experiment_resume),
         )
         .route(
             "/diagnostics/experiments/{id}/readout",
@@ -311,7 +335,16 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         // Observe › Agents: one scorecard per agent role ranked by crew and
         // model, and who each problem counts against, from one cached scan.
         .route("/agents/implementers/by-type", get(agents::agent_by_type))
+        .route(
+            "/agents/implementers/size-curves",
+            get(agents::agent_size_curves),
+        )
         .route("/agents/attribution", get(agents::agent_attribution))
+        // The implementer model ranking with tie bands [model-ranking §6].
+        .route("/agents/rank", get(agents::agent_rank))
+        // Required-check failures on candidate heads by cause, read live
+        // (model ranking §5.1).
+        .route("/agents/ci-failures", get(agents::agent_ci_failures))
         .route("/agents/{role}/scorecard", get(agents::agent_scorecard))
         .route("/agents/{role}/detail", get(agents::agent_detail))
         // `orbit doctor` for the selected workspace: read-only, on demand and

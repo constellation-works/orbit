@@ -8,6 +8,7 @@
 //! workspace.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::hold_step;
@@ -16,6 +17,7 @@ use orbit_types::task::{TaskStatus, task_id_prefix};
 use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, params_from_iter};
 
+use super::change_stamps::read_task_change_stamps;
 use super::partition_id::validate_partition_id;
 use super::store::TaskRegistryStore;
 use super::util::TERMINAL_STATUSES;
@@ -167,6 +169,16 @@ impl TaskRegistryStore {
     /// dependency and relation labels resolve across workspaces without
     /// projecting the whole registry.
     ///
+    /// When `targets` is small (non-empty and at most `ID_CHUNK` ids) the
+    /// workspace step selects only those ids
+    /// (`WHERE workspace_id = ?1 AND task_id IN (...)`, chunked) instead of
+    /// every indexed task of the workspace, so a lookup for `k` targets
+    /// returns at most `k` rows in total: the workspace hits, the
+    /// cross-workspace hits for the remainder, and at most one
+    /// representative per still-missing prefix. An empty target set and a
+    /// large set keep the whole-workspace query, whose callers rely on the
+    /// full workspace projection.
+    ///
     /// Prefix knowledge is derived from a projection's keys
     /// (`TaskReferenceIndex`), so a missing target under a prefix this
     /// workspace does not use is represented by one arbitrary indexed task of
@@ -181,13 +193,31 @@ impl TaskRegistryStore {
         let conn = self.read()?;
         let mut statuses = BTreeMap::new();
 
-        let mut stmt = conn
-            .prepare("SELECT task_id, status FROM task_bundle_index WHERE workspace_id = ?1")
-            .map_err(sqlite_store_error)?;
-        let rows = stmt
-            .query_map([&partition_id], decode_status_row)
-            .map_err(sqlite_store_error)?;
-        collect_statuses(rows, &mut statuses)?;
+        if targets.is_empty() || targets.len() > ID_CHUNK {
+            let mut stmt = conn
+                .prepare("SELECT task_id, status FROM task_bundle_index WHERE workspace_id = ?1")
+                .map_err(sqlite_store_error)?;
+            let rows = stmt
+                .query_map([&partition_id], decode_status_row)
+                .map_err(sqlite_store_error)?;
+            collect_statuses(rows, &mut statuses)?;
+        } else {
+            let target_ids = targets.iter().cloned().collect::<Vec<_>>();
+            for chunk in target_ids.chunks(ID_CHUNK) {
+                let mut sql = String::from(
+                    "SELECT task_id, status FROM task_bundle_index WHERE workspace_id = ? AND task_id IN (",
+                );
+                push_placeholders(&mut sql, chunk.len());
+                sql.push(')');
+                let mut values = vec![partition_id.clone()];
+                values.extend(chunk.iter().cloned());
+                let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
+                let rows = stmt
+                    .query_map(params_from_iter(values.iter()), decode_status_row)
+                    .map_err(sqlite_store_error)?;
+                collect_statuses(rows, &mut statuses)?;
+            }
+        }
 
         let missing = targets
             .iter()
@@ -259,6 +289,19 @@ fn index_filter_sql(partition_id: &str, filter: &TaskIndexFilter) -> (String, Ve
         );
         values.push(Value::Text(tag.clone()));
     }
+    if !filter.any_tags.is_empty() {
+        // An uncorrelated list through `idx_task_bundle_tags_workspace_tag`
+        // reads only the tagged rows; a correlated `EXISTS` probes every
+        // workspace row instead, which costs more than the whole selection.
+        sql.push_str(
+            " AND task_id IN (SELECT t.task_id FROM task_bundle_tags t
+                WHERE t.workspace_id = ? AND t.tag IN (",
+        );
+        push_placeholders(&mut sql, filter.any_tags.len());
+        sql.push_str("))");
+        values.push(Value::Text(partition_id.to_owned()));
+        values.extend(filter.any_tags.iter().cloned().map(Value::Text));
+    }
     if let Some(parent_id) = &filter.parent_id {
         sql.push_str(
             " AND EXISTS (SELECT 1 FROM task_bundle_relations r
@@ -299,44 +342,23 @@ impl TaskRegistryStore {
     /// read from the generated index alone. A change watcher compares two
     /// reads; the index row is rewritten with its envelope on every commit,
     /// whichever process made it.
+    ///
+    /// Writable registries return the same snapshot until another connection
+    /// commits. A failed read leaves that snapshot in place and returns the
+    /// error. Read-only registries read the index directly.
     pub fn task_change_stamps(
         &self,
         partition_id: &str,
-    ) -> Result<Vec<TaskChangeStamp>, OrbitError> {
+    ) -> Result<Arc<Vec<TaskChangeStamp>>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        let conn = self.read()?;
-        let mut stmt = conn
-            .prepare_cached(
-                "SELECT task_id, status, updated_at FROM task_bundle_index WHERE workspace_id = ?1",
-            )
-            .map_err(sqlite_store_error)?;
-        let rows = stmt
-            .query_map([&partition_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })
-            .map_err(sqlite_store_error)?;
-        let mut stamps = Vec::new();
-        for row in rows {
-            let (id, raw_status, raw_updated_at) = row.map_err(sqlite_store_error)?;
-            let status = parse_indexed_status(&id, &raw_status)?;
-            let updated_at = chrono::DateTime::parse_from_rfc3339(&raw_updated_at)
-                .map_err(|e| {
-                    OrbitError::Store(format!(
-                        "invalid indexed updated_at '{raw_updated_at}' for task '{id}': {e}"
-                    ))
-                })?
-                .with_timezone(&chrono::Utc);
-            stamps.push(TaskChangeStamp {
-                id,
-                status,
-                updated_at,
-            });
+        // Read-only admission may have fallen back to an immutable main-file
+        // connection on a mount without writable WAL sidecars. Preserve that
+        // connection's read semantics instead of requiring another live one.
+        if self.is_read_only()? {
+            let conn = self.read()?;
+            return Ok(Arc::new(read_task_change_stamps(&conn, &partition_id)?));
         }
-        Ok(stamps)
+        self.change_stamps.change_stamps_for(&partition_id)
     }
 }
 
@@ -358,7 +380,10 @@ fn collect_statuses(
     Ok(())
 }
 
-fn parse_indexed_status(task_id: &str, raw_status: &str) -> Result<TaskStatus, OrbitError> {
+pub(super) fn parse_indexed_status(
+    task_id: &str,
+    raw_status: &str,
+) -> Result<TaskStatus, OrbitError> {
     raw_status.parse::<TaskStatus>().map_err(|e| {
         OrbitError::Store(format!(
             "invalid indexed status '{raw_status}' for task '{task_id}': {e}"

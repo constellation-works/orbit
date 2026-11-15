@@ -314,7 +314,11 @@ fn a_quota_hold_on_a_purpose_assignment_draws_another_purpose_member() {
     let fx = fixture(PURPOSE_HOLD);
     let created = fx.tagged_task(&["baseline-red-repair"], None);
     assert_eq!(
-        created.crew_source.as_deref(),
+        created
+            .crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         Some("purpose:baseline_red_repair"),
         "{created:?}"
     );

@@ -12,13 +12,13 @@ use orbit_types::identity::Crew;
 use orbit_types::workflow::Provider;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::{ConfigSnapshot, CrewPerformancePolicy};
-
 use super::budget::ProviderLimitBudget;
 use super::target::{ProviderLimitTarget, SEPARATOR, validate_crew_target};
 
-/// `workflow.provider_limit_max_used_pct` when unset.
-pub const DEFAULT_PROVIDER_LIMIT_MAX_USED_PCT: u8 = 90;
+/// The former `workflow.provider_limit_max_used_pct` default, fixed when the
+/// key was removed [ORB-22808]: the used percent at or above which delivery
+/// admission skips a provider-limited crew, unless an override replaces it.
+pub const PROVIDER_LIMIT_MAX_USED_PCT: u8 = 90;
 
 const OVERRIDES_KEY: &str = "workflow.provider_limit_overrides";
 const EXPLICIT_CREWS_KEY: &str = "workflow.provider_limit_explicit_crews";
@@ -140,7 +140,7 @@ impl ProviderLimitExplicitCrews {
         }
     }
 
-    fn parse(value: &str) -> Option<Self> {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "wait" => Some(Self::Wait),
             "pool" => Some(Self::Pool),
@@ -165,37 +165,33 @@ pub struct ProviderLimitPolicy {
     /// canonical provider [ORB-14699].
     pub budgets: Vec<ProviderLimitBudget>,
     /// How task crew draws weigh weekly usage pressure
-    /// (`workflow.crew_selection`, `workflow.usage_pressure_*`).
+    /// (`workflow.crew_selection`).
     pub usage_pressure: UsagePressurePolicy,
-    /// How task crew draws weigh crew performance
-    /// (`workflow.crew_performance`, `workflow.crew_performance_*`). It
-    /// rides here beside usage pressure so both factors of one draw are
-    /// read from the same admission policy snapshot.
-    pub crew_performance: CrewPerformancePolicy,
 }
 
 impl Default for ProviderLimitPolicy {
     fn default() -> Self {
         Self {
-            max_used_pct: DEFAULT_PROVIDER_LIMIT_MAX_USED_PCT,
+            max_used_pct: PROVIDER_LIMIT_MAX_USED_PCT,
             overrides: BTreeMap::new(),
             crew_overrides: BTreeMap::new(),
             explicit_crews: ProviderLimitExplicitCrews::Wait,
             budgets: Vec::new(),
             usage_pressure: UsagePressurePolicy::default(),
-            crew_performance: CrewPerformancePolicy::default(),
         }
     }
 }
 
-/// `workflow.usage_pressure_cap` when unset.
-pub const DEFAULT_USAGE_PRESSURE_CAP: f64 = 8.0;
-/// `workflow.usage_pressure_strength` when unset.
-pub const DEFAULT_USAGE_PRESSURE_STRENGTH: f64 = 1.0;
+/// The former `workflow.usage_pressure_cap` default, fixed when the key was
+/// removed [ORB-22808]: the largest factor usage pressure scales a crew's
+/// draw weight up or down by.
+pub const USAGE_PRESSURE_CAP: f64 = 8.0;
+/// The former `workflow.usage_pressure_strength` default, fixed when the key
+/// was removed [ORB-22808]: the exponent applied to usage pressure before
+/// the cap.
+pub const USAGE_PRESSURE_STRENGTH: f64 = 1.0;
 
 const CREW_SELECTION_KEY: &str = "workflow.crew_selection";
-const USAGE_PRESSURE_CAP_KEY: &str = "workflow.usage_pressure_cap";
-const USAGE_PRESSURE_STRENGTH_KEY: &str = "workflow.usage_pressure_strength";
 
 /// How a task's automatic crew draw weighs its pool members
 /// (`workflow.crew_selection`).
@@ -221,7 +217,7 @@ impl CrewSelection {
         }
     }
 
-    fn parse(value: &str) -> Option<Self> {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "static" => Some(Self::Static),
             "usage_pressure" => Some(Self::UsagePressure),
@@ -230,8 +226,8 @@ impl CrewSelection {
     }
 }
 
-/// The admitted `workflow.crew_selection` and `workflow.usage_pressure_*`
-/// settings.
+/// The admitted `workflow.crew_selection`, with the fixed
+/// [`USAGE_PRESSURE_CAP`] and [`USAGE_PRESSURE_STRENGTH`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct UsagePressurePolicy {
     /// Whether draws weigh usage pressure at all.
@@ -246,8 +242,8 @@ impl Default for UsagePressurePolicy {
     fn default() -> Self {
         Self {
             selection: CrewSelection::Static,
-            cap: DEFAULT_USAGE_PRESSURE_CAP,
-            strength: DEFAULT_USAGE_PRESSURE_STRENGTH,
+            cap: USAGE_PRESSURE_CAP,
+            strength: USAGE_PRESSURE_STRENGTH,
         }
     }
 }
@@ -313,47 +309,10 @@ impl ProviderLimitPolicy {
     }
 }
 
-impl ConfigSnapshot {
-    /// The admitted `workflow.provider_limit_*` settings.
-    #[must_use]
-    pub fn provider_limit_policy(&self) -> ProviderLimitPolicy {
-        let mut overrides = BTreeMap::new();
-        let mut crew_overrides = BTreeMap::new();
-        for (target, threshold) in self
-            .workflow_provider_limit_overrides
-            .iter()
-            .filter_map(|entry| stored_override(entry))
-        {
-            match target {
-                ProviderLimitTarget::Provider(provider) => {
-                    overrides.insert(provider, threshold);
-                }
-                ProviderLimitTarget::Crew(crew) => {
-                    crew_overrides.insert(crew, threshold);
-                }
-            }
-        }
-        ProviderLimitPolicy {
-            max_used_pct: self.workflow_provider_limit_max_used_pct,
-            overrides,
-            crew_overrides,
-            explicit_crews: ProviderLimitExplicitCrews::parse(
-                &self.workflow_provider_limit_explicit_crews,
-            )
-            .unwrap_or_default(),
-            budgets: self.provider_limit_budgets(),
-            usage_pressure: UsagePressurePolicy {
-                selection: CrewSelection::parse(&self.workflow_crew_selection).unwrap_or_default(),
-                cap: self.workflow_usage_pressure_cap,
-                strength: self.workflow_usage_pressure_strength,
-            },
-            crew_performance: self.crew_performance_policy(),
-        }
-    }
-}
-
 /// One admitted override string `target:percent` or `target:off`.
-fn stored_override(entry: &str) -> Option<(ProviderLimitTarget, ProviderLimitThreshold)> {
+pub(crate) fn stored_provider_limit_override(
+    entry: &str,
+) -> Option<(ProviderLimitTarget, ProviderLimitThreshold)> {
     let (target, value) = entry.split_once(SEPARATOR)?;
     let threshold = if value == OFF {
         ProviderLimitThreshold::Off
@@ -370,7 +329,7 @@ pub(crate) fn validate_override_crews(
     crews: &BTreeMap<String, Crew>,
 ) -> Result<(), OrbitError> {
     for entry in entries {
-        if let Some((target, _)) = stored_override(entry) {
+        if let Some((target, _)) = stored_provider_limit_override(entry) {
             validate_crew_target(OVERRIDES_KEY, entry, &target, crews)?;
         }
     }
@@ -434,30 +393,6 @@ pub(crate) fn admit_crew_selection(raw: Option<String>) -> Result<String, OrbitE
                 CrewSelection::CHOICES.join(", ")
             ))
         })
-}
-
-/// Admit `workflow.usage_pressure_cap`: a finite number of at least 1.
-pub(crate) fn admit_usage_pressure_cap(raw: Option<f64>) -> Result<f64, OrbitError> {
-    let cap = raw.unwrap_or(DEFAULT_USAGE_PRESSURE_CAP);
-    if cap.is_finite() && cap >= 1.0 {
-        Ok(cap)
-    } else {
-        Err(OrbitError::InvalidInput(format!(
-            "{USAGE_PRESSURE_CAP_KEY} must be a finite number of at least 1, got {cap}"
-        )))
-    }
-}
-
-/// Admit `workflow.usage_pressure_strength`: a finite number of at least 0.
-pub(crate) fn admit_usage_pressure_strength(raw: Option<f64>) -> Result<f64, OrbitError> {
-    let strength = raw.unwrap_or(DEFAULT_USAGE_PRESSURE_STRENGTH);
-    if strength.is_finite() && strength >= 0.0 {
-        Ok(strength)
-    } else {
-        Err(OrbitError::InvalidInput(format!(
-            "{USAGE_PRESSURE_STRENGTH_KEY} must be a finite number of at least 0, got {strength}"
-        )))
-    }
 }
 
 /// Admit `workflow.provider_limit_explicit_crews`, `wait` when unset.

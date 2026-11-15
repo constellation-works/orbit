@@ -7,8 +7,11 @@ spec:
   description: >
     Leaf recovery for a typed task-PR rebase conflict, including one discovered
     after PR publication during authorized completion or an `--auto-fix`
-    watch. It uses a crew drawn from the medium complexity pool (the low pool
-    under `--auto-fix`) to resolve the live conflict files, with any companion edit
+    watch. It uses a crew drawn from the failure-recovery purpose pool
+    (`workflow.purpose_crews.failure_recovery`, or `workflow.purpose_crews.auto_fix`
+    for an `--auto-fix` run's completion step), falling back to the medium
+    complexity pool (the low pool under `--auto-fix`) while that pool is unset,
+    to resolve the live conflict files, with any companion edit
     the resolution needs. The host executor then validates, stages, continues
     the stopped rebase, and carries the candidate onto the current base tip
     before one retry.
@@ -222,8 +225,10 @@ spec:
        - Confirm no conflict path still has conflict markers.
        - Run the workspace's focused tests for the code that owns the resolved
          paths.
-       - When the task envelope has `task.final_validation_commands`, do not run
-         those commands; the host runs them after continuing the rebase. Record
+       - `task.final_validation_commands` comes only from the injected execution
+         envelope. It is absent when empty and is not an `orbit.task.show` field.
+         When the task envelope has it, do not run those commands; the host runs
+         them after continuing the rebase. Record
          each as `not_run` (host final validation) in `gates`. A required
          command missing from that list is still yours.
        - Without that list (including an empty capture, a standalone or unknown
@@ -260,16 +265,16 @@ spec:
       independent upstream behavior is not ambiguous: resolve it.
     - `result` is advisory: `summary`, `validations`, and the `gates` above.
   tool_disallow_list:
-    - orbit.agent.invoke
-    - orbit.auto_task.add
-    - orbit.auto_task.mint
-    - orbit.auto_task.update
+    - orbit.auto_task:add
+    - orbit.auto_task:mint
+    - orbit.auto_task:update
     - orbit.command.exec
     - orbit.pipeline.invoke
-    - orbit.workflow.run.show
-    - orbit.workflow.run.list
-    - orbit.workflow.run.resume
-    - orbit.workflow.ship
+    - orbit.run:show
+    - orbit.run:list
+    - orbit.run:resume
+    - orbit.workflow:land
+    - orbit.workflow:ship
   proc_disallowed_programs:
     - sudo
     - su

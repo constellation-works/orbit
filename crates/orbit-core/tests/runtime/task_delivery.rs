@@ -15,6 +15,7 @@ mod resume;
 #[path = "source_repair.rs"]
 mod source_repair;
 use resume::{
+    already_resolved_checkpoint_is_observed_as_no_change,
     inherited_commit_refuses_invalid_parent_evidence,
     legacy_checkpoint_and_wire_shape_remain_readable_after_resume,
     public_resume_retains_commit_producer_and_reads_current_landing,
@@ -402,5 +403,6 @@ crate::scenario_table!(
     public_resume_retains_commit_producer_and_reads_current_landing,
     inherited_commit_refuses_invalid_parent_evidence,
     repeated_resume_authenticates_each_parent_and_requires_current_landing,
-    legacy_checkpoint_and_wire_shape_remain_readable_after_resume
+    legacy_checkpoint_and_wire_shape_remain_readable_after_resume,
+    already_resolved_checkpoint_is_observed_as_no_change
 );

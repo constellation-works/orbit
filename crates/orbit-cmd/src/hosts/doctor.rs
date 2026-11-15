@@ -3,22 +3,22 @@
 use std::path::Path;
 
 use orbit_common::HostRegistryCode;
-use orbit_registry::hosts::{RegisteredHosts, legacy_destinations_path, load_host_registry};
+use orbit_registry::hosts::{HostEntry, load_host_registry};
 
-use super::{HostRow, RemoteTarget, in_parallel, remote_row, remote_targets, replica_owners};
+use super::{HostRow, in_parallel, remote_row, replica_owners};
 use crate::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
 
 const CHECK: &str = "hosts";
 
 /// Probe every registered host and report what would break a route.
 ///
-/// Fails when the host file is invalid, when it and the legacy file both
-/// exist, or when a host this machine pulls from (the owner of a local replica
+/// Fails when the host file is invalid, when the legacy file exists, or when
+/// a host this machine pulls from (the owner of a local replica
 /// checkout) runs a pull protocol or version that pull admission refuses.
 /// Warns on an unreachable host, any other version or protocol difference, a
 /// reachable host that reports no version or protocol fingerprint (an unknown
 /// is never a match, and fails like a difference on a host pulled from), a
-/// replica owner with no entry, and while only the legacy file exists.
+/// replica owner with no entry.
 pub fn doctor_hosts_row(global_root: &Path) -> WorkspaceDoctorResult {
     let registry = match load_host_registry(global_root) {
         Ok(registry) => registry,
@@ -26,8 +26,8 @@ pub fn doctor_hosts_row(global_root: &Path) -> WorkspaceDoctorResult {
             let remediation = if error.host_registry_code()
                 == Some(HostRegistryCode::HostFileConflict)
             {
-                "Delete the legacy file, then register each legacy row the diagnostic lists \
-                 as missing from the host file with the `orbit host add` command it names."
+                "Move mcp-destinations.toml aside, run `orbit host add <ssh-target>` for each \
+                 `ssh` row, then delete the moved file."
             } else {
                 "Repair the host file named in the diagnostic (or restore it from backup), then \
                  rerun `orbit doctor`."
@@ -47,39 +47,26 @@ pub fn doctor_hosts_row(global_root: &Path) -> WorkspaceDoctorResult {
         );
     };
     let pulls_from = replica_owners(global_root);
-    let targets = remote_targets(registry.hosts());
+    let targets = registry.hosts().entries();
     let mut failures = Vec::new();
     let mut warnings = Vec::new();
-    let mut migration_action = None;
-    if let RegisteredHosts::Legacy(rows) = registry.hosts() {
-        let command = rows
-            .iter()
-            .find(|row| row.machine_id != local.id)
-            .map(|row| format!("orbit host add {}", row.ssh))
-            .unwrap_or_else(|| "orbit host add <ssh-target>".to_string());
-        migration_action = Some(format!(
-            "Run `{command}` to migrate to hosts.toml and retire the legacy file. Every retained \
-             host must answer; remove a decommissioned row with `orbit host remove <host>` first."
-        ));
-        warnings.push(format!(
-            "hosts are still read from the legacy '{}'; run `{command}` to migrate them",
-            legacy_destinations_path(global_root).display(),
-        ));
-    }
     for owner in &pulls_from {
-        if !targets.iter().any(|target| target.machine_id() == owner) {
+        if !targets
+            .iter()
+            .any(|target| target.machine_id.as_str() == owner)
+        {
             warnings.push(format!(
                 "{owner} owns a replica checkout here but has no host entry, so pull drains \
                  cannot reach it"
             ));
         }
     }
-    let rows = in_parallel(&targets, |target| remote_row(target, &local.id, true));
+    let rows = in_parallel(targets, |target| remote_row(target, &local.id, true));
     for (target, host) in targets.iter().zip(&rows) {
         classify(
             target,
             host,
-            pulls_from.contains(target.machine_id()),
+            pulls_from.contains(target.machine_id.as_str()),
             &mut failures,
             &mut warnings,
         );
@@ -105,23 +92,22 @@ pub fn doctor_hosts_row(global_root: &Path) -> WorkspaceDoctorResult {
         .chain(warnings)
         .collect::<Vec<_>>()
         .join("; ");
-    let remediation = migration_action.unwrap_or_else(|| {
+    let remediation =
         "Run `orbit host list` for each host's live state. Deploy matching Orbit builds where \
              versions or protocols differ, and register missing owners with \
              `orbit host add <ssh-target>`."
-            .to_string()
-    });
+            .to_string();
     row(status, message, Some(&remediation))
 }
 
 fn classify(
-    target: &RemoteTarget<'_>,
+    target: &HostEntry,
     host: &HostRow,
     pulled_from: bool,
     failures: &mut Vec<String>,
     warnings: &mut Vec<String>,
 ) {
-    let name = target.name();
+    let name = &target.name;
     if let Some(error) = &host.error {
         let line = format!("{name}: {}", error.message);
         if error.code == HostRegistryCode::HostIdentityMismatch.as_str() {

@@ -19,7 +19,7 @@ use orbit_common::security::redaction::redact_all;
 use orbit_tools::github_cli;
 use serde_json::{Value, json};
 
-use super::super::github_host::{auth_status, run_gh};
+use super::super::github_host::{auth_status, clear_gh_environment, run_gh};
 
 /// Which slice of a run's log to read, and the read itself, are owned by
 /// `orbit_tools::github_cli` so the stages and the `github.*` tools cannot
@@ -68,6 +68,8 @@ pub(super) struct RunLog {
     /// Why the fallback recovered nothing. Present only when the read ends
     /// with no text at all, so the run's evidence gap can name its own cause.
     pub(super) fallback_error: Option<String>,
+    /// The provider rate-limited the read behind `fallback_error`.
+    pub(super) read_throttle: Option<orbit_common::ProviderReadThrottle>,
     pub(super) text: String,
     pub(super) diagnostic: Option<String>,
     pub(super) failure_regions: Option<Value>,
@@ -351,16 +353,18 @@ impl CiQueries for HostCiQueries {
             &json!({"run": run_id, "job": job_id, "scope": scope.as_str()}),
         )?
         .in_directory(&self.repo_root.to_string_lossy());
-        let read = github_cli::read_run_log(
+        let read = github_cli::read_run_log_guarded(
             &requests,
             github_cli::LogReadBounds::new(max_bytes),
             cached_view,
+            &|request| Ok(clear_gh_environment(request)),
         )?;
 
         Ok(RunLog {
             source: read.source.to_string(),
             source_jobs: read.source_jobs,
             fallback_error: read.fallback_error,
+            read_throttle: read.fallback_throttle,
             text: read.log.text,
             diagnostic: read.log.diagnostic,
             failure_regions: read.log.failure_regions,
@@ -418,10 +422,7 @@ impl CiQueries for HostCiQueries {
             args.extend(missing);
             git_success(&self.repo_root, &args)?;
         }
-        git_command_success(
-            &self.repo_root,
-            &["merge-base", "--is-ancestor", ancestor, descendant],
-        )
+        crate::executor::automation::vcs::git::is_ancestor(&self.repo_root, ancestor, descendant)
     }
 }
 
@@ -439,6 +440,7 @@ pub(super) fn bounded_run_log(raw: &str, max_bytes: usize) -> RunLog {
         source: github_cli::SOURCE_RUN_LOG.to_string(),
         source_jobs: Vec::new(),
         fallback_error: None,
+        read_throttle: None,
         text: bounded.text,
         diagnostic: bounded.diagnostic,
         failure_regions: bounded.failure_regions,

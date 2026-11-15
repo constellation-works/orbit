@@ -88,6 +88,7 @@ fn a_requeued_claimed_review_continues_its_kept_candidate_through_the_bound_work
     state.pipeline["worktree"] = worktree.clone();
     state.pipeline["commit"] = json!({"commit_sha": kept});
     state.final_recovery = Some(FinalRecoveryCheckpoint {
+        fault: Default::default(),
         key: FinalRecoveryKey {
             run_id: first.clone(),
             attempt: 1,
@@ -102,8 +103,11 @@ fn a_requeued_claimed_review_continues_its_kept_candidate_through_the_bound_work
         decision: Some(FinalRecoveryDecision::Escalate {
             diagnosis: "review budget exhausted".into(),
             human_action: "Authorize a review reset".into(),
+            summary: None,
         }),
-        outcome: Some("settled: recorded for the claim settlement".into()),
+        outcome: Some(FinalRecoveryCheckpointOutcome::Settled {
+            detail: "recorded for the claim settlement".into(),
+        }),
     });
     owner.pair.follower.write_run_state(&first, &state).unwrap();
     owner.pair.leaf_fails_with(

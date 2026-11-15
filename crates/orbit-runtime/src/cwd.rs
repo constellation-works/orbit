@@ -13,7 +13,7 @@ impl RuntimeKernel {
     /// inside this workspace's checkout or a linked worktree under
     /// `.orbit/state/worktrees/`.
     ///
-    /// Shared by `orbit.agent.invoke` (`cwd`) and `orbit.command.exec`
+    /// Used by `orbit.command.exec`
     /// (`working_directory`) so those tools cannot drift.
     pub fn resolve_workspace_cwd(
         &self,

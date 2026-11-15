@@ -7,6 +7,13 @@
 //! `--complete` run can never make a `proposed` task shippable, and it never
 //! writes a review verdict, so no independent-review signal is fabricated.
 //! A task that still owes a criterion after deploy stays in `review`.
+//!
+//! `completion.hold` [ORB-23365]: a task whose complexity, type or tags
+//! match a rule is held here too, at the canonical transition, so no path
+//! through it reaches `done` without a person. Path rules need the diff a
+//! route has before its merge — `pr_complete` and local delivery's
+//! `git_merge` decide those before anything lands — so this last guard
+//! carries no diff of its own.
 
 use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskStatus};
@@ -15,6 +22,9 @@ use serde_json::{Value, json};
 use crate::context::{RuntimeHost, TaskActivityUpdate};
 
 use super::super::input::{input_string_field, required_job_run_id};
+use super::super::vcs::completion_hold::{
+    ChangedPaths, evaluate_completion_hold, record_completion_hold,
+};
 
 /// Apply the guarded completion transition to every task named by the input.
 ///
@@ -76,8 +86,28 @@ pub(in crate::executor::automation) fn complete_tasks<H: RuntimeHost + ?Sized>(
         planned.push(task);
     }
 
+    // [ORB-23365] Hold the whole planned bundle when any planned task's
+    // complexity, type or tags match a rule, exactly as a route's own
+    // pre-merge decision holds its bundle. `paths` rules cannot match
+    // here: the route that merged already read the diff it landed.
+    let mut held_task_ids = Vec::new();
+    let mut completion_hold = None;
+    if !planned.is_empty() {
+        let rules = host.completion_hold_rules();
+        if let Some(hold) =
+            evaluate_completion_hold(&rules, &planned, &ChangedPaths::NoDiff, run_id)?
+        {
+            held_task_ids = planned.iter().map(|task| task.id.clone()).collect();
+            record_completion_hold(host, &held_task_ids, &hold)?;
+            completion_hold = Some(hold);
+        }
+    }
+
     let mut completed_task_ids = Vec::new();
     for task in &planned {
+        if !held_task_ids.is_empty() {
+            break;
+        }
         host.update_task_from_activity(
             &task.id,
             TaskActivityUpdate {
@@ -101,6 +131,8 @@ pub(in crate::executor::automation) fn complete_tasks<H: RuntimeHost + ?Sized>(
         "completed_task_ids": completed_task_ids,
         "skipped_task_ids": skipped_task_ids,
         "owed_task_ids": owed_task_ids,
+        "held_task_ids": held_task_ids,
+        "completion_hold": completion_hold,
         "authorization": authorization,
     }))
 }

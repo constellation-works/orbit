@@ -12,7 +12,7 @@ use orbit_types::tool::{
     McpToolAnnotations, McpToolDefinition, McpToolScope, ToolParam, ToolSchema, ToolSessionContext,
 };
 use rmcp::ServiceExt;
-use rmcp::model::{CallToolRequestParams, ClientInfo, Meta};
+use rmcp::model::{CallToolRequestParams, ClientConfig, RequestMetaObject};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 use tokio::net::TcpStream;
@@ -175,7 +175,12 @@ struct EchoHost {
 impl McpHost for EchoHost {
     fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
         *self.list_calls.lock().expect("list calls") += 1;
-        Ok(vec![definition("demo.echo"), definition("demo.inspect")])
+        Ok(vec![
+            definition("demo.echo"),
+            definition("demo.inspect"),
+            definition("demo.unbound_workspace"),
+            definition("demo.missing_workspace"),
+        ])
     }
 
     fn call_tool(
@@ -184,6 +189,18 @@ impl McpHost for EchoHost {
         input: Value,
         context: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
+        if name == "demo.unbound_workspace" {
+            return Err(OrbitError::not_found(
+                orbit_common::NotFoundKind::Workspace,
+                "ws_unbound-data-dir",
+            ));
+        }
+        if name == "demo.missing_workspace" {
+            return Err(OrbitError::not_found(
+                orbit_common::NotFoundKind::Workspace,
+                "ws_missing-project",
+            ));
+        }
         if name != "demo.echo" && name != "demo.inspect" {
             return Err(OrbitError::not_found(
                 orbit_common::NotFoundKind::Tool,
@@ -250,8 +267,8 @@ async fn generic_kernel_round_trips_initialize_list_call_and_error() {
         service.waiting().await.expect("wait for MCP fixture");
     });
 
-    let mut client_info = ClientInfo::default();
-    client_info.meta = Some(Meta(
+    let mut client_info = ClientConfig::default();
+    client_info.meta = Some(RequestMetaObject::from(
         json!({ "orbit": { "workspace": "/tmp/generic-workspace" } })
             .as_object()
             .expect("initialize metadata")
@@ -263,7 +280,10 @@ async fn generic_kernel_round_trips_initialize_list_call_and_error() {
         .expect("connect MCP fixture");
 
     let initialized = client.peer_info().expect("initialize result");
-    assert_eq!(initialized.server_info.name, "orbit-mcp");
+    assert_eq!(
+        initialized.server_info.as_ref().expect("server info").name,
+        "orbit-mcp"
+    );
     assert!(
         initialized
             .instructions
@@ -280,18 +300,6 @@ async fn generic_kernel_round_trips_initialize_list_call_and_error() {
     assert_eq!(resources.resources.len(), 1);
     let uri = &resources.resources[0].uri;
     assert_eq!(uri, "ui://orbit/control-center/v1/index.html");
-    let legacy = client
-        .peer()
-        .read_resource(rmcp::model::ReadResourceRequestParams::new(
-            "ui://orbit/task-panel/v1/index.html",
-        ))
-        .await
-        .expect("legacy resource remains reachable");
-    let legacy_wire = serde_json::to_value(legacy).expect("legacy resource JSON");
-    assert_eq!(
-        legacy_wire["contents"][0]["uri"],
-        "ui://orbit/task-panel/v1/index.html"
-    );
     let resource = client
         .peer()
         .read_resource(rmcp::model::ReadResourceRequestParams::new(uri))
@@ -305,9 +313,9 @@ async fn generic_kernel_round_trips_initialize_list_call_and_error() {
     );
     for refused in [
         "file:///etc/passwd",
-        "ui://orbit/task-panel/v1/../secret",
-        "ui://orbit/task-panel/v2/index.html",
-        "ui://orbit/task-panel/v1/index.html?workspace=other",
+        "ui://orbit/control-center/v1/../secret",
+        "ui://orbit/control-center/v2/index.html",
+        "ui://orbit/control-center/v1/index.html?workspace=other",
         "https://example.invalid/index.html",
     ] {
         assert!(
@@ -336,7 +344,12 @@ async fn generic_kernel_round_trips_initialize_list_call_and_error() {
             .iter()
             .map(|tool| tool.name.as_ref())
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["demo_echo", "demo_inspect"])
+        BTreeSet::from([
+            "demo_echo",
+            "demo_inspect",
+            "demo_unbound_workspace",
+            "demo_missing_workspace",
+        ])
     );
     assert_eq!(listed_again, listed);
     let tool = listed
@@ -410,6 +423,30 @@ async fn generic_kernel_round_trips_initialize_list_call_and_error() {
         "tool_not_found"
     );
 
+    let unbound_workspace = client
+        .peer()
+        .call_tool(call("demo_unbound_workspace", json!({ "value": "x" })))
+        .await
+        .expect("workspace not-found result crosses the MCP boundary");
+    assert_eq!(unbound_workspace.is_error, Some(true));
+    let message = unbound_workspace.structured_content.as_ref().unwrap()["message"]
+        .as_str()
+        .expect("structured workspace error message");
+    assert!(message.contains("workspace not found"), "{message}");
+    assert!(message.contains("orbit workspace init"), "{message}");
+    assert!(message.contains("--workspace"), "{message}");
+    assert!(!message.contains("ws_unbound-data-dir"), "{message}");
+
+    let missing_workspace = client
+        .peer()
+        .call_tool(call("demo_missing_workspace", json!({ "value": "x" })))
+        .await
+        .expect("real workspace not-found result crosses the MCP boundary");
+    let message = missing_workspace.structured_content.as_ref().unwrap()["message"]
+        .as_str()
+        .expect("structured missing workspace message");
+    assert!(message.contains("ws_missing-project"), "{message}");
+
     let contexts = host.contexts.lock().expect("contexts");
     assert_eq!(contexts.len(), 1);
     assert_eq!(
@@ -448,8 +485,8 @@ async fn loopback_listener_round_trips_a_session_and_records_the_peer_ip() {
 
     let stream = TcpStream::connect(addr).await.expect("connect over TCP");
     let (client_read, client_write) = tokio::io::split(stream);
-    let mut client_info = ClientInfo::default();
-    client_info.meta = Some(Meta(
+    let mut client_info = ClientConfig::default();
+    client_info.meta = Some(RequestMetaObject::from(
         json!({ "orbit": { "workspace": "/tmp/listener-workspace" } })
             .as_object()
             .expect("initialize metadata")
@@ -464,6 +501,8 @@ async fn loopback_listener_round_trips_a_session_and_records_the_peer_ip() {
             .peer_info()
             .expect("initialize result")
             .server_info
+            .as_ref()
+            .expect("server info")
             .name,
         "orbit-mcp"
     );
@@ -642,8 +681,8 @@ async fn presentation_wire_preserves_dispatch_context_and_refuses_hidden_or_mism
             .await
             .expect("wait");
     });
-    let mut info = ClientInfo::default();
-    info.meta = Some(Meta(json!({"orbit":{"workspace":"session-default","actor":"human","effective_capabilities":["operator"]}, "ui":{"authority":"human"}}).as_object().unwrap().clone()));
+    let mut info = ClientConfig::default();
+    info.meta = Some(RequestMetaObject::from(json!({"orbit":{"workspace":"session-default","actor":"human","effective_capabilities":["operator"]}, "ui":{"authority":"human"}}).as_object().unwrap().clone()));
     let client = info
         .serve((client_read, client_write))
         .await
@@ -655,13 +694,13 @@ async fn presentation_wire_preserves_dispatch_context_and_refuses_hidden_or_mism
             .iter()
             .map(|tool| tool.name.as_ref())
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["orbit_task_show", "orbit_ui_inspect", "orbit_ui_open"])
+        BTreeSet::from(["orbit_task_show", "orbit_ui"])
     );
     let selected = client
         .peer()
         .call_tool(call(
-            "orbit_ui_inspect",
-            json!({"workspace":"selected","id":"TST-1"}),
+            "orbit_ui",
+            json!({"action":"inspect","workspace":"selected","id":"TST-1"}),
         ))
         .await
         .expect("inspect");
@@ -695,7 +734,7 @@ async fn presentation_wire_preserves_dispatch_context_and_refuses_hidden_or_mism
     }
     let missing = client
         .peer()
-        .call_tool(call("orbit_ui_inspect", json!({"id":"TST-1"})))
+        .call_tool(call("orbit_ui", json!({"action":"inspect","id":"TST-1"})))
         .await
         .unwrap();
     assert_eq!(missing.is_error, Some(true));
@@ -707,8 +746,8 @@ async fn presentation_wire_preserves_dispatch_context_and_refuses_hidden_or_mism
     let wrong = client
         .peer()
         .call_tool(call(
-            "orbit_ui_inspect",
-            json!({"workspace":"wrong","id":"TST-1"}),
+            "orbit_ui",
+            json!({"action":"inspect","workspace":"wrong","id":"TST-1"}),
         ))
         .await
         .unwrap();
@@ -719,8 +758,8 @@ async fn presentation_wire_preserves_dispatch_context_and_refuses_hidden_or_mism
     let mismatch = client
         .peer()
         .call_tool(call(
-            "orbit_ui_inspect",
-            json!({"workspace":"selected","id":"TST-2"}),
+            "orbit_ui",
+            json!({"action":"inspect","workspace":"selected","id":"TST-2"}),
         ))
         .await
         .unwrap();
@@ -739,8 +778,8 @@ async fn presentation_wire_preserves_dispatch_context_and_refuses_hidden_or_mism
     let hidden = client
         .peer()
         .call_tool(call(
-            "orbit_ui_inspect",
-            json!({"workspace":"selected","id":"TST-1"}),
+            "orbit_ui",
+            json!({"action":"inspect","workspace":"selected","id":"TST-1"}),
         ))
         .await
         .unwrap();
@@ -771,12 +810,7 @@ impl McpHost for PresentationCollisionHost {
 
 #[tokio::test]
 async fn mixed_dot_underscore_names_cannot_shadow_presentation_entrypoints() {
-    for name in [
-        "orbit.ui_open",
-        "orbit_ui.open",
-        "orbit.ui_inspect",
-        "orbit_ui.inspect",
-    ] {
+    for name in ["orbit.ui", "orbit_ui"] {
         let host = Arc::new(PresentationCollisionHost {
             name,
             calls: std::sync::atomic::AtomicUsize::new(0),
@@ -794,7 +828,7 @@ async fn mixed_dot_underscore_names_cannot_shadow_presentation_entrypoints() {
                 .await
                 .expect("wait");
         });
-        let client = ClientInfo::default()
+        let client = ClientConfig::default()
             .serve((client_read, client_write))
             .await
             .expect("client");
@@ -832,11 +866,11 @@ impl McpHost for DesktopWireHost {
             task_show,
             definition("orbit.task.list"),
             definition("orbit.task.update"),
-            definition("orbit.workflow.run.show"),
+            definition("orbit.run"),
         ];
         for definition in &mut definitions {
             definition.schema.builtin = true;
-            if definition.schema.name == "orbit.workflow.run.show" {
+            if definition.schema.name == "orbit.run" {
                 definition
                     .schema
                     .parameters
@@ -888,8 +922,8 @@ async fn desktop_wire_preserves_explicit_destination_and_run_inspector_authority
             .await
             .unwrap();
     });
-    let mut info = ClientInfo::default();
-    info.meta = Some(Meta(
+    let mut info = ClientConfig::default();
+    info.meta = Some(RequestMetaObject::from(
         json!({"orbit":{"workspace":"session-default","effective_capabilities":["operator"]}})
             .as_object()
             .unwrap()
@@ -938,8 +972,8 @@ async fn desktop_wire_preserves_explicit_destination_and_run_inspector_authority
     let opened = client
         .peer()
         .call_tool(call(
-            "orbit_ui_open",
-            json!({"workspace":"host-qualified:opaque-workspace"}),
+            "orbit_ui",
+            json!({"action":"open","workspace":"host-qualified:opaque-workspace"}),
         ))
         .await
         .unwrap();
@@ -955,8 +989,8 @@ async fn desktop_wire_preserves_explicit_destination_and_run_inspector_authority
     let inspected = client
         .peer()
         .call_tool(call(
-            "orbit_ui_inspect",
-            json!({"workspace":"host-qualified:opaque-workspace","id":"jrun-proof","kind":"run"}),
+            "orbit_ui",
+            json!({"action":"inspect","workspace":"host-qualified:opaque-workspace","id":"jrun-proof","kind":"run"}),
         ))
         .await
         .unwrap();
@@ -968,7 +1002,8 @@ async fn desktop_wire_preserves_explicit_destination_and_run_inspector_authority
     {
         let calls = host.calls.lock().unwrap();
         assert_eq!(calls.len(), 4);
-        assert_eq!(calls[3].0, "orbit.workflow.run.show");
+        assert_eq!(calls[3].0, "orbit.run");
+        assert_eq!(calls[3].1["action"], "show");
         assert_eq!(calls[3].1["view"], "bounded");
         assert_eq!(
             calls[3].2.effective_capabilities, trusted.effective_capabilities,
@@ -979,8 +1014,8 @@ async fn desktop_wire_preserves_explicit_destination_and_run_inspector_authority
     let mismatch = client
         .peer()
         .call_tool(call(
-            "orbit_ui_inspect",
-            json!({"workspace":"host-qualified:opaque-workspace","id":"jrun-other","kind":"run"}),
+            "orbit_ui",
+            json!({"action":"inspect","workspace":"host-qualified:opaque-workspace","id":"jrun-other","kind":"run"}),
         ))
         .await
         .unwrap();
@@ -1008,6 +1043,69 @@ impl McpHost for CanonicalContractHost {
     }
 }
 
+struct FrictionTaxonomyHost;
+impl McpHost for FrictionTaxonomyHost {
+    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        orbit_mcp::canonical_mcp_tool_definitions()
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))
+    }
+
+    fn friction_tag_taxonomy(
+        &self,
+        _: &ToolSessionContext,
+    ) -> Result<Option<Vec<(String, String)>>, OrbitError> {
+        Ok(Some(vec![(
+            "workspace-only".into(),
+            "A tag defined by this workspace.".into(),
+        )]))
+    }
+
+    fn call_tool(
+        &self,
+        name: &str,
+        input: Value,
+        _: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        Ok(json!({"name":name,"input":input}))
+    }
+}
+
+#[tokio::test]
+async fn tools_list_advertises_the_bound_workspace_friction_taxonomy() {
+    let server = OrbitToolServer::new(Arc::new(FrictionTaxonomyHost));
+    let (client_io, server_io) = duplex(128 * 1024);
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(server_io)
+            .await
+            .unwrap()
+            .waiting()
+            .await
+            .unwrap();
+    });
+    let client = ClientConfig::default().serve(client_io).await.unwrap();
+    let listed = client.peer().list_all_tools().await.unwrap();
+    let friction = listed
+        .iter()
+        .find(|tool| tool.name == "orbit_friction")
+        .expect("friction family is listed");
+
+    assert_eq!(
+        friction.input_schema["properties"]["tags"]["items"]["enum"],
+        json!(["workspace-only"])
+    );
+    assert_eq!(
+        friction.input_schema["properties"]["tags"]["description"],
+        json!("Friction taxonomy tags.")
+    );
+    assert_eq!(
+        friction.input_schema["properties"]["title"]["maxLength"],
+        json!(120)
+    );
+    client.cancel().await.unwrap();
+    server_task.await.unwrap();
+}
+
 #[tokio::test]
 async fn client_handshake_does_not_advertise_retired_desktop_tools() {
     for legacy in [true, false] {
@@ -1017,10 +1115,10 @@ async fn client_handshake_does_not_advertise_retired_desktop_tools() {
             let service = server.serve(server_io).await.unwrap();
             service.waiting().await.unwrap();
         });
-        let mut info = ClientInfo::default();
+        let mut info = ClientConfig::default();
         info.client_info.name = "orbit-federated-mux".into();
         if !legacy {
-            info.meta = Some(Meta(
+            info.meta = Some(RequestMetaObject::from(
                 json!({"orbit":{"domain_contract":1}})
                     .as_object()
                     .unwrap()
@@ -1090,8 +1188,8 @@ async fn a_lock_wait_timeout_is_a_retryable_lock_busy_on_the_wire() {
         let service = server.serve(server_io).await.expect("serve");
         service.waiting().await.expect("wait");
     });
-    let mut info = ClientInfo::default();
-    info.meta = Some(Meta(
+    let mut info = ClientConfig::default();
+    info.meta = Some(RequestMetaObject::from(
         json!({ "orbit": { "workspace": "/tmp/owner" } })
             .as_object()
             .expect("initialize metadata")
@@ -1177,9 +1275,9 @@ async fn host_metadata_drives_selector_echo_and_presentation_without_builtin_nam
             .await
             .unwrap();
     });
-    let client = ClientInfo::default().serve(client_io).await.unwrap();
+    let client = ClientConfig::default().serve(client_io).await.unwrap();
     let listed = client.peer().list_all_tools().await.unwrap();
-    assert!(listed.iter().any(|tool| tool.name == "orbit_ui_inspect"));
+    assert!(listed.iter().any(|tool| tool.name == "orbit_ui"));
     for tool in &listed {
         assert!(serde_json::to_value(tool).unwrap().get("rules").is_none());
     }
@@ -1232,8 +1330,8 @@ async fn host_metadata_drives_selector_echo_and_presentation_without_builtin_nam
     let result = client
         .peer()
         .call_tool(call(
-            "orbit_ui_inspect",
-            json!({"workspace": "opaque-token", "id": "TST-1"}),
+            "orbit_ui",
+            json!({"action":"inspect","workspace": "opaque-token", "id": "TST-1"}),
         ))
         .await
         .unwrap();
@@ -1282,7 +1380,7 @@ async fn delivery_refusal_crosses_the_mcp_wire() {
             .await
             .unwrap();
     });
-    let client = ClientInfo::default().serve(client_io).await.unwrap();
+    let client = ClientConfig::default().serve(client_io).await.unwrap();
     let result = client
         .peer()
         .call_tool(call("demo_echo", json!({"value":"head"})))

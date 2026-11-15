@@ -39,12 +39,8 @@ impl Delivery {
 }
 
 /// The part of a settlement comment that names the attempt and its verdict.
-/// A replay recognizes its own comment by this lead, which does not depend on
-/// the task status the rest of the comment reports.
-pub(in crate::application::review::gate) fn comment_lead(
-    certificate: &ReviewCertificate,
-    delivery: &Delivery,
-) -> String {
+/// This is display text; publication replay uses the typed settlement identity.
+fn comment_lead(certificate: &ReviewCertificate, delivery: &Delivery) -> String {
     format!(
         "{} review settled attempt `{}`: verdict **{}**",
         match delivery {

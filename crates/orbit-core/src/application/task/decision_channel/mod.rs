@@ -36,11 +36,8 @@ mod store;
 mod submission;
 mod token;
 
-pub use model::DECISION_CHANNEL_KEY_SECRET;
-pub use model::DecisionChannelInfo;
 pub use model::DecisionDigest;
 pub use model::DecisionSubmitCaller;
 pub use model::DecisionSubmitParams;
-pub use model::MAX_DECISION_RAW_MESSAGE_BYTES;
 
 pub(super) mod dkim;

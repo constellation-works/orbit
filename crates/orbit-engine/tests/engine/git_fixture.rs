@@ -65,6 +65,16 @@ pub(super) fn configure_child(command: &mut Command, home: &Path, sandbox: &Path
 
 /// Isolate fixture environment and process-global caches under parallel libtest.
 pub(super) fn isolated(module: &str, test: &str, body: impl FnOnce()) {
+    isolated_with_timezone(module, test, None, body);
+}
+
+/// Run a fixture with an optional timezone set only on its disposable child.
+pub(super) fn isolated_with_timezone(
+    module: &str,
+    test: &str,
+    timezone: Option<&str>,
+    body: impl FnOnce(),
+) {
     const CHILD_ENV: &str = "ORBIT_GIT_FIXTURE_CHILD";
     let qualified = format!("{}::{test}", module.split_once("::").unwrap().1);
     if std::env::var_os(CHILD_ENV).is_some() {
@@ -96,6 +106,9 @@ pub(super) fn isolated(module: &str, test: &str, body: impl FnOnce()) {
         .env("TMPDIR", &tmp)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_TERMINAL_PROMPT", "0");
+    if let Some(timezone) = timezone {
+        command.env("TZ", timezone);
+    }
     let output = orbit_common::test_env::run_child_test(&mut command, &qualified, sandbox.path());
     orbit_common::test_env::assert_child_test_passed(
         &qualified,

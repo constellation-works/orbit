@@ -85,6 +85,8 @@ Non-interactive runs must pass both explicitly:
 orbit init --non-interactive --machine-name <name> --task-prefix <PREFIX>
 ```
 
+Init also seeds the operator's human crew (`[crews.<name>] kind = "human"`) for work Orbit tracks but never dispatches. It uses the OS user name, offered at a prompt and taken as-is non-interactively; pass `--human-name <name>` to choose another. A re-run keeps an existing one.
+
 ## Step 4 — Initialize the workspace
 
 For agent-assisted PR delivery, from the repository root (omit `--mcp` if no client registration is wanted):
@@ -103,7 +105,7 @@ jobs, activities, policies, routines, and auto-task definitions. `--mcp`
 auto-detects installed agent clients and registers Orbit's MCP server with
 them as `orbit mcp serve --operator --workspace <ws_id>` — **operator
 authority**, so the registered integration can dispatch workflows
-(`orbit.workflow.ship`), observe/resume runs, and run `orbit.command.exec`.
+(`orbit.workflow` action `ship`), observe/resume runs, and run `orbit.command.exec`.
 This is the deliberate bootstrap path for a human-facing orchestrator; bare
 `orbit mcp serve` and any worker/agent-launched MCP session stay agent-only.
 `--workspace` binds the session to the workspace being registered, so
@@ -129,11 +131,18 @@ See [multi-host.md](multi-host.md).
 
 Three things to know about what it seeded and how to finalize:
 
-- **Only `crew_performance_refresh` is seeded enabled.** Every other routine and
-  auto-task ships disabled: the automation layer is installed but dark until
-  someone reviews and opts in. `crew_performance_refresh` no-ops while
-  `workflow.crew_performance` is `off`, but it still records a job run each hour,
-  so a fresh workspace that seeds the default routines schedules it. → [automation.md](automation.md)
+- **Three shipped routines are seeded enabled when selected by the seeding
+  policy:** `worktree-gc`, `task-pilot` and `crew-memory-dream`. The
+  `host-health` auto-task is also seeded enabled when selected. Every other shipped routine and
+  auto-task ships disabled until someone opts in. Seeded enabled does not
+  turn the experimental crew-memory feature on: `crew-memory-dream` mints
+  nothing while `crew_memory.enabled` is false or no running memory-arm
+  experiment applies. A host clock is still needed
+  for unattended runs.
+  The `host-health` auto-task files a weekly host-health review on the workspace
+  owner once the host clock is installed; `orbit auto-task toggle host-health
+  off` turns it off, and `orbit routine disable <routine-name>` turns a routine
+  off (operator only). → [automation.md](automation.md), [auto-tasks.md](auto-tasks.md)
 - **`.orbit/` is per-user state.** `orbit workspace init` seeds a `.gitignore`
   that ignores the whole of `.orbit/` with no re-includes. Keep it. Seeded
   routines, auto-tasks, and resources come from the binary, not from git.
@@ -174,6 +183,27 @@ Supported clients: `claude`, `codex`, `gemini`, `antigravity`, `grok`, `cursor`,
 `agy` (Antigravity). Gemini CLI remains available for enterprise / API-key
 deployments; individual Gemini CLI accounts stopped on 2026-06-18.
 
+### Grok MCP registration
+
+Grok normally loads Orbit's MCP server from the project `.mcp.json` shared with
+Claude Code. `orbit workspace init --mcp` auto-detects installed clients and
+writes the project registration; to target Grok explicitly, run
+`orbit mcp init --scope workspace --grok`. For a home registration, run
+`orbit mcp init --scope home --grok`; the shared Claude-compatible home file is
+`~/.claude.json`.
+
+Re-running Orbit MCP initialization migrates an older Orbit-generated Grok
+entry out of `.grok/config.toml`, preserving other Grok settings and servers.
+When `[claude_compat] imported = true` in `~/.grok/config.toml`, Grok ignores
+the project `.mcp.json`, so initialization keeps the native `.grok/config.toml`
+target. For home scope, initialization also keeps that native target when
+`[compat.claude]` has `mcps = false` or `GROK_CLAUDE_MCPS_ENABLED=0`.
+
+Run `grok inspect` to see which configuration source Grok loaded. The project
+registration is shared: removing Orbit's entry through Claude Code or Grok
+removes it for both clients. Gemini CLI is the neighboring client and uses
+`.gemini/settings.json`.
+
 ### Workspace presets
 
 A preset is a TOML file a distribution ships to set a workspace up in one step.
@@ -209,9 +239,12 @@ auto_tasks = []
   `[seeding]`, not here.
 - **`[enable]`** switches on routines and auto-tasks that an enabled plugin
   already seeded into this workspace. It applies after seeding. It never enables
-  a shipped default, so `crew_performance_refresh` (seeded enabled) is the only
-  shipped default on without an opt-in; every other shipped routine and
-  auto-task stays disabled unless someone opts in.
+  a shipped default. The three shipped routines seeded enabled—`worktree-gc`,
+  `task-pilot` and `crew-memory-dream`—and the `host-health` auto-task
+  are on without an opt-in only when the seeding policy selects them.
+  `crew-memory-dream` still mints nothing while `crew_memory.enabled` is
+  false or no running memory-arm experiment applies. Every other
+  shipped routine and auto-task stays disabled unless someone opts in.
 
 **Validation and limits.** Orbit validates the whole file against this
 workspace before it writes anything. Nothing is written or registered when any
@@ -245,7 +278,7 @@ a `preset` key. Check the enabled routines and auto-tasks with
 ```bash
 orbit --version
 orbit workspace show
-orbit tool run orbit.task.list --input '{"model":"<agent-family>","workspace":"<workspace-id>"}'
+orbit tool run orbit.task.list --input '{"workspace":"<workspace-id>"}'
 orbit doctor
 ```
 

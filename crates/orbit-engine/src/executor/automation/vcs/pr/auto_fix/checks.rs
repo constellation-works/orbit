@@ -1,7 +1,9 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::{DeliveryRefusal, PrAutoFixBlocker};
+use orbit_types::workflow::{
+    DeliveryRefusal, PrAutoFixBaseRed, PrAutoFixBlocker, pr_auto_fix_no_edit_reruns,
+};
 use serde_json::Value;
 
 use crate::context::RuntimeHost;
@@ -49,7 +51,6 @@ pub(in crate::executor::automation::vcs::pr) fn red_base_wait<H: RuntimeHost + ?
     };
     match evaluate_red_base(
         host,
-        auto_fix,
         input,
         workspace_path,
         pr_number,
@@ -77,7 +78,6 @@ pub(in crate::executor::automation::vcs::pr) fn red_base_wait<H: RuntimeHost + ?
 #[allow(clippy::too_many_arguments)]
 fn evaluate_red_base<H: RuntimeHost + ?Sized>(
     host: &H,
-    auto_fix: &admission::AutoFix,
     input: &Value,
     workspace_path: &str,
     pr_number: &str,
@@ -107,15 +107,16 @@ fn evaluate_red_base<H: RuntimeHost + ?Sized>(
         base.trim(),
         &tip,
         base_name.strip_prefix("origin/").unwrap_or(&base_name),
-        &auto_fix.task_ids,
         &failed,
-        pr_number.parse::<u64>().ok(),
         deadline_ms,
     )
 }
 
-/// Produce the first retry through the same planner as claimed landing.
-#[allow(clippy::too_many_arguments)]
+/// Recover CI through the same durable retry planner as claimed landing.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "auto-fix recovery passes the pull status and deadline into the same planner landing uses"
+)]
 pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
@@ -127,31 +128,64 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
     observation: &mut Option<
         super::super::super::landing::checks::rerun_diagnostic::CiRerunDiagnostic,
     >,
-) -> Result<bool, OrbitError> {
+) -> Result<CiRerunRecovery, OrbitError> {
     let Some(head) = status.head_sha.as_deref() else {
-        return Ok(false);
+        return Ok(CiRerunRecovery::NotEligible);
     };
     // Missing source bindings leave prerequisite recovery's existing read
     // order and typed deadline holds intact; they cannot authorize this plan.
     let Some(base_name) = input_string_field(input, "base") else {
-        return Ok(false);
+        return Ok(CiRerunRecovery::NotEligible);
     };
     if status.head_branch.is_none() {
-        return Ok(false);
+        return Ok(CiRerunRecovery::NotEligible);
     }
     let failed = super::super::super::landing::checks::failed_checks(status);
     if failed.is_empty() {
-        return Ok(false);
+        return Ok(CiRerunRecovery::NotEligible);
     }
     let (failed, _) = match required_failures(host, workspace_path, pr_number, head, &failed) {
         Ok(value) => value,
-        Err(_) => return Ok(false),
+        Err(_) => return Ok(CiRerunRecovery::NotEligible),
     };
     let workspace = Path::new(workspace_path);
     let base_ref =
         resolve_worktree_start_point(workspace, &base_name, base_sync_mode_from_input(input)?)?;
     let tip = commit_sha(workspace, &base_ref)?;
     let base = git_output(workspace, &["merge-base", head, &tip])?;
+    // A repair that made no edit already spent its auto-fix attempt for this
+    // head. Rerun its failed checks once on the unchanged head instead of
+    // admitting another repair. A recorded rerun send is not itself a rerun
+    // result: the planner below keeps observing the original attempt (and an
+    // ambiguous send reply) and stops only on a later authenticated failed
+    // attempt.
+    if no_edit_repair_recorded(host, auto_fix, pr_number, head) {
+        match super::super::super::landing::checks::request_no_edit_repair_rerun(
+            host,
+            workspace,
+            &auto_fix.task_ids,
+            status,
+            &failed,
+            base.trim(),
+            base_name.strip_prefix("origin/").unwrap_or(&base_name),
+            deadline_ms,
+        )? {
+            super::super::super::landing::checks::CiRerunStep::Backoff(reason) => {
+                return Ok(CiRerunRecovery::BackingOff(reason));
+            }
+            super::super::super::landing::checks::CiRerunStep::Wait(reason)
+            | super::super::super::landing::checks::CiRerunStep::Unreadable(reason) => {
+                return Ok(CiRerunRecovery::Waiting(reason));
+            }
+            super::super::super::landing::checks::CiRerunStep::Acted(_) => {
+                return Ok(CiRerunRecovery::Retried);
+            }
+            super::super::super::landing::checks::CiRerunStep::BudgetSpent(reason) => {
+                return Ok(CiRerunRecovery::Stopped(reason));
+            }
+            super::super::super::landing::checks::CiRerunStep::NotEligible => {}
+        }
+    }
     match super::super::super::landing::checks::plan_ci_rerun(
         host,
         workspace,
@@ -167,13 +201,56 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
         &auto_fix.run_id,
         observation,
     )? {
-        super::super::super::landing::checks::CiRerunStep::NotEligible => Ok(false),
-        super::super::super::landing::checks::CiRerunStep::Wait(_) => {
-            // The shared bounded journal retains this observation.
-            Ok(true)
+        super::super::super::landing::checks::CiRerunStep::Backoff(reason) => {
+            Ok(CiRerunRecovery::BackingOff(reason))
         }
-        super::super::super::landing::checks::CiRerunStep::Acted(_) => Ok(true),
+        super::super::super::landing::checks::CiRerunStep::NotEligible => {
+            Ok(CiRerunRecovery::NotEligible)
+        }
+        super::super::super::landing::checks::CiRerunStep::Wait(reason)
+        | super::super::super::landing::checks::CiRerunStep::Unreadable(reason) => {
+            // The shared bounded journal retains this observation; the caller
+            // records the hold on the task and bounds it.
+            Ok(CiRerunRecovery::Waiting(reason))
+        }
+        super::super::super::landing::checks::CiRerunStep::Acted(_) => Ok(CiRerunRecovery::Retried),
+        super::super::super::landing::checks::CiRerunStep::BudgetSpent(reason) => {
+            Ok(CiRerunRecovery::Stopped(reason))
+        }
     }
+}
+
+/// What the shared CI retry decided for this poll.
+pub(in crate::executor::automation::vcs::pr) enum CiRerunRecovery {
+    /// Infrastructure pacing holds independently of the planner evidence deadline.
+    BackingOff(String),
+    /// The planner holds for the named reason. The caller bounds the hold:
+    /// past its deadline the failure goes to the repair path.
+    Waiting(String),
+    /// A rerun was reserved and sent on this poll. Do not admit a repair.
+    Retried,
+    /// The failure is not a CI retry. The caller may repair it.
+    NotEligible,
+    /// The retry budget is spent on stopped jobs or logged infrastructure
+    /// failures. The reason names the hold. Do not admit a repair.
+    Stopped(String),
+}
+
+/// Whether a repair of `head` on a task this run watches ended with no
+/// edit and no scope record. An unreadable history is no record.
+fn no_edit_repair_recorded<H: RuntimeHost + ?Sized>(
+    host: &H,
+    auto_fix: &admission::AutoFix,
+    pr_number: &str,
+    head: &str,
+) -> bool {
+    auto_fix.task_ids.iter().any(|task| {
+        host.get_task_history(task).is_ok_and(|history| {
+            pr_auto_fix_no_edit_reruns(&history, pr_number)
+                .iter()
+                .any(|record| record.head_sha == head)
+        })
+    })
 }
 
 /// Whether an earlier poll recorded `head`'s failure as inherited from the
@@ -185,14 +262,10 @@ fn recorded_base_red<H: RuntimeHost + ?Sized>(
 ) -> bool {
     auto_fix.task_ids.iter().any(|task| {
         host.get_task_history(task).is_ok_and(|history| {
-            history.iter().any(|entry| {
-                entry.event == "pr_auto_fix_base_red"
-                    && entry
-                        .note
-                        .as_deref()
-                        .and_then(|note| serde_json::from_str::<Value>(note).ok())
-                        .is_some_and(|note| note["failed_head"] == head)
-            })
+            history
+                .iter()
+                .filter_map(PrAutoFixBaseRed::from_entry)
+                .any(|record| record.failed_head == head)
         })
     })
 }
@@ -228,6 +301,21 @@ pub(in crate::executor::automation::vcs::pr) fn repair_failed_checks<H: RuntimeH
             Ok(found) => found,
             Err(reason) => return CheckRepair::Ended(verdict::stopped(pr_number, &reason)),
         };
+    let dependency_base = status.base_branch.as_deref().and_then(|base| {
+        git_output(
+            Path::new(workspace_path),
+            &[
+                "merge-base",
+                head_sha,
+                &format!("refs/remotes/origin/{base}"),
+            ],
+        )
+        .ok()
+    });
+    let dependency_context = status
+        .head_branch
+        .as_deref()
+        .zip(dependency_base.as_deref());
     let (evidence, annotations) = match head_check_evidence(
         host,
         Path::new(workspace_path),
@@ -239,6 +327,7 @@ pub(in crate::executor::automation::vcs::pr) fn repair_failed_checks<H: RuntimeH
         &required,
         true,
         deadline_ms,
+        dependency_context,
     ) {
         HeadCheckEvidence::Repair {
             evidence,

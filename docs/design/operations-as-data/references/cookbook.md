@@ -1,8 +1,8 @@
 ---
 title: Operations as Data — Migration Cookbook
 owner: claude
-last_updated: 2026-10-27
-last_validated: 2026-10-27
+last_updated: 2026-11-04
+last_validated: 2026-11-04
 status: Accepted
 feature: operations-as-data
 doc_role: reference
@@ -11,7 +11,7 @@ summary: Step-by-step procedure for migrating a noun to the operation registry u
 tags: [operations-as-data, architecture, adr-0209, cookbook]
 paths: ["crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/search.rs"]
 related_features: [operations-as-data]
-related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15940, ORB-15941, ORB-15942]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15939, ORB-15940, ORB-15941, ORB-15942]
 ---
 
 # Operations as Data — Migration Cookbook
@@ -28,16 +28,17 @@ kinds, `default`, and flag aliases and value names. Phase 3a (task reads,
 [ORB-15937]) built `EnumList`, multi-value flags, optional positionals and
 `CliHelp` (long description, after-help examples, flag order), and showed how
 to migrate part of a noun. Phase 3b (task writes, [ORB-15938]) built `Array`,
-CLI-required flags (`cli_required`), `UnknownFields::Refuse` for a verb that
+`UnknownFields::Refuse` for a verb that
 already refused extras, retired-field wordings, the `GuardedModes::preempt`
 and `schema_extension` tables, and a hidden option object for operator-only
-CLI flags. Phase 3c (task artifacts and locks, [ORB-15939]) built two-segment `cli_path`
+CLI flags. Phase 2 (drain and workspace claim, [ORB-15936]) migrated the
+tool-only nouns without adding CLI surfaces. Phase 3c (task artifacts and locks, [ORB-15939]) built two-segment `cli_path`
 nesting, `cli_groups` help and inherited group arguments, and CLI argument
 relationships. Phase 3d (task review and lifecycle, [ORB-15940]) built
 `CliArgKind::Actions`, which spells a multiplexed tool's actions as CLI
 subcommands with their own arguments. Phase 4 (workflow run, [ORB-15941]) migrated a tool-only
 noun whose overlapping CLI stays hand-wired, and the multiplexed
-`orbit.workflow.auto`. Phase 5 migrated search at the CLI command root and
+`orbit.workflow` action `auto`. Phase 5 migrated search at the CLI command root and
 recorded explicit exceptions for the remaining tools. A noun needing another kind the kernel lacks extends the kernel
 first. Two recipes: migrating a noun that is still hand-wired, and
 adding a verb to a noun that is already migrated.
@@ -87,11 +88,11 @@ For a noun with verbs `v₁…vₙ`, find:
 | Action enum variants | `crates/orbit-tools/src/host.rs` (`OrbitBuiltinAction`) |
 | Handler dispatch | `crates/orbit-core/src/adapter/tool_host/dispatch.rs` |
 | Handlers, and the input names and aliases they read | `crates/orbit-core/src/adapter/tool_host/<noun>_tools.rs` |
-| Redaction policy | `crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs` |
+| Redaction policy | `crates/orbit-core/src/adapter/tool_host/artifact_redaction/policy.rs` |
 | Claimed-worker routing | `crates/orbit-core/src/adapter/tool_host/worker_tools.rs` |
 | CLI args + `Execute` impls | `crates/orbit-cli/src/command/<noun>/` |
 | CLI audit metadata and runtime need | `crates/orbit-cli/src/command/operation/registry.rs` |
-| Governed operations | `crates/orbit-common/src/governance/authorization/catalog.rs` |
+| Governed operations | `crates/orbit-common/src/governance/authorization/catalog/operations.rs` |
 | Web handlers | `crates/orbit-web/src/api/<noun>s.rs` |
 
 Note where the *same* field is described differently in two places. Do **not**
@@ -166,7 +167,7 @@ fallout mechanically:
 - turn every wildcard arm that covers the noun into an exhaustive `match` on
   the verb, so a future verb has to state its behaviour. Under
   [The spec holds cross-surface facts; single-surface facts are an exhaustive match in that surface](../4_decisions.md#the-spec-holds-cross-surface-facts-single-surface-facts-are-an-exhaustive-match-in-that-surface)
-  this includes `worker_tools.rs` and `artifact_redaction.rs`. The redaction
+  this includes `worker_tools.rs` and `artifact_redaction/policy.rs`. The redaction
   field lists come from the parameters' `redact` class: give the noun's arm in
   `policy_for_action` its spec's `params` and delete its hand-written lists. A
   declared alias takes its parameter's class, so an accepted spelling is
@@ -178,8 +179,11 @@ Delete the per-verb `Tool` files. Register the noun with
 `operation::register_noun(registry, &NOUN)`, which serves every operation with
 the generic `OperationTool<V>`; it takes `execution_kind` from `effect` and
 dispatches through the `From<<Noun>Verb> for OrbitBuiltinAction` impl from
-Step 4. It also validates input with `parse_input` and reports unknown fields
-(a `warn!` and one audit row each) before dispatch.
+Step 4. It also validates input with the spec's `parse_input_fields` and
+`require_input_fields` phases and reports unknown fields (a `warn!` and one
+audit row each in warn mode) before dispatch. The generic
+`Tool::execute_with_input_check` hook places family required-field diagnostics
+between those phases, preserving unknown-field suggestions before missing fields.
 Delete the noun's hand-written registration block. For a verb without MCP
 scope, `NounSpec::tool_only_registration` selects active local registration
 or inactive registration; preserve the previous kind. MCP-scoped verbs still
@@ -199,7 +203,8 @@ If the CLI command has options MCP must not accept (task `add --plan`,
 `update --approve`), the CLI `prepare` table moves them into one hidden
 object parameter (task's `cli_options`) for the core handler to read. Admit
 that field only from a caller without an MCP session, so MCP keeps refusing
-it.
+it. The noun's `GuardedModes::preempt` table owns this surface restriction;
+keep noun-specific field rules out of the generic tool registry.
 
 If a tool routed some inputs elsewhere before dispatch (auto-task's bounded
 `list`, acknowledged `mint` and checked `update` go to desktop host actions),
@@ -209,7 +214,7 @@ implements it; friction's returns `None` throughout. A mode whose input the
 flat spec does not describe (task's guarded creation and update) goes in
 `preempt`, which runs before `parse_input`.
 
-If one tool multiplexes actions behind an `action` field (`orbit.workflow.auto`),
+If one tool multiplexes actions behind an `action` field (`orbit.workflow` action `auto`),
 declare the selector as an `Enum` and the union of the actions' fields. An
 action served by another host action is a guarded mode that checks its own
 field allowlist; the others leave their field rules to the verb's handler
@@ -386,12 +391,18 @@ runtime need all come from the spec.
   mode.
 - [ORB-15935] — migrated auto-task, building the switch, enum, object and
   CLI-only parameter kinds.
+- [ORB-15936] — migrated the drain and workspace-claim tool-only nouns.
 - [ORB-15937] — migrated the task read verbs, building enum lists, multi-value
   flags, optional positionals and `CliHelp`, and the part-migrated noun shape.
 - [ORB-15938] — migrated task `add` and `update`, building arrays,
   CLI-required flags, refuse-mode unknown fields, `preempt`,
   `schema_extension` and the hidden CLI option object.
+- [ORB-15939] — migrated task artifacts and locks with nested CLI groups.
+- [ORB-15940] — migrated task review and lifecycle tools with action
+  subcommands.
 - [ORB-15941] — migrated the workflow-run tools as a tool-only noun, with
   the multiplexed-action shape.
+- [ORB-15942] — migrated search and routine control where a second surface
+  existed.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -91,11 +91,11 @@ impl<'a> Host<'a> {
             policy: preparation::resolve_policy(runtime, Some(trigger)),
             incidents: RefCell::new(super::super::incidents::IncidentSession::new()),
             instructions: RefCell::new(BTreeMap::new()),
-            pinned: RefCell::new(BTreeMap::new()),
             owner: RefCell::new(None),
             head: RefCell::new(None),
             inspection_cache: None,
             pilot_hold: RefCell::new(None),
+            resident_now: std::cell::Cell::new(None),
             guard: None,
             guard_verdict: RefCell::new(None),
         }
@@ -150,79 +150,5 @@ impl<'a> Host<'a> {
             &|revision| self.instructions(revision),
             &self.policy,
         )
-    }
-
-    /// The commit an attempt pinned when it was admitted, read by its exact
-    /// ref rather than by listing every pin the repository holds [ORB-14164].
-    fn pinned_revision(&self, attempt_id: &str) -> Result<Option<String>, AutomationError> {
-        if let Some(pinned) = self.pinned.borrow().get(attempt_id) {
-            return Ok(pinned.clone());
-        }
-        let pinned = pins::pinned(&self.source(), &self.owner()?, attempt_id)?;
-        self.pinned
-            .borrow_mut()
-            .insert(attempt_id.to_string(), pinned.clone());
-        Ok(pinned)
-    }
-
-    /// The `material_v1` hash the member's task would certify at the revision
-    /// `assessment`'s attempt pinned.
-    pub(super) fn legacy_fingerprint(
-        &self,
-        member: &StateMember,
-        assessment: &MemberAssessment,
-    ) -> Result<Option<String>, AutomationError> {
-        let [task_id] = member.task_ids.as_slice() else {
-            return Ok(None);
-        };
-        let Some(revision) = self.pinned_revision(&assessment.receipt_id)? else {
-            return Ok(None);
-        };
-        let task = self.runtime.get_task(task_id)?;
-        let instructions = self.instructions(&revision)?;
-        preparation::legacy_fingerprint(
-            self.runtime,
-            &task,
-            &revision,
-            &instructions,
-            self.eligibility(),
-        )
-        .map(Some)
-    }
-
-    /// Whether a just-settled pre-upgrade assessment still needs its source
-    /// revision to be carried forward. Current `material_v2` receipts do not
-    /// match this legacy digest and can release their attempt pin immediately.
-    pub(super) fn has_legacy_assessment(
-        &self,
-        attempt: &MemberAttempt,
-    ) -> Result<bool, AutomationError> {
-        let Some(state) = self
-            .runtime
-            .automation_store()?
-            .automation_state(&attempt.consumer)?
-        else {
-            return Ok(false);
-        };
-        let Some(members) = state.members else {
-            return Ok(false);
-        };
-
-        for member in attempt.members() {
-            let Some(assessment) = members
-                .assessed
-                .get(&member.key)
-                .filter(|assessment| assessment.receipt_id == attempt.id)
-            else {
-                continue;
-            };
-            if self
-                .legacy_fingerprint(member, assessment)?
-                .is_some_and(|fingerprint| fingerprint == assessment.resulting_fingerprint)
-            {
-                return Ok(true);
-            }
-        }
-        Ok(false)
     }
 }

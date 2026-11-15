@@ -2,11 +2,17 @@ use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use chrono::Utc;
-use orbit_core::{JobRun, JobRunState, OrbitRuntime};
+use std::collections::BTreeSet;
+
+use chrono::{DateTime, TimeZone, Utc};
+use orbit_core::{
+    JobRun, JobRunState, JobRunStep, JobTargetType, OrbitRuntime, V2AuditEventInsertParams,
+};
+use orbit_types::workflow::{ChildDispatch, PipelineState};
 use orbit_types::workspace::{
     Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceRegistry, WorkspaceStatus,
 };
@@ -18,6 +24,17 @@ const CHILD_TEST: &str = "ORBIT_HTTP_TEST_CHILD";
 const FIXTURE_ROOT: &str = "ORBIT_HTTP_FIXTURE_ROOT";
 
 /// No environment mutation in the parent: managed authority is removed only on the child command.
+/// Asks the server child to open its workspace with path leases enabled.
+const LEASES_ENABLED: &str = "ORBIT_HTTP_LEASES_ENABLED";
+
+/// The fixed lease policy with path leases enabled.
+pub(super) fn leases_enabled() -> orbit_core::runtime::task::locks::lease::LeasePolicy {
+    orbit_core::runtime::task::locks::lease::LeasePolicy {
+        enabled: true,
+        ..orbit_core::runtime::task::locks::lease::LeasePolicy::FIXED
+    }
+}
+
 pub(super) fn isolated(name: &str, body: impl FnOnce()) {
     if std::env::var(CHILD_TEST).ok().as_deref() == Some(name) {
         body();
@@ -26,8 +43,8 @@ pub(super) fn isolated(name: &str, body: impl FnOnce()) {
     let home = tempfile::tempdir().expect("isolated test home");
     let mut command = fixture_command(home.path());
     command
-        // Explicitly selected browser fixtures are ignored in the ordinary
-        // suite, but must still execute in their isolated child.
+        // Ignored tests are skipped in the ordinary suite, but a child
+        // re-executed by name must still run them.
         .args([
             "--exact",
             name,
@@ -53,7 +70,9 @@ fn fixture_command(home: &Path) -> Command {
     orbit_common::test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
     });
-    // An explicit agent envelope prevents an inherited TTY granting operator authority.
+    // An explicit agent envelope keeps an inherited TTY from granting operator
+    // authority on surfaces that read the process envelope (the dashboard
+    // itself grants only through `--operator`).
     command
         .current_dir(home)
         .env("HOME", home)
@@ -103,6 +122,39 @@ impl Fixture {
         orbit_registry::machine_identity::load_machine_identity(&self.global)
             .unwrap()
             .id
+    }
+
+    /// Appends `toml` to the workspace `config.toml` and reopens the runtime,
+    /// so the in-process runtime reads it as well as any server started next.
+    pub(super) fn with_workspace_config(self, toml: &str) -> Self {
+        let Self {
+            temp,
+            global,
+            work,
+            runtime,
+        } = self;
+        drop(runtime);
+        let config = work.join("config.toml");
+        let mut text = fs::read_to_string(&config).unwrap_or_default();
+        text.push_str(toml);
+        fs::write(&config, text).unwrap();
+        let registry = orbit_registry::workspace_registry::load_registry_from(
+            &orbit_registry::workspace_registry::registry_path_for(&global),
+        )
+        .unwrap();
+        let runtime =
+            orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
+                &global,
+                &registry.workspaces[0],
+                &registry.checkouts[0],
+            )
+            .expect("reopened disposable runtime");
+        Self {
+            temp,
+            global,
+            work,
+            runtime,
+        }
     }
 
     /// Reopens an owner-prepared checkout with replica authority for HTTP tests.
@@ -249,6 +301,12 @@ impl Fixture {
         )
     }
 
+    /// A server whose workspace opens with path leases enabled, which no
+    /// configuration can do [ORB-22808].
+    pub(super) fn server_with_leases(&self, operator: bool) -> Server {
+        self.server_with_envs(operator, &[(LEASES_ENABLED, std::ffi::OsStr::new("1"))])
+    }
+
     /// A server with extra environment for the server child.
     pub(super) fn server_with_envs(
         &self,
@@ -256,6 +314,65 @@ impl Fixture {
         env: &[(&str, &std::ffi::OsStr)],
     ) -> Server {
         self.server_impl_with_env(operator, false, false, &self.path("process.log"), None, env)
+    }
+
+    /// A server whose process runs from a linked git worktree of the
+    /// fixture's workspace repository, inside a managed run's environment
+    /// (`ORBIT_MANAGED_RUN_CONTEXT` and `ORBIT_RUN_ID`) naming `run_id`. That
+    /// is the one process shape in which the owning-run relaxation of a task
+    /// write's context check can apply to a caller bound to the run.
+    pub(super) fn server_in_linked_worktree_of_run(&self, operator: bool, run_id: &str) -> Server {
+        let repo = self.temp.path().join("repo");
+        let worktree = self.temp.path().join("linked-worktree");
+        let git = |dir: &Path, args: &[&str]| {
+            let mut command = Command::new("git");
+            orbit_common::test_env::clear_inherited_authority(|name| {
+                command.env_remove(name);
+            });
+            let output = command
+                .current_dir(dir)
+                .args([
+                    "-c",
+                    "user.name=fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                ])
+                .args(args)
+                .output()
+                .expect("run git");
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&repo, &["init", "--quiet"]);
+        git(&repo, &["commit", "--quiet", "--allow-empty", "-m", "base"]);
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "--detach",
+                worktree.to_str().unwrap(),
+            ],
+        );
+        spawn_server_from(
+            self.temp.path(),
+            &worktree,
+            ServerFeatures {
+                operator,
+                resources: false,
+                replay_worker: false,
+            },
+            &self.path("process.log"),
+            None,
+            &[
+                ("ORBIT_MANAGED_RUN_CONTEXT", std::ffi::OsStr::new("1")),
+                ("ORBIT_RUN_ID", std::ffi::OsStr::new(run_id)),
+            ],
+        )
     }
 
     pub(super) fn counted_task_server(&self) -> Server {
@@ -280,6 +397,30 @@ impl Fixture {
                 self.path("run-query.jsonl").as_os_str(),
             )],
         )
+    }
+
+    /// A server that records each exact pipeline-state batch read.
+    pub(super) fn counted_run_state_server(&self) -> Server {
+        self.server_impl_with_env(
+            false,
+            false,
+            false,
+            &self.path("process.log"),
+            None,
+            &[(
+                "ORBIT_HTTP_RUN_STATE_TRACE",
+                self.path("run-state.jsonl").as_os_str(),
+            )],
+        )
+    }
+
+    pub(super) fn run_state_trace(&self) -> Vec<Value> {
+        fs::read_to_string(self.path("run-state.jsonl"))
+            .unwrap()
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
     }
 
     pub(super) fn job_run_query_trace(&self) -> Vec<Value> {
@@ -365,6 +506,7 @@ impl Fixture {
     pub(super) fn seed_run(&self, name: &str, job: &str, state: JobRunState) -> JobRun {
         let now = Utc::now();
         let run = JobRun {
+            build: None,
             run_id: name.into(),
             job_id: job.into(),
             attempt: 1,
@@ -408,10 +550,46 @@ pub(super) fn spawn_server(
     task_query_log: Option<&Path>,
     env: &[(&str, &std::ffi::OsStr)],
 ) -> Server {
+    spawn_server_from(
+        root,
+        root,
+        ServerFeatures {
+            operator,
+            resources,
+            replay_worker,
+        },
+        log_path,
+        task_query_log,
+        env,
+    )
+}
+
+/// The fixture features one server child enables.
+struct ServerFeatures {
+    operator: bool,
+    resources: bool,
+    replay_worker: bool,
+}
+
+/// [`spawn_server`] with the server process's working directory at `cwd`.
+fn spawn_server_from(
+    root: &Path,
+    cwd: &Path,
+    features: ServerFeatures,
+    log_path: &Path,
+    task_query_log: Option<&Path>,
+    env: &[(&str, &std::ffi::OsStr)],
+) -> Server {
+    let ServerFeatures {
+        operator,
+        resources,
+        replay_worker,
+    } = features;
     orbit_common::test_env::assert_child_test_exists("server_child");
     let log = tempfile::NamedTempFile::new_in(root).unwrap();
     let mut command = fixture_command(root);
     command
+        .current_dir(cwd)
         .args(["--ignored", "--exact", "server_child", "--nocapture"])
         .env(FIXTURE_ROOT, root)
         .env("ORBIT_HTTP_PORT", "0")
@@ -611,7 +789,15 @@ pub(super) fn serve_fixture() {
         .or_else(|| {
             std::env::var_os("ORBIT_HTTP_RUN_QUERY_TRACE")
                 .map(|path| (path, &["orbit.core.job_run.reconcile"][..]))
+        })
+        .or_else(|| {
+            std::env::var_os("ORBIT_HTTP_RUN_STATE_TRACE")
+                .map(|path| (path, &["orbit.core.job_run_state"][..]))
         });
+    let trace = trace.or_else(|| {
+        std::env::var_os("ORBIT_HTTP_HOST_PROJECTION_TRACE")
+            .map(|path| (path, &["orbit.hosts.workspace_projection"][..]))
+    });
     if let Some((path, targets)) = trace {
         // Count task-store operations (with the codebase scan's per-task
         // computes and landed diffs) or stale-run scans across blocking threads.
@@ -628,7 +814,16 @@ pub(super) fn serve_fixture() {
             )
             .init();
     }
+    if let Ok(parties) = std::env::var("ORBIT_HTTP_SELECTION_BARRIER") {
+        install_selection_barrier(parties.parse().expect("selection barrier parties"));
+    }
     let root = PathBuf::from(std::env::var_os(FIXTURE_ROOT).expect("fixture root"));
+    if std::env::var(LEASES_ENABLED).as_deref() == Ok("1") {
+        orbit_core::runtime::task::locks::lease::install_test_lease_policy(
+            &root.join("repo/.orbit"),
+            leases_enabled(),
+        );
+    }
     // Ordinary fixtures launch a harmless stub; replay fixtures execute only
     // their disposable sleep job through the real worker.
     if std::env::var("ORBIT_HTTP_REPLAY_WORKER").as_deref() == Ok("1") {
@@ -719,6 +914,29 @@ pub(super) fn serve_fixture() {
     }
 }
 
+/// Holds each observed workspace task-candidate selection until `parties` of
+/// them are in flight together. A scan that waits out the bound instead fails,
+/// which marks its workspace unavailable in the aggregate response.
+fn install_selection_barrier(parties: usize) {
+    let gate = Arc::new((Mutex::new(0_usize), Condvar::new()));
+    orbit_core::test_support::install_candidate_selection_checkpoint(move || {
+        let (entered, arrived) = &*gate;
+        let mut count = entered.lock().unwrap_or_else(PoisonError::into_inner);
+        *count += 1;
+        arrived.notify_all();
+        let (count, _) = arrived
+            .wait_timeout_while(count, Duration::from_secs(5), |count| *count < parties)
+            .unwrap_or_else(PoisonError::into_inner);
+        if *count < parties {
+            return Err(orbit_core::OrbitError::Execution(format!(
+                "only {} of {parties} workspace selections were in flight; the per-workspace scans are serialised",
+                *count
+            )));
+        }
+        Ok(())
+    });
+}
+
 pub(super) fn execute_replay_worker() {
     let root = PathBuf::from(std::env::var_os(FIXTURE_ROOT).unwrap());
     let global = root.join("global");
@@ -801,4 +1019,407 @@ pub(super) fn rewind_retention_analytics(fixture: &Fixture) {
 /// Run pending store migrations through the production open boundary.
 pub(super) fn upgrade_retention_analytics(fixture: &Fixture) {
     orbit_store::Store::open(&fixture.global.join("orbit.db")).unwrap();
+}
+
+// --- Shared run-scenario fixture helpers ---
+
+pub(super) fn get(server: &Server, path: &str) -> Value {
+    json_ok(server.get(path))
+}
+
+pub(super) fn run_detail(server: &Server, run_id: &str) -> Value {
+    get(server, &format!("/api/runs/{run_id}"))
+}
+
+pub(super) fn list_rows(page: &Value) -> &[Value] {
+    page["items"].as_array().unwrap()
+}
+
+pub(super) fn run_ids(page: &Value) -> BTreeSet<String> {
+    list_rows(page)
+        .iter()
+        .map(|run| run["run_id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+pub(super) fn id_set(ids: &[&str]) -> BTreeSet<String> {
+    ids.iter().map(|id| id.to_string()).collect()
+}
+
+pub(super) fn ws_id(fixture: &Fixture) -> String {
+    fixture.runtime.workspace_id().unwrap()
+}
+
+pub(super) fn store(fixture: &Fixture) -> orbit_store::Store {
+    fixture.runtime.sqlite_store().unwrap()
+}
+
+/// The one `v2_audit_events` insert shape every scenario seeds through.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn insert_audit(
+    fixture: &Fixture,
+    workspace: &str,
+    source: &str,
+    event_id: &str,
+    run_id: &str,
+    ts: DateTime<Utc>,
+    event_type: &str,
+    agent: &str,
+    parent: Option<&str>,
+    payload: Value,
+) {
+    fixture
+        .runtime
+        .insert_v2_audit_event(&V2AuditEventInsertParams {
+            workspace_id: workspace.into(),
+            event_id: event_id.into(),
+            source: source.into(),
+            schema_version: 1,
+            event_type: event_type.into(),
+            ts,
+            run_id: run_id.into(),
+            agent_identity: agent.into(),
+            parent_event_id: parent.map(str::to_string),
+            workspace_path: None,
+            payload_json: payload.to_string(),
+        })
+        .unwrap();
+}
+
+/// [`insert_audit`] with the default source and the fixture agent.
+pub(super) fn insert_audit_default(
+    fixture: &Fixture,
+    workspace: &str,
+    event_id: &str,
+    run_id: &str,
+    ts: DateTime<Utc>,
+    event_type: &str,
+    payload: Value,
+) {
+    insert_audit(
+        fixture,
+        workspace,
+        "v2_envelope",
+        event_id,
+        run_id,
+        ts,
+        event_type,
+        "fixture",
+        None,
+        payload,
+    );
+}
+
+/// [`insert_audit_default`] in the fixture's own workspace.
+pub(super) fn insert_audit_here(
+    fixture: &Fixture,
+    event_id: &str,
+    run_id: &str,
+    ts: DateTime<Utc>,
+    event_type: &str,
+    payload: Value,
+) {
+    insert_audit_default(
+        fixture,
+        &ws_id(fixture),
+        event_id,
+        run_id,
+        ts,
+        event_type,
+        payload,
+    );
+}
+
+pub(super) fn make_job_run(
+    run_id: &str,
+    job_id: &str,
+    state: JobRunState,
+    at: DateTime<Utc>,
+    input: Option<Value>,
+) -> JobRun {
+    JobRun {
+        build: None,
+        run_id: run_id.into(),
+        job_id: job_id.into(),
+        attempt: 1,
+        state,
+        scheduled_at: at,
+        created_at: at,
+        started_at: Some(at),
+        finished_at: state.is_terminal().then_some(at),
+        duration_ms: None,
+        pid: None,
+        pid_start_time: None,
+        input,
+        retry_source_run_id: None,
+        knowledge_metrics: None,
+        resolved_crew: None,
+        crew_model: None,
+        steps: Vec::new(),
+        executed_on: None,
+    }
+}
+
+pub(super) fn write_state(fixture: &Fixture, run: &JobRun, state: &PipelineState) {
+    fixture.runtime.write_run_state(&run.run_id, state).unwrap();
+}
+
+pub(super) fn pipeline_for(run: &JobRun) -> PipelineState {
+    PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}))
+}
+
+/// Build a fresh `PipelineState` for `run`, mutate it, and persist it.
+pub(super) fn state_with(fixture: &Fixture, run: &JobRun, edit: impl FnOnce(&mut PipelineState)) {
+    let mut state = pipeline_for(run);
+    edit(&mut state);
+    write_state(fixture, run, &state);
+}
+
+pub(super) fn at(hour: u32, minute: u32) -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(2026, 10, 10, hour, minute, 0).unwrap()
+}
+
+pub(super) fn dispatch(child: &JobRun) -> ChildDispatch {
+    dispatch_ids(&child.run_id, &child.job_id)
+}
+
+pub(super) fn dispatch_ids(run_id: &str, job_id: &str) -> ChildDispatch {
+    child_dispatch(run_id, job_id, "leaf_invoke", false, false, Utc::now())
+}
+
+/// A submitted child dispatch with an explicit step and flags.
+pub(super) fn child_dispatch(
+    run_id: &str,
+    job_id: &str,
+    step: &str,
+    wait: bool,
+    coordinator: bool,
+    at: DateTime<Utc>,
+) -> ChildDispatch {
+    ChildDispatch::submitted(
+        run_id.into(),
+        job_id.into(),
+        step.into(),
+        wait,
+        coordinator,
+        at,
+    )
+}
+
+pub(super) fn operations(trace: &[Value], name: &str) -> usize {
+    trace
+        .iter()
+        .filter(|event| event["span"]["name"] == name)
+        .count()
+}
+
+/// Record `child` as a dispatched child of `parent`.
+pub(super) fn link_child(fixture: &Fixture, parent: &JobRun, child: &JobRun) {
+    state_with(fixture, parent, |state| {
+        state.record_child_dispatch(dispatch(child))
+    });
+}
+
+/// A `test.event` audit row as the provider and log scenarios seed them.
+pub(super) fn insert_test_event(
+    fixture: &Fixture,
+    workspace: &str,
+    run_id: &str,
+    event_id: &str,
+    ts: &str,
+    parent: Option<&str>,
+    payload: Value,
+) {
+    let ts = ts.parse::<DateTime<Utc>>().unwrap();
+    insert_audit(
+        fixture,
+        workspace,
+        "v2_envelope",
+        event_id,
+        run_id,
+        ts,
+        "test.event",
+        "codex",
+        parent,
+        payload,
+    );
+}
+
+pub(super) fn add_workspace(fixture: &Fixture, id: &str, name: &str) -> OrbitRuntime {
+    let path = orbit_registry::workspace_registry::registry_path_for(&fixture.global);
+    let mut registry = orbit_registry::workspace_registry::load_registry_from(&path).unwrap();
+    let mut workspace = registry.workspaces[0].clone();
+    workspace.id = id.into();
+    workspace.name = name.into();
+    let repo = fixture.path(name);
+    let work = repo.join(".orbit");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::write(
+        work.join("config.yaml"),
+        format!("schema_version: 1\nworkspace_id: {id}\n"),
+    )
+    .unwrap();
+    let checkout = WorkspaceCheckout::owner(id.into(), repo, work);
+    registry.workspaces.push(workspace.clone());
+    registry.checkouts.push(checkout.clone());
+    orbit_registry::workspace_registry::save_registry_to(&registry, &path).unwrap();
+    orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
+        &fixture.global,
+        &workspace,
+        &checkout,
+    )
+    .unwrap()
+}
+
+/// A successful `task_pr_pipeline` run for `ORB-2` in another workspace,
+/// `offset_ms` after `created` (the cross-workspace list cases).
+pub(super) fn seed_other_run(
+    runtime: &OrbitRuntime,
+    id: &str,
+    offset_ms: i64,
+    created: DateTime<Utc>,
+) {
+    let at = created + chrono::Duration::milliseconds(offset_ms);
+    let run = make_job_run(
+        id,
+        "task_pr_pipeline",
+        JobRunState::Success,
+        at,
+        Some(json!({"task_id": "ORB-2"})),
+    );
+    runtime
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &run, None)
+        .unwrap();
+}
+
+/// A step record with no timing yet; callers set the fields they seed.
+pub(super) fn run_step(
+    target_type: JobTargetType,
+    target_id: &str,
+    state: JobRunState,
+) -> JobRunStep {
+    JobRunStep {
+        lock_wait_ms: None,
+        step_index: 0,
+        target_type,
+        target_id: target_id.into(),
+        started_at: None,
+        finished_at: None,
+        duration_ms: None,
+        exit_code: None,
+        agent_response_json: None,
+        state,
+        error_code: None,
+        failure_code: None,
+        error_message: None,
+    }
+}
+
+pub(super) fn save_record_step(fixture: &Fixture, run: &JobRun, step: &JobRunStep) {
+    store(fixture)
+        .upsert_job_run_step_for_workspace(&ws_id(fixture), &run.run_id, step)
+        .unwrap();
+}
+
+/// One `step_started` or `step_finished` event in a run's audit trail.
+pub(super) fn insert_step_audit(
+    fixture: &Fixture,
+    run_id: &str,
+    step_id: &str,
+    body_kind: &str,
+    minute: u32,
+) {
+    let ts = at(6, minute);
+    let event_id = format!("evt-{run_id}-{step_id}-{body_kind}");
+    insert_audit_here(
+        fixture,
+        &event_id,
+        run_id,
+        ts,
+        "activity.progress",
+        json!({"event_id": event_id, "body_kind": body_kind, "step_id": step_id, "outcome": "success", "lock_wait_ms": 42, "ts": ts}),
+    );
+}
+
+pub(super) fn insert_cancel_audit(fixture: &Fixture, run_id: &str, ts: DateTime<Utc>) {
+    let payload = json!({
+        "schemaVersion": 1, "event_type": "run.cancelled", "event_id": format!("evt-{run_id}"), "ts": ts, "run_id": run_id,
+        "agent_identity": "not-the-actor", "body_kind": "run_cancelled", "actor": "on-call", "source": "cli",
+        "reason": "stopped after the gate hung", "previous_state": "running", "final_state": "cancelled",
+    });
+    insert_audit(
+        fixture,
+        &ws_id(fixture),
+        "v2_envelope",
+        &format!("evt-{run_id}"),
+        run_id,
+        ts,
+        "run.cancelled",
+        "not-the-actor",
+        None,
+        payload,
+    );
+}
+
+pub(super) fn pull_destination() -> orbit_store::contracts::PullDestination {
+    orbit_store::contracts::PullDestination {
+        owner_machine_id: "hm_owner".into(),
+        owner_workspace_id: "ws_owner".into(),
+        selector: "owner/workspace".into(),
+        execution_machine_id: "hm_follower".into(),
+    }
+}
+
+pub(super) fn pull_request(
+    run: &JobRun,
+    request_id: &str,
+) -> orbit_store::contracts::AdmissionRequest {
+    serde_json::from_value(json!({
+        "request_id": request_id, "caller_version": env!("CARGO_PKG_VERSION"), "caller_schema": 1,
+        "run_context": { "run_id": run.run_id, "job_name": run.job_id, "machine_name": "follower" },
+        "ship": { "mode": "pr", "base_branch": "agent-main", "landing_branch": "agent-main", "completion": "review" },
+    })).unwrap()
+}
+
+/// Bind `task_id`'s run to another host in the task document store.
+pub(super) fn bind_task_run_to_host(fixture: &Fixture, task_id: &str, run_id: &str) {
+    use orbit_store::contracts::TaskDocumentUpdateParams;
+    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+
+    let documents = orbit_store::compose::workspace_coordinated_backends(
+        TaskRegistryStore::open(&task_registry_path(&fixture.global)).unwrap(),
+        ws_id(fixture),
+        store(fixture),
+    )
+    .unwrap()
+    .task
+    .document;
+    documents
+        .update_task_document(
+            task_id,
+            TaskDocumentUpdateParams {
+                actor: "fixture".into(),
+                job_run_id: Some(Some(run_id.into())),
+                job_run_machine: Some(Some(orbit_types::task::ExecutionLocation {
+                    machine_id: "hm_follower_mini".into(),
+                    machine_name: Some("follower-mini".into()),
+                })),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+}
+
+pub(super) fn persist_admission(
+    store: &orbit_store::Store,
+    workspace: &str,
+    request_id: &str,
+    admission: &orbit_store::contracts::LocalPullAdmission,
+) {
+    store.connection().lock().unwrap().execute(
+        "UPDATE local_pull_admissions SET leaf_run_id=?1, record_json=?2 WHERE workspace_id=?3 AND request_id=?4",
+        (admission.leaf_run_id.as_deref(), serde_json::to_string(admission).unwrap(), workspace, request_id),
+    ).unwrap();
 }

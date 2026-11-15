@@ -158,8 +158,7 @@ impl OrbitRuntime {
         let Some((_, receipt)) = super::pilot_receipts(comments).next() else {
             return Ok(Vec::new());
         };
-        let audit: Value = serde_json::from_str(receipt.body)
-            .map_err(|error| OrbitError::Execution(format!("decode pilot assessment: {error}")))?;
+        let audit = self.task_pilot_audit(&task.id, receipt)?;
         requirements_from_audit(task, &audit)
     }
 }

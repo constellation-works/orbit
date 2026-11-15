@@ -140,10 +140,23 @@ fn completion_replay_finishes_side_effects_after_a_post_lock_read_failure() {
         .expect("add friction")
         .record
         .id;
+    let text_friction = frictions
+        .add(FrictionAddParams {
+            model: "codex".to_string(),
+            title: None,
+            body: "Named only in the task text".to_string(),
+            tags: vec!["tooling".to_string()],
+            status: FrictionStatus::Open,
+            during_task: None,
+            created_at: Utc::now(),
+        })
+        .expect("add text friction")
+        .record
+        .id;
     let task = runtime
         .add_task(TaskAddParams {
             title: "Complete through desktop".to_string(),
-            description: "Exercise desktop completion replay.".to_string(),
+            description: format!("Exercise desktop completion replay; cites {text_friction}."),
             acceptance_criteria: vec!["Side effects finish once.".to_string()],
             plan: "1) implement 2) validate".to_string(),
             relations: vec![TaskRelation {
@@ -202,6 +215,14 @@ fn completion_replay_finishes_side_effects_after_a_post_lock_read_failure() {
         },
     };
     let friction_status = || frictions.show(&friction).unwrap().unwrap().record.status;
+    let text_friction_status = || {
+        frictions
+            .show(&text_friction)
+            .unwrap()
+            .unwrap()
+            .record
+            .status
+    };
 
     super::super::write::FAIL_SIDE_EFFECT_READ.with(|fail| fail.set(true));
     let error = runtime
@@ -216,6 +237,18 @@ fn completion_replay_finishes_side_effects_after_a_post_lock_read_failure() {
     assert!(forge.closed.lock().unwrap().is_empty());
     assert_eq!(friction_status(), FrictionStatus::Open);
 
+    // A history read that fails on the replay drops nothing: the target stays
+    // owed until a replay can read the completion's record.
+    rewrite_receipt_notes(&runtime, &task.id, false);
+    crate::application::task::resolves::FAIL_HISTORY_READ.with(|fail| fail.set(true));
+    assert!(
+        runtime
+            .desktop_task_write(request.clone(), None, None, &operator)
+            .expect("replay survives the failed read")
+            .replayed
+    );
+    assert_eq!(friction_status(), FrictionStatus::Open);
+
     rewrite_receipt_notes(&runtime, &task.id, false);
     let replay = runtime
         .desktop_task_write(request.clone(), None, None, &operator)
@@ -223,6 +256,27 @@ fn completion_replay_finishes_side_effects_after_a_post_lock_read_failure() {
     assert!(replay.replayed);
     assert_eq!(*forge.closed.lock().unwrap(), vec![12]);
     assert_eq!(friction_status(), FrictionStatus::Resolved);
+    // A desktop completion retains no delivered commit, so a target named
+    // only in text is settled on the record instead of staying owed.
+    assert_eq!(
+        text_friction_status(),
+        FrictionStatus::Open,
+        "no landing evidence authorizes the text target"
+    );
+    let settled = format!("target={text_friction}");
+    assert!(
+        runtime
+            .get_task_history(&task.id)
+            .unwrap()
+            .iter()
+            .any(|entry| {
+                entry.event == "resolves_side_effect_recovered"
+                    && entry
+                        .note
+                        .as_deref()
+                        .is_some_and(|note| note.starts_with(&settled))
+            })
+    );
 
     // A human reopens the target and the forge lists #12 again; neither
     // successful effect is repeated on another replay.

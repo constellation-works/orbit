@@ -1,10 +1,10 @@
 //! The shared lexical search operation. Reindex is local maintenance and has no tool.
 use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamType, RetiredField,
-    ToolOnlyRegistration, UnknownFields, aliased, both, defaulted, mcp_only, operation_registry,
+    ToolOnlyRegistration, UnknownFields, aliased, both, defaulted, operation_registry,
     preserve_empty,
 };
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 operation_registry! {
     noun: SEARCH;
@@ -72,9 +72,9 @@ const QUERY: OperationSpec<SearchVerb> = OperationSpec {
             both(
                 "limit",
                 ParamType::Integer,
-                "Maximum number of results, at most 1000. Default: 10, or 1000 for a friction listing.",
+                "Maximum number of results, at most 1000. 0 or omitted uses the default: 10, or 1000 for a friction listing.",
                 flag("limit"),
-                "Maximum total results returned (across all kinds when --kind all; round-robin per kind to ensure fair representation)",
+                "Maximum total results returned (across all kinds when --kind all; round-robin per kind to ensure fair representation). 0 uses the default: 10",
             ),
             "10",
         ),
@@ -124,11 +124,6 @@ const QUERY: OperationSpec<SearchVerb> = OperationSpec {
                 "Search every active workspace registered on this machine. Overrides `--workspaces`",
             ),
             &["allWorkspaces"],
-        ),
-        mcp_only(
-            "model",
-            ParamType::String,
-            "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
         ),
     ]],
     at_least_one_of: &[],
@@ -188,6 +183,7 @@ const QUERY: OperationSpec<SearchVerb> = OperationSpec {
     ],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const fn flag(long: &'static str) -> CliArgKind {

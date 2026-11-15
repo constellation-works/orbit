@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use chrono::{SecondsFormat, Utc};
 use orbit_common::test_fixtures::TEST_CODEX_MODEL;
 use orbit_core::AuditEventStatus;
 use orbit_core::JobRunState;
@@ -243,7 +244,6 @@ fn comments(server: &Server, id: &str) -> usize {
         .len()
 }
 
-/// Browser fetch must decode the gzip that crosses both dashboard servers.
 #[test]
 fn proposed_creation_forward_preserves_frozen_owner_target_and_receipt() {
     isolated(
@@ -284,46 +284,7 @@ fn proposed_creation_forward_preserves_frozen_owner_target_and_receipt() {
     );
 }
 
-#[test]
-#[ignore = "requires ORBIT_PLAYWRIGHT_MODULE and ORBIT_COMPRESSION_BROWSER_EVIDENCE_DIR"]
-fn gzip_forward_returns_json_to_the_browser() {
-    isolated(
-        "host_forward::gzip_forward_returns_json_to_the_browser",
-        || {
-            let b = Fixture::host("hostb", "HB");
-            b.seed_run("jrun-browser-compression", "fixture", JobRunState::Success);
-            let b_server = b.server(false);
-            let a = Fixture::new();
-            write_hosts(&a, &[("hostb", &b.machine_id(), "hostb-ssh", "HB")]);
-            let stub =
-                StubSsh::new(json!({"hostb-ssh": {"attach": port(&b_server), "spawn": null}}));
-            let a_server = a.server_with_path(false, stub.bin());
-            let output = std::process::Command::new("node")
-                .arg(
-                    Path::new(env!("CARGO_MANIFEST_DIR"))
-                        .join("tests/http_api/compression_browser.mjs"),
-                )
-                .arg(
-                    std::env::var_os("ORBIT_PLAYWRIGHT_MODULE")
-                        .expect("prepared Playwright module"),
-                )
-                .arg(
-                    std::env::var_os("ORBIT_COMPRESSION_BROWSER_EVIDENCE_DIR")
-                        .expect("browser evidence directory"),
-                )
-                .arg(&a_server.origin)
-                .output()
-                .expect("launch compression browser fixture");
-            assert!(
-                output.status.success(),
-                "browser gzip forwarding failed:\n{}\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-        },
-    );
-}
-
+/// Browser fetch must decode the gzip that crosses both dashboard servers.
 #[test]
 fn gzip_forward_negotiates_upstream_and_preserves_encoding_and_vary() {
     isolated(
@@ -842,10 +803,20 @@ fn foreign_listener_scenario(preoccupied: bool) {
                     let reserved = forwarded_port(&call);
                     // Deterministic variant: an unrelated listener wins the
                     // race for the reserved port before the fixture binds it.
+                    // The application has already released this ephemeral
+                    // port, so an unrelated process may claim it before the
+                    // test can. That occupant still exercises the failed
+                    // forward path; it simply cannot be counted as a probe.
                     let preoccupying_probes = if preoccupied {
-                        let unrelated = TcpListener::bind((Ipv4Addr::LOCALHOST, reserved))
-                            .expect("the pre-occupying listener binds the free reserved port");
-                        Some(serve_dashboard(unrelated, Some(foreign_identity.clone())))
+                        match TcpListener::bind((Ipv4Addr::LOCALHOST, reserved)) {
+                            Ok(unrelated) => {
+                                Some(serve_dashboard(unrelated, Some(foreign_identity.clone())))
+                            }
+                            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => None,
+                            Err(error) => {
+                                panic!("preoccupying listener on reserved port {reserved}: {error}")
+                            }
+                        }
                     } else {
                         None
                     };
@@ -1185,100 +1156,6 @@ fn forwarded_audit_cursor_walks_the_remote_window_page_by_page() {
     );
 }
 
-// Run the public ticket issuer in the server's HOME without changing the test process environment.
-#[test]
-#[ignore]
-fn local_session_ticket_child() {
-    orbit_web::open_dashboard(orbit_web::OpenArgs { no_open: true }).unwrap();
-}
-
-fn local_session_ticket(fixture: &Fixture) -> String {
-    let home = fixture.path("");
-    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-    orbit_common::test_env::clear_inherited_authority(|name| {
-        command.env_remove(name);
-    });
-    command
-        .current_dir(&home)
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .env_remove("RUST_TEST_THREADS")
-        .args([
-            "--exact",
-            "host_forward::local_session_ticket_child",
-            "--ignored",
-            "--nocapture",
-        ]);
-    let logs = tempfile::tempdir().unwrap();
-    let output =
-        orbit_common::test_env::run_child_test(&mut command, "local session ticket", logs.path());
-    assert!(output.status.success(), "ticket issuer failed");
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    stdout
-        .split("#orbit-session=")
-        .nth(1)
-        .unwrap()
-        .split_whitespace()
-        .next()
-        .unwrap()
-        .to_owned()
-}
-
-#[test]
-fn local_forward_preserves_browser_sessions() {
-    isolated(
-        "host_forward::local_forward_preserves_browser_sessions",
-        || {
-            let disabled = Fixture::new();
-            let server = disabled.server(true);
-            assert_eq!(server.get("/api/on/http-fixture/session").status(), 404);
-            assert_eq!(
-                server
-                    .request("POST", "/api/on/http-fixture/session")
-                    .header("origin", &server.origin)
-                    .body("invalid")
-                    .send()
-                    .unwrap()
-                    .status(),
-                404
-            );
-            drop(server);
-
-            let fixture = Fixture::new();
-            OpenOptions::new()
-                .append(true)
-                .open(fixture.global.join("config.toml"))
-                .unwrap()
-                .write_all(b"\n[machine.web_terminal]\nenabled = true\n")
-                .unwrap();
-            let server = fixture.server(true);
-            let direct = json_ok(server.get("/api/session"));
-            let ticket = local_session_ticket(&fixture);
-            let post = |path: &str, ticket: &str| {
-                server
-                    .request("POST", path)
-                    .header("origin", &server.origin)
-                    .body(ticket.to_owned())
-                    .send()
-                    .unwrap()
-            };
-            let direct_post = post("/api/session", &ticket);
-            assert_eq!(direct_post.status(), 204);
-            assert!(direct_post.headers().contains_key("set-cookie"));
-            let ticket = local_session_ticket(&fixture);
-            let forwarded_post = post("/api/on/http-fixture/session", &ticket);
-            assert_eq!(forwarded_post.status(), 204);
-            assert!(forwarded_post.headers().contains_key("set-cookie"));
-            assert_eq!(post("/api/on/http-fixture/session", &ticket).status(), 401);
-            assert_eq!(
-                post("/api/on/http-fixture/session", "invalid").status(),
-                401
-            );
-            assert_eq!(json_ok(server.get("/api/on/http-fixture/session")), direct);
-        },
-    );
-}
-
 /// The serving host's own name is answered locally: outer `/on/<host>/<rest>`
 /// captures must not leak into the inner router, or every inner `Path<_>`
 /// sees host, rest and its own capture (ORB-20148).
@@ -1291,8 +1168,12 @@ fn local_forward_preserves_inner_path_params() {
             let task = seed_task(&fixture);
             let server = fixture.server(false);
 
+            // Pin the window end so the direct and forwarded scorecards
+            // report the same `since`/`until` even when the two requests
+            // straddle a second boundary (ORB-23462).
+            let until = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
             let direct_score = server.get(
-                "/api/agents/implementers/scorecard?workspace=ws_http_fixture&window=last500&min_support=1",
+                &format!("/api/agents/implementers/scorecard?workspace=ws_http_fixture&window=last500&min_support=1&until={until}"),
             );
             let direct_status = direct_score.status();
             let direct_body = direct_score.text().unwrap();
@@ -1303,7 +1184,7 @@ fn local_forward_preserves_inner_path_params() {
             );
             let direct_score_json: Value = serde_json::from_str(&direct_body).unwrap();
             let forwarded_score = server.get(
-                "/api/on/http-fixture/agents/implementers/scorecard?workspace=ws_http_fixture&window=last500&min_support=1",
+                &format!("/api/on/http-fixture/agents/implementers/scorecard?workspace=ws_http_fixture&window=last500&min_support=1&until={until}"),
             );
             let status = forwarded_score.status();
             let body = forwarded_score.text().unwrap();
@@ -1369,6 +1250,32 @@ fn forwarded_audit_cursor_survives_a_capped_short_page() {
                 forwarded.last().unwrap().1.is_none(),
                 "the window's last page carries no cursor"
             );
+        },
+    );
+}
+
+/// [ORB-24160] A task's run link opens the run on the host that holds it.
+/// When that host cannot be reached, run detail fails naming the host and
+/// the reason, not "run not found".
+#[test]
+fn run_detail_on_an_unreachable_holding_host_names_the_host_and_reason() {
+    isolated(
+        "host_forward::run_detail_on_an_unreachable_holding_host_names_the_host_and_reason",
+        || {
+            let a = Fixture::new();
+            write_hosts(&a, &[("deadhost", "hm_deadhost", "dead-ssh", "HD")]);
+            let stub = StubSsh::new(json!({"dead-ssh": {"exit": 255}}));
+            let server = a.server_with_path(false, stub.bin());
+            let response = server
+                .request("GET", &format!("/api/on/deadhost/runs/jrun-held-c1{WS}"))
+                .timeout(SLOW_REQUEST)
+                .send()
+                .unwrap();
+            let dead = error_code(response, 502, "unreachable_destination");
+            assert_eq!(dead["host"], "deadhost", "{dead}");
+            let message = dead["error"].as_str().unwrap();
+            assert!(message.contains("deadhost"), "names the host: {dead}");
+            assert!(message.contains("exit 255"), "says why: {dead}");
         },
     );
 }

@@ -21,7 +21,7 @@ authorization, omit `--complete`. If the user will start the drain themselves,
 prepare work without launching a second coordinator.
 
 Prefer the connected MCP submission tool when it supports the requested
-options. `orbit_workflow_ship` intentionally has no completion input and always
+options. `orbit_workflow` action `ship` intentionally has no completion input and always
 submits review-only work. If completion is authorized, use `orbit run ship
 <task-id> --complete` through an available authorized operator command surface
 on the owning host; do not invent a `completion` argument, silently submit a
@@ -85,10 +85,9 @@ forecasting, or start another drain to bypass a wait without operator
 authorization.
 
 `orbit run readiness --json` names `host_shutdown_scheduled` when a shutdown or
-reboot is within `machine.host_shutdown_hold_minutes` (default 180), holding
+reboot is within the fixed 180-minute hold, holding
 new unattended admissions while leaving running work alone. Later schedules
-are reported while admissions continue. Preserve the configured window and
-schedule; diagnostics do not authorize cancelling shutdown or overriding the
+are reported while admissions continue. Preserve the schedule; diagnostics do not authorize cancelling shutdown or overriding the
 hold. See [operational-logs.md](../../orbit-setup/references/operational-logs.md#delivery-profiles-and-admission-diagnostics).
 
 Sustained host pressure throttles admissions on its own: readiness tasks read
@@ -102,7 +101,7 @@ Linux the throttle also reads disk I/O stall (`io full`, from
 admissions with CPU idle, so lower the drain ceiling or build slots rather
 than raising the mark. While
 CPU alone is held, `no-diff-expected` auto-tasks (marked `cpu-light`) still
-start within `workflow.resource_throttle.cpu_light_leaves`, and one waiting on
+start in up to two reserved slots, and one waiting on
 that spent budget reads `cpu_light_budget_full`. A task whose frozen delivery
 batch is within two hours of its deadline already sorts ahead of same-priority
 backlog, so do not raise it to critical just to beat the throttle.

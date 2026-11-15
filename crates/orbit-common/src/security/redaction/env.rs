@@ -199,7 +199,7 @@ fn cached_sensitive_env_values() -> &'static [String] {
 }
 
 fn sensitive_env_values() -> Cow<'static, [String]> {
-    // Tests mutate process env after startup (`EnvVarGuard`). A process-wide
+    // Tests mutate process env after startup (`ScopedEnv`). A process-wide
     // snapshot would miss those values, so re-collect in this crate's tests
     // and while the shared scoped environment guard is active. Normal
     // production calls retain the cached snapshot.
@@ -213,7 +213,7 @@ fn sensitive_env_values() -> Cow<'static, [String]> {
 /// Decide whether a sensitive-named env value is eligible for substitution
 /// by [`redact_sensitive_env_text`].
 ///
-/// A value is eligible when, after trim, it is at least 4 characters and is
+/// A value is eligible when, after trim, it is at least 4 bytes and is
 /// not one of the small compatibility set of ordinary words (`user`, `true`,
 /// `false`, `none`, `null`, `root`, `main`, `test`, `prod`, `local`, `auto`).
 /// This keeps those known prose/sentinel values readable while allowing
@@ -229,7 +229,8 @@ fn sensitive_env_values() -> Cow<'static, [String]> {
 ///
 /// Pattern-based redaction still independently catches provider-shaped tokens
 /// (`ghp_…`, `sk-…`).
-// pub(crate) for sibling-layout tests in security/tests/redaction.rs.
+// pub(crate) keeps the eligibility check reachable within the crate without
+// widening the public API; behavior is covered via the public redaction entry points.
 pub(crate) fn is_redactable_value(value: &str) -> bool {
     let trimmed = value.trim();
     trimmed.len() >= 4

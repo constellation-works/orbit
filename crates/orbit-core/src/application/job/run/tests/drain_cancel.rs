@@ -21,7 +21,7 @@ use orbit_types::workflow::{ChildDispatch, JobRun, JobRunState, PipelineState};
 use serde_json::{Value, json};
 
 use super::super::actions::CancellationRequest;
-use super::super::drain_cancel::set_drain_cancel_state_init_hook;
+use super::super::state_write::set_run_state_write_hook;
 use super::{
     assert_worker_checkpoint_preserved, insert_pending_run, running_run_without_state,
     test_runtime, worker_checkpoint,
@@ -49,7 +49,7 @@ fn graceful_cancel_initialization_preserves_worker_checkpoint_and_merges_control
         let run_id = run.run_id.clone();
         let progress = checkpoint.clone();
         let observed = reached.clone();
-        set_drain_cancel_state_init_hook(move || {
+        set_run_state_write_hook(move || {
             assert!(!observed.replace(true), "NoState seam must run once");
             assert!(worker.read_run_state(&run_id).unwrap().is_none());
             if let Some(state) = progress {
@@ -113,7 +113,7 @@ fn graceful_cancel_initialization_refuses_concurrent_terminalization() {
             let worker = runtime.clone();
             let run_id = run.run_id.clone();
             let progress = checkpoint.clone();
-            set_drain_cancel_state_init_hook(move || {
+            set_run_state_write_hook(move || {
                 assert!(worker.read_run_state(&run_id).unwrap().is_none());
                 if let Some(state) = progress {
                     assert!(
@@ -243,7 +243,7 @@ fn drain(runtime: &OrbitRuntime, job: &str, input: Value) -> JobRun {
     run
 }
 
-fn in_progress_task(runtime: &OrbitRuntime, run: &JobRun) -> String {
+pub(super) fn in_progress_task(runtime: &OrbitRuntime, run: &JobRun) -> String {
     let task = runtime
         .stores()
         .task_records()
@@ -426,6 +426,7 @@ fn admission(
         caller_before_pr: false,
         review_gate: false,
         selective_review: false,
+        visual_resolution: 0,
         ..admission_request(
             format!("request-{}", owner.receipts.lock().unwrap().len()),
             AdmissionRunContext {

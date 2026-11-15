@@ -206,6 +206,62 @@ fn assert_applied(workspace: &Workspace, task_id: &str, output: &Value) {
     let task = workspace.runtime.get_task(task_id).expect("task");
     assert_eq!(task.context_files, vec!["file:README.md".to_string()]);
     assert_eq!(task.complexity, Some(TaskComplexity::Low));
+    let comments = workspace.runtime.get_task_comments(task_id).unwrap();
+    let comment = comments
+        .iter()
+        .rev()
+        .find(|comment| comment.by == "task-pilot")
+        .unwrap();
+    assert_eq!(
+        comment.message.lines().count(),
+        1,
+        "pilot audits must not consume the human comment budget"
+    );
+    let reference: Value = serde_json::from_str(&comment.message).unwrap();
+    let path = reference["assessment_artifact"]
+        .as_str()
+        .expect("full pilot audit belongs in an artifact");
+    assert!(path.starts_with("pilot/assessment-"));
+    assert_eq!(
+        reference["operation_id"].as_str(),
+        comment.receipt().map(|receipt| receipt.operation_id)
+    );
+    assert!(reference["summary"].as_str().unwrap().contains("selectors"));
+    let audit = crate::task_pilot::pilot_audit(&workspace.runtime, task_id, comment);
+    assert_eq!(audit["assessment"]["task_id"], task_id);
+    // A normal attachment must not make trusted pilot evidence unreadable.
+    // Reproduced through the public update API during artifact QA: replacing
+    // the bytes previously succeeded, then even a repair update was refused.
+    let replacement = workspace
+        .runtime
+        .update_task_as_human(
+            task_id,
+            TaskUpdateParams {
+                upsert_artifacts: vec![orbit_types::task::TaskArtifact {
+                    path: path.into(),
+                    media_type: "application/json".into(),
+                    content: b"{}".to_vec(),
+                    created_by: None,
+                }],
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap_err();
+    assert!(
+        replacement.to_string().contains("sealed evidence"),
+        "{replacement}"
+    );
+    assert_eq!(
+        crate::task_pilot::pilot_audit(&workspace.runtime, task_id, comment),
+        audit
+    );
+
+    assert_eq!(
+        audit["assessment"]["context_files_after"],
+        json!(["file:README.md"])
+    );
+
     let history = workspace
         .runtime
         .get_task_history(task_id)
@@ -568,6 +624,258 @@ fn dependency_status_alone_still_applies_and_is_not_named_with_a_title_edit() {
     );
 }
 
+/// A proposed task whose pilot assessment artifact has gone missing (the
+/// state a restore without attachments leaves behind) must hold only its own
+/// readout. List and show keep serving every task, and the broken task reports
+/// its audit as unavailable instead of failing the page.
+fn missing_assessment_artifact_degrades_only_its_own_readout() {
+    let workspace = workspace(None);
+    let broken = add_task(&workspace.runtime, "broken audit", TaskStatus::Proposed);
+    let healthy = add_task(&workspace.runtime, "healthy", TaskStatus::Proposed);
+    let output = apply(&workspace, &prepare(&workspace, &broken.id)).expect("apply");
+    assert_eq!(output["status"], "succeeded", "{output}");
+    let comment = workspace
+        .runtime
+        .get_task_comments(&broken.id)
+        .expect("comments")
+        .into_iter()
+        .rev()
+        .find(|comment| comment.by == "task-pilot")
+        .expect("pilot receipt");
+    let reference: Value = serde_json::from_str(&comment.message).expect("reference");
+    let path = reference["assessment_artifact"]
+        .as_str()
+        .expect("assessment artifact path")
+        .to_string();
+    crate::artifact_tools::drop_artifact_manifest_entry(
+        &workspace.runtime.global_root(),
+        &broken.id,
+        &path,
+    );
+    assert!(
+        workspace
+            .runtime
+            .get_task_artifact(&broken.id, &path)
+            .expect("artifact read")
+            .is_none(),
+        "the assessment artifact must now be missing"
+    );
+
+    let listed = workspace
+        .runtime
+        .run_tool("orbit.task.list", json!({"status": "proposed"}))
+        .expect("list must survive one unreadable pilot audit");
+    let rows = listed["tasks"].as_array().expect("task rows");
+    let row = |id: &str| {
+        rows.iter()
+            .find(|row| row["id"] == id)
+            .unwrap_or_else(|| panic!("{id} missing from list: {listed}"))
+    };
+    assert_eq!(row(&healthy.id)["pilot_warnings"], json!([]), "{listed}");
+    assert_eq!(
+        row(&broken.id)["pilot_warnings"][0]["kind"],
+        "pilot_assessment_unavailable",
+        "{listed}"
+    );
+
+    let shown = workspace
+        .runtime
+        .run_tool("orbit.task.show", json!({"id": broken.id}))
+        .expect("show must survive one unreadable pilot audit");
+    assert_eq!(
+        shown["pilot_warnings"][0]["kind"], "pilot_assessment_unavailable",
+        "{shown}"
+    );
+    assert_eq!(
+        shown["resolvable_pilot_admission_hold"],
+        json!(false),
+        "{shown}"
+    );
+}
+
+fn unreadable_assessment_degrades_show_and_refuses_admission() {
+    for oversized in [false, true] {
+        let workspace = workspace(None);
+        let task = add_task(&workspace.runtime, "unreadable audit", TaskStatus::Proposed);
+        let output = apply(&workspace, &prepare(&workspace, &task.id)).expect("apply");
+        assert_eq!(output["status"], "succeeded", "{output}");
+        let comment = workspace
+            .runtime
+            .get_task_comments(&task.id)
+            .expect("comments")
+            .into_iter()
+            .rev()
+            .find(|comment| comment.by == "task-pilot")
+            .expect("pilot receipt");
+        let reference: Value = serde_json::from_str(&comment.message).expect("reference");
+        let path = reference["assessment_artifact"]
+            .as_str()
+            .expect("artifact path");
+        let blob = crate::artifact_tools::find_artifact_blob(
+            &workspace.runtime.global_root(),
+            &task.id,
+            path,
+        );
+        if oversized {
+            let content =
+                vec![b'x'; orbit_types::task::MAX_TASK_ARTIFACT_CONTENT_BYTES as usize + 1];
+            std::fs::write(&blob, &content).expect("oversize blob");
+            let manifest_path = blob
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("manifest.yaml");
+            let mut manifest: orbit_types::task::ArtifactManifestV2 =
+                serde_yaml::from_str(&std::fs::read_to_string(&manifest_path).expect("manifest"))
+                    .expect("parse manifest");
+            let entry = manifest
+                .files
+                .iter_mut()
+                .find(|entry| entry.path == path)
+                .expect("entry");
+            entry.size_bytes = content.len() as u64;
+            entry.sha256 = orbit_common::security::release::sha256_hex(&content);
+            std::fs::write(manifest_path, serde_yaml::to_string(&manifest).unwrap())
+                .expect("write manifest");
+        } else {
+            std::fs::remove_file(&blob).expect("remove blob");
+            std::fs::create_dir(&blob).expect("replace blob with directory");
+        }
+        let error = workspace
+            .runtime
+            .has_resolvable_pilot_admission_hold(&task.id)
+            .expect_err("admission must fail closed on unreadable evidence");
+        if oversized {
+            assert!(
+                matches!(error, orbit_common::OrbitError::InvalidInput(_)),
+                "{error:?}"
+            );
+        } else {
+            assert!(
+                matches!(error, orbit_common::OrbitError::Io(_)),
+                "{error:?}"
+            );
+        }
+        let shown = workspace
+            .runtime
+            .run_tool("orbit.task.show", json!({"id": task.id}))
+            .expect("show must survive unreadable pilot evidence");
+        let warnings = shown["pilot_warnings"].as_array().expect("warnings");
+        assert_eq!(warnings.len(), 1, "{shown}");
+        assert_eq!(
+            warnings[0]["kind"], "pilot_assessment_unavailable",
+            "{shown}"
+        );
+        assert_eq!(shown["resolvable_pilot_admission_hold"], false, "{shown}");
+    }
+}
+
+fn dangling_or_corrupt_pilot_blob_degrades_show() {
+    // 0: blob absent with manifest retained. 1: same-length bytes whose
+    // sha256 no longer matches the manifest. 2: appended bytes whose size
+    // (and sha256) no longer match the manifest.
+    for variant in 0..3 {
+        let workspace = workspace(None);
+        let task = add_task(&workspace.runtime, "dangling audit", TaskStatus::Proposed);
+        let output = apply(&workspace, &prepare(&workspace, &task.id)).expect("apply");
+        assert_eq!(output["status"], "succeeded", "{output}");
+        let comment = workspace
+            .runtime
+            .get_task_comments(&task.id)
+            .expect("comments")
+            .into_iter()
+            .rev()
+            .find(|comment| comment.by == "task-pilot")
+            .expect("pilot receipt");
+        let reference: Value = serde_json::from_str(&comment.message).expect("reference");
+        let path = reference["assessment_artifact"]
+            .as_str()
+            .expect("artifact path");
+        let blob = crate::artifact_tools::find_artifact_blob(
+            &workspace.runtime.global_root(),
+            &task.id,
+            path,
+        );
+        match variant {
+            0 => std::fs::remove_file(&blob).expect("remove blob"),
+            1 => {
+                let mut bytes = std::fs::read(&blob).expect("read blob");
+                bytes[0] ^= 0xff;
+                std::fs::write(&blob, &bytes).expect("tamper blob");
+            }
+            _ => {
+                let mut bytes = std::fs::read(&blob).expect("read blob");
+                bytes.push(b'x');
+                std::fs::write(&blob, &bytes).expect("append blob");
+            }
+        }
+        // Store integrity and admission stay fail-closed.
+        assert!(
+            matches!(
+                workspace.runtime.get_task(&task.id),
+                Err(orbit_common::OrbitError::TaskBundleCorrupt { .. })
+            ),
+            "variant {variant}: full bundle read must refuse damaged evidence"
+        );
+        workspace
+            .runtime
+            .has_resolvable_pilot_admission_hold(&task.id)
+            .expect_err("variant: admission must refuse damaged evidence");
+        let shown = workspace
+            .runtime
+            .run_tool("orbit.task.show", json!({"id": task.id}))
+            .unwrap_or_else(|error| {
+                panic!("variant {variant}: show must degrade damaged pilot evidence: {error}")
+            });
+        let warnings = shown["pilot_warnings"].as_array().expect("warnings");
+        assert_eq!(warnings.len(), 1, "variant {variant}: {shown}");
+        assert_eq!(
+            warnings[0]["kind"], "pilot_assessment_unavailable",
+            "variant {variant}: {shown}"
+        );
+        assert_eq!(
+            shown["resolvable_pilot_admission_hold"], false,
+            "variant {variant}: {shown}"
+        );
+    }
+
+    // Unrelated structural corruption stays an explicit show error.
+    let workspace = workspace(None);
+    let task = add_task(
+        &workspace.runtime,
+        "structurally corrupt",
+        TaskStatus::Proposed,
+    );
+    let output = apply(&workspace, &prepare(&workspace, &task.id)).expect("apply");
+    assert_eq!(output["status"], "succeeded", "{output}");
+    let comment = workspace
+        .runtime
+        .get_task_comments(&task.id)
+        .expect("comments")
+        .into_iter()
+        .rev()
+        .find(|comment| comment.by == "task-pilot")
+        .expect("pilot receipt");
+    let reference: Value = serde_json::from_str(&comment.message).expect("reference");
+    let path = reference["assessment_artifact"]
+        .as_str()
+        .expect("artifact path");
+    let blob =
+        crate::artifact_tools::find_artifact_blob(&workspace.runtime.global_root(), &task.id, path);
+    let bundle_dir = blob
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .expect("bundle dir");
+    std::fs::write(bundle_dir.join("task.yaml"), ": [invalid envelope\n")
+        .expect("corrupt envelope");
+    workspace
+        .runtime
+        .run_tool("orbit.task.show", json!({"id": task.id}))
+        .expect_err("structural corruption must remain an explicit show error");
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     meaning_edits_name_the_drifted_component_and_write_nothing_scenarios,
@@ -577,5 +885,8 @@ crate::scenario_table!(
     proposed_to_backlog_still_applies,
     malformed_component_map_fails_apply_without_writing,
     configured_crew_and_dependency_meaning_drift_are_named,
-    dependency_status_alone_still_applies_and_is_not_named_with_a_title_edit
+    dependency_status_alone_still_applies_and_is_not_named_with_a_title_edit,
+    missing_assessment_artifact_degrades_only_its_own_readout,
+    unreadable_assessment_degrades_show_and_refuses_admission,
+    dangling_or_corrupt_pilot_blob_degrades_show
 );

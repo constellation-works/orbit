@@ -3,6 +3,10 @@
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(
+    not(any(test, feature = "test-support")),
+    deny(clippy::disallowed_methods)
+)]
 //! Orbit's Model Context Protocol framing, tool surface, and transports.
 //!
 //! This crate owns protocol framing, advertised-name translation, structured
@@ -36,12 +40,14 @@ pub use listener::{DEFAULT_MCP_LISTEN_PORT, ListenerExposure, McpListener};
 pub use remote::{
     FEDERATED_DESTINATION_WORKSPACE_LIST_TOOL, HostFacts, McpServerIdentity, McpSessionAuthority,
     RemoteProxyArgs, WORKSPACE_LIST_INCLUDE_CREWS, canonical_mcp_tool_definitions,
-    execute_discovery_tool, execute_federated_workspace_discovery,
-    ignored_caller_authorization_paths, mcp_server_identity, safe_mcp_tool_names,
-    serve_mcp_remote_proxy, warn_ignored_caller_authorization, workspace_list_includes_crews,
+    execute_discovery_tool, execute_federated_workspace_discovery, mcp_server_identity,
+    safe_mcp_tool_names, serve_mcp_remote_proxy, workspace_list_includes_crews,
 };
 pub use stdio_session::{LIFECYCLE_INTERVAL_ENV, RESUME_ENV, StdioExit, stdin_supports_handover};
-pub use toolset::{MCP_TOOLSETS_CONFIG_KEY, TOOLSET_NOT_ENABLED_CODE, with_mcp_toolsets};
+pub use toolset::{
+    MCP_ROLE_CONFIG_KEY, MCP_TOOLSETS_CONFIG_KEY, McpSurfaceReport, TOOLSET_NOT_ENABLED_CODE,
+    mcp_surface_report, with_mcp_toolsets,
+};
 
 /// Back-end for the complete MCP tool surface.
 ///
@@ -78,6 +84,11 @@ pub trait McpHost: Send + Sync + 'static {
     /// session; `tools/call` enforces the same state on its own.
     fn hidden_tool_names(&self, _session_context: &ToolSessionContext) -> BTreeSet<String> {
         BTreeSet::new()
+    }
+
+    /// Whether the adapter may expose its UI entrypoints.
+    fn presentation_enabled(&self) -> bool {
+        true
     }
 
     /// Execute one canonicalized call and return its finished result. The

@@ -1,6 +1,7 @@
 //! Diagnostic, resource-limit and cancellation records for a worker's run.
 
 use super::*;
+use crate::application::job::run::worker_scope::WorkerScopeCgroup;
 
 impl OrbitRuntime {
     /// The bounded process snapshot captured when this run's watchdog tripped.
@@ -35,7 +36,7 @@ impl OrbitRuntime {
             Err(error) => error.to_string(),
         };
         let Some(breach) =
-            scope::WorkerScopeCgroup::of_current_process().and_then(|scope| scope.limit_breach())
+            WorkerScopeCgroup::of_current_process().and_then(|scope| scope.limit_breach())
         else {
             return;
         };
@@ -55,28 +56,6 @@ impl OrbitRuntime {
         );
     }
 
-    /// [ORB-10002] Record a terminal diagnostic step with an explicit state
-    /// (`failed` for job errors, `interrupted` for orphan reconciliation).
-    pub(crate) fn record_pipeline_diagnostic_step(
-        &self,
-        run: &JobRun,
-        started_at: chrono::DateTime<Utc>,
-        finished_at: chrono::DateTime<Utc>,
-        error_code: Option<&str>,
-        message: &str,
-        state: JobRunState,
-    ) -> Result<(), OrbitError> {
-        record::diagnostic_step(
-            self.stores().jobs(),
-            run,
-            started_at,
-            finished_at,
-            error_code,
-            message,
-            state,
-        )
-    }
-
     /// [ORB-12038] Read a run's own `<run_id>.worker.log`, for a caller (`orbit
     /// run logs`) that found no audited CLI-invocation blobs to show. A run
     /// that fails before any step runs — a routine-dispatch workspace
@@ -84,10 +63,10 @@ impl OrbitRuntime {
     /// output to audit; the worker log is where that process wrote its own
     /// stderr, and it is the only place the cause exists.
     ///
-    /// `Ok(None)` means no such file exists (the ordinary case for a run that
-    /// reached step execution). `Some` with `content: None` means the file
-    /// exists but its content could not be recovered (unreadable or empty);
-    /// the caller still has the path to name where to look by hand.
+    /// `Ok(None)` means the path is not a regular file, including when it is
+    /// absent. An error opening an existing file returns `Err(OrbitError::Io)`.
+    /// After a successful open, `Ok(Some(...))` retains the path; `content: None`
+    /// means the tail could not be read or yielded no content or diagnostics.
     pub fn read_pipeline_worker_log(
         &self,
         run_id: &str,
@@ -104,28 +83,5 @@ impl OrbitRuntime {
         })?;
         let content = read_pipeline_worker_log_tail(&mut file);
         Ok(Some(PipelineWorkerLogSnapshot { path, content }))
-    }
-
-    pub(crate) fn record_pipeline_audit(
-        &self,
-        tool_name: &str,
-        target_id: Option<&str>,
-        actor: Option<&str>,
-        status: AuditEventStatus,
-        arguments: Value,
-        error_message: Option<String>,
-    ) -> Result<(), OrbitError> {
-        record::pipeline_audit(
-            self.stores().audit_events(),
-            &self.paths().repo_root,
-            record::PipelineAuditRow {
-                tool_name,
-                target_id,
-                actor,
-                status,
-                arguments,
-                error_message,
-            },
-        )
     }
 }

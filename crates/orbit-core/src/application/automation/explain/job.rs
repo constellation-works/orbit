@@ -1,19 +1,23 @@
 //! `orbit automation explain job:<name>` [ORB-20157]: a job's auto-task
 //! steps as checked at load, with each named auto-task resolved and frozen
-//! for inspection (`docs/design/activity-job/specs/auto-task-step.md` §7,
-//! phase 1). No such job runs yet, so there is no wait to evaluate; the
-//! report reads definitions and writes nothing.
+//! for inspection (`docs/design/activity-job/specs/auto-task-step.md` §7).
+//! It explains the definition, not an execution: no wait is evaluated, and
+//! the report reads definitions and writes nothing.
 
 use chrono::Utc;
 use orbit_automation::condition::{
     CheckedAutoTaskStep, CheckedExpression, ConditionReads, OuterBound, check_job_waits,
 };
 use orbit_common::OrbitError;
-use orbit_types::workflow::AutoTaskSchedule;
+use orbit_types::workflow::{
+    AutoTaskAcceptedHistory, AutoTaskCompletionContract, AutoTaskCompletionReceipt,
+    AutoTaskSchedule,
+};
 use serde::Serialize;
 
 use super::ExplainedDefinition;
 use crate::OrbitRuntime;
+use crate::application::automation::AutomationAutoTaskPort;
 
 /// The `orbit.automation.explain` payload for `job:<name>`.
 #[derive(Debug, Serialize)]
@@ -98,8 +102,35 @@ pub struct ExplainedAutoTaskTarget {
     pub definition_digest: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub admission_guard: Option<ExplainedAdmissionGuard>,
+    /// The definition's declared completion contract, when it opts into one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion: Option<ExplainedCompletion>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// A declared completion contract and what it would answer now.
+#[derive(Debug, Serialize)]
+pub struct ExplainedCompletion {
+    #[serde(flatten)]
+    pub contract: AutoTaskCompletionContract,
+    /// `granted`, `stale`, `ungranted`, `missing` or `unreadable`. Anything but
+    /// `granted` holds a step on this definition as unavailable.
+    pub adapter_grant: String,
+    pub accepted_history: ExplainedAcceptedHistory,
+}
+
+/// A definition's accepted-result history: `latest`, `missing` or `unreadable`.
+#[derive(Debug, Serialize)]
+#[serde(tag = "state", rename_all = "lowercase")]
+pub enum ExplainedAcceptedHistory {
+    Latest {
+        receipt: Box<AutoTaskCompletionReceipt>,
+    },
+    Missing,
+    Unreadable {
+        error: String,
+    },
 }
 
 /// The referenced definition's own condition, an additional admission
@@ -178,10 +209,12 @@ impl OrbitRuntime {
             steps,
             evaluated_at: now.to_rfc3339(),
             runtime: ExplainedJobRuntime {
-                executable: false,
-                note: "auto-task steps are defined and explained only: this Orbit refuses to \
-                       enable or run the job, so nothing waits, no task is minted and no \
-                       result is accepted",
+                executable: true,
+                note: "an enabled job runs detached: each execution freezes this definition, \
+                       parks without a worker while a step waits, and mints at most one task \
+                       per step; a step requiring release-readiness/v1 holds until its definition \
+                       declares that contract with a granted adapter script and the adapter \
+                       accepts the task's evidence",
             },
         })
     }
@@ -216,6 +249,7 @@ impl OrbitRuntime {
             enabled: None,
             definition_digest: None,
             admission_guard: None,
+            completion: None,
             error: None,
         };
         let unreadable = |mut target: ExplainedAutoTaskTarget, error: String| {
@@ -223,8 +257,8 @@ impl OrbitRuntime {
             target.error = Some(error);
             target
         };
-        let path = match self.auto_task_read_source(name) {
-            Ok(Some((_, path))) => path,
+        let path = match self.auto_task_discovery_path(name) {
+            Ok(Some(path)) => path,
             Ok(None) => return target,
             Err(error) => return unreadable(target, error.to_string()),
         };
@@ -233,12 +267,33 @@ impl OrbitRuntime {
             Ok(bytes) => bytes,
             Err(error) => return unreadable(target, format!("read {}: {error}", path.display())),
         };
-        let definition = match self.auto_task_show(name) {
+        let definition = match self.validated_auto_task_definition(name) {
             Ok(Some(definition)) => definition,
             Ok(None) => return target,
             Err(error) => return unreadable(target, error.to_string()),
         };
         target.resolution = "resolved";
+        target.completion = definition.completion.clone().map(|contract| {
+            let adapter_grant = match self.script_status(&contract.adapter) {
+                Ok(Some(status)) => status.state.as_str().to_string(),
+                Ok(None) => "missing".to_string(),
+                Err(_) => "unreadable".to_string(),
+            };
+            let accepted_history = match self.auto_task_completion_history(name) {
+                AutoTaskAcceptedHistory::Latest(receipt) => {
+                    ExplainedAcceptedHistory::Latest { receipt }
+                }
+                AutoTaskAcceptedHistory::Missing => ExplainedAcceptedHistory::Missing,
+                AutoTaskAcceptedHistory::Unreadable(error) => {
+                    ExplainedAcceptedHistory::Unreadable { error }
+                }
+            };
+            ExplainedCompletion {
+                contract,
+                adapter_grant,
+                accepted_history,
+            }
+        });
         target.enabled = Some(definition.enabled);
         target.definition_digest = Some(orbit_automation::delivery::digest(&bytes));
         target.admission_guard = Some(match definition.schedule {

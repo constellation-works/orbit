@@ -116,7 +116,8 @@ pub fn is_provider_failure(error_code: Option<&str>, message: Option<&str>) -> b
 ///
 /// No repair of the candidate can install a tool, so step and final recovery
 /// skip it, the failure handoff keeps the candidate for `orbit job resume`
-/// without opening a `[BLOCKED]` PR, and a pull drain releases the claim.
+/// without opening a `[BLOCKED]` PR. A pull drain retains release evidence
+/// while its owner holds the task for an operator decision.
 pub const VALIDATION_ENVIRONMENT_ERROR_CODE: &str = "validation_environment";
 
 /// The bracketed marker form of [`VALIDATION_ENVIRONMENT_ERROR_CODE`].
@@ -143,7 +144,7 @@ pub fn is_validation_environment_failure(error_code: Option<&str>, message: Opti
 /// It is a kind of [`VALIDATION_ENVIRONMENT_ERROR_CODE`]: no repair of the
 /// candidate changes the lane's sandbox, so step and final recovery skip it,
 /// the failure handoff keeps the candidate, and a pull drain releases the
-/// claim as an `environment` failure instead of blocking the task.
+/// claim as an `environment` failure, which the owner holds for an operator.
 pub const VALIDATION_ROUTE_UNAVAILABLE_ERROR_CODE: &str = "validation_route_unavailable";
 
 /// The bracketed marker form of [`VALIDATION_ROUTE_UNAVAILABLE_ERROR_CODE`].
@@ -170,14 +171,143 @@ pub fn is_validation_route_unavailable(error_code: Option<&str>, message: Option
 pub const OWNER_ROUTE_UNAVAILABLE_ERROR_CODE: &str = "owner_route_unavailable";
 
 /// The bracketed marker form of [`OWNER_ROUTE_UNAVAILABLE_ERROR_CODE`].
+///
+/// Legacy only: records written before the typed step-failure code existed
+/// carry this marker in their message text and no code field. No producer
+/// stamps it into new messages; [`is_owner_route_unavailable`] is its single
+/// remaining classification reader, for those old records.
 pub const OWNER_ROUTE_UNAVAILABLE_MARKER: &str = "[owner_route_unavailable]";
 
+/// Token a step failure carries when the implementer stopped because
+/// recorded owner approval is still missing. The run holds for the
+/// operator; another agent cannot record that approval. [ORB-23956]
+pub const OWNER_SIGNOFF_REQUIRED_ERROR_CODE: &str = "owner_signoff_required";
+
+/// `error.code=` fragment the step diagnostic writes for
+/// [`OWNER_SIGNOFF_REQUIRED_ERROR_CODE`], including the semicolon that
+/// closes the code. A handoff that sees only the step message matches this.
+const OWNER_SIGNOFF_REQUIRED_DIAGNOSTIC_TOKEN: &str = "error.code=owner_signoff_required;";
+
+/// The typed code a step failure carries beside its message.
+///
+/// Parsed once where a step failure is ingested — from the declared
+/// envelope's `error.code` or from an `OrbitError` — and recorded on the
+/// step record, so recovery and classification branch on the code instead
+/// of recovering it from message text. Serializes as its plain code
+/// string, so persisted and wire shapes keep the code's existing form.
+/// New named codes join this enum as their markers are converted; an
+/// arbitrary agent-declared code is preserved verbatim by
+/// [`Self::Other`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum StepFailureCode {
+    /// A claimed leaf could not reach its task's owner
+    /// ([`OWNER_ROUTE_UNAVAILABLE_ERROR_CODE`]).
+    OwnerRouteUnavailable,
+    /// Recorded owner approval is still missing
+    /// ([`OWNER_SIGNOFF_REQUIRED_ERROR_CODE`]). The run holds.
+    OwnerSignoffRequired,
+    /// Any other agent- or host-declared code, preserved as declared.
+    Other(String),
+}
+
+impl StepFailureCode {
+    /// Parse a declared code string into its typed form, once, at the
+    /// boundary where a step failure is ingested.
+    #[must_use]
+    pub fn parse(code: &str) -> Self {
+        match code {
+            OWNER_ROUTE_UNAVAILABLE_ERROR_CODE => Self::OwnerRouteUnavailable,
+            OWNER_SIGNOFF_REQUIRED_ERROR_CODE => Self::OwnerSignoffRequired,
+            other => Self::Other(other.to_string()),
+        }
+    }
+
+    /// The code's string form, as the broker wire and agent envelope carry it.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::OwnerRouteUnavailable => OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,
+            Self::OwnerSignoffRequired => OWNER_SIGNOFF_REQUIRED_ERROR_CODE,
+            Self::Other(code) => code,
+        }
+    }
+
+    /// Whether this code says a claimed worker could not reach its owner.
+    #[must_use]
+    pub const fn is_owner_route_unavailable(&self) -> bool {
+        matches!(self, Self::OwnerRouteUnavailable)
+    }
+}
+
+impl std::fmt::Display for StepFailureCode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl From<&str> for StepFailureCode {
+    fn from(code: &str) -> Self {
+        Self::parse(code)
+    }
+}
+
+impl From<String> for StepFailureCode {
+    fn from(code: String) -> Self {
+        match code.as_str() {
+            OWNER_ROUTE_UNAVAILABLE_ERROR_CODE => Self::OwnerRouteUnavailable,
+            OWNER_SIGNOFF_REQUIRED_ERROR_CODE => Self::OwnerSignoffRequired,
+            _ => Self::Other(code),
+        }
+    }
+}
+
+impl From<StepFailureCode> for String {
+    fn from(code: StepFailureCode) -> Self {
+        code.as_str().to_string()
+    }
+}
+
+impl Serialize for StepFailureCode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for StepFailureCode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer).map(Self::from)
+    }
+}
+
 /// Whether a step failure says a claimed worker could not reach its owner.
+///
+/// A present typed code decides alone. The bracketed-marker check is the
+/// documented legacy fallback for a record with no code field, written
+/// before the typed code existed; it lives only here.
 #[must_use]
-pub fn is_owner_route_unavailable(error_code: Option<&str>, message: Option<&str>) -> bool {
-    error_code == Some(OWNER_ROUTE_UNAVAILABLE_ERROR_CODE)
-        || message.is_some_and(|message| {
+pub fn is_owner_route_unavailable(
+    error_code: Option<&StepFailureCode>,
+    message: Option<&str>,
+) -> bool {
+    match error_code {
+        Some(code) => code.is_owner_route_unavailable(),
+        None => message.is_some_and(|message| {
             failure_classification_text(message).contains(OWNER_ROUTE_UNAVAILABLE_MARKER)
+        }),
+    }
+}
+
+/// Whether a step stopped because recorded owner approval is still missing.
+///
+/// An `error_code` equal to [`OWNER_SIGNOFF_REQUIRED_ERROR_CODE`] decides.
+/// The diagnostic fragment is the fallback for a handoff that received only
+/// the step message: that message writes `error.code=owner_signoff_required;`
+/// and is not itself a typed code. This is not an owner-route failure.
+#[must_use]
+pub fn is_owner_signoff_required(error_code: Option<&str>, message: Option<&str>) -> bool {
+    error_code == Some(OWNER_SIGNOFF_REQUIRED_ERROR_CODE)
+        || message.is_some_and(|message| {
+            failure_classification_text(message).contains(OWNER_SIGNOFF_REQUIRED_DIAGNOSTIC_TOKEN)
         })
 }
 
@@ -233,11 +363,10 @@ pub fn is_owner_busy(message: Option<&str>) -> bool {
 /// Why a claimed leaf ended without its typed handoff, as its settlement
 /// carries it to the owner [ORB-14257].
 ///
-/// The owner blocks the task only for [`Self::Candidate`] and
-/// [`Self::TaskInput`]: the work or the task itself needs a human. Every
-/// other class is the executing host's, the base's or the moment's, so the
-/// claim is released to the backlog instead, within a per-task release budget
-/// that counts every typed release.
+/// Candidate and task-input failures fail the claim. External prerequisites
+/// ([`Self::requires_operator_decision`]) retain release evidence for host
+/// suppression but also block the task immediately. Other classes release to
+/// backlog within a per-task budget.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ClaimFailureClass {
@@ -285,20 +414,28 @@ impl ClaimFailureClass {
         }
     }
 
-    /// Whether the owner blocks the task for it rather than releasing it.
+    /// Whether the leaf fails its claim instead of sending release evidence.
     #[must_use]
     pub const fn blocks(self) -> bool {
         matches!(self, Self::Candidate | Self::TaskInput)
     }
 
+    /// Whether a prerequisite outside the worker's reach needs an operator
+    /// before another attempt. Keep release evidence for these classes so
+    /// the failed host remains suppressed even while the task is blocked.
+    #[must_use]
+    pub const fn requires_operator_decision(self) -> bool {
+        matches!(self, Self::Environment | Self::OwnerRoute)
+    }
+
     /// Whether a release of this class counts against the task's release
-    /// budget. Every typed release counts; the third within the window blocks
-    /// the task until a human decides what should change. A `provider`
+    /// budget. Releases that do not already require an operator count; the
+    /// third blocks the task until a human decides what should change. A `provider`
     /// release for a usage limit is the exception the release itself carries,
     /// since a limit says nothing about the task [ORB-14695].
     #[must_use]
     pub const fn budgeted(self) -> bool {
-        !self.blocks()
+        !self.blocks() && !self.requires_operator_decision()
     }
 
     /// Whether the owner withholds the released task from the same drain for
@@ -339,6 +476,21 @@ impl ClaimFailureClass {
     /// [hold](super::super::BaselineRedHold), which the owner needs to lift it.
     #[must_use]
     pub fn of_step_failure(error_code: Option<&str>, message: Option<&str>) -> Option<Self> {
+        // Parse the string code once at this boundary; typed callers use
+        // [`Self::of_step_failure_code`] directly.
+        Self::of_step_failure_code(error_code.map(StepFailureCode::parse).as_ref(), message)
+    }
+
+    /// [`Self::of_step_failure`] for a failure that already carries its
+    /// typed [`StepFailureCode`]. The owner-route branch matches on the
+    /// typed code; the sibling codes not yet converted keep their
+    /// string/marker classification.
+    #[must_use]
+    pub fn of_step_failure_code(
+        failure_code: Option<&StepFailureCode>,
+        message: Option<&str>,
+    ) -> Option<Self> {
+        let error_code = failure_code.map(StepFailureCode::as_str);
         let typed = |code: &str, marker: &str| {
             error_code == Some(code)
                 || message
@@ -348,7 +500,7 @@ impl ClaimFailureClass {
             Some(Self::Provider)
         } else if is_validation_environment_failure(error_code, message) {
             Some(Self::Environment)
-        } else if is_owner_route_unavailable(error_code, message) {
+        } else if is_owner_route_unavailable(failure_code, message) {
             Some(Self::OwnerRoute)
         } else if super::super::is_baseline_red_failure(error_code, message)
             && message

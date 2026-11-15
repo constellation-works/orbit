@@ -37,7 +37,9 @@ impl McpToolClass {
 /// Classify public tools and internal drain operations by behavior.
 ///
 /// Accepts either the canonical (`orbit.task.add`) or advertised
-/// (`orbit_task_add`) spelling. Task reads are `control_plane` because the
+/// (`orbit_task_add`) spelling. A family call is classified by the operation
+/// its action reaches (`orbit.workflow.run.show` for `orbit.run` with
+/// `action: show`), so callers pass that operation. Task reads are `control_plane` because the
 /// coordination store is owner-authoritative. A name this host does not
 /// advertise or serve internally is unclassified here; public routing rejects it with
 /// `tool_not_on_this_host`, which precedes `capability_refused`.
@@ -71,26 +73,32 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         | "orbit_task_pull"
         | "orbit_drain_claim_bind"
         | "orbit_drain_claim_settle"
-        // Leases, including reads, answer for the owner's single lock state.
-        | "orbit_lease_request"
-        | "orbit_lease_renew"
-        | "orbit_lease_release"
-        | "orbit_lease_show"
-        | "orbit_lease_list"
-        | "orbit_lease_check"
+        | "orbit_drain_claim_effort"
+        // Fleet notices, including reads, answer for the home workspace's
+        // owner store only; a replica holding a copy would go stale.
+        | "orbit_notice_post"
+        | "orbit_notice_close"
+        | "orbit_notice_list"
+        | "orbit_notice_show"
+        | "orbit_workflow_land"
         | "orbit_workflow_ship" => McpToolClass::ControlPlane,
         // A replica may resolve an existing host-local legacy friction. Core
         // checks the update's fields and still refuses every other mutation.
         "orbit_friction_update" => McpToolClass::Execute,
+        // The named fan-out read is never refused: each destination derives
+        // only the kinds its checkout role is authoritative for (an owner its
+        // task-level kinds, every host its own health), so it is answerable
+        // everywhere, like workspace discovery.
+        "orbit_attention" => McpToolClass::Unclassified,
         // Runs a process on the destination host outside Orbit's sandbox, so
         // the host that would execute it owns the decision — the same reason
         // `orbit.command.exec` is Execute [ORB-11354].
         "orbit_pipeline_invoke"
         | "orbit_workflow_auto"
         | "orbit_routine_control"
-        | "orbit_agent_invoke"
         | "orbit_command_exec"
         | "orbit_workflow_run_list"
+        | "orbit_workflow_run_observe"
         | "orbit_workflow_run_show"
         | "orbit_workflow_run_resume" => McpToolClass::Execute,
         _ => McpToolClass::Unclassified,

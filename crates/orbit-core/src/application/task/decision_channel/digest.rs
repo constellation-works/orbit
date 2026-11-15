@@ -92,7 +92,9 @@ impl OrbitRuntime {
         let expiring: Vec<DecisionRequest> = listing
             .requests
             .into_iter()
-            .filter(|request| request.expires_at <= horizon)
+            .filter(|request| {
+                request.expires_at <= horizon && request.gate != DecisionGate::ModelAnswerReview
+            })
             .collect();
         let mut requests = approvals;
         for request in &expiring {
@@ -127,7 +129,12 @@ impl OrbitRuntime {
                 let expected = match gate {
                     DecisionGate::ProposedApproval => TaskStatus::Proposed,
                     DecisionGate::ReviewApproval => TaskStatus::Review,
-                    DecisionGate::BlockTriage | DecisionGate::PilotAdmission => {
+                    DecisionGate::BlockTriage
+                    | DecisionGate::PilotAdmission
+                    | DecisionGate::AgentRequest
+                    | DecisionGate::ModelAnswerReview
+                    | DecisionGate::ResidentAuthority
+                    | DecisionGate::ScriptGrant => {
                         return Ok(());
                     }
                 };
@@ -159,7 +166,8 @@ impl OrbitRuntime {
                     binding,
                     "digest".to_string(),
                     chrono::Utc::now(),
-                );
+                )
+                .with_category(&self.workspace_id()?);
                 self.stores().task_records().update(
                     task_id,
                     TaskRecordUpdateParams {

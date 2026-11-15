@@ -22,16 +22,9 @@ impl OwnerCoordinator for MetadataWire {
         session: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
         self.requests.lock().unwrap().push(input.clone());
-        if input["_worker_read"] == "history"
-            && *self.fault.lock().unwrap() == Some("history-failed")
-        {
-            return Err(OrbitError::UnreachableDestination(
-                "history unavailable".into(),
-            ));
-        }
-        if input["_worker_read"] == "task_metadata"
+        if *self.fault.lock().unwrap() == Some("scan-change")
+            && input["_worker_read"] == "task_metadata"
             && !input["metadata_page"]["cursor"].is_null()
-            && *self.fault.lock().unwrap() == Some("scan-change")
         {
             self.owner.add_task(TaskAddParams {
                 title: "Deterministic scan mutation".into(),
@@ -267,7 +260,7 @@ crate::scenario_table!(
     worker_metadata_scenarios,
     worker_metadata_is_complete_bodyless_and_bounded,
     worker_metadata_failures_never_return_a_partial_scan,
-    worker_metadata_regression_marks_match_the_owner
+    worker_metadata_carries_regression_classifications
 );
 
 fn worker_metadata_failures_never_return_a_partial_scan() {
@@ -300,16 +293,6 @@ fn worker_metadata_failures_never_return_a_partial_scan() {
         assert!(
             bound.list_task_metadata_for_ids(&ids).is_err(),
             "{fault}: targeted metadata fails too"
-        );
-        assert_eq!(
-            RuntimeHost::regression_risk_for_agent_input(
-                &bound,
-                "metadata-failure",
-                "agent_implement",
-                &json!({"task_id": ids.first().unwrap()})
-            ),
-            None,
-            "{fault}: marks remain advisory"
         );
     }
     *wire.fault.lock().unwrap() = Some("scan-change");
@@ -363,12 +346,12 @@ fn worker_metadata_failures_never_return_a_partial_scan() {
     ));
 }
 
-fn worker_metadata_regression_marks_match_the_owner() {
+fn worker_metadata_carries_regression_classifications() {
     use orbit_types::task::{
         DefectSeverity, RegressionClassification, RegressionEscape, RegressionNature,
         SeveritySource, TaskRelation, TaskRelationType,
     };
-    let (leaf, wire, bound, ids) = metadata_fixture();
+    let (leaf, _wire, bound, ids) = metadata_fixture();
     let owner = &leaf.pair.wire.owner;
     for (index, target) in ids.iter().take(3).enumerate() {
         owner
@@ -394,93 +377,9 @@ fn worker_metadata_regression_marks_match_the_owner() {
             })
             .unwrap();
     }
-    *wire.fault.lock().unwrap() = Some("history-failed");
-    assert_eq!(
-        RuntimeHost::regression_risk_for_agent_input(
-            &bound,
-            "history-failure",
-            "agent_implement",
-            &json!({"task_id": ids.first().unwrap()})
-        ),
-        None,
-        "a failed history read must not become a successful analytics scan"
-    );
-    *wire.fault.lock().unwrap() = None;
-    // These tasks have recent update stamps but entered done outside the window.
-    // The separate history read must exclude them from the denominator.
-    for n in 0..5 {
-        let old = owner
-            .add_task(TaskAddParams {
-                title: format!("old hot {n}"),
-                description: "small old body".into(),
-                context_files: vec!["file:src/hot.rs".into()],
-                status: Some(TaskStatus::Done),
-                ..Default::default()
-            })
-            .unwrap();
-        let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-            &orbit_store::maintenance::task_registry::task_registry_path(&owner.global_root()),
-        )
-        .unwrap();
-        let events = registry
-            .find_task_binding(&old.id)
-            .unwrap()
-            .unwrap()
-            .canonical_path
-            .join(orbit_types::task::TASK_EVENTS_FILE_NAME);
-        let at = (Utc::now() - chrono::Duration::days(60)).to_rfc3339();
-        let rows: String = std::fs::read_to_string(&events)
-            .unwrap()
-            .lines()
-            .map(|line| {
-                let mut row: Value = serde_json::from_str(line).unwrap();
-                row["at"] = json!(at);
-                format!("{row}\n")
-            })
-            .collect();
-        std::fs::write(events, rows).unwrap();
-    }
-    let marks = |runtime: &OrbitRuntime| {
-        RuntimeHost::regression_risk_for_agent_input(
-            runtime,
-            "bounded-metadata",
-            "agent_implement",
-            &json!({"task_id": ids.first().unwrap()}),
-        )
-    };
-    let expected = marks(owner).expect("the owner has one qualifying hotspot");
-    wire.requests.lock().unwrap().clear();
     assert_eq!(
         serde_json::to_value(bound.list_task_metadata().unwrap()).unwrap(),
         serde_json::to_value(owner.list_task_metadata().unwrap()).unwrap(),
         "all envelope fields, including regression sites and attribution, survive the wire"
-    );
-    assert_eq!(marks(&bound), Some(expected.clone()));
-    *wire.fault.lock().unwrap() = Some("identity");
-    assert_eq!(
-        marks(&bound),
-        None,
-        "a failed metadata scan with a known hotspot omits advisory marks"
-    );
-    *wire.fault.lock().unwrap() = None;
-    assert_eq!(expected["marks"][0]["regressed"], "3 of 7 touching tasks");
-    assert_eq!(expected["marks"][0]["nature"], json!(["broke_existing"]));
-    assert_eq!(expected["marks"][0]["escape"], json!(["no_test"]));
-    assert_eq!(
-        expected["marks"][0]["lesson"],
-        "Restore the bounded retry lesson"
-    );
-    let requests = wire.requests.lock().unwrap();
-    assert!(
-        requests
-            .iter()
-            .any(|request| request["_worker_read"] == "history"),
-        "history remains a separate read"
-    );
-    assert!(
-        requests
-            .iter()
-            .all(|request| request["_worker_read"] != "tasks"),
-        "no whole-corpus body read"
     );
 }

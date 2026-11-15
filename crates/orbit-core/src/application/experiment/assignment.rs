@@ -5,7 +5,7 @@ use crate::OrbitRuntime;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_store::contracts::{ExperimentAssignment, ExperimentRecord, ExperimentStoreBackend as _};
-use orbit_types::task::Task;
+use orbit_types::task::{CrewSource, Task};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
@@ -24,22 +24,13 @@ impl OrbitRuntime {
         task: &Task,
     ) -> Result<Vec<ExperimentAssignment>, OrbitError> {
         let enabled = self.current_experiments_enabled();
-        // Bring the crew ladder's standing trials in line with the ladder
-        // in force before this task is assigned. A worker's claimed leaf
-        // never writes experiments; the owner admitted it already.
-        if enabled
-            && self.worker_invocation().is_none()
-            && let Err(error) = self.sync_crew_ladder_trials()
-        {
-            tracing::warn!(task = %task.id, %error, "crew ladder trial sync failed; assigning against the stored trials");
-        }
         // Read before the store transaction: recovering a legacy crew's
         // provenance reads the task's history.
         let explicit_crew = task
             .crew
             .as_deref()
             .is_some_and(|crew| !crew.trim().is_empty())
-            && self.task_crew_source(task)?.as_deref() == Some("explicit");
+            && self.task_crew_source(task)? == Some(CrewSource::Explicit);
         self.sqlite_store()?.assign_experiments(
             &self.workspace_id()?,
             &task.id,
@@ -134,8 +125,9 @@ impl OrbitRuntime {
     /// experiment yields to the force; an existing arm assignment or another
     /// exclusion for it remains sticky, and overlapping surfaces owned by
     /// another experiment are refused. A task with an explicit crew may be
-    /// forced into a crew arm; the arm's crew then runs and is written back to
-    /// the task at admission.
+    /// forced into a crew arm. On fresh admission that force supersedes an
+    /// older task pin; a later audited task pin or explicit run choice wins.
+    /// Already admitted runs retain their captured treatment.
     pub fn force_experiment_assignment(
         &self,
         id: &str,
@@ -261,6 +253,9 @@ fn experiment_surfaces(record: &ExperimentRecord) -> Result<BTreeSet<&'static st
         }
         if overlay.config.is_some() {
             surfaces.insert("config");
+        }
+        if overlay.memory.is_some() {
+            surfaces.insert("memory");
         }
     }
     Ok(surfaces)

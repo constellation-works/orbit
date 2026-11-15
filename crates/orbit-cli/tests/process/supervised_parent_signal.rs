@@ -380,7 +380,7 @@ fn orbit_command(work: &Path, home: &Path) -> Command {
 fn spawn_mcp_listen(fixture: &Fixture) -> BoundServer {
     BoundServer::spawn(
         orbit_command(&fixture.work, &fixture.home)
-            .args(["mcp", "listen", "127.0.0.1:0"])
+            .args(["mcp", "listen", "127.0.0.1:0", "--toolset", "plugins"])
             .env("RUST_LOG", "warn,orbit::command::mcp::server=info")
             .env("NO_COLOR", "1")
             .stdin(Stdio::null())

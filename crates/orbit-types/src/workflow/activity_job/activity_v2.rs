@@ -39,8 +39,7 @@ pub struct ActivityV2 {
 /// `type: agent_loop|deterministic`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 // Boxing the agent spec would churn every reader that matches it for a size
-// heuristic; the additive optional `explore_brief_instruction` makes this
-// enum cross that threshold.
+// heuristic.
 #[allow(clippy::large_enum_variant)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ActivityV2Spec {
@@ -59,25 +58,27 @@ pub struct AgentLoopSpec {
     /// instruction is byte-identical to `instruction` alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steering_instruction: Option<String>,
-    /// How the agent acts on the task context's `regression_risk` marks,
-    /// appended to the instruction only when the host marked a context file
-    /// for this prompt. Declaring it is what asks the host for marks; absent,
-    /// or with nothing marked, the rendered instruction is unchanged.
+    /// Which of the engine's built-in fleet-notice instructions this
+    /// activity opts into. A non-empty [`Self::notice_instruction`] or
+    /// [`Self::notice_posting_instruction`] replaces the matching built-in
+    /// text; the delivery gates are the same either way.
+    #[serde(default, skip_serializing_if = "FleetNoticeGuidance::is_none")]
+    pub fleet_notices: FleetNoticeGuidance,
+    /// How the agent must treat the task context's `fleet_notices` block,
+    /// appended to the instruction only when the host delivers one for this
+    /// prompt. Declaring it (or [`Self::fleet_notices`]) is what asks the
+    /// host for open notices; with neither, the prompt carries no block and
+    /// no notice read happens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub regression_risk_instruction: Option<String>,
-    /// Read-only exploration delegation an implement or review-repair agent
-    /// may use, appended to the instruction only when the host enables
-    /// `workflow.explore` and has an explorer crew to draw [ORB-16814].
-    /// Absent or unavailable, the rendered instruction offers no delegation.
+    pub notice_instruction: Option<String>,
+    /// How the agent posts a fleet notice, appended to the instruction only
+    /// when this dispatch may call `orbit.notice.post`. Unlike
+    /// [`Self::notice_instruction`], it does not depend on a delivered
+    /// `fleet_notices` brief: an empty board or disabled brief delivery
+    /// still leaves a posting agent with its guidance, while the
+    /// untrusted-data handling above stays conditional on a brief.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub explore_instruction: Option<String>,
-    /// How the agent uses the task context's `explore_brief`, the task
-    /// pilot's map of the change, appended to the instruction only when the
-    /// host delivers a brief for this prompt. Declaring it is what asks the
-    /// host for a brief and records the outcome; only `agent_implement`
-    /// declares it, so review and recovery never receive one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub explore_brief_instruction: Option<String>,
+    pub notice_posting_instruction: Option<String>,
     /// Tool allowlist (§6). Custom activities keep this exact allowlist
     /// contract. An empty list with no `tool_disallow_list` is deprecated:
     /// asset load warns and enforcement keeps its legacy behaviour until the
@@ -158,6 +159,32 @@ pub struct AgentLoopSpec {
     /// asset; the exception must be explicit, not incidental.
     #[serde(default = "default_require_completion_envelope")]
     pub require_completion_envelope: bool,
+    /// Bounded continuation of an implementer that declares its authorized
+    /// work unfinished with the typed `implementation_incomplete` signal
+    /// [ORB-21837]. Absent, such a declaration fails the step as any other
+    /// declared failure. Present, the runner may start a fresh invocation in
+    /// the same worktree, with the same crew, tools and sandbox, inside the
+    /// unspent part of this activity's wall-clock budget; it never extends
+    /// that budget or changes what the step's success means.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incomplete_continuation: Option<IncompleteContinuationPolicy>,
+    /// Bounded correction of a reply the response parser rejects, when its
+    /// envelope says `success` and also carries an `error` object [ORB-22426]
+    /// or a clean turn ended in prose with no envelope [ORB-22427]. Absent,
+    /// that reply fails the step. Present, the runner may
+    /// start a fresh invocation with the same crew, tools and sandbox, inside
+    /// the unspent part of this activity's wall-clock budget, and only a newly
+    /// valid reply succeeds. Asset load requires the read-only filesystem
+    /// profile and refuses an allowlist grant of the built-in Orbit mutation
+    /// tools, including writes to coordination state outside the worktree
+    /// ([`validate_response_correction_activity`]). Dispatch denies every such
+    /// tool on each invocation, so those mutations cannot be repeated by a
+    /// correction. A task's `required_tools` cannot add one
+    /// either: the runtime grant drops such a requirement with a note.
+    ///
+    /// [`validate_response_correction_activity`]: crate::workflow::activity_job::validate_response_correction_activity
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_correction: Option<ResponseCorrectionPolicy>,
     /// Program allowlist enforced before `proc.spawn` executes a request.
     /// An empty `Some(vec![])` denies every program (fail-closed).
     ///
@@ -171,14 +198,7 @@ pub struct AgentLoopSpec {
     /// mode. Absent in legacy activity assets and persisted snapshots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proc_disallowed_programs: Option<Vec<String>>,
-    /// Run this activity's provider subprocess directly on the host, outside
-    /// the executor's filesystem sandbox [ORB-11354].
-    ///
-    /// Legal only on the built-in
-    /// [`TRUSTED_HOST_ACTIVITY`](crate::workflow::activity_job::TRUSTED_HOST_ACTIVITY)
-    /// — asset load rejects it anywhere else — and inert without a per-invocation
-    /// operator admission in the run input. The flag names the mode; it never
-    /// grants it. See `crate::workflow::activity_job::trusted_host`.
+    /// Retired mode, retained to parse legacy assets and refuse their load.
     #[serde(rename = "trustedHostExecution", default)]
     pub trusted_host_execution: bool,
     /// The dispatching crew's `[crews.<name>] env` entries, set by crew
@@ -200,6 +220,30 @@ pub struct AgentLoopSpec {
     /// image-input run on it is refused before launch. Never persisted.
     #[serde(skip)]
     pub crew_vision_disabled: bool,
+}
+
+/// Bounds on [`AgentLoopSpec::incomplete_continuation`] [ORB-21837].
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct IncompleteContinuationPolicy {
+    /// Most continuation invocations one step dispatch may start after its
+    /// first. Zero admits none.
+    pub max_rounds: u32,
+    /// Unspent wall-clock budget, in seconds, a continuation needs before it
+    /// may start. A smaller remainder keeps the declared failure.
+    pub min_remaining_seconds: u64,
+}
+
+/// Bounds on [`AgentLoopSpec::response_correction`] [ORB-22426].
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResponseCorrectionPolicy {
+    /// Most correction invocations one step dispatch may start after its
+    /// first. Zero admits none.
+    pub max_rounds: u32,
+    /// Unspent wall-clock budget, in seconds, a correction needs before it may
+    /// start. A smaller remainder keeps the rejected reply's failure.
+    pub min_remaining_seconds: u64,
 }
 
 /// Accepted-but-inert value of the retired `backend:` key [ORB-10801].
@@ -265,10 +309,8 @@ impl<'de> Deserialize<'de> for RetiredAgentBackend {
 /// (ORB-10091): every crew/runtime path that turns a string into a provider —
 /// crew parsing, activity resolution, CLI executor selection, setup
 /// detection — routes through [`Provider::parse`] so canonical IDs, alias
-/// normalization, and capability predicates cannot drift across layers or
-/// disagree with Worker/Bridge. The set mirrors the Constellation
-/// provider-resolution contract (see `docs/CONFIG.md` and the pinned fixture
-/// under `tests/fixtures/provider_contract.json`).
+/// normalization, and capability predicates cannot drift across layers.
+/// The set mirrors the Constellation provider-resolution contract (see `docs/CONFIG.md`).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Provider {
@@ -354,17 +396,6 @@ impl Provider {
     /// Whether this provider is a retired compatibility-only variant.
     pub fn is_retired(self) -> bool {
         matches!(self, Provider::Cursor | Provider::Pi | Provider::Opencode)
-    }
-
-    /// Parse a persisted provider id, including retired lanes. History
-    /// readers use this; configuration and dispatch use [`Self::parse`].
-    pub fn from_persisted_id(raw: &str) -> Result<Provider, ProviderParseError> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "cursor" => Ok(Provider::Cursor),
-            "pi" => Ok(Provider::Pi),
-            "opencode" => Ok(Provider::Opencode),
-            _ => Provider::parse(raw),
-        }
     }
 
     /// Accepted non-canonical spellings, normalized by [`Provider::parse`] /
@@ -537,17 +568,6 @@ pub struct ProviderDeprecation {
     pub canonical: Provider,
 }
 
-/// Which entry point's capability set applies during full resolution
-/// (contract §5). The canonical four providers are executable at every entry
-/// point; `ollama` / `openai_compat` are known Orbit identities that no CLI
-/// entry point can execute.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProviderEntryPoint {
-    Orbit,
-    Worker,
-    Bridge,
-}
-
 /// The precedence tier that supplied the resolved value (contract §3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderSource {
@@ -556,109 +576,6 @@ pub enum ProviderSource {
     WorkspaceDefault,
     EnvironmentDefault,
     SystemDefault,
-    PersistedReconciliation,
-}
-
-impl ProviderSource {
-    /// Stable contract spelling used in diagnostics / conformance assertions.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ProviderSource::Explicit => "explicit",
-            ProviderSource::TaskConfig => "task_config",
-            ProviderSource::WorkspaceDefault => "workspace_default",
-            ProviderSource::EnvironmentDefault => "environment_default",
-            ProviderSource::SystemDefault => "system_default",
-            ProviderSource::PersistedReconciliation => "persisted_reconciliation",
-        }
-    }
-}
-
-/// Stable diagnostic code for a resolution outcome (contract §6). Each repo
-/// maps its native error/log to the shared code; conformance asserts the code,
-/// not the wording.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProviderDiagnostic {
-    Ok,
-    Defaulted,
-    AliasDeprecated,
-    Unknown,
-    Unsupported,
-    Unavailable,
-}
-
-impl ProviderDiagnostic {
-    /// Stable contract code string (e.g. `"provider.alias_deprecated"`).
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ProviderDiagnostic::Ok => "provider.ok",
-            ProviderDiagnostic::Defaulted => "provider.defaulted",
-            ProviderDiagnostic::AliasDeprecated => "provider.alias_deprecated",
-            ProviderDiagnostic::Unknown => "provider.unknown",
-            ProviderDiagnostic::Unsupported => "provider.unsupported",
-            ProviderDiagnostic::Unavailable => "provider.unavailable",
-        }
-    }
-
-    /// Whether the diagnostic represents a successful resolution (§6).
-    pub fn is_success(self) -> bool {
-        matches!(
-            self,
-            ProviderDiagnostic::Ok
-                | ProviderDiagnostic::Defaulted
-                | ProviderDiagnostic::AliasDeprecated
-        )
-    }
-}
-
-/// Inputs to a single provider resolution (contract §8). Every tier is an
-/// optional raw string (empty / whitespace-only counts as "not selected" and
-/// falls through, not an error). `host_available` is `None` when availability
-/// is not exercised.
-#[derive(Debug, Clone)]
-pub struct ProviderResolveRequest<'a> {
-    pub entry_point: ProviderEntryPoint,
-    pub requested: Option<&'a str>,
-    pub task_provider: Option<&'a str>,
-    pub workspace_default: Option<&'a str>,
-    pub env_default: Option<&'a str>,
-    pub system_default: Option<&'a str>,
-    pub persisted_resolution: Option<&'a str>,
-    pub host_available: Option<bool>,
-}
-
-impl ProviderResolveRequest<'_> {
-    /// A request with only the entry point set; fill tiers with struct-update
-    /// syntax (`ProviderResolveRequest { requested: Some(x), ..base }`).
-    pub fn new(entry_point: ProviderEntryPoint) -> Self {
-        Self {
-            entry_point,
-            requested: None,
-            task_provider: None,
-            workspace_default: None,
-            env_default: None,
-            system_default: None,
-            persisted_resolution: None,
-            host_available: None,
-        }
-    }
-}
-
-/// Outcome of a provider resolution (contract §8): the normalized identity (or
-/// `None` on `provider.unknown`), the tier it came from, the stable diagnostic,
-/// and any deprecation signal.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderResolution {
-    pub normalized_provider: Option<Provider>,
-    pub source: ProviderSource,
-    pub diagnostic: ProviderDiagnostic,
-    pub deprecation: Option<ProviderDeprecation>,
-}
-
-impl ProviderResolution {
-    /// Whether resolution succeeded (identity usable for dispatch).
-    pub fn is_success(&self) -> bool {
-        self.diagnostic.is_success()
-    }
 }
 
 impl Provider {
@@ -666,7 +583,7 @@ impl Provider {
     /// canonical four are executable everywhere; `ollama` / `openai_compat` are
     /// known but unsupported at every CLI entry point — the identity resolves,
     /// only execution capability is missing.
-    pub fn capabilities(_entry_point: ProviderEntryPoint) -> &'static [Provider] {
+    pub fn capabilities() -> &'static [Provider] {
         const CANONICAL: [Provider; 4] = [
             Provider::Claude,
             Provider::Codex,
@@ -675,113 +592,6 @@ impl Provider {
         ];
         &CANONICAL
     }
-
-    /// Full contract resolution (§8): reconciliation short-circuit, then
-    /// precedence (§3), alias normalization (§2), and identity → capability →
-    /// availability checks (§5) — never falling back to another provider. This
-    /// is the surface the vendored conformance cases assert against, so Orbit
-    /// stays in parity with Worker and Bridge.
-    pub fn resolve(request: &ProviderResolveRequest<'_>) -> ProviderResolution {
-        // Reconciliation short-circuit: a frozen resolution is reused verbatim
-        // and precedence is not re-run (§7).
-        if let Some(persisted) = non_empty(request.persisted_resolution) {
-            // A persisted identity is already canonical; if it somehow fails to
-            // parse we surface `unknown` rather than inventing a fallback.
-            return match Provider::from_persisted_id(persisted) {
-                Ok(provider) if provider.is_retired() => ProviderResolution {
-                    normalized_provider: Some(provider),
-                    source: ProviderSource::PersistedReconciliation,
-                    diagnostic: ProviderDiagnostic::Unsupported,
-                    deprecation: None,
-                },
-                Ok(provider) => ProviderResolution {
-                    normalized_provider: Some(provider),
-                    source: ProviderSource::PersistedReconciliation,
-                    diagnostic: ProviderDiagnostic::Ok,
-                    deprecation: None,
-                },
-                Err(_) => ProviderResolution {
-                    normalized_provider: None,
-                    source: ProviderSource::PersistedReconciliation,
-                    diagnostic: ProviderDiagnostic::Unknown,
-                    deprecation: None,
-                },
-            };
-        }
-
-        // Precedence: first non-empty tier wins (§3).
-        let tiers = [
-            (request.requested, ProviderSource::Explicit),
-            (request.task_provider, ProviderSource::TaskConfig),
-            (request.workspace_default, ProviderSource::WorkspaceDefault),
-            (request.env_default, ProviderSource::EnvironmentDefault),
-            (request.system_default, ProviderSource::SystemDefault),
-        ];
-        let Some((raw, source)) = tiers
-            .into_iter()
-            .find_map(|(value, source)| non_empty(value).map(|raw| (raw, source)))
-        else {
-            // No tier supplied a value. The contract always provides a system
-            // default (canonical `claude`); treat an absent one as that so
-            // resolution is total.
-            return ProviderResolution {
-                normalized_provider: Some(Provider::default()),
-                source: ProviderSource::SystemDefault,
-                diagnostic: ProviderDiagnostic::Defaulted,
-                deprecation: None,
-            };
-        };
-
-        // Normalize (§2), then identity → capability → availability (§5).
-        let identity = match Provider::resolve_name(raw) {
-            Ok(identity) => identity,
-            Err(_) => {
-                return ProviderResolution {
-                    normalized_provider: None,
-                    source,
-                    diagnostic: ProviderDiagnostic::Unknown,
-                    deprecation: None,
-                };
-            }
-        };
-
-        if !Provider::capabilities(request.entry_point).contains(&identity.provider) {
-            return ProviderResolution {
-                normalized_provider: Some(identity.provider),
-                source,
-                diagnostic: ProviderDiagnostic::Unsupported,
-                deprecation: None,
-            };
-        }
-
-        if request.host_available == Some(false) {
-            return ProviderResolution {
-                normalized_provider: Some(identity.provider),
-                source,
-                diagnostic: ProviderDiagnostic::Unavailable,
-                deprecation: None,
-            };
-        }
-
-        let diagnostic = if identity.deprecation.is_some() {
-            ProviderDiagnostic::AliasDeprecated
-        } else if source == ProviderSource::Explicit {
-            ProviderDiagnostic::Ok
-        } else {
-            ProviderDiagnostic::Defaulted
-        };
-        ProviderResolution {
-            normalized_provider: Some(identity.provider),
-            source,
-            diagnostic,
-            deprecation: identity.deprecation,
-        }
-    }
-}
-
-/// Trim a tier value and treat empty / whitespace-only as "not selected" (§3).
-fn non_empty(value: Option<&str>) -> Option<&str> {
-    value.map(str::trim).filter(|value| !value.is_empty())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -804,7 +614,56 @@ pub enum OnDenial {
     Continue,
 }
 
+impl Default for AgentLoopSpec {
+    fn default() -> Self {
+        Self {
+            instruction: String::new(),
+            steering_instruction: None,
+            fleet_notices: FleetNoticeGuidance::None,
+            notice_instruction: None,
+            notice_posting_instruction: None,
+            tools: Vec::new(),
+            tool_disallow_list: None,
+            on_denial: OnDenial::Terminate,
+            model: None,
+            reasoning_effort: None,
+            max_iterations: default_max_iterations(),
+            backend: None,
+            provider: Provider::default(),
+            wall_clock_timeout_seconds: default_cli_wall_clock_timeout_seconds(),
+            require_response_envelope: false,
+            require_completion_envelope: default_require_completion_envelope(),
+            incomplete_continuation: None,
+            response_correction: None,
+            proc_allowed_programs: None,
+            proc_disallowed_programs: None,
+            trusted_host_execution: false,
+            crew_env: Vec::new(),
+            crew_name: None,
+            crew_account: None,
+            crew_vision_disabled: false,
+        }
+    }
+}
+
 impl AgentLoopSpec {
+    /// Shared test constructor: neutral defaults with the given instruction,
+    /// provider and wall-clock timeout. Fixtures override fields with
+    /// struct-update syntax (`..AgentLoopSpec::for_provider(..)`).
+    pub fn for_provider(
+        instruction: impl Into<String>,
+        provider: Provider,
+        wall_clock_timeout_seconds: u64,
+    ) -> Self {
+        Self {
+            instruction: instruction.into(),
+            provider,
+            wall_clock_timeout_seconds,
+            max_iterations: 1,
+            ..Self::default()
+        }
+    }
+
     /// The instruction bytes for one envelope. With steering disabled, or
     /// with no `steering_instruction` declared, this is exactly
     /// `instruction`; with steering enabled and a declared paragraph, it is
@@ -819,6 +678,42 @@ impl AgentLoopSpec {
             }
             _ => std::borrow::Cow::Borrowed(&self.instruction),
         }
+    }
+}
+
+/// An activity's opt-in to the built-in fleet-notice instructions,
+/// serialized as `fleet_notices: none|read|post`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FleetNoticeGuidance {
+    /// No built-in text; only the activity's own instructions, if any.
+    #[default]
+    None,
+    /// The untrusted-data handling, which rides only with a delivered
+    /// `fleet_notices` brief.
+    Read,
+    /// [`Self::Read`] plus the posting guidance, which rides whenever the
+    /// dispatch may call `orbit.notice.post`.
+    Post,
+}
+
+impl FleetNoticeGuidance {
+    /// No built-in instruction is selected.
+    #[must_use]
+    pub const fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
+
+    /// The built-in untrusted-data handling is selected.
+    #[must_use]
+    pub const fn reads(self) -> bool {
+        matches!(self, Self::Read | Self::Post)
+    }
+
+    /// The built-in posting guidance is selected.
+    #[must_use]
+    pub const fn posts(self) -> bool {
+        matches!(self, Self::Post)
     }
 }
 

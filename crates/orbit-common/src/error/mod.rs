@@ -3,11 +3,16 @@ mod conversions;
 mod kinds;
 mod orbit_error;
 
-pub use classification::{LOCK_BUSY_ERROR_CODE, is_lock_busy_message};
+pub use classification::{
+    JSON_RPC_INVALID_PARAMS_CODE, LOCK_BUSY_ERROR_CODE, is_lock_busy_message,
+};
 pub use kinds::{
     ArtifactOrigin, ArtifactOriginMode, CandidateAbsorbed, ClaimRefusalKind, ConflictedFile,
-    DecisionRefusalCode, DependencyNotDelivered, FrictionNotLocal, HostRegistryCode, NotFoundKind,
+    DecisionRefusalCode, DependencyNotDelivered, ForceOverridableKind, ForceOverridableRefusal,
+    ForgePushHoldFailure, FrictionNotLocal, HostRegistryCode, NotFoundKind, NoticeRefusalCode,
     PrivateVcsFailure, PrivateVcsFailureClass, ProviderReadThrottle, RecoverableVcsConflict,
-    RemoteToolCode, SqliteContention, StorageLayer, WorkspaceClaimHeld,
+    RemoteToolCode, SourceRepairAuthorityRefusal, SourceRepairRunStateRefusal, SqliteContention,
+    StorageLayer, TaskPilotRefusalCode, UpgradeAdmissionRefusal, UpgradeAdmissionRefusalKind,
+    WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
 };
 pub use orbit_error::OrbitError;

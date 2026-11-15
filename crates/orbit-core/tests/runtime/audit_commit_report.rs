@@ -20,7 +20,6 @@ use tempfile::TempDir;
 const FAILED_AUDIT_TITLE: &str = "audit insert fails after the task commits";
 const NORMAL_TITLE: &str = "audit insert commits with the task";
 
-#[test]
 fn committed_task_add_stays_success_when_its_audit_insert_fails() {
     let (_root, runtime, repo_root, database) = test_runtime();
     install_audit_failure(&database);
@@ -82,48 +81,47 @@ fn committed_task_add_stays_success_when_its_audit_insert_fails() {
 /// another connection's writer lock retries the insert once, so the row
 /// still lands. The lock is held for one busy timeout plus a margin: the
 /// first insert gives up while it is held, and the retry outlasts it.
-#[test]
 fn audit_insert_held_out_by_a_sqlite_writer_lock_is_retried() {
-    let (_root, runtime, repo_root, database) = test_runtime();
-    let busy_timeout = Duration::from_millis(u64::from(
-        orbit_common::storage::sqlite::DEFAULT_BUSY_TIMEOUT_MS,
-    ));
-    let (held, held_rx) = std::sync::mpsc::channel();
-    let holder = std::thread::spawn(move || {
-        let connection = rusqlite::Connection::open(&database).expect("open audit database");
-        connection
-            .execute_batch("BEGIN IMMEDIATE;")
-            .expect("hold the audit writer lock");
-        held.send(()).expect("report the held lock");
-        std::thread::sleep(busy_timeout + Duration::from_millis(2_500));
-        connection
-            .execute_batch("ROLLBACK;")
-            .expect("release the audit writer lock");
+    orbit_common::storage::sqlite::with_sqlite_busy_timeout(500, || {
+        let (_root, runtime, repo_root, database) = test_runtime();
+        let busy_timeout = Duration::from_millis(500);
+        let (held, held_rx) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let connection = rusqlite::Connection::open(&database).expect("open audit database");
+            connection
+                .execute_batch("BEGIN IMMEDIATE;")
+                .expect("hold the audit writer lock");
+            held.send(()).expect("report the held lock");
+            std::thread::sleep(busy_timeout + Duration::from_millis(200));
+            connection
+                .execute_batch("ROLLBACK;")
+                .expect("release the audit writer lock");
+        });
+        held_rx.recv().expect("the holder takes the lock");
+
+        let listed = runtime
+            .execute_tool_command(
+                "orbit.task.list",
+                json!({"workspace": repo_root.to_string_lossy(), "model": "grok"}),
+                None,
+                Some("grok".into()),
+            )
+            .expect("a read-only call succeeds behind the audit lock");
+        holder.join().expect("the holder releases the lock");
+
+        assert!(
+            listed.get("audit_warning").is_none(),
+            "the retried insert persisted: {listed}"
+        );
+        let rows = runtime
+            .list_audit_events(None, Some("orbit.task.list".to_string()), None, None, 20)
+            .expect("list audit rows");
+        assert_eq!(
+            rows.len(),
+            1,
+            "the insert that lost to the lock is retried into exactly one row: {rows:?}"
+        );
     });
-    held_rx.recv().expect("the holder takes the lock");
-
-    let listed = runtime
-        .execute_tool_command(
-            "orbit.task.list",
-            json!({"workspace": repo_root.to_string_lossy(), "model": "grok"}),
-            None,
-            Some("grok".into()),
-        )
-        .expect("a read-only call succeeds behind the audit lock");
-    holder.join().expect("the holder releases the lock");
-
-    assert!(
-        listed.get("audit_warning").is_none(),
-        "the retried insert persisted: {listed}"
-    );
-    let rows = runtime
-        .list_audit_events(None, Some("orbit.task.list".to_string()), None, None, 20)
-        .expect("list audit rows");
-    assert_eq!(
-        rows.len(),
-        1,
-        "the insert that lost to the lock is retried into exactly one row: {rows:?}"
-    );
 }
 
 /// The caller from the incident: a reported failure is retried once, and a
@@ -178,6 +176,7 @@ fn audit_rows(runtime: &OrbitRuntime) -> Vec<orbit_types::telemetry::AuditEvent>
 }
 
 fn test_runtime() -> (TempDir, OrbitRuntime, PathBuf, PathBuf) {
+    crate::scenarios::require_isolated_mutable_fixture("audit_commit_report::test_runtime");
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).expect("tempdir");
     let global_root = root.path().join("global");
     let repo_root = root.path().join("repo");
@@ -214,3 +213,9 @@ fn clear_audit_failure(database: &Path) {
         .execute_batch("DROP TRIGGER IF EXISTS injected_tool_audit_failure;")
         .expect("drop audit failure trigger");
 }
+
+crate::scenario_table!(
+    mutable_scenarios,
+    committed_task_add_stays_success_when_its_audit_insert_fails,
+    audit_insert_held_out_by_a_sqlite_writer_lock_is_retried,
+);

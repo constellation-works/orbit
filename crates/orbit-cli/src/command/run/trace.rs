@@ -12,7 +12,7 @@ use super::steps::{RunRead, resolve_run};
 
 #[derive(Args)]
 #[command(
-    after_help = "JSON shape: {\"run_id\":\"...\",\"job_id\":\"...\",\"roots\":[<tree-node>],\"orphans\":[<tree-node>]}\nExamples:\n  orbit run trace\n  orbit run trace jrun-20260426-0631 --json"
+    after_help = "JSON shape: installed orbit-orchestrate skill `references/run-debugging.md`.\n\nExamples:\n  orbit run trace\n  orbit run trace jrun-20260426-0631 --json"
 )]
 pub struct RunTraceArgs {
     /// Run ID to inspect. Defaults to the most recently scheduled run globally.

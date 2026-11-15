@@ -1,7 +1,7 @@
-use orbit_common::OrbitError;
+use orbit_common::{OrbitError, security::release::sha256_hex};
 use orbit_types::workflow::{
     FLAKY_VALIDATION_EVENT, FlakyValidation, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation,
-    MissingSectionPolicy,
+    MissingSectionPolicy, PrSectionGap, PrSectionGapPublication,
 };
 use serde_json::{Value, json};
 
@@ -9,6 +9,7 @@ use crate::context::RuntimeHost;
 
 use super::super::super::super::input::{input_string_field, required_input_string};
 use super::super::super::base::obsolescence::ensure_base_can_still_land;
+use super::super::super::forge_text;
 use super::super::super::freshness::branch_freshness_against_ref;
 use super::super::super::git::git_output;
 use super::super::super::handoff::{
@@ -120,10 +121,18 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
             .map_err(|e| Box::new((FailedHandoffPhase::PrLookup, e)))?;
     }
 
-    let pr_config = host.pr_config();
+    let mut pr_config = host.pr_config();
+    // A continuation has already authenticated this exact target. A new PR
+    // has no number yet, and historical references cannot supply its URL.
+    if pr_config.task_url_template.is_none()
+        && let Some(binding) = &publication
+    {
+        pr_config.task_url_template = Some(binding.pull_request_url.clone());
+    }
     let title = input_string_field(input, "title")
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| pr_title(&context.tasks, &pr_config));
+    let title = forge_text::neutralize_mentions(&title);
     let pr_opener_model = host.actor_model_identity();
     let (body, missing_required) =
         match input_string_field(input, "body").filter(|value| !value.trim().is_empty()) {
@@ -165,19 +174,39 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
     let draft = pr_config.conventions.draft
         || (!missing_required.is_empty()
             && pr_config.conventions.missing_section == MissingSectionPolicy::Draft);
-    if !missing_required.is_empty() {
-        template::record_section_gap(host, context, &missing_required, &pr_config)
-            .map_err(|error| Box::new((FailedHandoffPhase::PrBody, error)))?;
-        if pr_config.conventions.missing_section == MissingSectionPolicy::Refuse {
-            return Err(Box::new((
-                FailedHandoffPhase::PrBody,
-                OrbitError::Execution(format!(
-                    "pr_required_section_missing: {}; pr.missing_required_section = \"refuse\" \
-                     holds the pull request",
-                    template::section_gaps(&missing_required)
-                )),
-            )));
-        }
+    // The typed gap decision; only a create publishes the gap body, so only
+    // that record carries the publication draft recovery may later act on.
+    let section_gap = (!missing_required.is_empty()).then(|| PrSectionGap {
+        missing_sections: missing_required.clone(),
+        action: pr_config.conventions.missing_section,
+        run_id: context.batch_id.clone(),
+        head_branch: head.to_string(),
+        publication: None,
+    });
+    let record_gap = |publication: Option<PrSectionGapPublication>| match &section_gap {
+        Some(gap) => template::record_section_gap(
+            host,
+            context,
+            &PrSectionGap {
+                publication,
+                ..gap.clone()
+            },
+        )
+        .map_err(|error| Box::new((FailedHandoffPhase::PrBody, error))),
+        None => Ok(()),
+    };
+    if !missing_required.is_empty()
+        && pr_config.conventions.missing_section == MissingSectionPolicy::Refuse
+    {
+        record_gap(None)?;
+        return Err(Box::new((
+            FailedHandoffPhase::PrBody,
+            OrbitError::Execution(format!(
+                "pr_required_section_missing: {}; pr.missing_required_section = \"refuse\" \
+                 holds the pull request",
+                template::section_gaps(&missing_required)
+            )),
+        )));
     }
     let known_red = evidence::collect_validation_records(
         host,
@@ -213,6 +242,8 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
     let body = evidence::append_section(body, super::super::body::render_flaky_section(&flaky));
     let body = bound_pr_body(evidence::with_review_fixes(body, input), &context.tasks);
     if let Some(binding) = &publication {
+        // Reusing a published PR never publishes this gap body.
+        record_gap(None)?;
         let (_, _, pr) = lookup::view_pr(host, &context.workspace_path, &binding.pull_request)
             .map_err(|e| Box::new((FailedHandoffPhase::PrView, e)))?;
         super::super::draft_recovery::recover_section_gap_draft(
@@ -241,9 +272,13 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
     // A failed create may already have taken effect. Reconcile by head before
     // every retry; the private create operation must remain single-shot.
     let mut attempt = 1;
+    let mut gap_recorded = false;
     loop {
-        match lookup::find_pr_by_head(host, &context.workspace_path, head) {
+        match lookup::find_pr_by_head(host, &context.workspace_path, head, base) {
             Ok(Some((pr_number, pr_url, pr))) => {
+                if !gap_recorded {
+                    record_gap(None)?;
+                }
                 super::super::draft_recovery::recover_section_gap_draft(
                     host,
                     context,
@@ -267,6 +302,15 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
                 }));
             }
             Ok(None) => {
+                // Recorded once, before the single-shot create, so a create
+                // that took effect despite an error is still bound to it.
+                if !gap_recorded {
+                    record_gap(Some(PrSectionGapPublication {
+                        head_branch: head.to_string(),
+                        body_sha256: sha256_hex(body.as_bytes()),
+                    }))?;
+                    gap_recorded = true;
+                }
                 tracing::info!(
                     constructed_body_bytes = body.len(),
                     allowed_body_bytes = GITHUB_PR_BODY_BYTE_LIMIT,
@@ -353,8 +397,9 @@ pub(in crate::executor::automation::vcs) fn open_or_reuse_unchecked<H: RuntimeHo
     title: &str,
     body: &str,
 ) -> Result<(String, Option<String>, bool), OrbitError> {
+    let title = forge_text::neutralize_mentions(title);
     let body = bound_pr_body(body.to_string(), &[]);
-    if let Some((number, url, _)) = lookup::find_pr_by_head(host, workspace_path, head)? {
+    if let Some((number, url, _)) = lookup::find_pr_by_head(host, workspace_path, head, base)? {
         return Ok((number, url, false));
     }
     tracing::info!(

@@ -193,6 +193,40 @@ impl OutputSink {
         (self.width > 0).then(|| usize::from(self.width))
     }
 
+    /// Word-wrap human prose to the terminal's display width, preserving
+    /// explicit line breaks and indentation. Plain and machine-readable modes,
+    /// pipes and terminals with no known width retain the original bytes.
+    /// Words wider than an entire line are split only when necessary to fit.
+    pub(crate) fn wrap_prose<'a>(&self, text: &'a str) -> std::borrow::Cow<'a, str> {
+        use comfy_table::{Cell, ColumnConstraint, ContentArrangement, Table, Width, presets};
+
+        if !self.is_tty || self.mode != OutputMode::Table || self.width == 0 {
+            return std::borrow::Cow::Borrowed(text);
+        }
+        let lines = text.split('\n').map(|line| {
+            if line.is_empty() {
+                return String::new();
+            }
+            let indent = line.len() - line.trim_start_matches(' ').len();
+            let indent = indent.min(usize::from(self.width.saturating_sub(1)));
+            let mut prose = Table::new();
+            prose.load_style(presets::NOTHING);
+            prose.force_no_tty();
+            prose.set_content_arrangement(ContentArrangement::Disabled);
+            prose.add_row(vec![Cell::new(line.trim_start_matches(' '))]);
+            if let Some(column) = prose.column_mut(0) {
+                column.set_padding((indent as u16, 0));
+                column.set_constraint(ColumnConstraint::Absolute(Width::Fixed(self.width)));
+            }
+            prose
+                .lines()
+                .map(|line| line.trim_end().to_string())
+                .collect::<Vec<_>>()
+                .join("\n")
+        });
+        std::borrow::Cow::Owned(lines.collect::<Vec<_>>().join("\n"))
+    }
+
     /// Whether a spinner, bar, or ticker may be drawn (spec §6).
     ///
     /// A terminal is necessary but not sufficient: `json` and `ndjson` are

@@ -42,12 +42,60 @@ class AwaitJobsTests(unittest.TestCase):
         self.timed_response = None
         self.response_headers = {}
         self.pages = None
+        self.artifacts = None
+        # Raw HTTP 200 job-listing body, when set, replaces the jobs JSON.
+        self.raw_job_body = None
+        # Optional (page, elapsed) -> (status, headers, JSON payload or None).
+        self.artifact_reply = None
+        # Optional (elapsed) -> (status, headers, jobs list or None).
+        self.job_reply = None
         fixture = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
                 fixture.requests.append(self.path)
                 fixture.request_headers.append(dict(self.headers))
+                if "/artifacts" in self.path:
+                    elapsed = float(self.headers.get("X-Fixture-Time", "0"))
+                    if fixture.artifact_reply:
+                        page = 2 if "&page=2" in self.path else 1
+                        status, headers, payload = fixture.artifact_reply(page, elapsed)
+                    else:
+                        produced = fixture.artifacts
+                        if callable(produced):
+                            produced = produced(elapsed)
+                        status, headers = (503, {}) if produced is None else (200, {})
+                        payload = None if produced is None else {"total_count": len(produced),
+                                                                 "artifacts": produced}
+                    body = b"" if payload is None else json.dumps(payload).encode()
+                    self.send_response(status)
+                    self.send_header("Content-Type", "application/json")
+                    for name, value in headers.items():
+                        self.send_header(name, value)
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                if fixture.job_reply is not None:
+                    elapsed = float(self.headers.get("X-Fixture-Time", "0"))
+                    status, headers, payload = fixture.job_reply(elapsed)
+                    body = b"" if payload is None else json.dumps(
+                        {"total_count": len(payload), "jobs": payload}).encode()
+                    self.send_response(status)
+                    self.send_header("Content-Type", "application/json")
+                    for name, value in headers.items():
+                        self.send_header(name, value)
+                    self.end_headers()
+                    if status != 304:
+                        self.wfile.write(body)
+                    return
+                if fixture.raw_job_body is not None:
+                    raw = fixture.raw_job_body
+                    body = raw.encode() if isinstance(raw, str) else raw
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 response = (fixture.timed_response(float(self.headers.get("X-Fixture-Time", "0")))
                             if fixture.timed_response else
                             fixture.responses.pop(0) if len(fixture.responses) > 1 else fixture.responses[0])
@@ -93,11 +141,24 @@ class AwaitJobsTests(unittest.TestCase):
 import os, signal, sys
 blocked_pid_file = os.environ.get("CI_AWAIT_BLOCK_PID_FILE")
 if blocked_pid_file:
-    # A listing that never answers: record the pid, then wait to be killed.
-    with open(blocked_pid_file, "w") as pid_file:
-        pid_file.write(str(os.getpid()))
-    while True:
-        signal.pause()
+    answered = os.environ.get("CI_AWAIT_ANSWERED_LISTINGS")
+    should_block = True
+    if answered is not None:
+        count_file = blocked_pid_file + ".count"
+        try:
+            count = int(open(count_file).read())
+        except Exception:
+            count = 0
+        count += 1
+        with open(count_file, "w") as handle:
+            handle.write(str(count))
+        should_block = count > int(answered)
+    if should_block:
+        # A listing that never answers: record the pid, then wait to be killed.
+        with open(blocked_pid_file, "w") as pid_file:
+            pid_file.write(str(os.getpid()))
+        while True:
+            signal.pause()
 args = ["http://127.0.0.1:{server.server_port}/" + arg if arg.startswith("repos/") else arg
         for arg in sys.argv[1:]]
 if "CI_AWAIT_FIXTURE_TIME" in os.environ:
@@ -129,11 +190,16 @@ finally:
     Path(os.environ["CI_AWAIT_CLOCK_OUTPUT"]).write_text(str(elapsed))
 ''')
 
-    def wait(self, *responses, timeout="10", jobs=EXPECTED, step=None, poll="0.01", virtual=False):
+    def wait(self, *responses, timeout="10", jobs=EXPECTED, step=None, poll="0.01", virtual=False,
+             artifact_names=(), grace=None):
         self.responses[:] = responses
         arguments = [argument for name in jobs for argument in ("--job", name)]
+        if grace is not None:
+            arguments += ["--absent-grace-seconds", grace]
         if step is not None:
             arguments += ["--step", step]
+        for name in artifact_names:
+            arguments += ["--artifact", name]
         launcher = [str(self.clock_launcher)] if virtual else []
         self.env["CI_AWAIT_CLOCK_OUTPUT"] = str(self.root / "elapsed")
         return self_test_hang.run(
@@ -287,7 +353,8 @@ finally:
         self.assertIn("paginated=true", result.stdout)
 
     def test_waits_until_every_named_job_succeeds(self):
-        building = [job("Test build", "in_progress"), job("Check / Clippy / Test", "in_progress")]
+        building = [job("Test build", "in_progress"), job("Test shard 1/2", "queued"),
+                    job("Test shard 2/2", "queued"), job("Check / Clippy / Test", "in_progress")]
         sharding = [job("Test build"), job("Test shard 1/2"), job("Test shard 2/2", "queued")]
         done = [job("Test build"), job("Test shard 1/2"), job("Test shard 2/2"),
                 job("Check / Clippy / Test", "in_progress")]
@@ -336,10 +403,69 @@ finally:
                 self.assertIn("concluded", result.stderr)
                 self.assertEqual(len(self.requests), 1)
 
-    def test_a_job_that_never_completes_times_out_by_name(self):
-        result = self.wait([job("Test build"), job("Test shard 1/2")], timeout="3")
-        self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn("timed out after 3 s waiting for Test shard 2/2 (missing)", result.stderr)
+    def test_an_absent_job_fails_without_waiting_out_the_timeout(self):
+        # Run 42670994582 attempt 1 listed no Test build job. The old wait
+        # treated that omission as pending and sat out the full timeout.
+        # Every listed job has completed, so the omission fails once the
+        # grace period for creating a dependent job has passed.
+        result = self.wait([job("Test build"), job("Test shard 1/2")], timeout="2400", poll="15",
+                           virtual=True, artifact_names=["nextest-archive-1"])
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("Test shard 2/2 is absent from the run", result.stderr)
+        self.assertNotIn("timed out", result.stderr)
+        self.assertEqual(len(self.requests), 9, self.requests)
+        self.assertFalse(any("/artifacts" in path for path in self.requests), self.requests)
+        self.assertEqual(float((self.root / "elapsed").read_text()), 120)
+
+        self.requests.clear()
+        failed = job("Test build", conclusion="failure", steps=[(UPLOAD, "completed", "failure")])
+        result = self.wait([failed], jobs=["Test build"], step=UPLOAD, virtual=True, timeout="30",
+                           artifact_names=["nextest-archive-1"])
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("concluded failure", result.stderr)
+        self.assertFalse(any("/artifacts" in path for path in self.requests), self.requests)
+        self.assertEqual(float((self.root / "elapsed").read_text()), 0)
+
+    def test_jobs_created_after_their_need_completes_are_awaited_not_absent(self):
+        # Run 43630477699: the shards `needs:` Test build, so GitHub listed
+        # none of them until the build had completed, and the first test job
+        # started 16 s after it. The wait failed 3 s in, calling them absent.
+        self.env["ORBIT_DEPENDENCY_JOB_NAME"] = "Check / Clippy / Test"
+        check = job("Check / Clippy / Test", "in_progress")
+
+        def created_after_build(never_created):
+            def response(elapsed):
+                if elapsed < 30:
+                    return [check, job("Test build", "in_progress")]
+                # Between the build completing and its dependents appearing,
+                # every job but the waiter's own has completed.
+                if never_created or elapsed < 45:
+                    return [check, job("Test build")]
+                status = "completed" if elapsed >= 60 else "queued"
+                return [check, job("Test build"), job("Test shard 1/2", status),
+                        job("Test shard 2/2", status)]
+            return response
+
+        self.timed_response = created_after_build(never_created=False)
+        result = self.wait(timeout="600", poll="15", virtual=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("all 3 awaited jobs succeeded", result.stdout)
+        self.assertNotIn("absent", result.stderr)
+        # Listings were taken inside the 15 s gap, and the wait went on to
+        # the dependents' completion.
+        times = [float(headers["X-Fixture-Time"]) for headers in self.request_headers]
+        self.assertTrue(any(30 <= at < 45 for at in times), times)
+        self.assertGreaterEqual(float((self.root / "elapsed").read_text()), 60)
+
+        self.requests.clear()
+        self.timed_response = created_after_build(never_created=True)
+        result = self.wait(timeout="600", poll="15", virtual=True, grace="20")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("Test shard 1/2, Test shard 2/2 are absent from the run", result.stderr)
+        self.assertNotIn("timed out", result.stderr)
+        # Not before the grace period that began with the build's completion.
+        self.assertGreaterEqual(float((self.root / "elapsed").read_text()), 50)
+        self.assertLess(float((self.root / "elapsed").read_text()), 60)
 
     def test_a_blocked_listing_is_killed_at_the_deadline(self):
         pid_file = self.root / "gh.pid"
@@ -364,11 +490,276 @@ finally:
 
     def test_the_poll_sleep_does_not_outlast_the_deadline(self):
         started = time.monotonic()
-        result = self.wait([job("Test build")], timeout="3", poll="60")
+        result = self.wait([job("Test build", "in_progress")], timeout="3", poll="60",
+                           jobs=["Test build"])
         # Loose bound: unclipped, the sleep alone takes the full 60 s poll.
         self.assertLess(time.monotonic() - started, 30)
         self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn("timed out after 3 s waiting for Test shard 1/2 (missing)", result.stderr)
+        self.assertIn("timed out after 3 s waiting for Test build (in_progress)", result.stderr)
+
+    def test_archive_parts_must_be_listed_before_the_wait_returns(self):
+        uploaded = [job("Test build", "in_progress", steps=[(UPLOAD, "completed", "success")])]
+        names = ["nextest-archive-1", "nextest-archive-2"]
+
+        def not_ready(elapsed):
+            if elapsed < 0.01:
+                return [{"name": "nextest-archive-1", "expired": False, "size_in_bytes": 0},
+                        {"name": "nextest-archive-2", "expired": True, "size_in_bytes": 8}]
+            return [{"name": "nextest-archive-1", "expired": False, "size_in_bytes": 8},
+                    {"name": "nextest-archive-2", "expired": False, "size_in_bytes": 8}]
+
+        self.artifacts = not_ready
+        result = self.wait(uploaded, jobs=["Test build"], step=UPLOAD, virtual=True,
+                           poll="0.01", timeout="10", artifact_names=names)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertGreater(float((self.root / "elapsed").read_text()), 0,
+                           "a zero-size or expired part must keep the wait open")
+        self.assertIn("with archive parts nextest-archive-1, nextest-archive-2", result.stdout)
+        self.assertIn("awaited jobs succeeded", result.stdout)
+
+        def never(_elapsed):
+            return [{"name": "nextest-archive-1", "expired": False, "size_in_bytes": 8}]
+
+        self.artifacts = never
+        self.requests.clear()
+        result = self.wait(uploaded, jobs=["Test build"], step=UPLOAD, virtual=True,
+                           poll="1", timeout="5", artifact_names=names)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("timed out after 5 s waiting for archive parts nextest-archive-2", result.stderr)
+        self.assertNotIn("awaited jobs succeeded", result.stdout)
+
+        calls = {"n": 0}
+
+        def flaky(_elapsed):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return None
+            return [{"name": name, "expired": False, "size_in_bytes": 8} for name in names]
+
+        self.artifacts = flaky
+        result = self.wait(uploaded, jobs=["Test build"], step=UPLOAD, virtual=True,
+                           poll="0.01", timeout="10", artifact_names=names)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertGreater(float((self.root / "elapsed").read_text()), 0)
+        self.assertIn("artifact listing failed", result.stderr)
+        self.assertIn("with archive parts nextest-archive-1, nextest-archive-2", result.stdout)
+
+    def artifact_request_times(self):
+        return [float(headers["X-Fixture-Time"]) for path, headers in zip(self.requests, self.request_headers)
+                if "/artifacts" in path]
+
+    def test_artifact_listing_backoff_is_honored_before_the_next_poll(self):
+        # Completed job with an ETag, then an artifact listing throttled by
+        # the server. The next artifact poll must wait out the server minimum;
+        # the 7 s absolute deadline still ends the wait.
+        self.timed_response = lambda elapsed: [job("Test build")]
+        cases = (({"Retry-After": "60", "X-RateLimit-Remaining": "0"}, 429),
+                 ({"Retry-After": "60"}, 200),
+                 ({"X-Poll-Interval": "30"}, 200),
+                 ({}, 403),
+                 ({}, 429),
+                 ({"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(int(time.time()) + 120)}, 403))
+        for headers, status in cases:
+            with self.subTest(headers=headers, status=status):
+                self.requests.clear()
+                self.request_headers.clear()
+                self.artifact_reply = lambda page, elapsed, headers=headers, status=status: (
+                    status, headers, {"total_count": 0, "artifacts": []})
+                result = self.wait(timeout="7", jobs=["Test build"], poll="15", virtual=True,
+                                   artifact_names=["nextest-archive-1"])
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                explicit = status in (403, 429) and ("Retry-After" in headers or
+                                                     "X-RateLimit-Reset" in headers)
+                if explicit:
+                    self.assertIn("ci-await: rate limit:", result.stderr)
+                    self.assertIn("artifact listing has been unavailable", result.stderr)
+                    self.assertNotIn("timed out", result.stderr)
+                    self.assertEqual(float((self.root / "elapsed").read_text()), 0)
+                else:
+                    self.assertIn("timed out after 7 s waiting for archive parts", result.stderr)
+                    self.assertEqual(float((self.root / "elapsed").read_text()), 7,
+                                     "the backoff minimum cannot extend the absolute deadline")
+                self.assertEqual(self.artifact_request_times(), [0], self.requests)
+
+    def test_paginated_artifact_listing_folds_backoff_from_every_page(self):
+        self.timed_response = lambda elapsed: [job("Test build")]
+
+        def page(names):
+            return [{"name": name, "expired": False, "size_in_bytes": 8} for name in names]
+
+        other = [f"other-{number}" for number in range(100)]
+        cases = (({"Retry-After": "60"}, 200, {}, 200),
+                 ({}, 200, {"Retry-After": "60"}, 429))
+        for first_headers, first_status, second_headers, second_status in cases:
+            with self.subTest(first=first_headers, second=second_headers, second_status=second_status):
+                self.requests.clear()
+                self.request_headers.clear()
+
+                def reply(number, elapsed):
+                    if number == 1:
+                        return first_status, first_headers, {"total_count": 101, "artifacts": page(other)}
+                    return second_status, second_headers, {"total_count": 101,
+                                                           "artifacts": page(["other-100"])}
+
+                self.artifact_reply = reply
+                result = self.wait(timeout="7", jobs=["Test build"], poll="15", virtual=True,
+                                   artifact_names=["nextest-archive-1"])
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                explicit = second_status in (403, 429) and ("Retry-After" in second_headers or
+                                                            "X-RateLimit-Reset" in second_headers)
+                if explicit:
+                    self.assertIn("ci-await: rate limit:", result.stderr)
+                    self.assertNotIn("timed out", result.stderr)
+                    self.assertEqual(float((self.root / "elapsed").read_text()), 0)
+                else:
+                    self.assertIn("timed out after 7 s", result.stderr)
+                    self.assertEqual(float((self.root / "elapsed").read_text()), 7)
+                self.assertTrue(any("&page=2" in path for path in self.requests), self.requests)
+                self.assertEqual(self.artifact_request_times(), [0, 0], self.requests)
+
+    def test_artifact_polling_uses_fallback_interval(self):
+        # Completed jobs carry an ETag, so the job listing drops to a 3 s
+        # fast path. Artifact requests are unconditional primary-quota GETs
+        # with no ETag fast path, so an API error, a still-missing part, a
+        # paginated listing, or fewer than 100 remaining primary requests must
+        # wait out --poll-seconds (15 s) before the next artifact cycle; a
+        # shorter deadline still ends the wait there (ORB-23867).
+        self.timed_response = lambda elapsed: [job("Test build")]
+
+        def available(names):
+            return [{"name": name, "expired": False, "size_in_bytes": 8} for name in names]
+
+        other100 = [f"other-{number}" for number in range(100)]
+
+        def error_reply(_page, _elapsed):
+            return 503, {}, None
+
+        def missing_reply(_page, _elapsed):
+            return 200, {}, {"total_count": 1, "artifacts": available(["other"])}
+
+        def low_quota_reply(_page, _elapsed):
+            return 200, {"X-RateLimit-Remaining": "5"}, {
+                "total_count": 1, "artifacts": available(["other"])}
+
+        def paginated_reply(number, _elapsed):
+            if number == 1:
+                return 200, {}, {"total_count": 101, "artifacts": available(other100)}
+            return 200, {}, {"total_count": 101, "artifacts": available(["other-100"])}
+
+        cases = (("error", error_reply, [0, 15]),
+                 ("missing", missing_reply, [0, 15]),
+                 ("low-quota", low_quota_reply, [0, 15]),
+                 ("paginated", paginated_reply, [0, 0, 15, 15]))
+        for name, reply, expected in cases:
+            with self.subTest(case=name):
+                self.requests.clear()
+                self.request_headers.clear()
+                self.artifact_reply = reply
+                result = self.wait(timeout="20", jobs=["Test build"], poll="15", virtual=True,
+                                   artifact_names=["nextest-archive-1"])
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("timed out after 20 s waiting for archive parts", result.stderr)
+                self.assertEqual(float((self.root / "elapsed").read_text()), 20,
+                                 "a shorter overall timeout still exits at its deadline")
+                self.assertEqual(self.artifact_request_times(), expected, self.requests)
+
+        # A shorter deadline still ends the wait there instead of waiting out
+        # the fallback.
+        with self.subTest(case="short-timeout"):
+            self.requests.clear()
+            self.request_headers.clear()
+            self.artifact_reply = error_reply
+            result = self.wait(timeout="7", jobs=["Test build"], poll="15", virtual=True,
+                               artifact_names=["nextest-archive-1"])
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("timed out after 7 s waiting for archive parts", result.stderr)
+            self.assertEqual(float((self.root / "elapsed").read_text()), 7)
+            self.assertEqual(self.artifact_request_times(), [0], self.requests)
+
+    def test_listing_unavailable_after_success_is_not_reported_as_in_progress(self):
+        def reply(elapsed):
+            if elapsed == 0:
+                return 200, {}, [job("Test build", "in_progress")]
+            return 403, {}, None
+        self.job_reply = reply
+        try:
+            result = self.wait(timeout="5", jobs=["Test build"], poll="1", virtual=True)
+        finally:
+            self.job_reply = None
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("listing has been unavailable", result.stderr)
+        self.assertIn("consecutive failure", result.stderr)
+        self.assertIn("rate limit exceeded (HTTP 403)", result.stderr)
+        self.assertNotIn("waiting for Test build (in_progress)", result.stderr)
+
+    def test_rate_limit_beyond_remaining_budget_fails_promptly_for_jobs(self):
+        for headers in ({"Retry-After": "120"},
+                        {"X-RateLimit-Remaining": "0",
+                         "X-RateLimit-Reset": str(int(time.time()) + 120)}):
+            with self.subTest(headers=headers):
+                self.job_reply = lambda elapsed, headers=headers: (403, headers, None)
+                try:
+                    result = self.wait(timeout="30", jobs=["Test build"], poll="15", virtual=True)
+                finally:
+                    self.job_reply = None
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("ci-await: rate limit:", result.stderr)
+                self.assertIn("rate limit exceeded (HTTP 403)", result.stderr)
+                self.assertNotIn("timed out", result.stderr)
+                self.assertEqual(float((self.root / "elapsed").read_text()), 0)
+
+    def test_rate_limit_beyond_remaining_budget_fails_promptly_for_artifacts(self):
+        self.timed_response = lambda elapsed: [job("Test build")]
+        for status, headers in ((403, {"X-RateLimit-Remaining": "0",
+                                       "X-RateLimit-Reset": str(int(time.time()) + 120)}),
+                                (429, {"Retry-After": "60"})):
+            with self.subTest(status=status, headers=headers):
+                self.requests.clear()
+                self.request_headers.clear()
+                self.artifact_reply = lambda page, elapsed, status=status, headers=headers: (
+                    status, headers, None)
+                result = self.wait(timeout="7", jobs=["Test build"], poll="15", virtual=True,
+                                   artifact_names=["nextest-archive-1"])
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("ci-await: rate limit:", result.stderr)
+                self.assertIn("artifact listing has been unavailable", result.stderr)
+                self.assertNotIn("timed out", result.stderr)
+                self.assertEqual(float((self.root / "elapsed").read_text()), 0)
+        self.artifact_reply = None
+
+    def test_a_listing_killed_after_an_earlier_success_is_not_reported_as_current(self):
+        pid_file = self.root / "gh.pid"
+        self.env["CI_AWAIT_BLOCK_PID_FILE"] = str(pid_file)
+        self.env["CI_AWAIT_ANSWERED_LISTINGS"] = "1"
+        result = self.wait([job("Test build", "in_progress")], timeout="2", jobs=["Test build"])
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("timed out after 2 s waiting for every job (job listing still running at the "
+                      "deadline, killed)", result.stderr)
+        self.assertNotIn("waiting for Test build (in_progress)", result.stderr)
+
+    def test_malformed_single_page_job_listing_retries_until_the_deadline(self):
+        bodies = (
+            "<html>not-json",
+            "{",
+            "[]",
+            "null",
+            '{"total_count": 1}',
+            '{"total_count": 1, "jobs": [{"status": "completed"}]}',
+        )
+        try:
+            for body in bodies:
+                with self.subTest(body=body):
+                    self.requests.clear()
+                    self.raw_job_body = body
+                    result = self.wait(timeout="30", poll="15", virtual=True)
+                    combined = result.stdout + result.stderr
+                    self.assertNotIn("Traceback", combined)
+                    self.assertEqual(result.returncode, 1, combined)
+                    self.assertIn("timed out after 30 s waiting for every job", result.stderr)
+                    self.assertGreaterEqual(len(self.requests), 2, self.requests)
+                    self.assertEqual(float((self.root / "elapsed").read_text()), 30)
+        finally:
+            self.raw_job_body = None
 
 
 if __name__ == "__main__":

@@ -103,6 +103,16 @@ raise SystemExit("unexpected transport: " + name)
         (work / "private").mkdir()
         (work / "linked").symlink_to(work / "private", target_is_directory=True)
         cache = work / "linked" / "cache"
+    elif scenario == "existing-unowned":
+        (work / "a").mkdir()
+        (work / "a" / "operator.txt").write_text("operator source\n")
+        (work / "a-target").mkdir()
+        (work / "a-target" / "sentinel.txt").write_text("operator target\n")
+    elif scenario == "existing-unowned-cache":
+        (work / "cache").mkdir()
+        (work / "cache" / "operator.txt").write_text("operator cache\n")
+    elif scenario == "existing-unowned-file":
+        (work / "operator.txt").write_text("operator file\n")
     env = dict(os.environ)
     for key in list(env):
         if key.startswith(("SCCACHE_", "ORBIT_COMPILER_CACHE_")):
@@ -140,6 +150,20 @@ raise SystemExit("unexpected transport: " + name)
         errors.append("external or workdir deletion reached recorder")
     if sentinel.read_text() != "operator data\n":
         errors.append("external sentinel changed")
+    if scenario.startswith("existing-unowned"):
+        expected = {
+            "existing-unowned": ((work / "a" / "operator.txt", "operator source\n"),
+                                 (work / "a-target" / "sentinel.txt", "operator target\n")),
+            "existing-unowned-cache": ((work / "cache" / "operator.txt", "operator cache\n"),),
+            "existing-unowned-file": ((work / "operator.txt", "operator file\n"),),
+        }[scenario]
+        for path, text in expected:
+            if not path.exists() or path.read_text() != text:
+                errors.append(f"pre-existing sentinel changed: {path}")
+        if (work / "result.txt").exists():
+            errors.append("refusal created or truncated the result file")
+        if (work / ".orbit-compiler-cache-bench-owner").exists():
+            errors.append("refusal claimed an unowned workdir")
     return dict(scenario=scenario, exit_code=process.returncode, errors=errors,
                 events=recorded, stderr=process.stderr[-3000:])
 
@@ -155,7 +179,8 @@ def main():
         results = [check_benchmark(args.script.resolve(), Path(directory), scenario) for scenario in (
             "parent-escape", "ancestor-symlink-escape", "literal-external", "workdir-equality",
             "dot-equality", "target-symlink", "source-symlink", "cache-target-overlap",
-            "cache-target-ancestor", "result-symlink", "private-nested", "private-dot", "private-symlink")]
+            "cache-target-ancestor", "result-symlink", "private-nested", "private-dot", "private-symlink",
+            "private-empty", "existing-unowned", "existing-unowned-cache", "existing-unowned-file")]
     if args.report:
         args.report.write_text(json.dumps(results, indent=2) + "\n")
     for result in results:

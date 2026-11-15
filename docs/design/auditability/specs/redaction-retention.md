@@ -2,6 +2,7 @@
 type: design
 summary: Spec: Redaction and Retention Boundaries
 last_validated: 2026-10-29
+last_updated: 2026-11-14
 ---
 
 # Spec: Redaction and Retention Boundaries
@@ -51,10 +52,10 @@ Command audit rows:
   denials once; subsequent inserts capture the same facts independently of audit GC.
   Unscoped legacy rows are not attributed to a workspace.
 
-Activity/job and loop traces:
+Activity/job traces and historical loop rows:
 
-- Live under `.orbit/state/audit/` for workspace-local run reconstruction.
-- V2 envelope and loop events are persisted through the SQLite-backed v2 audit store.
+- V2 envelope events are persisted through the SQLite-backed v2 audit store; historical `source: loop_event` rows remain opaque payloads in the same table and share its retention policy.
+- Payload blobs live under `.orbit/state/audit/` for workspace-local run reconstruction.
 - Use content-addressed blobs for payload bodies.
 - Are bounded by `orbit gc audit`: it plans by default and, with `--apply`, deletes this workspace's v2 audit rows, and rows whose workspace id is no longer registered, older than `retention.audit_days` (default 60) in batches of 1,000 rows, each its own write transaction, then sweeps the blobs under `.orbit/state/audit/blobs/` that no remaining run audit row, run step or pipeline state names. Another registered workspace keeps its own window. The opt-in `store-gc` routine runs it daily. `VACUUM` stays an operator action; each report shows the freed pages.
 - A blob is protected from the sweep while it is being published. The writer records `.orbit/state/audit/pending/<hash>` before it writes or reuses a blob and retires the marker after the row naming it commits; writing content that is already stored refreshes the blob's mtime. The sweep moves a candidate to `.orbit/state/audit/sweep/`, then rechecks the marker and the mtime (24-hour grace) and moves it back if either is fresh. A marker older than the audit cutoff belongs to a write that never published and is reclaimed with its blob.
@@ -76,7 +77,7 @@ Run pipeline state:
 Per-minute resource history:
 
 - Lives in the host-wide `run_resource_minutes` (per run, with task id, work class and complexity; no payloads) and `host_resource_minutes` tables.
-- Is pruned by the same `orbit gc runs --apply` pass when older than 30 days, independent of `retention.runs_days`, except the newest `max(200, machine.auto_concurrency.profile_window)` deliveries per workspace, work class and complexity, which stay at any age.
+- Is pruned by the same `orbit gc runs --apply` pass when older than 30 days, independent of `retention.runs_days`, except the newest 200 deliveries per workspace, work class and complexity, which stay at any age.
 
 Admission forecasts:
 
@@ -90,10 +91,10 @@ Admission reservations:
 
 Applied task commit journal:
 
-- `retention.journal_days` (default 14) removes older applied rows only, preserving each
+- A fixed 14-day window ([ORB-22808]) removes older applied rows only, preserving each
   task's newest applied row plus all prepared, committed and aborted rows. Published
   task history and recovery inputs stay; older raw transition diagnostics are lost.
-- `retention.store_warn_bytes` controls a warning only and deletes nothing.
+- The fixed 1 GiB store-size warning deletes nothing.
 - Cost, task-store Codebase rankings, `orbit task flow` and friction stats keep working
   across audit, run and journal pruning. Auto-concurrency profiles and forecast accuracy
   keep working on the rows the count exceptions keep at any age; raw samples outside
@@ -116,7 +117,7 @@ Global process tracing:
 
 - If a redactor misses an unknown secret shape, the audit layer may persist that value. Reviewers should treat new provider payload shapes as redaction-sensitive changes.
 - If redaction changes payload bytes, the stored hash identifies the redacted payload, not the raw provider payload.
-- If v2 audit-store writes fail, the run may continue with in-memory audit snapshots only; durable reconstruction is incomplete.
+- If v2 audit-store writes fail, the run continues with a degraded audit trail: the writer counts and logs each failed envelope and keeps no in-memory copy. A failed event is absent from sink-backed snapshots and cannot be reconstructed from memory, so its durable evidence is missing.
 - `orbit audit prune` deletes command audit rows only; run audit rows and blobs are pruned by `orbit gc audit`.
 - A blob whose write crashed before its row committed keeps its pending marker and survives until the marker is older than `retention.audit_days`.
 - A blob named by pipeline state survives its audit row until `orbit gc runs` drops that state. A blob named by a step response or error is kept for as long as the step row exists, since run retention keeps steps.
@@ -135,3 +136,11 @@ Future retention work should add:
 ## Agent Signature
 
 Last revised by codex / gpt-5.5 for [T20260427-0023].
+
+## Task References
+
+- **[ORB-10591]** — Document the artifact-write redaction boundary, add structural SSH identifier coverage, and return field-level redaction details.
+- [ORB-22808] — Hardcoded unset tuning keys as named constants, fixing the applied task-commit journal window at 14 days.
+- [T20260427-0023] — project policy denials and friction task submissions into the global tracing feed.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

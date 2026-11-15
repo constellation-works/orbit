@@ -2,7 +2,7 @@
 use super::*;
 use crate::contracts::{AtomicTaskMutationOutcome, DesktopTaskMutationParams};
 use crate::driver::file::task_bundle::PendingWriteGuard;
-use orbit_types::task::{DesktopMutationReceipt, TaskDecision};
+use orbit_types::task::{CrewSource, DesktopMutationReceipt, TaskDecision};
 
 fn revision(bundle: &TaskBundleV2) -> Result<String, OrbitError> {
     let bytes = serde_json::to_vec(&(
@@ -21,7 +21,7 @@ fn revision(bundle: &TaskBundleV2) -> Result<String, OrbitError> {
 /// Why an active claim refuses desktop writes, and the supported way out: a
 /// claim-scoped mutation, never a status change. The task and claiming run are
 /// named so a refusal can be traced without a second lookup.
-fn active_claim_reason(claim: &crate::contracts::ExecutionClaim) -> String {
+pub(crate) fn active_claim_reason(claim: &crate::contracts::ExecutionClaim) -> String {
     let identity = format!(
         " (task {}, run {})",
         claim.task_id, claim.run_context.run_id
@@ -66,7 +66,7 @@ impl TaskV2Store {
             .as_ref()
             .map(|manifest| manifest.files.clone())
             .unwrap_or_default();
-        let task = self.task_from_bundle(bundle)?;
+        let task = super::task_from_bundle(bundle);
         let readonly = self.registry.is_read_only()?
             || fs::metadata(self.bundle_store.bundle_path(id)?)?
                 .permissions()
@@ -74,12 +74,10 @@ impl TaskV2Store {
         let write_disabled_reason = if readonly {
             Some("task storage is read-only".into())
         } else if let Some(boundary) = &self.coordination {
-            match boundary.inspect_execution_claims() {
+            match boundary.inspect_task_execution_claims(id) {
                 Ok(claims) => claims
                     .iter()
-                    .find(|claim| {
-                        claim.claim.task_id == id && claim.claim.phase.protects_footprint()
-                    })
+                    .find(|claim| claim.claim.phase.protects_footprint())
                     .map(|claim| active_claim_reason(&claim.claim)),
                 Err(error) => Some(error.to_string()),
             }
@@ -156,7 +154,7 @@ impl TaskV2Store {
             }
             if let Some(v) = &p.fields.crew {
                 b.envelope.crew = (!v.is_empty()).then(|| v.clone());
-                b.envelope.crew_source = b.envelope.crew.as_ref().map(|_| "explicit".to_string());
+                b.envelope.crew_source = b.envelope.crew.as_ref().map(|_| CrewSource::Explicit);
             }
             if let Some(source) = &p.crew_source {
                 b.envelope.crew_source = source.clone();
@@ -177,18 +175,17 @@ impl TaskV2Store {
                 )?;
             }
             let now = Utc::now();
+            let mut pending_events: Vec<TaskEventRowV2> = Vec::new();
+            let mut pending_comments: Vec<TaskCommentRowV2> = Vec::new();
             if let Some(v) = &p.comment {
-                self.bundle_store.append_comment(
-                    id,
-                    &TaskCommentRowV2 {
-                        schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
-                        comment_id: format!("C-{:04}", next_sequence(&b.comments, "C-")),
-                        at: now,
-                        by: p.actor.clone(),
-                        body: v.clone(),
-                        operation_id: None,
-                    },
-                )?;
+                pending_comments.push(TaskCommentRowV2 {
+                    schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                    comment_id: format!("C-{:04}", next_sequence(&b.comments, "C-")),
+                    at: now,
+                    by: p.actor.clone(),
+                    body: v.clone(),
+                    operation_id: None,
+                });
             }
             let approval =
                 old_status == TaskStatus::Proposed && b.envelope.status == TaskStatus::Backlog;
@@ -205,7 +202,7 @@ impl TaskV2Store {
                     operation_id: None,
                     decision: None,
                 };
-                self.bundle_store.append_event(id, &approval)?;
+                pending_events.push(approval.clone());
                 b.events.push(approval);
             }
             for entry in &p.append_history {
@@ -221,7 +218,7 @@ impl TaskV2Store {
                     operation_id: None,
                     decision: entry.decision.clone(),
                 };
-                self.bundle_store.append_event(id, &event)?;
+                pending_events.push(event.clone());
                 b.events.push(event);
             }
             let event = TaskEventRowV2 {
@@ -243,17 +240,19 @@ impl TaskV2Store {
                     payload_digest: p.payload_digest.clone(),
                 })),
             };
-            self.bundle_store.append_event(id, &event)?;
+            pending_events.push(event.clone());
             b.events.push(event);
             let context_files = b.envelope.context_files.clone();
             append_creation_grant(
-                &self.bundle_store,
                 &mut b,
                 &context_files,
                 &[],
                 &p.actor,
                 now,
+                &mut pending_events,
             )?;
+            self.bundle_store.append_events(id, &pending_events)?;
+            self.bundle_store.append_comments(id, &pending_comments)?;
             b.envelope.updated_at = now;
             self.bundle_store.rewrite_envelope(id, &b.envelope)?;
             pending.finish();

@@ -1,7 +1,6 @@
 //! Shared working-directory confinement for operator host tools.
 //!
-//! `orbit.agent.invoke` and `orbit.command.exec` both start an unsandboxed
-//! subprocess from an explicit directory. Containment is what keeps "this
+//! `orbit.command.exec` starts a subprocess from an explicit directory. Containment is what keeps "this
 //! workspace authorized the call" true: a caller addressing workspace A must
 //! not be able to point that subprocess at workspace B, `$HOME`, or anywhere
 //! else the Orbit user can reach.

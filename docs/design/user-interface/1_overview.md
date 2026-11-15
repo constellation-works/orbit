@@ -4,7 +4,7 @@ type: design
 title: "User Interface — Overview"
 owner: gemini
 last_updated: 2026-10-20
-last_validated: 2026-10-30
+last_validated: 2026-11-11
 status: Draft
 stage: shipped
 next: "—"
@@ -43,21 +43,44 @@ Agent runs produce more state changes, logs, and diagnostics than a human can re
   update open details without discarding unsaved editors.
 
 The Tasks dock holds the Auto-drain status and forecast, a simple **Start a
-window** card, **Locks held** and **Log**. It gives way to the task pane when
-a task opens. Below 1000px the list keeps the full width, and an explicit Drain,
-Locks held or Log link shows the dock in its place until **Back to tasks**.
-Locks held lists holders by task or locked paths by file, marking a path more
-than one task holds, with a
-filter by task ID. On a replica checkout, Start pulls directly from the
+window** card, and **Log**. It gives way to the task pane when
+a task opens. Below 1000px the list keeps the full width, and an explicit Drain or
+Log link shows the dock in its place; the rail's **Tasks** item
+returns to the list, keeping its filters.
+Backlog readiness names holding tasks; each task detail lists its context
+files and lock contention. Retired Locks held links and remembered dock modes
+open Drain. On a replica checkout, Start pulls directly from the
 owner; the Auto-drain card can stop that pull's admissions.
 
-The top-bar fleet indicator opens the Tasks dock in **All workspaces** mode.
-There the Auto-drain card lists fleet drains, one tab per host when more
-than one is registered (the chosen tab is remembered), with phase and
+The rail workspace dropdown is a single-select. **All workspaces** is its first
+entry, then the selected host's owned workspaces. Choosing one opens that
+workspace's board; **All workspaces** opens the aggregate board.
+
+Under **All workspaces**, the Tasks status-chip row has a workspace multi-select
+immediately after **More**, in the same chip style. It is absent on a single
+workspace's board. Ticking a subset narrows task rows and status-pill counts;
+ticking down to one workspace opens that board. The URL and per-host browser
+preference retain a multi-workspace choice, dropping workspaces no longer
+available. Several `workspaces=` values open **All workspaces** with that filter;
+one value opens that workspace's board.
+
+With **All workspaces** selected, the dock tabs are **Drain**, **Fleet**, **Log**. Drain reuses the Auto-drain body, with an
+**Auto-draining** header followed by a workspace select, an owner-first host select and phase pill.
+The workspace select lists the selected host's owned workspaces in alphabetical order,
+defaulting to the first with a live drain on any host; the host select lists
+that workspace's owner first and selected by default, then its follower hosts,
+and changing the workspace resets the host to the owner. The owner's concrete
+board shows the same host select, without a workspace select, and the owner
+stays the default there. Followers are readable
+through the host forward. The chosen workspace's drain on the chosen host is
+shown, or Idle when none is live there; both choices survive a reload, with a
+remembered value that no longer exists falling back to those defaults.
+Aggregate controls remain read-only. Fleet holds the existing fleet drains card,
+one tab per host when more than one is registered (the chosen tab is
+remembered), with phase and
 used/ceiling leaf slots for each workspace. Live drains lead; eligible work,
 waits, holds and queued windows add a second line only when present.
-Selecting a row switches host and workspace. The indicator remains visible
-when an idle workspace is selected. Legacy `#drain`, `#drain/start` and
+Selecting a row switches host and workspace. Legacy `#drain`, `#drain/start` and
 `#drain/log` links open the corresponding Tasks dock content.
 
 `GET /api/fleet/drains` returns `{ items: [...] }` with one row per registered
@@ -70,7 +93,10 @@ These fields are null on unavailable workspaces. Failed/inactive workspaces stay
 `error`, and null counts. Counts use the read-only readiness snapshot (up to 500
 tasks); `counts_truncated` marks a lower bound, displayed with `+`. The top wait
 is the most frequent reason among those tasks, with alphabetical ties. Slots
-include shared leaf occupancy, matching the workspace Drain card.
+include shared leaf occupancy, matching the workspace Drain card. Rows run the
+same admission decisions as workspace readiness, read concurrently with one
+registry-global task status read per request, and skip the approval, claim and
+validation-environment diagnostics a row does not report.
 
 The browser combines this endpoint across the serving host's registered hosts
 through `/api/on/<host>/fleet/drains`, with at most three requests in flight.
@@ -95,6 +121,7 @@ partial coverage. No recursive federation or workspace writes are performed.
 | Dashboard styles | `crates/orbit-web/assets/dashboard/css/` | One file per screen plus shared base, shell, and components layers; `DASHBOARD_CSS` in `lib.rs` joins them in cascade order and serves the result as `/static/dashboard.css`. |
 | CLI adapter | `crates/orbit-cli/src/command/web.rs` | Delegates `serve` and `connect` to `orbit-web`. |
 | Theme rules | `./specs/theme.md` | Canon Refined tokens and visual invariants. |
+| Workspace navigation across hosts (proposed) | `./specs/workspace-navigation.md` | One entry per logical workspace, owner routing, follower capacity lanes and a multi-workspace scope. Not implemented. |
 | Dashboard implementation | [crates/orbit-web/src/serve.rs](../../../crates/orbit-web/src/serve.rs), [assets.rs](../../../crates/orbit-web/src/assets.rs), [state/](../../../crates/orbit-web/src/state/), [api/](../../../crates/orbit-web/src/api/) | HTTP server, embedded dashboard assets, workspace state, and API routing. |
 
 ## Task References

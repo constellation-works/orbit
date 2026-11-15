@@ -1,4 +1,4 @@
-use super::support::{Fixture, Server, isolated};
+use super::support::{Fixture, Server, error_code, isolated};
 use axum::http::StatusCode;
 use chrono::Utc;
 use orbit_core::OrbitRuntime;
@@ -52,6 +52,9 @@ fn owner_state_with_claims(
             preserved_candidate: None,
             settlement: None,
             steering: None,
+            leaf_run_evidence: None,
+            late_leaf_effort: None,
+            late_leaf_model: None,
         };
         let claim_json = serde_json::to_string(&claim).expect("serialize claim fixture");
         let inspection_json =
@@ -220,6 +223,61 @@ fn default_claim_response_stays_small_with_long_settled_history() {
     );
 }
 
+fn edit_registry(
+    fixture: &Fixture,
+    edit: impl FnOnce(&mut orbit_types::workspace::WorkspaceRegistry),
+) {
+    let path = orbit_registry::workspace_registry::registry_path_for(&fixture.global);
+    let mut registry = orbit_registry::workspace_registry::load_registry_from(&path).unwrap();
+    edit(&mut registry);
+    orbit_registry::workspace_registry::save_registry_to(&registry, &path).unwrap();
+}
+
+#[test]
+fn retry_handoff_inactive_workspace_is_typed_workspace_unavailable() {
+    isolated(
+        "distributed_contracts::retry_handoff_inactive_workspace_is_typed_workspace_unavailable",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.server(true);
+            let body = serde_json::json!({"expected_candidate_commit":"aaaa","expected_base_commit":"bbbb","expected_latest_attempt":1,"expected_latest_state":"stopped","reason":"retry safely","request_key":"r1"});
+            let uri = "/api/distributed/handoffs/abc123/retry?workspace=ws_http_fixture";
+            // The selected workspace becomes inactive (its checkout moved)
+            // before the replay. The Ws extractor answers before the retry
+            // handler and its receipt lookup, so the refusal is environmental:
+            // it stays a 400 but must carry the typed code the browser uses
+            // to retain a retained request_key.
+            let registry_path =
+                orbit_registry::workspace_registry::registry_path_for(&fixture.global);
+            let original_registry = std::fs::read(&registry_path).unwrap();
+            edit_registry(&fixture, |registry| {
+                registry.checkouts[0].repo_root = fixture.path("missing-checkout");
+            });
+            let refused = error_code(
+                server.send("POST", uri, body.clone()),
+                400,
+                "workspace_unavailable",
+            );
+            assert!(
+                refused["error"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("is inactive")),
+                "{refused}"
+            );
+            // After the workspace is active again the same replay is no longer
+            // refused as workspace_unavailable; it reaches the handler.
+            std::fs::write(&registry_path, &original_registry).unwrap();
+            let restored = server.send("POST", uri, body);
+            let restored_body: Value = restored.json().unwrap();
+            assert_ne!(
+                restored_body.get("code"),
+                Some(&serde_json::json!("workspace_unavailable")),
+                "{restored_body}"
+            );
+        },
+    );
+}
+
 fn get(server: &Server, uri: &str) -> reqwest::blocking::Response {
     server.get(&format!(
         "/api{}",
@@ -268,6 +326,206 @@ fn a_replica_checkout_reads_empty_and_refuses_every_owner_action() {
                 assert_eq!(response.status(), StatusCode::FORBIDDEN, "{uri}");
                 assert_eq!(body_json(response)["code"], "replica_checkout", "{uri}");
             }
+        },
+    );
+}
+
+/// Each operator route refuses a bad reason or replay key with a 400 `{error}`
+/// from the core operation, before any receipt is written. The 2000-byte
+/// reason and 128-byte key are the accepted boundary; they pass the bounds
+/// and fail later for the absent handoff or claim.
+#[test]
+fn operator_handoff_reason_and_replay_key_are_bounded_on_every_route() {
+    isolated(
+        "distributed_contracts::operator_handoff_reason_and_replay_key_are_bounded_on_every_route",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.server(true);
+            fn retry_body(reason: &str, key: &str) -> Value {
+                serde_json::json!({"expected_candidate_commit":"aaaa","expected_base_commit":"bbbb","expected_latest_attempt":1,"expected_latest_state":"stopped","reason":reason,"request_key":key})
+            }
+            fn revoke_body(reason: &str, key: &str) -> Value {
+                serde_json::json!({"expected_candidate_commit":"aaaa","expected_base_commit":"bbbb","reason":reason,"request_id":key})
+            }
+            fn recover_body(reason: &str, key: &str) -> Value {
+                serde_json::json!({"expected_phase":"running","status":"blocked","reason":reason,"request_id":key})
+            }
+            type BodyFor = fn(&str, &str) -> Value;
+            let routes: [(&str, BodyFor); 3] = [
+                (
+                    "/api/distributed/handoffs/abc123/retry?workspace=ws_http_fixture",
+                    retry_body,
+                ),
+                (
+                    "/api/distributed/handoffs/abc123/revoke?workspace=ws_http_fixture",
+                    revoke_body,
+                ),
+                (
+                    "/api/distributed/claims/claim1/recover?workspace=ws_http_fixture",
+                    recover_body,
+                ),
+            ];
+            let long_reason = "r".repeat(2001);
+            let long_key = "k".repeat(129);
+            for (uri, body) in routes {
+                for (reason, key) in [
+                    (long_reason.as_str(), "ok-key"),
+                    ("retry safely", "has space"),
+                    ("retry safely", long_key.as_str()),
+                ] {
+                    let response = server.send("POST", uri, body(reason, key));
+                    assert_eq!(response.status(), 400, "{uri} {reason:.12} {key}");
+                    let json: Value = response.json().unwrap();
+                    assert!(json["error"].is_string(), "{uri}: {json}");
+                }
+                // The boundary values pass the bounds and fail later, on the
+                // absent handoff or claim, not on the reason or key.
+                let boundary = server.send("POST", uri, body(&"r".repeat(2000), &"k".repeat(128)));
+                let json: Value = boundary.json().unwrap();
+                assert!(
+                    !json["error"].as_str().unwrap_or_default().contains("bytes"),
+                    "{uri}: {json}"
+                );
+            }
+        },
+    );
+}
+
+#[test]
+fn operator_handoff_audit_never_contains_unbounded_or_invalid_reason_or_key() {
+    isolated(
+        "distributed_contracts::operator_handoff_audit_never_contains_unbounded_or_invalid_reason_or_key",
+        || {
+            let fixture = Fixture::new();
+            let operations = ["handoff.retry", "handoff.revoke", "claim.recover"];
+            let routes = [
+                "/api/distributed/handoffs/abc123/retry?workspace=ws_http_fixture",
+                "/api/distributed/handoffs/abc123/revoke?workspace=ws_http_fixture",
+                "/api/distributed/claims/claim1/recover?workspace=ws_http_fixture",
+            ];
+            let long_reason = "r".repeat(2001);
+            let invalid_key = "has space";
+            let body_for = |index: usize, reason: &str, key: &str| -> Value {
+                match index {
+                    0 => {
+                        serde_json::json!({"expected_candidate_commit":"aaaa","expected_base_commit":"bbbb","expected_latest_attempt":1,"expected_latest_state":"stopped","reason":reason,"request_key":key})
+                    }
+                    1 => {
+                        serde_json::json!({"expected_candidate_commit":"aaaa","expected_base_commit":"bbbb","reason":reason,"request_id":key})
+                    }
+                    _ => {
+                        serde_json::json!({"expected_phase":"running","status":"blocked","reason":reason,"request_id":key})
+                    }
+                }
+            };
+            // Operator (refused) path: core refuses, audit is a failure row.
+            {
+                let server = fixture.server(true);
+                for (index, uri) in routes.iter().enumerate() {
+                    for (reason, key) in [
+                        (long_reason.as_str(), "ok-key"),
+                        ("retry safely", invalid_key),
+                    ] {
+                        let response = server.send("POST", uri, body_for(index, reason, key));
+                        assert_eq!(response.status(), 400, "{uri}");
+                    }
+                    // Valid values audit trimmed.
+                    let _ = server.send(
+                        "POST",
+                        uri,
+                        body_for(index, "  retry safely  ", "  ok-key  "),
+                    );
+                }
+            }
+            // Non-operator (denied) path: audit is a denied row.
+            {
+                let server = fixture.server(false);
+                for (index, uri) in routes.iter().enumerate() {
+                    for (reason, key) in [
+                        (long_reason.as_str(), "ok-key"),
+                        ("retry safely", invalid_key),
+                    ] {
+                        let response = server.send("POST", uri, body_for(index, reason, key));
+                        assert_eq!(response.status(), 403, "{uri}");
+                    }
+                }
+            }
+            for operation in operations {
+                let events = fixture
+                    .runtime
+                    .list_audit_events_with_kind(
+                        None,
+                        None,
+                        Some(operation.to_string()),
+                        None,
+                        None,
+                        100,
+                    )
+                    .expect("list audit events");
+                let rows: Vec<_> = events
+                    .iter()
+                    .filter(|event| event.command == "dashboard.operations")
+                    .collect();
+                assert!(!rows.is_empty(), "{operation} should be audited");
+                assert!(
+                    rows.iter().any(|event| {
+                        event.status == orbit_types::telemetry::AuditEventStatus::Denied
+                    }),
+                    "{operation} denied row audited"
+                );
+                assert!(
+                    rows.iter().any(|event| {
+                        event.status == orbit_types::telemetry::AuditEventStatus::Failure
+                    }),
+                    "{operation} failure row audited"
+                );
+                for event in &rows {
+                    let arguments = event.arguments_json.as_deref().unwrap_or_default();
+                    assert!(
+                        !arguments.contains(&long_reason),
+                        "{operation} audit leaked long reason: {arguments:.80}"
+                    );
+                    assert!(
+                        !arguments.contains(invalid_key),
+                        "{operation} audit leaked invalid key: {arguments}"
+                    );
+                    assert!(
+                        arguments.len() <= 2500,
+                        "{operation} audit unbounded: {} bytes",
+                        arguments.len()
+                    );
+                }
+                // A valid request audits the trimmed reason (and, for retry,
+                // the trimmed key).
+                assert!(
+                    rows.iter().any(|event| {
+                        let arguments = event.arguments_json.as_deref().unwrap_or_default();
+                        arguments.contains("\"reason\":\"retry safely\"")
+                    }),
+                    "{operation} valid audit should hold trimmed reason: {rows:?}"
+                );
+            }
+            let retry_rows = fixture
+                .runtime
+                .list_audit_events_with_kind(
+                    None,
+                    None,
+                    Some("handoff.retry".to_string()),
+                    None,
+                    None,
+                    100,
+                )
+                .expect("list retry audit events");
+            assert!(
+                retry_rows.iter().any(|event| {
+                    event
+                        .arguments_json
+                        .as_deref()
+                        .unwrap_or_default()
+                        .contains("\"request_key\":\"ok-key\"")
+                }),
+                "retry audit should hold trimmed key"
+            );
         },
     );
 }

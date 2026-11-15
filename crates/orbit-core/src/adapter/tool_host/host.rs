@@ -36,11 +36,7 @@ struct RuntimeOrbitToolHost {
     /// The calling session's asserted grants, carried so a handler whose
     /// decision depends on *who is calling* can reach them [ORB-11354].
     ///
-    /// The tool chokepoint resolves capabilities before dispatch, but its
-    /// answer is a yes/no it does not pass on. `orbit.agent.invoke` needs the
-    /// caller itself, because it records the authorizing operator on a durable
-    /// admission and verifies the operation-specific identity and workspace
-    /// scope of a remote caller the ordinary registry would otherwise allow.
+    /// Session identity and worker binding for operation-specific admission.
     session_context: ToolSessionContext,
 }
 
@@ -93,6 +89,13 @@ impl OrbitToolHost for RuntimeOrbitToolHost {
         self.task_scope.clone()
     }
 
+    fn scope_is_resident_cycle(&self) -> bool {
+        self.task_scope
+            .run_id
+            .as_deref()
+            .is_some_and(|run_id| self.runtime.is_resident_cycle_run(run_id))
+    }
+
     /// A routed decision-channel callback runs here, outside the plugin
     /// sandbox, through the same `orbit tool run` dispatch the child would
     /// have used. The caller is the routed callback session the dispatch
@@ -110,9 +113,12 @@ impl OrbitToolHost for RuntimeOrbitToolHost {
             worker_invocation: self.session_context.worker_invocation.clone(),
             ..Default::default()
         };
+        // The route carries the operation; a family operation is dispatched
+        // as its family call, the only name the dispatcher accepts for it.
+        let (tool, input) = orbit_types::tool::tool_family_call(tool, input);
         self.runtime
             .execute_tool_command_dispatch_with_session_context(
-                tool,
+                &tool,
                 input,
                 None,
                 None,

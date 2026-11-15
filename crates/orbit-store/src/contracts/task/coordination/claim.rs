@@ -76,6 +76,25 @@ pub struct ExecutionClaim {
     pub repair: Option<ClaimRepair>,
 }
 
+/// The first of `claims` that refuses a task starting work on `footprint`:
+/// a protecting claim whose frozen footprint `footprint` blocks under
+/// `lock_modes`. `footprint` is the task's whole canonical context, unlocked
+/// paths included, because that is what the work-start guard compares
+/// [ORB-23894]. Admission defers on the same answer, so it never creates a run
+/// that guard would refuse.
+pub fn claim_refusing_work_start<'a>(
+    claims: impl IntoIterator<Item = &'a ExecutionClaim>,
+    footprint: &[String],
+    lock_modes: &orbit_common::fs::lock_mode::FootprintLockModes,
+) -> Option<&'a ExecutionClaim> {
+    if footprint.is_empty() {
+        return None;
+    }
+    claims.into_iter().find(|claim| {
+        claim.phase.protects_footprint() && lock_modes.footprints_block(footprint, &claim.footprint)
+    })
+}
+
 /// Immutable leaf identity. Host labels are diagnostic; machine and run fence ownership.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaimRun {
@@ -100,8 +119,9 @@ pub struct ClaimInvocation {
     pub(crate) attribution: ClaimAttribution,
 }
 
-/// The crew and model a claimed leaf ran as, and the branch and worktree its
-/// `worktree` step recorded, as its follower reports them. Attribution only:
+/// The crew, model and reasoning effort a claimed leaf ran as, and the branch
+/// and worktree its `worktree` step recorded, as its follower reports them.
+/// Attribution only:
 /// the owner keeps them on the claim's settlement record for the scorecards
 /// and the task detail panel, and never consults them for validation, a
 /// settlement's outcome or review-crew selection.
@@ -117,6 +137,17 @@ pub struct ClaimAttribution {
     /// The leaf's absolute worktree path on its executing machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_path: Option<String>,
+    /// The effective reasoning effort of the leaf's main implementing
+    /// invocation, in the agent scorecards' encoding: `Some(Some(name))` is
+    /// the effort's wire name, `Some(None)` (`null` on the wire) the
+    /// provider default, and `None` (absent) an effort the follower does not
+    /// know, as every follower that predates the report sends.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "reported_effort"
+    )]
+    pub reasoning_effort: Option<Option<String>>,
 }
 
 impl ClaimAttribution {
@@ -127,10 +158,35 @@ impl ClaimAttribution {
             && self.crew_model.is_none()
             && self.branch.is_none()
             && self.worktree_path.is_none()
+            && self.reasoning_effort.is_none()
     }
 }
 
+/// The `reasoning_effort` a follower's settle call sends for a leaf that ran
+/// at its provider's default effort. Tool input drops a `null` parameter, so
+/// the provider default travels by this name and the owner records it as
+/// `null`.
+pub const PROVIDER_DEFAULT_REPORTED_EFFORT: &str = "provider_default";
+
+/// Deserialize a present reported effort, `null` included, as `Some`; an
+/// absent one stays `None` through `#[serde(default)]`. A plain
+/// `Option<Option<_>>` would read `null` as absent and lose the provider
+/// default.
+pub(crate) fn reported_effort<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
+}
+
 impl ClaimInvocation {
+    /// The task this invocation is authorized for. The embedding runtime
+    /// reads it to refresh derived state (the lexical index) after a
+    /// committed claim mutation names its task.
+    pub fn task_id(&self) -> &str {
+        &self.task_id
+    }
+
     /// Only trusted runtime code may call this constructor; payload labels confer no rights.
     pub fn trusted_worker(
         task_id: String,
@@ -193,6 +249,10 @@ impl ClaimInvocation {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaimEvidence {
+    /// Host-only review publication, paired with `comment` in one task mutation.
+    /// Older peers omit this and remain readable through legacy comments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_settlement: Option<orbit_types::task::RecordedReviewSettlement>,
     pub summary: Option<String>,
     pub comment: Option<String>,
     pub artifacts: Vec<orbit_types::task::TaskArtifact>,
@@ -254,6 +314,12 @@ pub struct ClaimEvidence {
     /// [`Self::crew`]. An owner that predates the field ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew_model: Option<String>,
+    /// [ORB-20906] The leaf run's job, build and failing step as its run
+    /// record held them when the follower recorded this settlement. The owner
+    /// keeps them in a separate immutable row, as evidence only. An owner
+    /// that predates the field ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leaf_run: Option<super::LeafRunReport>,
 }
 
 /// Review ledgers a claimed leaf carried home [ORB-16699].

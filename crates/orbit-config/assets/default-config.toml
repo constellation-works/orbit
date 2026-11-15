@@ -19,6 +19,9 @@ pass = [
 [execution.codex]
 sandbox = "danger-full-access"
 
+[experiments]
+enabled = true
+
 # Selective before-landing review is off by default. To watch what it would
 # select without invoking reviewers or changing delivery, an operator may
 # set (example only; `review.timing` stays "off"):
@@ -33,6 +36,14 @@ sandbox = "danger-full-access"
 # configured) when selected candidates must review before landing.
 
 [workflow]
+# Draw task crews by their pool weights alone.
+crew_selection = "static"
+# Context entries matching these globs take no context lock.
+unlocked_context_paths = ["**/*.json", "**/*.txt", "**/*.md", "**/mod.rs", "**/*.toml"]
+# Deliver operator comments written on a task while its run is in flight.
+mid_run_steering.enabled = true
+# Only a requirements edit makes a task-pilot assessment stale.
+task_pilot_freshness.material_fields = ["description", "criteria"]
 
 # Footprint lock modes. Any overlap between two tasks' context selectors keeps
 # the second task waiting. A path in `shared` mode lets overlapping tasks run
@@ -55,13 +66,7 @@ paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "script
 [workflow.review_skip_tags."auto-task:auto-task-yield-review"]
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 
-[workflow.review_skip_tags."auto-task:crew-ladder-review"]
-paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
-
 [workflow.review_skip_tags."auto-task:architecture-audit"]
-paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
-
-[workflow.review_skip_tags."auto-task:backlog-hygiene"]
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 
 [workflow.review_skip_tags."auto-task:delivery-code-review"]
@@ -73,9 +78,6 @@ paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "script
 [workflow.review_skip_tags."auto-task:code-review"]
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 
-[workflow.review_skip_tags."auto-task:ci-budget-watch"]
-paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
-
 [workflow.review_skip_tags."auto-task:code-health-sweep"]
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 
@@ -83,9 +85,6 @@ paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "script
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 
 [workflow.review_skip_tags."auto-task:escape-to-guard"]
-paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
-
-[workflow.review_skip_tags."auto-task:flaky-test-hunt"]
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 
 [workflow.review_skip_tags."auto-task:friction-curation"]
@@ -107,10 +106,4 @@ paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "script
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 
 [workflow.review_skip_tags."auto-task:security-review"]
-paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
-
-[workflow.review_skip_tags."auto-task:structure-sweep"]
-paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
-
-[workflow.review_skip_tags."auto-task:suppression-ratchet"]
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]

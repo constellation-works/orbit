@@ -127,6 +127,18 @@ pub enum V2AuditEventKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<serde_json::Value>,
     },
+    /// An implementer's otherwise successful response failed only the output
+    /// contract, and the step asked its agent once, in the same attempt, for
+    /// a corrected envelope instead of failing into recovery [ORB-24143].
+    StepContractCorrection {
+        step_id: String,
+        /// The refused output field, such as `task_artifacts`.
+        field: String,
+        /// The contract refusal that went back to the agent; bounded.
+        refusal: String,
+        /// `requested` when the correction was dispatched.
+        outcome: String,
+    },
     /// [ORB-13907] The job-level final recovery hook ran, or was skipped, for
     /// a failed top-level step.
     FinalRecoveryAttempted {
@@ -243,9 +255,19 @@ pub enum V2AuditEventKind {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         omitted_requirement_notes: Vec<String>,
     },
-    /// The tag instructions a CLI backend invocation's prompt carried, emitted
-    /// once per invocation before the subprocess starts, and only when there
-    /// were some. Text is not recorded: the hash and source identify it.
+    /// Generated workspace corpus rows delivered to one provider invocation.
+    /// The digest and pinned source identify the text; content stays out of audit.
+    AgentCorpusApplied {
+        step_id: String,
+        activity_name: String,
+        index: String,
+        revision: String,
+        paths: Vec<String>,
+        sha256: String,
+        bytes: usize,
+        truncated: bool,
+    },
+    /// Trusted per-tag guidance delivered to one invocation.
     TagInstructionsApplied {
         /// The pipeline step that dispatched the activity.
         step_id: String,
@@ -253,17 +275,30 @@ pub enum V2AuditEventKind {
         task_id: String,
         instructions: Vec<crate::workflow::TagInstructionRecord>,
     },
-    /// What an implement dispatch did with the task's explore brief, emitted
-    /// once per dispatch of an activity that declares an
-    /// `explore_brief_instruction`, before the subprocess starts, whatever
-    /// the outcome (`absent` included). The brief itself is not recorded:
-    /// its hash and revision identify it.
+    /// What an implement dispatch did with the task's explore brief. No
+    /// longer emitted: the explore brief was removed [ORB-22805], and the
+    /// variant stays so earlier audit rows still parse.
     ExploreBriefApplied {
         /// The pipeline step that dispatched the activity.
         step_id: String,
         activity_name: String,
         task_id: String,
         brief: crate::workflow::ExploreBriefRecord,
+    },
+    /// The fleet notices one prompt build quoted as untrusted data, emitted
+    /// once per dispatch of an activity that opts into `fleet_notices` or
+    /// declares a `notice_instruction` whenever its prompt carries the block (the
+    /// `unavailable` marker included, with no notices). It records what
+    /// the host wrote, never that the agent read it.
+    NoticesDelivered {
+        /// The pipeline step that dispatched the activity.
+        step_id: String,
+        activity_name: String,
+        task_id: String,
+        /// Each delivered notice as `id@revision`.
+        notices: Vec<String>,
+        /// Open notices in scope the brief's item bound omitted.
+        omitted: u64,
     },
     /// Whether an image-input invocation returned its canary code, emitted
     /// once per invocation whose provider finished its turn. Two misses in a
@@ -436,6 +471,18 @@ pub enum V2AuditEventKind {
         harness_version: Option<String>,
         timed_out: bool,
     },
+    /// Trusted provider outcome, independent of the pipeline step or recovery
+    /// decision. Historical invocations without this event have unknown outcomes.
+    ProviderInvocationObserved {
+        provider: String,
+        crew: Option<String>,
+        account: Option<String>,
+        started_at: DateTime<Utc>,
+        finished_at: DateTime<Utc>,
+        success: bool,
+        /// Set only by the provider protocol/stderr classifier, never agent text.
+        failure_class: Option<crate::workflow::ProviderFailureClass>,
+    },
     /// One attempt of a `target: script:<name>` step: what the grant
     /// authorized, what the script profile ran and how it ended, or the
     /// refusal that stopped it before anything was spawned. `orbit run
@@ -469,6 +516,7 @@ impl V2AuditEventKind {
             V2AuditEventKind::StepRetry { .. } => "step.retry",
             V2AuditEventKind::StepRecoveryAttempted { .. } => "step.recovery_attempted",
             V2AuditEventKind::StepPostRecoveryAttempt { .. } => "step.post_recovery_attempt",
+            V2AuditEventKind::StepContractCorrection { .. } => "step.contract_correction",
             V2AuditEventKind::FinalRecoveryAttempted { .. } => "job.final_recovery_attempted",
             V2AuditEventKind::StepDenied { .. } => V2_EVENT_TYPE_STEP_DENIED,
             V2AuditEventKind::StepJoin { .. } => "step.join",
@@ -490,8 +538,10 @@ impl V2AuditEventKind {
             V2AuditEventKind::TrustedHostExecutionAdmitted { .. } => {
                 "trusted_host.execution_admitted"
             }
+            V2AuditEventKind::AgentCorpusApplied { .. } => "activity.agent_corpus_applied",
             V2AuditEventKind::TagInstructionsApplied { .. } => "activity.tag_instructions_applied",
             V2AuditEventKind::ExploreBriefApplied { .. } => "activity.explore_brief_applied",
+            V2AuditEventKind::NoticesDelivered { .. } => "activity.notices_delivered",
             V2AuditEventKind::ImageCanaryChecked { .. } => "activity.image_canary_checked",
             V2AuditEventKind::ExperimentOverlayApplied { .. } => {
                 "activity.experiment_overlay_applied"
@@ -504,10 +554,88 @@ impl V2AuditEventKind {
             }
             V2AuditEventKind::CliInvocationFinished { .. } => "cli.invocation.finished",
             V2AuditEventKind::CliInvocationBuildBudget { .. } => "cli.invocation.build_budget",
+            V2AuditEventKind::ProviderInvocationObserved { .. } => "provider.invocation.observed",
             V2AuditEventKind::ScriptExecution { .. } => V2_EVENT_TYPE_SCRIPT_EXECUTION,
             V2AuditEventKind::TelemetryPersistFailed { .. } => "telemetry.persist_failed",
         }
     }
+}
+
+/// Payload `body_kind` and the `event_type` column the writer stores for it.
+///
+/// Both come from one [`V2AuditEventKind`]. A kind page can reject every other
+/// entry here without reading `payload_json`. A `body_kind` absent from this
+/// table, or a row whose `event_type` is not one of these columns, still has
+/// to be matched from the payload.
+pub const V2_AUDIT_BODY_KIND_EVENT_TYPES: &[(&str, &str)] = &[
+    (
+        "provider_invocation_observed",
+        "provider.invocation.observed",
+    ),
+    ("run_started", "run.started"),
+    ("run_finished", "run.finished"),
+    ("run_cancelled", "run.cancelled"),
+    ("step_started", "step.started"),
+    ("step_finished", "step.finished"),
+    ("step_skipped", "step.skipped"),
+    ("step_retry", "step.retry"),
+    ("step_recovery_attempted", "step.recovery_attempted"),
+    ("step_post_recovery_attempt", "step.post_recovery_attempt"),
+    ("step_contract_correction", "step.contract_correction"),
+    ("final_recovery_attempted", "job.final_recovery_attempted"),
+    ("step_denied", V2_EVENT_TYPE_STEP_DENIED),
+    ("step_join", "step.join"),
+    ("fanout_dispatched", "fanout.dispatched"),
+    ("worker_state", "worker.state"),
+    ("fanin_joined", "fanin.joined"),
+    ("loop_iteration_start", "loop.iteration.start"),
+    ("loop_iteration_end", "loop.iteration.end"),
+    ("loop_did_not_converge", "loop.did_not_converge"),
+    ("activity_started", "activity.started"),
+    ("activity_finished", "activity.finished"),
+    ("fs_call_request", "fs.call.request"),
+    ("fs_call_result", "fs.call.result"),
+    ("fs_call_denied", V2_EVENT_TYPE_FS_CALL_DENIED),
+    ("tool_denied", V2_EVENT_TYPE_TOOL_DENIED),
+    (
+        "tool_allowlist_harness_delegated",
+        "tool_allowlist.harness_delegated",
+    ),
+    (
+        "trusted_host_execution_admitted",
+        "trusted_host.execution_admitted",
+    ),
+    (
+        "tag_instructions_applied",
+        "activity.tag_instructions_applied",
+    ),
+    ("agent_corpus_applied", "activity.agent_corpus_applied"),
+    ("explore_brief_applied", "activity.explore_brief_applied"),
+    ("notices_delivered", "activity.notices_delivered"),
+    ("image_canary_checked", "activity.image_canary_checked"),
+    (
+        "experiment_overlay_applied",
+        "activity.experiment_overlay_applied",
+    ),
+    ("cli_invocation_started", "cli.invocation.started"),
+    ("cli_invocation_process", "cli.invocation.process"),
+    ("cli_invocation_activity", "cli.invocation.activity"),
+    (
+        "cli_invocation_stopped_descendant",
+        "cli.invocation.stopped_descendant",
+    ),
+    ("cli_invocation_finished", "cli.invocation.finished"),
+    ("cli_invocation_build_budget", "cli.invocation.build_budget"),
+    ("script_execution", V2_EVENT_TYPE_SCRIPT_EXECUTION),
+    ("telemetry_persist_failed", "telemetry.persist_failed"),
+];
+
+/// Column `event_type` stored for `body_kind`, when this crate writes that kind.
+pub fn event_type_for_body_kind(body_kind: &str) -> Option<&'static str> {
+    V2_AUDIT_BODY_KIND_EVENT_TYPES
+        .iter()
+        .find(|(kind, _)| *kind == body_kind)
+        .map(|(_, event_type)| *event_type)
 }
 
 /// How the executor read a recovery invocation's durable decision file.

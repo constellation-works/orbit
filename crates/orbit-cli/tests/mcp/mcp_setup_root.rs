@@ -1649,6 +1649,47 @@ fn emitted_external_root_launch_lists_tasks_without_inherited_orbit_root() {
 }
 
 #[test]
+fn global_data_dir_refuses_workspace_setup_without_touching_home_config() {
+    let fixture = ExternalRootFixture::paths_at(None);
+    crate::git_repo::SeededRepo::new(&fixture.home).build();
+    let global = fixture.home.join(".orbit");
+    fs::create_dir_all(&global).expect("global Orbit directory");
+    let config = fixture.home.join(".codex/config.toml");
+    for action in ["init", "remove"] {
+        for seeded in [false, true] {
+            if seeded {
+                fs::create_dir_all(config.parent().unwrap()).unwrap();
+                fs::write(&config, b"[mcp_servers.orbit]\ncommand = 'orbit'\n").unwrap();
+            }
+            let before = fs::read(&config).ok();
+            fixture
+                .orbit(&global, &argv(&["mcp", action, "--codex"]))
+                .failure();
+            assert_eq!(
+                fs::read(&config).ok(),
+                before,
+                "{action} changed home config"
+            );
+            if seeded {
+                fs::remove_file(&config).unwrap();
+            }
+        }
+    }
+
+    let local = fixture.elsewhere.join(".orbit");
+    fs::create_dir_all(&local).expect("workspace Orbit directory");
+    fixture
+        .orbit(&local, &argv(&["mcp", "init", "--codex"]))
+        .success();
+    let local_config = fixture.elsewhere.join(".codex/config.toml");
+    assert!(local_config.is_file());
+    fixture
+        .orbit(&local, &argv(&["mcp", "remove", "--codex"]))
+        .success();
+    assert!(!local_config.exists());
+}
+
+#[test]
 fn setup_root_expansion_and_config_confinement() {
     for (name, check) in [
         (

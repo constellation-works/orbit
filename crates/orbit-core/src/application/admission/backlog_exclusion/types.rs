@@ -14,7 +14,9 @@ pub(crate) struct BacklogTaskExclusion {
     pub(crate) reason: BacklogTaskExclusionReason,
     pub(crate) conflicts: Vec<BacklogTaskConflict>,
     /// The crew the task would have dispatched as, on a
-    /// [`BacklogTaskExclusionReason::CrewNotAllowed`] exclusion. Naming the
+    /// [`BacklogTaskExclusionReason::CrewNotAllowed`],
+    /// [`BacklogTaskExclusionReason::CrewEnvUnset`] or
+    /// [`BacklogTaskExclusionReason::HumanCrew`] exclusion. Naming the
     /// *effective* crew — not the raw `task.crew`, which is often unset and
     /// inherited — is what makes the exclusion actionable [ORB-11242].
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -35,6 +37,17 @@ pub(crate) struct BacklogTaskExclusion {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum BacklogTaskExclusionReason {
     ContextLockConflict,
+    /// The task carries the reserved `no-drain` tag: no automatic drain,
+    /// pull-drain follower or automatic admission pass admits it. An
+    /// explicit `orbit run ship <id>` still runs it, and removing the tag
+    /// makes it eligible on the next pass. Serializes as `no_drain_tag`.
+    NoDrainTag,
+    /// The task's crew is a human crew (`[crews.<name>] kind = "human"`): the
+    /// work waits for that operator. No drain admits it, whatever its
+    /// `--allow-crew` list names, and it is never re-crewed onto an agent.
+    /// `crew` names the human crew; reassigning the task to an agent crew is
+    /// the only thing that clears it.
+    HumanCrew,
     /// The task selects a delivery job with a `delivery:<job>` tag that cannot
     /// deliver it in the drain's ship mode — its plugin is disabled or
     /// uninstalled, or the job does not declare that mode. The task stays in
@@ -52,6 +65,8 @@ pub(crate) enum BacklogTaskExclusionReason {
     /// it is — never silently re-crewed — and the remaining eligible work
     /// keeps filling the drain's slots.
     CrewNotAllowed,
+    /// Every otherwise permitted candidate has an unset declared env source.
+    CrewEnvUnset,
     /// The task's `os:` tags name no OS this host runs. It stays in `backlog`
     /// for a host that does — a follower pulling from this owner, say — and
     /// `detail` names the wait (`waits for a macos host (os:macos)`).
@@ -68,11 +83,6 @@ pub(crate) enum BacklogTaskExclusionReason {
     /// [`Self::HostOsMismatch`], so a task this host's OS cannot run names
     /// that wait first.
     BrowserKitMissing,
-    /// A `verify-mock-ui` task whose mocks fail validation against the
-    /// view manifest at the base revision (visual-review §2.3). `detail`
-    /// names every failing artifact and its refusal code; only renaming,
-    /// re-exporting or re-declaring clears it.
-    MockValidationFailed,
     GroupMemberConflict,
     /// An `epic`-tagged root that declared no `context_files` of its own while
     /// its descendants did. Admission no longer inherits their surface, so the
@@ -91,6 +101,8 @@ pub(crate) enum BacklogTaskExclusionReason {
     /// The latest applied pilot assessment identifies duplicate work. Only a
     /// newer clear assessment or an explicit operator decision releases it.
     PilotDuplicate,
+    /// Description or acceptance criteria changed after the assessment.
+    PilotAssessmentStale,
     /// The latest applied pilot assessment identifies work already landed.
     PilotAlreadyLanded,
     /// Current validation needs an operator-reserved governed operation.
@@ -104,10 +116,6 @@ pub(crate) enum BacklogTaskExclusionReason {
     /// assessment without the finding clears it. A host of that OS may
     /// still start the task.
     NativeOsRequired,
-    /// The task is a review-filed bug without a CONFIRMED verdict from the
-    /// finding verification job. `detail` names the job to run; a CONFIRMED
-    /// verdict, or a retag or retype by an operator, clears it.
-    UnverifiedReviewFinding,
     /// Effective `review.timing` is `before_pr` and this delivery is the local-only
     /// route. Pipeline admission refuses that combination; the task stays in
     /// `backlog` until the switch is turned off or delivery uses the PR route.

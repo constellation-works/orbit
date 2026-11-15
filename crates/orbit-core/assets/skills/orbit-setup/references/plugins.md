@@ -16,6 +16,11 @@ section: see [What enabling installs](#what-enabling-installs).
 Nothing here is required for task tracking or agent execution. Add a plugin
 only when the user asks for the capability it provides.
 
+For a login service acting on explicit approvals, use [scoped application
+authority](applications.md). It binds host-issued credentials to an exact
+workspace, tool inputs, manifest digest and completion callbacks without
+granting the service Operator/Runner or making approval tools agent-callable.
+
 ## Two halves: the machine installs, the checkout pins
 
 A plugin lives once per machine under `~/.orbit/plugins/<ns>/<version>/`.
@@ -140,7 +145,7 @@ An upgrade re-seeds a file that still matches what the plugin wrote. A file
 edited since is preserved with a warning until `orbit plugin enable <ns>
 --force` takes the plugin's version. Disabling or removing the plugin (on the
 host, or `--scope workspace`) leaves the files where they are and skips them.
-`orbit routine list`, `orbit auto-task list`, MCP `orbit.auto_task.list` and
+`orbit routine list`, `orbit auto-task list`, MCP `orbit.auto_task` action `list` and
 the dashboard hide them; `--all` (MCP `include_inactive_plugins`, the
 dashboard's "Show hidden") lists them as inactive with a reason naming the
 plugin, and `show <name>` still resolves them. Re-enabling brings them back
@@ -163,9 +168,9 @@ from the top level of the schema and nowhere deeper:
 | `string` | `--kebab-case <VALUE>`; a schema `enum` is offered as the allowed values |
 | `integer` / `number` | `--kebab-case <N>` |
 | `boolean` | `--kebab-case`, or `--kebab-case=false` to set it explicitly |
-| `array` of scalars | `--kebab-case <VALUE>`, repeated |
-| `object` or an array of objects | `--kebab-case-json '<JSON>'` |
-| named in the manifest's `cli.positional` | a positional argument, in that order, alongside its ordinary `--kebab-case` flag |
+| `array` of `string`, `integer` or `number` | `--kebab-case <VALUE>`, repeated |
+| `object`, any other `array` (objects, booleans, untyped items), or untyped | `--kebab-case-json '<JSON>'` (so `flags: {type: array, items: {type: boolean}}` uses `--flags-json '[true,false]'`) |
+| named in the manifest's `cli.positional` | a positional argument, in that order, alongside its ordinary `--kebab-case` flag; a JSON-shaped property keeps only its `--<name>-json` flag and has no positional form |
 
 `--input '<json>'`, `--input-file` and `--dry-run` are always accepted, and `--input`
 overrides every flag — that is the escape hatch for a shape no flag expresses. A property
@@ -206,6 +211,7 @@ orbit plugin scaffold demo            # creates ./demo/.orbit-plugin with backen
 orbit plugin scaffold demo --dir /path/to/demo # choose an explicit output directory
 orbit plugin validate ./demo --render # manifest plus effective profile/env
 orbit plugin test ./demo              # run its goldens through the real protocol
+orbit plugin test ./demo --fixture-config ./fixture-config.json # explicit fixture keys over defaults
 orbit plugin test ./demo --case status_reports_ready
 orbit plugin test ./demo --update-goldens
 ```
@@ -219,14 +225,38 @@ stored ones at version `fixture`; a declared secret the case leaves out is unset
 host's real secrets are never read. It exits non-zero when a
 case fails, naming it. `--case <name>` runs one case without certifying the full suite;
 `--update-goldens` replaces mismatched output expectations with actual output.
-`{{workspace}}` and `{{plugin_state}}` render inside that temp workspace, and write roots
-there, `network: loopback`, and `orbit_tools` are applied as the manifest requests them, so
-they do not touch the operator's Orbit state.
+
+Configuration comes only from `spec.config.defaults`, optionally overlaid with the JSON
+object in `--fixture-config <file>` (plugin keys directly, without a `plugins` or namespace
+wrapper). The merged section is validated against the plugin schema before any backend
+starts. String values supplied by `--fixture-config` substitute `{{workspace}}` and
+`{{plugin_root}}` before they are overlaid; manifest defaults pass through unchanged, as
+they do for installed calls. The backend and `{{config.<key>}}` templates receive that
+same merged section. For example, `{"root":"{{workspace}}/fixture-state","limit":2}`
+in a fixture file selects disposable fixture state. Template markers inside a manifest
+default remain literal and are not expanded recursively.
+Caller global/workspace `[plugins.<ns>]` settings are always excluded, even with
+`--workspace`, `--grant` or `--accept-requested`. A fixture-config run does not record
+certification of the installed plugin's default suite.
+
+There is no conformance mode that executes using caller configuration. For deliberate
+validation of installed settings, first use `orbit plugin validate <dir> --render` to inspect
+resolved roots and the admitted environment without starting a backend; an actual installed
+tool call is a separate operation using normal grants and the normal tool audit. Do not use
+conformance as a live-data smoke test.
+
+`{{workspace}}` and `{{plugin_state}}` render inside the disposable roots, but temporary
+execution roots alone do **not** isolate data paths in configuration or the manifest.
+Absolute paths in defaults or fixture values, explicit permissions, `env_pass`, and an
+unconfined backend can still reach external state or credentials when consented. Use only
+sentinel data and model stubs in disposable directories for such checks; never dispatch a
+real credentialed model to reproduce an isolation defect.
 
 The command refuses, and prints the requested grant set, when the manifest asks for an
-unconfined backend (`backend.sandbox: none`), an `fs.write` root that resolves outside that
-temp workspace, `network: any`, or any `env_pass` variable. A write root is judged where it
-lands after rendering with the effective `[plugins.<ns>]` config and resolving relative paths
+unconfined backend (`backend.sandbox: none`), an `fs.write` root or `fs.write_files` file that
+resolves outside that temp workspace, `network: any`, or any `env_pass` variable. A write root
+or file is judged where it lands after rendering with manifest defaults plus explicit fixture
+overrides and resolving relative paths
 against the plugin directory, so a `{{config.<key>}}` default or `../` path naming a host
 directory needs consent just like an absolute one. Re-run with `--accept-requested` to
 test under that requested profile, or with `--grant` using the same names as `orbit plugin
@@ -256,16 +286,15 @@ in the current directory; `--dir <path>` creates it in `<path>/.orbit-plugin/` i
 sources inside a workspace repository, so move the scaffold outside the repository
 or give `--dir` an external path before installing it.
 
-`orbit plugin validate <dir> --render` uses the same profile and child-environment builders
-as a real call, but starts no backend. Human and JSON inspection retain environment
+`orbit plugin validate <dir> --render` projects the sandbox profile and child environment
+a real call would use, including the program-link directory on `PATH` when the source
+declares a granted program. It does not create, repoint or remove those links, and it
+starts no backend. Human and JSON inspection retain environment
 names and non-sensitive values while redacting credential values; actual backend calls
 still receive the admitted values. In a registered workspace it renders for that
 workspace. From an unregistered directory it uses host-level config and does not
 initialize a workspace there. Pass the global `--workspace <selector>` option when
 rendering needs workspace config or to inspect another registered checkout.
-
-`orbit tool scaffold` still writes the older executable-plus-sidecar form for one more
-release and prints a deprecation pointing here.
 
 ## When a plugin is not serving its tools
 
@@ -296,11 +325,33 @@ grants the user authorizes.
 
 | Grant | What the manifest asks for | What granting it does |
 |---|---|---|
-| `fs` | `permissions.fs.read` / `.write` | Opens exactly those paths to the sandboxed backend. |
+| `fs` | `permissions.fs.read` / `.write` / `.write_files` | Opens exactly those paths to the sandboxed backend. `write_files` opens only the named existing files, never their parent directory (see below). |
 | `network` | `permissions.network: loopback\|any` | Lets the backend reach the network; without it, TCP is refused. |
 | `env_pass` | `permissions.env_pass` | Copies those variables from Orbit's environment into the child. `ORBIT_*` names are reserved for Orbit's own envelope: `validate_structure` refuses a manifest that names one, and the privilege-bearing ones (`ORBIT_OPERATOR`, `ORBIT_WORKSPACE_CLAIM_TOKEN`) can never reach the child even so. |
 | `orbit_tools` | `permissions.orbit_tools` | Lets the backend call those Orbit tools back through `orbit tool run`, and nothing else. |
 | `unsandboxed` | `backend.sandbox: none` | Runs the backend with no confinement at all. Agents in a sandboxed run cannot call it; the broker refuses the call. |
+
+`permissions.fs.write_files` is the exact-file write request. Use it for an existing file the
+backend must modify, such as a runtime file named by `{{config.<key>}}`, without also opening
+its directory:
+
+```yaml
+permissions:
+  fs:
+    write_files: ["{{config.runtime_file}}"]
+```
+
+Each entry must render to an absolute physical path of an existing regular file that the
+current user owns, with one hard link and no group or other write bits. Spell it physically:
+on macOS, `/private/tmp/...` rather than the `/tmp` alias. Symbolic links,
+missing files, directories, and paths that pass through a symbolic link or an unsafe
+directory are refused. Orbit never creates such a file or widens its grant: creating,
+replacing a file by rename needs a `fs.write` directory grant. A scoped `fs=<root>` grant
+covers a `write_files` entry only when it names that file or one of its ancestor
+directories. Adding an entry, or changing where a config value resolves, needs consent
+again. Linux binds the existing inode, and macOS uses a file-rooted `subpath` rule.
+Neither grants sibling files. Admission refuses a path with `*` or `?` in any component,
+whether the file name or an ancestor directory: macOS reads those characters as wildcards.
 
 A plugin that requests a grant the host has not given registers its tools
 **inactive**: a call is refused with a diagnostic naming the grant and the

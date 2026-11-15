@@ -1,68 +1,9 @@
 //! Shared footprint and block facts, including their persisted representation.
 
-use std::str::FromStr;
-
 use chrono::{DateTime, Utc};
-use orbit_common::fs::selector::Selector;
 use serde::{Deserialize, Serialize};
 
-/// A footprint entry: a workspace-relative path and whether it names a
-/// directory (`dir:` selector) rather than a file.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub(in crate::application) struct Anchor {
-    pub(in crate::application) path: String,
-    pub(in crate::application) dir: bool,
-}
-
-impl Anchor {
-    /// Parse a context selector (`file:`, `dir:`, `symbol:`) or a bare
-    /// reservation path. Module and command selectors carry no path.
-    pub(in crate::application) fn parse(raw: &str) -> Option<Self> {
-        let raw = raw.trim();
-        if raw.is_empty() {
-            return None;
-        }
-        let selector = if raw.contains(':') && !raw.starts_with('/') {
-            Selector::from_str(raw).ok()
-        } else {
-            None
-        };
-        let (path, dir) = match selector {
-            Some(Selector::Dir { path }) => (path, true),
-            Some(Selector::File { path } | Selector::Symbol { path, .. }) => (path, false),
-            Some(Selector::Module { .. } | Selector::Command { .. }) => return None,
-            None => (raw.to_string(), false),
-        };
-        let path = path
-            .trim_start_matches("./")
-            .trim_end_matches('/')
-            .to_string();
-        if path.is_empty() || path == "." {
-            return None;
-        }
-        Some(Self { path, dir })
-    }
-}
-
-/// Why a task entered `blocked`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::application) enum BlockCause {
-    /// An infrastructure failure the run failure classification names; never
-    /// counted against the task's files.
-    Infra(&'static str),
-    /// A run failed or escalated on the work itself: counted against the
-    /// task's footprint.
-    Run,
-    /// The candidate could not be carried onto a base that moved under it:
-    /// counted only against the conflicting paths it recorded.
-    BaseConflict(Vec<Anchor>),
-    /// A status write made by hand, by the named [actor kind](super::block_cause::actor_kind).
-    Manual(&'static str),
-    /// Not a failure: a review evidence hold or an operator's cancel.
-    NotFailure,
-    /// Nothing identifies the cause; reported in its own bucket.
-    Unclassified,
-}
+pub(in crate::application) use crate::application::task::{Anchor, BlockCause};
 
 /// [`BlockCause`] as stored: its infrastructure cause or actor kind by name,
 /// which must name one this binary lists to be read back.

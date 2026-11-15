@@ -17,12 +17,13 @@ use std::sync::Arc;
 use orbit_core::application::codebase::{TASK_RISKINESS_ESTIMATOR_VERSION, TaskRiskinessModel};
 
 use orbit_core::application::task::{
-    PullRequestLinks, TaskOsReadout, TaskRow, job_run_is_locally_navigable, link_pull_requests,
-    mark_readiness_preparing, summary_status_transitions, task_detail_with_dashboard_extras,
-    task_pilot_warnings, tasks_in_pilot_preparation,
+    self, DashboardPageReads, PullRequestLinks, TaskOsReadout, TaskRow,
+    job_run_is_locally_navigable, link_pull_requests, mark_readiness_preparing,
+    summary_status_transitions, task_detail_with_dashboard_extras, tasks_in_pilot_preparation,
 };
 use orbit_core::runtime::engine::ConfiguredCrewRegistryProjection;
 use orbit_core::{AuditEvent, OrbitError, OrbitRuntime, ResolvedCrewProjection, Task, TaskStatus};
+use orbit_types::identity::HumanCrew;
 use orbit_types::task::task_base_json;
 use orbit_types::telemetry::audit_event_base_json;
 use serde_json::{Map, Value, json};
@@ -54,6 +55,32 @@ pub(crate) fn task_to_json(
     let mut object = task_base_json(task, status_by_id);
     link_pull_requests(&mut object, task, links);
     object
+}
+
+/// Stamp `human_crew` (`{name, description}`) on a task object whose `crew`
+/// names a human crew, and leave it off otherwise. The owning workspace's
+/// registry classifies the task here, so a client never has to guess from a
+/// crew name: the aggregate view mixes workspaces that configure the same
+/// name as an agent crew in one and a human crew in another, and carries no
+/// crew registry of its own.
+pub(crate) fn stamp_human_crew(object: &mut Map<String, Value>, human: Option<&HumanCrew>) {
+    object.remove("human_crew");
+    if let Some(human) = human {
+        object.insert(
+            "human_crew".to_string(),
+            json!({ "name": human.name, "description": human.description }),
+        );
+    }
+}
+
+/// [`stamp_human_crew`] for a task object built outside the list projection,
+/// classified by `runtime`'s registry from the object's own `crew` value.
+pub(crate) fn stamp_human_crew_from_runtime(
+    runtime: &OrbitRuntime,
+    object: &mut Map<String, Value>,
+) {
+    let human = runtime.human_crew(object.get("crew").and_then(Value::as_str));
+    stamp_human_crew(object, human);
 }
 
 /// The riskiness model cached for `runtime`. The first read for a runtime
@@ -113,19 +140,29 @@ pub(crate) fn task_riskiness_json(model: Option<&TaskRiskinessModel>, task: &Tas
 /// run's recorded branch and worktree path on its execution machine. A task
 /// that was piloted, reviewed or recovered carries `handled_by`: those hands
 /// in time order, each derived from a durable record. Every task carries
-/// `riskiness`, as its list row does.
+/// `riskiness`, as its list row does, and an active triage/recovery binding
+/// carries `active_triage` on both surfaces. A task assigned to a human crew
+/// carries `human_crew` (`{name, description}`) on both surfaces and on every
+/// dashboard write response.
+///
+/// `page` lends the workspace-wide reads a list page already made when the
+/// list bundles this detail ([`TaskListProjection::detail_page_reads`]), so
+/// the bundled request does not scan them twice; `GET /api/tasks/:id` passes
+/// the default.
 pub(crate) fn task_detail_json(
     runtime: &OrbitRuntime,
     row: &TaskRow,
     status_by_id: &BTreeMap<String, TaskStatus>,
     riskiness: Option<&TaskRiskinessModel>,
+    page: &DashboardPageReads<'_>,
 ) -> Result<Value, OrbitError> {
-    let mut value = task_detail_with_dashboard_extras(runtime, row, status_by_id)?;
+    let mut value = task_detail_with_dashboard_extras(runtime, row, status_by_id, page)?;
     if let Some(object) = value.as_object_mut() {
         object.insert(
             "riskiness".to_string(),
             task_riskiness_json(riskiness, &row.task),
         );
+        stamp_human_crew_from_runtime(runtime, object);
         if let Some(triage) = runtime.escalation_triage_eligibility_json(row)? {
             object.insert("escalation_triage".to_string(), triage);
         }
@@ -173,6 +210,7 @@ pub(crate) struct TaskListProjection {
     delivery_attention: BTreeMap<String, Value>,
     /// Read once, on the page's first proposed or backlog row.
     preparing: OnceCell<BTreeSet<String>>,
+    active_triage: OnceCell<Result<BTreeMap<String, Value>, String>>,
     /// Reads the origin remote once, on the page's first unlinked PR ref.
     pull_request_links: PullRequestLinks,
     /// The page's riskiness model; `None` when it is unavailable.
@@ -187,6 +225,7 @@ impl TaskListProjection {
             local_machine_id: runtime.automation_machine_identity().map(str::to_string),
             delivery_attention: BTreeMap::new(),
             preparing: OnceCell::new(),
+            active_triage: OnceCell::new(),
             pull_request_links: PullRequestLinks::new(runtime),
             riskiness: None,
         }
@@ -202,8 +241,21 @@ impl TaskListProjection {
         self
     }
 
+    /// The reads this page made for its rows, lent to the detail it bundles.
+    /// Call after rendering the detail's own row: the active-triage map is
+    /// lent only once a row has read it successfully, and the detail reads
+    /// it itself otherwise.
+    pub(crate) fn detail_page_reads(&self) -> DashboardPageReads<'_> {
+        DashboardPageReads {
+            pull_request_links: Some(&self.pull_request_links),
+            active_triage: self.active_triage.get().and_then(|read| read.as_ref().ok()),
+            preparing: Some(&self.preparing),
+            delivery_attention: Some(&self.delivery_attention),
+        }
+    }
+
     /// `runtime` is the one this projection was built from; it is read only
-    /// for the pilot preparations behind `readiness.preparing`.
+    /// for pilot preparation and active triage/recovery bindings.
     pub(crate) fn row_to_json(
         &self,
         runtime: &OrbitRuntime,
@@ -228,15 +280,10 @@ impl TaskListProjection {
         }
         object.insert(
             "pilot_warnings".into(),
-            json!(task_pilot_warnings(
-                task.status,
-                &row.comments,
-                &task.dependencies(),
-                &|id: &str| matches!(
-                    runtime.get_task(id),
-                    Ok(found) if found.status == TaskStatus::Done
-                ),
-            )),
+            json!(
+                runtime.task_pilot_warning_findings(task, &row.comments, &|id: &str| runtime
+                    .warning_prerequisite_is_done(id),)
+            ),
         );
         self.os_readout
             .as_ref()
@@ -260,6 +307,13 @@ impl TaskListProjection {
             object.insert("resolved_crew".to_string(), Value::String(projection.name));
             object.insert("crew_model".to_string(), Value::String(projection.model));
         }
+        let human = explicit_task_crew(task).and_then(|name| {
+            self.registry
+                .human_crews
+                .iter()
+                .find(|human| human.name == name)
+        });
+        stamp_human_crew(&mut object, human);
         // Same decision as the detail projection. The list used to omit the
         // flag, and the dashboard treats a missing value as permission to
         // link `#runs?run_id=` on this host.
@@ -272,6 +326,16 @@ impl TaskListProjection {
         );
         if let Some(attention) = self.delivery_attention.get(&task.id) {
             object.insert("delivery_attention".to_string(), attention.clone());
+        }
+        let triage = self
+            .active_triage
+            .get_or_init(|| {
+                task::active_task_triage_map(runtime).map_err(|error| error.to_string())
+            })
+            .as_ref()
+            .map_err(|error| OrbitError::Execution(error.clone()))?;
+        if let Some(triage) = triage.get(&task.id) {
+            object.insert("active_triage".to_string(), triage.clone());
         }
         object.insert(
             "riskiness".to_string(),

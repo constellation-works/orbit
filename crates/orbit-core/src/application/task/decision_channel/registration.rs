@@ -1,3 +1,4 @@
+use orbit_common::security::release;
 use orbit_common::{DecisionRefusalCode, OrbitError};
 use orbit_types::identity::is_automation_actor;
 use orbit_types::plugin::is_valid_namespace;
@@ -41,7 +42,7 @@ impl ChannelRegistration {
             plugin: self.plugin.clone(),
             allowed_senders: self.allowed_senders.clone(),
             epoch: self.epoch,
-            key_fingerprint: token::sha256_hex(self.key_hex.as_bytes()),
+            key_fingerprint: release::sha256_hex(self.key_hex.as_bytes()),
             revoked: self.revoked,
             require_dkim_verification: self.require_dkim_verification,
             registered_at: self.registered_at,

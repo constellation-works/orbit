@@ -9,7 +9,9 @@
 //! [`TaskListResultPolicy::finalize`] returns; they keep no copy of this rule.
 //! Callers that need full records (the noun CLI, HTTP) never apply it.
 
-use orbit_common::governance::task::{MINIMAL_TASK_FIELDS, project_task_list_output};
+use orbit_common::governance::task::{
+    MINIMAL_TASK_FIELDS, TASK_LIST_COMPACT_HINT, project_task_list_output,
+};
 use serde_json::Value;
 
 const TASK_LIST_TOOL: &str = "orbit.task.list";
@@ -69,6 +71,31 @@ impl TaskListResultPolicy {
     /// its own.
     pub fn owns_result(&self) -> bool {
         self.0 != ListShape::NotTaskList
+    }
+
+    /// Whether this call's rows will be projected to the compact fields, so
+    /// the handler can serve them from envelopes only.
+    pub fn is_compact(&self) -> bool {
+        self.0 == ListShape::Compact
+    }
+
+    /// Stamp this policy's compact decision into a task-list call's input as
+    /// the internal [`TASK_LIST_COMPACT_HINT`], overwriting any value the
+    /// caller supplied. A non-compact task-list policy removes the hint, so
+    /// a caller cannot use it to truncate a full or field-projected answer;
+    /// other tools' inputs are left alone.
+    pub fn apply_compact_hint(&self, input: &mut Value) {
+        if self.0 == ListShape::NotTaskList {
+            return;
+        }
+        let Some(object) = input.as_object_mut() else {
+            return;
+        };
+        if self.is_compact() {
+            object.insert(TASK_LIST_COMPACT_HINT.to_string(), Value::Bool(true));
+        } else {
+            object.remove(TASK_LIST_COMPACT_HINT);
+        }
     }
 
     /// The call's result after this policy. Rows are projected inside the

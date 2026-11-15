@@ -210,6 +210,10 @@ fn consumer_writes_accept_legacy_json_and_refuse_stale_snapshots() {
     if automation_isolated("consumer_writes_accept_legacy_json_and_refuse_stale_snapshots") {
         return;
     }
+    // One store serves every row: opening applies the whole migration
+    // registry, and each row starts from the tables the writes touch emptied.
+    let base = Store::open_in_memory().unwrap();
+    let store = compose::automation_store(base.clone()).unwrap();
     for missing in [
         "excluded",
         "waived",
@@ -226,8 +230,16 @@ fn consumer_writes_accept_legacy_json_and_refuse_stale_snapshots() {
             Write::Reset,
             Write::Waive,
         ] {
-            let base = Store::open_in_memory().unwrap();
-            let store = compose::automation_store(base.clone()).unwrap();
+            base.connection()
+                .lock()
+                .unwrap()
+                .execute_batch(
+                    "DELETE FROM automation_consumers;
+                     DELETE FROM automation_recoveries;
+                     DELETE FROM automation_waivers;
+                     DELETE FROM automation_coverage;",
+                )
+                .unwrap();
             let mut expected = baseline();
             if matches!(write, Write::Waive) {
                 failed_batch(&mut expected);

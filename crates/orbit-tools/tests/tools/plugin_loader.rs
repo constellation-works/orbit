@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 
 use orbit_tools::plugin::{
     PluginLoadError, PluginSourceRequest, PluginValidationPolicy, load_plugin_dir,
-    load_sidecar_manifest, migrate_sidecars, resolve_plugin_source, validate_loaded_plugin,
+    load_plugin_dir_without_tests, load_sidecar_manifest, migrate_sidecars, resolve_plugin_source,
+    validate_loaded_plugin,
 };
 use orbit_types::plugin::{
     MANIFEST_FILE_NAME, PLUGIN_DIR_NAME, PluginBackendType, PluginMcpScope, SemverRange,
@@ -86,6 +87,84 @@ fn design_example_loads_and_validates_with_unused_sections_tolerated() {
     assert_eq!(plugin.manifest_digest.len(), 64);
     // Not first-party: no `origin`, so tools are `graph.<verb>`.
     assert_eq!(plugin.tool_name("recommend", false), "graph.recommend");
+}
+
+fn write_golden(root: &Path, body: &str) {
+    let dir = root.join("tests/conformance");
+    std::fs::create_dir_all(&dir).expect("golden dir");
+    std::fs::write(dir.join("golden.yaml"), body).expect("write golden");
+}
+
+const VALID_GOLDEN: &str = "\
+schemaVersion: 1
+kind: PluginTest
+tests:
+  - name: status_ok
+    tool: status
+    input: {}
+    expect:
+      output: {}
+";
+
+#[test]
+fn full_loader_reads_goldens_and_host_loader_skips_them() {
+    let temp = scratch_example();
+    write_golden(temp.path(), VALID_GOLDEN);
+
+    let full = load_plugin_dir(temp.path()).expect("full load reads goldens");
+    assert_eq!(full.tests.len(), 1);
+    assert_eq!(full.tests[0].file.tests.len(), 1);
+    assert_eq!(full.tests[0].file.tests[0].name, "status_ok");
+
+    let host = load_plugin_dir_without_tests(temp.path()).expect("host load skips goldens");
+    assert!(host.tests.is_empty(), "host load must not parse goldens");
+    assert_eq!(host.manifest, full.manifest);
+    assert_eq!(host.manifest_digest, full.manifest_digest);
+    assert_eq!(host.backend_command, full.backend_command);
+    assert_eq!(host.tools, full.tools);
+    assert_eq!(host.definitions, full.definitions);
+    assert_eq!(host.skills, full.skills);
+    assert_eq!(host.config_schema, full.config_schema);
+    assert_eq!(host.config_defaults, full.config_defaults);
+}
+
+#[test]
+fn host_loader_tolerates_goldens_the_full_loader_refuses() {
+    for (body, why) in [
+        ("schemaVersion: [", "invalid YAML"),
+        (
+            "schemaVersion: 99\nkind: PluginTest\ntests:\n  - name: x\n    tool: status\n    input: {}\n    expect:\n      output: {}\n",
+            "unsupported schemaVersion",
+        ),
+        (
+            "schemaVersion: 1\nkind: PluginTest\ntests:\n  - name: x\n    tool: nope\n    input: {}\n    expect:\n      output: {}\n",
+            "undeclared tool",
+        ),
+    ] {
+        let temp = scratch_example();
+        write_golden(temp.path(), body);
+        let error = match load_plugin_dir(temp.path()) {
+            Ok(_) => panic!("full loader refuses {why} golden"),
+            Err(error) => error,
+        };
+        let field = manifest_field(error);
+        assert!(field.starts_with("spec.tests"), "{why}: field {field}");
+        let host = load_plugin_dir_without_tests(temp.path())
+            .unwrap_or_else(|error| panic!("host loader skips {why} golden: {error}"));
+        assert!(host.tests.is_empty());
+    }
+
+    // A literal golden pattern naming no file: the full loader refuses it
+    // during pattern resolution; the host loader never resolves the pattern.
+    let temp = scratch_example();
+    rewrite_manifest(
+        temp.path(),
+        "tests: [tests/conformance/*.yaml]",
+        "tests: [tests/conformance/missing.yaml]",
+    );
+    assert!(load_plugin_dir(temp.path()).is_err());
+    let host = load_plugin_dir_without_tests(temp.path()).expect("host load skips missing golden");
+    assert!(host.tests.is_empty());
 }
 
 #[test]

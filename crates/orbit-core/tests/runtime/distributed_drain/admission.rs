@@ -856,7 +856,11 @@ fn three_failed_claims_open_the_breaker_and_a_new_drain_resets_it() {
     let cleared = recorded_pass(&pair.follower, &restarted);
     assert_eq!(cleared.admission_refusal, None, "{cleared:?}");
     assert_eq!(pulls(&pair), 4);
-    assert_eq!(backlog(&pair), 1);
+    assert_eq!(
+        backlog(&pair),
+        0,
+        "the launch prerequisite holds the final task"
+    );
     assert_eq!(pair.owner_claims().len(), 4);
 }
 
@@ -1002,6 +1006,25 @@ fn excluded(pass: &Value, crew: &str) -> Value {
         .unwrap_or(Value::Null)
 }
 
+/// A `no-drain` backlog task is claimed by no pull follower.
+fn no_drain_task_is_never_claimed_by_a_pull_follower() {
+    let mut pair = Pair::new(0);
+    let task = backlog_task_with_input(
+        &pair.wire.owner,
+        &pair.owner_repo,
+        "src/no_drain.rs",
+        None,
+        json!({"tags": ["no-drain"]}),
+    );
+    pair.tasks.push(task.clone());
+    let drain = pair.start_drain();
+    let pass = pair.pass(&drain);
+    assert!(error_of(&pass).is_empty(), "{pass}");
+    assert_eq!(pass["admitted"], 0, "{pass}");
+    assert_no_admission(&pair);
+    assert_eq!(pair.owner_status(&task), "backlog");
+}
+
 /// Read-only audit requirements are admitted through the closed owner bridge.
 fn claimed_workspace_reads_are_satisfiable_before_a_leaf_is_created() {
     for tool in ["orbit.search", "orbit.task.list"] {
@@ -1021,13 +1044,93 @@ fn claimed_workspace_reads_are_satisfiable_before_a_leaf_is_created() {
     }
 }
 
+/// A task requiring an owner-only tool that is not a coordination tool —
+/// the codebase analytics of the ORB-23443 incident — is skipped by a
+/// follower with the skip recorded, stays in the backlog for the owner, and
+/// does not block a follower claim on a task whose tools all cross the
+/// coordinator.
+fn owner_only_required_tools_stay_in_backlog_for_the_owner() {
+    let pair = Pair::new(0);
+    let owner = &pair.wire.owner;
+    let held = backlog_task_with_input(
+        owner,
+        &pair.owner_repo,
+        "src/owner_only.rs",
+        None,
+        json!({"required_tools": ["orbit.codebase:analytics", "orbit.codebase:show"]}),
+    );
+    let drain = pair.start_drain();
+    let idle = pair.pass(&drain);
+    assert!(error_of(&idle).is_empty(), "{idle}");
+    assert_eq!(idle["admitted"], 0, "{idle}");
+    assert!(
+        pair.owner_claims().is_empty(),
+        "no claim for an owner-only tool"
+    );
+    assert!(
+        pair.leaf_runs().is_empty(),
+        "no leaf for an owner-only tool"
+    );
+    assert_eq!(pair.owner_status(&held), "backlog");
+
+    let request = pair.wire.calls("orbit.task.pull").pop().unwrap();
+    let receipt = owner_call(&pair, "orbit.task.pull", request).unwrap();
+    assert!(receipt["receipt"]["claim"].is_null(), "{receipt}");
+    let reason = receipt["receipt"]["deferred_conflicts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["task_id"] == held)
+        .expect("the skip is recorded for the held task")["reason"]
+        .as_str()
+        .unwrap();
+    assert!(reason.contains("orbit.codebase:analytics"), "{reason}");
+    assert!(reason.contains("owner-only"), "{reason}");
+    assert!(
+        reason.contains("outside the closed claimed-owner bridge"),
+        "{reason}"
+    );
+    assert_eq!(pair.owner_status(&held), "backlog");
+
+    // The owner itself still admits the skipped task: owner-local dispatch
+    // lists it and its implementer grant keeps the required tool.
+    let local = action(owner, "list_backlog_tasks", &json!({})).unwrap();
+    assert!(
+        local["task_ids"].as_array().unwrap().contains(&json!(held)),
+        "owner-local dispatch remains eligible: {local}"
+    );
+    let grant = owner
+        .resolve_activity_tool_denials(std::slice::from_ref(&held), "agent_implement", &[])
+        .unwrap();
+    assert!(
+        orbit_types::workflow::tool_allowed("orbit.codebase:analytics", &grant.effective_tools),
+        "{grant:?}"
+    );
+
+    // A task whose required tools all cross the coordinator is claimed.
+    let supported = backlog_task_with_input(
+        owner,
+        &pair.owner_repo,
+        "src/crossing.rs",
+        None,
+        json!({"required_tools": [
+            "orbit.task.show", "orbit.search", "orbit.task.artifact:put", "proc.spawn",
+        ]}),
+    );
+    let leaf = pair.queued_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&leaf), supported);
+    assert_eq!(pair.owner_claims().len(), 1);
+    assert!(!pair.owner_has_claim_for_task(&held));
+    assert_eq!(pair.owner_status(&held), "backlog");
+}
+
 /// Required tools must be satisfiable before a follower creates any claim or
 /// leaf (F2026-10-352/353/354). Provenance never changes that authority.
 fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
     let pair = Pair::new(0);
     let owner = &pair.wire.owner;
     let mut held = Vec::new();
-    for tool in ["orbit.task.update", "orbit.task.requeue"] {
+    for tool in ["orbit.task.update", "orbit.task.recover:requeue"] {
         for automated in [false, true] {
             let file = format!("src/requirement{}.rs", held.len());
             let task = if automated {
@@ -1036,7 +1139,7 @@ fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
                     .auto_task_add(orbit_core::AutoTaskAddParams {
                         name: format!("tool-routing-{}", held.len()),
                         description: "Preclaim requirement regression".into(),
-                        schedule: orbit_core::AutoTaskSchedule::every_minutes(60),
+                        schedule: orbit_types::workflow::AutoTaskSchedule::every_minutes(60),
                         template: serde_json::from_value(json!({
                             "title": "Automated tool requirement",
                             "description": "Same requirements as hand-authored work.",
@@ -1046,13 +1149,25 @@ fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
                             "complexity": "low", "status": "backlog",
                         }))
                         .unwrap(),
-                        dedupe: orbit_core::DedupePolicy::SkipIfOpen,
+                        dedupe: orbit_types::workflow::DedupePolicy::SkipIfOpen,
                     })
                     .unwrap();
                 let task = owner.auto_task_mint(&definition.name).unwrap();
                 owner.run_tool("orbit.task.update", json!({
                     "id": task.id, "plan": "1. Implement the requirement.", "model": "codex",
                 })).unwrap();
+                // Minted implementation tasks await approval. Approve this one
+                // so owner-local backlog dispatch sees the requirement.
+                owner
+                    .update_task_as_human(
+                        &task.id,
+                        TaskUpdateParams {
+                            status: Some(orbit_types::task::TaskStatus::Backlog),
+                            ..Default::default()
+                        },
+                        "fixture-operator".into(),
+                    )
+                    .unwrap();
                 task.id
             } else {
                 backlog_task_with_input(
@@ -1125,7 +1240,10 @@ fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
             .resolve_activity_tool_denials(std::slice::from_ref(task), "agent_implement", &[])
             .unwrap();
         assert_eq!(grant.requested_tools, vec![tool.to_string()]);
-        assert!(grant.effective_tools.iter().any(|name| name == tool));
+        assert!(orbit_types::workflow::tool_allowed(
+            tool,
+            &grant.effective_tools
+        ));
     }
     for peers in held.as_chunks::<2>().0 {
         let reason = |task: &str| {
@@ -1148,8 +1266,8 @@ fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
         "src/supported.rs",
         None,
         json!({"required_tools": [
-            "orbit.task.show", "orbit.task.add", "orbit.friction.add",
-            "orbit.task.artifact.get", "orbit.task.artifact.put", "proc.spawn",
+            "orbit.task.show", "orbit.task.add", "orbit.friction:add",
+            "orbit.task.artifact:get", "orbit.task.artifact:put", "proc.spawn",
         ]}),
     );
     assert_eq!(
@@ -1460,7 +1578,7 @@ model = \"gpt-sol\"
         "the alias crew is not admitted: {claims:#?}"
     );
     // This test binary cannot re-exec a worker, so the admitted sol leaf's
-    // launch fails and the owner releases that task. The claim phase is the
+    // launch fails and the owner holds that task. The claim phase is the
     // launch failure, which is how an admitted crew shows up here.
     assert!(
         launch_refused(&pass),
@@ -1468,8 +1586,8 @@ model = \"gpt-sol\"
     );
     assert_eq!(
         phase(&sol),
-        Some("revoked"),
-        "the other provider is admitted, then its launch fails: {claims:#?}"
+        Some("failed"),
+        "the other provider is admitted, then its launch prerequisite holds it: {claims:#?}"
     );
     let settles = pair.wire.calls("orbit.drain.claim.settle");
     assert!(
@@ -1484,8 +1602,8 @@ model = \"gpt-sol\"
     assert_eq!(pair.owner_status(&opus), "backlog");
     assert_eq!(
         pair.owner_status(&sol),
-        "backlog",
-        "the launch refusal releases the admitted task"
+        "blocked",
+        "the launch prerequisite holds the admitted task"
     );
 
     let window = crew_window(&pair, &drain);
@@ -1500,6 +1618,58 @@ model = \"gpt-sol\"
             .all(|crew| crew != "opus" && crew != "sonnet"),
         "{window:#?}"
     );
+}
+
+/// [ORB-20400] A crew window matches by crew family. `opus@medium` shares
+/// `opus`'s model and account, so it is runnable while `opus` is, and an
+/// authentication failure on `opus` keeps it out of the window too, for
+/// delivery and for review.
+fn a_provider_auth_failure_excludes_the_crews_effort_references_too() {
+    let config = "\
+[workflow]
+default_crew = \"sol\"
+
+[crews.opus]
+provider = \"claude\"
+model = \"claude-opus\"
+
+[crews.sol]
+provider = \"codex\"
+model = \"gpt-sol\"
+";
+    let pair = Pair::with_configs(config, config, &[Some("opus"), Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&leaf), pair.tasks[0]);
+    let healthy = crew_window(&pair, &drain).capability();
+    assert_eq!(
+        healthy.unrunnable_reason(Some("opus@medium")),
+        None,
+        "an effort reference is runnable while its crew is: {healthy:#?}"
+    );
+
+    pair.leaf_fails_with(
+        &leaf,
+        "[provider_unavailable] claude provider authentication failure (HTTP 401): \
+         Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator.",
+    );
+    pair.pass(&drain);
+
+    let window = crew_window(&pair, &drain);
+    let capability = window.capability();
+    for crew in ["opus", "opus@medium", "opus@high"] {
+        assert!(
+            capability
+                .unrunnable_reason(Some(crew))
+                .is_some_and(|reason| reason.contains("is excluded on the executor")
+                    && reason.contains("OAuth token revoked")),
+            "{crew}: {window:#?}"
+        );
+        assert!(
+            window.reviewer_unrunnable_reason(crew).is_some(),
+            "{crew} cannot review either: {window:#?}"
+        );
+    }
 }
 
 /// [ORB-14258] A claimed leaf whose required validation failed on its base
@@ -2252,14 +2422,13 @@ fn a_held_backlog_task_reports_the_hold_at_dispatch_not_a_status_change() {
 /// `caller_before_pr` would be admitted.
 fn probe_owner(owner: &OrbitRuntime, caller_before_pr: bool) -> Value {
     owner
-        .run_tool_with_context_and_role(
+        .run_tool_with_context(
             "orbit.drain.probe",
             json!({
                 "caller_version": orbit_core::application::distributed::owner_binary_version(),
                 "caller_schema": DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
                 "caller_before_pr": caller_before_pr,
             }),
-            Role::Admin,
             ToolContext {
                 session_context: ToolSessionContext {
                     caller_machine_id: Some(FOLLOWER.to_string()),
@@ -2292,9 +2461,9 @@ fn owner_with(root: &Path, config: &str, after_landing: bool) -> OrbitRuntime {
 
 /// [ORB-13992] [ORB-13908] Review never refuses a PR-route pull from an
 /// executor of this binary. After-landing review — the `delivery-code-review`
-/// auto-task, or the deprecated policy value that stands in for it — runs on
-/// the owner after landing; the owner's `review.before_pr` is captured on the
-/// claim for the leaf's gate; and the executor's own switch decides nothing.
+/// auto-task — runs on the owner after landing; the owner's
+/// `review.before_pr` is captured on the claim for the leaf's gate; and the
+/// executor's own switch decides nothing.
 fn review_settings_never_refuse_a_pull_and_the_owner_captures_before_pr() {
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
 
@@ -2306,24 +2475,24 @@ fn review_settings_never_refuse_a_pull_and_the_owner_captures_before_pr() {
     assert_eq!(probe["ship"]["before_pr"], false);
     assert!(probe["ship"].get("review").is_none(), "{probe}");
 
-    let legacy_after_landing = owner_with(
-        &root.path().join("legacy-after-landing"),
-        "[operation]\nreview_policy = \"after-landing\"\n",
-        false,
-    );
-    assert_eq!(probe_owner(&legacy_after_landing, false)["admits"], true);
-
     let follower_before_pr = probe_owner(&after_landing, true);
     assert_eq!(follower_before_pr["admits"], true, "{follower_before_pr}");
     assert_eq!(follower_before_pr["ship"]["before_pr"], false);
 
     // The review crew is one the owner defines: a load refuses one it does
     // not [ORB-15195].
-    for config in [
+    for (index, config) in [
         "[review]\nbefore_pr = true\n[operation]\nreview_crew = \"sol\"\n",
         "[operation]\nreview_policy = \"before-pr\"\nreview_crew = \"sol\"\n",
-    ] {
-        let owner = owner_with(&root.path().join(config.len().to_string()), config, false);
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let owner = owner_with(
+            &root.path().join(format!("review-crew-{index}")),
+            config,
+            false,
+        );
         let probe = probe_owner(&owner, false);
         assert_eq!(probe["review"]["before_pr"]["enabled"], true, "{config}");
         assert_eq!(probe["ship"]["before_pr"], true, "{config}");
@@ -2564,6 +2733,8 @@ crate::scenario_table!(
     contract_refusals_do_not_trip_the_breaker_but_genuine_failures_still_do,
     a_follower_never_receives_a_claim_for_a_crew_its_window_cannot_run,
     unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf,
+    owner_only_required_tools_stay_in_backlog_for_the_owner,
+    no_drain_task_is_never_claimed_by_a_pull_follower,
     claimed_workspace_reads_are_satisfiable_before_a_leaf_is_created,
     a_follower_is_handed_only_tasks_its_os_satisfies,
     a_provider_auth_failure_releases_the_claim_and_excludes_the_crew_for_the_window
@@ -2573,6 +2744,7 @@ crate::scenario_table!(
     a_provider_capacity_failure_releases_the_claim_and_excludes_the_crew_for_the_window_scenarios,
     a_provider_capacity_failure_releases_the_claim_and_excludes_the_crew_for_the_window,
     a_provider_auth_failure_excludes_every_crew_of_that_provider,
+    a_provider_auth_failure_excludes_the_crews_effort_references_too,
     a_red_base_failure_releases_the_claim_until_the_command_passes,
     a_throttled_pull_drain_keeps_settling_and_pulls_again_below_resume,
     a_pull_claim_is_gated_by_the_follower_host_never_the_owner,

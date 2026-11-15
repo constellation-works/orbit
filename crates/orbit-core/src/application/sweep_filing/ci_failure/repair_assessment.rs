@@ -3,19 +3,21 @@
 //! No command from an artifact or a CI log is executed here.
 
 use orbit_common::security::release::sha256_hex;
-use orbit_types::task::{Task, TaskArtifact, TaskStatus};
+use orbit_store::contracts::BranchObservationOutcome;
+use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::JobRunState;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
+use super::branch_observation::{claimed_entry, retain_owner_receipt};
 use super::cluster::FailureCluster;
 use super::evidence::selected_diagnostic;
 use super::fields::value_string;
 use super::filing::CI_FAILURE_KEY_TAG_PREFIX;
 use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
+use crate::application::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
 use crate::application::sweep_filing::full_revision;
-use crate::application::task::{TaskListFilter, TaskUpdateParams};
 
 const MAX_OWNERS: usize = 8;
 const MAX_ASSESSMENTS: usize = 32;
@@ -96,8 +98,12 @@ impl<'a> Assessor<'a> {
         }
     }
 
-    pub(super) fn assess(&mut self, cluster: &FailureCluster) -> Assessment {
-        let result = self.assess_inner(cluster);
+    pub(super) fn assess<L: DuplicateTaskLookup + ?Sized>(
+        &mut self,
+        cluster: &FailureCluster,
+        lookup: &L,
+    ) -> Assessment {
+        let result = self.assess_inner(cluster, lookup);
         match result {
             Ok(Some((owner, evidence))) => Assessment {
                 owner: Some(owner),
@@ -115,27 +121,26 @@ impl<'a> Assessor<'a> {
         }
     }
 
-    fn assess_inner(
+    fn assess_inner<L: DuplicateTaskLookup + ?Sized>(
         &mut self,
         cluster: &FailureCluster,
+        lookup: &L,
     ) -> AssessmentResult<Option<(String, Value)>> {
         let tag = format!("{CI_FAILURE_KEY_TAG_PREFIX}{}", cluster.failure_key);
-        let candidates = self
-            .runtime
-            .task_candidates(
-                &TaskListFilter {
-                    statuses: Some(vec![TaskStatus::Done]),
-                    tags: vec![tag],
-                    ..Default::default()
-                },
-                MAX_OWNERS,
-            )
-            .map_err(|_| "completed_owner_lookup_unavailable")?;
-        if candidates.total > MAX_OWNERS {
+        // The filing snapshot already answered this exact-tag query for
+        // the duplicate check, so the completed-owner selection reuses it
+        // instead of paying another store query per cluster.
+        let candidates: Vec<Task> = lookup
+            .list_tasks_by_tags(&[tag])
+            .map_err(|_| "completed_owner_lookup_unavailable")?
+            .into_iter()
+            .filter(|task| task.status == TaskStatus::Done)
+            .collect();
+        if candidates.len() > MAX_OWNERS {
             return Err("completed_owner_lookup_budget_exhausted".into());
         }
         let mut unresolved = Vec::new();
-        for candidate in candidates.items {
+        for candidate in candidates {
             if self.remaining == 0 {
                 return Err("assessment_budget_exhausted".into());
             }
@@ -243,7 +248,7 @@ impl<'a> Assessor<'a> {
         if run.state != JobRunState::Success
             || state.run_id != run.run_id
             || state.job_id != run.job_id
-            || run.job_id != "task_pr_pipeline"
+            || run.job_id != orbit_types::workflow::TASK_PR_PIPELINE_JOB
             || !assigned
             || state.step_states.get(&assessment.delivery_step_index) != Some(&JobRunState::Success)
             || owner.job_run_id.as_deref() != Some(assessment.delivery_run_id.as_str())
@@ -472,25 +477,30 @@ fn validate_results(
 
 /// A deterministic per-observation receipt makes retries and reversed snapshots
 /// converge without appending comments or rewriting the owner's task meaning.
+/// Returns one `deferred_attribution` entry per run while a claim holds it.
 pub(super) fn retain(
     runtime: &OrbitRuntime,
     owner: &str,
+    cluster: &FailureCluster,
     evidence: &Value,
-) -> Result<(), orbit_common::OrbitError> {
+) -> Result<Vec<Value>, orbit_common::OrbitError> {
     let content = serde_json::to_string(evidence)
         .map_err(|error| orbit_common::OrbitError::InvalidInput(error.to_string()))?;
     let path = format!(
         "ci-repair-observations/{}.json",
         sha256_hex(content.as_bytes())
     );
-    if runtime.get_task_artifact(owner, &path)?.is_none() {
-        runtime.update_task(
-            owner,
-            TaskUpdateParams {
-                upsert_artifacts: vec![TaskArtifact::from_text(path, content)],
-                ..Default::default()
-            },
-        )?;
+    if runtime.get_task_artifact(owner, &path)?.is_some() {
+        return Ok(Vec::new());
     }
-    Ok(())
+    let first_run = cluster.runs.first().unwrap_or(&Value::Null);
+    let outcome = retain_owner_receipt(runtime, owner, first_run, path.clone(), content, None)?;
+    Ok(match outcome {
+        BranchObservationOutcome::Retained => Vec::new(),
+        BranchObservationOutcome::Deferred { .. } => cluster
+            .runs
+            .iter()
+            .map(|run| claimed_entry(owner, run, &path))
+            .collect(),
+    })
 }

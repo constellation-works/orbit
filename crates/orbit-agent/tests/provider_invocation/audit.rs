@@ -1,5 +1,4 @@
-use orbit_agent::loop_engine::{AuditSink, InMemorySink, LoopAuditEvent};
-use serde_json::Value;
+use orbit_agent::loop_engine::{AuditSink, InMemorySink};
 
 use super::support::{isolated, scratch};
 
@@ -27,21 +26,4 @@ fn sink_redacts_secret_before_storing_blob_bytes() {
             );
         },
     );
-}
-
-#[test]
-fn historical_loop_event_payloads_remain_readable_without_shape_changes() {
-    // Frozen schema-v1 payloads from the persisted loop_event contract, covering
-    // every retained variant, including the retired HTTP runtime's records.
-    let rows: Vec<Value> = serde_json::from_str(include_str!("fixtures/loop_events.json"))
-        .expect("historical event fixtures");
-    for row in rows {
-        let event: LoopAuditEvent = serde_json::from_str(&row.to_string())
-            .expect("historical v2_audit_events payload remains deserializable");
-        assert_eq!(
-            serde_json::to_value(event).expect("serialize retained event"),
-            row,
-            "schema-v1 event_kind and payload fields must stay compatible"
-        );
-    }
 }

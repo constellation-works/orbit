@@ -368,6 +368,129 @@ fn new_holds_are_announced_once_and_task_identifiers_stay_private() {
     );
 }
 
+fn drain_with_fleet_holds(workspace: &str, task_ids: &[&str], complete: bool) -> Value {
+    let mut row = drain(workspace, "idle", &[]);
+    row["baseline_red_hold"] = json!({"task_ids": task_ids, "complete": complete});
+    row
+}
+
+#[test]
+fn fleet_row_holds_skip_the_readiness_request_and_still_track_changes() {
+    let mut dashboard = DrainDashboard::default();
+    let mut watcher = Watcher::default();
+    dashboard.drains(
+        "api",
+        vec![
+            drain_with_fleet_holds("workspace-a", &["private-old"], true),
+            drain_with_fleet_holds("workspace-b", &[], true),
+        ],
+    );
+    // No readiness routes are registered: any fallback request answers None.
+    assert!(dashboard.poll(&mut watcher).is_empty());
+    assert_eq!(
+        dashboard
+            .paths
+            .iter()
+            .filter(|path| path.contains("workflows/auto/readiness"))
+            .count(),
+        0,
+        "complete fleet rows issue no readiness requests: {:?}",
+        dashboard.paths
+    );
+
+    dashboard.drains(
+        "api",
+        vec![
+            drain_with_fleet_holds("workspace-a", &["private-old", "private-new"], true),
+            drain_with_fleet_holds("workspace-b", &["private-b"], true),
+        ],
+    );
+    let notes = dashboard.poll(&mut watcher);
+    assert_eq!(notes.len(), 2, "one new held task per workspace");
+    assert!(notes.iter().all(|(title, _)| title == "Task held"));
+    assert!(
+        notes.iter().all(|(_, body)| !body.contains("private-")),
+        "task identifiers stay private"
+    );
+    assert_eq!(
+        dashboard
+            .paths
+            .iter()
+            .filter(|path| path.contains("workflows/auto/readiness"))
+            .count(),
+        0
+    );
+
+    // A complete row that drops a hold clears it, so it can be announced again.
+    dashboard.drains(
+        "api",
+        vec![
+            drain_with_fleet_holds("workspace-a", &["private-old"], true),
+            drain_with_fleet_holds("workspace-b", &["private-b"], true),
+        ],
+    );
+    assert!(dashboard.poll(&mut watcher).is_empty());
+    dashboard.drains(
+        "api",
+        vec![
+            drain_with_fleet_holds("workspace-a", &["private-old", "private-new"], true),
+            drain_with_fleet_holds("workspace-b", &["private-b"], true),
+        ],
+    );
+    assert_eq!(dashboard.poll(&mut watcher).len(), 1);
+    assert_eq!(
+        dashboard
+            .paths
+            .iter()
+            .filter(|path| path.contains("workflows/auto/readiness"))
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn missing_or_incomplete_fleet_holds_fall_back_to_the_readiness_request() {
+    let mut dashboard = DrainDashboard::default();
+    let mut watcher = Watcher::default();
+    dashboard.drains(
+        "api",
+        vec![
+            drain_with_fleet_holds("workspace-a", &["private-ignored"], false),
+            drain("workspace-b", "idle", &[]),
+        ],
+    );
+    dashboard.readiness("api", "workspace-a", vec![held_task("private-old")]);
+    dashboard.readiness("api", "workspace-b", vec![held_task("private-old")]);
+    assert!(dashboard.poll(&mut watcher).is_empty());
+    assert_eq!(
+        dashboard
+            .paths
+            .iter()
+            .filter(|path| path.contains("workflows/auto/readiness"))
+            .count(),
+        2,
+        "one fallback request per workspace without complete fleet holds"
+    );
+
+    dashboard.readiness(
+        "api",
+        "workspace-a",
+        vec![held_task("private-old"), held_task("private-new")],
+    );
+    let notes = dashboard.poll(&mut watcher);
+    assert_eq!(notes.len(), 1, "the fallback still announces new holds");
+    assert_eq!(notes[0].0, "Task held");
+    assert_eq!(
+        dashboard
+            .paths
+            .iter()
+            .filter(|path| path.contains("workflows/auto/readiness"))
+            .count(),
+        4,
+        "the fallback repeats on the next poll"
+    );
+}
+
 #[test]
 fn unavailable_workspaces_do_not_finish_drains_or_reset_hold_history() {
     let mut dashboard = DrainDashboard::default();

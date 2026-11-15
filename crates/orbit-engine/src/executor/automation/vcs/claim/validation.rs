@@ -676,6 +676,18 @@ fn claimed_base_ref(context: &ClaimExecutionContext, input: &Value) -> Result<St
     })
 }
 
+/// Test-only base-ref resolution to drive the combinatorial ref-selection
+/// harness without exposing the private helper. Exists only in test builds
+/// for the sibling `claim::tests::validation` harness; production keeps
+/// `claimed_base_ref` private.
+#[cfg(test)]
+pub(super) fn claimed_base_ref_for_tests(
+    context: &ClaimExecutionContext,
+    input: &Value,
+) -> Result<String, OrbitError> {
+    claimed_base_ref(context, input)
+}
+
 /// The decision a validation step records when the workspace requires no
 /// command, on the owner's delivery path and a claimed leaf alike.
 pub(in crate::executor::automation::vcs) const SKIPPED_NO_REQUIRED_COMMANDS: &str =
@@ -690,7 +702,3 @@ pub(in crate::executor::automation::vcs) const SKIPPED_LIGHT_DELIVERY: &str =
 /// Why that decision ran nothing, in the step's own output.
 pub(in crate::executor::automation::vcs) const NO_REQUIRED_COMMANDS_NOTE: &str = "no required validation commands configured \
      (`workflow.required_validation_commands` is empty); no check ran";
-
-#[cfg(test)]
-#[path = "tests/validation.rs"]
-mod tests;

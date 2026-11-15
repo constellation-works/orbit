@@ -49,6 +49,7 @@ impl OrbitRuntime {
         }
         let runs = match self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
             include_steps: false,
+            input_keys: Some(WORKTREE_IDENTITY_INPUT_KEYS),
             ..JobRunQuery::default()
         }) {
             Ok(runs) => runs,
@@ -101,6 +102,7 @@ impl OrbitRuntime {
         self.reconcile_stale_job_runs(None)?;
         self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
             include_steps: false,
+            input_keys: Some(WORKTREE_IDENTITY_INPUT_KEYS),
             ..JobRunQuery::default()
         })
     }
@@ -444,14 +446,17 @@ impl OrbitRuntime {
 /// Only an unreachable destination, a lost result, or a fenced unavailable
 /// owner is evidence that the owner could not be reached. Stale local routes,
 /// unhealthy checkout probes, and structured tool errors leave the owner
-/// reachable or unverified, so they do not mean `owner_unreachable`.
+/// reachable or unverified, so they do not mean `owner_unreachable`. A
+/// preserved JSON-RPC answer keeps the classification it had as an unreachable
+/// destination, so an owner that answers with a protocol error stays pinned.
 fn is_worktree_gc_transport_failure(error: &OrbitError) -> bool {
     matches!(
         error,
         OrbitError::UnreachableDestination(_)
             | OrbitError::OutcomeUnknown { .. }
             | OrbitError::OwnerUnavailable(_)
-    ) || error.host_registry_code() == Some(orbit_common::HostRegistryCode::OwnerUnreachable)
+    ) || error.is_json_rpc_refusal()
+        || error.host_registry_code() == Some(orbit_common::HostRegistryCode::OwnerUnreachable)
 }
 
 /// Now less the parked-reclaim window; `None` when it cannot be represented,

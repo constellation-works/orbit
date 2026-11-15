@@ -19,12 +19,12 @@
 //! the dashboard can flag it before it starts.
 
 use orbit_common::OrbitError;
-use orbit_common::security::child_env::CLAUDE_CREDENTIAL_ENV;
+use orbit_common::security::child_env::{CLAUDE_CREDENTIAL_ENV, crew_env_file_problem};
 use orbit_engine::RuntimeHost;
 use orbit_engine::activity_job::cli_runner::{
     CLAUDE_WORKER_CREDENTIAL_REMEDY, claude_worker_credential_held,
 };
-use orbit_types::identity::{Crew, resolve_crew};
+use orbit_types::identity::{Crew, resolve_crew, same_crew_family};
 use orbit_types::workflow::CrewEnvUnset;
 use orbit_types::workflow::activity_job::Provider;
 
@@ -63,15 +63,36 @@ impl OrbitRuntime {
         let policy = self.execution_env_policy();
         let unset = policy.unset_crew_env(&crew.env);
         if !unset.is_empty() {
+            let file_problems = unset
+                .iter()
+                .filter_map(|entry| {
+                    crew_env_file_problem(entry).map(|problem| (entry.name.clone(), problem))
+                })
+                .collect();
             return Some(Unrunnable::UnsetEnv(CrewEnvUnset {
                 crew: crew.name.clone(),
                 env: unset,
+                file_problems,
             }));
         }
         (is_claude(crew)
             && RuntimeHost::requires_claude_worker_credential(self)
             && !claude_worker_credential_held(&policy.crew_agent_subprocess_env(&crew.env, &[])))
         .then_some(Unrunnable::NoClaudeCredential)
+    }
+
+    /// Declared source names for enabled crews, for shell and managed-service
+    /// diagnostics. Contains configuration identifiers only, never values.
+    pub fn configured_crew_env_sources(
+        &self,
+    ) -> Vec<(String, Vec<orbit_types::identity::CrewEnvVar>)> {
+        self.context
+            .settings()
+            .crews()
+            .values()
+            .filter(|crew| crew.enabled)
+            .map(|crew| (crew.name.clone(), crew.env.clone()))
+            .collect()
     }
 
     /// Every enabled crew whose `[crews.<name>] env` names a source this
@@ -134,13 +155,16 @@ impl OrbitRuntime {
             return Ok(requested);
         }
         let runnable = |name: &str| {
-            resolve_crew(name, crews)
-                .is_ok_and(|crew| !blocked.iter().any(|(blocked, _)| blocked.name == crew.name))
+            resolve_crew(name, crews).is_ok_and(|crew| {
+                !blocked
+                    .iter()
+                    .any(|(blocked, _)| same_crew_family(&blocked.name, &crew.name))
+            })
         };
         if !requested.is_empty() {
             let kept: Vec<String> = requested
                 .into_iter()
-                .filter(|name| runnable(name))
+                .filter(|name| runnable(name) || self.is_human_crew(Some(name)))
                 .collect();
             if kept.is_empty() {
                 return Err(OrbitError::InvalidInput(format!(

@@ -10,11 +10,15 @@ Interval checks cover anchored catch-up, consumed
 slots, invalid periods and an unrepresentable future boundary.
 
 State-mutating scheduler and coverage fixtures re-execute the exact test in a
-child with inherited Orbit authority cleared, disposable home/workspace paths,
-UTC host time and a 30-second deadline. The shared process supervisor drains
-output and kills/reaps a timed-out child. Real stores and definition discovery
-exercise cursors, overlap admission and coverage receipts; dispatch adapters
-provide the lifecycle outcomes that Core normally supplies.
+child with inherited Orbit authority cleared, disposable home/workspace paths
+and UTC host time. The shared child hang guard allows 300 seconds of silence
+after the child's first byte, and 540 seconds in all. Exec and libtest startup
+do not consume the quiet window: it opens at the first byte, so a child that
+has not printed yet is bounded only by the 540-second ceiling. A child that
+keeps printing is stopped only at that ceiling. The guard drains the child's
+output and kills and reaps a child that overruns either limit. Real stores and
+definition discovery exercise cursors, overlap admission and coverage receipts;
+dispatch adapters provide the lifecycle outcomes that Core normally supplies.
 `scheduling/pending_mints.rs` seeds claims with and without recorded task ids
 for enabled and disabled definitions. It compares dry-run and live reports,
 checks that previews leave cursor bytes unchanged, and verifies that live

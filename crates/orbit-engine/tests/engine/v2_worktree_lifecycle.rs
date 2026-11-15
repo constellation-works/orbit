@@ -41,9 +41,7 @@ use orbit_types::task::{
     CANDIDATE_DISCARDED_EVENT, ContextWideningStep, ExternalRef, Task, TaskArtifact,
     TaskHistoryEntry, TaskPriority, TaskStatus, TaskType,
 };
-use orbit_types::workflow::activity_job::{
-    ActivityV2, ActivityV2Spec, AgentLoopSpec, OnDenial, Provider,
-};
+use orbit_types::workflow::activity_job::{ActivityV2, ActivityV2Spec, AgentLoopSpec, Provider};
 use orbit_types::workflow::{
     ConventionTemplate, FailureActivityCheckpoint, FinalRecoveryDecision, JobRun, JobRunState,
     PipelineState,
@@ -521,6 +519,44 @@ fn worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root() {
     );
 }
 
+/// A tag sharing the base branch's name must not shadow it: local setup
+/// starts from the branch, and remote setup from the remote-tracking branch
+/// rather than a tag named `origin/<branch>`.
+fn worktree_setup_uses_the_branch_not_a_same_named_tag() {
+    let (fixture, host) = Fixture::hosted();
+    let tag_sha = commit_file(&fixture.repo, "tagged.txt", "tagged\n");
+    git(&fixture.repo, &["tag", BASE, &tag_sha]);
+    let branch_sha = commit_file(&fixture.repo, "branched.txt", "branched\n");
+    git(
+        &fixture.repo,
+        &[
+            "push",
+            "origin",
+            &format!("refs/heads/{BASE}:refs/heads/{BASE}"),
+        ],
+    );
+
+    host.add_task("T-TAG-LOCAL", TaskStatus::Backlog);
+    let setup = action(
+        &host,
+        "worktree_setup",
+        &setup_input(&["T-TAG-LOCAL"], "jrun-tag-local"),
+    )
+    .expect("local worktree setup");
+    assert_eq!(setup["base_sha"], branch_sha, "{setup}");
+    let checkout = Checkout::from_setup(&setup);
+    assert_eq!(head(&checkout.path), branch_sha);
+
+    git(&fixture.repo, &["tag", &format!("origin/{BASE}"), &tag_sha]);
+    host.add_task("T-TAG-REMOTE", TaskStatus::Backlog);
+    let mut remote_input = setup_input(&["T-TAG-REMOTE"], "jrun-tag-remote");
+    remote_input["base_sync"] = json!("remote");
+    let setup = action(&host, "worktree_setup", &remote_input).expect("remote worktree setup");
+    assert_eq!(setup["base_sha"], branch_sha, "{setup}");
+    let checkout = Checkout::from_setup(&setup);
+    assert_eq!(head(&checkout.path), branch_sha);
+}
+
 // ---------------------------------------------------------------------------
 // worktree_setup: stale-checkout refusal
 // ---------------------------------------------------------------------------
@@ -985,6 +1021,21 @@ fn a_candidate_held_for_an_upgrade_refusal_is_resumed_by_the_next_run() {
 /// is resumed by the task's requeued run: the cancel judged nothing.
 fn a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run() {
     assert_held_candidate_resumes_carried("validate", "held_child_timeout");
+}
+
+/// An owner-signoff hold resumes its implement-step candidate for the
+/// implementer to finish instead of starting fresh.
+fn a_candidate_held_for_owner_signoff_is_resumed_for_implementation_repair() {
+    let preserved = PreservedCandidate::feature();
+    preserved.preserve_decision("implement_one", "held_owner_signoff");
+    preserved.host.set_status(RESUME_TASK, TaskStatus::Backlog);
+
+    let (setup, resumed) = preserved.resumed();
+    assert_resumed("held_owner_signoff", &resumed, "resumed_repaired", true);
+    assert_eq!(resumed["repair"]["trigger"], "implementation");
+    assert_eq!(resumed["source_sha"], preserved.candidate);
+    assert_eq!(read(workspace(&setup).join("feature.txt")), "feature\n");
+    assert_resume_recorded(&preserved, "resumed_repaired");
 }
 
 /// The task's next run resumes a candidate whose failed run's handoff at
@@ -2508,6 +2559,44 @@ fn provider_primary_source_edit_fails_closed_and_preserves_both_checkouts() {
     );
 }
 
+/// [ORB-22100] A checkout that disappears while its provider runs names the
+/// missing worktree at the post-run snapshot. The snapshot used to surface the
+/// vanished working directory as a missing `git` binary
+/// (`failed to spawn git: No such file or directory`).
+#[cfg(unix)]
+fn dispatch_whose_checkout_vanishes_during_the_run_names_the_missing_worktree() {
+    let (fixture, host, checkout) = Fixture::with_checkout("T-VANISH", "jrun-vanished");
+    // The substitute provider deletes its own checkout, as an outside remover
+    // would, then exits before the boundary's post-run snapshot.
+    let body = format!("rm -rf '{}'", checkout.path.display());
+    let host = fixture.with_provider(&host, &body);
+
+    let error = dispatch_linked_provider(&host, "jrun-vanished", "T-VANISH", &checkout.path)
+        .expect_err("a checkout that vanishes before its snapshot must fail");
+    let diagnostic = integrity_diagnostic(&error, "worktree_mismatch");
+    let message = error.to_string();
+    let path = checkout.path.display().to_string();
+
+    assert!(
+        !checkout.path.exists(),
+        "ORB-22100: the race must remove the checkout before the snapshot runs"
+    );
+    assert!(
+        diagnostic["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("worktree is missing") && reason.contains(&path)),
+        "ORB-22100: the diagnostic must say the worktree is missing and name its path: {diagnostic}"
+    );
+    assert!(
+        message.contains(&path),
+        "ORB-22100: the error must name the missing worktree path: {message}"
+    );
+    assert!(
+        !message.contains("failed to spawn"),
+        "ORB-22100: a vanished checkout must not read as a missing git binary: {message}"
+    );
+}
+
 /// [ORB-19177] The ORB-18737 shape: a run starts while an operator has the
 /// primary on a hand hotfix branch, and the primary returns to the base branch
 /// mid-run. The guard's baseline is `workflow.base_branch`, never the branch
@@ -3182,31 +3271,11 @@ fn dispatch_audited_linked_activity(
 
 /// A one-iteration Codex agent loop that requires the completion envelope.
 fn agent_loop(instruction: &str) -> ActivityV2Spec {
-    ActivityV2Spec::AgentLoop(AgentLoopSpec {
-        crew_name: None,
-        tool_disallow_list: None,
-        instruction: instruction.to_string(),
-        steering_instruction: None,
-        regression_risk_instruction: None,
-        explore_instruction: None,
-        explore_brief_instruction: None,
-        tools: Vec::new(),
-        on_denial: OnDenial::Terminate,
-        model: None,
-        reasoning_effort: None,
-        max_iterations: 1,
-        backend: None,
-        provider: Provider::Codex,
-        wall_clock_timeout_seconds: 30,
-        require_response_envelope: false,
-        require_completion_envelope: true,
-        proc_allowed_programs: None,
-        proc_disallowed_programs: None,
-        trusted_host_execution: false,
-        crew_env: Vec::new(),
-        crew_account: None,
-        crew_vision_disabled: false,
-    })
+    ActivityV2Spec::AgentLoop(AgentLoopSpec::for_provider(
+        instruction.to_string(),
+        Provider::Codex,
+        30,
+    ))
 }
 
 /// An audit writer for `run_id` whose blobs land in `sink` under `blobs`.
@@ -3503,6 +3572,7 @@ fn action(host: &LifecycleHost, name: &str, input: &Value) -> Result<Value, Orbi
 fn job_run(run_id: &str, state: JobRunState, input: Value) -> JobRun {
     let now = Utc::now();
     JobRun {
+        build: None,
         executed_on: None,
         run_id: run_id.to_string(),
         job_id: "task_pr_pipeline".to_string(),
@@ -4677,6 +4747,7 @@ worktree_families! {
         worktree_gc_rejects_non_string_target_run_id_and_deletes_nothing,
     ],
     worktree_contracts_2: [
+        worktree_setup_uses_the_branch_not_a_same_named_tag,
         worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched,
         worktree_setup_names_a_templated_branch_stably_and_refuses_an_unsafe_render,
         worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits,
@@ -4689,6 +4760,7 @@ worktree_families! {
         a_validated_candidate_is_resumed_on_the_new_base_without_implementation,
         a_candidate_held_for_an_upgrade_refusal_is_resumed_by_the_next_run,
         a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run,
+        a_candidate_held_for_owner_signoff_is_resumed_for_implementation_repair,
         a_conflicting_candidate_is_handed_to_the_implementer_with_its_conflict,
     ],
     worktree_contracts_4: [
@@ -4725,6 +4797,8 @@ worktree_families! {
         agent_changed_paths_widen_selectors_with_their_step_as_the_agent_exits,
         #[cfg(unix)]
         provider_primary_source_edit_fails_closed_and_preserves_both_checkouts,
+        #[cfg(unix)]
+        dispatch_whose_checkout_vanishes_during_the_run_names_the_missing_worktree,
     ],
     worktree_contracts_8: [
         #[cfg(unix)]

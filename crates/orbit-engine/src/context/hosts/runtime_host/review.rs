@@ -75,6 +75,7 @@ macro_rules! review_methods {
             task_ids: &[String],
             handoff_id: Option<&str>,
             plan: &orbit_types::workflow::CiRerunPlan,
+            now_ms: u64,
         ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError>;
 
         /// Reserve the cumulative infrastructure rerun before mutation, under the
@@ -84,11 +85,7 @@ macro_rules! review_methods {
             _execution: &str,
             _task_ids: &[String],
             _evidence: &orbit_types::workflow::PrInfrastructureEvidence,
-        ) -> Result<orbit_types::workflow::PrInfrastructureAdmission, OrbitError> {
-            Ok(orbit_types::workflow::PrInfrastructureAdmission::Refused(
-                "this host cannot durably reserve infrastructure recovery".into(),
-            ))
-        }
+        ) -> Result<orbit_types::workflow::PrInfrastructureAdmission, OrbitError>;
 
         /// Recheck current accepted handoff authority/native evidence and reserve
         /// its base update under the same owner lock. Generic hosts refuse.
@@ -96,11 +93,7 @@ macro_rules! review_methods {
             &self,
             _handoff_id: &str,
             _request: &orbit_types::workflow::PrBaseUpdateReservation,
-        ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
-            Ok(orbit_types::workflow::PrBaseUpdateAdmission::Refused(
-                "current handoff authority is unavailable".into(),
-            ))
-        }
+        ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError>;
 
         /// Reserve the one cumulative provider base update under the owning task
         /// lock. A host without durable owner admission cannot mutate.
@@ -108,11 +101,7 @@ macro_rules! review_methods {
             &self,
             _task_ids: &[String],
             _request: &orbit_types::workflow::PrBaseUpdateReservation,
-        ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
-            Ok(orbit_types::workflow::PrBaseUpdateAdmission::Refused(
-                "this host cannot durably reserve a base update".into(),
-            ))
-        }
+        ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError>;
 
         // ── Before-PR review coverage [ORB-11333] ───────────────────────────
 
@@ -171,12 +160,25 @@ macro_rules! review_methods {
 
         /// Append a permitted CI observation owned by a live landing
         /// attempt. `event` is restricted by the owner store to
-        /// `ci_check_rerun`, `ci_base_suspect` or `ci_check_rerun_reserved`.
+        /// `ci_check_rerun`, `ci_base_suspect`, `ci_check_rerun_reserved`,
+        /// `ci_infrastructure_retry_backoff`, `ci_infrastructure_retry_exhausted`,
+        /// `ci_failure_recorded` or `ci_failure_reclassified`.
         fn record_handoff_landing_history(
             &self,
             handoff_id: &str,
             event: &str,
             note: &str,
+        ) -> Result<(), OrbitError>;
+
+        /// [ORB-24233] Record a completion hold on the task of a live landing
+        /// attempt: `history` (a `completion_held` entry) and the system
+        /// `comment`, written through that attempt's claim. The owner store
+        /// admits this only while the claim is handed off to the live attempt.
+        fn record_handoff_landing_completion_hold(
+            &self,
+            handoff_id: &str,
+            history: &orbit_types::task::TaskHistoryEntry,
+            comment: &str,
         ) -> Result<(), OrbitError>;
 
         // ── Claimed distributed leaf execution [ORB-12616] ─────────────────

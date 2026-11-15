@@ -1,4 +1,4 @@
-//! Task-branch CI observations retained under the claim commit boundary.
+//! CI observations retained under the claim commit boundary.
 //!
 //! The current claim check and queue-or-retain decision run in one exclusive
 //! section. A protecting claim queues the receipt for settlement. Otherwise
@@ -21,9 +21,13 @@ use super::TaskCommitBoundary;
 
 // Owner writes that skip `update_task` (ORB-15295). The claim commit path keeps
 // the manifest entry and blob, the envelope rewrite and `updated_at`, and the
-// task index replacement. Not carried over, because an artifact-only
-// observation does not need them:
-// - lexical search refresh: indexed task fields exclude artifacts;
+// task index replacement. Not carried over, because an observation of an
+// artifact and optionally a comment does not need them:
+// - lexical search refresh at this layer: the core seam that retains a
+//   receipt refreshes the index (artifact paths and comments are indexed
+//   fields); a receipt deferred to claim settlement lands inside that
+//   settlement's claim commit, and the core claim seam re-indexes the
+//   task from its settled row before the settlement returns;
 // - history entries and status-transition effects: `update_task` adds none
 //   without a status or field change;
 // - `resume_evidence_hold`: only System or Operator writers satisfy review
@@ -72,6 +76,7 @@ impl TaskCommitBoundary {
                 self.store
                     .task_coordination_row(&self.workspace_id, &row.kind, &row.row_id)?;
             let recorded = self.artifact_recorded(&stored.task_id, &stored.artifact_path)?;
+            let comment_recorded = self.comment_recorded(&stored)?;
             let queued_unapplied = match &existing {
                 Some(row) => {
                     !serde_json::from_str::<DeferredBranchObservation>(&row.payload_json)
@@ -80,7 +85,7 @@ impl TaskCommitBoundary {
                 }
                 None => false,
             };
-            if recorded && !queued_unapplied {
+            if recorded && comment_recorded && !queued_unapplied {
                 return Ok(BranchObservationOutcome::Retained);
             }
             // The content-addressed artifact path is the idempotence key for a
@@ -92,6 +97,9 @@ impl TaskCommitBoundary {
                 ..Default::default()
             };
             let mut effects = ClaimCommitEffects::default();
+            if !comment_recorded {
+                effects.observation_comments.extend(stored.comment.clone());
+            }
             if let Some(existing) = existing {
                 stored.applied = true;
                 row.payload_json = encode_observation(&stored)?;
@@ -119,7 +127,7 @@ impl TaskCommitBoundary {
                     Ok(BranchObservationOutcome::Retained)
                 }
                 outcome => Err(OrbitError::Store(format!(
-                    "branch observation retention did not commit: {outcome:?}"
+                    "CI observation retention did not commit: {outcome:?}"
                 ))),
             }
         })
@@ -154,7 +162,7 @@ impl TaskCommitBoundary {
                 orbit_common::tracing::warn!(
                     task_id,
                     path = %path,
-                    "deferred branch observation conflicts with claim evidence; left unapplied"
+                    "deferred CI observation conflicts with claim evidence; left unapplied"
                 );
                 continue;
             }
@@ -166,6 +174,11 @@ impl TaskCommitBoundary {
                 evidence
                     .artifacts
                     .push(TaskArtifact::from_text(path, content));
+            }
+            if !self.comment_recorded(&observation)? {
+                effects
+                    .observation_comments
+                    .extend(observation.comment.clone());
             }
             let mut applied = observation;
             applied.applied = true;
@@ -199,8 +212,12 @@ impl TaskCommitBoundary {
         let observation: DeferredBranchObservation =
             serde_json::from_str(&existing.payload_json)
                 .map_err(|error| OrbitError::Store(error.to_string()))?;
+        let incoming_observation: DeferredBranchObservation =
+            serde_json::from_str(&incoming.payload_json)
+                .map_err(|error| OrbitError::Store(error.to_string()))?;
         if !observation.applied
-            || self.artifact_recorded(&observation.task_id, &observation.artifact_path)?
+            || (self.artifact_recorded(&observation.task_id, &observation.artifact_path)?
+                && self.comment_recorded(&incoming_observation)?)
         {
             return Ok(());
         }
@@ -215,6 +232,26 @@ impl TaskCommitBoundary {
                 "deferred branch observation changed inside the commit boundary".into(),
             ))
         }
+    }
+
+    /// Comments are append-only, so one present once stays recorded. Rows in a
+    /// settlement carry different receipts and so different comments.
+    fn comment_recorded(
+        &self,
+        observation: &DeferredBranchObservation,
+    ) -> Result<bool, OrbitError> {
+        let Some(message) = &observation.comment else {
+            return Ok(true);
+        };
+        let bundle = match self
+            .bundle_store
+            .read_bundle_lightweight(&observation.task_id)
+        {
+            Ok(bundle) => bundle,
+            Err(OrbitError::NotFound { .. }) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        Ok(bundle.comments.iter().any(|row| row.body == *message))
     }
 
     fn artifact_recorded(&self, task_id: &str, path: &str) -> Result<bool, OrbitError> {

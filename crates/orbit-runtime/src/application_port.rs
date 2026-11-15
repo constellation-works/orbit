@@ -15,13 +15,13 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::TaskAutomationUpdate;
-use orbit_store::AuditEventInsertParams;
-use orbit_store::contracts::{ClaimInspection, TaskCandidates, TaskListFilter};
+use orbit_store::contracts::{TaskCandidates, TaskListFilter};
 use orbit_types::task::{
-    ExecutorOsLimit, ExternalRef, Task, TaskComplexity, TaskHistoryEntry, TaskPriority, TaskStatus,
+    CrewSource, ExecutorOsLimit, ExternalRef, Task, TaskComplexity, TaskHistoryEntry, TaskPriority,
+    TaskStatus,
 };
 use orbit_types::tool::ToolSessionContext;
-use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
+use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::Value;
 
 use crate::RuntimeKernel;
@@ -30,6 +30,24 @@ use crate::RuntimeKernel;
 /// owns it. Implemented once, by `orbit-core`'s composition root.
 pub trait ApplicationPort: Send + Sync {
     fn get_task(&self, kernel: &RuntimeKernel, id: &str) -> Result<Task, OrbitError>;
+    /// Lowercase hex SHA-256 of a task artifact's stored bytes (the bytes
+    /// `orbit.task.artifact.get` returns); `None` when the task has no
+    /// artifact at `path`.
+    fn task_artifact_sha256(
+        &self,
+        kernel: &RuntimeKernel,
+        id: &str,
+        path: &str,
+    ) -> Result<Option<String>, OrbitError>;
+    /// Stored bytes of a task artifact, the same bytes [`Self::task_artifact_sha256`]
+    /// hashes, read through the inline size bound. `None` when the task has no
+    /// artifact at `path`.
+    fn task_artifact_bytes(
+        &self,
+        kernel: &RuntimeKernel,
+        id: &str,
+        path: &str,
+    ) -> Result<Option<Vec<u8>>, OrbitError>;
     fn get_task_history(
         &self,
         kernel: &RuntimeKernel,
@@ -58,31 +76,12 @@ pub trait ApplicationPort: Send + Sync {
         filter: &TaskListFilter,
         limit: usize,
     ) -> Result<TaskCandidates, OrbitError>;
-    fn inspect_execution_claims(
-        &self,
-        kernel: &RuntimeKernel,
-    ) -> Result<Vec<ClaimInspection>, OrbitError>;
     fn apply_task_automation_update(
         &self,
         kernel: &RuntimeKernel,
         task_id: &str,
         update: TaskAutomationUpdate,
     ) -> Result<(), OrbitError>;
-    fn record_audit_event(
-        &self,
-        kernel: &RuntimeKernel,
-        params: &AuditEventInsertParams,
-    ) -> Result<(), OrbitError>;
-    fn get_job_run_backend(
-        &self,
-        kernel: &RuntimeKernel,
-        run_id: &str,
-    ) -> Result<Option<JobRun>, OrbitError>;
-    fn read_run_state(
-        &self,
-        kernel: &RuntimeKernel,
-        run_id: &str,
-    ) -> Result<Option<PipelineState>, OrbitError>;
     fn list_orphaned_running_job_runs(
         &self,
         kernel: &RuntimeKernel,
@@ -145,7 +144,7 @@ pub trait ApplicationPort: Send + Sync {
         input: &Value,
         task_id: &str,
         crew: Option<&str>,
-        crew_source: Option<&str>,
+        crew_source: Option<&CrewSource>,
         complexity: Option<TaskComplexity>,
     ) -> Option<String>;
 }
@@ -153,6 +152,22 @@ pub trait ApplicationPort: Send + Sync {
 impl RuntimeKernel {
     pub(crate) fn get_task(&self, id: &str) -> Result<Task, OrbitError> {
         self.application.get_task(self, id)
+    }
+
+    pub(crate) fn task_artifact_sha256(
+        &self,
+        id: &str,
+        path: &str,
+    ) -> Result<Option<String>, OrbitError> {
+        self.application.task_artifact_sha256(self, id, path)
+    }
+
+    pub(crate) fn task_artifact_bytes(
+        &self,
+        id: &str,
+        path: &str,
+    ) -> Result<Option<Vec<u8>>, OrbitError> {
+        self.application.task_artifact_bytes(self, id, path)
     }
 
     pub(crate) fn get_task_history(&self, id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
@@ -195,10 +210,6 @@ impl RuntimeKernel {
         self.application.task_candidates(self, filter, limit)
     }
 
-    pub(crate) fn inspect_execution_claims(&self) -> Result<Vec<ClaimInspection>, OrbitError> {
-        self.application.inspect_execution_claims(self)
-    }
-
     pub(crate) fn apply_task_automation_update(
         &self,
         task_id: &str,
@@ -206,21 +217,6 @@ impl RuntimeKernel {
     ) -> Result<(), OrbitError> {
         self.application
             .apply_task_automation_update(self, task_id, update)
-    }
-
-    pub(crate) fn record_audit_event(
-        &self,
-        params: &AuditEventInsertParams,
-    ) -> Result<(), OrbitError> {
-        self.application.record_audit_event(self, params)
-    }
-
-    pub(crate) fn get_job_run_backend(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
-        self.application.get_job_run_backend(self, run_id)
-    }
-
-    pub(crate) fn read_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError> {
-        self.application.read_run_state(self, run_id)
     }
 
     pub(crate) fn list_orphaned_running_job_runs(&self) -> Result<Vec<JobRun>, OrbitError> {
@@ -310,7 +306,7 @@ impl RuntimeKernel {
         input: &Value,
         task_id: &str,
         crew: Option<&str>,
-        crew_source: Option<&str>,
+        crew_source: Option<&CrewSource>,
         complexity: Option<TaskComplexity>,
     ) -> Option<String> {
         self.application.claimed_leaf_redrawn_crew(

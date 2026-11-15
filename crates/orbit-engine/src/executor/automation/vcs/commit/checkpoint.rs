@@ -9,28 +9,80 @@ use serde_json::Value;
 use crate::context::RuntimeHost;
 
 use super::super::super::input::input_string_field;
-use super::super::git::{git_command_success, git_output};
+use super::super::git::git_output;
 use super::already_landed::{self, AlreadyLanded};
+use super::already_resolved;
 use super::clean_tree::Verifier;
 use super::no_diff::{self, NoDiff};
 use super::tagged_no_diff;
+
+/// The `regression_from` culprits this run's implementer supplied, which the
+/// owner records as relations on acceptance [ORB-24696]. Read through the
+/// same implementation-output channel the commit step uses for its summary.
+fn supplied_regression_from_input<H: RuntimeHost + ?Sized>(
+    host: &H,
+    run_id: &str,
+    input: &Value,
+) -> Result<Vec<String>, OrbitError> {
+    let Some(output) = super::summary::commit_implementation_input(host, run_id, input)? else {
+        return Ok(Vec::new());
+    };
+    let Some(implementation) = output.get("implementation") else {
+        return Ok(Vec::new());
+    };
+    orbit_types::workflow::implementer_regression_from(implementation)
+        .map_err(|defect| OrbitError::InvalidInput(format!("invalid implementer output: {defect}")))
+}
 
 /// Accept a clean tree at the pinned HEAD only with structured evidence: a
 /// run's no-diff claim for this task and HEAD [ORB-13145], or a verified
 /// covering delivery. A stale artifact of one kind never shadows valid
 /// evidence of the other, including a definite inline-size refusal. Unknown
 /// artifact-read outcomes still refuse; when both routes fail, both refusals
-/// are reported.
+/// are reported. Without either report, admitted implementation selectors may
+/// settle a claimed task as already resolved at this pinned base; its host
+/// replays the selectors before handoff. Owner runs require a report.
 pub(super) fn verify_clean_tree<H: RuntimeHost + ?Sized>(
     host: &H,
     task: &orbit_types::task::Task,
     workspace_path: &Path,
     run_id: &str,
     base_sha: &str,
+    input: &Value,
 ) -> Result<Value, OrbitError> {
     let no_diff_error = match host.get_task_artifact(&task.id, no_diff::ARTIFACT) {
         Ok(None) => {
-            return AlreadyLanded::verify(host, task, workspace_path, run_id, base_sha);
+            // Only definitely absent reports permit implementation evidence.
+            // An invalid report remains authoritative and an unknown read
+            // refuses without retrying it through the fallback.
+            match host.get_task_artifact(&task.id, already_landed::ARTIFACT) {
+                Ok(None) => {
+                    if let Some(output) =
+                        super::summary::commit_implementation_input(host, run_id, input)?
+                        && super::implementer::admit_implementer_already_resolved(
+                            &output["implementation"],
+                            host.worker_invocation().is_some(),
+                        )?
+                        && let Some(evidence) =
+                            already_resolved::evidence_from_implementation(&output)?
+                    {
+                        return Ok(already_resolved::checkpoint(
+                            &task.id, run_id, base_sha, evidence,
+                        ));
+                    }
+                }
+                Ok(Some(_)) | Err(OrbitError::InvalidInput(_)) => {}
+                Err(error) => return Err(error),
+            }
+            let supplied = supplied_regression_from_input(host, run_id, input)?;
+            return AlreadyLanded::verify_with_supplied_regression_from(
+                host,
+                task,
+                workspace_path,
+                run_id,
+                base_sha,
+                &supplied,
+            );
         }
         Ok(Some(_)) => match NoDiff::verify(host, task, workspace_path, run_id, base_sha) {
             Ok(checkpoint) => return Ok(checkpoint),
@@ -44,8 +96,18 @@ pub(super) fn verify_clean_tree<H: RuntimeHost + ?Sized>(
     };
     match host.get_task_artifact(&task.id, already_landed::ARTIFACT) {
         Ok(None) => Err(no_diff_error),
-        Ok(Some(_)) => AlreadyLanded::verify(host, task, workspace_path, run_id, base_sha)
-            .map_err(|error| OrbitError::Execution(format!("{no_diff_error}; {error}"))),
+        Ok(Some(_)) => {
+            let supplied = supplied_regression_from_input(host, run_id, input)?;
+            AlreadyLanded::verify_with_supplied_regression_from(
+                host,
+                task,
+                workspace_path,
+                run_id,
+                base_sha,
+                &supplied,
+            )
+            .map_err(|error| OrbitError::Execution(format!("{no_diff_error}; {error}")))
+        }
         Err(error @ OrbitError::InvalidInput(_)) => {
             Err(OrbitError::Execution(format!("{no_diff_error}; {error}")))
         }
@@ -61,7 +123,7 @@ pub(in crate::executor::automation::vcs) fn verified_clean_tree_checkpoint(
     input.get("already_landed_checkpoint").filter(|checkpoint| {
         matches!(
             checkpoint.get("decision").and_then(Value::as_str),
-            Some(already_landed::DECISION | no_diff::DECISION)
+            Some(already_landed::DECISION | no_diff::DECISION | already_resolved::DECISION)
         )
     })
 }
@@ -82,6 +144,12 @@ pub(in crate::executor::automation::vcs) fn verify_clean_tree_handoff<H: Runtime
             [task] => tagged_no_diff::verify_handoff(task, workspace_path, checkpoint),
             _ => Err(OrbitError::PolicyDenied(
                 "a no-diff-expected checkpoint covers exactly one task".into(),
+            )),
+        },
+        Some(already_resolved::DECISION) => match tasks {
+            [task] => already_resolved::verify_handoff(task, workspace_path, checkpoint),
+            _ => Err(OrbitError::PolicyDenied(
+                "an already-resolved checkpoint covers exactly one task".into(),
             )),
         },
         _ => AlreadyLanded::verify_handoff(host, tasks, workspace_path, run_id, checkpoint),
@@ -113,16 +181,27 @@ pub(in crate::executor::automation::vcs) fn verify_clean_tree_handoff_at_revisio
     workspace: &Path,
     run_id: &str,
     checkpoint: &Value,
+    supplied_regression_from: &[String],
 ) -> Result<(), OrbitError> {
     match checkpoint["decision"].as_str() {
         Some(no_diff::DECISION) => {
             NoDiff::verify_handoff_at_revision(host, task, workspace, run_id, checkpoint)
         }
         Some(already_landed::DECISION) => {
-            AlreadyLanded::verify_handoff_at_revision(host, task, workspace, run_id, checkpoint)
+            AlreadyLanded::verify_handoff_at_revision_with_supplied_regression_from(
+                host,
+                task,
+                workspace,
+                run_id,
+                checkpoint,
+                supplied_regression_from,
+            )
         }
         Some(tagged_no_diff::DECISION) => {
             tagged_no_diff::verify_handoff_at_revision(task, checkpoint)
+        }
+        Some(already_resolved::DECISION) => {
+            already_resolved::verify_handoff_at_revision(task, checkpoint)
         }
         _ => Err(OrbitError::PolicyDenied(
             "a NoDiff handoff requires a verified clean-tree checkpoint".into(),
@@ -189,10 +268,7 @@ pub(super) fn head_descends_from_pin(
     base_sha: &str,
     head_sha: &str,
 ) -> Result<bool, OrbitError> {
-    git_command_success(
-        workspace_path,
-        &["merge-base", "--is-ancestor", base_sha, head_sha],
-    )
+    crate::executor::automation::vcs::git::is_ancestor(workspace_path, base_sha, head_sha)
 }
 
 /// Accept only the exact repair HEAD observed during final recovery, after its
@@ -223,7 +299,10 @@ pub(super) fn head_matches_final_recovery<H: RuntimeHost + ?Sized>(
         return Ok(false);
     };
     if checkpoint.task_id != task_id
-        || checkpoint.outcome.as_deref() != Some("resume")
+        || !matches!(
+            checkpoint.outcome,
+            Some(orbit_types::workflow::FinalRecoveryCheckpointOutcome::Resume)
+        )
         || !matches!(
             checkpoint.decision,
             Some(orbit_types::workflow::FinalRecoveryDecision::Resume { .. })
@@ -251,6 +330,85 @@ pub(super) fn head_matches_final_recovery<H: RuntimeHost + ?Sized>(
     };
     Ok(chain.contains(&checkpoint.key.run_id)
         && host.get_task(task_id)?.job_run_id.as_deref() == Some(checkpoint_owner))
+}
+
+/// Persisted author of a host system write (`ActorIdentity::System`).
+///
+/// Ordinary task updates stamp the caller's identity instead, so this label
+/// is the provenance of a legacy settlement comment, not a string the
+/// subject can choose.
+const SYSTEM_STAMPED_AUTHOR: &str = "system";
+
+/// Accept HEAD only when a settled before-landing review recorded it as its
+/// final commit and it descends from the pinned base.
+///
+/// A before-landing reviewer may commit its repair in the same worktree and
+/// settle with that commit as `final_commit`. When final recovery then
+/// resumes implementation, HEAD is still that reviewer commit: it is the
+/// candidate, not unexplained drift. An extra commit on top, a HEAD no
+/// settlement recorded, a non-descendant HEAD, or a before-PR settlement
+/// gains no permission from any settlement: before-PR settlements must not
+/// authorize another run's HEAD, or the original owner without a final
+/// recovery receipt would also be admitted (ORB-24328 follow-up).
+///
+/// Trusted evidence is the gate's typed history receipt, or a legacy comment
+/// whose stored author is `SYSTEM_STAMPED_AUTHOR`. The public task update
+/// accepts the same display prose from an implementer; that prose is not
+/// provenance (STD-05 §R1).
+pub(super) fn head_matches_settled_review<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task_id: &str,
+    workspace_path: &Path,
+    base_sha: &str,
+    head_sha: &str,
+) -> Result<bool, OrbitError> {
+    if !head_descends_from_pin(workspace_path, base_sha, head_sha)? {
+        return Ok(false);
+    }
+    let history = host.get_task_history(task_id)?;
+    let comments = host.get_task_comments(task_id)?;
+    let trusted_comments: Vec<_> = comments
+        .into_iter()
+        .filter(|comment| comment.by == SYSTEM_STAMPED_AUTHOR)
+        .collect();
+    let settlements = orbit_types::task::recorded_review_settlements(&history, &trusted_comments);
+    for (_, settlement) in settlements {
+        if settlement.gate != orbit_types::task::ReviewSettlementGate::BeforeLanding {
+            continue;
+        }
+        let Some(final_commit) = settlement.final_commit.as_deref() else {
+            continue;
+        };
+        if final_commit.eq_ignore_ascii_case(head_sha) {
+            return Ok(true);
+        }
+        // Legacy settlements may record a short id; resolve it in this
+        // worktree before comparing. Only hexadecimal object-id prefixes are
+        // valid here: resolving arbitrary revision expressions such as `HEAD`
+        // would let a later, unrecorded commit authorize itself. Unresolvable
+        // records prove nothing.
+        if !(4..=64).contains(&final_commit.len())
+            || !final_commit.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            continue;
+        }
+        if let Ok(resolved) = git_output(
+            workspace_path,
+            &[
+                "rev-parse",
+                "--verify",
+                &format!("{final_commit}^{{commit}}"),
+            ],
+        ) && resolved.trim().eq_ignore_ascii_case(head_sha)
+            && resolved
+                .trim()
+                .get(..final_commit.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(final_commit))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Reject anything that is not a full Git object id.

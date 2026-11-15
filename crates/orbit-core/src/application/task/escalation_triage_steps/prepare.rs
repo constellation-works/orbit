@@ -1,20 +1,19 @@
-//! Select the escalated holds an escalation triage run reads (held pilot
-//! assessments, or block episodes awaiting triage), draw each one's
-//! hard-tier crew and partition them by crew.
+//! Select the held pilot assessments an escalation triage run reads, draw each
+//! one's crew (from the pilot-warning purpose pool, else the hard tier) and
+//! partition them by crew.
 
-use std::cell::OnceCell;
 use std::collections::BTreeSet;
 
-use chrono::{SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
-use orbit_types::task::{Task, TaskComplexity, TaskStatus};
+use orbit_types::task::{CrewSource, Task, TaskComplexity, TaskStatus};
 use orbit_types::workflow::automation::members::StateTriggerKind;
+use orbit_types::workflow::{ActivityCrewPoolMember, CrewPurpose};
 use serde_json::{Value, json};
 
 use super::{HeldPilotWarnings, PilotWarningCandidacy};
 use crate::OrbitRuntime;
-use crate::application::task::TriageCandidacy;
+use crate::application::contracts::ESCALATION_TRIAGE_JOB;
 use crate::application::task::batch_prepare::{
     BatchSpec, Qualification, held_by_run_detail, prepare_batch,
 };
@@ -22,19 +21,18 @@ use crate::application::task::pilot::input::requested_workspace_root;
 use crate::application::task::pilot::requested_base_branch;
 use crate::application::task::pilot::source::{SourceSnapshot, resolve_source_snapshot};
 use crate::application::task::{TaskAutomationPort, TaskDistributedPort, TaskJobPort};
-use crate::application::task::{TaskListFilter, VerifierAssignment};
+use crate::application::task::{TaskListFilter, crew_named_by};
 
-/// Refuting a pilot finding takes the strongest reading of the source, so
-/// every triager is drawn from this tier.
+/// Refuting a pilot finding takes the strongest reading of the source, so a
+/// triager with no purpose pool to draw from comes from this tier.
 const TRIAGE_TIER: TaskComplexity = TaskComplexity::Hard;
 
-/// What one escalation triage run reads: the job's `subject` input.
+/// What one escalation triage run reads: the job's `subject` input. Only a
+/// `proposed` task's held pilot assessment (`pilot_warnings_held`) remains;
+/// blocked tasks are decided by final recovery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Subject {
-    /// A `proposed` task's held pilot assessment (`pilot_warnings_held`).
     PilotWarning,
-    /// A `blocked` task's block episode awaiting triage (`block_escalated`).
-    Block,
 }
 
 impl Subject {
@@ -43,40 +41,42 @@ impl Subject {
             None | Some(Value::Null) => Ok(Self::PilotWarning),
             Some(Value::String(subject)) => match subject.as_str() {
                 "" | "pilot_warning" => Ok(Self::PilotWarning),
-                "block" => Ok(Self::Block),
+                "block" => Err(DispatchError::action_failed(
+                    action,
+                    "the `block` subject is retired: final recovery decides blocked tasks and \
+                     opens the decision request an operator answers. Disable or delete the \
+                     `blocked-task-triage` routine; only `pilot_warning` remains",
+                )),
                 other => Err(DispatchError::action_failed(
                     action,
-                    format!("subject `{other}` is not one of pilot_warning or block"),
+                    format!("subject `{other}` is not pilot_warning"),
                 )),
             },
             Some(_) => Err(DispatchError::action_failed(
                 action,
-                "subject must be a string: pilot_warning or block",
+                "subject must be the string pilot_warning",
             )),
         }
     }
 
     fn as_str(self) -> &'static str {
-        match self {
-            Self::PilotWarning => "pilot_warning",
-            Self::Block => "block",
-        }
+        "pilot_warning"
     }
 
     /// The trigger kind whose members are this subject.
     fn trigger_kind(self) -> StateTriggerKind {
-        match self {
-            Self::PilotWarning => StateTriggerKind::PilotWarningsHeld,
-            Self::Block => StateTriggerKind::BlockEscalated,
-        }
+        StateTriggerKind::PilotWarningsHeld
+    }
+
+    /// The purpose whose `workflow.purpose_crews` pool this subject's
+    /// triagers are drawn from while it is set.
+    fn purpose(self) -> Option<CrewPurpose> {
+        Some(CrewPurpose::PilotWarningTriage)
     }
 
     /// The status a candidate of this subject holds.
     fn status(self) -> TaskStatus {
-        match self {
-            Self::PilotWarning => TaskStatus::Proposed,
-            Self::Block => TaskStatus::Blocked,
-        }
+        TaskStatus::Proposed
     }
 }
 
@@ -105,7 +105,6 @@ pub(crate) fn prepare(
     // revision as finding verification does. A non-Git workspace pins none,
     // as a task pilot does, and its triagers report no observed revision.
     let source = resolve_source_snapshot(runtime, action, input, &workspace_root)?;
-    let now = OnceCell::new();
     prepare_batch(
         runtime,
         action,
@@ -132,7 +131,7 @@ pub(crate) fn prepare(
             },
             // A task in the subject's status that holds nothing is not a
             // candidate at all.
-            silent_reasons: &["not_held", "not_blocked"],
+            silent_reasons: &["not_held"],
             before_workspace: vec![("subject", json!(subject.as_str()))],
             before_task_count: Vec::new(),
         },
@@ -142,31 +141,44 @@ pub(crate) fn prepare(
             if held.contains_key(&task.id) {
                 return Ok(Qualification::Rejected("already_triaging"));
             }
-            let now = *now.get_or_init(Utc::now);
-            match qualify(runtime, subject, task, now)? {
+            match qualify(runtime, subject, task)? {
                 Ok((row, author)) => Ok(Qualification::Selected((row, author))),
                 Err(reason) => Ok(Qualification::Rejected(reason)),
             }
         },
         |task, (mut row, author): (Value, Option<String>)| {
-            let triager = triager(runtime, task, author.as_deref())?;
+            let triager = triager(runtime, subject, task, author.as_deref())?;
             let crew = triager.crew.clone();
             row["crew"] = json!(crew);
             row["tier"] = json!(triager.tier);
+            row["crew_source"] = json!(triager.source);
+            row["eligible_pool"] = json!(triager.eligible_pool);
             Ok((row, crew))
         },
         skipped_detail,
-        |_, _| None,
+        |tasks, task_ids| {
+            let draws = tasks
+                .iter()
+                .filter(|task| task_ids.iter().any(|id| task["task_id"] == *id))
+                .map(|task| {
+                    json!({
+                        "task_id": task["task_id"],
+                        "source": task["crew_source"],
+                        "eligible_pool": task["eligible_pool"],
+                    })
+                })
+                .collect::<Vec<_>>();
+            Some(("draws", json!(draws)))
+        },
     )
 }
 
 /// `task`'s prepared row and the crew to pass over when it qualifies for
-/// `subject` at `now`, else the stable reason it does not.
+/// `subject`, else the stable reason it does not.
 fn qualify(
     runtime: &OrbitRuntime,
     subject: Subject,
     task: &Task,
-    now: chrono::DateTime<Utc>,
 ) -> Result<Result<(Value, Option<String>), &'static str>, OrbitError> {
     Ok(match subject {
         Subject::PilotWarning => match runtime.pilot_warning_candidacy_of(task)? {
@@ -187,23 +199,6 @@ fn qualify(
             }
             other => Err(other.as_str()),
         },
-        // The shared triage rule, exactly as the tool and the trigger apply
-        // it. No crew wrote a block, so the draw passes over none.
-        Subject::Block => match runtime.block_triage_candidacy_of(task, now)? {
-            TriageCandidacy::Qualifies(episode) => Ok((
-                json!({
-                    "task_id": task.id,
-                    "title": task.title,
-                    "status": task.status,
-                    "episode": episode.key(),
-                    "blocked_at": episode.blocked_at.to_rfc3339_opts(SecondsFormat::Secs, true),
-                    "basis": episode.basis,
-                    "run_id": episode.run_id,
-                }),
-                None,
-            )),
-            other => Err(other.as_str()),
-        },
     })
 }
 
@@ -222,24 +217,72 @@ fn assessment_author(
         .and_then(|state| runtime.pilot_assessment_crew(state)))
 }
 
-/// `task`'s triager: a hard-tier draw that can inspect source natively,
-/// passing over the assessment's author while the pool offers another, else
-/// the inspection-capable default crew, exactly as a finding verifier is
-/// drawn. With neither, preparation fails with `inspection_crew_unavailable`
-/// before any triager launches.
+/// One triager draw: the crew, where it was drawn from and the weights the
+/// draw ran on.
+struct TriagerDraw {
+    crew: String,
+    /// The complexity tier drawn from; `None` for a purpose-pool draw.
+    tier: Option<TaskComplexity>,
+    /// `purpose:<purpose>`, `pool:<tier>`, or `default`.
+    source: String,
+    eligible_pool: Vec<ActivityCrewPoolMember>,
+}
+
+/// `task`'s triager: a draw from the subject's `workflow.purpose_crews` pool,
+/// when it has one that is set and holds a member that can inspect source
+/// natively, else the hard tier's inspection-capable draw, else the
+/// inspection-capable default crew, exactly as a finding verifier is drawn.
+/// Either draw passes over the assessment's author while the pool offers
+/// another. With none eligible, preparation fails with
+/// `inspection_crew_unavailable` before any triager launches.
 fn triager(
     runtime: &OrbitRuntime,
+    subject: Subject,
     task: &Task,
     author: Option<&str>,
-) -> Result<VerifierAssignment, OrbitError> {
+) -> Result<TriagerDraw, OrbitError> {
     let avoid = author.into_iter().collect::<Vec<_>>();
+    if let Some(purpose) = subject.purpose()
+        && let Some((candidates, _)) = runtime.purpose_pool_members(purpose, true)?
+    {
+        let preferred = candidates
+            .iter()
+            .filter(|candidate| {
+                !avoid
+                    .iter()
+                    .any(|label| crew_named_by(&candidate.crew, label))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let candidates = if preferred.is_empty() {
+            candidates
+        } else {
+            preferred
+        };
+        let source = CrewSource::Purpose(purpose.as_str().to_string()).to_string();
+        let mut ticket = runtime
+            .seeded_crew_draw_tickets(format!("{ESCALATION_TRIAGE_JOB}:{}:{purpose}", task.id));
+        let draw = runtime.crew_pool_draw(candidates, &source, &mut *ticket)?;
+        return Ok(TriagerDraw {
+            crew: draw.crew.name,
+            tier: None,
+            source,
+            eligible_pool: draw.eligible_pool,
+        });
+    }
     if let Some(assignment) = runtime.draw_finding_verifier(task, TRIAGE_TIER, &avoid)? {
-        return Ok(assignment);
+        return Ok(TriagerDraw {
+            source: format!("pool:{}", assignment.tier),
+            crew: assignment.crew,
+            tier: Some(assignment.tier),
+            eligible_pool: assignment.eligible_pool,
+        });
     }
     let crew = runtime.inspection_default_crew(TRIAGE_TIER)?;
-    Ok(VerifierAssignment {
+    Ok(TriagerDraw {
         crew: crew.name,
-        tier: TRIAGE_TIER,
+        tier: Some(TRIAGE_TIER),
+        source: "default".to_string(),
         eligible_pool: Vec::new(),
     })
 }
@@ -255,15 +298,7 @@ fn skipped_detail(reason: &str, holders: Option<&BTreeSet<String>>) -> String {
         "operator_decided" => {
             "an operator recorded a task-pilot admission decision on the latest assessment".into()
         }
-        "triaged" => "the latest assessment or block episode was already triaged".into(),
-        "human_intervened" => "someone outside Orbit's automation acted after the block".into(),
-        "unexplained_change" => "the task changed after the block with no recorded actor".into(),
-        "not_escalated" => "the block's final-recovery decision is not an escalation".into(),
-        "awaiting_backstop" => {
-            "no decision yet; the blocked-task backstop may still recover it".into()
-        }
-        "no_episode" => "no history entry records the block".into(),
-        "not_blocked" => "the task is not blocked".into(),
+        "triaged" => "the latest assessment was already triaged".into(),
         _ => reason.into(),
     }
 }

@@ -1,4 +1,4 @@
-//! `orbit browser-kit` — install, report, verify and remove the host's
+//! `orbit config browser-kit` — install, report, verify and remove the host's
 //! headless browser kit.
 //!
 //! Workers that change a UI check it by scripting headless Chromium through

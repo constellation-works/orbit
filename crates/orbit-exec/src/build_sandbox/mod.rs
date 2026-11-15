@@ -10,8 +10,9 @@
 //! - **Linux** (`linux-bwrap-build-v1`): Bubblewrap with a constructed root,
 //!   every namespace unshared, a fresh `/proc` and a minimal `/dev`. The
 //!   `build` phase has no network namespace to speak of; `fetch` shares the
-//!   host network under a Landlock ruleset that allows only outbound TCP to
-//!   port 443.
+//!   host network under a Landlock ruleset that permits TCP connects only to
+//!   port 443 (including loopback), denies TCP binds, and leaves UDP (DNS
+//!   included) unrestricted.
 //! - **macOS** (`macos-sandbox-build-v1`): a deny-default SBPL profile with
 //!   no network. macOS runs no `fetch` phase ([`BUILD_FETCH_PHASE_SUPPORTED`]).
 //!
@@ -23,6 +24,9 @@
 mod linux;
 mod macos;
 mod script;
+mod script_macos;
+mod script_macos_inputs;
+mod script_roots;
 mod supervise;
 
 use std::ffi::OsStr;
@@ -34,10 +38,15 @@ use orbit_common::OrbitError;
 pub use linux::compile_linux_build_argv;
 pub use macos::compile_macos_build_profile;
 pub use script::{
-    SCRIPT_LOG_CAP_BYTES, SCRIPT_SANDBOX_MOUNT, SCRIPT_SCRATCH_DIRS, SCRIPT_STDOUT_CAP_BYTES,
-    SCRIPT_TERMINATION_GRACE, ScriptRunEnd, ScriptSandboxRequest, ScriptSandboxRun,
-    ScriptSandboxSpec, compile_linux_script_argv, probe_script_sandbox, run_script_sandboxed,
+    SCRIPT_HTTPS_PORT, SCRIPT_LOG_CAP_BYTES, SCRIPT_OPEN_FILES_LIMIT, SCRIPT_SANDBOX_MOUNT,
+    SCRIPT_SCRATCH_DIRS, SCRIPT_STDOUT_CAP_BYTES, SCRIPT_TERMINATION_GRACE, ScriptRunEnd,
+    ScriptSandboxInput, ScriptSandboxNetwork, ScriptSandboxRequest, ScriptSandboxRun,
+    ScriptSandboxSpec, compile_linux_script_argv, probe_script_sandbox,
+    probe_script_sandbox_network, run_script_sandboxed, script_input_conflict,
+    script_scratch_path_in_sandbox,
 };
+pub use script_macos::{SCRIPT_MACOS_PROFILE_GAPS, compile_macos_script_profile};
+pub use script_roots::{ScriptRootAccess, probe_script_root};
 pub use supervise::{BuildLog, PLUGIN_BUILD_LOG_CAP_BYTES};
 
 /// The size the build directory may reach before the phase is killed (§3.4).
@@ -59,8 +68,10 @@ pub const BUILD_FETCH_PHASE_SUPPORTED: bool = cfg!(not(target_os = "macos"));
 pub enum BuildPhaseNetwork {
     /// The `build` phase: no network.
     None,
-    /// The `fetch` phase: outbound TCP to [`PLUGIN_BUILD_FETCH_PORT`] and name
-    /// resolution, nothing else.
+    /// Linux `fetch` permits TCP connections only to [`PLUGIN_BUILD_FETCH_PORT`],
+    /// including loopback, denies TCP binds, and does not restrict UDP (including
+    /// DNS). macOS
+    /// refuses fetch phases; other platforms do not support builds.
     Https,
 }
 

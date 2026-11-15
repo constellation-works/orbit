@@ -1,0 +1,26 @@
+Freeze a new season's noise scales from the settled window
+
+Usage: orbit agents rank calibrate [OPTIONS]
+
+Options:
+      --window <WINDOW>
+          Time window, such as 7d or 30d [default: 30d]
+
+      --until <WHEN>
+          End before the settle lag: an RFC 3339 instant or a duration ago such as 7d [default: now]
+
+      --settle-lag <DURATION>
+          How long before --until the ranked window ends [default: 14d]
+
+      --execution <SCOPE>
+          Which tasks count by derived execution: managed, all or interactive [default: managed]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

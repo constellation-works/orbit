@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use orbit_common::fs::git::{git_common_dir, run_git};
 use orbit_common::governance::authorization::TASK_GRANT_TOOLS_OPERATION_ID;
@@ -33,6 +34,13 @@ impl RuntimeKernel {
         mut tool_context: ToolContext,
         capability_enforcement: CapabilityEnforcement,
     ) -> Result<Value, OrbitError> {
+        // Every check below keys on the operation a family call reaches.
+        let (operation, input) = if orbit_types::tool::tool_family(name).is_some() {
+            self.tool_registry().resolve_tool_call(name, input)?
+        } else {
+            (name.to_string(), input)
+        };
+        let name = operation.as_str();
         if super::worker_coordination::is_coordination_tool(name) {
             super::worker_coordination::check_worker_host_input(
                 &input,
@@ -171,6 +179,10 @@ impl RuntimeKernel {
     ) -> Result<(), OrbitError> {
         self.check_tool_enabled(name)?;
         check_tool_active(self.tool_registry(), name)?;
+        let mut session = tool_context.session_context.clone();
+        if self.admit_application_call(name, input, &mut session, capability_enforcement)? {
+            return Ok(());
+        }
 
         // ORB-10453: the capability chokepoint. Every tool caller in the
         // workspace reaches the registry through this function, so this is the
@@ -188,6 +200,9 @@ impl RuntimeKernel {
                 capability_enforcement,
             )?;
         }
+        // Input-dependent floors. Keep them in step with
+        // `INPUT_DEPENDENT_OPERATION_FLOORS`, which application consent reads
+        // to refuse such inputs outright.
         if (name == "orbit.pipeline.invoke"
             && input.get("default_input") == Some(&Value::Bool(true)))
             || (name == "orbit.auto_task.update" && input.get("expected_enabled").is_some())
@@ -202,8 +217,14 @@ impl RuntimeKernel {
         // [granted-tools §1] A grant lifts an activity's deny list, so writing
         // one is operator authority, refused (never stripped) for anyone else.
         // Keyed on presence: an empty list clears a grant, which is a change.
-        if matches!(name, "orbit.task.add" | "orbit.task.update")
-            && input.get(GRANTED_TOOLS_FIELD).is_some()
+        // An auto-task definition's grant is copied to every task it mints.
+        if matches!(
+            name,
+            "orbit.task.add"
+                | "orbit.task.update"
+                | "orbit.auto_task.add"
+                | "orbit.auto_task.update"
+        ) && input.get(GRANTED_TOOLS_FIELD).is_some()
         {
             self.authorize_tool_operation(
                 TASK_GRANT_TOOLS_OPERATION_ID,
@@ -230,12 +251,17 @@ impl RuntimeKernel {
     /// not exist (design `docs/design/plugins/1_scope.md` §4.1, §4.8). That
     /// only holds if inactive also means uncallable, which is here: the
     /// registry is the one place every workspace caller passes through.
-    fn check_tool_enabled(&self, name: &str) -> Result<(), OrbitError> {
-        if let Some(stored) = self.stores().tools().get_tool(name)?
+    /// Enforce a persisted tool disable before built-in application dispatch.
+    /// A family operation is disabled with its family, the tool an operator
+    /// names.
+    pub fn check_tool_enabled(&self, name: &str) -> Result<(), OrbitError> {
+        let tool = orbit_types::tool::tool_family_of_operation(name)
+            .map_or(name, |(family, _)| family.name);
+        if let Some(stored) = self.stores().tools().get_tool(tool)?
             && !stored.enabled
         {
             return Err(OrbitError::Execution(format!(
-                "tool '{name}' is disabled; enable it with: orbit tool enable {name}"
+                "tool '{tool}' is disabled; enable it with: orbit tool enable {tool}"
             )));
         }
         Ok(())
@@ -290,7 +316,8 @@ pub fn check_activity_tool_policy(
 ) -> Result<(), OrbitError> {
     if !tool_context.allowed_tools.is_empty() && !tool_allowed(name, &tool_context.allowed_tools) {
         return Err(OrbitError::PolicyDenied(format!(
-            "tool '{name}' is not in the activity allowlist"
+            "tool '{}' is not in the activity allowlist",
+            orbit_types::tool::tool_call_name(name)
         )));
     }
     if let Some(policy) = tool_context
@@ -384,14 +411,48 @@ fn canonical_repo_root(runtime: &RuntimeKernel) -> PathBuf {
         .unwrap_or_else(|_| runtime.context.paths().repo_root.clone())
 }
 
-fn active_git_checkout_root(
+/// Memoised positively verified checkout roots, keyed by `(canonical cwd,
+/// canonical repo root)`. A verified root does not change for the life of a
+/// process, so a long-lived MCP server pays any git fallback once per cwd
+/// instead of on every tool call. A `None` result is never memoised: the
+/// git probes collapse a timeout or execution failure into `None`, so a
+/// cached `None` would poison the pair for the process lifetime after one
+/// transient outage. Re-probing an unrecognised checkout costs git spawns
+/// but always falls back to the registered root, as before.
+type ActiveCheckoutRootCache = HashMap<(PathBuf, PathBuf), PathBuf>;
+
+static ACTIVE_CHECKOUT_ROOT_CACHE: OnceLock<Mutex<ActiveCheckoutRootCache>> = OnceLock::new();
+
+fn active_checkout_root_cache() -> MutexGuard<'static, ActiveCheckoutRootCache> {
+    ACTIVE_CHECKOUT_ROOT_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+
+pub(crate) fn active_git_checkout_root(
     canonical_repo_root: &Path,
     tool_context: &ToolContext,
 ) -> Option<PathBuf> {
     let cwd = tool_context.cwd.as_deref()?;
     let cwd = Path::new(cwd);
     let canonical_cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    let key = (canonical_cwd.clone(), canonical_repo_root.to_path_buf());
+    if let Some(cached) = active_checkout_root_cache().get(&key) {
+        return Some(cached.clone());
+    }
+    let resolved = active_git_checkout_root_uncached(canonical_repo_root, cwd, &canonical_cwd);
+    if let Some(root) = &resolved {
+        active_checkout_root_cache().insert(key, root.clone());
+    }
+    resolved
+}
 
+fn active_git_checkout_root_uncached(
+    canonical_repo_root: &Path,
+    cwd: &Path,
+    canonical_cwd: &Path,
+) -> Option<PathBuf> {
     // An ordinary path in the runtime checkout needs no git probes. A nested
     // checkout has its own .git marker, even when it is inside this path.
     if canonical_cwd.starts_with(canonical_repo_root) {
@@ -402,6 +463,12 @@ fn active_git_checkout_root(
         if !nested_checkout {
             return Some(canonical_repo_root.to_path_buf());
         }
+    }
+
+    if let Some(checkout_root) =
+        linked_worktree_root_from_gitfile(canonical_cwd, canonical_repo_root)
+    {
+        return Some(checkout_root);
     }
 
     let checkout_root = git_checkout_root(cwd)?;
@@ -418,6 +485,47 @@ fn active_git_checkout_root(
             &checkout_root,
         );
     owned_checkout.then_some(checkout_root)
+}
+
+/// Answer the standard linked-worktree case from files, without git.
+///
+/// The nearest ancestor carrying a `.git` entry decides: only a `.git`
+/// *file* whose `gitdir:`/`commondir` resolve to the main checkout rooted
+/// at `canonical_repo_root` (see
+/// [`crate::paths::resolve_main_repo_from_worktree_gitfile`]) proves the
+/// ancestor is an owned linked worktree. Every other shape — a `.git`
+/// directory, a submodule gitfile, a worktree of another repository, or a
+/// registered checkout that is itself linked (whose main root differs
+/// from `canonical_repo_root`) — is inconclusive and returns `None`, so
+/// the caller falls back to the git probes and stays identical to them.
+/// Git location overrides can relocate git's own answer, so with one set
+/// only git can say.
+fn linked_worktree_root_from_gitfile(
+    canonical_cwd: &Path,
+    canonical_repo_root: &Path,
+) -> Option<PathBuf> {
+    const GIT_LOCATION_OVERRIDES: [&str; 3] = ["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"];
+    if GIT_LOCATION_OVERRIDES
+        .iter()
+        .any(|name| std::env::var_os(name).is_some())
+    {
+        return None;
+    }
+    for ancestor in canonical_cwd.ancestors() {
+        let git_path = ancestor.join(".git");
+        if git_path.symlink_metadata().is_err() {
+            continue;
+        }
+        if !git_path.is_file() {
+            return None;
+        }
+        let main_root = crate::paths::resolve_main_repo_from_worktree_gitfile(&git_path)?;
+        let registered = canonical_repo_root
+            .canonicalize()
+            .unwrap_or_else(|_| canonical_repo_root.to_path_buf());
+        return (main_root == registered).then(|| ancestor.to_path_buf());
+    }
+    None
 }
 
 /// The checkout `path` sits in, or `None` when Git cannot say. A Git that

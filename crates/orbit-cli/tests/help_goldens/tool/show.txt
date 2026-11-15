@@ -1,0 +1,21 @@
+Show detailed information about a tool
+
+Usage: orbit tool show [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+          Tool name
+
+Options:
+      --parameter <NAME>
+          Print one parameter with its complete description
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

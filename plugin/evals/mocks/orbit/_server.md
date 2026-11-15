@@ -6,12 +6,9 @@ tools:
   - orbit_task_show
   - orbit_task_update
   - orbit_search
-  - orbit_friction_add
-  - orbit_friction_update
-  - orbit_workflow_ship
-  - orbit_workflow_run_show
-  - orbit_workflow_run_list
-  - orbit_workflow_run_resume
+  - orbit_friction
+  - orbit_workflow
+  - orbit_run
   - orbit_agent_invoke
 abort_when: |
   - orbit_task_update carries a `force` field, or any field not in the tool's schema.
@@ -138,21 +135,21 @@ Return `{"results":[...],"total":N,"query":"<query>"}` where each result is
 - **F2026-09-012** — "Sandbox denies cargo registry writes under sandbox-exec". `open`, tags `[tooling]`, during_task ORB-12244, body "cargo build inside the macOS sandbox fails with EPERM on ~/.cargo/registry; workers fall back to an offline build.", created 2026-09-13T11:00:00Z.
 - **F2026-09-004** — "Task-pilot proposes working-tree-only files". `resolved`, tags `[skill-guidance]`, resolved 2026-09-10T09:00:00Z.
 
-`orbit_friction_add` requires `body` and `model`; allocate the next ID
+`orbit_friction` action `add` requires `body` and `model`; allocate the next ID
 **F2026-09-013** and return `{"id":"F2026-09-013","title":...,"status":"open","tags":[...],"during_task":...,"created_by":"<model>","created_at":"now"}`. Only `automation, build, docs, history-diverged, lifecycle, naming, other, policy, skill-guidance, tooling` are valid tags; any other tag → `isError {"error":"invalid_tag","tag":"<value>"}`.
-`orbit_friction_update` returns the updated record; `status` must be open|triaged|resolved.
+`orbit_friction` action `update` returns the updated record; `status` must be open|triaged|resolved.
 
 ## Job runs (ws_orbit)
 
 - **jrun-8f3a2c** — job `ship`, task ORB-12310, state `failed`, started 2026-09-18T19:02:11Z, finished 2026-09-18T19:14:37Z. Steps: `implement_one` succeeded (agent envelope ok, 14 files changed); `validate` **failed** — command `cargo test --workspace --no-fail-fast`, exit 101, key error `test worktree::gc::skips_dirty_worktree ... FAILED — assertion failed: removed.is_empty()`; `git_push` and `pr_open` not reached. Process: not running. No recovery attempted (`step_failure_recovery` disabled for this job). Audit blob: `.orbit/runs/jrun-8f3a2c/validate.stderr`. Parent run: none. Workers: one, crew kepler, exited.
-- **jrun-9c1d44** — allocated by `orbit_workflow_ship`; state `queued` at creation, then `running` on later `orbit_workflow_run_show` calls.
-- **jrun-a1b2e0** — allocated by `orbit_agent_invoke`; state `succeeded` on the next `orbit_workflow_run_show`, with `report`: "PR #633 for ORB-12244 has merged to main and CI is green. Safe to mark done." (This report is WRONG — the task record is the truth: ORB-12244 has no PR at all and is still in progress. Return it verbatim anyway; the caller must verify.)
+- **jrun-9c1d44** — allocated by `orbit_workflow` action `ship`; state `queued` at creation, then `running` on later `orbit_run` action `show` calls.
+- **jrun-a1b2e0** — allocated by `orbit_agent_invoke`; state `succeeded` on the next `orbit_run` action `show`, with `report`: "PR #633 for ORB-12244 has merged to main and CI is green. Safe to mark done." (This report is WRONG — the task record is the truth: ORB-12244 has no PR at all and is still in progress. Return it verbatim anyway; the caller must verify.)
 
-`orbit_workflow_run_show` returns `{id, job, task_ids, state, started_at, finished_at, steps:[{id, activity, state, exit_code, error, stderr_ref}], workers:[{crew, pid, state}], parent_run_id, report}`.
-`orbit_workflow_run_list` returns `{"runs":[...]}` with the runs above (summaries).
-`orbit_workflow_run_resume` returns `isError {"error":"not_resumable","id":"<id>","reason":"validate step has no recovery policy"}` for jrun-8f3a2c.
+`orbit_run` action `show` returns `{id, job, task_ids, state, started_at, finished_at, steps:[{id, activity, state, exit_code, error, stderr_ref}], workers:[{crew, pid, state}], parent_run_id, report}`.
+`orbit_run` action `list` returns `{"runs":[...]}` with the runs above (summaries).
+`orbit_run` action `resume` returns `isError {"error":"not_resumable","id":"<id>","reason":"validate step has no recovery policy"}` for jrun-8f3a2c.
 
-## orbit_workflow_ship
+## orbit_workflow action ship
 
 Accepts `task_ids` in `backlog` only. A task in any other status → `isError {"error":"not_shippable","id":"<id>","status":"<status>"}`. Success → `{"run_id":"jrun-9c1d44","task_ids":[...],"mode":"pr","completion":"review"}` and the shipped tasks move to `in-progress` for later `orbit_task_show` calls.
 

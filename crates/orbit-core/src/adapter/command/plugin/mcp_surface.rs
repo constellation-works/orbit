@@ -102,13 +102,13 @@ impl PluginStamp {
 }
 
 #[derive(PartialEq, Eq)]
-struct FileStamp {
+pub(crate) struct FileStamp {
     link: Option<(SystemTime, u64, bool)>,
     target: Option<(SystemTime, u64)>,
 }
 
 impl FileStamp {
-    fn read(path: &Path) -> Self {
+    pub(crate) fn read(path: &Path) -> Self {
         Self {
             link: std::fs::symlink_metadata(path).ok().and_then(|metadata| {
                 Some((
@@ -126,14 +126,14 @@ impl FileStamp {
 
 /// Detect database replacement without treating every audit write as a change.
 #[derive(PartialEq, Eq)]
-struct FileIdentity {
+pub(crate) struct FileIdentity {
     created: Option<SystemTime>,
     #[cfg(unix)]
     device_inode: (u64, u64),
 }
 
 impl FileIdentity {
-    fn read(path: &Path) -> Result<Self, OrbitError> {
+    pub(crate) fn read(path: &Path) -> Result<Self, OrbitError> {
         let metadata = std::fs::metadata(path)?;
         Ok(Self {
             created: metadata.created().ok(),
@@ -147,41 +147,25 @@ impl FileIdentity {
 }
 
 impl HostPluginMcpCache {
+    /// Read the host's installed plugin rows through the cached read-only store.
+    /// The rows are read on each call so a plugin lifecycle change is visible,
+    /// while a warm cache avoids resolving config or opening another store.
+    /// A replaced database is reopened after its file identity changes.
+    pub fn host_installed_plugin_rows(
+        &self,
+        global_root: &Path,
+    ) -> Result<Vec<InstalledPlugin>, OrbitError> {
+        let mut cached = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let host = ensure_cached_host(&mut cached, global_root)?;
+        host.store.list_plugins()
+    }
+
     /// Return the same snapshot while plugin admission inputs remain unchanged.
     /// Failed host config or store reads never publish an empty plugin surface.
     /// Refused contributions are rechecked at each boundary to observe repairs.
     pub fn resolve(&self, global_root: &Path) -> Result<Arc<HostPluginMcpSurface>, OrbitError> {
         let mut cached = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        let config_stamp = FileStamp::read(&global_root.join("config.toml"));
-        if cached
-            .as_ref()
-            .is_none_or(|host| host.global_root != global_root || host.config_stamp != config_stamp)
-        {
-            // Drop the old state first: a failed config edit must not restore it.
-            *cached = None;
-            let config = super::global_only_config(global_root)?;
-            let database_identity = FileIdentity::read(&config.persistence.audit_db)?;
-            let store = Store::open_read_only(&config.persistence.audit_db)?;
-            *cached = Some(CachedHost {
-                global_root: global_root.to_path_buf(),
-                config_stamp,
-                config,
-                database_identity,
-                store,
-                surface: None,
-            });
-        }
-        let Some(host) = cached.as_mut() else {
-            return Err(OrbitError::Store(
-                "plugin discovery cache unavailable".into(),
-            ));
-        };
-        let database_identity = FileIdentity::read(&host.config.persistence.audit_db)?;
-        if host.database_identity != database_identity {
-            host.surface = None;
-            host.store = Store::open_read_only(&host.config.persistence.audit_db)?;
-            host.database_identity = database_identity;
-        }
+        let host = ensure_cached_host(&mut cached, global_root)?;
         let stamp = PluginStamp::read(&host.store, global_root)?;
         if let Some((previous, surface)) = &host.surface
             && *previous == stamp
@@ -228,4 +212,41 @@ impl HostPluginMcpCache {
         }
         Ok(surface)
     }
+}
+
+fn ensure_cached_host<'a>(
+    cached: &'a mut Option<CachedHost>,
+    global_root: &Path,
+) -> Result<&'a mut CachedHost, OrbitError> {
+    let config_stamp = FileStamp::read(&global_root.join("config.toml"));
+    if cached
+        .as_ref()
+        .is_none_or(|host| host.global_root != global_root || host.config_stamp != config_stamp)
+    {
+        // Drop the old state first: a failed config edit must not restore it.
+        *cached = None;
+        let config = super::global_only_config(global_root)?;
+        let database_identity = FileIdentity::read(&config.persistence.audit_db)?;
+        let store = Store::open_read_only(&config.persistence.audit_db)?;
+        *cached = Some(CachedHost {
+            global_root: global_root.to_path_buf(),
+            config_stamp,
+            config,
+            database_identity,
+            store,
+            surface: None,
+        });
+    }
+    let Some(host) = cached.as_mut() else {
+        return Err(OrbitError::Store(
+            "plugin discovery cache unavailable".into(),
+        ));
+    };
+    let database_identity = FileIdentity::read(&host.config.persistence.audit_db)?;
+    if host.database_identity != database_identity {
+        host.surface = None;
+        host.store = Store::open_read_only(&host.config.persistence.audit_db)?;
+        host.database_identity = database_identity;
+    }
+    Ok(host)
 }

@@ -35,6 +35,7 @@ impl Prompter for StdinPrompter {
         let stderr = io::stderr();
         let mut out = stderr.lock();
         prompt_stdin::read_trimmed_line(prompt, &mut out)
+            .map_err(|error| prompt_stdin::with_remedy(error, prompt_stdin::PROMPT_REMEDY))
     }
 }
 

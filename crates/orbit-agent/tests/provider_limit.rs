@@ -1,14 +1,15 @@
-//! Public provider timeout derivation and usage-limit reset instants, including
-//! resets read across the year boundary.
+//! Public provider timeout derivation, usage-limit reset instants (including
+//! resets read across the year boundary) and billing-quota classification.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::time::Duration;
 
 use chrono::{FixedOffset, TimeZone, Utc};
 use orbit_agent::{
-    apply_antigravity_print_timeout, provider_usage_limit, provider_usage_limit_details,
-    provider_usage_windows,
+    apply_antigravity_print_timeout, provider_quota_exceeded, provider_usage_limit,
+    provider_usage_limit_details, provider_usage_windows,
 };
+use orbit_types::workflow::activity_job::Provider;
 
 #[test]
 fn january_reset_seen_in_late_december_holds_until_next_january() {
@@ -159,7 +160,7 @@ fn args(values: &[&str]) -> Vec<String> {
 
 #[test]
 fn antigravity_reports_the_print_timeout_it_put_in_argv() {
-    for provider in ["antigravity", "agy"] {
+    for provider in [Provider::Antigravity] {
         let mut derived = args(&["--model", "m"]);
         let chosen =
             apply_antigravity_print_timeout(provider, &mut derived, Duration::from_secs(60));
@@ -214,7 +215,12 @@ fn antigravity_reports_the_print_timeout_it_put_in_argv() {
         assert_eq!(longer, args(&["--print-timeout", "9m30s"]));
     }
 
-    for provider in ["claude", "codex", "gemini", "grok"] {
+    for provider in [
+        Provider::Claude,
+        Provider::Codex,
+        Provider::Gemini,
+        Provider::Grok,
+    ] {
         let mut argv = args(&["--model", "m"]);
         let chosen = apply_antigravity_print_timeout(provider, &mut argv, Duration::from_secs(600));
         assert_eq!(chosen, None, "{provider}");
@@ -256,6 +262,27 @@ fn grok_failure_texts_are_classified_as_provider_usage_limits() {
     );
 }
 
+/// [ORB-24803] Claude Code's billing diagnostic, as its terminal `result`
+/// frame carries it, is a quota exhaustion. Explicit usage-limit wording in
+/// the same text keeps precedence, so its reset stays available to scheduling.
+#[test]
+fn claude_credit_balance_text_is_quota_exhaustion_unless_a_usage_limit_is_named() {
+    let billing = "Credit balance is too low";
+    assert!(
+        provider_quota_exceeded(billing),
+        "Claude's exact billing diagnostic must classify as quota exhaustion"
+    );
+    assert!(!provider_usage_limit(billing));
+
+    let overlapping =
+        format!("{billing}\nYou've hit your limit · resets Jan 2, 3am (America/Los_Angeles)");
+    assert!(provider_usage_limit(&overlapping));
+    assert!(
+        !provider_quota_exceeded(&overlapping),
+        "an explicit usage limit must take precedence over the billing phrase"
+    );
+}
+
 /// Muse Code 1.4.12 allowance payload recorded on macOS at 2026-10-23T04:13Z.
 /// The fixture keeps that payload and minimal surrounding stream records.
 const MUSE_USAGE: &[u8] = include_bytes!("provider_invocation/fixtures/muse_usage.jsonl");
@@ -271,7 +298,7 @@ const ANTIGRAVITY_USAGE: &[u8] =
 fn antigravity_quota_command_reports_scoped_windows_without_reading_answer_text() {
     use orbit_types::telemetry::ProviderLimitSource;
     let now = Utc.with_ymd_and_hms(2026, 10, 24, 5, 37, 0).unwrap();
-    let readings = provider_usage_windows("antigravity", ANTIGRAVITY_USAGE, None, now);
+    let readings = provider_usage_windows(Provider::Antigravity, ANTIGRAVITY_USAGE, None, now);
     assert_eq!(
         readings.len(),
         9,
@@ -317,7 +344,12 @@ fn antigravity_quota_command_reports_scoped_windows_without_reading_answer_text(
         .as_array_mut()
         .unwrap()
         .pop();
-    let readings = provider_usage_windows("antigravity", shared.to_string().as_bytes(), None, now);
+    let readings = provider_usage_windows(
+        Provider::Antigravity,
+        shared.to_string().as_bytes(),
+        None,
+        now,
+    );
     assert_eq!(readings.len(), 6);
     assert_eq!(readings[0].model.as_deref(), Some("gemini"));
 }
@@ -336,8 +368,13 @@ fn antigravity_quota_command_ignores_unknown_and_invalid_control_data() {
         json!({"status":"SUCCESS", "command":{"name":"other", "data":original["command"]["data"]}}),
     ] {
         assert!(
-            provider_usage_windows("antigravity", body.to_string().as_bytes(), None, now)
-                .is_empty()
+            provider_usage_windows(
+                Provider::Antigravity,
+                body.to_string().as_bytes(),
+                None,
+                now
+            )
+            .is_empty()
         );
     }
     let bucket = original["command"]["data"]["groups"][0]["buckets"][0].clone();
@@ -357,14 +394,24 @@ fn antigravity_quota_command_ignores_unknown_and_invalid_control_data() {
         bucket[field] = value;
         let body = json!({"status":"SUCCESS", "command":{"name":"usage", "data":{"groups":[{"buckets":[bucket]}]}}});
         assert!(
-            provider_usage_windows("antigravity", body.to_string().as_bytes(), None, now)
-                .is_empty(),
+            provider_usage_windows(
+                Provider::Antigravity,
+                body.to_string().as_bytes(),
+                None,
+                now
+            )
+            .is_empty(),
             "invalid {field}"
         );
     }
-    assert!(provider_usage_windows("antigravity", b"not json", None, now).is_empty());
+    assert!(provider_usage_windows(Provider::Antigravity, b"not json", None, now).is_empty());
     let body = json!({"status":"SUCCESS", "command":{"name":"usage", "data":{"groups":[{"buckets":[{"id":"3p-5h", "window":"5h", "remaining_fraction":0, "reset_time":"2026-10-24T09:00:00Z"}]}]}}});
-    let readings = provider_usage_windows("antigravity", body.to_string().as_bytes(), None, now);
+    let readings = provider_usage_windows(
+        Provider::Antigravity,
+        body.to_string().as_bytes(),
+        None,
+        now,
+    );
     assert_eq!(readings.len(), 2);
     assert!(
         readings
@@ -379,7 +426,7 @@ fn antigravity_quota_command_ignores_unknown_and_invalid_control_data() {
 fn grok_billing_records_the_reported_weekly_window_without_invocation_tokens() {
     use orbit_types::telemetry::ProviderLimitSource;
     let now = Utc.with_ymd_and_hms(2026, 10, 24, 5, 0, 0).unwrap();
-    let readings = provider_usage_windows("grok", GROK_BILLING, None, now);
+    let readings = provider_usage_windows(Provider::Grok, GROK_BILLING, None, now);
     assert_eq!(readings.len(), 1);
     let reading = &readings[0];
     assert_eq!(reading.provider, "grok");
@@ -431,14 +478,15 @@ fn grok_billing_ignores_unknown_shapes_and_never_reads_assistant_text() {
     }
     for case in cases {
         assert!(
-            provider_usage_windows("grok", case.to_string().as_bytes(), None, now).is_empty(),
+            provider_usage_windows(Provider::Grok, case.to_string().as_bytes(), None, now)
+                .is_empty(),
             "unrecognized billing must not gate: {case}"
         );
     }
-    assert!(provider_usage_windows("grok", b"not json", None, now).is_empty());
+    assert!(provider_usage_windows(Provider::Grok, b"not json", None, now).is_empty());
     let mut over = billing;
     over["config"]["creditUsagePercent"] = json!(102.5);
-    let readings = provider_usage_windows("grok", over.to_string().as_bytes(), None, now);
+    let readings = provider_usage_windows(Provider::Grok, over.to_string().as_bytes(), None, now);
     assert_eq!(readings[0].used_percent, Some(102.5));
     assert!(readings[0].exhausted);
 }
@@ -446,7 +494,7 @@ fn grok_billing_ignores_unknown_shapes_and_never_reads_assistant_text() {
 #[test]
 fn muse_run_usage_records_account_windows_at_completion() {
     let now = Utc.with_ymd_and_hms(2026, 10, 23, 4, 14, 0).unwrap();
-    let readings = provider_usage_windows("muse", MUSE_USAGE, None, now);
+    let readings = provider_usage_windows(Provider::Muse, MUSE_USAGE, None, now);
     assert_eq!(readings.len(), 2, "the recorded allowance has two windows");
     for (reading, label, used, reset) in [
         (&readings[0], "window", 27.0, 1_792_740_094_000),
@@ -482,7 +530,7 @@ const MUSE_USAGE_1413: &[u8] = include_bytes!("provider_invocation/fixtures/muse
 #[test]
 fn muse_run_usage_1413_records_account_windows_at_completion() {
     let now = Utc.with_ymd_and_hms(2026, 10, 25, 6, 30, 0).unwrap();
-    let readings = provider_usage_windows("muse", MUSE_USAGE_1413, None, now);
+    let readings = provider_usage_windows(Provider::Muse, MUSE_USAGE_1413, None, now);
     assert_eq!(readings.len(), 2, "the 1.4.13 allowance has two windows");
     for (reading, label, used, reset) in [
         (&readings[0], "window", 2.0, 1_792_927_340_000),
@@ -524,9 +572,9 @@ fn muse_run_usage_frame_from_1_4_13_records_the_same_account_windows() {
         run_usage_capture, status_capture,
         "the rename must reach the capture"
     );
-    let expected = provider_usage_windows("muse", MUSE_USAGE, None, now);
+    let expected = provider_usage_windows(Provider::Muse, MUSE_USAGE, None, now);
     assert_eq!(expected.len(), 2, "the recorded allowance has two windows");
-    let readings = provider_usage_windows("muse", run_usage_capture.as_bytes(), None, now);
+    let readings = provider_usage_windows(Provider::Muse, run_usage_capture.as_bytes(), None, now);
     assert_eq!(readings, expected);
 }
 
@@ -587,7 +635,8 @@ fn muse_usage_windows_reject_absent_malformed_and_embedded_allowances() {
     }
     for record in cases {
         assert!(
-            provider_usage_windows("muse", record.to_string().as_bytes(), None, now).is_empty(),
+            provider_usage_windows(Provider::Muse, record.to_string().as_bytes(), None, now)
+                .is_empty(),
             "must ignore {record}"
         );
     }
@@ -600,9 +649,9 @@ fn muse_usage_windows_reject_absent_malformed_and_embedded_allowances() {
         no_allowance.as_bytes(),
         truncated_run_usage.as_bytes(),
     ] {
-        assert!(provider_usage_windows("muse", capture, None, now).is_empty());
+        assert!(provider_usage_windows(Provider::Muse, capture, None, now).is_empty());
     }
-    assert!(provider_usage_windows("claude", MUSE_USAGE, None, now).is_empty());
+    assert!(provider_usage_windows(Provider::Claude, MUSE_USAGE, None, now).is_empty());
 }
 
 #[test]
@@ -615,14 +664,14 @@ fn muse_usage_windows_use_last_allowance_and_keep_valid_partial_windows() {
     status["payload"]["allowance"] =
         json!({"weekly": {"used_percent": 102.125, "resets_at_ms": 1792972800000_i64}});
     let capture = format!("{}\n{status}", std::str::from_utf8(MUSE_USAGE).unwrap());
-    let readings = provider_usage_windows("muse", capture.as_bytes(), None, now);
+    let readings = provider_usage_windows(Provider::Muse, capture.as_bytes(), None, now);
     assert_eq!(readings.len(), 1);
     assert_eq!(readings[0].window.as_deref(), Some("weekly"));
     assert_eq!(readings[0].used_percent, Some(102.125));
     assert!(readings[0].exhausted && readings[0].gating);
     status["payload"]["allowance"]["window"] = json!({"used_percent": "bad"});
     assert_eq!(
-        provider_usage_windows("muse", status.to_string().as_bytes(), None, now),
+        provider_usage_windows(Provider::Muse, status.to_string().as_bytes(), None, now),
         readings
     );
 }

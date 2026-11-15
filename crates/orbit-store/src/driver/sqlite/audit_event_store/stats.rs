@@ -7,6 +7,8 @@ use rusqlite::params;
 
 use crate::Store;
 
+use super::{param_refs, since_tool_filter, where_clause};
+
 impl Store {
     pub fn get_audit_event_stats(
         &self,
@@ -15,23 +17,8 @@ impl Store {
     ) -> Result<(i64, i64, i64, i64, f64, i64), OrbitError> {
         let conn = self.read()?;
 
-        let mut conditions = Vec::new();
-        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-
-        if let Some(since) = since {
-            conditions.push(format!("timestamp >= ?{}", param_values.len() + 1));
-            param_values.push(Box::new(since.to_rfc3339()));
-        }
-        if let Some(tool) = tool {
-            conditions.push(format!("tool_name = ?{}", param_values.len() + 1));
-            param_values.push(Box::new(tool.to_string()));
-        }
-
-        let where_clause = if conditions.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", conditions.join(" AND "))
-        };
+        let (conditions, param_values) = since_tool_filter(since, tool);
+        let where_clause = where_clause(&conditions);
 
         let sql = format!(
             "SELECT \
@@ -44,8 +31,7 @@ impl Store {
              FROM audit_events {where_clause}"
         );
 
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            param_values.iter().map(|b| b.as_ref()).collect();
+        let param_refs = param_refs(&param_values);
 
         conn.query_row(&sql, param_refs.as_slice(), |row| {
             Ok((
@@ -60,6 +46,21 @@ impl Store {
         .map_err(sqlite_store_error)
     }
 
+    /// `COUNT(*)` for the same `since` population as [`Self::get_audit_event_stats`].
+    ///
+    /// A `since` bound is a covering read of `idx_audit_events_timestamp`.
+    /// Callers that only need the event denominator use this instead of
+    /// loading every duration in the window.
+    pub fn get_audit_event_count(&self, since: Option<&DateTime<Utc>>) -> Result<i64, OrbitError> {
+        let conn = self.read()?;
+        let (conditions, param_values) = since_tool_filter(since, None);
+        let where_clause = where_clause(&conditions);
+        let sql = format!("SELECT COUNT(*) FROM audit_events {where_clause}");
+        let param_refs = param_refs(&param_values);
+        conn.query_row(&sql, param_refs.as_slice(), |row| row.get(0))
+            .map_err(sqlite_store_error)
+    }
+
     pub fn get_audit_event_durations(
         &self,
         since: Option<&DateTime<Utc>>,
@@ -67,29 +68,13 @@ impl Store {
     ) -> Result<Vec<i64>, OrbitError> {
         let conn = self.read()?;
 
-        let mut conditions = Vec::new();
-        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-
-        if let Some(since) = since {
-            conditions.push(format!("timestamp >= ?{}", param_values.len() + 1));
-            param_values.push(Box::new(since.to_rfc3339()));
-        }
-        if let Some(tool) = tool {
-            conditions.push(format!("tool_name = ?{}", param_values.len() + 1));
-            param_values.push(Box::new(tool.to_string()));
-        }
-
-        let where_clause = if conditions.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", conditions.join(" AND "))
-        };
+        let (conditions, param_values) = since_tool_filter(since, tool);
+        let where_clause = where_clause(&conditions);
 
         let sql =
             format!("SELECT duration_ms FROM audit_events {where_clause} ORDER BY duration_ms ASC");
 
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            param_values.iter().map(|b| b.as_ref()).collect();
+        let param_refs = param_refs(&param_values);
 
         let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
 

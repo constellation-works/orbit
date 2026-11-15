@@ -290,16 +290,10 @@ pub(super) fn record_light_delivery<H: RuntimeHost + ?Sized>(
         host.apply_task_automation_update(
             task_id,
             TaskAutomationUpdate {
-                append_history: vec![TaskHistoryEntry {
-                    at: Utc::now(),
-                    by: "system".into(),
-                    event: event.to_string(),
-                    note: Some(note.clone()),
-                    from_status: None,
-                    to_status: None,
-                    operation_id: None,
-                    decision: None,
-                }],
+                append_history: vec![
+                    TaskHistoryEntry::new(Utc::now(), "system", event)
+                        .with_note(Some(note.clone())),
+                ],
                 ..Default::default()
             },
         )?;

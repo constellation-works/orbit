@@ -7,8 +7,10 @@ Arguments:
           Plugin namespace
 
 Options:
-      --yes
+      --confirm
           Confirm permanent removal of the plugin install
+          
+          [aliases: --yes]
 
       --record-only
           Remove only this host's record of the plugin, leaving every installed file in place. Clears a record whose install path this host refuses, without deleting the path it names

@@ -1,7 +1,7 @@
 //! Workflow-failure / interruption status events and history-note helpers.
 
 use orbit_common::text::floor_char_boundary;
-use orbit_types::task::TaskStatus;
+use orbit_types::task::{TaskDecision, TaskStatus};
 use orbit_types::workflow::{BASELINE_RED_HOLD_EVENT, BaselineRedHold};
 
 use super::hosts::TaskAutomationUpdate;
@@ -65,7 +65,8 @@ fn workflow_run_note(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("-");
-    let error_message = elide_note_error(run_id, error_message);
+    let error_message = orbit_common::security::redaction::redact_all(error_message);
+    let error_message = elide_note_error(run_id, &error_message);
 
     format!(
         "workflow run {outcome}: job={job_id}, run_id={run_id}, error_code={error_code}, error={error_message}"
@@ -111,7 +112,31 @@ pub fn blocked_workflow_failure_update(
             error_code,
             error_message,
         )),
+        status_decision: Some(TaskDecision::RunTransition {
+            run_id: run_id.to_string(),
+        }),
         ..TaskAutomationUpdate::default()
+    }
+}
+
+/// Block for a run that held on recorded owner approval
+/// (`owner_signoff_required`). The run did not fail; its task waits for the
+/// operator's sign-off, so the note says `held`, not `failed`. [ORB-23967]
+pub fn blocked_workflow_owner_signoff_update(
+    job_id: &str,
+    run_id: &str,
+    error_code: Option<&str>,
+    error_message: Option<&str>,
+) -> TaskAutomationUpdate {
+    TaskAutomationUpdate {
+        status_note: Some(workflow_run_note(
+            "held",
+            job_id,
+            run_id,
+            error_code,
+            error_message,
+        )),
+        ..blocked_workflow_failure_update(job_id, run_id, error_code, error_message)
     }
 }
 
@@ -130,13 +155,16 @@ pub fn blocked_workflow_interruption_update(
             error_code,
             error_message,
         )),
+        status_decision: Some(TaskDecision::RunTransition {
+            run_id: run_id.to_string(),
+        }),
         ..TaskAutomationUpdate::default()
     }
 }
 
 /// [ORB-14258] Hold a task whose run failed because a required command fails
 /// on its base exactly as on the candidate: back to `backlog` under
-/// [`BASELINE_RED_HOLD_EVENT`], with the hold in the note, rather than
+/// [`BASELINE_RED_HOLD_EVENT`], with the hold as its decision and in the note, rather than
 /// `blocked`. Admission withholds the task until the required command passes
 /// on a new base tip.
 pub fn baseline_red_hold_update(job_id: &str, hold: &BaselineRedHold) -> TaskAutomationUpdate {
@@ -151,6 +179,7 @@ pub fn baseline_red_hold_update(job_id: &str, hold: &BaselineRedHold) -> TaskAut
             hold.base_sha,
             hold.failures_clause()
         ))),
+        status_decision: Some(TaskDecision::BaselineRedHold(hold.clone())),
         ..TaskAutomationUpdate::default()
     }
 }

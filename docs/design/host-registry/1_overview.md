@@ -3,8 +3,8 @@ summary: "Host Registry — Overview"
 type: design
 title: "Host Registry — Overview"
 owner: codex
-last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_updated: 2026-11-03
+last_validated: 2026-11-09
 status: Implemented
 stage: shipped
 next: "—"
@@ -27,7 +27,7 @@ It is not a fleet router. The operator registers remote hosts with `orbit host a
 | Layer | Current responsibility |
 |---|---|
 | orbit-types | Persistence-neutral host and workspace primitives: identifier validators and constants, workspace/catalog DTOs, roles, status, and schema constants |
-| orbit-registry | machine identity lifecycle and legacy migration, workspaces.json catalog operations, the hosts.toml host file, validation, atomic file persistence, and checkout-path health |
+| orbit-registry | machine identity lifecycle, workspaces.json catalog operations, the hosts.toml host file, validation, atomic file persistence, and checkout-path health |
 | orbit-cmd | RegisteredRuntimeFactory and the composition that joins a selected registry checkout to a Core runtime; the `orbit host` operations and their live identity probe |
 | orbit-cli | Global initialization, workspace mutations and display, `orbit host`, machine-name configuration, and MCP server bootstrap |
 | orbit-web | Registry-backed workspace snapshots, health projection, lazy runtime caching, and HTTP selection |
@@ -39,10 +39,11 @@ orbit-types does not read machine files. orbit-registry does not dispatch Core t
 
 - `~/.orbit/config.toml` stores the `[machine]` identity: a generated stable
   `id`, a renameable operator-chosen `name`, and an immutable `task_prefix`.
-  `orbit init` creates it. A legacy `~/.orbit/host.toml` is migrated into
-  `[machine]` on first identity load and removed once that write succeeds.
+  `orbit init` creates it. A legacy `~/.orbit/host.toml` left as the only
+  identity source is refused with the manual repair; when `[machine]` already
+  exists, a leftover `host.toml` is ignored.
 - ~/.orbit/workspaces.json is schema v1. It separates logical workspace records from this machine's checkout paths and owner or replica role.
-- `~/.orbit/hosts.toml` lists operator-registered remote hosts by name, SSH target, `machine_id` and `task_prefix`. When it is absent, Orbit still reads `~/.orbit/mcp-destinations.toml` as legacy routes; the next `orbit host` mutation migrates those routes and removes the legacy file. If both files exist, Orbit refuses to choose between them ([specs/host-commands.md](./specs/host-commands.md)).
+- `~/.orbit/hosts.toml` lists operator-registered remote hosts by name, SSH target, `machine_id` and `task_prefix`. The retired `~/.orbit/mcp-destinations.toml` fails every host-registry load with `host_file_conflict`, whether alone or beside the host file; move it aside, re-register each `ssh` row with `orbit host add <ssh-target>`, then delete it ([specs/host-commands.md](./specs/host-commands.md)).
 - A workspace runtime is opened only from a local checkout binding. A checkoutless logical catalog entry can be listed but cannot execute.
 
 The accepting machine is authoritative for its files and runtime. Remote MCP simply carries MCP stdio over SSH to that machine; it does not copy or interpret registry state locally.

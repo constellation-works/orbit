@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::contracts::ClaimedLeafStage;
+use crate::application::job::JobDrainPort;
 use crate::application::job::run_display_steps;
 use crate::application::task::{TaskRow, job_run_is_locally_navigable};
 
@@ -81,7 +82,7 @@ impl OrbitRuntime {
             // claim's leaf stage is the only durable local fact, and only
             // where this host holds the pull admission.
             return Ok(self
-                .claimed_leaf_stage_for_task(&task.id)?
+                .held_claimed_leaf_stage(&task.id)?
                 .map(|(stage, _, leaf_state)| claimed_stage_value(stage, &leaf_state)));
         };
         Ok(self.local_run_stage(&run))

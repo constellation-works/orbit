@@ -28,7 +28,7 @@ pub(crate) fn context_workspace_root(repo_root: &Path, workspace_path: Option<&s
 /// they are the only authoritative record of what a task declared before its
 /// scope was pruned. `context_repair` reads them so a restoration cites
 /// evidence instead of inventing scope.
-pub(super) const CONTEXT_FILES_PRUNED_EVENT: &str = "context_files_pruned";
+pub(in crate::application) const CONTEXT_FILES_PRUNED_EVENT: &str = "context_files_pruned";
 
 /// History event written when pruned declarations are restored from
 /// [`CONTEXT_FILES_PRUNED_EVENT`] evidence.
@@ -44,7 +44,7 @@ const PRUNED_NOTE_SUFFIX: &str = " (selector anchor not found in workspace)";
 /// A note that does not match the recorded shape yields nothing: an
 /// unparseable entry is missing evidence, and guessing at its contents is the
 /// scope invention this repair path exists to avoid.
-pub(super) fn pruned_selectors_from_note(note: &str) -> Vec<String> {
+pub(in crate::application) fn pruned_selectors_from_note(note: &str) -> Vec<String> {
     let Some(listed) = note.trim().strip_prefix(PRUNED_NOTE_PREFIX) else {
         return Vec::new();
     };

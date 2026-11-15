@@ -11,8 +11,7 @@
 //! closes them.
 
 use super::claimed_owed_evidence::{
-    artifact, attach_result, ci_fast, owner_action, owner_checkout, owner_resumes, publish_origin,
-    report,
+    self, attach_result, ci_fast, owner_action, owner_checkout, owner_resumes, publish_origin,
 };
 use super::claimed_review::{REVIEW_CREW, ReviewedLeaf};
 use super::*;
@@ -174,7 +173,7 @@ fn a_before_landing_evidence_hold_leaves_its_task_one_open_pull_request() {
 
     let admitted = leaf.admit_review();
     assert_eq!(admitted["timing"], "before-landing", "{admitted}");
-    leaf.put_report(&report(
+    leaf.put_report(&claimed_owed_evidence::claimed_review_report(
         &admitted,
         ReviewVerdict::Incomplete,
         Vec::new(),
@@ -183,7 +182,8 @@ fn a_before_landing_evidence_hold_leaves_its_task_one_open_pull_request() {
     ));
     let refused = leaf.settle().expect_err("missing evidence cannot land");
     assert!(refused.contains("review_awaiting_evidence"), "{refused}");
-    let hold: ReviewEvidenceHold = artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).unwrap();
+    let hold: ReviewEvidenceHold =
+        claimed_owed_evidence::leaf_owner_artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).unwrap();
     assert_eq!(hold.requirements, vec![macos_owed()]);
     let evidence_branch = format!("orbit-evidence/{branch}");
     assert_eq!(
@@ -371,7 +371,9 @@ fn a_before_landing_evidence_hold_preserves_reviewer_fixes_for_next_claim() {
             .settle()
             .expect_err("the named macOS check still holds review");
         assert!(refused.contains("review_awaiting_evidence"), "{refused}");
-        let hold: ReviewEvidenceHold = artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).unwrap();
+        let hold: ReviewEvidenceHold =
+            claimed_owed_evidence::leaf_owner_artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+                .unwrap();
         assert_eq!(git(&repo, &["rev-parse", "HEAD"]).trim(), fixed);
         assert_ne!(
             fixed, published,
@@ -379,7 +381,11 @@ fn a_before_landing_evidence_hold_preserves_reviewer_fixes_for_next_claim() {
         );
         assert_eq!(hold.candidate.commit, fixed);
         let certificate: orbit_types::workflow::ReviewCertificate =
-            artifact(&leaf, orbit_types::workflow::REVIEW_GATE_ARTIFACT).unwrap();
+            claimed_owed_evidence::leaf_owner_artifact(
+                &leaf,
+                orbit_types::workflow::REVIEW_GATE_ARTIFACT,
+            )
+            .unwrap();
         assert_eq!(certificate.repair_commits.last().unwrap().commit, fixed);
         let reference = format!("refs/orbit/candidates/{}/{}", leaf.task, leaf.leaf);
         if reject_evidence {

@@ -12,7 +12,7 @@ use crate::{
         auto_tasks::AutoTaskToggleProfile,
         job::JobCatalogFilter,
         routines::{
-            FireField, RoutineField, RoutineToggleOutcome, RoutineTriggerEditOutcome,
+            FireField, RoutineField,
             status::{checkout_routine_statuses, toggle_checkout_routine},
             trigger_edit::edit_checkout_routine_trigger,
         },
@@ -142,23 +142,20 @@ fn auto_task_rows(
     runtime: &OrbitRuntime,
     coordination_refusal: Option<&str>,
 ) -> Result<AutoTaskProjection, OrbitError> {
-    use crate::application::auto_tasks::AutoTaskSkip;
-    use crate::application::routines::ScheduleDisplayState;
+    use crate::application::auto_tasks::projection::AutoTaskListingProfile;
     let listing = runtime.auto_task_listing_state(true, Utc::now())?;
-    let rows = listing.rows.iter().map(|row|{
-        let d=&row.listed.definition;
-        let plugin_inactive=row.skip==Some(AutoTaskSkip::PluginInactive);
-        let state=if plugin_inactive{"plugin_inactive"}else{row.schedule_state.as_str()};
-        let next_due=(!plugin_inactive && row.schedule_state==ScheduleDisplayState::Scheduled).then_some(row.next_slot).flatten();
-        json!({"name":d.name,"description":text(&d.description),"enabled":d.enabled,"schedule":d.schedule,
-            "state":state,"next_due":next_due,
-            "target":text(&d.template.title),"dedupe":d.dedupe,"skip_reason":row.skipped_reason,
-            "effective_enabled":row.effective_enabled,
-            "toggle_available":!plugin_inactive && coordination_refusal.is_none(),
-            "mint_available":!plugin_inactive && coordination_refusal.is_none(),
-            "control_reason":coordination_refusal,
-            "updated_at":d.updated_at})
-    }).collect();
+    let rows = listing
+        .rows
+        .iter()
+        .map(|row| {
+            runtime.project_auto_task_listing_row(
+                row,
+                AutoTaskListingProfile::BoundedMcp {
+                    coordination_refusal,
+                },
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let total = listing.load_errors.len();
     let errors = listing
         .load_errors
@@ -232,32 +229,16 @@ pub(in crate::adapter::tool_host) fn control(
             let expected = boolean(&input, "expected_enabled")?;
             let enabled = boolean(&input, "enabled")?;
             let target = required_string(&input, &["target"], "target")?;
-            match toggle_checkout_routine(runtime, &name, &target, expected, enabled)? {
-                RoutineToggleOutcome::Changed | RoutineToggleOutcome::Unchanged => {
-                    json!({"enabled":enabled})
-                }
-                RoutineToggleOutcome::TargetConflict { .. } => {
-                    return Err(invalid("routine target changed; refresh before retrying"));
-                }
-                RoutineToggleOutcome::Conflict { .. } => {
-                    return Err(invalid("routine changed; refresh before retrying"));
-                }
-            }
+            let outcome = toggle_checkout_routine(runtime, &name, &target, expected, enabled)?;
+            json!({"enabled":enabled,"changed":outcome.changed})
         }
         ("routine", "set_trigger") => {
             let expected = trigger_field(&input, "expected_trigger")?;
             let trigger = trigger_field(&input, "trigger")?;
             let target = required_string(&input, &["target"], "target")?;
-            match edit_checkout_routine_trigger(runtime, &name, &target, &expected, trigger)? {
-                RoutineTriggerEditOutcome::Changed => json!({"changed":true}),
-                RoutineTriggerEditOutcome::Unchanged => json!({"changed":false}),
-                RoutineTriggerEditOutcome::TargetConflict { .. } => {
-                    return Err(invalid("routine target changed; refresh before retrying"));
-                }
-                RoutineTriggerEditOutcome::Conflict { .. } => {
-                    return Err(invalid("routine trigger changed; refresh before retrying"));
-                }
-            }
+            let outcome =
+                edit_checkout_routine_trigger(runtime, &name, &target, &expected, trigger)?;
+            json!({"changed":outcome.changed})
         }
         ("auto_task", "toggle") => {
             let profile = AutoTaskToggleProfile::Checked {

@@ -6,8 +6,10 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::StoreRetentionBackend;
 use orbit_types::task::{
-    RegressionRiskMarks, Task, TaskHistoryEntry, TaskRelationType, TaskStatus, is_no_diff_expected,
+    Task, TaskHistoryEntry, TaskRelationType, TaskStatus, is_no_diff_expected,
 };
+
+use orbit_config::RegressionLayerDefinition;
 
 use super::super::regression::{PendingLink, RegressionLink};
 use super::block_cause::failed_claim_settlements;
@@ -52,9 +54,6 @@ pub(in crate::application::codebase) struct TaskFacts {
     /// When the task entered a status other than `backlog`, ascending: each
     /// ends any lock wait in progress, since only a backlog task is admitted.
     pub(in crate::application::codebase) left_backlog: Vec<DateTime<Utc>>,
-    /// Each `regression_risk_marked` event: when a prompt for the task
-    /// marked context files, and what it marked.
-    pub(in crate::application::codebase) marks: Vec<(DateTime<Utc>, RegressionRiskMarks)>,
 }
 
 impl TaskFacts {
@@ -89,7 +88,6 @@ impl TaskFacts {
             blocks: Vec::new(),
             regressions: Vec::new(),
             left_backlog: Vec::new(),
-            marks: Vec::new(),
         }
     }
 }
@@ -130,6 +128,10 @@ pub struct CodebaseFacts {
     pub(in crate::application::codebase) lock_denials: Vec<LockDenial>,
     /// When each task was granted a reservation, ascending: its admission.
     pub(in crate::application::codebase) admissions: BTreeMap<String, Vec<DateTime<Utc>>>,
+    /// The `workflow.regression_layers` table every link's layer was
+    /// resolved under: the breakdowns and cross-tabs list its layers, so a
+    /// cached scan never mixes layers of two tables.
+    pub(in crate::application::codebase) regression_layers: Vec<RegressionLayerDefinition>,
 }
 
 /// Scan the workspace once. A task whose history cannot be read keeps its
@@ -267,11 +269,11 @@ pub(in crate::application::codebase) fn scan(
             widenings: history.widenings,
             blocks: history.blocks,
             left_backlog: history.left_backlog,
-            marks: history.marks,
         });
     }
     stored.save(runtime, facts.iter().map(|task| task.id.as_str()));
-    attach_regressions(&mut facts, pending_links);
+    let regression_layers = runtime.regression_layers().to_vec();
+    attach_regressions(&mut facts, pending_links, &regression_layers);
 
     let mut admissions: BTreeMap<String, Vec<DateTime<Utc>>> = BTreeMap::new();
     let mut reservation_tasks: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -321,32 +323,17 @@ pub(in crate::application::codebase) fn scan(
         reservations,
         lock_denials,
         admissions,
+        regression_layers,
     })
 }
 
-/// How `scan_regressions` treats a per-task history read failure for a done
-/// task that may have become done since `since`.
-///
-/// `Strict` propagates the read error so the caller fails closed (prompt
-/// marks become unavailable). `ExcludeUnreadable` warns and yields
-/// `done_at: None`, so the unreadable task is excluded from the window
-/// without substituting `updated_at` or an empty history. Global metadata
-/// and protocol errors still fail under either policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::application::codebase) enum HistoryCompleteness {
-    Strict,
-    ExcludeUnreadable,
-}
-
-/// The facts the regression-risk marks and the riskiness model read, and
-/// nothing else: every task's footprint and incoming `regression_from`
+/// The facts the riskiness model reads, and nothing else: every task's footprint and incoming `regression_from`
 /// links, with history read only for a done task that may have become done
 /// since `since`. A task updated before then became done before then too, so
 /// its update time stands in.
 pub(in crate::application::codebase) fn scan_regressions(
     runtime: &OrbitRuntime,
     since: DateTime<Utc>,
-    completeness: HistoryCompleteness,
 ) -> Result<CodebaseFacts, OrbitError> {
     let computed_at = Utc::now();
     let tasks = runtime.list_task_metadata()?;
@@ -358,27 +345,28 @@ pub(in crate::application::codebase) fn scan_regressions(
         } else if task.updated_at < since {
             Some(task.updated_at)
         } else {
-            // A failed history read cannot certify a time-window count.
+            // A failed history read cannot certify a time-window count, so the
+            // unreadable task is excluded from the window rather than given
+            // its update time or an empty history.
             match runtime.get_task_history(&task.id) {
                 Ok(history) => Some(entered(&history, TaskStatus::Done).unwrap_or(task.updated_at)),
-                Err(error) => match completeness {
-                    HistoryCompleteness::Strict => return Err(error),
-                    HistoryCompleteness::ExcludeUnreadable => {
-                        tracing::warn!(task_id = %task.id, %error, "riskiness: task history unreadable; excluding task from window");
-                        None
-                    }
-                },
+                Err(error) => {
+                    tracing::warn!(task_id = %task.id, %error, "riskiness: task history unreadable; excluding task from window");
+                    None
+                }
             }
         };
         facts.push(TaskFacts::from_envelope(task, done_at));
     }
-    attach_regressions(&mut facts, pending_links);
+    let regression_layers = runtime.regression_layers().to_vec();
+    attach_regressions(&mut facts, pending_links, &regression_layers);
     Ok(CodebaseFacts {
         computed_at,
         tasks: facts,
         reservations: Vec::new(),
         lock_denials: Vec::new(),
         admissions: BTreeMap::new(),
+        regression_layers,
     })
 }
 
@@ -410,7 +398,11 @@ fn pending_links(tasks: &[Task]) -> Vec<PendingLink> {
 
 /// Give each regressed task its links. A link's layer reads its regression
 /// task's landed paths, known only once every task is scanned.
-fn attach_regressions(facts: &mut [TaskFacts], pending_links: Vec<PendingLink>) {
+fn attach_regressions(
+    facts: &mut [TaskFacts],
+    pending_links: Vec<PendingLink>,
+    layers: &[RegressionLayerDefinition],
+) {
     let index: BTreeMap<String, usize> = facts
         .iter()
         .enumerate()
@@ -423,7 +415,7 @@ fn attach_regressions(facts: &mut [TaskFacts], pending_links: Vec<PendingLink>) 
         links
             .entry(regressed)
             .or_default()
-            .push(pending.resolve(fix));
+            .push(pending.resolve(fix, layers));
     }
     for (regressed, mut task_links) in links {
         if let Some(at) = index.get(&regressed) {

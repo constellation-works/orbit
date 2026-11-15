@@ -35,7 +35,7 @@ impl Store {
         )
         .map_err(sqlite_store_error)?;
         conn.busy_timeout(Duration::from_millis(u64::from(
-            orbit_common::storage::sqlite::DEFAULT_BUSY_TIMEOUT_MS,
+            orbit_common::storage::sqlite::sqlite_busy_timeout_ms(),
         )))
         .map_err(sqlite_store_error)?;
         // Hold the writer lock across the schema check and insert so another
@@ -87,7 +87,7 @@ impl Store {
 /// instead of failing the moment it is attempted.
 fn arm_audit_busy_timeout(conn: &Connection) -> Result<(), OrbitError> {
     conn.busy_timeout(Duration::from_millis(u64::from(
-        orbit_common::storage::sqlite::DEFAULT_BUSY_TIMEOUT_MS,
+        orbit_common::storage::sqlite::sqlite_busy_timeout_ms(),
     )))
     .map_err(sqlite_store_error)
 }
@@ -216,8 +216,9 @@ fn insert_audit_event_record_on_connection(
             actor_kind, actor_id, actor_vendor, actor_family, actor_model,
             actor_alias_version, self_reported_actor,
             plugin_name, plugin_version, plugin_manifest_digest, plugin_grants,
-            plugin_secrets, plugin_secret_updates, brokered, peer_pid
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50)"#,
+            plugin_secrets, plugin_secret_updates, brokered, peer_pid, application_json,
+            session_model
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52)"#,
         rusqlite::params![
             params.execution_id,
             now_string(),
@@ -271,6 +272,10 @@ fn insert_audit_event_record_on_connection(
             // rows written before the columns existed read.
             invocation.brokered_peer_pid.map(|_| 1_i64),
             invocation.brokered_peer_pid,
+            invocation.application.map(|application| {
+                serde_json::to_value(application).map(orbit_common::security::redaction::redact_sensitive_env_json).and_then(|value| serde_json::to_string(&value))
+            }).transpose().map_err(|_| OrbitError::Store("serialize application audit provenance".into()))?,
+            invocation.session_model,
         ],
     )
         .map_err(sqlite_store_error)?;

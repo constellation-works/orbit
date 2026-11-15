@@ -3,3 +3,6 @@
 mod hydrate;
 mod insert;
 mod query;
+
+#[cfg(test)]
+mod tests;

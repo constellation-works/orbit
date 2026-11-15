@@ -16,14 +16,16 @@ pub use audit::{
 };
 #[cfg(unix)]
 pub(crate) use brokered::RunDispatch;
-pub use callback::refuse_plugin_child_cli_command;
+pub use callback::{refuse_plugin_child_cli_command, refuse_plugin_child_remote_callback};
 #[cfg(unix)]
 pub use claimed::{ClaimedOwnerRoute, bridge_claimed_owner_call, owner_route_unavailable};
 pub use dry_run::DryRunResult;
 pub(super) use execute::execute_global_plugin_dispatch;
 pub use execute::{
-    ToolDispatchOutcome, ToolEntryPoint, execute_global_in_process_tool_dispatch,
-    mark_tool_audit_recorded, take_tool_audit_recorded, tool_suggestion_context,
+    GlobalAuditStoreCache, ToolDispatchOutcome, ToolEntryPoint,
+    execute_global_in_process_tool_dispatch,
+    execute_global_in_process_tool_dispatch_with_audit_writer, mark_tool_audit_recorded,
+    take_tool_audit_recorded, tool_suggestion_context,
 };
 
 #[cfg(test)]

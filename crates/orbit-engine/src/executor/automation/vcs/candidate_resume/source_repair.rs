@@ -71,10 +71,13 @@ pub(super) fn continue_source<H: RuntimeHost + ?Sized>(
     {
         return Err(refused("PR identity or merge intent changed"));
     }
+    // The remote and PR stay bound to the published head; the candidate is
+    // the certified local tip when the binding carries one, and the push step
+    // publishes it under a lease on the published head (`reused_head_sha`).
     let candidate = Candidate {
         run_id: binding.source_run_id.clone(),
         branch: binding.branch.clone(),
-        head_sha: binding.head_sha.clone(),
+        head_sha: binding.candidate_head().into(),
         durable_ref: None,
         failed_step_id: "operator_source_repair".into(),
         needs_review_repair: false,
@@ -88,7 +91,7 @@ pub(super) fn continue_source<H: RuntimeHost + ?Sized>(
         evidence_findings: None,
     };
     // A refusal never falls back to a new branch/PR or a fresh implementation.
-    match adopt_published_branch(workspace, &task.id, &candidate)? {
+    match adopt_published_branch(workspace, &task.id, &candidate, &binding.head_sha)? {
         Adoption::Adopted => {}
         Adoption::Refused(reason) => return Err(refused(&reason)),
     }
@@ -134,7 +137,7 @@ pub(super) fn continue_published_owner<H: RuntimeHost + ?Sized>(
             .executed_on
             .as_ref()
             .is_none_or(|o| o.machine_id != binding.machine_id)
-        || run.job_id != "task_pr_pipeline"
+        || run.job_id != orbit_types::workflow::TASK_PR_PIPELINE_JOB
         || run
             .input
             .as_ref()
@@ -156,7 +159,7 @@ pub(super) fn continue_published_owner<H: RuntimeHost + ?Sized>(
     let candidate = Candidate {
         run_id: binding.source_run_id.clone(),
         branch: binding.branch.clone(),
-        head_sha: binding.head_sha.clone(),
+        head_sha: binding.candidate_head().into(),
         durable_ref: None,
         failed_step_id: "complete_pr".into(),
         needs_review_repair: false,
@@ -181,7 +184,7 @@ pub(super) fn continue_published_owner<H: RuntimeHost + ?Sized>(
         }
         Applied::Refused(reason) => return Err(refused(&reason)),
     };
-    match adopt_published_branch(workspace, &task.id, &candidate)? {
+    match adopt_published_branch(workspace, &task.id, &candidate, &binding.head_sha)? {
         Adoption::Adopted => {}
         Adoption::Refused(reason) => return Err(refused(&reason)),
     }
@@ -265,7 +268,7 @@ pub(in crate::executor::automation::vcs) fn publication_lease<H: RuntimeHost + ?
     let state = host.read_run_state(id)?.ok_or_else(refused)?;
     let published = state.pipeline.get("push").ok_or_else(refused)?;
     if state.run_id != id
-        || state.job_id != "task_pr_pipeline"
+        || state.job_id != orbit_types::workflow::TASK_PR_PIPELINE_JOB
         || published["phase"] != "push"
         || published["branch"] != binding.branch
         || published["local_sha"] != lease

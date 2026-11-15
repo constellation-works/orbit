@@ -24,6 +24,23 @@ pub fn granted_tools_change_note(before: &[String], after: &[String], state: &st
     )
 }
 
+/// History event written when Orbit rewrites a task's stored pre-family tool
+/// names (`required_tools`, `granted_tools`) to family actions [ORB-23552]. It
+/// is a migration of the same tools, not an operator grant or edit.
+pub const TOOL_NAMES_MIGRATED_EVENT: &str = "tool_names_migrated";
+
+/// The note a [`TOOL_NAMES_MIGRATED_EVENT`] records: each rewritten field with
+/// its tool set before and after.
+#[must_use]
+pub fn tool_names_migrated_note(changes: &[(&str, &[String], &[String])]) -> String {
+    let fields = changes
+        .iter()
+        .map(|(field, before, after)| format!("{field} {} → {}", tool_set(before), tool_set(after)))
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!("pre-family tool names rewritten to family actions: {fields}")
+}
+
 fn tool_set(tools: &[String]) -> String {
     if tools.is_empty() {
         "none".to_string()

@@ -48,6 +48,23 @@ macro_rules! dispatch_methods {
             request: &crate::context::ScriptStepRequest,
         ) -> crate::context::ScriptStepRun;
 
+        /// Check a script output set a resumed run's checkpoint names against
+        /// the producer record the host stored beside the files, and re-hash
+        /// every file. `Err` names what is missing or differs; the engine
+        /// then refuses the resume rather than expose the references. A
+        /// descriptor alone confers nothing. A host that keeps no script
+        /// output files refuses every set.
+        ///
+        /// `consumer_run_id` is the run that would use the set. The set's
+        /// producing run must be that run or one of its `retry_source`
+        /// ancestors (the resume lineage), so a genuine set another run of
+        /// the workspace kept cannot be substituted into a checkpoint.
+        fn verify_script_output_set(
+            &self,
+            consumer_run_id: &str,
+            set: &orbit_types::workflow::activity_job::ScriptOutputSet,
+        ) -> Result<(), String>;
+
         /// Resolve the registered `local_shell` executor definition backing a
         /// deterministic shell step [ORB-11294].
         ///
@@ -122,22 +139,6 @@ macro_rules! dispatch_methods {
             input: &Value,
         ) -> Result<Option<Value>, DispatchError>;
 
-        /// The `regression_risk` section `activity_name` of `run_id` adds to its
-        /// task snapshot: the task's context files that regressed often enough
-        /// in the configured trailing window to be marked, highest risk first,
-        /// each with its regressed-of-touching counts, nature and escape
-        /// categories and one lesson line, and no internal IDs. The engine asks
-        /// only for an activity that declares a `regression_risk_instruction`.
-        /// `None` when marks are off, nothing qualifies, the input names no
-        /// single task, or the host cannot read its records; the host records
-        /// each section it returns on the task.
-        fn regression_risk_for_agent_input(
-            &self,
-            run_id: &str,
-            activity_name: &str,
-            input: &Value,
-        ) -> Option<Value>;
-
         /// Before agent activity `activity_name` of `run_id`, which may edit the
         /// run's worktree, take the context locks the run's admission deferred,
         /// waiting while other work holds them.
@@ -171,50 +172,56 @@ macro_rules! dispatch_methods {
             input: &Value,
         ) -> Result<Vec<TagInstruction>, DispatchError>;
 
-        /// What `activity_name` of `run_id` does with the explore brief of the
-        /// task its `input` names: the outcome its audit row records and, for
-        /// a `fresh` or `drifted` brief with delivery on, the task context's
-        /// `explore_brief` value.
-        ///
-        /// The engine asks only for an activity that declares an
-        /// `explore_brief_instruction`. The host checks the stored brief's
-        /// currency against the task's material first and its code drift
-        /// against the run's base second; it fails closed to an undelivered
-        /// outcome and never refuses the dispatch. `None` when the input names
-        /// no single task.
-        fn explore_brief_for_activity(
+        /// Pinned generated corpus rows selected by exact activity name.
+        /// Hosts without this capability answer with no guidance.
+        fn agent_corpus_for_activity(
+            &self,
+            run_id: &str,
+            activity_name: &str,
+        ) -> Result<Option<orbit_types::workflow::AgentCorpusInjection>, DispatchError>;
+
+        /// The `fleet_notices` brief `activity_name` of `run_id` adds to its
+        /// task context: the bounded block marked `untrusted_data` and the
+        /// `id@revision` of each notice it carries. The engine asks only
+        /// for an activity that opts into `fleet_notices` or declares a
+        /// `notice_instruction`, at every
+        /// prompt build. `None` when the workspace switch is off or no
+        /// notice is open in scope; a read that fails or times out answers
+        /// the `unavailable` block instead, never an error, so dispatch
+        /// always proceeds.
+        fn notices_for_agent_input(
             &self,
             run_id: &str,
             activity_name: &str,
             input: &Value,
-        ) -> Option<ExploreBriefAdmission>;
+        ) -> Option<orbit_types::workflow::FleetNoticeBrief>;
 
         /// The live experiment arms `activity_name` of `run_id` applies for the
         /// task its `input` names: each arm's instruction for the activity's
         /// role (already part of [`Self::tag_instructions_for_activity`]) and
         /// its tool delta, which the dispatch applies after the activity's
-        /// tool grant. A shadow experiment, an activity no role addresses, or
-        /// input naming no single task applies none. A claimed leaf's host
-        /// answers from the owner's claim capture and refuses without one.
+        /// tool grant. A memory arm's crew memory is resolved for `model`,
+        /// the dispatch's own model; without one no memory is delivered. A
+        /// shadow experiment, an activity no role addresses, or input naming
+        /// no single task applies none. A claimed leaf's host answers from
+        /// the owner's claim capture and refuses without one.
         fn experiment_overlays_for_activity(
             &self,
             run_id: &str,
             activity_name: &str,
             input: &Value,
+            model: Option<&str>,
         ) -> Result<Vec<ExperimentActivityOverlay>, DispatchError>;
-
-        /// Whether this host offers read-only exploration delegation: the
-        /// workspace enables `workflow.explore` and an explorer crew can run on
-        /// this host [ORB-16814]. When false, an activity's
-        /// `explore_instruction` is never appended.
-        fn explore_delegation_available(&self) -> bool;
 
         /// Whether `workflow.mid_run_steering.enabled` is on for this dispatch.
         /// When false (the default), an activity's `steering_instruction` is
         /// never appended, so rendered prompts stay byte-identical.
-        fn mid_run_steering_enabled(&self) -> bool {
-            false
-        }
+        fn mid_run_steering_enabled(&self) -> bool;
+
+        /// Record that a resident cycle's provider conversation reference
+        /// expired or could not be resumed, so this cycle fell back to
+        /// rebuilding from the brief alone (`continuity: rebuilt`).
+        fn record_resident_continuity_rebuilt(&self, _run_id: &str) -> Result<(), OrbitError>;
 
         /// Read mid-run steering's promotion gate for `task_id` of `run_id`,
         /// before the step the job's `steering_gate` guards

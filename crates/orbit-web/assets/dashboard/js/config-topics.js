@@ -1,18 +1,30 @@
-// Settings topic pages: Workflow, Execution, Review, Machine, All keys.
+// Settings topic pages: Workflow, Execution, Review, Machine, Other, built
+// from the shared blocks in settings-ui.js.
 // Rows come from /api/config/effective; the shared drawer writes via
 // PUT/DELETE /api/config/keys/:key and re-reads via context.reload.
 import { captureWorkspaceVisit, el, fetchJson, requestJson } from './common.js';
+import { settingsEditButton, settingsIcon, settingsKeyName, settingsLabelName, settingsLayerLabel, settingsReadOnlyAction, settingsRow, settingsRowSource, settingsSearchField, settingsSection, settingsSource, syncSettingsBarHeight } from './settings-ui.js';
 
 let drawer = null; // {row, scope, text, error, pending, visit, lockGlobal}
 let bulkRemoval = null;
-let layerFilter = 'all';
-let topicFilter = 'all';
+let workflowQuery = '';
+let workflowCollapsed = new Set(); // the saved layout, in force when no search is active
+let workflowSearchCollapsed = new Set(); // sections collapsed while a search is active
+let expandedValues = new Set(); // rows whose long value ("N more", "Show full") is open
 let rawScope = null;
 let rawText = null; // null while the latest read is in flight
 let rawSeq = 0; // numbers each read so only the latest click can apply its response
-let notice = null;
+let notice = null; // {text, failed}: the last bulk removal's outcome
+let landedOtherHash = null; // the key link already landed during this visit
 
-export function resetTopics() { drawer = null; bulkRemoval = null; layerFilter = 'all'; topicFilter = 'all'; rawScope = null; rawText = null; notice = null; }
+window.addEventListener('hashchange', (event) => {
+  if (landedOtherHash && new URL(event.oldURL).hash === landedOtherHash && new URL(event.newURL).hash !== landedOtherHash) {
+    landedOtherHash = null;
+  }
+});
+const NOTICE_MS = 10000;
+
+export function resetTopics() { drawer = null; bulkRemoval = null; workflowQuery = ''; workflowCollapsed = new Set(); workflowSearchCollapsed = new Set(); expandedValues = new Set(); rawScope = null; rawText = null; notice = null; landedOtherHash = null; }
 
 export function flatten(payload) {
   return (payload?.sections || []).flatMap((s) => s.keys || []);
@@ -20,13 +32,22 @@ export function flatten(payload) {
 function byKey(payload) { const m = new Map(); for (const r of flatten(payload)) m.set(r.key, r); return m; }
 export function display(v) {
   if (v == null) return '–';
-  if (Array.isArray(v)) return v.length ? v.join(' ') : '—';
+  if (Array.isArray(v)) return v.length ? v.map(listEntryText).join(v.some(isObject) ? '; ' : ' ') : '—';
   if (typeof v === 'string') return v === '' ? '""' : v;
   if (typeof v === 'object') {
     const leaves = tableLeaves(v);
     return leaves.length ? leaves.map(([path, leaf]) => `${path}: ${display(leaf)}`).join('; ') : '—';
   }
   return String(v);
+}
+function isObject(v) {
+  return Boolean(v) && typeof v === 'object';
+}
+// One list entry: a string or number as itself, a table such as a
+// completion.hold rule as `{name: x; paths: a b}`.
+function listEntryText(v) {
+  if (Array.isArray(v)) return `[${display(v)}]`;
+  return isObject(v) ? `{${display(v)}}` : String(v);
 }
 // A table value's leaves as [dotted path, value], so a nested table such as
 // workflow.type_complexity_crews reads `ui.hard: opus` rather than an object.
@@ -39,8 +60,20 @@ function tableLeaves(table, prefix = '') {
 function isTable(row) {
   return (row.value_type || '').startsWith('table<');
 }
+// A list of tables (completion.hold, workflow.task_types, workflow.lock_modes):
+// edited as a JSON array, like a table is edited as a JSON object.
+function isTableList(row) {
+  return (row.value_type || '').startsWith('array<table')
+    || (Array.isArray(row.value) && row.value.some(isObject));
+}
+// Keys whose drawer text is JSON rather than one entry per line.
+function isStructured(row) {
+  return isTable(row) || isTableList(row);
+}
 // TOML inline-table text for a JSON table, as `orbit config set` reads it.
+// TOML has no null, so a null leaf cannot be shown as a runnable command.
 function tomlInline(v) {
+  if (v === null) throw new Error('TOML cannot represent null');
   if (Array.isArray(v)) return `[${v.map(tomlInline).join(', ')}]`;
   if (v && typeof v === 'object') {
     const key = (k) => (/^[A-Za-z0-9_-]+$/.test(k) ? k : JSON.stringify(k));
@@ -48,16 +81,9 @@ function tomlInline(v) {
   }
   return typeof v === 'string' ? JSON.stringify(v) : String(v);
 }
-function diffText(row) {
-  const sh = row.shadowed_by || [];
-  if (sh.length) return sh.map((s) => s.note || `${s.layer}: ${display(s.value)}`).join('; ');
-  if (row.fallback) return `${row.fallback.layer}: ${display(row.fallback.value)}`;
-  if (row.built_in && row.source?.layer !== 'built-in') return `built-in: ${display(row.built_in.value)}`;
-  return '';
-}
 export function topicOf(key) {
   if (key.startsWith('execution.')) return 'execution';
-  if (key.startsWith('review.') || key === 'workflow.purpose_crews.review' || key === 'workflow.purpose_crews.pre_landing_review') return 'review';
+  if (key.startsWith('review.') || key.startsWith('completion.') || key === 'workflow.purpose_crews.review' || key === 'workflow.purpose_crews.pre_landing_review') return 'review';
   if (key.startsWith('machine.') || key === 'tasks.id_start' || key.startsWith('workflow.resource_throttle.')) return 'machine';
   if (key.startsWith('workflow.') || key.startsWith('pr.')) return 'workflow';
   if (key.startsWith('crews.')) return 'crews';
@@ -66,16 +92,16 @@ export function topicOf(key) {
 
 const WORKFLOW_SECTIONS = [
   ['Shipping', (k, p) => ['workflow.base_branch','workflow.distributed_completion','workflow.required_validation_commands'].includes(k) || k.startsWith('workflow.validation_env.') || k.startsWith('pr.')],
-  ['Crew routing', (k) => k === 'workflow.default_crew' || /complexity_crews$/.test(k) || k === 'workflow.crew_selection' || k.startsWith('workflow.crew_performance') || k.startsWith('workflow.provider_limit')],
+  ['Crew routing', (k) => k === 'workflow.default_crew' || /complexity_crews$/.test(k) || k === 'workflow.crew_selection' || k === 'workflow.task_types' || k.startsWith('workflow.provider_limit')],
   ['Task pilot', (k) => k === 'workflow.purpose_crews.task_pilot' || k.startsWith('workflow.task_pilot') || k.includes('task_pilot_freshness') || k === 'workflow.pilot_max_complexity'],
   ['Recovery', (k) => ['workflow.purpose_crews.failure_recovery','workflow.purpose_crews.auto_fix','workflow.purpose_crews.final_recovery','workflow.purpose_crews.baseline_red_repair','workflow.purpose_crews.sweep_tasks'].includes(k)],
-  ['Steering & exploration', (k) => k.startsWith('workflow.mid_run_steering.') || k.startsWith('workflow.explore.') || k === 'workflow.purpose_crews.explorer'],
+  ['Steering', (k) => k.startsWith('workflow.mid_run_steering.')],
 ];
 
 function openDrawer(row, context, lockGlobal) {
   if (!context.canEdit || row.settable === false) return;
   drawer = { row, scope: (lockGlobal || row.global_only) ? 'global' : (row.source?.layer === 'global' ? 'global' : 'workspace'),
-    text: isTable(row) ? JSON.stringify(row.value ?? {}, null, 2) : Array.isArray(row.value) ? row.value.join('\n') : display(row.value) === '–' ? '' : String(row.value ?? ''),
+    text: isStructured(row) ? JSON.stringify(row.value ?? (isTable(row) ? {} : []), null, 2) : Array.isArray(row.value) ? row.value.join('\n') : display(row.value) === '–' ? '' : String(row.value ?? ''),
     error: null, pending: false, visit: captureWorkspaceVisit(), lockGlobal: !!(lockGlobal || row.global_only) };
   context.rerender?.();
 }
@@ -97,13 +123,21 @@ export function parseDraft(row, text) {
   if (t === 'integer') {
     const trimmed = text.trim();
     if (!/^-?\d+$/.test(trimmed)) throw new Error(`${row.key} takes a whole number`);
-    return Number(trimmed);
+    return inAllowedRange(row, Number(trimmed));
   }
   if (t === 'number') {
     const trimmed = text.trim();
     const n = Number(trimmed);
     if (trimmed === '' || Number.isNaN(n) || !Number.isFinite(n)) throw new Error(`${row.key} takes a number`);
-    return n;
+    return inAllowedRange(row, n);
+  }
+  const choices = row.allowed?.kind === 'enum' ? row.allowed.values : null;
+  if (choices && !isStructured(row) && !Array.isArray(row.value)) {
+    const trimmed = text.trim();
+    if (!choices.includes(trimmed)) {
+      throw new Error(`${row.key} takes one of: ${choices.join(', ')}`);
+    }
+    return trimmed;
   }
   if (isTable(row)) {
     let parsed;
@@ -111,8 +145,22 @@ export function parseDraft(row, text) {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(`${row.key} takes a JSON object`);
     return parsed;
   }
+  if (isTableList(row)) {
+    let parsed;
+    try { parsed = JSON.parse(text.trim() || '[]'); } catch { throw new Error(`${row.key} takes a JSON array of objects`); }
+    if (!Array.isArray(parsed) || !parsed.every((entry) => isObject(entry) && !Array.isArray(entry))) throw new Error(`${row.key} takes a JSON array of objects`);
+    return parsed;
+  }
   if (Array.isArray(row.value) || t.includes('list') || t.includes('array')) return text.split('\n').map((s) => s.trim()).filter(Boolean);
   return text;
+}
+/// A number outside the key's declared range is refused before the save, with
+/// the same range the server checks [ORB-22809].
+function inAllowedRange(row, n) {
+  const a = row.allowed;
+  if (a?.kind !== 'range') return n;
+  if ((a.min != null && n < a.min) || (a.max != null && n > a.max)) throw new Error(`${row.key} takes ${a.summary}`);
+  return n;
 }
 // A bare TOML integer token must fit signed 64-bit. String() writes a whole number
 // from 2^63 up to 1e21 as an integer token, so those use exponent (float) form.
@@ -135,54 +183,139 @@ export function cliCmd(row, scope, text) {
   } else if (isTable(row)) {
     let parsed = null;
     try { parsed = JSON.parse(text.trim() || '{}'); } catch { parsed = null; }
-    v = shellQuote(parsed && typeof parsed === 'object' ? tomlInline(parsed) : text);
+    if (parsed && typeof parsed === 'object') {
+      try { v = shellQuote(tomlInline(parsed)); } catch { return '# TOML cannot represent null: remove null values to use this command'; }
+    } else v = shellQuote(text);
+  } else if (isTableList(row)) {
+    let parsed = null;
+    try { parsed = JSON.parse(text.trim() || '[]'); } catch { parsed = null; }
+    if (Array.isArray(parsed)) {
+      try { v = shellQuote(tomlInline(parsed)); } catch { return '# TOML cannot represent null: remove null values to use this command'; }
+    } else v = shellQuote(text);
   } else if (Array.isArray(row.value) || t.includes('list') || t.includes('array')) {
     const entries = text.split('\n').map((s) => s.trim()).filter(Boolean);
     v = shellQuote(`[${entries.map((s) => JSON.stringify(s)).join(', ')}]`);
-  } else if (/^(true|false|[+-]?(\d|inf|nan).*|[[{"'].*)$/i.test(text) || text === '') {
-    v = shellQuote(JSON.stringify(text));
+  } else if (row.allowed?.kind === 'enum' && !isStructured(row) && !Array.isArray(row.value)) {
+    const trimmed = text.trim();
+    if (/^(true|false|[+-]?(\d|inf|nan).*|[[{"'].*)$/i.test(trimmed) || trimmed === '') {
+      v = shellQuote(JSON.stringify(trimmed));
+    } else {
+      v = shellWord(trimmed);
+    }
   } else {
-    v = shellWord(text);
+    // A free-form string keeps its whitespace: Save submits parseDraft's
+    // untrimmed text, so the CLI literal must quote that exact value.
+    v = shellQuote(JSON.stringify(text));
   }
   return `orbit config set ${row.key} ${v}${scope === 'global' ? ' --global' : ''}`;
 }
 
+function keyCount(n) {
+  return `${n} key${n === 1 ? '' : 's'}`;
+}
+
+function hasValue(v) {
+  if (v == null) return false;
+  if (Array.isArray(v)) return v.length > 0;
+  return typeof v !== 'object' || Object.keys(v).length > 0;
+}
+function tagsNode(entries) {
+  return el('div', { class: 'settings-tags' }, entries.map(([text, note]) =>
+    el('span', { class: 'settings-tag' }, [text, note == null ? null : el('span', { class: 'settings-tag-note', text: note })])));
+}
+// A crew pool as tags, each with its share of the draw (`name:weight`, weight 1 when absent).
+function poolTags(values) {
+  const parts = values.map((v) => { const [name, w] = String(v).split(':'); return { name, weight: Number(w) || 1 }; });
+  const total = parts.reduce((sum, p) => sum + p.weight, 0);
+  return tagsNode(parts.map((p) => [p.name, `${total ? Math.round((p.weight / total) * 100) : 0}%`]));
+}
+// A table, or a list of tables, as key/value lines; past three the rest sit
+// behind an "N more" toggle whose state survives a re-render.
+const MAX_VALUE_LINES = 3;
+function valueLines(row, lines) {
+  const list = el('dl', { class: 'settings-kv' });
+  const extra = [];
+  lines.forEach(([name, text], index) => {
+    const pair = [el('dt', { text: name }), el('dd', { text })];
+    if (index >= MAX_VALUE_LINES) extra.push(...pair);
+    list.append(...pair);
+  });
+  if (!extra.length) return [list];
+  const more = el('button', { class: 'settings-more' }); more.type = 'button';
+  const sync = () => {
+    const open = expandedValues.has(row.key);
+    for (const node of extra) node.hidden = !open;
+    more.textContent = open ? 'Show fewer' : `${extra.length / 2} more`;
+    more.setAttribute('aria-expanded', String(open));
+  };
+  more.addEventListener('click', () => {
+    if (!expandedValues.delete(row.key)) expandedValues.add(row.key);
+    sync();
+  });
+  sync();
+  return [list, more];
+}
+function tableEntryLine(entry, index) {
+  if (!isObject(entry) || Array.isArray(entry)) return [String(index + 1), display(entry)];
+  const { name, ...rest } = entry;
+  return typeof name === 'string' && name ? [name, display(rest)] : [String(index + 1), display(entry)];
+}
+function valueNodes(row) {
+  const v = row.value;
+  if (!hasValue(v)) return [el('div', { class: 'settings-value none', text: '—' })];
+  if (Array.isArray(v)) {
+    if (v.some(isObject)) return valueLines(row, v.map(tableEntryLine));
+    return [/crews$|purpose_crews/.test(row.key) ? poolTags(v) : tagsNode(v.map((entry) => [String(entry)]))];
+  }
+  if (typeof v === 'object') return valueLines(row, tableLeaves(v).map(([path, leaf]) => [path, display(leaf)]));
+  return [el('div', { class: 'settings-value', text: display(v) })];
+}
+/// The muted line under a value: what the key accepts [ORB-22809], then the
+/// value it overrides or falls back to, when there is one.
+function valueMeta(row) {
+  const parts = [];
+  const a = row.allowed;
+  if (a?.summary) parts.push([el('span', { class: a.kind === 'format' ? '' : 'mono', title: `Accepts: ${a.summary}`, text: a.summary })]);
+  const lower = (row.shadowed_by || []).map((s) => (s.note ? [s.note] : [`${settingsLayerLabel(s.layer)}: `, el('span', { class: 'mono', text: display(s.value) })]));
+  if (!lower.length && row.state === 'set' && row.fallback && hasValue(row.fallback.value)) {
+    lower.push([`${settingsLayerLabel(row.fallback.layer)}: `, el('span', { class: 'mono', text: display(row.fallback.value) })]);
+  }
+  parts.push(...lower);
+  if (!parts.length) return null;
+  const meta = el('div', { class: 'settings-meta' });
+  parts.forEach((part, index) => { if (index) meta.append(' · '); meta.append(...part); });
+  return meta;
+}
+
 function rowNode(row, context, opts = {}) {
-  const layer = row.state === 'set' ? (row.source?.layer || 'set') : row.state;
-  const node = el('div', { class: `config-row topic-row${opts.inactive ? ' inactive' : ''}` });
+  let action = null;
+  if (context.canEdit && row.settable !== false && !opts.readOnly) {
+    action = el('div', { class: 'settings-act' }, [settingsEditButton(() => openDrawer(row, context, opts.lockGlobal), `Edit ${row.key}`)]);
+  } else if (row.read_only_reason || opts.readOnly) {
+    action = settingsReadOnlyAction(row.read_only_reason);
+  }
+  const node = settingsRow({
+    name: settingsKeyName(row.key, { label: row.label, description: row.description, prefix: opts.prefix }),
+    value: [...valueNodes(row), valueMeta(row)],
+    source: settingsRowSource(row),
+    action,
+    dim: opts.inactive,
+  });
   node.dataset.key = row.key;
   node.id = `key-${row.key.replace(/[^a-z0-9]+/gi, '-')}`;
-  const pool = Array.isArray(row.value) && /crews$|purpose_crews/.test(row.key) ? weightBar(row.value) : null;
-  node.append(
-    el('span', { class: 'topic-label' }, [el('span', { text: row.label || row.key }), el('span', { class: 'config-key mono', text: row.key })]),
-    el('span', { class: 'config-value mono', text: display(row.value) }),
-    el('span', { class: `config-source ${layer}`, text: layer }),
-    el('span', { class: 'topic-diff', text: diffText(row) }),
-  );
-  if (pool) node.appendChild(pool);
-  if (opts.inactive) node.appendChild(el('span', { class: 'config-source topic-inactive', text: 'inactive — review.timing is off' }));
-  if (context.canEdit && row.settable !== false && !opts.readOnly) {
-    const b = el('button', { class: 'config-action', text: 'Edit' }); b.type = 'button';
-    b.addEventListener('click', () => openDrawer(row, context, opts.lockGlobal));
-    node.appendChild(b);
-  } else if (row.read_only_reason || opts.readOnly) {
-    node.appendChild(el('span', { class: 'topic-diff topic-readonly', text: row.read_only_reason || 'read-only' }));
-  }
   return node;
 }
-function weightBar(values) {
-  const wrap = el('span', { class: 'topic-pool' });
-  let total = 0; const parts = values.map((v) => { const [n, w] = String(v).split(':'); const weight = Number(w) || 1; total += weight; return { n, weight }; });
-  for (const p of parts) { const s = el('span', { class: 'topic-pool-seg', text: `${p.n} ${total ? Math.round((p.weight / total) * 100) : 0}%` }); s.style.flexGrow = String(p.weight); wrap.appendChild(s); }
-  return wrap;
+function sectionSlug(title) {
+  return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
-function section(title, rows, context, opts) {
-  const sec = el('section', { class: 'panel config-section' });
-  sec.appendChild(el('header', {}, [el('span', { class: 'config-section-title', text: title }), el('span', { class: 'count', text: `${rows.length} keys` })]));
-  const body = el('div', { class: 'config-section-body' });
-  if (!rows.length) body.appendChild(el('div', { class: 'config-empty', text: 'No keys in this section.' }));
+// A section of key rows. `opts.lead` rows (not keys) come first and are not counted.
+function keySection(title, rows, context, opts = {}) {
+  const { section, body } = settingsSection(title, { ...opts, count: keyCount(rows.length) });
+  const lead = opts.lead || [];
+  if (!rows.length && !lead.length) body.appendChild(el('div', { class: 'settings-empty', text: 'No keys in this section.' }));
+  body.append(...lead);
   for (const r of rows) body.appendChild(rowNode(r, context, opts));
-  sec.appendChild(body); return sec;
+  return section;
 }
 
 function ownsDrawerMutation(session) {
@@ -225,6 +358,8 @@ function drawerNode(payload, context) {
   panel.appendChild(el('h3', { text: row.label || row.key }));
   panel.appendChild(el('div', { class: 'config-key mono', text: row.key }));
   if (row.description) panel.appendChild(el('p', { text: row.description }));
+  if (row.detail) panel.appendChild(el('p', { class: 'drawer-detail', text: row.detail }));
+  if (row.allowed?.summary) panel.appendChild(el('div', { class: 'config-note drawer-allowed', text: `Accepts: ${row.allowed.summary}` }));
   const chain = el('div', { class: 'drawer-chain' });
   chain.appendChild(el('div', { text: `built-in: ${display(row.built_in?.value)}` }));
   for (const s of row.shadowed_by || []) chain.appendChild(el('div', { text: `${s.layer}: ${display(s.value)}` }));
@@ -242,11 +377,23 @@ function drawerNode(payload, context) {
   if (session.lockGlobal) panel.appendChild(el('div', { class: 'config-note', text: 'This key can only be written to the global file.' }));
   let field;
   if ((row.options || []).length) {
-    field = el('select', { class: 'config-input' });
-    for (const o of row.options) { const opt = el('option', { text: o }); opt.value = o; if (o === session.text) opt.selected = true; field.appendChild(opt); }
+    const options = row.options;
+    // An unset choice has an empty draft, but a select shows its first option.
+    // Copy that option into the draft so Save and the CLI hint match the display.
+    if (session.text === '') session.text = options[0];
+    field = el('select', { class: 'settings-input' });
+    for (const o of options) { const opt = el('option', { text: o }); opt.value = o; if (o === session.text) opt.selected = true; field.appendChild(opt); }
+    field.value = session.text;
     field.addEventListener('change', () => { session.text = field.value; const c = panel.querySelector('.drawer-cli'); if (c) c.textContent = cliCmd(row, session.scope, session.text); });
+  } else if (row.allowed?.kind === 'range' && (row.value_type === 'integer' || row.value_type === 'number')) {
+    field = el('input', { class: 'settings-input mono', type: 'number' });
+    if (row.allowed.min != null) field.min = String(row.allowed.min);
+    if (row.allowed.max != null) field.max = String(row.allowed.max);
+    field.step = row.allowed.integer ? '1' : 'any';
+    field.value = session.text;
+    field.addEventListener('input', () => { session.text = field.value; const c = panel.querySelector('.drawer-cli'); if (c) c.textContent = cliCmd(row, session.scope, session.text); });
   } else {
-    field = el('textarea', { class: 'config-input' }); field.value = session.text; field.rows = Array.isArray(row.value) ? 4 : 2;
+    field = el('textarea', { class: 'settings-input' }); field.value = session.text; field.rows = isTableList(row) ? 8 : Array.isArray(row.value) ? 4 : 2;
     field.addEventListener('input', () => { session.text = field.value; const c = panel.querySelector('.drawer-cli'); if (c) c.textContent = cliCmd(row, session.scope, session.text); });
   }
   panel.appendChild(field);
@@ -263,91 +410,241 @@ function drawerNode(payload, context) {
     ? [['Seed from global', 'seed-from-global'], ['Start empty', 'fresh']]
     : [['Save', null]];
   for (const [label, init] of saves) {
-    const save = el('button', { class: 'config-action', text: session.pending ? 'Saving…' : label }); save.type = 'button'; save.disabled = session.pending;
+    const save = el('button', { class: 'settings-btn primary', text: session.pending ? 'Saving…' : label }); save.type = 'button'; save.disabled = session.pending;
     if (init) save.dataset.init = init;
     save.addEventListener('click', saveWith(init));
     actions.appendChild(save);
   }
-  const remove = el('button', { class: 'config-action ghost', text: 'Remove workspace value' }); remove.type = 'button'; remove.disabled = session.pending;
+  // A global-only drawer (lockGlobal) has no workspace value to clear, so its
+  // Remove clears the global value; the label names the scope it removes.
+  const removeScope = session.lockGlobal ? 'global' : 'workspace';
+  const remove = el('button', { class: 'settings-btn ghost', text: `Remove ${removeScope} value` }); remove.type = 'button'; remove.disabled = session.pending;
   remove.addEventListener('click', () => submitDrawerMutation(session, context, (visit) =>
-    requestJson(`/api/config/keys/${encodeURIComponent(row.key)}?scope=workspace`, 'DELETE', undefined, visit)));
-  const close = el('button', { class: 'config-action ghost', text: 'Close' }); close.type = 'button';
+    requestJson(`/api/config/keys/${encodeURIComponent(row.key)}?scope=${removeScope}`, 'DELETE', undefined, visit)));
+  const close = el('button', { class: 'settings-btn ghost', text: 'Close' }); close.type = 'button';
   close.addEventListener('click', () => { drawer = null; context.rerender?.(); });
   actions.append(remove, close); panel.appendChild(actions);
   return panel;
 }
+// The bulk-removal outcome. A clean removal expires on its own; one that names
+// failures stays until dismissed, since the operator acts on it.
+function noticeNode(context) {
+  if (!notice) return null;
+  const shown = notice;
+  const dismiss = el('button', { class: 'settings-btn ghost', text: 'Dismiss', title: 'Dismiss this notice' }); dismiss.type = 'button';
+  dismiss.addEventListener('click', () => { if (notice === shown) { notice = null; context.rerender?.(); } });
+  return el('div', { class: 'settings-callout', role: 'status' }, [el('span', { text: shown.text }), ' ', dismiss]);
+}
+function showNotice(next, context) {
+  notice = next;
+  if (next.failed) return;
+  setTimeout(() => { if (notice === next) { notice = null; context.rerender?.(); } }, NOTICE_MS);
+}
 function finish(body, payload, context, nodes) {
-  const wrap = el('div', { class: 'topic-page' });
-  if (notice) wrap.appendChild(el('div', { class: 'config-note', text: notice }));
+  const wrap = el('div', { class: 'settings-stack' });
+  const note = noticeNode(context); if (note) wrap.appendChild(note);
   for (const n of nodes) if (n) wrap.appendChild(n);
   const d = drawerNode(payload, context); if (d) wrap.appendChild(d);
   body.appendChild(wrap);
 }
 
+// The collapsed sections in force. A search keeps its own set: its matches open
+// for discoverability, explicit collapses made during it stay in that set, and
+// the saved layout is untouched until the search clears.
+function workflowCollapsedSet() {
+  return workflowQuery.trim() ? workflowSearchCollapsed : workflowCollapsed;
+}
+
 export function renderWorkflow(body, payload, context) {
   const rows = flatten(payload).filter((r) => topicOf(r.key) === 'workflow' && !r.key.startsWith('workflow.resource_throttle.'));
-  const used = new Set(); const nodes = [];
-  const binding = payload.workspace_binding;
-  if (binding) nodes.push(el('div', { class: 'config-note', text: `Registry: base_branch ${binding.base_branch || '–'} · ship_mode ${binding.ship_mode || '–'}` }));
+  const used = new Set();
+  const groups = [];
   for (const [title, pred] of WORKFLOW_SECTIONS) {
     const sec = rows.filter((r) => pred(r.key, payload)); sec.forEach((r) => used.add(r.key));
-    nodes.push(section(title, sec, context));
+    groups.push({ title, id: `workflow-section-${sectionSlug(title)}`, rows: sec });
   }
   const rest = rows.filter((r) => !used.has(r.key));
-  if (rest.length) nodes.push(section('Other workflow keys', rest, context));
+  if (rest.length) groups.push({ title: 'Other', id: 'workflow-section-other', rows: rest });
+  const query = workflowQuery.trim().toLowerCase();
+  const matches = (r) => !query || `${r.key} ${r.label || ''} ${display(r.value)}`.toLowerCase().includes(query);
+  const shown = groups
+    .map((g) => ({ ...g, rows: query ? g.rows.filter(matches) : g.rows }))
+    .filter((g) => !query || g.rows.length);
+  const nodes = [];
+  // Direct navigation from the bar: jump to any section (expanding it),
+  // filter to matching keys, or collapse sections to a bounded subset. Every
+  // control is a native button/input so the whole set is keyboard reachable.
+  const jumps = el('nav', { class: 'settings-jump' });
+  jumps.setAttribute('aria-label', 'Workflow sections');
+  for (const g of shown) {
+    const jump = el('button', { class: 'settings-jump-link', text: g.title });
+    jump.type = 'button';
+    jump.dataset.workflowTarget = g.id;
+    jump.addEventListener('click', () => {
+      workflowCollapsedSet().delete(g.id);
+      context.rerender?.();
+      const target = document.getElementById(g.id);
+      if (!target) return;
+      syncSettingsBarHeight(document.getElementById('config-controls'));
+      target.scrollIntoView({ block: 'start' });
+      target.querySelector('.settings-section-toggle')?.focus({ preventScroll: true });
+    });
+    jumps.appendChild(jump);
+  }
+  const search = settingsSearchField({
+    cls: 'workflow-search', placeholder: 'Search settings', label: 'Search workflow keys', value: workflowQuery,
+    onInput: (input) => {
+      workflowQuery = input.value;
+      if (!workflowQuery.trim()) workflowSearchCollapsed = new Set();
+      context.rerender?.();
+      const rebuilt = document.querySelector('input.workflow-search');
+      if (rebuilt) { rebuilt.focus({ preventScroll: true }); rebuilt.setSelectionRange(rebuilt.value.length, rebuilt.value.length); }
+    },
+  });
+  // Expand all and Collapse all act on the sections the view shows, so a search
+  // collapses only its matches. Each keeps keyboard focus on its own button.
+  // The text hides in a narrow pane (settings.css), so the label is also the name.
+  const quiet = (cls, icon, label, onClick) => {
+    const button = el('button', { class: `settings-quiet ${cls}`, 'aria-label': label, title: label }, [settingsIcon(icon), el('span', { class: 'settings-quiet-label', text: label })]);
+    button.type = 'button';
+    button.addEventListener('click', () => {
+      onClick(); context.rerender?.();
+      document.querySelector(`button.${cls}`)?.focus({ preventScroll: true });
+    });
+    return button;
+  };
+  const expandAll = quiet('workflow-expand-all', 'expand', 'Expand all', () => workflowCollapsedSet().clear());
+  const collapseAll = quiet('workflow-collapse-all', 'collapse', 'Collapse all', () => {
+    const collapsed = workflowCollapsedSet();
+    collapsed.clear(); for (const g of shown) collapsed.add(g.id);
+  });
+  if (query && !shown.length) {
+    const empty = el('section', { class: 'settings-section' });
+    empty.appendChild(el('div', { class: 'settings-empty', text: 'No workflow keys match this search. Clear the search to show every key.' }));
+    nodes.push(empty);
+  }
+  // Shipping opens with what the workspace registry recorded: it is not a
+  // config key, so it is a read-only row and stays out of the key count.
+  const binding = payload.workspace_binding;
+  const bindingRow = () => settingsRow({
+    name: settingsLabelName('Workspace registry', 'Recorded when the workspace was registered.'),
+    value: [tagsNode([['base_branch', binding.base_branch || '–'], ['ship_mode', binding.ship_mode || '–']])],
+    source: settingsSource('registry'),
+    action: settingsReadOnlyAction(null),
+  });
+  for (const g of shown) {
+    nodes.push(keySection(g.title, g.rows, context, {
+      id: g.id,
+      lead: binding && !query && g.title === 'Shipping' ? [bindingRow()] : [],
+      collapsible: true,
+      collapsed: workflowCollapsedSet().has(g.id),
+      onToggle: () => {
+        const collapsed = workflowCollapsedSet();
+        if (collapsed.has(g.id)) collapsed.delete(g.id); else collapsed.add(g.id);
+        context.rerender?.();
+        document.getElementById(g.id)?.querySelector('.settings-section-toggle')?.focus({ preventScroll: true });
+      },
+    }));
+  }
   finish(body, payload, context, nodes);
+  return { lead: [jumps, search], actions: [expandAll, collapseAll], sticky: true };
 }
 export function renderExecution(body, payload, context) {
   const rows = flatten(payload).filter((r) => r.key.startsWith('execution.'));
   const nodes = [];
-  if (payload.layers?.execution_not_inherited) nodes.push(el('div', { class: 'config-warning', text: 'execution.* keys in the global file are not inherited while this workspace sets execution policy; the workspace values below are in force.' }));
-  nodes.push(section('Execution', rows, context));
-  const paths = el('section', { class: 'panel config-section' });
-  paths.appendChild(el('header', {}, [el('span', { class: 'config-section-title', text: 'Paths' })]));
-  const pb = el('div', { class: 'config-section-body' });
-  for (const p of payload.paths || []) pb.appendChild(el('div', { class: 'config-row topic-row topic-plain' }, [el('span', { class: 'config-key mono', text: p.label || p.name || '' }), el('span', { class: 'config-value mono', text: p.path || p.value || '' })]));
-  paths.appendChild(pb); nodes.push(paths);
+  if (payload.layers?.execution_not_inherited) nodes.push(el('div', { class: 'settings-callout warn', text: 'execution.* keys in the global file are not inherited while this workspace sets execution policy; the workspace values below are in force.' }));
+  nodes.push(keySection('Execution', rows, context));
+  const paths = settingsSection('Paths');
+  for (const p of payload.paths || []) {
+    paths.body.appendChild(settingsRow({ name: settingsLabelName(p.label || p.name || ''), value: [el('div', { class: 'settings-value', text: p.path || p.value || '' })], wide: true }));
+  }
+  nodes.push(paths.section);
   finish(body, payload, context, nodes);
+  return {};
+}
+// The server's one-line account of a review layer runs long, so it is clamped
+// to one line; "Show full" appears only while the line is actually cut.
+let clampObserver = null;
+function syncClamp(clamp) {
+  const more = clamp.nextElementSibling;
+  if (more && !clamp.classList.contains('full')) more.hidden = clamp.scrollWidth <= clamp.clientWidth;
+}
+function clampedLine(id, text) {
+  const clamp = el('span', { class: 'settings-clamp', text });
+  const more = el('button', { class: 'settings-more' }); more.type = 'button';
+  const sync = () => {
+    const open = expandedValues.has(id);
+    clamp.classList.toggle('full', open);
+    more.textContent = open ? 'Show less' : 'Show full';
+    more.setAttribute('aria-expanded', String(open));
+    if (open) more.hidden = false; else syncClamp(clamp);
+  };
+  more.addEventListener('click', () => {
+    if (!expandedValues.delete(id)) expandedValues.add(id);
+    sync();
+  });
+  sync();
+  if (typeof ResizeObserver === 'function') {
+    clampObserver ||= new ResizeObserver((entries) => { for (const entry of entries) syncClamp(entry.target); });
+    clampObserver.observe(clamp);
+    // The observer keeps a target until unobserve. A Settings poll replaces
+    // this line, and resetPanel drops the body; both run teardownNode.
+    clamp.teardown = () => clampObserver.unobserve(clamp);
+  }
+  return el('div', { class: 'settings-meta settings-line' }, [clamp, more]);
 }
 export function renderReview(body, payload, context) {
   const map = byKey(payload); const nodes = [];
   const review = payload.review || {};
-  const layers = el('section', { class: 'panel config-section' });
-  layers.appendChild(el('header', {}, [el('span', { class: 'config-section-title', text: 'Review layers' })]));
-  const lb = el('div', { class: 'config-section-body' });
+  const layers = settingsSection('Review layers');
   for (const [id, label] of [['before_pr','Before PR'],['before_landing','Before landing'],['after_landing','After landing']]) {
     const step = review[id] || {};
-    lb.appendChild(el('div', { class: 'config-row topic-row topic-plain' }, [el('span', { class: 'topic-label', text: label }), el('span', { class: 'topic-value-cell' }, [el('span', { class: `config-source ${step.enabled ? 'workspace' : ''}`, text: step.enabled ? 'on' : 'off' }), el('span', { class: 'config-value', text: step.line || '' })])]));
+    layers.body.appendChild(settingsRow({
+      name: settingsLabelName(label),
+      value: [
+        el('div', { class: 'settings-label' }, [el('span', { class: `settings-dot${step.enabled ? ' on' : ''}` }), step.enabled ? 'On' : 'Off']),
+        step.line ? clampedLine(`review-layer:${id}`, step.line) : null,
+      ],
+      wide: true,
+    }));
   }
-  if (review.healthy === false) lb.appendChild(el('div', { class: 'config-warning', text: review.error || 'Review diagnostics unavailable.' }));
-  layers.appendChild(lb); nodes.push(layers);
+  if (review.healthy === false) layers.body.appendChild(el('div', { class: 'settings-note warn', text: review.error || 'Review diagnostics unavailable.' }));
+  nodes.push(layers.section);
   const timing = map.get('review.timing'); const timingOff = !timing || timing.value === 'off' || timing.value == null;
-  nodes.push(section('Timing', [timing].filter(Boolean), context));
-  nodes.push(section('Reviewer pool', ['workflow.purpose_crews.review','workflow.purpose_crews.pre_landing_review'].map((k) => map.get(k)).filter(Boolean), context));
-  nodes.push(section('Before landing', ['review.minutes','review.before_landing_hosts','review.baseline_commands'].map((k) => map.get(k)).filter(Boolean), context, { inactive: timingOff }));
-  nodes.push(section('Finding verification', ['review.verify_findings'].map((k) => map.get(k)).filter(Boolean), context));
-  const link = el('a', { class: 'config-action ghost', text: 'finding_verification routine in Automation' }); link.href = '#operations/routines';
-  const diag = el('a', { class: 'config-action ghost', text: 'Full review diagnostics' }); diag.href = '#diagnostics';
-  nodes.push(el('div', { class: 'topic-links' }, [link, diag]));
-  const rest = flatten(payload).filter((r) => topicOf(r.key) === 'review' && !['review.timing','review.minutes','review.before_landing_hosts','review.baseline_commands','review.verify_findings','workflow.purpose_crews.review','workflow.purpose_crews.pre_landing_review'].includes(r.key));
-  if (rest.length) nodes.push(section('Other review keys', rest, context));
+  nodes.push(keySection('Timing', [timing].filter(Boolean), context));
+  nodes.push(keySection('Reviewer pool', ['workflow.purpose_crews.review','workflow.purpose_crews.pre_landing_review'].map((k) => map.get(k)).filter(Boolean), context, { prefix: 'workflow.purpose_crews.' }));
+  // The inactive state is said once, on the header; its rows only dim.
+  nodes.push(keySection('Before landing', ['review.minutes','review.before_landing_hosts','review.baseline_commands'].map((k) => map.get(k)).filter(Boolean), context, { inactive: timingOff, state: timingOff ? { text: 'Inactive: review.timing is off' } : null }));
+  const rest = flatten(payload).filter((r) => topicOf(r.key) === 'review' && !['review.timing','review.minutes','review.before_landing_hosts','review.baseline_commands','workflow.purpose_crews.review','workflow.purpose_crews.pre_landing_review'].includes(r.key));
+  if (rest.length) nodes.push(keySection('Other review keys', rest, context));
   finish(body, payload, context, nodes);
+  const diag = el('a', { text: 'Review diagnostics' }); diag.href = '#diagnostics';
+  return { lead: [el('div', { class: 'settings-bar-text' }, [diag])] };
 }
 export function renderMachine(body, payload, context, throttleNode) {
   // payload is the global file view merged with effective+host by config.js
   const eff = payload.effective || payload; const map = byKey(eff);
-  const nodes = [el('div', { class: 'config-note', text: 'Edits on this page write only ~/.orbit/config.toml (the global file).' })];
+  const nodes = [];
   const identity = ['machine.id','machine.name','machine.task_prefix'].map((k) => map.get(k)).filter(Boolean);
-  const idSec = el('section', { class: 'panel config-section' });
-  idSec.appendChild(el('header', {}, [el('span', { class: 'config-section-title', text: 'Machine identity' })]));
-  const ib = el('div', { class: 'config-section-body' });
-  for (const r of identity) ib.appendChild(rowNode(r, context, { lockGlobal: true, readOnly: r.key !== 'machine.name' }));
-  idSec.appendChild(ib); nodes.push(idSec);
-  nodes.push(section('Auto-concurrency', flatten(eff).filter((r) => r.key.startsWith('machine.auto_concurrency.')), context, { lockGlobal: true }));
-  nodes.push(section('Machine', flatten(eff).filter((r) => r.key.startsWith('machine.') && !r.key.startsWith('machine.auto_concurrency.') && !identity.includes(r)), context, { lockGlobal: true }));
+  const idSec = settingsSection('Machine identity', { count: keyCount(identity.length) });
+  for (const r of identity) idSec.body.appendChild(rowNode(r, context, { lockGlobal: true, readOnly: r.key !== 'machine.name' }));
+  nodes.push(idSec.section);
+  nodes.push(keySection('Auto-concurrency', flatten(eff).filter((r) => r.key.startsWith('machine.auto_concurrency.')), context, { lockGlobal: true }));
+  nodes.push(keySection('Machine', flatten(eff).filter((r) => r.key.startsWith('machine.') && !r.key.startsWith('machine.auto_concurrency.') && !identity.includes(r)), context, { lockGlobal: true }));
   if (throttleNode) nodes.push(throttleNode);
-  nodes.push(section('Tasks', ['tasks.id_start'].map((k) => map.get(k)).filter(Boolean), context, { lockGlobal: true }));
+  // The throttle panel shows only the enabled flag and the per-resource
+  // marks; any other throttle key (today cpu_source) still belongs on this
+  // page, so no machine-topic key is left without a page.
+  const throttleShown = new Set(['workflow.resource_throttle.enabled']);
+  for (const resource of ['cpu', 'memory', 'disk', 'io']) {
+    throttleShown.add(`workflow.resource_throttle.${resource}_high_percent`);
+    throttleShown.add(`workflow.resource_throttle.${resource}_resume_percent`);
+  }
+  const throttleRest = flatten(eff).filter((r) => r.key.startsWith('workflow.resource_throttle.') && !throttleShown.has(r.key));
+  if (throttleRest.length) nodes.push(keySection('Other throttle keys', throttleRest, context, { lockGlobal: true, prefix: 'workflow.resource_throttle.' }));
+  nodes.push(keySection('Tasks', ['tasks.id_start'].map((k) => map.get(k)).filter(Boolean), context, { lockGlobal: true }));
   finish(body, eff, context, nodes);
+  return { lead: [el('div', { class: 'settings-bar-text' }, ['Edits on this page write the global file ', el('span', { class: 'mono', text: '~/.orbit/config.toml' })])] };
 }
 export async function loadRaw(scope, context) {
   const seq = ++rawSeq;
@@ -386,22 +683,18 @@ function isFallbackPreserving(row) {
   if (row.fallback == null) return false;
   return valuesEqual(row.value, row.fallback.value);
 }
-export function renderAllKeys(body, payload, context) {
-  const rows = flatten(payload);
-  const nodes = [];
-  const controls = el('div', { class: 'topic-controls' });
-  const mkSelect = (label, value, options, onChange) => {
-    const s = el('select', { class: 'config-input' }); s.setAttribute('aria-label', label);
-    for (const o of options) { const opt = el('option', { text: o }); opt.value = o; if (o === value) opt.selected = true; s.appendChild(opt); }
-    s.addEventListener('change', () => onChange(s.value)); return s;
-  };
-  controls.append(el('span', { text: 'Layer' }), mkSelect('Layer filter', layerFilter, ['all','built-in','global','workspace'], (v) => { layerFilter = v; context.rerender?.(); }),
-    el('span', { text: 'Topic' }), mkSelect('Topic filter', topicFilter, ['all','workflow','execution','review','machine','crews','housekeeping'], (v) => { topicFilter = v; context.rerender?.(); }));
-  nodes.push(controls);
-  const restates = rows.filter(isFallbackPreserving);
+// Topics that have their own Settings page. Other shows every key
+// topicOf() files elsewhere, so a key added later cannot end up on no page.
+const TOPIC_PAGES = new Set(['workflow', 'execution', 'review', 'machine', 'crews']);
+export function renderOther(body, payload, context) {
+  const rows = flatten(payload).filter((r) => !TOPIC_PAGES.has(topicOf(r.key)));
+  const nodes = [keySection('Other', rows, context)];
+  // The cleanup section moved here whole from All keys: it lists every
+  // workspace value whose removal keeps the effective value, on any topic.
+  const restates = flatten(payload).filter(isFallbackPreserving);
   if (restates.length) {
-    const sec = section('Keys that only repeat the global or built-in value', restates, context);
-    const bulk = el('button', { class: 'config-action', text: `Remove all ${restates.length} workspace values` }); bulk.type = 'button';
+    const sec = keySection('Keys that only repeat the global or built-in value', restates, context);
+    const bulk = el('button', { class: 'settings-btn', text: `Remove all ${restates.length} workspace values` }); bulk.type = 'button';
     bulk.disabled = !context.canEdit || bulkRemoval !== null;
     bulk.addEventListener('click', async () => {
       if (!context.canEdit || bulkRemoval) return;
@@ -423,28 +716,37 @@ export function renderAllKeys(body, payload, context) {
             failures.push(`${r.key}: ${error.message}`);
           }
         }
-        notice = `Removed ${ok} workspace value(s).${failures.length ? ' Failed: ' + failures.join('; ') : ''}`;
+        showNotice({ text: `Removed ${ok} workspace value(s).${failures.length ? ' Failed: ' + failures.join('; ') : ''}`, failed: failures.length > 0 }, context);
         await context.reload();
       } finally {
         if (ownsRemoval()) { bulkRemoval = null; context.rerender?.(); }
       }
     });
-    sec.appendChild(bulk); nodes.push(sec);
+    sec.appendChild(el('div', { class: 'settings-actions' }, [bulk])); nodes.push(sec);
   }
-  const filtered = rows.filter((r) => (layerFilter === 'all' || (r.source?.layer || r.state) === layerFilter || (layerFilter === 'built-in' && r.state !== 'set')) && (topicFilter === 'all' || topicOf(r.key) === topicFilter));
-  nodes.push(section('All keys', filtered, context));
-  const raw = el('section', { class: 'panel config-section' });
-  raw.appendChild(el('header', {}, [el('span', { class: 'config-section-title', text: 'Raw TOML' })]));
-  const rb = el('div', { class: 'config-section-body topic-actions' });
+  const raw = settingsSection('Raw TOML', { id: 'config-raw-toml' });
+  const rb = el('div', { class: 'settings-actions' });
   for (const scope of ['workspace', 'global']) {
-    const b = el('button', { class: 'config-action ghost', text: `Show ${scope} file` }); b.type = 'button';
+    const b = el('button', { class: 'settings-btn ghost', text: `Show ${scope} file` }); b.type = 'button';
     b.addEventListener('click', () => loadRaw(scope, context)); rb.appendChild(b);
   }
   if (rawScope) {
     const where = rawScope === 'global' ? 'every workspace on this machine (~/.orbit/config.toml)' : 'this workspace (.orbit/config.toml)';
-    rb.appendChild(el('div', { class: 'topic-raw-label mono', text: `Showing ${where}` }));
-    rb.appendChild(el('pre', { class: 'topic-raw mono', text: rawText == null ? 'Loading…' : (rawText || '(empty file)') }));
+    rb.appendChild(el('div', { class: 'settings-raw-label', text: `Showing ${where}` }));
+    rb.appendChild(el('pre', { class: 'settings-raw mono', text: rawText == null ? 'Loading…' : (rawText || '(empty file)') }));
   }
-  raw.appendChild(rb); nodes.push(raw);
+  raw.body.appendChild(rb); nodes.push(raw.section);
   finish(body, payload, context, nodes);
+  // A deep link (?key=…) that lands here names a row on this short page:
+  // bring it into view once per visit, preserving operator scrolling during
+  // raw-file reads, reloads and drawer rerenders. Other keys route elsewhere.
+  const linked = new URLSearchParams((window.location.hash.split('?')[1] || '')).get('key');
+  if (linked && window.location.hash !== landedOtherHash && rows.some((r) => r.key === linked)) {
+    const target = document.getElementById(`key-${linked.replace(/[^a-z0-9]+/gi, '-')}`);
+    if (target && typeof target.scrollIntoView === 'function') {
+      target.scrollIntoView({ block: 'start' });
+      landedOtherHash = window.location.hash;
+    }
+  }
+  return {};
 }

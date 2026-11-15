@@ -52,6 +52,43 @@ pub fn is_host_credentialed_read(tool: &str) -> bool {
     HOST_CREDENTIALED_READS.contains(&tool)
 }
 
+/// The built-in a sandboxed resident cycle starts a leaf run through. The
+/// broker submits it on the host, so the leaf's worker starts beside the
+/// cycle's read-only sandbox instead of inside it, where it could neither write
+/// its worktree nor start its own agent sandbox.
+pub const BROKERED_RESIDENT_SHIP_TOOL: &str = crate::authorization::WORKFLOW_SHIP_OPERATION_ID;
+
+/// The built-in a sandboxed resident cycle escalates through. The broker raises
+/// it on the host, because the raise takes a workspace-wide lock in `.orbit`,
+/// which the cycle's sandbox mounts read-only.
+pub const BROKERED_RESIDENT_RAISE_TOOL: &str = "orbit.decision.raise";
+
+/// The built-in a sandboxed resident cycle lands a delivery through. The broker
+/// runs it on the host, because the merge needs the host's `gh` credentials.
+pub const BROKERED_RESIDENT_LAND_TOOL: &str = crate::authorization::WORKFLOW_LAND_OPERATION_ID;
+
+/// The built-in a resident cycle moves a task to `done` through. Only that move
+/// is brokered ([`is_brokered_resident_completion`]): the guard asks the forge,
+/// with the host's `gh` credentials, whether the task's pull request is open.
+pub const BROKERED_RESIDENT_TASK_UPDATE_TOOL: &str = "orbit.task.update";
+
+/// Whether `tool` is a built-in the broker runs for a resident cycle's run,
+/// whatever its input.
+pub fn is_brokered_resident_tool(tool: &str) -> bool {
+    tool == BROKERED_RESIDENT_SHIP_TOOL
+        || tool == BROKERED_RESIDENT_RAISE_TOOL
+        || tool == BROKERED_RESIDENT_LAND_TOOL
+}
+
+/// Whether this call is a resident cycle's move of a task to `done`.
+pub fn is_brokered_resident_completion(tool: &str, input: &serde_json::Value) -> bool {
+    tool == BROKERED_RESIDENT_TASK_UPDATE_TOOL
+        && input
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|status| status.trim() == "done")
+}
+
 /// Executes one authenticated request for the run a broker serves.
 ///
 /// The implementation holds the run's dispatch record, so everything that

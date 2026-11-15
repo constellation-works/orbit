@@ -1,8 +1,8 @@
 ---
 title: Federated MCP — Decisions
 owner: grok
-last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_updated: 2026-11-14
+last_validated: 2026-11-05
 status: Draft
 feature: federated-mcp
 doc_role: decisions
@@ -11,7 +11,7 @@ summary: Standing rules for the federated MCP mux: destinations are configured, 
 tags: [federated-mcp, mcp, host-registry, multi-host]
 paths: ["crates/orbit-mcp/**", "crates/orbit-registry/**", "crates/orbit-core/**"]
 related_features: [federated-mcp, host-registry, mcp-bridge, remote-access]
-related_artifacts: [ORB-14449, ORB-14448, ORB-12564, ORB-12563, ORB-11184, ORB-11053, ORB-11052, ORB-11044, ORB-11023, ORB-11010, ORB-11009, ORB-11008]
+related_artifacts: [ORB-24631, ORB-24377, ORB-21263, ORB-14449, ORB-14448, ORB-12564, ORB-12563, ORB-11184, ORB-11053, ORB-11052, ORB-11044, ORB-11023, ORB-11010, ORB-11009, ORB-11008]
 ---
 
 # Federated MCP — Decisions
@@ -200,7 +200,7 @@ Three rules make that operational:
 2. **The label stays a label.** `--remote-caller-machine-id` is attribution: it marks the session's transport as SSH, names the calling machine in the destination's `authorization` audit rows and in a trusted-host admission, and contributes nothing to any decision. It is not renamed, merged with a credential, or promoted.
 3. **The deny case is `authorized_keys`.** Removing a key is the only boundary this machine ever had. If per-workspace narrowing of remote operator is wanted later, it returns as a small opt-in on the *caller* side, not as a destination default.
 
-What is kept is what actually describes something the destination can observe: capability class (`control_plane` / `execute`) and workspace scope describe the checkout, not the caller; the `authorization` audit rows; and `orbit mcp listen` staying agent-only, because a socket authenticates no client and that reasoning is untouched by any of this.
+What is kept is what actually describes something the destination can observe: capability class (`control_plane` / `execute`) and workspace scope describe the checkout, not the caller; the `authorization` audit rows; and `orbit mcp listen` staying agent-only. A later peer user-id check admits only this server's user and still does not promote that session to operator.
 
 Rejected alternative: **fix the propagation and keep the file as an optional ceiling.** It would have satisfied the immediate bug while leaving every destination a setup step, a doctor row, and a silent-downgrade failure mode for a ceiling nothing can enforce. Also rejected: **a compatibility window** in which a present callers file still caps a session. A file that sometimes decides is worse than one that never does; migration is instead one `warn!` at startup and a `orbit doctor` row telling the operator to delete it.
 
@@ -208,15 +208,60 @@ This is the same rationale as [ORB-12563] on the dashboard: an authorization sta
 
 ### Consequences
 
-- `orbit mcp serve --mode federated --operator` yields operator-capable sessions on every reachable destination without per-destination caller grants. Remote destinations still require registration with `orbit host add`; calls remain subject to the destination's advertised tools and workspace capability checks. Current examples include `orbit.agent.invoke`, `orbit.workflow.ship`, and `orbit.command.exec`.
+- `orbit mcp serve --mode federated --operator` yields operator-capable sessions on every reachable destination without per-destination caller grants. Remote destinations still require registration with `orbit host add`; calls remain subject to the destination's advertised tools and workspace capability checks. Current examples include `orbit.workflow.ship` and `orbit.command.exec`.
 - `crates/orbit-mcp/src/remote/callers.rs` and `ssh_auth.rs` are gone, with `orbit mcp callers`, `--accept-ssh`, `--caller`, `ORBIT_MCP_SSH_ACCEPTANCE`, `~/.orbit/mcp-ssh-acceptance/`, the setgid login-shell launcher, `CallerIdentityProof`, `RemoteAgentInvokeMode`, `RemoteCallerGrant`, and `CallerProvenance::RemoteGrant`. Roughly 2,500 lines of authorization machinery leave with them.
 - Trusted-host admission is `operator`, full stop. The durable admission keeps `caller_machine_id` for attribution and no longer records an identity proof or a trust mode, because there is only one.
 - Cost: **a destination is as exposed as its `authorized_keys` and no more.** That was already true — the file was editable by the same login — but it is now stated rather than obscured by a ceiling that implied otherwise.
 - Cost: **an operator who wants a genuinely narrower remote surface has nothing to reach for.** The answer is a second SSH key and account, or not granting the login; Orbit deliberately does not reimplement multi-tenancy.
 
+## An MCP role limits the surface, never the authority
+
+**Recorded:** 2026-11 · [ORB-21263]
+
+**Code anchors:** `crates/orbit-types/src/tool/mcp_toolset.rs::McpRole`, `crates/orbit-tools/src/mcp/toolsets.rs::builtin_mcp_toolset`, `crates/orbit-mcp/src/toolset.rs::with_mcp_toolsets`, `crates/orbit-mcp/src/remote/proxy.rs::remote_surface_args`
+
+### Context
+
+Every `orbit mcp serve` advertised the always-on default toolset, about 40 builtin tools, and opt-in toolsets could only add to it. Manager, resident-cycle, operator-console and leaf-agent sessions all carried the same large surface. Daniel (2026-11-02): "mcp surfaces are getting too large lately" and "we may need a task that will group mcp toolsets into roles."
+
+### Decision
+
+**Split the default toolset into capability toolsets, put every tool in exactly one, and define roles as named sets of toolsets in one place.** `orbit mcp serve --role <role>` (or the global `machine.mcp.role`) serves the role's toolsets plus the always-on discovery `core`; `--toolset` adds to it. The prescriptive contract is [specs/mcp-roles.md](./specs/mcp-roles.md).
+
+1. **A role is placement, not permission.** It limits what MCP lists and dispatches, exactly as a disabled toolset already did. Operator-only tools still need operator capability under every role, and `orbit tool run`, activities and plugin callbacks see every tool. Making a role grant anything would have created a second authorization axis that a launch argv could widen.
+2. **No role means today's surface.** Without `--role` or `machine.mcp.role` the advertised list is byte-identical to the pre-role default, so running long-lived MCP clients keep working. Changing the default role is a separate decision, after the 30-day compatibility window.
+3. **Placement is one table.** Builtin MCP tools are placed by name in one table; a tool missing from it makes MCP definition building fail, so no tool ships unplaced. Plugin tools fall back to `plugins`; a manifest-declared toolset is deferred because it would be a persisted manifest contract and would let a plugin place itself in a role's surface.
+4. **Size is budgeted.** Each role has a recorded tool-count and approximate-token budget, checked in CI, so a role's surface cannot quietly grow.
+
+Rejected alternative: **a `resident` add-on toolset for the resident orchestrator.** Another opt-in toolset only adds to the 40-tool default; it cannot serve less. Also rejected: **filtering roles by tool annotation** (for example, read-only hints). Annotations are client UX hints and the plugin ones are author-declared, so they are not a stable basis for a surface definition.
+
+### Consequences
+
+- `--toolset default` and `machine.mcp.toolsets = ["default"]` still name the pre-role surface, now the default tier.
+- `orbit tool list` reports a toolset for every tool, `local` for those no server lists.
+- `--mode remote` forwards `--role` to the destination; a destination older than roles refuses a role argv, so roles over remote mode need both hosts on a release that has them (hosts deploy in lockstep). Without a role the remote argv is unchanged.
+- Cost: moving a tool between toolsets changes every role that serves either, which the role budgets and the role roundtrip tests surface in review.
+
+## Routed calls reuse the transport, never what a destination said
+
+**Recorded:** 2026-11 · [ORB-24377], hardened on re-land by [ORB-24631]
+
+### Context
+
+Every routed call spawned `ssh`, started a cold remote `orbit mcp serve` (CLI startup, then a runtime build for the target workspace) and paid an `initialize` round trip before its discovery, `tools/list` and `tools/call`. Only the SSH connection was amortised (`ControlPersist 60`), so cost grew linearly with routed calls from a mux, a follower worker to its owner, or id-routed task calls. The standing rule was "no caching between calls", read as one session per call. The first pooled version parked sessions per argv/binding key and returned a live-but-broken parked session's failure as the call's own; a parked idle runtime could also hold the destination's runtime lock against the next fresh session, whose `tools/call` waited out its whole 900 s delivery budget (the claimed-review bridge hang that got it reverted).
+
+### Decision
+
+The rule forbids carrying anything a destination *said* from one call to the next: snapshots, tool surfaces and health verdicts. It does not forbid reusing the transport. A routed call may check out an idle session (the `ssh` child and its remote `orbit mcp serve`) whose argv and handshake binding match exactly — destination, SSH target, caller machine id, orchestrator, authority, internal-drain and worker-host flags, worker invocation — and must still run live discovery, identity confirmation and `tools/list` on it. Listing keeps its own fresh sessions. Reuse is fenced so a parked session can never be stale, desynchronised or shared: checkout removes it (one in-flight call per session); it is reused only after a bounded MCP `ping` answers exactly with nothing else unread; a reuse health-check or discovery failure discards it and opens fresh, since `ping` and discovery dispatch nothing. A later pre-dispatch `tools/list` failure is returned as a delivery miss, not retried with a fresh session. A session is parked only after an intact dispatched answer (success or the destination's structured refusal) with nothing left unread, at most one parked session exists per destination across all keys, opening any fresh session to a destination closes its parked one first, and a parked session closes after 60 idle seconds. Apply this whenever a change wants to keep anything else between calls.
+
+### Consequences
+
+- N sequential routed calls to one destination inside the idle window spawn one `ssh` child and send one `initialize`; discovery still runs N times.
+- ORB-11023 semantics hold: a lost answer is `outcome_unknown` and its session is discarded; a parked session that fails its reuse health check or this call's discovery is discarded and replaced by a fresh one before anything is dispatched. A later pre-dispatch `tools/list` failure, and a fresh session's failure before dispatch, stays a delivery miss; a fresh session's loss after dispatch is `outcome_unknown`. No path here replays a routed mutation.
+- Cost: an idle remote `orbit mcp serve` per destination lives up to 60 seconds after its last call, and a wedged parked session costs the next call one bounded `ping` (or one discovery) before it is replaced.
+
 ## Task References
 
-- [ORB-11008] — recorded the prior federated MCP policy that these rules implement
 - [ORB-11009] — recorded these standing rules as the contract home (PR #1139)
 - [ORB-11010] — closed the PR #1139 review holes (selector wording, tool class, error precedence, competing authorities)
 - [ORB-11044] — implicit local membership for federated serve
@@ -233,5 +278,8 @@ This is the same rationale as [ORB-12563] on the dashboard: an authorization sta
 - [ORB-12563] — the same rationale applied to the dashboard
 - [ORB-14448] — host file and `orbit host` commands (specified in host-registry)
 - [ORB-14449] — task-prefix routing and `--host` (host-registry)
+- [ORB-21263] — MCP roles and the toolset split
+- [ORB-24377] — routed calls reuse an idle SSH MCP session per destination
+- [ORB-24631] — re-land of that pool with reuse health checks and per-destination parking
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

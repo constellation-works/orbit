@@ -250,6 +250,24 @@ pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
             };
             (status, Json(json!({"error": message, "code": code.as_str()}))).into_response()
         }
+        orbit_core::OrbitError::NoticeRefused { code, message } => {
+            let status = if code == orbit_common::NoticeRefusalCode::NotFound {
+                StatusCode::NOT_FOUND
+            } else if code.is_policy_denial() {
+                StatusCode::FORBIDDEN
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            (status, Json(json!({"error": message, "code": code.as_str()}))).into_response()
+        }
+        orbit_core::OrbitError::TaskPilotRefused { code, message } => (
+            StatusCode::CONFLICT,
+            Json(json!({"error": message, "code": code.as_str()})),
+        )
+            .into_response(),
+        error @ orbit_core::OrbitError::ForceOverridable(_) => {
+            force_overridable_response(error)
+        }
         orbit_core::OrbitError::InvalidInput(msg)
         | orbit_core::OrbitError::ClaimRefused { message: msg, .. } => bad_request(msg),
         orbit_core::OrbitError::InvalidInputDiagnostic { message, .. } => bad_request(message),
@@ -295,6 +313,9 @@ pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
         error @ orbit_core::OrbitError::FrictionNotLocal(_) => friction_not_local_conflict(error),
         error @ orbit_core::OrbitError::ShipRunInFlight { .. } => {
             ship_run_in_flight_conflict(error)
+        }
+        error @ orbit_core::OrbitError::ResumeRunInFlight { .. } => {
+            resume_run_in_flight_conflict(error)
         }
         // A well-formed ship the workspace's remotes cannot deliver as a PR:
         // the caller rebinds the ship mode or tags the task, then retries.
@@ -358,6 +379,24 @@ fn ship_run_in_flight_conflict(error: orbit_core::OrbitError) -> Response {
         .into_response()
 }
 
+fn resume_run_in_flight_conflict(error: orbit_core::OrbitError) -> Response {
+    let (source_run_id, run_id) = error
+        .resume_run_in_flight()
+        .map_or_else(Default::default, |(source_run_id, run_id)| {
+            (source_run_id.to_string(), run_id.to_string())
+        });
+    (
+        StatusCode::CONFLICT,
+        Json(json!({
+            "error": error.to_string(),
+            "code": "resume_run_in_flight",
+            "run_id": run_id,
+            "source_run_id": source_run_id,
+        })),
+    )
+        .into_response()
+}
+
 /// [ORB-10709] Another operator holds this workspace's claim. A 409 for the
 /// same reason a duplicate dispatch is one: the request is well-formed, and the
 /// caller can retry once the claim lapses or is released. The body names the
@@ -402,6 +441,31 @@ fn artifact_conflict(error: orbit_core::OrbitError, code: &'static str) -> Respo
         })),
     )
         .into_response()
+}
+
+/// A refusal `--force` overrides: the dashboard matches on `code` (never
+/// the message) and names the guard from `guard` plus its facts.
+fn force_overridable_response(error: orbit_core::OrbitError) -> Response {
+    let refusal = error.force_overridable();
+    let mut body = json!({
+        "error": refusal.map_or_else(|| error.to_string(), |refusal| refusal.message.clone()),
+        "code": "force_overridable",
+        "guard": refusal.map(|refusal| refusal.kind.as_str()),
+    });
+    if let Some(refusal) = refusal
+        && let Some(object) = body.as_object_mut()
+    {
+        if let Some(run_id) = &refusal.run_id {
+            object.insert("run_id".to_string(), json!(run_id));
+        }
+        if let Some(run_state) = &refusal.run_state {
+            object.insert("run_state".to_string(), json!(run_state));
+        }
+        if let Some(task_status) = &refusal.task_status {
+            object.insert("task_status".to_string(), json!(task_status));
+        }
+    }
+    (StatusCode::BAD_REQUEST, Json(body)).into_response()
 }
 
 pub(super) fn bad_request(message: String) -> Response {
@@ -532,13 +596,25 @@ where
     F: FnOnce() -> Result<T, orbit_core::OrbitError> + Send + 'static,
     T: Send + 'static,
 {
-    match tokio::task::spawn_blocking(op).await {
-        Ok(Ok(value)) => Ok(value),
-        Ok(Err(e)) => Err(Box::new(map_runtime_error(e))),
-        Err(join_err) => Err(Box::new(server_error(orbit_core::OrbitError::Execution(
-            format!("{label} panicked: {join_err}"),
-        )))),
-    }
+    blocking_join(label, op)
+        .await?
+        .map_err(|error| Box::new(map_runtime_error(error)))
+}
+
+/// Run an operation on the blocking pool, mapping only join failures to HTTP.
+///
+/// The operation's result stays intact so callers can audit typed failures or
+/// apply their own HTTP mapping. `label` names the operation in the panic error.
+pub(super) async fn blocking_join<T, F>(label: &str, op: F) -> Result<T, Box<Response>>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(op).await.map_err(|join_err| {
+        Box::new(server_error(orbit_core::OrbitError::Execution(format!(
+            "{label} panicked: {join_err}"
+        ))))
+    })
 }
 
 /// Workspace identity for audit records, resolved on the blocking pool.

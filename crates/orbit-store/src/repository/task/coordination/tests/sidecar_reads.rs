@@ -17,7 +17,7 @@ use super::super::apply::apply_fault::{self, Fault};
 use super::claim_section::Owner;
 use super::commit_replay::leases;
 use crate::contracts::TaskHistoryStoreBackend;
-use crate::driver::file::task_bundle::{PendingWriteGuard, append_jsonl_row};
+use crate::driver::file::task_bundle::{PendingWriteGuard, append_jsonl_rows};
 use crate::repository::task::v2::TaskV2Store;
 
 /// History events and comment messages, read through the store's surface.
@@ -124,16 +124,16 @@ fn a_history_read_settles_an_interrupted_commit_or_write_first() {
         .open(&events)
         .expect("open events");
     writeln!(log, "{last_event}").expect("append event");
-    append_jsonl_row(
+    append_jsonl_rows(
         &bundle_dir.join(TASK_COMMENTS_FILE_NAME),
-        &TaskCommentRowV2 {
+        &[TaskCommentRowV2 {
             schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
             comment_id: "uncommitted".into(),
             at: chrono::Utc::now(),
             by: "codex".into(),
             body: "never committed".into(),
             operation_id: None,
-        },
+        }],
     )
     .expect("append comment");
     // The writer dies before it commits or aborts.

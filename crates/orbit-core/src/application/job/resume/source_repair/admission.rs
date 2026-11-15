@@ -1,14 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
-use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::required_string;
 use orbit_common::security::release::sha256_hex;
+use orbit_common::{OrbitError, SourceRepairAuthorityRefusal, SourceRepairRunStateRefusal};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::{
-    JobRun, JobRunState, JobV2, PR_AUTO_FIX_BUDGET, PipelineState, ReviewAdmission,
+    self, JobRun, JobRunState, JobV2, PR_AUTO_FIX_BUDGET, PipelineState, ReviewAdmission,
     SOURCE_REPAIR_KEY, SOURCE_REPAIR_LINKED, SOURCE_REPAIR_RESERVED, SourceRepairAdmission,
     SourceRepairBinding, pr_auto_fix_attempts,
 };
@@ -43,6 +43,23 @@ pub(super) struct RepairLink {
 
 pub(super) fn refuse(message: impl Into<String>) -> OrbitError {
     OrbitError::JobValidation(format!("source repair refused: {}", message.into()))
+}
+
+/// A refusal caused by the run's state; reports exactly as the [`refuse`] text
+/// it carries, with the reason attached for callers to classify.
+pub(super) fn refuse_run_state(
+    reason: SourceRepairRunStateRefusal,
+    message: impl Into<String>,
+) -> OrbitError {
+    OrbitError::SourceRepairRunStateRefused {
+        reason,
+        message: format!("source repair refused: {}", message.into()),
+    }
+}
+
+/// A named authority refusal; reports exactly as the [`refuse`] text it replaced.
+pub(super) fn refuse_authority(code: SourceRepairAuthorityRefusal) -> OrbitError {
+    OrbitError::SourceRepairAuthorityRefused(code)
 }
 
 pub(super) fn digest(value: &impl serde::Serialize) -> Result<String, OrbitError> {
@@ -95,18 +112,20 @@ pub(super) fn task_pr_association(task: &Task, number: &str, url: &str) -> Resul
             // Key-only references are a supported persisted format. Repository
             // authority comes from the host checkpoints, origin and provider.
             if reference.url.as_deref().is_some_and(|value| value != url) {
-                return Err(refuse(
-                    "task PR association has a conflicting repository or URL",
+                return Err(refuse_authority(
+                    SourceRepairAuthorityRefusal::PrAssociationRepositoryConflict,
                 ));
             }
             associated = true;
         } else if reference.url.as_deref() == Some(url) {
-            return Err(refuse("task PR association has a conflicting number"));
+            return Err(refuse_authority(
+                SourceRepairAuthorityRefusal::PrAssociationNumberConflict,
+            ));
         }
     }
     if !associated {
-        return Err(refuse(
-            "task PR association is missing for the authenticated publication",
+        return Err(refuse_authority(
+            SourceRepairAuthorityRefusal::PrAssociationMissing,
         ));
     }
     Ok(())
@@ -122,7 +141,9 @@ impl OrbitRuntime {
     // policy independent of task selectors allows the host's recorded delivery
     // widening while still refusing configuration changes before source effects.
     fn source_rework_policy(&self, actor: &str, provenance: &str) -> Result<String, OrbitError> {
-        let mut definition = self.load_v2_job_asset_by_name("task_pr_pipeline")?.1;
+        let mut definition = self
+            .load_v2_job_asset_by_name(workflow::TASK_PR_PIPELINE_JOB)?
+            .1;
         orbit_engine::resolve_job_catalog_refs_for_execution(
             &mut definition,
             &self
@@ -131,7 +152,7 @@ impl OrbitRuntime {
         )
         .map_err(|e| refuse(e.to_string()))?;
         let mut fresh = json!({"task_ids":[]});
-        self.install_review_admission("task_pr_pipeline", &mut fresh, None, false)?;
+        self.install_review_admission(workflow::TASK_PR_PIPELINE_JOB, &mut fresh, None, false)?;
         // Capture time is not policy; every inspection resolves it afresh.
         fresh[orbit_types::workflow::REVIEW_ADMISSION_KEY]
             .as_object_mut()
@@ -189,29 +210,32 @@ impl OrbitRuntime {
                         .as_str(),
                     ))
         {
-            return Err(refuse(
-                "publication requires unchanged explicit rework authority and current policy",
+            return Err(refuse_authority(
+                SourceRepairAuthorityRefusal::ReworkAuthorityChanged,
             ));
         }
-        let prefix = "source, task, scope or reservation changed before source application";
         if source.state == JobRunState::Failed
             && super::inline_publication::kept_inline_publication(&state)
             && binding.superseded.is_none()
         {
-            return Err(refuse(
-                "kept inline publication requires its complete stopped lineage",
+            return Err(refuse_authority(
+                SourceRepairAuthorityRefusal::InlineLineageMissing,
             ));
         }
         if !self.source_successor_unchanged(binding, run_id)? {
-            return Err(refuse(format!("{prefix}: newer execution changed")));
+            return Err(refuse_authority(
+                SourceRepairAuthorityRefusal::SuccessorChanged,
+            ));
         }
         if !self.source_owner_unchanged(&source, binding)? {
-            return Err(refuse(format!(
-                "{prefix}: original checkpoint owner changed"
-            )));
+            return Err(refuse_authority(
+                SourceRepairAuthorityRefusal::CheckpointOwnerChanged,
+            ));
         }
         if run_evidence_digest(&source, &state, &definition)? != binding.source_digest {
-            return Err(refuse(format!("{prefix}: source evidence changed")));
+            return Err(refuse_authority(
+                SourceRepairAuthorityRefusal::SourceEvidenceChanged,
+            ));
         }
         if !super::adoption::admitted_task_matches(
             &task,
@@ -220,7 +244,9 @@ impl OrbitRuntime {
             record.authorized_at,
             &binding.task_digest,
         )? {
-            return Err(refuse(format!("{prefix}: task meaning changed")));
+            return Err(refuse_authority(
+                SourceRepairAuthorityRefusal::TaskMeaningChanged,
+            ));
         }
         if binding.schema_version != 1
             || binding.workspace_id != self.workspace_id()?
@@ -232,7 +258,7 @@ impl OrbitRuntime {
                 .job_run_machine
                 .as_ref()
                 .is_none_or(|origin| origin.machine_id != binding.machine_id)
-            || run.job_id != "task_pr_pipeline"
+            || run.job_id != workflow::TASK_PR_PIPELINE_JOB
             || !matches!(run.state, JobRunState::Pending | JobRunState::Running)
             || run.retry_source_run_id.as_deref() != Some(binding.source_run_id.as_str())
             || task.job_run_id.as_deref() != Some(run_id)
@@ -241,16 +267,13 @@ impl OrbitRuntime {
             || !self.repairable_published_source(&source, &task.id)?
             || run_owner_liveness(&source) != RunOwnerLiveness::Stopped
             || self.stores().jobs().local_pull_for_run(run_id)?.is_some()
-            || self
-                .resolve_execution_claims()?
-                .iter()
-                .any(|claim| claim.claim.task_id == task.id)
+            || !self.resolve_task_execution_claims(&task.id)?.is_empty()
             || !history(self, &task.id)?
                 .iter()
                 .any(|r| digest(r).ok() == digest(&record).ok())
         {
-            return Err(refuse(
-                "source, task, scope or reservation changed before source application",
+            return Err(refuse_authority(
+                SourceRepairAuthorityRefusal::BindingChanged,
             ));
         }
         task_pr_association(&task, &binding.pull_request, &binding.pull_request_url)?;
@@ -286,7 +309,12 @@ impl OrbitRuntime {
                 let (source, _, binding) =
                     self.observe_source_repair(&source_id, &request.task_id, false)?;
                 let mut fresh = json!({"task_ids":[request.task_id]});
-                self.install_review_admission("task_pr_pipeline", &mut fresh, None, false)?;
+                self.install_review_admission(
+                    workflow::TASK_PR_PIPELINE_JOB,
+                    &mut fresh,
+                    None,
+                    false,
+                )?;
                 Ok(
                     json!({"binding":binding, "review":fresh[orbit_types::workflow::REVIEW_ADMISSION_KEY],
                     "policy_digest":if super::inline_publication::requires_fresh_rework_authority(
@@ -502,7 +530,7 @@ impl OrbitRuntime {
         // before appending either reservation or fresh consent.
         let (ancestors, lineage) = self.resume_lineage_run_ids(&source)?;
         let mut fresh = json!({"task_ids":[task.id]});
-        self.install_review_admission("task_pr_pipeline", &mut fresh, None, false)?;
+        self.install_review_admission(workflow::TASK_PR_PIPELINE_JOB, &mut fresh, None, false)?;
         let mut current: ReviewAdmission =
             serde_json::from_value(fresh[orbit_types::workflow::REVIEW_ADMISSION_KEY].clone())
                 .map_err(|e| refuse(e.to_string()))?;
@@ -602,7 +630,7 @@ impl OrbitRuntime {
         }
         let submitted = self.submit_persisted_pipeline_run(PipelineSubmission {
             resume: Some(&plan),
-            ..PipelineSubmission::catalog("task_pr_pipeline", input, Some(actor))
+            ..PipelineSubmission::catalog(workflow::TASK_PR_PIPELINE_JOB, input, Some(actor))
         })?;
         self.source_repair_event(
             &task.id,
@@ -666,7 +694,7 @@ impl OrbitRuntime {
             .ok_or_else(|| refuse("local machine identity unavailable"))?;
         if !self.repairable_published_source(&source, task_id)?
             || source.finished_at.is_none()
-            || source.job_id != "task_pr_pipeline"
+            || source.job_id != workflow::TASK_PR_PIPELINE_JOB
             || run_owner_liveness(&source) != RunOwnerLiveness::Stopped
         {
             return Err(refuse(
@@ -686,10 +714,7 @@ impl OrbitRuntime {
                 .jobs()
                 .local_pull_for_run(source_id)?
                 .is_some()
-            || self
-                .resolve_execution_claims()?
-                .iter()
-                .any(|claim| claim.claim.task_id == task_id)
+            || !self.resolve_task_execution_claims(task_id)?.is_empty()
             || source.input.as_ref().is_none_or(|input| {
                 input.get("claimed").and_then(Value::as_bool) == Some(true)
                     || carried_task_ids(input) != BTreeSet::from([task_id.to_string()])

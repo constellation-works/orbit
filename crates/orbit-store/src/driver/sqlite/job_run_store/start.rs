@@ -48,6 +48,17 @@ pub(super) fn mark_job_run_running(
         }
 
         run.state = run.state.try_transition(RunEvent::Start)?;
+        // Admission can be performed by a different binary than the worker.
+        // Only the winning first Start records the executing build; duplicate
+        // starts and subsequent updates preserve it.
+        let build = serde_json::to_string(&orbit_common::process::build::current_orbit_build())
+            .map_err(|error| OrbitError::Store(format!("serialize Orbit build: {error}")))?;
+        tx.tx
+            .execute(
+                "UPDATE job_runs SET build_json = ?3 WHERE workspace_id = ?1 AND run_id = ?2",
+                rusqlite::params![workspace_id, run_id, build],
+            )
+            .map_err(orbit_common::storage::sqlite::sqlite_store_error)?;
         run.started_at = Some(started_at);
         run.pid = Some(pid);
         run.pid_start_time = pid_start_time;

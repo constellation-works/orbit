@@ -6,6 +6,7 @@ use orbit_tools::{ActivityBinding, ReservationOwnerContext};
 use orbit_types::identity::{
     normalize_agent_family_for_model, normalize_optional_attribution_label,
 };
+use orbit_types::task::ReservationOwnerMetadata;
 use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
@@ -94,12 +95,10 @@ pub fn trusted_mcp_audit_context() -> AuditContext {
 
 pub(super) fn reservation_owner_from_env() -> Option<ReservationOwnerContext> {
     managed_run_context_run_id_from_env().map(|owner_run_id| ReservationOwnerContext {
-        owner_metadata_json: Some(
-            serde_json::json!({
-                "source": "orbit_cli",
-            })
-            .to_string(),
-        ),
+        owner_metadata: Some(ReservationOwnerMetadata {
+            source: Some("orbit_cli".to_string()),
+            ..Default::default()
+        }),
         owner_run_id,
     })
 }
@@ -169,9 +168,11 @@ pub(super) fn resolve_agent_identity_for_entry_point(
 /// Resolve the audit `role` label for a tool invocation.
 ///
 /// Runtime envelope identity (`ORBIT_AGENT_*`) is authoritative for agent
-/// activities and overwrites any self-reported `model` field in tool JSON.
-/// Manual CLI/MCP calls without an envelope keep the legacy input/flag
-/// precedence.
+/// activities and overwrites any self-reported `model` field in tool JSON; an
+/// explicit `--agent`/`--model` flag overrides the envelope, as in
+/// `resolve_agent_identity`, and still outranks tool JSON. Manual CLI/MCP
+/// calls without an envelope keep the legacy input/flag precedence (tool JSON
+/// `model`, then flags).
 pub fn audit_role_label(
     input: &Value,
     agent_override: Option<&str>,
@@ -194,9 +195,7 @@ pub fn audit_role_label(
             .flatten()
             .or(env_agent);
         (agent.clone(), agent)
-    } else if has_input_identity {
-        (input_agent, input_model)
-    } else if has_flag_identity {
+    } else if has_flag_identity && (has_env_identity || !has_input_identity) {
         (
             agent_override
                 .map(str::trim)
@@ -207,6 +206,8 @@ pub fn audit_role_label(
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned),
         )
+    } else if has_input_identity {
+        (input_agent, input_model)
     } else {
         (env_agent, env_model)
     };
@@ -252,6 +253,39 @@ pub fn audit_role_label_for_entry_point(
     .unwrap_or_else(|| "unverified".to_string())
 }
 
+/// Server-derived model recorded on an MCP tool audit row.
+///
+/// Order: the job's resolved model (a brokered run, else managed
+/// `ORBIT_AGENT_MODEL`), else the session `--orchestrator` crew's configured
+/// model, else MCP `clientInfo.name`. Tool-input `model` is not read. CLI
+/// calls return `None`. The value is not an authenticated role.
+pub(super) fn mcp_audit_session_model(
+    entry_point: ToolEntryPoint,
+    brokered_model: Option<&str>,
+    orchestrator_model: Option<&str>,
+    mcp_client_name: Option<&str>,
+) -> Option<String> {
+    if entry_point != ToolEntryPoint::Mcp {
+        return None;
+    }
+    fn kept(value: Option<&str>) -> Option<String> {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    }
+    if let Some(model) = kept(brokered_model) {
+        return Some(model);
+    }
+    if managed_run_context() {
+        let env_model = std::env::var("ORBIT_AGENT_MODEL").ok();
+        if let Some(model) = kept(env_model.as_deref()) {
+            return Some(model);
+        }
+    }
+    kept(orchestrator_model).or_else(|| kept(mcp_client_name))
+}
+
 /// The run's agent family as a brokered call carries it, taken from the
 /// run's dispatch record rather than this process's environment. As for a
 /// managed nested call, the family fills the model slot too.
@@ -272,19 +306,13 @@ pub(super) fn brokered_role_label(agent: Option<&str>, model: Option<&str>) -> S
 
 fn read_input_identity(input: &Value) -> (Option<String>, Option<String>) {
     if let Value::Object(map) = input {
-        let agent = map
-            .get("agent")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
         let model = map
             .get("model")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned);
-        (agent, model)
+        (None, model)
     } else {
         (None, None)
     }

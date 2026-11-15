@@ -1,21 +1,53 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use orbit_common::governance::authorization::{self, GrantedToolEffect, ToolGrantability};
 use orbit_engine::{DispatchError, ResolvedActivityTools};
 use orbit_tools::{ActivityBinding, FsAuditLogger, ReservationOwnerContext, ToolContext};
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
-use orbit_types::task::Task;
-use orbit_types::tool::ToolSessionContext;
+use orbit_types::task::{ReservationOwnerMetadata, Task};
+use orbit_types::tool::{ToolSessionContext, tool_requirement_name};
 use orbit_types::workflow::{ActivityToolDenyPolicy, tool_allowed, tools_allowed_by_disallow_list};
 
 use crate::OrbitRuntime;
 use crate::adapter::tool_host::build_orbit_tool_host;
-use crate::application::job::{drops_disallowed_requirements, granted_tool_refusal};
+use crate::application::job::{
+    DisallowGrant, IMPLEMENTING_ACTIVITY, agent_tool_grant_classification, classify_disallow_grant,
+    drops_disallowed_requirements, granted_tool_refusal,
+};
 
-/// The one activity a task's `granted_tools` reach. Every other activity,
-/// including reviewers, recovery and pilot, never reads a grant.
-const GRANT_LIFTING_ACTIVITY: &str = "agent_implement";
+/// Activities whose tool baseline carries the fleet-notice write tools, so
+/// a managed run can warn other agents about a problem outside its task
+/// (fleet notices slice 3). Nothing else is granted for notices: `list`
+/// stays a brief/read surface, not a baseline grant.
+pub(crate) const NOTICE_AGENT_ACTIVITIES: &[&str] =
+    &["agent_implement", "agent_review_repair", "final_recovery"];
+
+/// The notice tools a managed agent's baseline carries.
+pub(crate) const NOTICE_AGENT_TOOLS: &[&str] = &[
+    "orbit.notice.post",
+    "orbit.notice.show",
+    "orbit.notice.close",
+];
+
+/// Give the named notice activities the agent notice tools, even if a
+/// future baseline change drops them. Managed agents always may post and
+/// close their own notices [ORB-22808].
+fn apply_notice_agent_posting_baseline(
+    activity: &str,
+    disallow_list: &[String],
+    effective_tools: &mut Vec<String>,
+) {
+    if !NOTICE_AGENT_ACTIVITIES.contains(&activity) {
+        return;
+    }
+    for tool in NOTICE_AGENT_TOOLS {
+        if !tool_allowed(tool, disallow_list)
+            && !effective_tools.iter().any(|existing| existing == tool)
+        {
+            effective_tools.push((*tool).to_string());
+        }
+    }
+}
 
 pub(super) fn resolve_activity_tools(
     runtime: &OrbitRuntime,
@@ -24,19 +56,25 @@ pub(super) fn resolve_activity_tools(
 ) -> Result<ResolvedActivityTools, DispatchError> {
     let tasks = load_tasks(runtime, task_ids)?;
     let (requested_tools, omitted_requirement_notes) = admit_required_tools(runtime, &tasks, None)?;
+    let memory_suppressed = crew_memory_suppressions(runtime, &tasks, None)?;
     if requested_tools.is_empty() {
         return Ok(ResolvedActivityTools {
             requested_tools,
-            effective_tools: baseline_tools.to_vec(),
+            effective_tools: baseline_tools
+                .iter()
+                .filter(|tool| !memory_suppressed.contains(tool))
+                .cloned()
+                .collect(),
             omitted_requirement_notes,
             granted_tools: Vec::new(),
+            suppressed_tools: Vec::new(),
         });
     }
 
     let mut seen = std::collections::BTreeSet::new();
     let mut effective_tools = Vec::with_capacity(baseline_tools.len() + requested_tools.len());
     for tool in baseline_tools.iter().chain(requested_tools.iter()) {
-        if seen.insert(tool.clone()) {
+        if !memory_suppressed.contains(tool) && seen.insert(tool.clone()) {
             effective_tools.push(tool.clone());
         }
     }
@@ -45,6 +83,7 @@ pub(super) fn resolve_activity_tools(
         effective_tools,
         omitted_requirement_notes,
         granted_tools: Vec::new(),
+        suppressed_tools: Vec::new(),
     })
 }
 
@@ -70,7 +109,7 @@ pub(super) fn resolve_activity_tool_denials(
     disallow_list: &[String],
 ) -> Result<ResolvedActivityTools, DispatchError> {
     let tasks = load_tasks(runtime, task_ids)?;
-    let grants = if activity == GRANT_LIFTING_ACTIVITY {
+    let grants = if activity == IMPLEMENTING_ACTIVITY {
         resolve_granted_deny_lifts(runtime, &tasks, activity, disallow_list)?
     } else {
         GrantedDenyLifts::default()
@@ -101,26 +140,51 @@ pub(super) fn resolve_activity_tool_denials(
             other => other,
         })?;
     let registered_tools = runtime.allowlist_known_tool_names();
+    let mut effective_tools = tools_allowed_by_disallow_list(
+        &deny_policy.disallow_list,
+        registered_tools.iter().map(String::as_str),
+    );
+    apply_notice_agent_posting_baseline(activity, disallow_list, &mut effective_tools);
+    // Crew memory's agent tools reach only the runs core admits: the
+    // suppression also denies them to the child.
+    let suppressed_tools = crew_memory_suppressions(runtime, &tasks, Some(activity))?;
+    effective_tools.retain(|tool| !suppressed_tools.contains(tool));
     Ok(ResolvedActivityTools {
         requested_tools,
-        effective_tools: tools_allowed_by_disallow_list(
-            &deny_policy.disallow_list,
-            registered_tools.iter().map(String::as_str),
-        ),
+        effective_tools,
         omitted_requirement_notes,
         granted_tools: grants.lifted.into_iter().collect(),
+        suppressed_tools,
     })
+}
+
+/// The crew memory agent tools these tasks' run in `activity` must not
+/// list (core decides which runs may reach them).
+fn crew_memory_suppressions(
+    runtime: &OrbitRuntime,
+    tasks: &[Task],
+    activity: Option<&str>,
+) -> Result<Vec<String>, DispatchError> {
+    runtime
+        .crew_memory_tool_suppressions(tasks, activity)
+        .map_err(|error| {
+            DispatchError::CliInvocationFailed(format!("resolve crew memory tool scope: {error}"))
+        })
 }
 
 fn load_tasks(runtime: &OrbitRuntime, task_ids: &[String]) -> Result<Vec<Task>, DispatchError> {
     task_ids
         .iter()
         .map(|task_id| {
-            runtime.get_task(task_id).map_err(|error| {
+            let task = runtime.get_task(task_id).map_err(|error| {
                 DispatchError::CliInvocationFailed(format!(
                     "load task `{task_id}` tool requirements: {error}"
                 ))
-            })
+            })?;
+            // A task that still stores pre-family tool names is rewritten on
+            // detection; admission below reads either form [ORB-23552].
+            runtime.heal_task_tool_names(&task);
+            Ok(task)
         })
         .collect()
 }
@@ -147,7 +211,13 @@ fn resolve_granted_deny_lifts(
 ) -> Result<GrantedDenyLifts, DispatchError> {
     let mut grants = GrantedDenyLifts::default();
     for task in tasks {
-        for tool_name in &task.granted_tools {
+        // A grant stored before tool families reads as its family action.
+        for tool_name in task
+            .granted_tools
+            .iter()
+            .map(|name| tool_requirement_name(name).into_owned())
+        {
+            let tool_name = &tool_name;
             let refuse = |reason: String| DispatchError::RequiredToolAdmission {
                 task_id: task.id.clone(),
                 tool_name: tool_name.clone(),
@@ -162,27 +232,33 @@ fn resolve_granted_deny_lifts(
             if let Some(reason) = unavailable {
                 return Err(refuse(reason));
             }
-            if !tool_allowed(tool_name, disallow_list) {
-                continue;
+            match classify_disallow_grant(
+                disallow_list,
+                tool_name,
+                agent_tool_grant_classification(tool_name),
+            ) {
+                // Not covered: the activity already allows this exact task
+                // grant. Preserve it for MCP surface selection even though no
+                // denial needs lifting; the existing activity policy still
+                // applies. Liftable: an exact read/repeat-safe denial.
+                DisallowGrant::NotCovered | DisallowGrant::Liftable => {
+                    grants.lifted.insert(tool_name.clone());
+                }
+                DisallowGrant::Mutating => {
+                    grants.held_mutating.insert(tool_name.clone());
+                }
+                DisallowGrant::OperatorOnly => {
+                    return Err(refuse(
+                        "the tool is always operator-only, so a grant cannot lift its denial"
+                            .into(),
+                    ));
+                }
+                DisallowGrant::Wildcard { entry } => {
+                    return Err(refuse(format!(
+                        "a grant lifts only an exact disallow entry, and `{entry}` still covers it for {activity}"
+                    )));
+                }
             }
-            let classification = authorization::classify_agent_tool_grant(tool_name);
-            if classification.grantability == ToolGrantability::AlwaysOperatorOnly {
-                return Err(refuse(
-                    "the tool is always operator-only, so a grant cannot lift its denial".into(),
-                ));
-            }
-            if let Some(entry) = disallow_list.iter().find(|entry| {
-                *entry != tool_name && tool_allowed(tool_name, std::slice::from_ref(*entry))
-            }) {
-                return Err(refuse(format!(
-                    "a grant lifts only an exact disallow entry, and `{entry}` still covers it for {activity}"
-                )));
-            }
-            if classification.effect == GrantedToolEffect::Mutating {
-                grants.held_mutating.insert(tool_name.clone());
-                continue;
-            }
-            grants.lifted.insert(tool_name.clone());
         }
     }
     Ok(grants)
@@ -204,7 +280,14 @@ fn admit_required_tools(
         deny_policy.is_some_and(|policy| drops_disallowed_requirements(&policy.activity));
     for task in tasks {
         let task_id = &task.id;
-        for tool_name in task.required_tools.iter().cloned() {
+        // A requirement stored before tool families (a task minted, or an
+        // auto-task definition written, by an earlier release) reads as its
+        // family action rather than refusing admission [ORB-23280].
+        for tool_name in task
+            .required_tools
+            .iter()
+            .map(|name| tool_requirement_name(name).into_owned())
+        {
             let reason = granted_tool_refusal(runtime, &tool_name).map_err(|error| {
                 DispatchError::CliInvocationFailed(format!(
                     "read tool `{tool_name}` admission state for task `{task_id}`: {error}"
@@ -281,13 +364,11 @@ pub(super) fn tool_context_for_activity(
         proc_spawn_activity_scoped,
         reservation_owner: run_id.map(|owner_run_id| ReservationOwnerContext {
             owner_run_id: owner_run_id.to_string(),
-            owner_metadata_json: Some(
-                serde_json::json!({
-                    "source": "v2_activity",
-                    "fs_profile": fs_profile.unwrap_or(UNRESTRICTED_FS_PROFILE),
-                })
-                .to_string(),
-            ),
+            owner_metadata: Some(ReservationOwnerMetadata {
+                source: Some("v2_activity".to_string()),
+                fs_profile: Some(fs_profile.unwrap_or(UNRESTRICTED_FS_PROFILE).to_string()),
+                ..Default::default()
+            }),
         }),
         // The dispatcher adds the task from the activity's run input; the
         // run is this context's own, never a tool's.

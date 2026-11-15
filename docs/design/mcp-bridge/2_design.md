@@ -1,9 +1,9 @@
 ---
 title: Orbit MCP — Design
 owner: codex
-last_updated: 2026-10-28
-last_validated: 2026-10-28
-status: Draft
+last_updated: 2026-11-05
+last_validated: 2026-11-05
+status: Implemented
 feature: mcp-bridge
 doc_role: design
 type: design
@@ -163,16 +163,25 @@ orbit mcp listen [ADDR] [--allow-non-loopback]
 
 The listener binds before it accepts, so the bind policy is applied and the
 assigned address is known before any client can arrive. A non-loopback address is
-refused unless the operator asked for it explicitly, because the socket
-authenticates no client: local processes can reach its agent tool surface even
-when it binds loopback. A browser page can send HTTP requests to loopback, so
+refused unless the operator asked for it explicitly. After accept, only a peer
+whose user id is the server's is admitted, and a different user is refused
+before any message is read. A remote TCP peer has no local user id and is
+refused. A browser page can send HTTP requests to loopback, so
 the listener closes a connection unless its first byte is `{`. This check runs
 before rmcp can skip HTTP headers and dispatch JSON-RPC lines in the body
 ([ORB-12929] closed that browser-originated request path).
-rmcp buffers a message until its newline with no ceiling of its own, so the
-listener also closes a session whose single message exceeds 8 MiB
-(`DEFAULT_MAX_MCP_MESSAGE_BYTES`) rather than let an unauthenticated peer grow
-the process without bound.
+rmcp's stream transport caps one incoming line at 16 MiB (`DEFAULT_MAX_LINE_LENGTH`
+in rmcp 3.8) [ORB-21031]. A longer line is discarded and logged while the connection stays
+open. The listener adds a stricter guard beneath rmcp: it fails the read and
+closes the session once a single message exceeds 8 MiB
+(`DEFAULT_MAX_MCP_MESSAGE_BYTES`), so a peer cannot grow a message
+past that bound, and rmcp's discard path is never reached on this listener. The
+pollable Unix stdio handover pump enforces the same 16 MiB line limit before
+buffering or tracking a complete line; an oversized line closes that stdio
+session, even if its newline has not arrived [ORB-21044]. The non-pollable stdio pump
+(`pump_plain_lines`) enforces the same 16 MiB line limit and likewise closes
+the session on overflow, even if its newline has not arrived, rather than
+discarding the line so reading can continue [ORB-21371].
 
 Each accepted connection is served on its own task with its own server instance.
 That isolation is load-bearing rather than defensive. The adapter's session state
@@ -186,7 +195,8 @@ Past that framing check the session follows the direct local request flow: the
 same host, the same workspace resolution, and the same single Core dispatch and
 audit boundary. The listener adds no broker, checkout preflight, or placement
 decision and makes no separate client-side capability or authorization check; it
-serves agent authority because it authenticates no client.
+serves agent authority only: a matching user id admits the session and does not
+promote it to operator.
 
 ## 5. Direct v1 workspace authority
 
@@ -222,6 +232,17 @@ Each definition contains a schema and an `McpToolScope`. Scope controls only
 whether the server injects and resolves a workspace selector. It does not encode
 caller capability, placement, or authorization.
 
+Role and toolset selection filters the surface before listing and dispatch.
+`--role` or `machine.mcp.role` selects the base toolsets; `--toolset` or
+`machine.mcp.toolsets` adds to that selection. A local server with neither a
+role nor extra toolsets serves the core profile; a direct SSH route
+with no selection still serves every toolset for caller-side filtering
+[ORB-20234] [ORB-21263]. Direct `tools/list` also hides governed tools
+the session's caller authority cannot use, while Core continues to authorize
+each call [ORB-19444]. Roles limit the MCP surface and never grant authority;
+a call outside the selected toolsets returns `toolset_not_enabled`. The role
+contract is in [federated-mcp's MCP roles spec](../federated-mcp/specs/mcp-roles.md).
+
 The concrete server classifies known tools before opening a runtime. Known global
 tools use Core's global in-process seam; known workspace tools use the resolved
 runtime seam. Unknown and unadvertised raw names use the global seam and return
@@ -232,10 +253,13 @@ read names can carry a conservative recovery hint shared with CLI tool dispatch:
 suggests task show's `field: "artifacts"` projection. Candidates must be active,
 advertised builtins allowed on the agent surface and by the activity's tool
 policy; runtime dispatch also filters disabled tools. Operator-only, inactive,
-hidden and ungranted candidates never supply hints. Ambiguous or unmatched names
-keep the original message. These hints register no aliases and preserve the
-not-found code, original requested name and audit failure classification.
+hidden and ungranted candidates never supply replacement hints. Ambiguous or
+unmatched names point to `orbit tool list` or MCP `tools/list` instead. These
+hints register no aliases and preserve the not-found code, original requested
+name and audit failure classification.
 [ORB-18559] implemented these recovery hints.
+MCP not-found refusals for missing tasks and job runs include a next-step tool
+or field without changing their stable error code [ORB-21937].
 
 The adapter-owned UI
 presentation entrypoints are a separate wrapper: opening the control center or
@@ -266,15 +290,14 @@ login to a destination is ownership of it: anyone who can start
 `orbit mcp serve --operator` there can equally set `ORBIT_OPERATOR=1` on any
 other command, so a destination-side ceiling would only be a file the caller can
 rewrite. The client decides — a proxy or mux started with `--operator`
-propagates it, and one running as an agent never does. `orbit_agent_invoke` is
-admitted on `operator` like every other governed operation.
+propagates it, and one running as an agent never does.
 
 Core enforces the resulting capabilities and governed operations after the
 accepting server has resolved the session. A proxy or UI may not grant authority,
 because either can be bypassed by reaching the server directly. The TCP listener
 is the one place that ignores its process's authority and serves `agent` only:
-it authenticates no client, so a socket peer has not demonstrated the SSH login
-the argv rule rests on. Federated destinations additionally enforce the mux's
+a matching local user id is not the SSH login the argv rule rests on, so a
+socket peer is not promoted to operator. Federated destinations additionally enforce the mux's
 destination and checkout-class checks.
 
 ## 9. Separate web transport
@@ -305,5 +328,12 @@ contract to source and focused tests. The important behavioral gates are:
 - [ORB-15800] added SSH connection reuse for direct and federated sessions.
 - [ORB-17223] excluded removed checkouts from workspace discovery.
 - [ORB-18559] added policy-filtered recovery hints for unknown builtin tool names.
+- [ORB-19444] corrected the conformance contract for caller-filtered `tools/list`.
+- [ORB-20234] added opt-in MCP toolsets and the structured refusal for disabled sets.
+- [ORB-21031] aligned the MCP design with rmcp's 16 MiB incoming-line limit.
+- [ORB-21044] closed pollable stdio sessions on oversized input lines.
+- [ORB-21263] added named MCP roles over toolset selections.
+- [ORB-21371] closed non-pollable stdio sessions on oversized input lines.
+- [ORB-21937] added next-step guidance to MCP task and run not-found refusals.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

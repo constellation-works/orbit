@@ -3,7 +3,7 @@
 //! A host that has scheduled its own shutdown or reboot will kill every run
 //! started before it, so unattended admission points (routine and auto-task
 //! fires from the scheduler tick, drain waves) hold new work while one is
-//! pending *within* `machine.host_shutdown_hold_minutes`.
+//! pending *within* [`HOST_SHUTDOWN_HOLD_MINUTES`].
 //! A schedule further away is reported and does not idle the host. Runs
 //! already in flight are never touched: the probe only answers "is a shutdown
 //! scheduled", and callers decide what not to *start*.
@@ -23,6 +23,13 @@ use serde::Serialize;
 
 /// Where systemd-logind records a pending `shutdown` schedule.
 pub const SYSTEMD_SCHEDULED_SHUTDOWN_PATH: &str = "/run/systemd/shutdown/scheduled";
+
+/// Minutes before a scheduled shutdown when new unattended admissions hold:
+/// long enough for work admitted now to finish, short enough that a reboot
+/// scheduled for tomorrow does not idle the host all day.
+///
+/// The former `machine.host_shutdown_hold_minutes` default, fixed when the key was removed [ORB-22808].
+pub const HOST_SHUTDOWN_HOLD_MINUTES: u32 = 180;
 
 /// Stable code every hold reports, so schedulers and readiness can branch on it.
 pub const HOST_SHUTDOWN_SCHEDULED: &str = "host_shutdown_scheduled";

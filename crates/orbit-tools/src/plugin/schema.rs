@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use orbit_common::protocol::tool_schema::tool_input_schema_for;
+use orbit_common::governance::tool_schema::tool_input_schema_for;
 use orbit_types::tool::ToolParam;
 use serde_json::{Map, Value};
 

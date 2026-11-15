@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::identity::{OrbitId, is_valid_adr_id, is_valid_friction_id};
 use crate::task::{
-    ExternalRef, RegressionClassification, TaskComplexity, TaskError, TaskPriority, TaskStatus,
-    TaskType,
+    CrewSource, ExternalRef, RegressionClassification, TaskComplexity, TaskError, TaskPriority,
+    TaskStatus, TaskType,
 };
 
 pub const TASK_ARTIFACT_SCHEMA_VERSION: u32 = 1;
@@ -24,18 +24,6 @@ pub const TASK_COMMENTS_FILE_NAME: &str = "comments.jsonl";
 pub const TASK_ARTIFACTS_DIR_NAME: &str = "artifacts";
 pub const TASK_ARTIFACT_MANIFEST_FILE_NAME: &str = "manifest.yaml";
 pub const TASK_ARTIFACT_FILES_DIR_NAME: &str = "files";
-
-/// Task artifact holding the task-pilot's explore brief: a bounded,
-/// revision-keyed map of the change. Only the pilot's apply step writes it,
-/// as the system writer; agent and operator writes to the name are refused.
-pub const EXPLORE_BRIEF_ARTIFACT: &str = "explore-brief.json";
-
-/// Whether a canonical task artifact path names the explore brief. Callers
-/// must first use [`canonical_artifact_path`]; ASCII case folding protects
-/// owners on case-insensitive filesystems.
-pub fn is_explore_brief_artifact(path: &str) -> bool {
-    path.eq_ignore_ascii_case(EXPLORE_BRIEF_ARTIFACT)
-}
 
 pub fn is_valid_orb_task_id(id: &str) -> bool {
     let Some((prefix, suffix)) = id.split_once('-') else {
@@ -109,10 +97,10 @@ pub struct TaskEnvelopeV2 {
     pub job_run_machine: Option<crate::task::ExecutionLocation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,
-    /// Assignment provenance: `explicit`, `pool:<complexity>`, or `default`.
-    /// Absent on legacy records; assignment history can recover it.
+    /// Assignment provenance; see [`CrewSource`]. Absent on legacy records;
+    /// assignment history can recover it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub crew_source: Option<String>,
+    pub crew_source: Option<CrewSource>,
     /// Named crew responsible for task orchestration, distinct from execution crew.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orchestrator: Option<String>,

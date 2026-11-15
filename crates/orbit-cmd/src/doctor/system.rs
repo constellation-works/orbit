@@ -58,19 +58,13 @@ pub(crate) fn collect_lock_files(paths: &WorkspacePaths) -> Vec<PathBuf> {
     lock_files
 }
 
-/// Liveness probe for a recorded holder PID. `kill(pid, 0)` — EPERM still
-/// means alive. Conservative on doubt: an unprobeable PID counts as alive so
-/// a live holder is never reported stale.
+/// Liveness probe for a recorded holder PID. Delegates to the
+/// zombie-aware owner in orbit-common, which knows an unreaped zombie is
+/// dead; EPERM and other unprobeable states stay conservatively alive so a
+/// live holder is never reported stale.
 #[cfg(unix)]
 pub(crate) fn process_is_alive(pid: u32) -> bool {
-    let Ok(pid) = libc::pid_t::try_from(pid) else {
-        return true;
-    };
-    if pid <= 0 {
-        return false;
-    }
-    let result = unsafe { libc::kill(pid, 0) };
-    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    orbit_common::process::identity::process_is_alive(pid)
 }
 
 /// Non-Unix: no cheap probe; treat every holder as alive (never report stale).

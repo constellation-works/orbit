@@ -50,7 +50,17 @@ fn seeded_and_builtin_configs_load_valid_crew_registries() {
         let seed = ConfigSeed::from_families(families);
         seed_default_config(&path, Some(&seed)).expect("seed");
         let seeded_body = std::fs::read_to_string(&path).expect("read");
-        default_crew_write_config(workspace.path(), &seeded_body);
+        let seeded_values: toml::Table = seeded_body.parse().expect("seeded TOML");
+        assert!(
+            !seeded_values["workflow"]["purpose_crews"]
+                .as_table()
+                .expect("purpose pools")
+                .contains_key("explorer"),
+            "fresh config must not seed a retired key whose warning corrupts structured callback errors"
+        );
+        // `orbit init` seeds the global file, which alone may carry `[machine]`.
+        default_crew_write_config(global.path(), &seeded_body);
+        default_crew_write_config(workspace.path(), "[workflow]\n");
         let loaded =
             orbit_config::ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
                 .expect("seeded config loads with its pools");

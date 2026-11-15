@@ -1,6 +1,5 @@
-# Superseded `worktree_gc` default (shipped 2026-07-12 to 2026-07-25): the
-# description changed on 2026-07-25. Kept as a provenance shape only — see
-# `SUPERSEDED_ROUTINE_TEMPLATES` in `application/routine.rs`.
+# Superseded `worktree_gc` default, kept as a provenance shape only — see
+# `SUPERSEDED_ROUTINE_TEMPLATES` in `application/routines/seed.rs`.
 schemaVersion: 1
 name: __ORBIT_ROUTINE_NAME__
 description: >

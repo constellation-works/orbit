@@ -76,18 +76,8 @@ fn inspect_process(pid: u32) -> Option<(u64, u32)> {
 #[cfg(target_os = "linux")]
 fn linux_start_and_parent(pid: u32) -> Option<(u64, u32)> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let (_, tail) = stat.rsplit_once(')')?;
-    let mut fields = tail.split_whitespace();
-    let _state = fields.next()?;
-    let ppid: u32 = fields.next()?.parse().ok()?;
-    // After `ppid`: pgrp session tty_nr tpgid flags minflt cminflt majflt
-    // cmajflt utime stime cutime cstime priority nice num_threads itrealvalue
-    // starttime. That is 17 further fields to skip, then starttime.
-    for _ in 0..17 {
-        fields.next()?;
-    }
-    let starttime: u64 = fields.next()?.parse().ok()?;
-    Some((starttime, ppid))
+    let parsed = super::identity::parse_linux_process_stat(&stat)?;
+    Some((parsed.start_ticks, parsed.parent_pid))
 }
 
 #[cfg(target_os = "macos")]
@@ -788,6 +778,25 @@ pub(super) mod darwin_tree {
 
 /// The kernel command name for this exact process, without command-line
 /// arguments. Returns `None` when the identity changed during the query.
+#[cfg(target_os = "linux")]
+pub fn process_command_name(key: ProcessStartKey) -> Option<String> {
+    if process_start_key(key.pid) != Some(key) {
+        return None;
+    }
+    let name = std::fs::read(format!("/proc/{}/comm", key.pid)).ok()?;
+    if process_start_key(key.pid) != Some(key) {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&name)
+            .chars()
+            .filter(|character| !character.is_control())
+            .collect(),
+    )
+}
+
+/// The kernel command name for this exact process, without command-line
+/// arguments. Returns `None` when the identity changed during the query.
 #[cfg(target_os = "macos")]
 pub fn process_command_name(key: ProcessStartKey) -> Option<String> {
     if process_start_key(key.pid) != Some(key) {
@@ -816,7 +825,7 @@ pub fn process_command_name(key: ProcessStartKey) -> Option<String> {
 
 /// Bind a recorded start key to the platform's identity-bound signal handle.
 /// A replacement between the identity check and a signal is never targeted.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn bind_process_start_key(
     key: ProcessStartKey,
 ) -> std::io::Result<Option<super::signal::BoundProcess>> {

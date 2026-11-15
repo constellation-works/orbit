@@ -13,6 +13,7 @@ fn fs_state_permissions() -> PluginPermissions {
         fs: PluginFsPermissions {
             read: vec![],
             write: vec!["{{plugin_state}}".into()],
+            ..PluginFsPermissions::default()
         },
         ..PluginPermissions::default()
     }
@@ -21,6 +22,8 @@ fn fs_state_permissions() -> PluginPermissions {
 mod brokered;
 mod confinement;
 mod state_isolation;
+
+mod write_files;
 
 mod support;
 

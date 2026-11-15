@@ -4,9 +4,9 @@
 //! clear of a stalled condition.
 use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, NounSpec, OperationSpec, ParamSpec, ParamType,
-    ToolOnlyRegistration, UnknownFields, both, mcp_only, operation_registry, required,
+    ToolOnlyRegistration, UnknownFields, both, operation_registry, required,
 };
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 operation_registry! {
     noun: AUTOMATION;
@@ -50,23 +50,18 @@ const EXPLAIN_PARAMS: &[ParamSpec] = &[
         CliArgKind::flag("subject"),
         "Subject whose clause tree to show (a task ID, or workspace)",
     ),
-    mcp_only(
-        "model",
-        ParamType::String,
-        "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
-    ),
 ];
 
 const EXPLAIN: OperationSpec<AutomationVerb> = OperationSpec {
     verb: AutomationVerb::Explain,
     cli_path: &["explain"],
     tool_name: "orbit.automation.explain",
-    tool_description: "Explain one routine's `trigger.condition` or auto-task's `schedule.condition` over the workspace's live state, without writing anything: its scope, the store prefilter and literal cross-reads, the ownership verdict, the current matches (up to 20, each with its arm state and remaining hold) and closest misses (up to 20; subjects failing exactly one top-level clause), and for one subject the tree of top-level && and || clauses with each clause's value and the operand values it read. Values that cannot be read evaluate as unknown, never false. `tracking` is the durable state: arm states and holds, any stall, the last pass and skip, recent fires with their upstream chain, and `self`. With `job:<name>` it reports that job's auto-task steps as checked at load instead: the outer `expire_when` bound, whether admission pins a source revision, and for each step its target auto-task (resolved, missing or unreadable, with its file digest, enabled state and own condition guard), `when`, `wait_until`, `expire_when`, `reuse_when`, `require_result` and the earlier steps it reads. Such a job cannot be enabled or run yet, so nothing is evaluated, waited on or minted.",
+    tool_description: "Explain a routine's `trigger.condition`, an auto-task's `schedule.condition`, or `job:<name>` steps against live workspace state. Reports the scope, matches and closest misses, one subject's clause tree with operand values (unreadable values are unknown, never false), and durable tracking; job mode shows the steps checked at load. Read-only: it writes nothing, evaluates no waits and mints nothing; enabled jobs run detached and park while a step waits. Details: installed Orbit skill `references/tool-surface.md`, row `Condition explain`.",
     cli_about: "Show a condition's matches, closest misses and clause tree over live state, or a job's auto-task steps",
     cli_help: CliHelp {
         long_about: None,
         after_help: Some(
-            "Explain reads the task store, the drain's eligibility view, open runs and the\ncondition's stored state, and writes nothing. A task-scope condition is evaluated over\nthe tasks its status or tag prefilter selects, at most 200 per explain. Tracking shows\narm states and holds, any stall, recent fires with their upstream chain, and `self`.\njob:<name> shows a job's auto-task steps as checked at load, with each named auto-task\nresolved; such jobs cannot run yet.\nExamples:\n  orbit automation explain release-prep\n  orbit automation explain routine:release-on-prep-done --subject <task-id> --json\n  orbit automation explain job:release-readiness",
+            "Explain reads the task store, the drain's eligibility view, open runs and the\ncondition's stored state, and writes nothing. A task-scope condition is evaluated over\nthe tasks its status or tag prefilter selects, at most 200 per explain. Tracking shows\narm states and holds, any stall, recent fires with their upstream chain, and `self`.\njob:<name> shows a job's auto-task steps as checked at load, with each named auto-task\nresolved; it evaluates no wait.\nExamples:\n  orbit automation explain release-prep\n  orbit automation explain routine:release-on-prep-done --subject <task-id> --json\n  orbit automation explain job:release-readiness",
         ),
         flag_order: &[],
         constraints: &[],
@@ -77,6 +72,7 @@ const EXPLAIN: OperationSpec<AutomationVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const CLEAR_STALL_PARAMS: &[ParamSpec] = &[
@@ -116,4 +112,5 @@ const CLEAR_STALL: OperationSpec<AutomationVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };

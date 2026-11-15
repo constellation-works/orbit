@@ -18,12 +18,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbit_common::OrbitError;
 use orbit_common::fs::git::run_git;
 use orbit_types::task::{DELIVERY_JOB_TAG_PREFIX, Task, delivery_job_selection};
-use orbit_types::workflow::{ActivityV2Spec, JobKind, JobV2, JobV2Step, JobV2StepBody, ShipMode};
+use orbit_types::workflow::{
+    self, ActivityV2Spec, JobKind, JobV2, JobV2Step, JobV2StepBody, ShipMode,
+};
 use orbit_types::workspace::{git_remote_network_host, redact_git_remote};
 
 use super::catalog::{DEFAULT_JOB_FILES, is_default_job_name, shipped_job_spec};
 use crate::OrbitRuntime;
-use crate::application::contracts::LOCAL_ROUTE_JOB;
 use crate::runtime::task::locks::parse_task_ids;
 
 /// `git_commit` defaults to the singleton `all` scope in both PR and local
@@ -107,9 +108,6 @@ pub(crate) fn require_single_delivery_task(count: usize) -> Result<(), OrbitErro
     Ok(())
 }
 
-/// The job that opens a pull request: the one route a forge remote gates.
-const PR_ROUTE_JOB: &str = "task_pr_pipeline";
-
 /// The job a gate dispatches for one bundle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DeliveryRoute {
@@ -123,12 +121,12 @@ pub(crate) struct DeliveryRoute {
 impl DeliveryRoute {
     /// The route opens a pull request, so it needs a forge remote.
     pub(crate) fn opens_pull_request(&self) -> bool {
-        self.job_name == PR_ROUTE_JOB
+        self.job_name == workflow::TASK_PR_PIPELINE_JOB
     }
 
     /// The route merges into the local base without a pull request.
     pub(crate) fn delivers_locally(&self) -> bool {
-        self.job_name == LOCAL_ROUTE_JOB
+        self.job_name == workflow::TASK_LOCAL_PIPELINE_JOB
     }
 }
 
@@ -136,7 +134,11 @@ impl DeliveryRoute {
 /// read from the tags alone so discovery need not hydrate the task. A
 /// malformed selection is left to [`OrbitRuntime::resolve_delivery_route`].
 pub(crate) fn tags_route_through_pr_pipeline(tags: &[String], mode: ShipMode) -> bool {
-    mode == ShipMode::Pr && matches!(delivery_job_selection(tags), Ok(None | Some(PR_ROUTE_JOB)))
+    mode == ShipMode::Pr
+        && matches!(
+            delivery_job_selection(tags),
+            Ok(None | Some(workflow::TASK_PR_PIPELINE_JOB))
+        )
 }
 
 /// One admission pass's view of whether `pr_open` could find a forge. The
@@ -326,8 +328,9 @@ impl OrbitRuntime {
             )));
         }
         // A local selection needs no forge, so it is honoured in a PR ship.
-        let local_in_pr =
-            mode == ShipMode::Pr && job == LOCAL_ROUTE_JOB && spec.delivers_mode(ShipMode::Local);
+        let local_in_pr = mode == ShipMode::Pr
+            && job == workflow::TASK_LOCAL_PIPELINE_JOB
+            && spec.delivers_mode(ShipMode::Local);
         if !spec.delivers_mode(mode) && !local_in_pr {
             return Err(refuse(format!(
                 "does not declare `spec.task_delivery.modes` containing '{}'",

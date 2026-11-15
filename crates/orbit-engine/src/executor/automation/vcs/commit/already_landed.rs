@@ -12,7 +12,7 @@ use orbit_common::OrbitError;
 use orbit_common::fs::selector::{anchor_path, overlaps};
 use orbit_types::task::Task;
 use orbit_types::workflow::handoff::{
-    AlreadyLandedEvidence as Evidence, already_landed_scope as scope,
+    AlreadyLandedEvidence as Evidence, already_landed_scope as scope, already_landed_scope_matches,
 };
 use orbit_types::workflow::{ValidationOutcome, ValidationRole};
 use serde_json::{Value, json};
@@ -66,6 +66,24 @@ impl Verifier for AlreadyLanded {
         run_id: &str,
         tested_head: &str,
     ) -> Result<Value, OrbitError> {
+        Self::verify_at_revision_with_supplied_regression_from(
+            host,
+            task,
+            workspace,
+            run_id,
+            tested_head,
+            &[],
+        )
+    }
+
+    fn verify_at_revision_with_supplied_regression_from<H: RuntimeHost + ?Sized>(
+        host: &H,
+        task: &Task,
+        workspace: &Path,
+        run_id: &str,
+        tested_head: &str,
+        supplied_regression_from: &[String],
+    ) -> Result<Value, OrbitError> {
         let report = Self::artifact(host, &task.id, ARTIFACT)?;
         let evidence: Evidence = serde_json::from_slice(&report.content).map_err(|error| {
             let diagnostic = error.to_string();
@@ -80,8 +98,10 @@ impl Verifier for AlreadyLanded {
                 "evidence must identify this task and a covering delivery",
             ));
         }
-        let expected_scope = scope(task, &host.get_task_comments(&task.id)?);
-        if evidence.scope != expected_scope {
+        let comments = host.get_task_comments(&task.id)?;
+        let expected_scope = scope(task, &comments);
+        if !already_landed_scope_matches(&evidence.scope, task, &comments, supplied_regression_from)
+        {
             return Err(Self::refused(scope_changed(
                 &evidence.scope,
                 &expected_scope,

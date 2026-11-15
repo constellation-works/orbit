@@ -9,14 +9,16 @@
 //!   JSON Schema conditionals guarded writes need live in `orbit-tools`'
 //!   schema-extension table.
 //! - CLI-only flags with no tool field: `add`'s `--parent`, `--dependencies`,
-//!   `--plan`, `--ref`, `--status` and `--source-task`, and `update`'s
-//!   `--approve`, `--force`, `--discard-candidate` and `--artifact`. The CLI
-//!   surface table carries them in [`TASK_CLI_OPTIONS_PARAM`], which only a
-//!   process-local caller may send.
+//!   `--plan`, `--ref` and `--status`, and `update`'s `--approve`, `--force`,
+//!   `--discard-candidate` and `--artifact`. The CLI surface table carries
+//!   them in [`TASK_CLI_OPTIONS_PARAM`], which only a process-local caller
+//!   may send. `add`'s `--source-task` keeps its CLI-only binding but shares
+//!   its semantics with the `source_task_id` tool field, which the CLI sends
+//!   through the same options object.
 //!
 //! **Every string below is shipped contract.**
 
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 use super::operations::{
     TASK_COMPLEXITY_VALUES, TASK_HOST_HELP, TASK_ORIGIN_VALUES, TASK_PRIORITY_VALUES,
@@ -44,7 +46,7 @@ const TASK_CREATE_STATUS_VALUES: &[EnumValue] = &[
 ];
 
 /// The statuses `orbit task update --status` offers.
-const TASK_UPDATE_STATUS_VALUES: &[EnumValue] = &[
+pub(crate) const TASK_UPDATE_STATUS_VALUES: &[EnumValue] = &[
     EnumValue::plain("proposed"),
     EnumValue::plain("backlog"),
     EnumValue::plain("someday"),
@@ -60,22 +62,20 @@ const TASK_UPDATE_STATUS_VALUES: &[EnumValue] = &[
     EnumValue::plain("rejected"),
 ];
 
-/// The attribution field of the write tools, whose description predates the
-/// shared one.
-const WRITE_MODEL_PARAM: ParamSpec = both(
+/// CLI `--model` on the write tools. The MCP schema does not advertise it;
+/// the tool boundary still reads the key when the session asserts no model.
+const WRITE_MODEL_PARAM: ParamSpec = cli_only(
     "model",
     ParamType::String,
-    "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
     CliArgKind::flag("model"),
     "Explicit agent model to persist on the task artifact",
 );
 
-/// `orbit.task.add`'s attribution field: a create also keeps a full model
-/// string, as `created_by_model`.
-const ADD_MODEL_PARAM: ParamSpec = both(
+/// `orbit task add --model`: a create also keeps a full model string, as
+/// `created_by_model`. Not an MCP parameter.
+const ADD_MODEL_PARAM: ParamSpec = cli_only(
     "model",
     ParamType::String,
-    "Preferred provenance field: the agent family (codex, claude, gemini, grok, or muse) or a full model string such as `claude-opus-5-5`. `created_by` records the family; a full model string is also recorded once as `created_by_model`. A value that names no known family is refused.",
     CliArgKind::flag("model"),
     "Creator's agent family or full model id (e.g. claude-opus-5-5); created_by records the family and a full model id is also kept as created_by_model",
 );
@@ -85,13 +85,9 @@ pub(super) const WRITE_PROJECTION_PARAMS: &[ParamSpec] = &[
     mcp_only(
         "fields",
         ParamType::StringList,
-        "Optional response field names as a string or array. Defaults omit `comments` and `history`; request them explicitly. Catalogue and projection semantics: installed Orbit skill `references/task-fields.md`.",
+        "Response fields, keyed (even one).",
     ),
-    mcp_only(
-        "field",
-        ParamType::String,
-        "Compatibility alias for a single response field projection, such as `field: \"history\"`.",
-    ),
+    mcp_only("field", ParamType::String, "One response field."),
 ];
 
 /// The CLI-only options, carried as one object.
@@ -140,19 +136,18 @@ const fn path(mut param: ParamSpec) -> ParamSpec {
 }
 
 /// `not_before` on `orbit.task.add`.
-const NOT_BEFORE_MCP_HELP: &str = "Optional scheduled start: an RFC 3339 instant with an offset, such as `2026-11-06T09:00:00Z`, stored in UTC. No dispatcher starts the task from the backlog before it; the hold lifts by itself on the first admission pass after it. A malformed time is refused";
+const NOT_BEFORE_MCP_HELP: &str = "Earliest dispatch time as an RFC 3339 instant.";
 
 /// `--not-before` on `orbit task add|update`.
-const NOT_BEFORE_CLI_HELP: &str = "Earliest time a dispatcher may start the task: an RFC 3339 instant (`2026-11-06T09:00:00Z`) or a local `YYYY-MM-DDTHH:MM` in this host's time zone. Until then a backlog task waits, reported `scheduled`";
+const NOT_BEFORE_CLI_HELP: &str = "Earliest dispatch start: an RFC 3339 instant (`2026-11-06T09:00:00Z`) or local `YYYY-MM-DDTHH:MM`";
 
 const ADD_RETIRED_FIELDS: &[RetiredField] = &[
     RETIRED_AGENT_FIELD,
     RetiredField::unknown_field("plan", "set it with orbit.task.update"),
     RetiredField::unknown_field("status", "set it with orbit.task.update"),
     RetiredField::unknown_field("parent_id", "set it with orbit.task.update"),
-    RetiredField::unknown_field("source_task_id", "set it with orbit.task.update"),
     RetiredField::unknown_field("external_refs", "set it with orbit.task.update"),
-    RetiredField::unknown_field("context", "set it with orbit.task.update"),
+    RetiredField::unknown_field("context", "use `context_files`"),
     RetiredField::unknown_field("comment", "set it with orbit.task.update"),
     RetiredField::unknown_field("dependencies", "set it with orbit.task.update"),
 ];
@@ -161,12 +156,14 @@ pub(super) const ADD: TaskOperation = TaskOperation {
     verb: TaskVerb::Add,
     cli_path: &["add"],
     tool_name: "orbit.task.add",
-    tool_description: "Create an Orbit task and return the created task JSON",
+    tool_description: "Create a task and return its JSON; rules are in the installed Orbit skill `references/task-fields.md`.",
     cli_about: "Create a new task",
     cli_help: CliHelp {
         constraints: &[],
         long_about: None,
-        after_help: None,
+        after_help: Some(
+            "Status, grant, selector and scheduling rules for these flags: installed Orbit skill `references/task-fields.md`.",
+        ),
         flag_order: &[
             "parent_id",
             "title",
@@ -200,59 +197,63 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             free_text(required(both(
                 "title",
                 ParamType::String,
-                "Task title",
+                "Task title.",
                 CliArgKind::flag("title"),
                 "Task title",
             ))),
-            free_text(required(defaulted(
+            // Not wire-required: the operator command defaults it to empty, so
+            // the MCP tool's `description` requirement lives in the schema
+            // extension and `shape_input`. Complexity separately requires its
+            // CLI flag without changing its conditional wire requirement.
+            free_text(defaulted(
                 both(
                     "description",
                     ParamType::String,
-                    "Task description markdown",
+                    "Task description markdown.",
                     CliArgKind::flag("description"),
                     "Task description",
                 ),
                 "",
-            ))),
+            )),
             // The binding key for the task store; an MCP session's own
             // workspace may supply it, and process cwd never does.
             mcp_only(
                 "workspace",
                 ParamType::String,
-                "Workspace selector: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path to a local checkout (a linked Git worktree resolves to its registered checkout). Falls back to the MCP session's `_meta.orbit.workspace` when omitted; never inferred from process cwd.",
+                "Workspace selector from orbit_workspace_list.",
             ),
             free_text(both(
                 "acceptance_criteria",
                 ParamType::StringList,
-                "Optional acceptance criteria as a string or array of strings",
+                "Acceptance criteria.",
                 CliArgKind::flag("acceptance-criteria"),
                 "Acceptance criteria. Repeat the flag for multiple criteria",
             )),
             both(
                 "tags",
                 ParamType::StringList,
-                "Optional tags as a string or array of strings. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task (several: any one of them); any other `os:` value is rejected",
+                "Task tags.",
                 flag_with_delimiter("tag", &[], None),
                 "Task tags. Repeat or comma-separate for multiple tags. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task; any other `os:` value is rejected",
             ),
             both(
                 "required_tools",
                 ParamType::StringList,
-                "Optional exact canonical tool names the task adds to its agent activity baseline, as a string or array of strings",
+                "Canonical tool names added to the activity baseline.",
                 flag_with_delimiter("required-tools", &["required-tool"], None),
                 "Exact canonical tool names the task adds to its agent activity baseline",
             ),
             both(
                 "granted_tools",
                 ParamType::StringList,
-                "Optional exact canonical tool names an operator grants the implementing activity despite its deny list, as a string or array of strings. Requires operator authority: any other caller supplying it is refused, never stripped. Stored and shown. Only the implementing activity (`agent_implement`) reads a grant: it lifts that tool's deny entry only for a read/repeat-safe tool, and a mutating tool stays denied",
+                "Operator-granted tool names.",
                 flag_with_delimiter("granted-tools", &["granted-tool"], None),
-                "Exact canonical tool names an operator grants the implementing activity despite its deny list (operator only; stored and shown). Only `agent_implement` reads a grant: it lifts an exact deny entry only for a read/repeat-safe tool; a mutating grant stays denied",
+                "Exact canonical tool names an operator grants the implementing activity despite its deny list (operator only)",
             ),
             both(
                 "requires_labels",
                 ParamType::StringList,
-                "Optional capability labels a host must carry, all of them, to run the task, as a string or array of strings. A host carries its `machine.labels` plus its OS (`linux`, `macos` or `windows`). Refused when no registered serving host carries them together with the task's `os:` tags",
+                "Host capability labels the task requires.",
                 flag_with_delimiter("requires-labels", &["requires-label"], Some("LABEL")),
                 "Capability labels a host must carry, all of them, to run the task (its `machine.labels` plus its OS). Repeat or comma-separate for multiple labels",
             ),
@@ -266,22 +267,22 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             path(both(
                 "context_files",
                 ParamType::StringList,
-                "Optional task context selectors as a comma-separated string or array of strings. Add entries ONLY for existing files, directories, or symbols expected to be modified or deleted by the task. Do not add background-reading entries or files referenced only for context. Prefer canonical selectors: `file:`, `dir:`, or `symbol:path#name:kind`. Legacy raw paths are accepted and upgraded automatically. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up.",
+                "Context selectors this task will change.",
                 flag_with_delimiter("context", &[], Some("CONTEXT")),
-                "Task context selectors. Repeat or comma-separate for multiple selectors. Prefer `file:`, `dir:`, or `symbol:` forms; legacy raw paths are accepted and upgraded. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up",
+                "Task context selectors (`file:`, `dir:`, `symbol:path#name:kind`); repeat or comma-separate",
             )),
             both(
                 "allow_missing_context",
                 ParamType::Switch,
-                "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Each such selector is recorded on the task as durable creation intent for that exact selector, which later writes and task preparation honor. Syntax, workspace containment and file/directory kind are still checked. Missing selectors are rejected by default.",
+                "Accept selectors for created files.",
                 CliArgKind::flag("allow-missing-context"),
-                "Accept context selectors whose target does not exist yet (for work that creates the file). Each missing selector is recorded as durable creation intent for the task",
+                "Accept context selectors for files this task will create",
             ),
             defaulted(
                 both(
                     "priority",
                     ParamType::Enum(TASK_PRIORITY_VALUES),
-                    "Optional priority level",
+                    "low|medium|high|critical",
                     CliArgKind::flag("priority"),
                     "Priority level",
                 ),
@@ -290,49 +291,50 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             cli_required(both(
                 "complexity",
                 ParamType::Enum(TASK_COMPLEXITY_VALUES),
-                "Required for ordinary creation; omit for guarded request_id creation. Task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard",
-                CliArgKind::flag("complexity"),
-                "Task complexity (low, medium, hard, or xhard)",
+                "low|medium|hard|xhard",
+                flag_named("complexity", "low|medium|hard|xhard"),
+                "Task complexity (low, medium, hard, or xhard). Required",
             )),
             both(
                 "type",
                 ParamType::Enum(TASK_TYPE_VALUES),
-                "Optional task type (defaults to chore)",
+                "Task type.",
                 flag_named("type", "TASK_TYPE"),
                 "Task type (defaults to chore)",
             ),
+            mcp_only("relations", ParamType::Array, "Typed task relations."),
             mcp_only(
-                "relations",
-                ParamType::Array,
-                "Optional typed task relations as an array of {type, target} objects. A `regression_from` relation may add `regression: {nature, escape, severity, severity_source?, sites?}`: nature is broke_existing, defect_in_new, incomplete, merge_reintroduced, contract_drift or unclassified; escape is no_test, test_not_selected, platform_only, review_missed, spec_ambiguous, nondeterministic or unclassified; severity is required and is critical (data loss, a security hole, every drain halted, silently wrong results), high (a core workflow broken with no workaround), medium (a feature broken in a real path, with a workaround), low (an edge case or misleading message) or nit (wording, doc drift, cosmetic); severity_source is filer (the default), operator or backfill; optional `sites` lists up to 8 `symbol:` or `file:` selectors of where the defect lives, or a `dir:` selector when no narrower site can be named",
+                "source_task_id",
+                ParamType::String,
+                "Task whose change introduced this bug.",
             ),
             both(
                 "crew",
                 ParamType::String,
-                "Optional named crew to use when running this task; omitted, one is drawn from the complexity pool or the configured default",
+                "Crew that runs this task.",
                 CliArgKind::flag("crew"),
                 "Named crew to use when running this task (default: drawn from the complexity pool, else the configured default crew)",
             ),
             both(
                 "orchestrator",
                 ParamType::String,
-                "Optional named crew responsible for orchestration attribution; does not select execution. Defaults to the MCP session's `orbit mcp serve --orchestrator` crew when omitted",
+                "Crew credited for orchestration.",
                 CliArgKind::flag("orchestrator"),
                 "Named crew responsible for orchestration attribution",
             ),
             both(
                 "orchestrator_model",
                 ParamType::String,
-                "Optional model the orchestrator runs, only when it differs from the `orchestrator` crew's configured model. Omitted, the task records that crew's configured model at creation. Requires an orchestrator, is set once at creation and never updated. Unrelated to `model`, which labels the writer",
+                "Orchestrator model when it differs from the crew.",
                 CliArgKind::flag("orchestrator-model"),
                 "Orchestrator's model when it differs from the orchestrator crew's configured model (default: that crew's model, recorded at creation)",
             ),
             both(
                 "origin",
                 ParamType::Enum(TASK_ORIGIN_VALUES),
-                "Optional reason the task was filed: `operator_request` when a human asked for the work, `orchestrator_initiative` when the orchestrator decided on its own, `automation` for a system filer. Omitted, it stays unset, except that system filers and sweep findings record `automation`.",
+                "Category, not free text: operator_request, orchestrator_initiative, automation.",
                 CliArgKind::flag("origin"),
-                "Why the task was filed: operator_request (a human asked), orchestrator_initiative (the orchestrator decided) or automation. Omitted, it stays unset",
+                "Provenance category, not free text: operator_request (a human asked), orchestrator_initiative (the orchestrator decided) or automation. Omitted, it stays unset",
             ),
         ],
         WRITE_PROJECTION_PARAMS,
@@ -340,7 +342,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             mcp_only(
                 "request_id",
                 ParamType::String,
-                "Optional retry-safe proposed creation. Requires explicit workspace and acceptance_criteria; accepts only title, description, acceptance_criteria, priority and crew. Reuse the identity with identical input to reconcile a lost reply. Returns a versioned snapshot.",
+                "Retry-safe creation identity; selects guarded creation, which accepts only 'title', 'description', 'acceptance_criteria', 'priority', 'crew'.",
             ),
             ADD_MODEL_PARAM,
             cli_only(
@@ -389,6 +391,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
     retired_fields: ADD_RETIRED_FIELDS,
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const UPDATE_RETIRED_FIELDS: &[RetiredField] = &[
@@ -402,8 +405,9 @@ const UPDATE_RETIRED_FIELDS: &[RetiredField] = &[
     ),
     RetiredField::verbatim(
         "artifacts",
-        "orbit.task.update does not accept inline artifacts; use orbit.task.artifact.put",
+        "orbit.task.update does not accept inline artifacts; use orbit.task.artifact with action put",
     ),
+    RetiredField::unknown_field("context", "use `context_files`"),
 ];
 
 const REQUIRED_TOOLS_REFUSAL: &str = "orbit.task.update does not accept `required_tools`; task tool requirements are immutable after creation";
@@ -412,12 +416,14 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
     verb: TaskVerb::Update,
     cli_path: &["update"],
     tool_name: "orbit.task.update",
-    tool_description: "Update an Orbit task and return the fresh task JSON. Field edits may accompany a status change, except `status: backlog` on a proposed task (approval), which accepts only `note` and `comment`. Starting with `status: in-progress` from a pickup state may include field edits on the same write.",
+    tool_description: "Update a task and return its JSON; rules are in the installed Orbit skill `references/task-fields.md`.",
     cli_about: "Update task fields, or take the next approval step with `--approve` (proposed -> backlog, review -> done)",
     cli_help: CliHelp {
         constraints: &[],
         long_about: None,
-        after_help: None,
+        after_help: Some(
+            "Lifecycle, override, selector and scheduling rules for these flags: installed Orbit skill `references/task-fields.md` (Human CLI task update).",
+        ),
         flag_order: &[
             "host",
             "id",
@@ -453,83 +459,87 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             "discard_candidate",
             "force",
             "allow_drop_system_tags",
+            "repilot",
         ],
     },
     effect: Effect::Write,
     params: &[
         &[
+            both(
+                "repilot",
+                ParamType::Switch,
+                "Request one new pilot.",
+                CliArgKind::flag("repilot"),
+                "Request one new pilot after updating (operator only)",
+            ),
             required(both(
                 "id",
                 ParamType::String,
-                "task ID",
+                "Task ID.",
                 CliArgKind::Positional,
                 "Task ID",
             )),
             free_text(both(
                 "title",
                 ParamType::String,
-                "New task title",
+                "New task title.",
                 CliArgKind::flag("title"),
                 "New title",
             )),
             free_text(preserve_empty(both(
                 "description",
                 ParamType::String,
-                "New task description (empty string clears)",
+                "New description; empty clears it.",
                 CliArgKind::flag("description"),
                 "New description (empty string clears)",
             ))),
             free_text(both(
                 "acceptance_criteria",
                 ParamType::StringList,
-                "New acceptance criteria as an array of strings or a single string",
+                "Replacement criteria.",
                 CliArgKind::flag("acceptance-criteria"),
                 "Replacement acceptance criteria. Repeat the flag for multiple criteria",
             )),
             preserve_empty(both(
                 "dependencies",
                 ParamType::StringList,
-                "Replacement dependency task IDs as a string or array of strings",
+                "Replacement dependency IDs.",
                 flag_with_delimiter("dependencies", &["dependency"], None),
-                "Replacement dependency task IDs. Repeat or comma-separate for multiple dependencies (empty string clears)",
+                "Replacement dependency task IDs; repeat or comma-separate (empty string clears)",
             )),
-            mcp_only(
-                "relations",
-                ParamType::Array,
-                "Replacement typed task relations as an array of {type, target} objects. A `regression_from` relation may add `regression: {nature, escape, severity, severity_source?, sites?}`: nature is broke_existing, defect_in_new, incomplete, merge_reintroduced, contract_drift or unclassified; escape is no_test, test_not_selected, platform_only, review_missed, spec_ambiguous, nondeterministic or unclassified; severity is critical (data loss, a security hole, every drain halted, silently wrong results), high (a core workflow broken with no workaround), medium (a feature broken in a real path, with a workaround), low (an edge case or misleading message) or nit (wording, doc drift, cosmetic), required on a link the task does not hold yet, while a held link re-sent without one keeps its recorded severity and source; severity_source is filer (the default), operator or backfill, and reads back as verified once finding verification rates the link or default for a link stored without a severity; optional `sites` lists up to 8 `symbol:` or `file:` selectors of where the defect lives, or a `dir:` selector when no narrower site can be named",
-            ),
+            mcp_only("relations", ParamType::Array, "Replacement task relations."),
             both(
                 "tags",
                 ParamType::StringList,
-                "Replacement task tags as a string or array of strings. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task from its next admission; any other `os:` value is rejected",
+                "Replacement task tags.",
                 flag_with_delimiter("tag", &[], None),
-                "Replacement task tags. Repeat or comma-separate for multiple tags. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task from its next admission; any other `os:` value is rejected",
+                "Replacement task tags; repeat or comma-separate. `os:linux|macos|windows` limits the host OS",
             ),
             preserve_empty(both(
                 "granted_tools",
                 ParamType::StringList,
-                "Replacement operator-granted tool names, as a string or array of strings; an empty array clears the grant. Requires operator authority: any other caller supplying it is refused, never stripped. Accepted only while the task is proposed, backlog or someday with no live run or claim; a grant is frozen once an attempt is dispatched and changes only for a new attempt. Stored and shown. Only the implementing activity (`agent_implement`) reads a grant: it lifts that tool's deny entry only for a read/repeat-safe tool, and a mutating tool stays denied",
+                "Replacement granted tool names.",
                 flag_with_delimiter("granted-tools", &["granted-tool"], None),
-                "Replacement operator-granted tool names (operator only; empty string clears). Accepted only before the task's next attempt is dispatched",
+                "Replacement operator-granted tool names (operator only; empty string clears)",
             )),
             preserve_empty(both(
                 "requires_labels",
                 ParamType::StringList,
-                "Replacement capability labels a host must carry, all of them, to run the task from its next admission, as a string or array of strings; an empty array clears it. A host carries its `machine.labels` plus its OS. Refused when no registered serving host carries them together with the task's `os:` tags",
+                "Replacement capability labels.",
                 flag_with_delimiter("requires-labels", &["requires-label"], Some("LABEL")),
-                "Replacement capability labels a host must carry, all of them, to run the task (empty string clears). Repeat or comma-separate for multiple labels",
+                "Replacement labels a host must all carry to run the task (empty string clears)",
             )),
             preserve_empty(both(
                 "not_before",
                 ParamType::String,
-                "Replacement scheduled start: an RFC 3339 instant with an offset, such as `2026-11-06T09:00:00Z`, stored in UTC; an empty string clears it (null, like any omitted field, leaves it unchanged). No dispatcher starts a backlog task before it, and the hold lifts by itself on the first admission pass after it. A malformed time is refused",
+                "Earliest start, or empty to clear.",
                 flag_named("not-before", "TIME"),
                 NOT_BEFORE_CLI_HELP,
             )),
             both(
                 "allow_drop_system_tags",
                 ParamType::Switch,
-                "Optional. Set true to permit replacing `tags` with a list that drops a system identity tag (`ci-failure:*`). Missing or false rejects the tag drop.",
+                "Allow dropping a system tag.",
                 CliArgKind::Flag {
                     long: "allow-drop-system-tags",
                     delimiter: None,
@@ -538,12 +548,12 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
                     value_name: None,
                     multiple: false,
                 },
-                "Allow replacing tags when the replacement list drops a system identity tag (`ci-failure:*`)",
+                "Allow a tag replacement that drops a system identity tag (`ci-failure:*`)",
             ),
             free_text(preserve_empty(both(
                 "plan",
                 ParamType::String,
-                "Replacement task plan text (empty string clears). May be supplied on the same write that transitions to in-progress when a plan is required.",
+                "Replacement plan text.",
                 CliArgKind::Flag {
                     long: "plan",
                     delimiter: None,
@@ -557,148 +567,139 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             both(
                 "status",
                 ParamType::Enum(TASK_UPDATE_STATUS_VALUES),
-                "New task status. `backlog` on a proposed task is the approval transition and cannot be combined with field edits (only `note` and `comment`). `in-progress` from a pickup state is the start transition and may include field edits on the same write; from any other status that start is refused whether or not extra fields are present. Other status changes are ordinary governed updates and may include field edits.",
+                "New task status.",
                 CliArgKind::flag("status"),
-                "New status",
+                "New status (human-crew tasks accept any status, recorded as a bypass)",
             ),
             free_text(both(
                 "note",
                 ParamType::String,
-                "Annotation stored on this status transition's history entry; use `comment` for free-form discussion",
+                "Note on this status transition.",
                 CliArgKind::flag("note"),
                 "Note recorded on the approval's status history entry (with `--approve`)",
             )),
             both(
                 "priority",
                 ParamType::Enum(TASK_PRIORITY_VALUES),
-                "New dispatch priority (low, medium, high, or critical)",
+                "low|medium|high|critical",
                 CliArgKind::flag("priority"),
                 "New dispatch priority",
             ),
             both(
                 "complexity",
                 ParamType::Enum(TASK_COMPLEXITY_VALUES),
-                "Optional task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard",
+                "low|medium|hard|xhard",
                 CliArgKind::flag("complexity"),
                 "Task complexity",
             ),
             both(
                 "type",
                 ParamType::Enum(TASK_TYPE_VALUES),
-                "New task type",
+                "New task type.",
                 flag_named("type", "TASK_TYPE"),
                 "New task type",
             ),
             mcp_only(
                 "source_task_id",
                 ParamType::String,
-                "For bug tasks: originating task ID that introduced the defect (empty string clears)",
+                "Source bug ID; empty clears it.",
             ),
             preserve_empty(both(
                 "planned_by",
                 ParamType::String,
-                "Explicit planning attribution label (empty string clears)",
+                "Planner; empty clears it.",
                 CliArgKind::flag("planned-by"),
                 "Explicit planning attribution label (empty string clears)",
             )),
             preserve_empty(both(
                 "implemented_by",
                 ParamType::String,
-                "Explicit implementation attribution label (empty string clears)",
+                "Implementer; empty clears it.",
                 CliArgKind::flag("implemented-by"),
                 "Explicit implementation attribution label (empty string clears)",
             )),
             free_text(preserve_empty(both(
                 "execution_summary",
                 ParamType::String,
-                "Replacement execution summary text",
+                "New execution summary.",
                 CliArgKind::flag("execution-summary"),
                 "New execution summary (empty string clears)",
             ))),
             free_text(both(
                 "comment",
                 ParamType::String,
-                "Task comment to append",
+                "Comment to append.",
                 CliArgKind::flag("comment"),
                 "Append a task comment",
             )),
             preserve_empty(both(
                 "pr_status",
                 ParamType::String,
-                "PR review status (e.g. approve, request-changes; empty string clears)",
+                "PR status; empty clears it.",
                 CliArgKind::flag("pr-status"),
                 "PR review status: `approve` or `request-changes` (empty string clears)",
             )),
             preserve_empty(both(
                 "job_run_id",
                 ParamType::String,
-                "Job run ID to associate with the task (empty string clears)",
+                "Job run ID; empty clears it.",
                 CliArgKind::flag("job-run-id"),
                 "Job run ID to associate with the task (empty string clears)",
             )),
             preserve_empty(both(
                 "crew",
                 ParamType::String,
-                "Named crew to use when running this task (empty string draws a fresh one)",
+                "Named crew; empty redraws.",
                 CliArgKind::flag("crew"),
                 "Named crew to use when running this task (empty string draws a fresh one)",
             )),
             preserve_empty(both(
                 "orchestrator",
                 ParamType::String,
-                "Named crew responsible for orchestration attribution (empty string clears; mutable only before execution)",
+                "Orchestrator crew; empty clears it.",
                 CliArgKind::flag("orchestrator"),
                 "Named crew responsible for orchestration attribution (empty string clears)",
             )),
             both(
                 "origin",
                 ParamType::Enum(TASK_ORIGIN_VALUES),
-                "Replacement reason the task was filed: operator_request, orchestrator_initiative or automation. Corrects a recorded origin; it cannot be cleared.",
+                "Category, not free text: operator_request, orchestrator_initiative, automation.",
                 CliArgKind::flag("origin"),
-                "Replacement task origin (operator_request, orchestrator_initiative, automation)",
+                "Replacement provenance category, not free text: operator_request, orchestrator_initiative, automation",
             ),
             path(preserve_empty(both(
                 "context_files",
                 ParamType::StringList,
-                "Replaces the whole selector list; omit both context fields to preserve it. To extend, read `context_files` and send the deduplicated union of all existing and new selectors. Policy and clear/create cases: installed Orbit skill `references/task-fields.md`.",
+                "New context selectors.",
                 flag_with_delimiter("context", &["context-files"], None),
-                "Replace the whole task context list. Omit to preserve it; an empty string clears it. To extend scope, include all existing selectors plus the new ones. Repeat or comma-separate for multiple selectors. Prefer `file:`, `dir:`, or `symbol:` forms; legacy raw paths are accepted and upgraded. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up",
+                "Replace the whole context selector list; to extend, resend existing ones too (empty string clears)",
             ))),
             both(
                 "allow_missing_context",
                 ParamType::Switch,
-                "Accept missing targets for files this task creates, recording durable creation intent per selector. Missing targets are rejected by default. Persistence and validation rules: installed Orbit skill `references/task-fields.md`.",
+                "Accept selectors for created files.",
                 CliArgKind::flag("allow-missing-context"),
-                "Accept context selectors whose target does not exist yet (for work that creates the file). Each missing selector is recorded as durable creation intent; dropping a selector from the list revokes it, and re-sending a recorded one needs no flag",
+                "Accept context selectors for files this task will create",
             ),
-            path(mcp_only(
-                "context",
-                ParamType::String,
-                "Legacy string alias for `context_files`, which takes precedence. Replaces the whole list; to extend, read and send the union of all existing and new selectors. Omit both to preserve. Policy: installed Orbit skill `references/task-fields.md`.",
-            )),
         ],
         WRITE_PROJECTION_PARAMS,
         &[
             mcp_only(
                 "request_id",
                 ParamType::String,
-                "Optional retry-safe guarded write identity. Requires explicit workspace and expected_revision. Reuse identical input to reconcile a lost reply; returns a fresh versioned snapshot.",
+                "Retry-safe; selects guarded update ('verdict', 'complete'; 'comment'; or 'status' edits). Omit for an ordinary update.",
             ),
             mcp_only(
                 "expected_revision",
                 ParamType::String,
-                "Observed revision from task.show snapshot:true. Guarded mode accepts field edits, a comment, or a verdict separately.",
+                "Revision from task show.",
             ),
             // The schema-extension table replaces the advertised shape.
-            mcp_only(
-                "verdict",
-                ParamType::Object,
-                "Evidence-bound review verdict: decision (accept or changes_requested), rationale, criteria [{criterion,met,evidence}], evidence, expected_run_id and expected_head. Review requires request_id and expected_revision.",
-            ),
+            mcp_only("verdict", ParamType::Object, "Review verdict object."),
             mcp_only(
                 "complete",
                 ParamType::Boolean,
-                "Guarded review only: explicitly complete an accepted review with existing trusted operator authority. Default false; never merges, publishes or dispatches.",
+                "Complete an accepted review.",
             ),
             WRITE_MODEL_PARAM,
             cli_only(
@@ -723,19 +724,19 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
                 "approve",
                 ParamType::Switch,
                 CliArgKind::flag("approve"),
-                "Take the task's next approval step: `proposed` -> `backlog`, or `review` -> `done`. The transition is chosen from the current status, so it cannot be combined with field edits or an explicit `--status`",
+                "Take the next approval step (proposed -> backlog, review -> done); no field edits or `--status`",
             ),
             cli_only(
                 "discard_candidate",
                 ParamType::Switch,
                 CliArgKind::flag("discard-candidate"),
-                "Discard the candidate the task's last failed run preserved, so its next run implements fresh instead of resuming it. Combine with `--status backlog` to requeue",
+                "Discard the last failed run's preserved candidate; pair with `--status backlog` to requeue",
             ),
             cli_only(
                 "force",
                 ParamType::Switch,
                 CliArgKind::flag("force"),
-                "Apply `--status` even when the task lifecycle refuses the transition (for example reopening a done task). Human-operator override: the change is recorded in task history as `forced`",
+                "Apply `--status` even when the lifecycle refuses it (human override, recorded as `forced`)",
             ),
             CLI_OPTIONS_PARAM,
         ],
@@ -744,4 +745,5 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
     retired_fields: UPDATE_RETIRED_FIELDS,
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Task,
 };

@@ -6,6 +6,7 @@ use std::sync::{Mutex, OnceLock};
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
+use orbit_common::text;
 
 use crate::operation::REVIEW_HOST_EVIDENCE_KEY;
 use crate::registry::{
@@ -40,29 +41,15 @@ pub fn unknown_config_keys_present(document: &toml::Value) -> Vec<UnknownConfigK
         )
         .chain([
             "task.artifact_store",
-            "knowledge.task_id_pattern",
             "runtime.backend",
             "agent",
             "watch",
-            "docs",
-            "duel",
             "routines",
             "plugins",
             "plugin_enablement",
             crate::TAG_INSTRUCTIONS_KEY,
+            crate::AGENT_CORPUS_KEY,
             crate::REVIEW_SKIP_TAGS_KEY,
-            // Read by runtime admission; recognize the leaves without hiding unknown siblings.
-            "visual_review.manifests",
-            "visual_review.default_width",
-            "visual_review.mode",
-            "visual_review.max_mocks",
-            "visual_review.reviewer",
-            "visual_review.max_images",
-            "visual_review.max_image_tokens",
-            "visual_review.max_findings",
-            "visual_review.require_established",
-            "visual_review.block_at",
-            "visual_review.file_at",
             // Read by the operation layer; the settings registry has no row for it.
             REVIEW_HOST_EVIDENCE_KEY,
         ])
@@ -98,17 +85,11 @@ pub fn unknown_config_keys_present(document: &toml::Value) -> Vec<UnknownConfigK
 }
 
 /// Unknown settings in `path`; missing and empty files have none.
-/// Uses the config store's no-follow read checks.
+/// Uses the shared no-follow config read checks.
 pub fn unknown_config_keys_at(path: &Path) -> Result<Vec<UnknownConfigKey>, OrbitError> {
-    let Some(raw) = crate::store::read_config_file(path)? else {
+    let Some(document) = crate::config_toml::read_config_toml(path)? else {
         return Ok(Vec::new());
     };
-    let document = toml::from_str(&raw).map_err(|error| {
-        OrbitError::InvalidInput(format!(
-            "invalid runtime config '{}': {error}",
-            redact_home_dir(&path.display().to_string())
-        ))
-    })?;
     Ok(unknown_config_keys_present(&document))
 }
 
@@ -131,7 +112,7 @@ fn visit(
             let key = display_path(path);
             let suggestion = suggestions
                 .iter()
-                .map(|candidate| (distance(&key, candidate), candidate))
+                .map(|candidate| (text::unicode_edit_distance(&key, candidate), candidate))
                 .min()
                 .filter(|(distance, candidate)| {
                     *distance
@@ -175,23 +156,6 @@ fn display_path(segments: &[String]) -> String {
         })
         .collect::<Vec<_>>()
         .join(".")
-}
-
-fn distance(left: &str, right: &str) -> usize {
-    let right: Vec<_> = right.chars().collect();
-    let mut row: Vec<_> = (0..=right.len()).collect();
-    for (index, left) in left.chars().enumerate() {
-        let mut diagonal = row[0];
-        row[0] = index + 1;
-        for (column, right) in right.iter().enumerate() {
-            let previous = row[column + 1];
-            row[column + 1] = (diagonal + usize::from(left != *right))
-                .min(previous + 1)
-                .min(row[column] + 1);
-            diagonal = previous;
-        }
-    }
-    row[right.len()]
 }
 
 pub(crate) fn warn_unknown_keys(document: &toml::Value, path: &Path) {

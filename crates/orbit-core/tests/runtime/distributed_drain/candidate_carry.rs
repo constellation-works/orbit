@@ -223,7 +223,8 @@ fn a_carried_candidate_resumes_on_another_host() {
         head,
         "origin holds the candidate at its durable ref"
     );
-    assert_eq!(pair.owner_status(&task), "backlog");
+    assert_eq!(pair.owner_status(&task), "blocked");
+    returned_to_backlog(&pair, &task);
     let released = released_candidate(&pair, &leaf);
     assert_eq!(released["durable_ref"], reference.as_str(), "{released}");
     assert_eq!(released["head_sha"], head.as_str(), "{released}");
@@ -308,6 +309,7 @@ fn an_uncarried_candidate_is_fresh_elsewhere_with_a_typed_reason() {
             .is_some_and(|reason| !reason.is_empty()),
         "{carry}"
     );
+    returned_to_backlog(&pair, &task);
     let released = released_candidate(&pair, &leaf);
     assert_eq!(released["head_sha"], head.as_str(), "{released}");
     assert!(released.get("durable_ref").is_none(), "{released}");
@@ -646,7 +648,8 @@ fn an_owner_local_run_records_why_it_sets_a_kept_candidate_aside() {
     );
     let (_, leaf, head, carry) = committed_then_failed(&pair, &follower, &base);
     assert_eq!(carry["carry"], "failed", "{carry}");
-    assert_eq!(pair.owner_status(&task), "backlog");
+    assert_eq!(pair.owner_status(&task), "blocked");
+    returned_to_backlog(&pair, &task);
 
     let (_, resumed) = owner_local_run(&pair, &task);
     assert_eq!(resumed["outcome"], "fresh", "{resumed}");

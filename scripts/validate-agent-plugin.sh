@@ -77,6 +77,12 @@ def load_json(path: Path, label: str) -> dict[str, Any] | None:
     except json.JSONDecodeError as exc:
         errors.append(f"{label} is not valid JSON: {exc}")
         return None
+    except UnicodeDecodeError as exc:
+        errors.append(f"{label} is not valid JSON: {exc}")
+        return None
+    except OSError as exc:
+        errors.append(f"{label} cannot be read: {exc}")
+        return None
     if not isinstance(payload, dict):
         errors.append(f"{label} must contain a JSON object")
         return None
@@ -117,7 +123,10 @@ def reject_user_specific_paths(value: Any, path: str) -> None:
     if isinstance(value, str):
         if "CLAUDE_PROJECT_DIR" in value:
             errors.append(f"{path} must not reference CLAUDE_PROJECT_DIR")
-        if str(Path.home()) in value:
+        # HOME=/ makes Path.home() the filesystem root, which is a substring
+        # of every slash-containing value, including the @orbit-tools/cli pin.
+        home = str(Path.home())
+        if home not in {"", "/"} and home in value:
             errors.append(f"{path} must not embed a user-specific absolute home path")
         if value.startswith("/") or (len(value) >= 3 and value[1] == ":" and value[0].isalpha()):
             errors.append(f"{path} must not use an absolute filesystem path")
@@ -137,24 +146,25 @@ def reject_user_specific_paths(value: Any, path: str) -> None:
             reject_user_specific_paths(item, f"{path}.{key}")
 
 
-def mcp_launch(payload: dict[str, Any] | None, label: str) -> tuple[str, list[str]] | None:
+def mcp_launch(payload: dict[str, Any] | None, label: str, name: str = "orbit") -> tuple[str, list[str]] | None:
     if payload is None:
         return None
     servers = payload.get("mcpServers")
     if not isinstance(servers, dict):
         errors.append(f"{label}.mcpServers must be an object")
         return None
-    orbit = servers.get("orbit")
-    if not isinstance(orbit, dict):
-        errors.append(f"{label}.mcpServers.orbit must be an object")
+    server = servers.get(name)
+    if not isinstance(server, dict):
+        errors.append(f"{label}.mcpServers.{name} must be an object")
         return None
-    command = orbit.get("command")
-    args = orbit.get("args")
+    command = server.get("command")
+    # Orbit args are required. Another server may omit them.
+    args = server.get("args") if name == "orbit" else server.get("args", [])
     if not isinstance(command, str) or not command.strip():
-        errors.append(f"{label}.mcpServers.orbit.command must be a non-empty string")
+        errors.append(f"{label}.mcpServers.{name}.command must be a non-empty string")
         return None
     if not isinstance(args, list) or not all(isinstance(arg, str) and arg.strip() for arg in args):
-        errors.append(f"{label}.mcpServers.orbit.args must be an array of non-empty strings")
+        errors.append(f"{label}.mcpServers.{name}.args must be an array of non-empty strings")
         return None
     return command, args
 
@@ -164,7 +174,11 @@ def validate_skill_frontmatter(skill_dir: Path) -> None:
     if not skill_path.is_file():
         errors.append(f"skill {skill_dir.name} is missing SKILL.md")
         return
-    text = skill_path.read_text(encoding="utf-8")
+    try:
+        text = skill_path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError) as exc:
+        errors.append(f"skill {skill_dir.name} SKILL.md cannot be read: {exc}")
+        return
     if not text.startswith("---\n"):
         errors.append(f"skill {skill_dir.name} must start with YAML frontmatter")
         return
@@ -303,6 +317,8 @@ if mcp is not None:
             if not isinstance(server, dict):
                 errors.append(f"plugin/mcp.json.mcpServers.{server_name} must be an object")
                 continue
+            if server_name != "orbit":
+                mcp_launch(mcp, "plugin/mcp.json", server_name)
             server_type = server.get("type")
             if server_type != "stdio":
                 errors.append(f"plugin/mcp.json.mcpServers.{server_name}.type must be 'stdio'")
@@ -332,19 +348,25 @@ if mcp is not None:
 
 agent_launch = mcp_launch(mcp, "plugin/mcp.json")
 claude_launch = mcp_launch(claude_mcp, "plugin/.mcp.json")
-codex_launch = mcp_launch(
-    codex_manifest if isinstance(codex_manifest, dict) else None,
-    "plugin/.codex-plugin/plugin.json",
-)
+codex_payload = codex_manifest if isinstance(codex_manifest, dict) else None
+codex_launch = mcp_launch(codex_payload, "plugin/.codex-plugin/plugin.json")
 expected = (
     (EXPECTED_MCP_COMMAND, expected_mcp_args) if expected_mcp_args is not None else None
 )
-for label, launch in (
-    ("plugin/mcp.json", agent_launch),
-    ("plugin/.mcp.json", claude_launch),
-    ("plugin/.codex-plugin/plugin.json", codex_launch),
+for label, launch, source in (
+    ("plugin/mcp.json", agent_launch, mcp),
+    ("plugin/.mcp.json", claude_launch, claude_mcp),
+    ("plugin/.codex-plugin/plugin.json", codex_launch, codex_payload),
 ):
-    if launch is None or expected is None:
+    if expected is None:
+        continue
+    if launch is None:
+        # A loaded manifest with no usable Orbit launch is a failure. A missing
+        # file was already reported by load_json and is not given a second error.
+        if source is not None:
+            errors.append(
+                f"{label} MCP launch must be {EXPECTED_MCP_COMMAND} {' '.join(expected_mcp_args)}"
+            )
         continue
     args = launch[1]
     if launch == expected:
@@ -372,8 +394,6 @@ skills_root = plugin_root / "skills"
 orbit_skill = skills_root / "orbit"
 if not orbit_skill.is_dir():
     errors.append("plugin/skills/orbit is missing")
-else:
-    validate_skill_frontmatter(orbit_skill)
 if skills_root.is_dir():
     for skill_dir in sorted(path for path in skills_root.iterdir() if path.is_dir()):
         validate_skill_frontmatter(skill_dir)

@@ -13,9 +13,11 @@
 //! that branch. The branch is then renamed aside to
 //! `<branch>-superseded-<suffix>` first, which keeps that checkout and its
 //! commits intact, and worktree GC still reads the branch from its HEAD.
-//! A local branch at any commit other than the published head is never
+//! A local branch at any commit other than the candidate's head is never
 //! moved: the leaf keeps its own branch, and `pr_open` closes the earlier
-//! pull request once its own is open.
+//! pull request once its own is open. A source-repair candidate may be a
+//! certified, unpublished tip past the published head; that branch is always
+//! renamed aside, because `origin` does not keep its commits.
 
 use std::path::Path;
 
@@ -33,11 +35,14 @@ pub(super) enum Adoption {
 }
 
 /// Rename this checkout's branch to `candidate`'s published branch, moving a
-/// retained worktree's copy of it aside when it sits at the published head.
+/// retained copy of it aside when it sits at the candidate's head: a copy a
+/// worktree holds, or one at an unpublished tip `published_head` does not
+/// name.
 pub(super) fn adopt_published_branch(
     workspace_path: &Path,
     task_id: &str,
     candidate: &Candidate,
+    published_head: &str,
 ) -> Result<Adoption, OrbitError> {
     let branch = candidate.branch.as_str();
     let Ok(ours) = git_output(
@@ -77,12 +82,12 @@ pub(super) fn adopt_published_branch(
         )?;
         if tip.trim() != candidate.head_sha {
             return Ok(Adoption::Refused(format!(
-                "this host's branch '{branch}' is at {}, not the published head {}",
+                "this host's branch '{branch}' is at {}, not the candidate head {}",
                 tip.trim(),
                 candidate.head_sha
             )));
         }
-        if held_by_worktree(workspace_path, &local_ref)? {
+        if candidate.head_sha != published_head || held_by_worktree(workspace_path, &local_ref)? {
             let suffix = ours.rsplit('-').next().unwrap_or(ours.as_str());
             let aside = format!("{branch}-superseded-{suffix}");
             if let Some(refused) = rename(workspace_path, &["branch", "-m", branch, &aside])? {
@@ -90,8 +95,8 @@ pub(super) fn adopt_published_branch(
             }
         }
     }
-    // A local copy no worktree holds sits at the published head, which
-    // `origin` keeps, so `-M` loses nothing by replacing it.
+    // A local copy left in place sits at the published head, which `origin`
+    // keeps, so `-M` loses nothing by replacing it.
     Ok(
         match rename(workspace_path, &["branch", "-M", &ours, branch])? {
             Some(refused) => Adoption::Refused(refused),

@@ -1,4 +1,6 @@
-use orbit_types::workflow::{FinalRecoveryDecision, FinalRecoveryResume, PipelineState};
+use orbit_types::workflow::{
+    FaultAttribution, FinalRecoveryDecision, FinalRecoveryResume, PipelineState,
+};
 
 /// What the executor does after the hook.
 #[derive(Debug, PartialEq, Eq)]
@@ -26,8 +28,8 @@ pub(in crate::activity_job::job_executor) enum FinalRecoveryBudget {
     /// Not invoked yet.
     Available,
     /// A run this one resumed decided this and did not resume; the host
-    /// applies it again, without a second dispatch.
-    Replay(FinalRecoveryDecision),
+    /// applies it again, with its recorded fault, without a second dispatch.
+    Replay(FinalRecoveryDecision, FaultAttribution),
     /// Invoked already, by this run or one it resumed.
     Spent,
 }
@@ -40,7 +42,7 @@ impl FinalRecoveryBudget {
             None => Self::Available,
             Some(checkpoint) => match &checkpoint.decision {
                 Some(decision) if !matches!(decision, FinalRecoveryDecision::Resume { .. }) => {
-                    Self::Replay(decision.clone())
+                    Self::Replay(decision.clone(), checkpoint.fault.clone())
                 }
                 _ => Self::Spent,
             },

@@ -10,12 +10,12 @@ use super::super::identity::{Access, CompatibilityIdentity};
 use super::super::image::{process_digest, remember_process_digest};
 use super::super::paths::validated_generation_root;
 use super::super::records::{Record, read_generation};
-use super::super::refusal::{refusal, switch_pending, upgrade_pending};
+use super::super::refusal::{self, switch_pending};
 use super::super::registry::{
     self, ParticipantRecord, ParticipantRole, PendingSwitch, Registration, pending_switch,
 };
 use super::lock::quiesce_bound;
-use crate::OrbitError;
+use crate::{OrbitError, UpgradeAdmissionRefusalKind};
 
 /// A shared generation pin. Retain until all operations and replies finish.
 ///
@@ -104,6 +104,47 @@ pub fn pending_switch_for_this_process() -> Option<PendingSwitch> {
     let participation = PARTICIPATION.get()?;
     pending_switch(&participation.root).filter(|switch| {
         switch.pid != std::process::id() && switch.target != participation.identity
+    })
+}
+
+/// Whether an updater that renames nothing asked this process to hand over
+/// to its own installed executable: a refresh is pending on an authority this
+/// process joined, for exactly the digest and identity it runs, and it
+/// registered a resume capability (`capability`, when the caller names one).
+/// Exec'ing releases every generation hold it
+/// has, which is how the updater proves that nothing else holds the
+/// generation before re-pinning it; the new image queues behind the updater
+/// and joins what it pinned.
+pub(in super::super) fn refresh_requested_for_this_process(capability: Option<&str>) -> bool {
+    let Some(participation) = PARTICIPATION.get() else {
+        return false;
+    };
+    let resumes = participation
+        .handover
+        .as_deref()
+        .is_some_and(|handover| capability.is_none_or(|capability| capability == handover));
+    if !resumes {
+        return false;
+    }
+    let Ok(digest) = process_digest(None, false) else {
+        return false;
+    };
+    let mut joined = vec![(participation.root.clone(), participation.identity.clone())];
+    joined.extend(
+        PROCESS_JOINS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|join| join.hold.strong_count() > 0)
+            .map(|join| (join.root.clone(), join.identity.clone())),
+    );
+    joined.iter().any(|(root, identity)| {
+        pending_switch(root).is_some_and(|switch| {
+            switch.refresh
+                && switch.pid != std::process::id()
+                && switch.digest == digest
+                && switch.target == *identity
+        })
     })
 }
 
@@ -284,9 +325,15 @@ impl GenerationGuard {
             && switch.target != *participant.identity
         {
             return Err(if participant.in_activity {
-                upgrade_pending(switch_pending(&switch))
+                refusal::upgrade_admission_pending(
+                    UpgradeAdmissionRefusalKind::SwitchPending,
+                    switch_pending(&switch),
+                )
             } else {
-                refusal(switch_pending(&switch))
+                refusal::upgrade_admission_refusal(
+                    UpgradeAdmissionRefusalKind::SwitchPending,
+                    switch_pending(&switch),
+                )
             });
         }
         // As a fresh join computes it: a reader of a record naming another

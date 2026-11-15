@@ -11,6 +11,13 @@ pub const NO_DIFF_EXPECTED_TAG: &str = "no-diff-expected";
 /// human approves them.
 pub const NO_AUTO_APPROVE_TAG: &str = "no-auto-approve";
 
+/// Tasks carrying this tag are never admitted by an automatic drain
+/// (`orbit run auto`, pull-drain followers or any automatic admission pass)
+/// and are never approved by drain-window auto-approval (it implies
+/// [`NO_AUTO_APPROVE_TAG`]). An explicit `orbit run ship <id>` and an
+/// interactive claim still run it; removing the tag makes it eligible again.
+pub const NO_DRAIN_TAG: &str = "no-drain";
+
 /// Task history event an operator records to discard the candidate the task's
 /// last failed run preserved; the next run implements fresh [ORB-13985].
 pub const CANDIDATE_DISCARDED_EVENT: &str = "candidate_discarded";
@@ -174,7 +181,10 @@ impl FromStr for TaskStatus {
             "archived" => Ok(TaskStatus::Archived),
             "rejected" => Ok(TaskStatus::Rejected),
             "someday" => Ok(TaskStatus::Someday),
-            other => Err(format!("unknown task status: {other}")),
+            other => Err(format!(
+                "unknown task status: {other} (valid statuses: {})",
+                TaskStatus::ALL.map(TaskStatus::cli_name).join(", ")
+            )),
         }
     }
 }
@@ -287,8 +297,18 @@ impl FromStr for TaskPriority {
             "medium" => Ok(TaskPriority::Medium),
             "high" => Ok(TaskPriority::High),
             "critical" => Ok(TaskPriority::Critical),
-            other => Err(format!("unknown task priority: {other}")),
+            other => Err(format!(
+                "unknown task priority: {other} (valid priorities: {})",
+                TaskPriority::valid_names().join(", ")
+            )),
         }
+    }
+}
+
+impl TaskPriority {
+    /// Priority values accepted on task create and update surfaces.
+    pub fn valid_names() -> &'static [&'static str] {
+        &["low", "medium", "high", "critical"]
     }
 }
 
@@ -339,12 +359,20 @@ impl FromStr for TaskComplexity {
             "hard" => Ok(TaskComplexity::Hard),
             "xhard" => Ok(TaskComplexity::XHard),
             "unassessed" => Ok(TaskComplexity::Unassessed),
-            other => Err(format!("unknown task complexity: {other}")),
+            other => Err(format!(
+                "unknown task complexity: {other} (valid complexities: {})",
+                TaskComplexity::assessed_names().join(", ")
+            )),
         }
     }
 }
 
 impl TaskComplexity {
+    /// Complexity values an operator or agent may assign to a task.
+    pub fn assessed_names() -> &'static [&'static str] {
+        &["low", "medium", "hard", "xhard"]
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             TaskComplexity::Low => "low",

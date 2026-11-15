@@ -10,7 +10,9 @@ mod automation;
 mod codebase;
 mod config;
 mod cost;
+mod crew_memory;
 mod crews;
+mod dashboard_chrome;
 mod decisions;
 mod denials;
 mod diagnostics;
@@ -27,17 +29,20 @@ pub(crate) mod lease_notices;
 pub(crate) mod leases;
 mod log;
 mod metrics;
+mod notices;
 mod origin;
 mod pagination;
 mod plugins;
 mod reliability;
+mod residents;
 mod resource_profiles;
 mod routes;
 pub(crate) mod routines;
 mod runs;
 mod schedule_edits;
+mod scripts;
 mod search;
-pub(crate) mod session;
+mod task_search;
 mod tasks;
 mod workspaces;
 
@@ -46,34 +51,6 @@ pub(crate) use host::host_error_code;
 pub(crate) use origin::{nosniff_json_responses, require_localhost_origin};
 pub(super) use routes::{request_shutdown, router};
 pub(crate) use runs::failure_root_line;
-
-// Keep the API's shared error projection in the helpers module while adding
-// the structured response needed by the dashboard for a live resume conflict.
-pub(super) fn map_runtime_error(error: orbit_core::OrbitError) -> axum::response::Response {
-    match error {
-        error @ orbit_core::OrbitError::ResumeRunInFlight { .. } => {
-            resume_run_in_flight_conflict(error)
-        }
-        other => helpers::map_runtime_error(other),
-    }
-}
-
-fn resume_run_in_flight_conflict(error: orbit_core::OrbitError) -> axum::response::Response {
-    let (source_run_id, run_id) = error
-        .resume_run_in_flight()
-        .map_or_else(Default::default, |(source_run_id, run_id)| {
-            (source_run_id.to_string(), run_id.to_string())
-        });
-    axum::response::IntoResponse::into_response((
-        axum::http::StatusCode::CONFLICT,
-        axum::Json(serde_json::json!({
-            "error": error.to_string(),
-            "code": "resume_run_in_flight",
-            "run_id": run_id,
-            "source_run_id": source_run_id,
-        })),
-    ))
-}
 
 #[cfg(test)]
 pub(crate) mod tests;

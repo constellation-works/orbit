@@ -7,8 +7,6 @@
 //! change the instructions it runs under, and nothing on the task (its
 //! description, comments or tags) supplies text. A tag only selects.
 
-use std::path::Path;
-
 use orbit_common::OrbitError;
 use orbit_config::TagInstructionSetting;
 use orbit_store::contracts::AdmissionShipContract;
@@ -20,6 +18,11 @@ use orbit_types::workflow::{
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+// Compatibility shim: the commit-pinned readers moved to
+// `task::base_revision` so task code no longer routes through this module.
+// Retire it by re-pointing the remaining importers (experiment overlays)
+// at the new home in a follow-up.
+pub(crate) use crate::application::task::base_revision::{commit_at, read_blob_at};
 use crate::runtime::assets::DEFAULT_TAG_INSTRUCTIONS;
 use crate::runtime::run_input::singular_task_id_from_input;
 
@@ -35,6 +38,26 @@ pub(crate) enum TagInstructionFailure {
     Store(OrbitError),
     /// A mapped instruction was refused.
     Refused(TagInstructionError),
+}
+
+/// What tag-instruction selection needs from experiment overlays [ORB-23019].
+///
+/// Experiment owns arm capture and overlay policy, and it reads this module's
+/// revision helpers back, so a direct call from here would close a cycle.
+/// This port is the way in: experiment implements it on
+/// [`OrbitRuntime`](crate::OrbitRuntime), so composing the runtime binds it.
+/// Selection, default suppression, role filtering and the combined prompt
+/// budget stay here. The query name stays distinct from the inherent method
+/// it forwards to, so the dependency guard can index that method.
+pub(in crate::application) trait TagInstructionExperimentPort {
+    /// Live overlays for `activity_name` of `run_id` and the task `input`
+    /// names, in assignment order. Implemented by experiment.
+    fn tag_instruction_experiment_overlays(
+        &self,
+        run_id: &str,
+        activity_name: &str,
+        input: &Value,
+    ) -> Result<Vec<ExperimentActivityOverlay>, TagInstructionFailure>;
 }
 
 impl OrbitRuntime {
@@ -68,7 +91,7 @@ impl OrbitRuntime {
             }
         }
         .map_err(TagInstructionFailure::Refused)?;
-        let overlays = self.experiment_overlays_for_activity(run_id, activity_name, input)?;
+        let overlays = self.tag_instruction_experiment_overlays(run_id, activity_name, input)?;
         with_experiment_instructions(selected, &overlays, role)
     }
 
@@ -97,6 +120,7 @@ impl OrbitRuntime {
             revision: None,
             instructions: Vec::new(),
             refusals: Vec::new(),
+            agent_corpus: Default::default(),
         };
         let mut bytes = 0;
         for (tag, role) in pairs {
@@ -124,6 +148,12 @@ impl OrbitRuntime {
                     error: error.to_string(),
                 }),
             }
+        }
+        for (activity, index) in self.tag_instruction_settings().agent_corpus() {
+            let injection = revision
+                .get()
+                .and_then(|revision| self.read_agent_corpus_at(activity, index, &revision));
+            captured.agent_corpus.insert(activity.clone(), injection);
         }
         captured.revision = revision.resolved();
         captured
@@ -181,7 +211,7 @@ impl OrbitRuntime {
     /// The receipt's capture when this process executes a claimed leaf. A
     /// leaf whose admission is unreadable, or whose older owner captured
     /// nothing, resolves on this replica instead and says so.
-    fn claimed_tag_instructions(&self) -> Option<CapturedTagInstructions> {
+    pub(crate) fn claimed_tag_instructions(&self) -> Option<CapturedTagInstructions> {
         self.worker_invocation()?;
         let captured = self.current_claimed_leaf().map(|leaf| {
             leaf.admission
@@ -201,27 +231,6 @@ impl OrbitRuntime {
                 );
                 None
             }
-        }
-    }
-
-    /// The commit the run's worktree was cut from, as its `worktree` step
-    /// recorded it, or else this checkout's `HEAD` commit.
-    pub(crate) fn run_base_revision(&self, run_id: &str) -> Result<String, String> {
-        let recorded = self
-            .read_run_state(run_id)
-            .ok()
-            .flatten()
-            .and_then(|state| {
-                state
-                    .pipeline
-                    .get("worktree")
-                    .and_then(|worktree| worktree.get("base_sha"))
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            });
-        match recorded {
-            Some(sha) => commit_at(&self.paths().repo_root, &sha),
-            None => commit_at(&self.paths().repo_root, "HEAD"),
         }
     }
 
@@ -308,38 +317,4 @@ impl<'a> LazyRevision<'a> {
     fn resolved(&self) -> Option<String> {
         self.value.clone().and_then(Result::ok)
     }
-}
-
-/// The full commit id `revision` names in the repository at `root`.
-pub(crate) fn commit_at(root: &Path, revision: &str) -> Result<String, String> {
-    let repo = git2::Repository::open(root)
-        .map_err(|error| format!("the repository cannot be opened: {}", error.message()))?;
-    repo.revparse_single(revision)
-        .and_then(|object| object.peel_to_commit())
-        .map(|commit| commit.id().to_string())
-        .map_err(|error| {
-            format!(
-                "revision {revision} cannot be resolved: {}",
-                error.message()
-            )
-        })
-}
-
-/// The bytes of `path` in the tree of commit `revision`. The admission, not
-/// this read, enforces the size cap, so an oversized file is refused by name.
-pub(crate) fn read_blob_at(root: &Path, revision: &str, path: &str) -> Result<Vec<u8>, String> {
-    let repo = git2::Repository::open(root)
-        .map_err(|error| format!("the repository cannot be opened: {}", error.message()))?;
-    let tree = repo
-        .revparse_single(revision)
-        .and_then(|object| object.peel_to_tree())
-        .map_err(|error| format!("revision cannot be read: {}", error.message()))?;
-    let entry = tree
-        .get_path(Path::new(path))
-        .map_err(|_| "the file is not in that commit".to_string())?;
-    let blob = entry
-        .to_object(&repo)
-        .and_then(|object| object.peel_to_blob())
-        .map_err(|_| "the path is not a file".to_string())?;
-    Ok(blob.content().to_vec())
 }

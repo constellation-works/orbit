@@ -1,12 +1,16 @@
 mod request;
 mod response;
 
-pub use request::{AgentOperation, AgentRequest};
+pub use request::AgentRequest;
 pub(crate) use response::request_usage;
+pub(crate) use response::tool_calls_in_documents;
 pub use response::{AgentInvocationSpec, AgentResponseStatus};
-pub use response::{DeclaredResponseFailure, ParsedStdout};
+pub use response::{
+    DeclaredResponseFailure, IMPLEMENTATION_INCOMPLETE_CODE, IncompleteContinuationRequest,
+    ParsedStdout, is_missing_envelope_violation, is_success_carrying_error_violation,
+};
 pub use response::{
     provider_authentication_failure, provider_capacity_exhausted, provider_content_refusal,
-    provider_invocation_diagnostic, provider_usage_limit, provider_usage_limit_details,
-    response_envelope_json_schema_arg,
+    provider_invocation_diagnostic, provider_quota_exceeded, provider_usage_limit,
+    provider_usage_limit_details, response_envelope_json_schema, response_envelope_json_schema_arg,
 };

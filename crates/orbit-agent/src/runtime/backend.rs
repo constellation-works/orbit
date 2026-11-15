@@ -64,7 +64,6 @@ impl ProviderRegistry {
 impl Default for ProviderRegistry {
     fn default() -> Self {
         let mut registry = Self::new();
-        let _ = registry.register(Arc::new(crate::providers::mock_agent::MockAgentFactory));
         let _ = registry.register(Arc::new(crate::providers::codex::CodexFactory));
         let _ = registry.register(Arc::new(crate::providers::claude::ClaudeFactory));
         let _ = registry.register(Arc::new(crate::providers::gemini::GeminiFactory));

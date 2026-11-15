@@ -245,9 +245,114 @@ fn dashboard_force_still_overrides_the_lifecycle_table() {
     );
 }
 
+/// A governed status change on a run-owned task returns the structured
+/// force-overridable code; `force: true` retries it, records it as forced
+/// and leaves the owning run untouched.
+#[test]
+fn dashboard_status_change_on_a_run_owned_task_offers_the_force_override() {
+    isolated(
+        "task_writes::dashboard_status_change_on_a_run_owned_task_offers_the_force_override",
+        || {
+            let fixture = Fixture::new();
+            let id = seed(&fixture, "Run-owned status change", TaskStatus::Proposed);
+            let run = own_pending(&fixture, &id);
+            let server = fixture.server(true);
+            let uri = format!("/api/tasks/{id}{WORKSPACE}");
+
+            let refused = server.send("PATCH", &uri, json!({ "status": "backlog" }));
+            assert_eq!(refused.status().as_u16(), 400);
+            let body: Value = refused.json().expect("error body");
+            assert_eq!(body["code"], json!("force_overridable"), "{body}");
+            assert_eq!(body["guard"], json!("run_still_owns_task"), "{body}");
+            assert_eq!(body["run_id"], json!(run.run_id), "{body}");
+            assert_eq!(body["run_state"], json!("pending"), "{body}");
+            assert_eq!(
+                fixture.runtime.get_task(&id).expect("task").status,
+                TaskStatus::Proposed,
+                "a refused change writes nothing"
+            );
+
+            let forced =
+                json_ok(server.send("PATCH", &uri, json!({ "status": "backlog", "force": true })));
+            assert_eq!(forced["status"], json!("backlog"), "{forced}");
+            assert!(
+                forced["history"]
+                    .as_array()
+                    .expect("history")
+                    .iter()
+                    .any(|entry| entry["event"] == json!("forced")),
+                "the override is recorded as forced: {forced}"
+            );
+            assert_eq!(
+                fixture
+                    .runtime
+                    .show_job_run(&run.run_id)
+                    .expect("run")
+                    .state,
+                JobRunState::Pending,
+                "forcing does not cancel the owning run"
+            );
+        },
+    );
+}
+
+/// Archiving through the archive button refuses a run-owned task with the
+/// same structured code, and `force: true` archives it as forced.
+#[test]
+fn dashboard_archive_of_a_run_owned_task_offers_the_force_override() {
+    isolated(
+        "task_writes::dashboard_archive_of_a_run_owned_task_offers_the_force_override",
+        || {
+            let fixture = Fixture::new();
+            let id = seed(&fixture, "Run-owned archive", TaskStatus::Backlog);
+            let run = own_pending(&fixture, &id);
+            let server = fixture.server(true);
+            let uri = format!("/api/tasks/{id}/archive{WORKSPACE}");
+
+            let refused = server.send("POST", &uri, json!({}));
+            assert_eq!(refused.status().as_u16(), 400);
+            let body: Value = refused.json().expect("error body");
+            assert_eq!(body["code"], json!("force_overridable"), "{body}");
+            assert_eq!(body["guard"], json!("run_still_owns_task"), "{body}");
+            assert_eq!(body["run_id"], json!(run.run_id), "{body}");
+            assert_eq!(
+                fixture.runtime.get_task(&id).expect("task").status,
+                TaskStatus::Backlog,
+                "a refused archive writes nothing"
+            );
+
+            let archived = json_ok(server.send("POST", &uri, json!({ "force": true })));
+            assert_eq!(archived["ok"], json!(true), "{archived}");
+            let task = json_ok(server.get(&format!("/api/tasks/{id}{WORKSPACE}")));
+            assert_eq!(task["status"], json!("archived"), "{task}");
+            assert!(
+                task["history"]
+                    .as_array()
+                    .expect("history")
+                    .iter()
+                    .any(|entry| entry["event"] == json!("forced")),
+                "the forced archive is recorded as forced: {task}"
+            );
+            assert_eq!(
+                fixture
+                    .runtime
+                    .show_job_run(&run.run_id)
+                    .expect("run")
+                    .state,
+                JobRunState::Pending,
+                "forcing does not cancel the owning run"
+            );
+        },
+    );
+}
+
 /// The owning-run relaxation of the update context check needs a caller
-/// bound to the task's run. A dashboard request carries no run binding, so a
-/// task a run owns still gets the strict check, with its escape named.
+/// bound to the task's run, calling from a linked worktree of the workspace.
+/// The server here is exactly that process: it runs from a linked worktree
+/// inside the managed run's environment. A dashboard request is not that
+/// run's caller, so a task the run owns still gets the strict check, with its
+/// escape named; a handler that took its binding from the server process
+/// would relax it.
 #[test]
 fn dashboard_update_of_a_run_owned_task_keeps_the_strict_context_check() {
     isolated(
@@ -267,7 +372,7 @@ fn dashboard_update_of_a_run_owned_task_keeps_the_strict_context_check() {
                     None,
                 )
                 .expect("bind task to a run");
-            let server = fixture.server(true);
+            let server = fixture.server_in_linked_worktree_of_run(true, "jrun-dashboard-owner");
 
             let refused = server.send(
                 "PATCH",
@@ -495,14 +600,18 @@ fn dashboard_answers_a_decision_request_as_human() {
                 DecisionGate::BlockTriage,
                 vec![
                     DecisionAnswer {
+                        risk_tier: Default::default(),
                         id: "1".to_string(),
                         label: "Drop criterion 2".to_string(),
                         consequence: "the old API stays retired".to_string(),
+                        option: None,
                     },
                     DecisionAnswer {
+                        risk_tier: Default::default(),
                         id: "dismiss".to_string(),
                         label: "Dismiss".to_string(),
                         consequence: "Leave blocked, stop asking for this episode.".to_string(),
+                        option: None,
                     },
                 ],
                 DecisionBinding::BlockEpisode {

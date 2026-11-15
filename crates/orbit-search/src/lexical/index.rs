@@ -8,10 +8,10 @@ use super::store::LexicalStore;
 /// An opened search index, or the explanation for its absence.
 #[derive(Clone)]
 pub enum LexicalIndex {
-    /// The index is open and can answer search reads and writes.
+    /// The connection opened; individual operations may still fail.
     Ready(LexicalStore),
     /// This storage would not yield a usable index. Carries the
-    /// operator-facing explanation reported to every search caller.
+    /// operator-facing reason returned by `store()` to callers that need it.
     Unavailable(String),
 }
 
@@ -41,7 +41,7 @@ impl LexicalIndex {
     }
 
     /// Open an existing index without creating or migrating it. Missing or
-    /// unreadable storage is unavailable rather than a startup failure.
+    /// access-refused storage is unavailable rather than a startup failure.
     pub fn open_read_only(path: &Path) -> Result<Self, OrbitError> {
         match LexicalStore::open_read_only(path) {
             Ok(store) => Ok(Self::Ready(store)),
@@ -52,8 +52,19 @@ impl LexicalIndex {
         }
     }
 
-    /// The open store, or the error every search operation reports when
-    /// there is no index to consult.
+    /// Whether indexing writes cannot land through this handle: the store
+    /// opened read-only, or no store opened at all because the storage
+    /// refused it. Best-effort indexers skip instead of attempting a write
+    /// known to fail on every task write; the index then stays stale until
+    /// a reindex from writable storage. [ORB-24077]
+    pub fn is_read_only(&self) -> bool {
+        match self {
+            Self::Ready(store) => store.is_read_only(),
+            Self::Unavailable(_) => true,
+        }
+    }
+
+    /// The opened store, or the operator-facing reason it is unavailable.
     pub fn store(&self) -> Result<&LexicalStore, OrbitError> {
         match self {
             Self::Ready(store) => Ok(store),

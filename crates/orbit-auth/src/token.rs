@@ -9,6 +9,7 @@
 use std::fmt;
 
 use orbit_common::OrbitError;
+use orbit_common::security::token;
 use sha2::{Digest, Sha256};
 
 /// Prefix of every lease token secret.
@@ -59,7 +60,7 @@ impl LeaseTokenDigest {
     /// Compare against stored digest bytes in time independent of where they
     /// first differ.
     pub fn matches_stored(&self, stored: &[u8]) -> bool {
-        constant_time_eq(&self.0, stored)
+        token::constant_time_eq(&self.0, stored)
     }
 }
 
@@ -71,17 +72,14 @@ impl fmt::Debug for LeaseTokenDigest {
 
 /// Mint a new secret from the OS random source.
 pub fn generate_lease_token_secret() -> Result<LeaseTokenSecret, OrbitError> {
-    let bytes = random_bytes::<LEASE_TOKEN_SECRET_BYTES>()?;
-    Ok(LeaseTokenSecret(format!(
-        "{LEASE_TOKEN_PREFIX}{}",
-        lower_hex(&bytes)
-    )))
+    let hex = token::random_hex(LEASE_TOKEN_SECRET_BYTES)?;
+    Ok(LeaseTokenSecret(format!("{LEASE_TOKEN_PREFIX}{hex}")))
 }
 
 /// A new public identifier for a token row.
 pub fn generate_lease_token_id() -> Result<String, OrbitError> {
-    let bytes = random_bytes::<LEASE_TOKEN_ID_BYTES>()?;
-    Ok(format!("{LEASE_TOKEN_ID_PREFIX}{}", lower_hex(&bytes)))
+    let hex = token::random_hex(LEASE_TOKEN_ID_BYTES)?;
+    Ok(format!("{LEASE_TOKEN_ID_PREFIX}{hex}"))
 }
 
 /// Whether `raw` has the lease token secret shape. A malformed value is
@@ -98,34 +96,4 @@ pub fn is_lease_token_secret_shape(raw: &str) -> bool {
 /// SHA-256 of a presented secret, used to look it up.
 pub fn lease_token_digest(secret: &str) -> LeaseTokenDigest {
     LeaseTokenDigest(Sha256::digest(secret.as_bytes()).into())
-}
-
-fn random_bytes<const N: usize>() -> Result<[u8; N], OrbitError> {
-    let mut bytes = [0u8; N];
-    getrandom::fill(&mut bytes)
-        .map_err(|error| OrbitError::Execution(format!("OS random source unavailable: {error}")))?;
-    Ok(bytes)
-}
-
-fn lower_hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(char::from(DIGITS[usize::from(byte >> 4)]));
-        out.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
-    }
-    out
-}
-
-/// Equal-length byte comparison whose running time does not depend on the
-/// position of the first difference.
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    if left.len() != right.len() {
-        return false;
-    }
-    let difference = left
-        .iter()
-        .zip(right)
-        .fold(0u8, |acc, (a, b)| acc | (a ^ b));
-    std::hint::black_box(difference) == 0
 }

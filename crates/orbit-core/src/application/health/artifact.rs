@@ -13,7 +13,9 @@
 //!   default that the running binary no longer ships. A routine is also
 //!   deprecated when its content matches a retired template and the manifest
 //!   never recorded it: reconciliation retires that file by content, so
-//!   reporting the catalog healthy would contradict it [DANI-10502].
+//!   reporting the catalog healthy would contradict it [DANI-10502]. A
+//!   demoted auto-task default is not deprecated: its copy is kept as a
+//!   workspace-local definition.
 //! - **Stale** — the file is a managed copy of an *older* release of a default
 //!   this binary still ships, or an untracked file colliding with a bundled
 //!   default name. An auto-task file that differs from its bundled body only
@@ -54,14 +56,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_config::DEMOTED_DEFAULT_AUTO_TASKS;
 
-use super::activity_catalog::repair_retired_activity_backends as repair_activity_backends;
-
-pub use super::activity_catalog::{
-    FIX_RETIRED_ACTIVITY_BACKENDS_CMD, RetiredActivityBackendRepair, RetiredActivityBackendSkip,
-};
-
-use super::artifact_diagnosis::diagnose_catalog;
+use super::artifact_diagnosis;
 use crate::OrbitRuntime;
 use crate::application::auto_tasks::auto_tasks_dir;
 
@@ -258,6 +255,9 @@ pub(super) struct ManagedCatalog {
     /// Shipped defaults the workspace seeding policy leaves out. They are
     /// never missing, and a tracked copy is retired as a dropped default is.
     pub(super) left_out: BTreeSet<String>,
+    /// Defaults a release demoted to workspace-local: a tracked copy is kept,
+    /// never deprecated, and `orbit workspace sync` drops its provenance.
+    pub(super) kept: BTreeSet<String>,
 }
 
 impl ManagedCatalog {
@@ -274,6 +274,7 @@ impl ManagedCatalog {
             embedded: Some(embedded),
             shipped,
             left_out: BTreeSet::new(),
+            kept: BTreeSet::new(),
         }
     }
 
@@ -288,6 +289,7 @@ impl ManagedCatalog {
             embedded: None,
             shipped: names.into_iter().collect(),
             left_out: BTreeSet::new(),
+            kept: BTreeSet::new(),
         }
     }
 
@@ -302,9 +304,54 @@ impl ManagedCatalog {
         self
     }
 
+    /// Keep tracked copies of the demoted defaults `kept` out of retirement.
+    fn keeping<'a>(mut self, kept: impl IntoIterator<Item = &'a str>) -> Self {
+        self.kept = kept.into_iter().map(str::to_string).collect();
+        self
+    }
+
     pub(super) fn path_of(&self, name: &str) -> PathBuf {
         self.dir.join(self.kind.layout().relative_path(name))
     }
+}
+
+/// The base branch shipped auto-tasks in this runtime's catalogs are
+/// judged against: the registered base branch of the workspace whose
+/// catalog is being read.
+///
+/// A bound runtime already carries that branch. An unbound runtime — for
+/// example `orbit doctor --root <workspace>` run from outside the
+/// checkout, where root resolution supplies no binding — recovers it from
+/// the registry entry whose checkout claims this runtime's shared or
+/// local root as its orbit dir, when every such entry agrees on the
+/// branch. Anything else keeps the `[workflow] base_branch` fallback.
+pub(super) fn catalog_auto_task_base_branch(runtime: &OrbitRuntime) -> String {
+    if runtime.workspace_runtime_binding().is_some() {
+        return runtime.workspace_base_branch().to_string();
+    }
+    let registered_branch = (|| {
+        let path = orbit_registry::workspace_registry::registry_path_for(&runtime.global_root());
+        let load = orbit_registry::workspace_registry::load_registry_from_read_only(&path).ok()?;
+        let candidates = [
+            runtime.shared_root(),
+            runtime.local_root(),
+            runtime.paths().local_dir.clone(),
+        ];
+        let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let mut branches = BTreeSet::new();
+        for (workspace, checkout) in
+            orbit_registry::workspace_registry::local_workspaces(&load.registry)
+        {
+            if candidates
+                .iter()
+                .any(|candidate| canonical(candidate) == canonical(&checkout.orbit_dir))
+            {
+                branches.insert(workspace.base_branch.clone());
+            }
+        }
+        (branches.len() == 1).then(|| branches.into_iter().next())?
+    })();
+    registered_branch.unwrap_or_else(|| runtime.workspace_base_branch().to_string())
 }
 
 /// Every managed catalog for this runtime, in doctor display order.
@@ -317,6 +364,7 @@ fn managed_catalogs(runtime: &OrbitRuntime) -> Vec<ManagedCatalog> {
         .workspace_seeding_policies()
         .map(|policies| SeedingPolicyExclusions::of(&policies))
         .unwrap_or_default();
+    let auto_task_base_branch = catalog_auto_task_base_branch(runtime);
     let owned = |assets: &[(&str, &str)]| -> Vec<(String, String)> {
         assets
             .iter()
@@ -351,11 +399,12 @@ fn managed_catalogs(runtime: &OrbitRuntime) -> Vec<ManagedCatalog> {
             DEFAULT_AUTO_TASK_FILES.iter().map(|(name, content)| {
                 (
                     (*name).to_string(),
-                    render_default_auto_task(content, runtime.workspace_base_branch()).into_owned(),
+                    render_default_auto_task(content, &auto_task_base_branch).into_owned(),
                 )
             }),
         )
-        .leaving_out(left_out.auto_task_set()),
+        .leaving_out(left_out.auto_task_set())
+        .keeping(DEMOTED_DEFAULT_AUTO_TASKS.iter().copied()),
         // Routines are loaded and reconciled from the shared catalog. A linked
         // worktree's `local_dir` is its own `.orbit` and must not hide a fault
         // in the catalog the loader and sweep read. Auto-task writes stay
@@ -378,20 +427,26 @@ impl OrbitRuntime {
     pub fn inspect_definition_artifacts(&self) -> Result<Vec<ArtifactHealth>, OrbitError> {
         let mut report = Vec::new();
         for mut catalog in managed_catalogs(self) {
-            let mut health = diagnose_catalog(self, &catalog);
+            let mut health = artifact_diagnosis::diagnose_catalog(self, &catalog);
+            health
+                .findings
+                .extend(artifact_diagnosis::diagnose_workspace_catalog_copies(
+                    self,
+                    catalog.kind,
+                ));
             if catalog.kind == ArtifactKind::AutoTask && self.local_root() != self.shared_root() {
                 // Both catalogs can supply an inspected definition. Diagnose
                 // each with its own settings and manifest, retaining local
                 // candidate faults as well as faults in the shared catalog.
                 catalog.dir = auto_tasks_dir(&self.shared_root());
-                let shared = diagnose_catalog(self, &catalog);
+                let shared = artifact_diagnosis::diagnose_catalog(self, &catalog);
                 health.scanned += shared.scanned;
                 health.findings.extend(shared.findings);
             }
             if catalog.kind == ArtifactKind::Skill
                 && let Some(base) = self.global_root().parent()
             {
-                let roots = crate::bootstrap::init::skill_link_roots(base);
+                let roots = crate::application::skill::skill_link_roots(base);
                 let links = match dangling_client_skill_links(&roots) {
                     Ok(links) => links,
                     Err(error) => {
@@ -447,15 +502,6 @@ impl OrbitRuntime {
         }
         Ok(removed)
     }
-
-    /// Remove known retired `spec.backend` values from schemaVersion 2
-    /// agent-loop activities. Unknown backends and unrelated malformed
-    /// files are left untouched and listed for a manual edit.
-    pub fn repair_retired_activity_backends(
-        &self,
-    ) -> Result<RetiredActivityBackendRepair, OrbitError> {
-        repair_activity_backends(self)
-    }
 }
 
 /// Read one artifact file, treating an unreadable file as absent.
@@ -506,7 +552,7 @@ fn retire_catalog(catalog: &ManagedCatalog) -> Result<usize, OrbitError> {
     let mut retired = 0usize;
     let mut settled = Vec::new();
     for (name, digest) in &manifest.assets {
-        if catalog.shipped.contains(name) {
+        if catalog.shipped.contains(name) || catalog.kept.contains(name) {
             continue;
         }
         let relative = kind.layout().relative_path(name);

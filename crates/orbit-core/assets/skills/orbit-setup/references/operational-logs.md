@@ -53,7 +53,7 @@ run's [worker scope](#worker-resource-containment)):
 | Source | Contents | First inspection |
 | --- | --- | --- |
 | OS service log | `orbit-sweep` starts, exits, and scheduler output | Linux: `journalctl --user -u orbit-sweep.service`; macOS: the launchd sweep log |
-| Global JSONL trace | Structured tracing emitted by Orbit processes | `~/.orbit/state/logs/orbit.jsonl` and rotated archives |
+| Global JSONL trace | Structured tracing emitted by Orbit processes | Ordinarily `~/.orbit/state/logs/orbit.jsonl` and rotated archives; in a managed run with a different explicit `--root` or `ORBIT_ROOT`, the selected root's `state/logs/orbit.jsonl` and archives |
 | Audit event store | Persistent CLI invocation metadata | `orbit audit list --since 1h --status failure` |
 | Job-run evidence | One pipeline's state, events, stdout/stderr, and blobs | `orbit run show|events|trace|logs <run_id>` |
 
@@ -116,6 +116,13 @@ orbit sweep --dry-run
 
 The JSONL tracing sink is distinct from the sweep-service log. Its active file
 and rename-based archives are disposable; job/run stores are not.
+Ordinary processes use the home-global `~/.orbit/state/logs/orbit.jsonl` and
+`orbit-agent.jsonl` feeds. An Orbit-managed run normally uses its inherited
+registry root, but a different explicit `--root` or `ORBIT_ROOT` diverts both
+feeds to that selected root's `state/logs/` directory so scratch startup logs
+stay out of the inherited registry. The diversion requires a managed-run
+context; unmanaged root overrides keep the home-global feeds. Check the root
+used by the managed invocation when locating its logs.
 
 ```bash
 # Preferred public reader: recent events, warnings, or one tracing target.
@@ -196,9 +203,10 @@ orbit config show
 
 Profiles summarize per-delivery CPU and memory by workspace, work class and
 complexity on this host; `auto-task:<template>` profiles omit complexity.
-They use each key's last `profile_window` completed deliveries, whatever their
-age, under the newest crew model and Orbit version, excluding resumed
-or retried deliveries. Sparse keys fall back to broader profiles; inspect
+Each key has a union window across crew models and a separate window per
+crew model, each using its last `profile_window` completed deliveries, whatever
+their age. Orbit versions never filter these windows. Resumed or retried
+deliveries are excluded. Sparse keys fall back to broader profiles; inspect
 sample counts and spread before drawing conclusions. `BUILD_FLAG` identifies
 no-diff work using more than one core for two consecutive minutes, with its
 deliveries listed; templates that build by design, such as QA sweeps, are exempt.
@@ -213,10 +221,8 @@ Forecast fit, the fixed worker-slot ceiling, and sustained resource throttling
 are separate admission checks; diagnostics authorize no policy change.
 
 Readiness names `host_shutdown_scheduled` with the scheduled time and mode.
-New unattended admissions hold within `machine.host_shutdown_hold_minutes`
-(default 180); later schedules are still visible while admissions continue.
-Running work is left alone by the hold. Report the schedule and configured
-window; preserve the hold and operator capacity policy rather than raising
+New unattended admissions hold within the fixed 180-minute window; later schedules are still visible while admissions continue.
+Running work is left alone by the hold. Report the schedule; preserve the hold and operator capacity policy rather than raising
 concurrency, changing forecast thresholds, or cancelling a shutdown automatically.
 
 ## Provider failure holds
@@ -340,11 +346,9 @@ scripts. Compare that value with the service's `Environment=PATH=…` when a too
 cannot be found. Restart the launching service between runs after changing its
 environment, then confirm a new box delivery passes `candidate_validate`.
 
-The config schema exposes `workflow.validation_env.shell_probe`: `interactive`
-(default), `login` to select only the non-interactive probe, or `off` to
-disable shell probing. `workflow.validation_env.path` adds explicit PATH entries
-(leading `~/` expands to the owner's home); `workflow.validation_env.path_mode`
-is `prepend` by default or `replace` to use only those entries. Only allow-listed
+The probe always tries the interactive login shell first and falls back to a
+login-only shell. `workflow.validation_env.path` adds explicit PATH entries
+(leading `~/` expands to the owner's home) ahead of the resolved PATH. Only allow-listed
 toolchain variables cross the probe; it does not copy the shell's environment.
 Agent sessions start with the same `path` entries ahead of their PATH, so a
 reviewer runs the `python3` validation runs. While `path` has an entry, Codex

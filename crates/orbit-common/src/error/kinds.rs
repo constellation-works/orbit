@@ -132,10 +132,9 @@ pub struct SqliteContention {
 /// The error family an [`crate::OrbitError::StorageAccessDenied`] or
 /// [`crate::OrbitError::StorageLockBusy`] reports as.
 ///
-/// A read-only, access-denied or lock-busy failure keeps the message prefix
-/// and the stable error code of the variant it would otherwise have been
-/// built as, so carrying the class changes no user-visible text and no wire
-/// code.
+/// A classified storage failure keeps the message prefix of its original
+/// layer. Access denials use `storage_access_denied` on CLI and MCP; lock-busy
+/// failures retain this layer's wire code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StorageLayer {
@@ -148,7 +147,7 @@ pub enum StorageLayer {
 }
 
 impl StorageLayer {
-    /// The stable error code the CLI and MCP surfaces report for this layer.
+    /// The stable code for unclassified and lock-busy failures in this layer.
     pub fn error_code(self) -> &'static str {
         match self {
             Self::Io => "io_error",
@@ -213,13 +212,61 @@ impl ClaimRefusalKind {
     }
 }
 
+/// Which guard refused a write that `--force` (the dashboard's Force)
+/// overrides. Callers branch on this kind, never on message text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ForceOverridableKind {
+    /// A non-terminal local run still owns the task.
+    RunStillOwnsTask,
+    /// Delete was asked for a task outside `proposed` or `rejected`.
+    DeleteOutsideProposedOrRejected,
+}
+
+impl ForceOverridableKind {
+    /// The stable token every surface reports for this guard.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::RunStillOwnsTask => "run_still_owns_task",
+            Self::DeleteOutsideProposedOrRejected => "delete_outside_proposed_or_rejected",
+        }
+    }
+}
+
+impl std::fmt::Display for ForceOverridableKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Evidence behind [`crate::OrbitError::ForceOverridable`]: the guard that
+/// refused, its human message, and the facts a caller needs to name the
+/// guard without parsing the message. Boxed so the rare refusal does not
+/// widen every `Result<_, OrbitError>`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ForceOverridableRefusal {
+    /// The guard that refused.
+    pub kind: ForceOverridableKind,
+    /// The refusal text, without the `invalid input: ` prefix.
+    pub message: String,
+    /// The owning run, for [`ForceOverridableKind::RunStillOwnsTask`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// The owning run's state, for [`ForceOverridableKind::RunStillOwnsTask`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_state: Option<String>,
+    /// The task's status, for [`ForceOverridableKind::DeleteOutsideProposedOrRejected`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_status: Option<String>,
+}
+
 /// Stable refusal codes of the operator host registry (`orbit host`, the
 /// host file and its consumers). The serialized name is the code callers
 /// match on, so each variant is protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HostRegistryCode {
-    /// Both the host file and the legacy destinations file exist.
+    /// The retired legacy destinations file exists.
     HostFileConflict,
     /// The probed `machine_id` is already registered.
     HostExists,
@@ -237,8 +284,6 @@ pub enum HostRegistryCode {
     UnknownHost,
     /// A local replica checkout or running pull drain depends on the host.
     HostInUse,
-    /// A legacy destination row did not answer during migration.
-    LegacyHostUnreachable,
     /// A task id's prefix is neither this host's nor a registered host's
     /// [ORB-14449].
     UnknownTaskPrefix,
@@ -262,7 +307,6 @@ impl HostRegistryCode {
             Self::HostIdentityMismatch => "host_identity_mismatch",
             Self::UnknownHost => "unknown_host",
             Self::HostInUse => "host_in_use",
-            Self::LegacyHostUnreachable => "legacy_host_unreachable",
             Self::UnknownTaskPrefix => "unknown_task_prefix",
             Self::TaskPrefixRemote => "task_prefix_remote",
             Self::OwnerUnreachable => "owner_unreachable",
@@ -299,6 +343,8 @@ pub enum RemoteToolCode {
     PluginBrokerUnavailable,
     /// The remote rejected the request's input; nothing was decided.
     InvalidInput,
+    /// The remote host's own configuration is invalid; the request was not judged.
+    HostConfiguration,
     /// The remote's catalog role refused the call, before any capability
     /// grant was consulted.
     CapabilityRefused,
@@ -311,12 +357,13 @@ pub enum RemoteToolCode {
 }
 
 impl RemoteToolCode {
-    const NAMED: [Self; 8] = [
+    const NAMED: [Self; 9] = [
         Self::LockBusy,
         Self::NotFound,
         Self::ProtocolSkew,
         Self::PluginBrokerUnavailable,
         Self::InvalidInput,
+        Self::HostConfiguration,
         Self::CapabilityRefused,
         Self::CapabilityDenied,
         Self::PolicyDenied,
@@ -330,6 +377,7 @@ impl RemoteToolCode {
             Self::ProtocolSkew => "protocol_skew",
             Self::PluginBrokerUnavailable => "plugin_broker_unavailable",
             Self::InvalidInput => "invalid_input",
+            Self::HostConfiguration => "host_configuration",
             Self::CapabilityRefused => "capability_refused",
             Self::CapabilityDenied => "capability_denied",
             Self::PolicyDenied => "policy_denied",
@@ -394,6 +442,62 @@ impl std::fmt::Display for CandidateAbsorbed {
             self.head, self.base_sha, self.covering_commit, self.base_ref
         )
     }
+}
+
+/// Why executable-generation admission refused an operation.
+///
+/// Clock ticks select quiet holds and recorded upgrade refusals by this kind;
+/// the accompanying message remains diagnostic only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpgradeAdmissionRefusalKind {
+    /// A writer cannot join the still-running foreign generation.
+    WritesWhileForeign,
+    /// A pending generation switch holds admission, including an expired waiter.
+    SwitchPending,
+    /// Live participants did not yield for a breaking migration in time.
+    BreakingWaiting,
+    /// This binary cannot run beside the live participants.
+    Incompatible,
+    /// Another admission refusal, with no special clock handling.
+    Other,
+}
+
+/// A typed admission refusal that retains the execution error's wire message.
+/// Boxed in [`crate::OrbitError`] to keep its size bounded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpgradeAdmissionRefusal {
+    /// The admission decision, independent of its wording.
+    pub kind: UpgradeAdmissionRefusalKind,
+    /// The diagnostic and remedy, without the execution error prefix.
+    pub message: String,
+}
+
+/// Orbit could not read or authenticate the evidence a workflow prerequisite
+/// decision needs. Callers branch on this type; `reason` is diagnostic only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowEvidenceUnavailable {
+    /// What could not be read or verified.
+    pub reason: String,
+}
+
+impl std::fmt::Display for WorkflowEvidenceUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "workflow prerequisite evidence is unavailable ({})",
+            self.reason
+        )
+    }
+}
+
+/// A delivery push the forge kept refusing past its retry budget, decided where
+/// the push gave up. Callers read the hold from here, never from `message`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForgePushHoldFailure {
+    /// The push the forge refused.
+    pub hold: orbit_types::workflow::ForgeUnavailableHold,
+    /// The rendered message, without the `execution failed: ` prefix.
+    pub message: String,
 }
 
 /// How a failed private automation VCS operation reads, decided once where
@@ -536,5 +640,202 @@ impl DecisionRefusalCode {
 impl std::fmt::Display for DecisionRefusalCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+/// Stable fleet-notice refusal codes shared by every transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoticeRefusalCode {
+    PosterUnidentified,
+    ScopeRefused,
+    KindRefused,
+    EvidenceRequired,
+    ExpiryExceedsCap,
+    ExpiryInvalid,
+    LimitExceeded,
+    CloseRefused,
+    NotFound,
+    InvalidField,
+    /// Raised only by owners older than ORB-22808, whose `notice.agent_posting`
+    /// switch could refuse agent posts; kept so their refusals still parse.
+    AgentPostingDisabled,
+}
+
+impl NoticeRefusalCode {
+    /// The protocol name exposed as the CLI and MCP structured error code.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PosterUnidentified => "notice_poster_unidentified",
+            Self::ScopeRefused => "notice_scope_refused",
+            Self::KindRefused => "notice_kind_refused",
+            Self::EvidenceRequired => "notice_evidence_required",
+            Self::ExpiryExceedsCap => "notice_expiry_exceeds_cap",
+            Self::ExpiryInvalid => "notice_expiry_invalid",
+            Self::LimitExceeded => "notice_limit_exceeded",
+            Self::CloseRefused => "notice_close_refused",
+            Self::NotFound => "notice_not_found",
+            Self::InvalidField => "notice_invalid_field",
+            Self::AgentPostingDisabled => "notice_agent_posting_disabled",
+        }
+    }
+
+    /// Whether the refusal is an authority decision rather than bad input.
+    pub fn is_policy_denial(self) -> bool {
+        matches!(
+            self,
+            Self::PosterUnidentified
+                | Self::ScopeRefused
+                | Self::KindRefused
+                | Self::EvidenceRequired
+                | Self::ExpiryExceedsCap
+                | Self::LimitExceeded
+                | Self::CloseRefused
+                | Self::AgentPostingDisabled
+        )
+    }
+}
+
+impl std::fmt::Display for NoticeRefusalCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Stable refusal codes of an explicit task-pilot submission, carried by
+/// [`crate::OrbitError::TaskPilotRefused`] and reported unchanged by every
+/// transport (CLI, MCP, remote and HTTP).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskPilotRefusalCode {
+    /// The task is not `proposed` or `backlog`.
+    UnsupportedStatus,
+    /// The task is assigned to a human crew.
+    HumanCrew,
+    /// A live pilot run already holds the task.
+    AlreadyRunning,
+    /// A live delivery run carries the task.
+    DeliveryRunning,
+    /// This checkout is a replica; the owner machine pilots.
+    ReplicaCheckout,
+}
+
+impl TaskPilotRefusalCode {
+    /// The protocol name exposed as the structured error code.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UnsupportedStatus => "task_pilot_unsupported_status",
+            Self::HumanCrew => "task_pilot_human_crew",
+            Self::AlreadyRunning => "task_pilot_already_running",
+            Self::DeliveryRunning => "task_pilot_delivery_running",
+            Self::ReplicaCheckout => "task_pilot_replica_checkout",
+        }
+    }
+}
+
+impl std::fmt::Display for TaskPilotRefusalCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Why a source-repair requeue refused the run it would repair, carried by
+/// [`crate::OrbitError::SourceRepairRunStateRefused`].
+///
+/// Both reasons describe the run's state, not the pull request's checks, so
+/// requeuing again cannot succeed until the run changes or is discarded. The
+/// producer that decides the refusal attaches the reason; consumers never
+/// read it from the rendered message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceRepairRunStateRefusal {
+    /// The delivery is still running, or its record says it ended but its
+    /// worker is not conclusively gone.
+    StillRunning,
+    /// The run is terminal but is not a conclusively stopped failed delivery
+    /// or review-decision hold.
+    NotStoppedFailed,
+}
+
+/// A named source-repair authority refusal, carried by
+/// [`crate::OrbitError::SourceRepairAuthorityRefused`].
+///
+/// The producer that decides the refusal attaches the code, so publication
+/// diagnostics name it without reading the rendered error. Each code keeps the
+/// exact text and error category its untyped predecessor reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceRepairAuthorityRefusal {
+    /// The immutable publication admission differs from the bound one. Raised
+    /// by the engine's publication check; reports as an execution failure.
+    PublicationAdmissionChanged,
+    HostSelectorRemoved,
+    HostWideningUnreadable,
+    ReworkAuthorityChanged,
+    InlineLineageMissing,
+    SuccessorChanged,
+    CheckpointOwnerChanged,
+    SourceEvidenceChanged,
+    TaskMeaningChanged,
+    BindingChanged,
+    PrAssociationRepositoryConflict,
+    PrAssociationNumberConflict,
+    PrAssociationMissing,
+}
+
+impl SourceRepairAuthorityRefusal {
+    /// The static reason retained as a publication refusal's
+    /// `authority_refusal` evidence. Persisted: never reword it.
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::PublicationAdmissionChanged => "publication admission changed",
+            Self::HostSelectorRemoved => "host-widened selector was removed",
+            Self::HostWideningUnreadable => "unreadable host selector widening",
+            Self::ReworkAuthorityChanged => {
+                "publication requires unchanged explicit rework authority and current policy"
+            }
+            Self::InlineLineageMissing => {
+                "kept inline publication requires its complete stopped lineage"
+            }
+            Self::SuccessorChanged => {
+                "source, task, scope or reservation changed before source application: newer execution changed"
+            }
+            Self::CheckpointOwnerChanged => {
+                "source, task, scope or reservation changed before source application: original checkpoint owner changed"
+            }
+            Self::SourceEvidenceChanged => {
+                "source, task, scope or reservation changed before source application: source evidence changed"
+            }
+            Self::TaskMeaningChanged => {
+                "source, task, scope or reservation changed before source application: task meaning changed"
+            }
+            Self::BindingChanged => {
+                "source, task, scope or reservation changed before source application"
+            }
+            Self::PrAssociationRepositoryConflict => {
+                "task PR association has a conflicting repository or URL"
+            }
+            Self::PrAssociationNumberConflict => "task PR association has a conflicting number",
+            Self::PrAssociationMissing => {
+                "task PR association is missing for the authenticated publication"
+            }
+        }
+    }
+
+    /// Whether this refusal reports as [`crate::OrbitError::Execution`]
+    /// rather than [`crate::OrbitError::JobValidation`].
+    pub fn reports_as_execution(self) -> bool {
+        matches!(self, Self::PublicationAdmissionChanged)
+    }
+
+    /// The message of the untyped error this refusal reports as: the reason
+    /// itself for an execution failure, otherwise the reason after the
+    /// `source repair refused: ` prefix every job-validation refusal carries.
+    pub fn message(self) -> String {
+        if self.reports_as_execution() {
+            self.reason().to_string()
+        } else {
+            format!("source repair refused: {}", self.reason())
+        }
     }
 }

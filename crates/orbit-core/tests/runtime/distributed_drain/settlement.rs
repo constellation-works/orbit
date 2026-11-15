@@ -84,9 +84,9 @@ fn another_session_machine_cannot_bind_or_settle_a_followers_claim() {
     assert_eq!(pair.owner_status(&claim.task_id), "backlog");
 }
 
-/// A host that cannot spawn a claimed leaf returns its task and stops pulling
+/// A host that cannot spawn a claimed leaf holds its task and stops pulling
 /// immediately, rather than blocking several tasks to trip the breaker.
-fn a_launch_failure_cancels_the_leaf_releases_the_task_and_suppresses_the_host() {
+fn a_launch_failure_cancels_the_leaf_holds_the_task_and_suppresses_the_host() {
     let pair = Pair::new(3);
     let drain = pair.start_drain();
     let failed = pair.pass(&drain);
@@ -109,13 +109,13 @@ fn a_launch_failure_cancels_the_leaf_releases_the_task_and_suppresses_the_host()
         settles[0]["settlement"]["Release"]["failure"]["class"],
         "environment"
     );
-    assert_eq!(
-        pair.owner_claim_for_leaf(&leaf)["claim"]["phase"],
-        "revoked"
-    );
+    assert_eq!(pair.owner_claim_for_leaf(&leaf)["claim"]["phase"], "failed");
+    let claimed = pair.claimed_task(&leaf);
+    assert_eq!(pair.owner_status(&claimed), "blocked");
     assert!(
         pair.tasks
             .iter()
+            .filter(|task| **task != claimed)
             .all(|task| pair.owner_status(task) == "backlog")
     );
     let suppressed = pair.pass(&drain);
@@ -224,7 +224,7 @@ fn lost_pull_and_bind_replies_recover_the_same_claim_and_leaf_exactly_once() {
     let leaves = pair.leaf_runs();
     assert_eq!(leaves.len(), 1, "one leaf for the one claim: {leaves:?}");
     assert_eq!(claims[0]["bound_run"]["run_id"], leaves[0].as_str());
-    assert_eq!(claims[0]["claim"]["phase"], "revoked");
+    assert_eq!(claims[0]["claim"]["phase"], "failed");
     let settles = pair.wire.calls("orbit.drain.claim.settle");
     assert_eq!(settles.len(), 1, "{settles:?}");
     assert!(
@@ -234,7 +234,7 @@ fn lost_pull_and_bind_replies_recover_the_same_claim_and_leaf_exactly_once() {
         "the bound leaf reached its launch: {settles:?}"
     );
     let claimed = claims[0]["claim"]["task_id"].as_str().unwrap();
-    assert_eq!(pair.owner_status(claimed), "backlog");
+    assert_eq!(pair.owner_status(claimed), "blocked");
     assert_eq!(pair.run_state(&leaves[0]), JobRunState::Cancelled);
     assert_eq!(
         settles[0]["settlement"]["Release"]["failure"]["class"],
@@ -260,8 +260,8 @@ fn a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once() {
     assert!(error_of(&lost).contains("dropped"), "{lost}");
     assert_eq!(
         pair.owner_status(&task),
-        "backlog",
-        "the owner applied the release"
+        "blocked",
+        "the owner applied the prerequisite hold"
     );
     assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 1);
     let applied = pair.owner_task(&task);
@@ -288,7 +288,7 @@ fn a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once() {
         .wire
         .call("", "orbit.drain.claim.settle", settles[0].clone())
         .expect("a replayed settlement answers with the recorded outcome");
-    assert_eq!(replay["phase"], "revoked", "{replay}");
+    assert_eq!(replay["phase"], "failed", "{replay}");
     let after = pair.owner_task(&task);
     for field in ["status", "execution_summary", "comments", "history"] {
         assert_eq!(after[field], applied[field], "{field} changed on replay");
@@ -300,8 +300,8 @@ fn a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once() {
         .filter(|event| event["to_status"] == "blocked")
         .count();
     assert_eq!(
-        blocked, 0,
-        "a launch failure never blocks the task: {after:#}"
+        blocked, 1,
+        "the launch prerequisite blocks exactly once: {after:#}"
     );
 }
 
@@ -327,7 +327,7 @@ fn a_recovered_claim_closes_its_pending_handoff_before_observing_the_pr() {
             orbit_types::task::TaskStatus::Blocked,
             "operator",
             "The follower stopped; the PR was rescued by hand",
-            "recover-pending-handoff",
+            ("operator-recover", "recover-pending-handoff"),
         )
         .unwrap();
     // Ended claims reach the real owner rather than the transport's fake PR.
@@ -593,7 +593,7 @@ fn a_delivery_refused_settlement_backs_off_closes_and_lets_other_work_proceed() 
             orbit_types::task::TaskStatus::Blocked,
             "operator",
             "The follower stopped; the PR was rescued by hand",
-            "recover-delivery-refused-handoff",
+            ("operator-recover", "recover-delivery-refused-handoff"),
         )
         .unwrap();
     pair.elapse_settlement_backoff(&leaf);
@@ -629,13 +629,12 @@ fn an_operator_stop_delivers_a_refused_settlement_without_waiting_for_its_backof
     *pair.wire.refuse_settle.lock().unwrap() = None;
     let stopped = pair
         .follower
-        .run_tool_with_context_and_role(
+        .run_tool_with_context(
             "orbit.workflow.auto",
             json!({
                 "workspace": pair.follower.workspace_id().unwrap(),
                 "action": "stop",
             }),
-            Role::Admin,
             ToolContext {
                 session_context: ToolSessionContext {
                     transport: Some(McpTransport::Local),
@@ -1222,11 +1221,128 @@ fn backfill_ignores_a_settlement_older_than_a_newer_run_without_a_crew_selection
     );
 }
 
+/// [ORB-23825] A follower reports its leaf's reasoning effort beside the
+/// settlement, and the owner's implementer scorecard counts the pulled
+/// attempt, which has no local job run, under it: a wire name under that
+/// name, `provider_default` under the provider default (a null effort), and
+/// no field, as
+/// an older follower sends, under `unknown`. The report is attribution only:
+/// every variant settles to the same phase and task status.
+fn settle_reporting_effort(effort: Option<Value>, expected: &Value) {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let record = pair.admission(&leaf);
+    let claim = record.receipt.as_ref().unwrap().claim.as_ref().unwrap();
+    let mut input = json!({
+        "claim_id": claim.claim_id,
+        "run_id": leaf,
+        "settlement": ClaimMutation::Fail(ClaimEvidence {
+            summary: Some("leaf failed".into()),
+            ..Default::default()
+        }),
+        "crew": "sol",
+        "crew_model": "model-pulled",
+    });
+    if let Some(effort) = effort {
+        input["reasoning_effort"] = effort;
+    }
+    let settled = pair
+        .wire
+        .call("", "orbit.drain.claim.settle", input)
+        .expect("the owner accepts the settlement");
+    assert_eq!(settled["phase"], "failed", "{settled}");
+    assert_eq!(pair.owner_status(&task), "blocked");
+
+    let card = pair
+        .wire
+        .owner
+        .run_tool("orbit.agents.scorecard", json!({"role": "implementers"}))
+        .expect("owner scorecard");
+    let rows: Vec<&Value> = card["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["model"] == "model-pulled")
+        .collect();
+    assert_eq!(rows.len(), 1, "one row for the pulled attempt: {card:#}");
+    assert_eq!(rows[0]["reasoning_effort"], *expected, "{card:#}");
+}
+
+fn a_pulled_attempt_counts_under_the_effort_its_follower_reported() {
+    settle_reporting_effort(Some(json!("high")), &json!("high"));
+}
+
+fn a_pulled_attempt_reported_at_the_provider_default_counts_under_a_null_effort() {
+    settle_reporting_effort(Some(json!("provider_default")), &Value::Null);
+}
+
+fn a_pulled_attempt_whose_follower_reports_no_effort_stays_unknown() {
+    settle_reporting_effort(None, &json!("unknown"));
+}
+
+/// [ORB-23825] A follower whose leaf launched its implementing agent at
+/// `high` reports that effort when it settles the claim, from its own launch
+/// record, and the owner's implementer scorecard counts the pulled attempt
+/// under it.
+fn a_follower_reports_its_leafs_recorded_effort_on_settlement() {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+
+    // Keep this fixture from signalling the test process used as the fake
+    // worker, as the operator cancel scenario does.
+    let mut run = pair.follower_jobs.get_job_run(&leaf).unwrap().unwrap();
+    run.pid = None;
+    run.pid_start_time = None;
+    let workspace = pair.follower.workspace_id().unwrap();
+    let store = pair.follower.sqlite_store().unwrap();
+    store
+        .upsert_job_run_for_workspace(&workspace, &run, None)
+        .unwrap();
+    store
+        .begin_agent_execution(
+            &workspace,
+            &leaf,
+            "implement_one",
+            "fixture",
+            run.crew_model.as_deref(),
+            &orbit_types::telemetry::AgentExecutionIdentity {
+                crew: Some("sol".into()),
+                reasoning_effort: Some(orbit_types::identity::ReasoningEffort::High),
+            },
+        )
+        .unwrap();
+
+    pair.follower
+        .cancel_job_run_with_options_and_policy(&leaf, "operator", "cli", None, false, false)
+        .expect("cancel claimed leaf");
+    let settles = pair.wire.calls("orbit.drain.claim.settle");
+    assert_eq!(settles.len(), 1, "{settles:?}");
+    assert_eq!(settles[0]["reasoning_effort"], "high", "{:#}", settles[0]);
+    assert_eq!(pair.owner_status(&task), "backlog");
+
+    let card = pair
+        .wire
+        .owner
+        .run_tool("orbit.agents.scorecard", json!({"role": "implementers"}))
+        .expect("owner scorecard");
+    let efforts: Vec<&Value> = card["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| &row["reasoning_effort"])
+        .collect();
+    assert_eq!(efforts, [&json!("high")], "{card:#}");
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     another_session_machine_cannot_bind_or_settle_a_followers_claim_scenarios,
     another_session_machine_cannot_bind_or_settle_a_followers_claim,
-    a_launch_failure_cancels_the_leaf_releases_the_task_and_suppresses_the_host,
+    a_launch_failure_cancels_the_leaf_holds_the_task_and_suppresses_the_host,
     operator_cancelled_claimed_leaf_returns_to_backlog_with_reason,
     lost_pull_and_bind_replies_recover_the_same_claim_and_leaf_exactly_once,
     a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once,
@@ -1241,7 +1357,11 @@ crate::scenario_table!(
     an_overlapping_fail_replay_leaves_the_crew_chosen_after_the_settlement_unchanged,
     a_fail_settlement_reporting_its_crew_in_evidence_writes_it_back,
     backfill_recovers_a_settled_claimed_leafs_crew_from_its_settlement,
-    backfill_ignores_a_settlement_older_than_a_newer_run_without_a_crew_selection
+    backfill_ignores_a_settlement_older_than_a_newer_run_without_a_crew_selection,
+    a_pulled_attempt_counts_under_the_effort_its_follower_reported,
+    a_pulled_attempt_reported_at_the_provider_default_counts_under_a_null_effort,
+    a_pulled_attempt_whose_follower_reports_no_effort_stays_unknown,
+    a_follower_reports_its_leafs_recorded_effort_on_settlement
 );
 
 #[cfg(unix)]

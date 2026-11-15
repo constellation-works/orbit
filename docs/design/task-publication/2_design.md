@@ -1,8 +1,8 @@
 ---
 title: Task Publication — Design
 owner: codex
-last_updated: 2026-10-28
-last_validated: 2026-10-28
+last_updated: 2026-11-04
+last_validated: 2026-11-04
 status: Accepted
 feature: task-publication
 doc_role: design
@@ -83,8 +83,9 @@ authority_machine_id: hm_example
 The binding lives with machine-local workspace-registry state, not in a task
 bundle or workspace `.orbit/config.toml`. It must not contain embedded
 credentials, claim tokens, checkout paths, SSH command lines, or
-credential-bearing URLs. Authentication uses the operator's existing Git/SSH credential
-configuration.
+credential-bearing URLs. Authentication uses SSH or an explicit `GIT_ASKPASS` bridge. Publication
+isolates global and system Git configuration, so ordinary global credential helpers
+are not used; [ORB-18377] supplied the supported credential path.
 
 Both URL-form and scp-style remotes reject embedded passwords. A remote such as
 `user:password@host:owner/repo.git` is credential-bearing; diagnostics mask its
@@ -193,7 +194,7 @@ Publication is an explicit operator operation in v1. It is not part of
 task-write acknowledgement: a task update commits to the canonical local store
 even when the publication repository is unavailable. A routine trigger is
 separately configurable and invokes the same publication boundary: a weekly
-routine seeded disabled runs the `task_publication_pipeline` job. No post-task-write
+routine seeded disabled runs the `task_publication_pipeline` job ([ORB-18378]). No post-task-write
 hook exists.
 
 The owner performs these phases:
@@ -410,7 +411,12 @@ deleting the current tree erased the data.
   entry points. MCP publication/restore, authority transfer, and multi-writer
   sync are deferred.
 
+[ORB-11068] specified the original protocol, [ORB-11077] shipped its operator workflow, and [ORB-18375] added branch-scoped lineages in shared repositories.
+
 ## Task References
+
+- [ORB-18377] — supplied isolated Git authentication through SSH or an explicit askpass bridge.
+- [ORB-18378] — seeded the disabled weekly publication routine.
 
 - [ORB-11068] — specified the proposed dedicated private task-publication repository protocol.
 - [ORB-11074] — implemented the owner-only Git compare-and-swap publication transport.

@@ -1,7 +1,8 @@
-//! Run audit events, invocation logs, and bounded log previews.
+//! Run audit events, invocation logs, and bounded log previews, each read from
+//! the workspace that holds the run on this host ([`super::locate`]).
 
-use crate::state::Ws;
-use axum::extract::{Path, Query};
+use crate::state::DashboardState;
+use axum::extract::{Path, Query, RawQuery, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_core::runtime::audit::run_events::{RunEventsPage, RunEventsPageResult};
@@ -10,13 +11,17 @@ use serde_json::{Value, json};
 
 use super::super::{
     HISTORY_DEFAULT_LIMIT, LimitQuery, RunEventsQuery, bad_request, blocking, bounded_limit,
-    validate_id,
+    map_runtime_error, validate_id,
 };
+use super::locate::{LocatedRun, RunLookupFailure, locate_run, requested_workspace};
 
 const RUN_EVENTS_DEFAULT_LIMIT: usize = 100;
 
+/// `GET /api/runs/:id/events`, from the workspace that holds the run on this
+/// host, located like run detail ([`super::locate`]).
 pub(in crate::api) async fn list_run_events(
-    Ws(runtime): Ws,
+    State(state): State<DashboardState>,
+    RawQuery(query): RawQuery,
     Path(id): Path<String>,
     Query(q): Query<RunEventsQuery>,
 ) -> Response {
@@ -38,8 +43,14 @@ pub(in crate::api) async fn list_run_events(
     }
 
     let run_id = run_id.to_string();
+    let requested = requested_workspace(query.as_deref());
     match blocking("run events", move || {
-        let run = runtime.show_job_run(&run_id)?;
+        let located = match locate_run(&state, requested.as_deref(), &run_id, |runtime, id| {
+            runtime.show_job_run(id)
+        }) {
+            Ok(located) => located,
+            Err(failure) => return Ok(Err(failure)),
+        };
         let page = if q.tail {
             RunEventsPage::Tail { offset, limit }
         } else {
@@ -49,17 +60,26 @@ pub(in crate::api) async fn list_run_events(
                 limit,
             }
         };
-        runtime.run_events_page(&run, page)
+        Ok(Ok(match located {
+            LocatedRun::Registered { runtime, run } => runtime.run_events_page(&run, page)?,
+            LocatedRun::Recorded { reader, recorded } => reader.run_events_page_in_workspace(
+                &recorded.workspace_id,
+                &recorded.run.run_id,
+                page,
+            )?,
+        }))
     })
     .await
     {
-        Ok(RunEventsPageResult::Tail {
+        Ok(Err(RunLookupFailure::Response(response))) => *response,
+        Ok(Err(RunLookupFailure::Error(error))) => map_runtime_error(*error),
+        Ok(Ok(RunEventsPageResult::Tail {
             events,
             total,
             offset,
-        }) => Json(json!({"events": events, "total": total, "offset": offset})).into_response(),
-        Ok(RunEventsPageResult::Forward(page)) => Json(Value::Array(page)).into_response(),
-        Ok(RunEventsPageResult::ScanBudgetExceeded) => (
+        })) => Json(json!({"events": events, "total": total, "offset": offset})).into_response(),
+        Ok(Ok(RunEventsPageResult::Forward(page))) => Json(Value::Array(page)).into_response(),
+        Ok(Ok(RunEventsPageResult::ScanBudgetExceeded)) => (
             StatusCode::PAYLOAD_TOO_LARGE,
             Json(json!({
                 "error": "run-events audit rows exceed bounded scan budget; narrow the kind filter or reduce offset"
@@ -70,8 +90,12 @@ pub(in crate::api) async fn list_run_events(
     }
 }
 
+/// `GET /api/runs/:id/logs`, located like run detail ([`super::locate`]). A
+/// run recorded under a workspace no registered runtime serves has no CLI
+/// invocation previews this host can resolve, so it answers an empty list.
 pub(in crate::api) async fn list_run_logs(
-    Ws(runtime): Ws,
+    State(state): State<DashboardState>,
+    RawQuery(query): RawQuery,
     Path(id): Path<String>,
     Query(q): Query<LimitQuery>,
 ) -> Response {
@@ -81,23 +105,32 @@ pub(in crate::api) async fn list_run_logs(
     };
     let limit = bounded_limit(q.limit, HISTORY_DEFAULT_LIMIT);
     let run_id = run_id.to_string();
+    let requested = requested_workspace(query.as_deref());
     match blocking("run logs", move || {
-        runtime.show_job_run(&run_id)?;
-        runtime.collect_run_cli_invocations_bounded(
-            &run_id,
-            Some(limit),
-            RunCliInvocationProfile::HttpPreview.blob_read_max_bytes(),
-        )
-    })
-    .await
-    {
-        Ok(records) => Json(Value::Array(
-            records
+        let located = match locate_run(&state, requested.as_deref(), &run_id, |runtime, id| {
+            runtime.show_job_run(id)
+        }) {
+            Ok(located) => located,
+            Err(failure) => return Ok(Err(failure)),
+        };
+        Ok(Ok(match located {
+            LocatedRun::Registered { runtime, .. } => runtime
+                .collect_run_cli_invocations_bounded(
+                    &run_id,
+                    Some(limit),
+                    RunCliInvocationProfile::HttpPreview.blob_read_max_bytes(),
+                )?
                 .iter()
                 .map(|record| record.to_profile_json(RunCliInvocationProfile::HttpPreview))
                 .collect(),
-        ))
-        .into_response(),
+            LocatedRun::Recorded { .. } => Vec::new(),
+        }))
+    })
+    .await
+    {
+        Ok(Ok(records)) => Json(Value::Array(records)).into_response(),
+        Ok(Err(RunLookupFailure::Response(response))) => *response,
+        Ok(Err(RunLookupFailure::Error(error))) => map_runtime_error(*error),
         Err(response) => *response,
     }
 }

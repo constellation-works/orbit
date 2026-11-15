@@ -446,7 +446,7 @@ fn run_show_numeric_step_selectors_follow_displayed_audit_steps() {
     );
 }
 
-/// `orbit run show` and MCP `orbit.workflow.run.show`/`list` choose and
+/// `orbit run show` and MCP `orbit.run` actions `show`/`list` choose and
 /// reconcile an ended run's steps by one rule: the audit trail answers for a
 /// run-level-only record, and the step the run died in reads as the run's
 /// terminal state with an `interrupted` outcome rather than `running`.
@@ -467,10 +467,10 @@ fn every_run_view_reads_the_step_an_interrupted_run_died_in_as_interrupted() {
 
     let cli = fixture.json(&["run", "show", INTERRUPTED, "--no-reconcile", "--json"]);
     let shown = tool(
-        "orbit.workflow.run.show",
-        serde_json::json!({ "id": INTERRUPTED }),
+        "orbit.run",
+        serde_json::json!({"action": "show", "id": INTERRUPTED }),
     );
-    let listed = tool("orbit.workflow.run.list", serde_json::json!({}));
+    let listed = tool("orbit.run", serde_json::json!({"action": "list"}));
     let listed = listed["items"]
         .as_array()
         .unwrap()
@@ -524,6 +524,58 @@ fn every_run_view_reads_the_step_an_interrupted_run_died_in_as_interrupted() {
     ]);
     assert_eq!(step["step"]["state"], "interrupted", "{step}");
     assert_eq!(step["step"]["outcome"], "interrupted", "{step}");
+}
+
+fn run_show_names_a_sigkilled_workers_rescue_candidate() {
+    const RESCUED: &str = "jrun-sigkill-rescue";
+    let fixture = Fixture::terminal();
+    seed_run_with_state(&fixture, RESCUED, "failed");
+    let rescue_ref = format!("refs/orbit/rescue/{RESCUED}");
+    let rescue_commit = "0123456789abcdef0123456789abcdef01234567";
+    let checkpoint = serde_json::json!({
+        "run_id": RESCUED,
+        "job_id": "fixture_job",
+        "initial_input": {},
+        "pipeline": {
+            "rescue_candidate": {
+                "run_id": RESCUED,
+                "rescue_ref": rescue_ref,
+                "rescue_commit": rescue_commit,
+                "partial_commit": rescue_commit,
+            },
+        },
+        "updated_at": "2026-10-08T00:26:00+00:00",
+    });
+    fixture
+        .db()
+        .execute(
+            "INSERT INTO job_run_states (workspace_id, run_id, pipeline_state_json)
+             VALUES (?1, ?2, ?3)",
+            params![fixture.workspace_id(), RESCUED, checkpoint.to_string()],
+        )
+        .expect("seed rescue candidate checkpoint");
+
+    let json = fixture.json(&["run", "show", RESCUED, "--no-reconcile", "--json"]);
+    assert_eq!(json["run"]["state"], "failed", "{json}");
+    assert_eq!(json["rescue_candidate"]["rescue_ref"], rescue_ref, "{json}");
+    assert_eq!(
+        json["rescue_candidate"]["rescue_commit"], rescue_commit,
+        "{json}"
+    );
+
+    let output = fixture
+        .orbit()
+        .args(["run", "show", RESCUED, "--no-reconcile"])
+        .output()
+        .expect("spawn orbit");
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains(&format!(
+            "Rescue candidate: {rescue_ref} (commit {rescue_commit})"
+        )),
+        "{text}"
+    );
 }
 
 fn run_show_lists_a_final_recovery_resume_with_its_rationale() {
@@ -1202,6 +1254,165 @@ fn stale_workspace_auto_no_reconcile_preserves_state_and_default_reconciles() {
     );
 }
 
+/// `orbit run show` prints a leaf's terminal status once the admission pass
+/// has recorded it. Before that pass the same drain prints `phase=submitted`
+/// and no status. A live leaf and a finished pilot stay submitted: only a
+/// terminal `task_auto_pipeline` child is recorded here.
+#[test]
+fn run_show_prints_a_settled_leaf_terminal_status() {
+    if !isolated_run_observation(
+        "run_observation::run_show_display::run_show_prints_a_settled_leaf_terminal_status",
+    ) {
+        return;
+    }
+    let fixture = Fixture::terminal();
+    const DRAIN: &str = "jrun-leaf-dispatch-drain";
+    const FAILED_LEAF: &str = "jrun-leaf-dispatch-failed";
+    const LIVE_LEAF: &str = "jrun-leaf-dispatch-live";
+    const PILOT: &str = "jrun-leaf-dispatch-pilot";
+    let (_seeded, mut state) =
+        fixture.seed_running(DRAIN, "workspace_auto_pipeline", serde_json::json!({}));
+    let runtime = fixture
+        .runtime()
+        .with_host_resource_probe(std::sync::Arc::new(CalmHost));
+    let now = chrono::Utc::now();
+    let stamp = now.to_rfc3339();
+    let workspace_id = fixture.workspace_id();
+    for (id, job, run_state) in [
+        (FAILED_LEAF, "task_auto_pipeline", "failed"),
+        (LIVE_LEAF, "task_auto_pipeline", "running"),
+        (PILOT, "task_pilot_pipeline", "success"),
+    ] {
+        fixture
+            .db()
+            .execute(
+                "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, input_json,
+                scheduled_at, started_at, finished_at, created_at, pid)
+             VALUES (?1, ?2, ?3, 1, ?4, '{}', ?5, ?5, ?5, ?5, ?6)",
+                params![id, workspace_id, job, run_state, stamp, std::process::id()],
+            )
+            .unwrap();
+        dispatch(&mut state, id, job, "invoke_detached", now);
+    }
+    runtime.write_run_state(DRAIN, &state).unwrap();
+
+    let before = fixture.show_text(DRAIN);
+    let failed_before = dispatch_line(&before, FAILED_LEAF);
+    assert!(
+        failed_before.contains("phase=submitted") && !failed_before.contains("status="),
+        "{failed_before}"
+    );
+
+    run_det(
+        &runtime,
+        "classify_workspace_auto_tasks",
+        serde_json::json!({
+            "run_id": DRAIN,
+            "max_active_leaf_runs": 1,
+            "approve_proposed": false,
+        }),
+    );
+
+    let after = fixture.show_text(DRAIN);
+    let failed = dispatch_line(&after, FAILED_LEAF);
+    assert!(
+        failed.contains("phase=terminal") && failed.contains("status=failed"),
+        "a finished leaf stays phase=submitted with no status until the admission pass records it: {failed}\n{after}"
+    );
+    let live = dispatch_line(&after, LIVE_LEAF);
+    assert!(
+        live.contains("phase=submitted") && !live.contains("status="),
+        "{live}"
+    );
+    let pilot = dispatch_line(&after, PILOT);
+    assert!(
+        pilot.contains("phase=submitted") && !pilot.contains("status="),
+        "{pilot}"
+    );
+}
+
+/// [ORB-23198] A leaf that ends after its drain's last admission pass is
+/// recorded by the next reconciling `orbit run show` of the finished drain,
+/// with no further pass. `--no-reconcile` leaves the record as it was. A live
+/// leaf and a finished pilot stay submitted.
+#[test]
+fn run_show_settles_a_leaf_that_finished_after_the_drain_ended() {
+    if !isolated_run_observation(
+        "run_observation::run_show_display::run_show_settles_a_leaf_that_finished_after_the_drain_ended",
+    ) {
+        return;
+    }
+    let fixture = Fixture::terminal();
+    const DRAIN: &str = "jrun-late-leaf-drain";
+    const FAILED_LEAF: &str = "jrun-late-leaf-failed";
+    const LIVE_LEAF: &str = "jrun-late-leaf-live";
+    const PILOT: &str = "jrun-late-leaf-pilot";
+    let (runtime, mut state) =
+        fixture.seed_running(DRAIN, "workspace_auto_pipeline", serde_json::json!({}));
+    let now = chrono::Utc::now();
+    let stamp = now.to_rfc3339();
+    let workspace_id = fixture.workspace_id();
+    for (id, job) in [
+        (FAILED_LEAF, "task_auto_pipeline"),
+        (LIVE_LEAF, "task_auto_pipeline"),
+        (PILOT, "task_pilot_pipeline"),
+    ] {
+        fixture
+            .db()
+            .execute(
+                "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, input_json,
+                scheduled_at, started_at, created_at, pid)
+             VALUES (?1, ?2, ?3, 1, 'running', '{}', ?4, ?4, ?4, ?5)",
+                params![id, workspace_id, job, stamp, std::process::id()],
+            )
+            .unwrap();
+        dispatch(&mut state, id, job, "invoke_detached", now);
+    }
+    runtime.write_run_state(DRAIN, &state).unwrap();
+    // The drain ends with its leaves still live, so no admission pass ever
+    // sees them finish. Then the leaf and the pilot end.
+    fixture.set_run_state(DRAIN, "success");
+    fixture.set_run_state(FAILED_LEAF, "failed");
+    fixture.set_run_state(PILOT, "success");
+
+    let observed = fixture.show_text(DRAIN);
+    let failed_observed = dispatch_line(&observed, FAILED_LEAF);
+    assert!(
+        failed_observed.contains("phase=submitted") && !failed_observed.contains("status="),
+        "an observe-only read records nothing: {failed_observed}"
+    );
+
+    let shown = fixture.text(&["run", "show", DRAIN]);
+    let failed = dispatch_line(&shown, FAILED_LEAF);
+    assert!(
+        failed.contains("phase=terminal") && failed.contains("status=failed"),
+        "a leaf that finished after the drain ended must be recorded terminal: {failed}\n{shown}"
+    );
+    let live = dispatch_line(&shown, LIVE_LEAF);
+    assert!(
+        live.contains("phase=submitted") && !live.contains("status="),
+        "{live}"
+    );
+    let pilot = dispatch_line(&shown, PILOT);
+    assert!(
+        pilot.contains("phase=submitted") && !pilot.contains("status="),
+        "{pilot}"
+    );
+    // The record is durable, not a rendering: an observe-only read now sees it.
+    let persisted = dispatch_line(&fixture.show_text(DRAIN), FAILED_LEAF);
+    assert!(
+        persisted.contains("phase=terminal") && persisted.contains("status=failed"),
+        "{persisted}"
+    );
+}
+
+fn dispatch_line(text: &str, run_id: &str) -> String {
+    text.lines()
+        .find(|line| line.contains(&format!("Child {run_id} ")))
+        .unwrap_or_else(|| panic!("no child line for {run_id} in {text}"))
+        .to_string()
+}
+
 #[test]
 fn run_show_contracts() {
     if !isolated_run_observation("run_observation::run_show_display::run_show_contracts") {
@@ -1227,6 +1438,10 @@ fn run_show_contracts() {
         (
             "run_show_lists_a_final_recovery_resume_with_its_rationale",
             run_show_lists_a_final_recovery_resume_with_its_rationale as fn(),
+        ),
+        (
+            "run_show_names_a_sigkilled_workers_rescue_candidate",
+            run_show_names_a_sigkilled_workers_rescue_candidate as fn(),
         ),
         (
             "run_show_keeps_worker_identity_and_degrades_on_an_unreadable_checkpoint",

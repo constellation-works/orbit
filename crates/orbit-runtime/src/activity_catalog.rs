@@ -27,7 +27,13 @@ impl RuntimeKernel {
     /// and workspace-local shipped names are skipped even when the global file
     /// is missing.
     /// Duplicate names inside one directory tree are still a hard error
-    /// (`CatalogError::DuplicateName`).
+    /// (`CatalogError::DuplicateName`). An activity whose tool allowlist does
+    /// not validate against the registered tools is withdrawn alone and
+    /// refused when a job references it. A workspace-local file that fails
+    /// to parse (a stale copy of a retired activity, or one declaring a
+    /// removed key) is likewise withdrawn alone with a warning naming the
+    /// file, so unrelated jobs still run; only a job referencing that name
+    /// is refused, with the same parse error.
     pub fn v2_activity_catalog(
         &self,
     ) -> Result<
@@ -51,19 +57,34 @@ impl RuntimeKernel {
                     );
                 }
                 V2ActivityCatalogDirKind::WorkspaceLocal => {
-                    warn_skipped_retired_activity_assets(
-                        dir.path(),
-                        catalog.load_dir_skipping_retired_prefer_existing_where(
+                    // A stale workspace-local copy (e.g. of a retired bundled
+                    // activity, or one declaring a removed key) must not fail
+                    // every job in the workspace: withdraw that file alone,
+                    // warn with its path and remedy, and let unrelated jobs
+                    // build. A job referencing the withdrawn name is refused
+                    // with the same named error. Global and explicit layers
+                    // stay fail-closed above.
+                    let (skipped, failures) = catalog
+                        .load_dir_skipping_retired_prefer_existing_where_best_effort(
                             dir.path(),
                             |name| !is_default_activity_name(name),
-                        )?,
-                    );
+                        )?;
+                    warn_skipped_retired_activity_assets(dir.path(), skipped);
+                    for failure in &failures {
+                        tracing::warn!(
+                            target: "orbit.core.assets",
+                            error = %failure,
+                            "skipping invalid workspace-local activity file; fix or remove the stale file it names (a removed activity or key will not return — migrate as the error directs, for example to a task workflow), then rerun the job; jobs that reference this activity will be refused with the same error"
+                        );
+                    }
                 }
             }
         }
         // The `plugin:<ns>` layer loads last, so a workspace file of the same
         // name shadows a plugin's activity and a shipped default stays
-        // authoritative (L-0060). `orbit run show` prints which layer answered
+        // authoritative (L-0060). A name withdrawn for a stale workspace-local
+        // file stays withdrawn here: the plugin layer must not revive it.
+        // `orbit run show` prints which layer answered
         // for each reference, which is what makes the shadowing legible.
         for plugin in self.plugin_load().active() {
             let files: Vec<PathBuf> = plugin.definitions.activities.clone();
@@ -75,8 +96,20 @@ impl RuntimeKernel {
                 catalog.load_files_prefer_existing(&files)?,
             );
         }
+        // An activity whose allowlist names a tool this workspace does not
+        // register (say, one from a plugin that is not installed) is withdrawn
+        // on its own: jobs that reference it are refused with the reason, and
+        // every other job keeps running. Catalog loading logs each withdrawal.
         let registered_tools = self.allowlist_known_tool_names();
-        catalog.validate_tool_allowlists(registered_tools.iter().map(String::as_str))?;
+        for failure in
+            catalog.withdraw_invalid_tool_allowlists(registered_tools.iter().map(String::as_str))
+        {
+            tracing::warn!(
+                target: "orbit.core.assets",
+                error = %failure,
+                "activity withdrawn from the catalog"
+            );
+        }
 
         Ok(catalog)
     }

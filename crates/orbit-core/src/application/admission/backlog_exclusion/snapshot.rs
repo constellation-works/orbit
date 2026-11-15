@@ -1,12 +1,17 @@
+use std::cell::LazyCell;
 use std::collections::BTreeMap;
 
+use orbit_store::contracts::TaskRow;
+
 use chrono::{DateTime, Utc};
+use orbit_types::identity::same_crew_family;
 use orbit_types::task::{
     EpicHierarchyNode, Task, TaskReferenceIndex, TaskStatus, inherited_only_epic_roots,
-    task_dependencies_ready_with_index,
+    is_no_diff_expected, task_dependencies_ready_with_index,
 };
 use orbit_types::workflow::{REVIEW_RUN_OPTION_SOURCE, ReviewAdmission, ReviewLayer, ShipMode};
 
+use super::super::claim_holders::{self, ClaimHolders};
 use super::super::pass_error::PassError;
 use super::super::surface_reservation::{
     MAX_SURFACE_RESERVATIONS, reserves_surface, reserving_detail, withhold_reserved_surfaces,
@@ -14,8 +19,9 @@ use super::super::surface_reservation::{
 use super::super::unknown_footprint::footprint_waits;
 use super::exclusions::{
     browser_kit_exclusion, clears_complexity_gate, host_labels_exclusion, host_os_exclusion,
-    inherited_only_epic_root_exclusion, mock_validation_exclusion, pilot_finding_exclusion,
-    pilot_preparation_exclusion, scheduled_exclusion,
+    human_crew_exclusion, inherited_only_epic_root_exclusion, no_drain_exclusion,
+    pilot_finding_exclusion, pilot_hold_exclusion, pilot_preparation_exclusion,
+    scheduled_exclusion, scheduled_exclusion_from_history,
 };
 use super::listing::active_pilot_preparations;
 use super::ordering::task_root_id;
@@ -27,6 +33,7 @@ use super::{
 use crate::OrbitRuntime;
 use crate::application::job::PublishedResume;
 use crate::application::job::crew_pools::CapturedCrewPools;
+use crate::application::task::{AdmissionProviderPass, standing_baseline_hold_from_history};
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::task::locks::{
     active_task_lock_holders, lock_holder_index, task_lock_overlaps,
@@ -41,15 +48,34 @@ pub(crate) fn workspace_ship_mode(runtime: &OrbitRuntime) -> ShipMode {
     runtime.automatic_delivery_ship_mode()
 }
 
+/// Observation keeps the live launcher's recorded missing-source names;
+/// without a live run, readiness judges the observing environment.
+pub(super) enum BacklogReadMode<'a> {
+    /// `prepared_rows` are backlog rows the pass already loaded while
+    /// recording pilot handoffs. The snapshot does not read those bundles
+    /// again. Discovery that did not preload passes `None` and records here.
+    Admission {
+        prepared_rows: Option<BTreeMap<String, Option<TaskRow>>>,
+    },
+    Observation {
+        crew_env_unset: Option<&'a [orbit_types::workflow::CrewEnvUnset]>,
+        /// The registry-global status index this read's caller already holds.
+        shared_status: Option<&'a BTreeMap<String, TaskStatus>>,
+    },
+}
+
 /// The drain's snapshot: admitted work is delivered in the workspace's ship
 /// mode. `review` is the admitting run's captured review admission, when
-/// there is one.
+/// there is one. `prepared_rows` are backlog rows the pass already loaded
+/// while recording pilot handoffs; the snapshot does not read those bundles
+/// again.
 pub(crate) fn backlog_snapshot(
     runtime: &OrbitRuntime,
     action: &str,
     allowlist: Option<&CrewAllowlist>,
     pools: &CapturedCrewPools,
     review: Option<&ReviewAdmission>,
+    prepared_rows: Option<BTreeMap<String, Option<TaskRow>>>,
 ) -> Result<BacklogSnapshot, PassError> {
     backlog_snapshot_in_mode(
         runtime,
@@ -58,7 +84,7 @@ pub(crate) fn backlog_snapshot(
         pools,
         workspace_ship_mode(runtime),
         review,
-        false,
+        BacklogReadMode::Admission { prepared_rows },
     )
 }
 
@@ -68,12 +94,17 @@ pub(crate) fn backlog_snapshot(
 /// reads never queue behind — or hold up — a drain's task commits. Ancestor
 /// and explicit-id loads still settle a pending commit first. Observation
 /// only: nothing admission decides may consume this snapshot.
+///
+/// `shared_status` lets one aggregate read reuse the registry-global status
+/// index across its workspaces instead of reading it once for each.
 pub(crate) fn backlog_snapshot_observed(
     runtime: &OrbitRuntime,
     action: &str,
     allowlist: Option<&CrewAllowlist>,
     pools: &CapturedCrewPools,
     review: Option<&ReviewAdmission>,
+    crew_env_unset: Option<&[orbit_types::workflow::CrewEnvUnset]>,
+    shared_status: Option<&BTreeMap<String, TaskStatus>>,
 ) -> Result<BacklogSnapshot, PassError> {
     backlog_snapshot_in_mode(
         runtime,
@@ -82,7 +113,10 @@ pub(crate) fn backlog_snapshot_observed(
         pools,
         workspace_ship_mode(runtime),
         review,
-        true,
+        BacklogReadMode::Observation {
+            crew_env_unset,
+            shared_status,
+        },
     )
 }
 
@@ -95,40 +129,70 @@ pub(super) fn backlog_snapshot_in_mode(
     pools: &CapturedCrewPools,
     mode: ShipMode,
     review: Option<&ReviewAdmission>,
-    observed: bool,
+    mut read_mode: BacklogReadMode<'_>,
 ) -> Result<BacklogSnapshot, PassError> {
+    // One host outage query for every provider-hold check in this snapshot,
+    // including the crew redraw. One lightweight row per backlog task feeds
+    // the pilot, baseline and provider holds.
+    let _provider_pass = AdmissionProviderPass::enter(runtime);
+    let prepared_rows = match &mut read_mode {
+        BacklogReadMode::Admission { prepared_rows } => prepared_rows.take(),
+        BacklogReadMode::Observation { .. } => None,
+    };
     // The population is materialized once, by moving the selection into the
     // lookup. Everything below borrows from it: the backlog is a vector of
     // references and the snapshot hands back IDs.
-    let task_lookup = admission_population(runtime.stores().tasks(), observed)
-        .map_err(|error| PassError::store(action, "list tasks", error))?;
+    let mut task_lookup = admission_population(
+        runtime.stores().tasks(),
+        matches!(read_mode, BacklogReadMode::Observation { .. }),
+    )
+    .map_err(|error| PassError::store(action, "list tasks", error))?;
+    let pass_rows = super::pass_rows::prepare_pass_rows(
+        runtime,
+        action,
+        matches!(read_mode, BacklogReadMode::Admission { .. }),
+        &mut task_lookup,
+        prepared_rows,
+    )?;
     // One status projection per snapshot. It is the registry-global index,
     // not a re-read of `task_lookup`'s statuses (see `BacklogSnapshot`).
-    let status_by_id = runtime
-        .dependency_status_index(
-            task_lookup
-                .values()
-                .filter(|task| task.status == TaskStatus::Backlog),
-        )
-        .map_err(|error| PassError::store(action, "load global task status projection", error))?;
+    let backlog_tasks = task_lookup
+        .values()
+        .filter(|task| task.status == TaskStatus::Backlog);
+    let status_by_id = match read_mode {
+        BacklogReadMode::Observation {
+            shared_status: Some(shared),
+            ..
+        } if runtime.coordination_task_reads_visible() => {
+            let mut status_by_id = shared.clone();
+            runtime.satisfy_completed_archived_dependencies(&mut status_by_id, backlog_tasks);
+            status_by_id
+        }
+        _ => runtime
+            .dependency_status_index(backlog_tasks)
+            .map_err(|error| {
+                PassError::store(action, "load global task status projection", error)
+            })?,
+    };
     let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
     let workspace_root = runtime.paths().repo_root.as_path();
-    // [ORB-12500] Claims need no separate holder entry here. A claimed task is
-    // `in-progress` or `review`, so its surface is already in this map, and
-    // the claim journal refuses every ordinary mutation of a claimed task —
-    // including narrowing its `context_files` — so the recomputed lock cannot
-    // drift from the footprint the claim froze. Consulting the claim ledger on
-    // this path would only add a way for the drain's hot loop to fail on a
-    // journal awaiting repair. The paths that can reach a claimed task
-    // directly, rather than through the backlog, consult it themselves.
-    // [ORB-14247] `no-diff-expected` is omitted from this map. The claim
-    // journal still fences that task's own writes; it just does not exclude
-    // overlapping backlog work. Entries `workflow.unlocked_context_paths`
-    // leaves unlocked are left out here as for any holder, though the claim
-    // froze them.
+    // Status-based holders omit `no-diff-expected` and apply the workspace's
+    // unlocked-path policy. Ordinary claims retain the surface their admission
+    // froze; known no-diff holders remain exempt from context locks.
     let unlocked = runtime.unlocked_context_paths();
     let lock_modes = runtime.footprint_lock_modes();
-    let lock_holders = active_task_lock_holders(task_lookup.values(), workspace_root, unlocked);
+    let mut lock_holders = active_task_lock_holders(task_lookup.values(), workspace_root, unlocked);
+    // A follower has no local leaf run, and the task population need not show
+    // its frozen surface. Reservation expiry does not release that surface.
+    // Readiness is an observation, so an unreadable claim ledger leaves its
+    // claim-based conflicts unannotated. Admission must still fail closed
+    // when it cannot establish the surfaces held by live claims.
+    let claims = match read_mode {
+        BacklogReadMode::Observation { .. } => ClaimHolders::read(runtime),
+        BacklogReadMode::Admission { .. } => ClaimHolders::read_for_admission(runtime)
+            .map_err(|error| PassError::store(action, "read execution claims", error))?,
+    };
+    claims.extend_lock_holders(&mut lock_holders, &task_lookup);
     // `task_lookup` iterates in task-ID order rather than the store's
     // created-at order; `sort_tasks_for_automatic_dispatch` is a total order
     // ending in the task ID, so the dispatch sequence is unchanged.
@@ -152,11 +216,35 @@ pub(super) fn backlog_snapshot_in_mode(
     let dispatch_order = runtime.owner_dispatch_order(&executor_host_os);
     sort_tasks_for_automatic_dispatch(&mut backlog, &expiring_batches, &dispatch_order);
     let mut excluded = Vec::new();
+    // Operator work is never admitted, whatever else holds it, so a human
+    // crew is the first reason a task reports.
+    backlog.retain(|task| {
+        let Some(exclusion) = human_crew_exclusion(runtime, task) else {
+            return true;
+        };
+        excluded.push(exclusion);
+        false
+    });
+    // A `no-drain` task is never admitted automatically. Read every pass, so
+    // removing the tag makes it eligible on the next pass. Explicit ship
+    // (`listing.rs` with named task_ids) does not use this snapshot filter.
+    backlog.retain(|task| {
+        let Some(exclusion) = no_drain_exclusion(task) else {
+            return true;
+        };
+        excluded.push(exclusion);
+        false
+    });
     // A task scheduled ahead waits for its time whatever else holds it, so
     // it reports `scheduled` first. Read every pass: the first pass after
     // the time admits it, and an edited `not_before` counts at the next.
     backlog.retain(|task| {
-        let Some(exclusion) = scheduled_exclusion(runtime, task) else {
+        let Some(exclusion) = pass_rows
+            .get(&task.id)
+            .and_then(Option::as_ref)
+            .map(|row| scheduled_exclusion_from_history(task, &row.history))
+            .unwrap_or_else(|| scheduled_exclusion(runtime, task))
+        else {
             return true;
         };
         excluded.push(exclusion);
@@ -189,7 +277,15 @@ pub(super) fn backlog_snapshot_in_mode(
     }
     let mut kept = Vec::with_capacity(backlog.len());
     for task in backlog {
-        if let Some(exclusion) = pilot_finding_exclusion(runtime, action, task)? {
+        let exclusion = if let Some(row) = pass_rows.get(&task.id).and_then(Option::as_ref) {
+            let hold = runtime
+                .pilot_admission_hold_from_row(row)
+                .map_err(|error| PassError::store(action, "read pilot findings", error))?;
+            pilot_hold_exclusion(runtime, task, hold)
+        } else {
+            pilot_finding_exclusion(runtime, action, task)?
+        };
+        if let Some(exclusion) = exclusion {
             excluded.push(exclusion);
         } else {
             kept.push(task);
@@ -272,35 +368,33 @@ pub(super) fn backlog_snapshot_in_mode(
         excluded.push(exclusion);
         false
     });
-    // A `verify-mock-ui` task whose mocks fail validation against the
-    // manifest at the base waits for the mocks to be fixed, naming each.
-    backlog.retain(|task| {
-        let Some(exclusion) = mock_validation_exclusion(runtime, task) else {
-            return true;
-        };
-        excluded.push(exclusion);
-        false
-    });
     // [ORB-14258] A task held for a red base waits until the command passes
     // on a new base tip; dispatching it would only fail the same command
     // again. Only the clock tick's recorded verdict is read here, never a
     // validation run [ORB-14739]. A hold that cannot be read is not one: the
     // delivery's own validation decides.
-    backlog.retain(|task| match runtime.standing_baseline_hold(task) {
-        Ok(None) => true,
-        Ok(Some(why)) => {
-            excluded.push(BacklogTaskExclusion {
-                id: task.id.clone(),
-                reason: BacklogTaskExclusionReason::BaselineRedHold,
-                conflicts: Vec::new(),
-                crew: None,
-                detail: Some(why),
-            });
-            false
-        }
-        Err(error) => {
-            tracing::warn!(task_id = %task.id, "could not read baseline red hold: {error}");
-            true
+    backlog.retain(|task| {
+        match pass_rows
+            .get(&task.id)
+            .and_then(Option::as_ref)
+            .map(|row| Ok(standing_baseline_hold_from_history(task, &row.history)))
+            .unwrap_or_else(|| runtime.standing_baseline_hold(task))
+        {
+            Ok(None) => true,
+            Ok(Some(why)) => {
+                excluded.push(BacklogTaskExclusion {
+                    id: task.id.clone(),
+                    reason: BacklogTaskExclusionReason::BaselineRedHold,
+                    conflicts: Vec::new(),
+                    crew: None,
+                    detail: Some(why),
+                });
+                false
+            }
+            Err(error) => {
+                tracing::warn!(task_id = %task.id, "could not read baseline red hold: {error}");
+                true
+            }
         }
     });
     // [ORB-14266] A task whose provider failure hold excludes every crew it
@@ -328,21 +422,26 @@ pub(super) fn backlog_snapshot_in_mode(
     // [ORB-14697] A task every crew of which is at its provider's usage
     // limit on this host waits for the reading's reset; one with an
     // unlimited crew left is admitted and drawn onto it.
-    backlog.retain(|task| match runtime.provider_limit_deferral(task, pools) {
-        Ok(None) => true,
-        Ok(Some(why)) => {
-            excluded.push(BacklogTaskExclusion {
-                id: task.id.clone(),
-                reason: BacklogTaskExclusionReason::ProviderLimit,
-                conflicts: Vec::new(),
-                crew: None,
-                detail: Some(why),
-            });
-            false
-        }
-        Err(error) => {
-            tracing::warn!(task_id = %task.id, "could not read provider limits: {error}");
-            true
+    // The readings are host-wide, so one read serves the whole pass, and a pass
+    // with no backlog reads none.
+    let provider_limit_gate = LazyCell::new(|| runtime.provider_limit_gate(Utc::now()));
+    backlog.retain(|task| {
+        match runtime.provider_limit_deferral(task, pools, &provider_limit_gate) {
+            Ok(None) => true,
+            Ok(Some(why)) => {
+                excluded.push(BacklogTaskExclusion {
+                    id: task.id.clone(),
+                    reason: BacklogTaskExclusionReason::ProviderLimit,
+                    conflicts: Vec::new(),
+                    crew: None,
+                    detail: Some(why),
+                });
+                false
+            }
+            Err(error) => {
+                tracing::warn!(task_id = %task.id, "could not read provider limits: {error}");
+                true
+            }
         }
     });
     // [ORB-14168] A task that cleared the per-task gates would still fail
@@ -403,43 +502,92 @@ pub(super) fn backlog_snapshot_in_mode(
     // Once the assessment gate has held back unprepared work, the crew filter
     // runs before scheduling exclusions so a task reports the reason an
     // operator can act on — reassign it, or run a drain that permits its crew
-    // — rather than a downstream lock reason. Everything that survives keeps
+    // — or provide its missing env source — rather than a downstream lock
+    // reason. Everything that survives keeps
     // its ordinary priority/age order.
-    if let Some(allowlist) = allowlist {
-        backlog.retain(|task| {
-            match runtime.auto_task_crew_candidates(task, pools, None) {
-                // A parked pool member (weight 0) is never drawn, so it cannot
-                // make a task eligible under this restriction either.
-                Ok((crews, _))
-                    if crews.iter().any(|candidate| {
-                        candidate.weight > 0 && allowlist.permits(&candidate.crew)
-                    }) =>
-                {
-                    true
-                }
-                // An unresolvable crew fails closed under an explicit
-                // restriction: the drain cannot show it is permitted, and
-                // guessing would spend a budget the operator scoped.
-                resolution => {
-                    excluded.push(BacklogTaskExclusion {
-                        id: task.id.clone(),
-                        reason: BacklogTaskExclusionReason::CrewNotAllowed,
-                        conflicts: Vec::new(),
-                        crew: Some(match resolution {
-                            Ok((crews, _)) => crews
-                                .into_iter()
-                                .map(|candidate| candidate.crew.name)
-                                .collect::<Vec<_>>()
-                                .join(", "),
-                            Err(error) => format!("<unresolved: {error}>"),
-                        }),
-                        detail: None,
-                    });
-                    false
-                }
+    let crew_unset = match read_mode {
+        BacklogReadMode::Observation {
+            crew_env_unset: Some(unset),
+            ..
+        } => unset.to_vec(),
+        BacklogReadMode::Observation {
+            crew_env_unset: None,
+            ..
+        }
+        | BacklogReadMode::Admission { .. } => runtime.unset_crew_env(),
+    };
+    backlog.retain(|task| {
+        if allowlist.is_none() && crew_unset.is_empty() {
+            return true;
+        }
+        let resolution = runtime.auto_task_crew_candidates(task, pools, None, allowlist);
+        if let Ok((crews, _, _)) = &resolution {
+            let candidates = crews
+                .iter()
+                .filter(|candidate| candidate.weight > 0)
+                .collect::<Vec<_>>();
+            let runnable = candidates.iter().any(|candidate| {
+                allowlist.is_none_or(|allowed| allowed.permits(&candidate.crew))
+                    && !crew_unset
+                        .iter()
+                        .any(|unset| same_crew_family(&unset.crew, &candidate.crew.name))
+            });
+            if runnable {
+                return true;
             }
+            // `crew_unset` holds one entry per base crew, so iterate it and
+            // keep each entry any candidate matches: two pool members of one
+            // family then name that crew once, not once per member.
+            let missing = crew_unset
+                .iter()
+                .filter(|unset| {
+                    candidates
+                        .iter()
+                        .any(|candidate| same_crew_family(&unset.crew, &candidate.crew.name))
+                })
+                .collect::<Vec<_>>();
+            if !missing.is_empty() {
+                excluded.push(BacklogTaskExclusion {
+                    id: task.id.clone(),
+                    reason: BacklogTaskExclusionReason::CrewEnvUnset,
+                    conflicts: Vec::new(),
+                    crew: Some(
+                        missing
+                            .iter()
+                            .map(|unset| unset.crew.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ),
+                    detail: Some(
+                        missing
+                            .iter()
+                            .map(|unset| unset.describe())
+                            .collect::<Vec<_>>()
+                            .join("; "),
+                    ),
+                });
+                return false;
+            }
+        }
+        if allowlist.is_none() {
+            return true;
+        }
+        excluded.push(BacklogTaskExclusion {
+            id: task.id.clone(),
+            reason: BacklogTaskExclusionReason::CrewNotAllowed,
+            conflicts: Vec::new(),
+            crew: Some(match resolution {
+                Ok((crews, _, _)) => crews
+                    .into_iter()
+                    .map(|candidate| candidate.crew.name)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                Err(error) => format!("<unresolved: {error}>"),
+            }),
+            detail: None,
         });
-    }
+        false
+    });
     // A task resuming a preserved publication adopts its existing branch and
     // pull request before it edits anything, so it is not held behind other
     // tasks' locks on files its own published diff already changed. Only the
@@ -459,6 +607,31 @@ pub(super) fn backlog_snapshot_in_mode(
             }
         })
         .collect();
+    // A no-diff claim holds no surface, but it still prevents a second
+    // dispatch of its own task, independently of context-lock conflicts.
+    backlog.retain(|task| {
+        if !is_no_diff_expected(&task.tags) {
+            return true;
+        }
+        let Some(claim) = claims.protecting_task_claim(&task.id) else {
+            return true;
+        };
+        excluded.push(BacklogTaskExclusion {
+            id: task.id.clone(),
+            reason: BacklogTaskExclusionReason::ContextLockConflict,
+            conflicts: task
+                .context_files
+                .iter()
+                .map(|selector| BacklogTaskConflict {
+                    requested_file: selector.clone(),
+                    locking_task_id: task.id.clone(),
+                })
+                .collect(),
+            crew: None,
+            detail: Some(claim_holders::claim_detail(claim)),
+        });
+        false
+    });
     if !lock_holders.is_empty() {
         let holder_index = lock_holder_index(&lock_holders);
         let direct_conflicts: BTreeMap<String, Vec<BacklogTaskConflict>> = backlog
@@ -528,6 +701,39 @@ pub(super) fn backlog_snapshot_in_mode(
             );
         }
     }
+    // [ORB-23894] The work-start guard compares a task's whole canonical
+    // context with every protecting claim's frozen footprint: unlocked paths
+    // count there, and a published resume or no-diff task is not exempt
+    // (a known no-diff holder still locks nothing, as above). A
+    // task it would refuse waits here, naming the claim, instead of being
+    // admitted, failed at worktree setup and readmitted every pass.
+    backlog.retain(|task| {
+        let Some((claim, overlapping)) =
+            claims.refusing_work_start(task, workspace_root, lock_modes, |holder| {
+                task_lookup
+                    .get(holder)
+                    .is_some_and(|holder| is_no_diff_expected(&holder.tags))
+            })
+        else {
+            return true;
+        };
+        excluded.push(BacklogTaskExclusion {
+            id: task.id.clone(),
+            reason: BacklogTaskExclusionReason::ContextLockConflict,
+            conflicts: overlapping
+                .into_iter()
+                .map(|requested_file| BacklogTaskConflict {
+                    requested_file,
+                    locking_task_id: claim.task_id.clone(),
+                })
+                .collect(),
+            crew: None,
+            // Another task's claim is named from `blocked_by` where the wait
+            // is reported; a claim on this task itself is named here.
+            detail: (claim.task_id == task.id).then(|| claim_holders::claim_detail(claim)),
+        });
+        false
+    });
     excluded.sort_by(|a, b| a.id.cmp(&b.id));
     let footprint_waits = footprint_waits(runtime, action, backlog.iter().copied(), Utc::now())?;
     let admissible_leaves = backlog.into_iter().map(|task| task.id.clone()).collect();

@@ -1,8 +1,8 @@
 # orbit-agent
 
 Provider CLI runtimes and audit contracts for Orbit. Provider adapters drive
-`claude`, `codex`, `copilot`, `gemini`, `agy`, `grok`, `ollama`,
-`muse`, and `mock-agent` through subprocess command
+`claude`, `codex`, `copilot`, `gemini`, `agy`, `grok`, `ollama` and
+`muse` through subprocess command
 descriptors. A descriptor sends the prompt on stdin, or, for a CLI that cannot
 read stdin (`muse`), names a prompt-file flag the engine fills with a private
 file path.
@@ -38,15 +38,25 @@ including Codex terminal usage, Copilot usage events and Gemini model stats.
 Tool inputs and outputs, reasoning, conversation histories and quoted provider
 streams cannot supply counters. A complete Orbit answer envelope can declare
 usage directly or on its immediate result object; deeper result data is ignored.
+Declared counters are a compatibility fallback only when the capture contains no
+provider counters. Direct, named and model rollups take precedence, including
+explicit zeroes and counters in separate provider frames.
 Claude's terminal usage rollup takes precedence over its duplicate model map and
 retains the separate five-minute and one-hour cache creation counts. Raw Codex
 tool events remain available to invocation tracing.
+
+Codex prompt-tier evidence reads every request after the session rollout's latest
+`task_started`, retaining the running-total deduplication across resumes. Earlier
+turns never contribute premiums to the current invocation. A missing turn boundary
+or stdout `turn.started` leaves per-request usage unknown. A truncated stdout
+capture can still identify the thread and turn from its retained prefix; the
+rollout supplies all current-turn requests, including those lost from stdout.
 
 ## Provider boundary tests
 
 `./scripts/build-budget.py -- cargo test -p orbit-agent --test provider_invocation`
 runs one integration binary on Unix. Recording shell executables exercise every
-CLI adapter's public `Agent` invocation, including the internal mock provider.
+CLI adapter's public `Agent` invocation.
 `Provider::ALL` requires a CLI fixture or a structured unsupported-provider
 error, including the persisted `openai_compat` provider value.
 
@@ -61,18 +71,15 @@ and environment overrides remain engine responsibilities.
 
 ## Audit contracts
 
-`loop_engine::audit` keeps the existing engine import path for `AuditSink`,
-`LoopAuditEvent`, `InMemorySink`, `NullSink`, and the shared blob/redaction
-re-exports. The event variants retain their schema-v1 `event_kind` tags and
-payload fields for historical `v2_audit_events` rows, including session, HTTP,
-tool, iteration and policy records. They support serialization and
-deserialization; removing a runtime does not remove its persisted event shape.
+`loop_engine::audit` provides `AuditSink::write_blob`, `InMemorySink`,
+`NullSink`, and the shared `BlobStore` re-export. The retired HTTP agent loop's
+historical `loop_event` rows remain opaque persisted payloads; these sinks
+only write blobs.
 
 The runtime's SQLite-backed sink lives in `orbit-engine`. Payload bodies are
 stored separately under `.orbit/state/audit/blobs/`, keyed by their redacted
 content hash. Blob writes use the common crate's redaction at write time,
-before hashing and persistence. The boundary tests also verify sink redaction
-and decode fixtures for every historical event variant.
+before hashing and persistence. The boundary tests also verify sink redaction.
 
 The complete redaction contract lives in
 [`artifact-redaction.md`](../../docs/design/auditability/specs/artifact-redaction.md).

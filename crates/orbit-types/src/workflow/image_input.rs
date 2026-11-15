@@ -18,6 +18,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::WorkflowError;
+
 /// The token `attach_args` replaces with a staged image's path.
 pub const IMAGE_PATH_PLACEHOLDER: &str = "{path}";
 
@@ -213,27 +215,47 @@ impl ExecutorImageInput {
 }
 
 /// The image paths an activity input asks to stage, when it asks for image
-/// input at all ([`IMAGE_INPUT_FIELD`] present). `Some(vec![])` asks for the
-/// canary alone.
-#[must_use]
-pub fn requested_images(input: &Value) -> Option<Vec<String>> {
-    let request = input.get(IMAGE_INPUT_FIELD)?;
+/// input at all ([`IMAGE_INPUT_FIELD`] present and not null). `Ok(Some(vec![]))`
+/// asks for the canary alone: an object without `images`, or with an empty
+/// `images` list.
+///
+/// # Errors
+///
+/// A request that is not an object, carries a field other than `images`,
+/// gives `images` as anything but a list of strings, or lists an empty path
+/// is refused rather than shortened, so no requested image is silently
+/// dropped.
+pub fn requested_images(input: &Value) -> Result<Option<Vec<String>>, WorkflowError> {
+    let Some(request) = input.get(IMAGE_INPUT_FIELD) else {
+        return Ok(None);
+    };
     if request.is_null() {
-        return None;
+        return Ok(None);
     }
-    Some(
-        request
-            .get("images")
-            .and_then(Value::as_array)
-            .map(|images| {
-                images
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(ToOwned::to_owned)
-                    .collect()
-            })
-            .unwrap_or_default(),
-    )
+    let request: ImageInputRequest = serde_json::from_value(request.clone()).map_err(|error| {
+        WorkflowError::Invalid(format!(
+            "invalid `{IMAGE_INPUT_FIELD}`: {error}; expected an object whose optional `images` \
+             lists image paths as strings, such as {{\"images\": [\"diagram.png\"]}}"
+        ))
+    })?;
+    if let Some(position) = request
+        .images
+        .iter()
+        .position(|image| image.trim().is_empty())
+    {
+        return Err(WorkflowError::Invalid(format!(
+            "invalid `{IMAGE_INPUT_FIELD}`: `images[{position}]` is an empty path"
+        )));
+    }
+    Ok(Some(request.images))
+}
+
+/// The wire shape of an [`IMAGE_INPUT_FIELD`] request.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ImageInputRequest {
+    #[serde(default)]
+    images: Vec<String>,
 }
 
 /// Whether a step failure says its result did not return the canary.

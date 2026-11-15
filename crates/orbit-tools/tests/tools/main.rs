@@ -16,6 +16,7 @@ mod plugin_loader;
 mod proc_spawn_lockdown;
 mod proc_spawn_timeout;
 mod public_tool_surface;
+mod tool_families;
 
 mod artifact_admission;
 mod domain_admission;

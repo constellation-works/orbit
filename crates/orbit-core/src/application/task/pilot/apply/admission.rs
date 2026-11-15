@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
-use orbit_types::task::{TaskComplexity, TaskRelation, TaskStatus};
+use orbit_types::task::{CrewSource, TaskComplexity, TaskRelation, TaskStatus};
 use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -40,8 +40,20 @@ pub(in super::super) struct PreparedTaskSnapshot {
     /// Identity of the durable context creation grant the task held at
     /// preparation, `None` for none (or a payload prepared before grants).
     pub(in super::super) context_creation_identity: Option<String>,
-    /// Whether preparation requested an explore brief for the task.
-    pub(in super::super) explore_brief_requested: bool,
+    /// The pilot mode preparation chose for the task.
+    pub(in super::super) pilot_mode: PilotModeSnapshot,
+}
+
+/// How preparation asked the pilot to assess a task. The default, also read
+/// from a payload prepared before modes, is a full pilot with no prior.
+#[derive(Debug, Clone, Default)]
+pub(in super::super) struct PilotModeSnapshot {
+    /// The re-check input; `Some` only when the task is re-checked.
+    pub(in super::super) recheck: Option<serde_json::Value>,
+    /// Why a full pilot ran although a prior assessment existed.
+    pub(in super::super) reason: Option<String>,
+    /// The latest assessment's receipt id at preparation.
+    pub(in super::super) prior_assessment_id: Option<String>,
 }
 
 pub(in super::super) struct ValidatedTask {
@@ -72,10 +84,12 @@ pub(in super::super) struct ValidatedTask {
     /// The pilot job run that produced the assessment, persisted as the
     /// audit's `pilot_run_id`.
     pub(in super::super) pilot_run_id: Option<String>,
-    /// The pilot run's crew, recorded in an explore brief's provenance.
+    /// The pilot run's crew, which an invalid-finding record attributes.
     pub(in super::super) pilot_crew: Option<String>,
-    /// The explore brief decision, `None` when none was owed or returned.
-    pub(in super::super) explore_brief: Option<super::super::explore_brief::BriefDecision>,
+    /// The `<crew>@<effort>` this task's partition ran as when the run drew a
+    /// task-pilot `<crew>@auto` member; reported as the result's
+    /// `pilot_crew`, which pilot attribution prefers over the run's draw.
+    pub(in super::super) pilot_auto_crew: Option<String>,
 }
 
 impl ValidatedTask {
@@ -103,11 +117,18 @@ impl ValidatedTask {
 pub(in super::super) struct AppliedTaskMaterial {
     pub(in super::super) tags: Vec<String>,
     pub(in super::super) crew: Option<String>,
-    pub(in super::super) crew_source: Option<String>,
+    pub(in super::super) crew_source: Option<CrewSource>,
     pub(in super::super) relations: Vec<TaskRelation>,
     pub(in super::super) material: Option<(String, String)>,
     pub(in super::super) status_neutral_fingerprint: Option<String>,
     pub(in super::super) material_components: Option<BTreeMap<String, String>>,
+    /// The finding material and status this write left, so a rejection of
+    /// the pilot's judgement binds to them rather than to a later read.
+    /// Receipts written before this was sealed carry neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) finding_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) status: Option<TaskStatus>,
 }
 
 /// One task's promotion decision, by the authority that requested it.

@@ -1,19 +1,19 @@
 ---
 title: Operations as Data — Overview
 owner: claude
-last_updated: 2026-10-27
-last_validated: 2026-10-27
+last_updated: 2026-11-04
+last_validated: 2026-11-04
 status: Accepted
 stage: building
 next: "Restore ORB-15934 after 2026-11-12 to refuse unknown fields"
 feature: operations-as-data
 doc_role: overview
 type: design
-summary: One spec per operation drives the CLI, MCP, and runtime adapters; dashboard routes remain separately wired. Kernel v2 serves friction, auto-task, drain, workspace claim, task, workflow-run, search, codebase operations, and agent scorecards; deprecated orchestrator scorecard aliases share the registry.
+summary: One spec per operation drives the CLI, MCP, and runtime adapters; dashboard routes remain separately wired. Kernel v2 serves friction, auto-task, drain, workspace claim, task, workflow-run, search, codebase operations, agent scorecards, resident checkpoint and evolution.
 tags: [operations-as-data, architecture, adr-0209]
-paths: ["crates/orbit-common/src/governance/operation/**", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-common/src/governance/codebase.rs", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-tools/src/builtin/orbit/codebase.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-cli/src/command/codebase.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs", "crates/orbit-core/src/adapter/tool_host/workflow_tools.rs", "crates/orbit-core/src/adapter/tool_host/codebase_tools.rs", "crates/orbit-core/src/application/codebase/**", "crates/orbit-common/src/governance/search.rs", "crates/orbit-common/src/governance/agents.rs", "crates/orbit-common/src/governance/orchestrator.rs", "crates/orbit-tools/src/builtin/orbit/agents.rs", "crates/orbit-tools/src/builtin/orbit/orchestrator.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-cli/src/command/orchestrator.rs", "crates/orbit-core/src/adapter/tool_host/agents_tools.rs", "crates/orbit-core/src/adapter/tool_host/orchestrator_tools.rs"]
+paths: ["crates/orbit-common/src/governance/operation/**", "crates/orbit-common/src/governance/drain.rs", "crates/orbit-common/src/governance/workspace_claim.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-common/src/governance/auto_task/**", "crates/orbit-common/src/governance/codebase.rs", "crates/orbit-tools/src/builtin/orbit/operation.rs", "crates/orbit-tools/src/builtin/orbit/auto_task.rs", "crates/orbit-tools/src/builtin/orbit/codebase.rs", "crates/orbit-cli/src/command/operation/args.rs", "crates/orbit-cli/src/command/auto_task/**", "crates/orbit-cli/src/command/codebase.rs", "crates/orbit-common/src/governance/task/**", "crates/orbit-cli/src/command/task/operation.rs", "crates/orbit-common/src/governance/workflow.rs", "crates/orbit-tools/src/builtin/orbit/workflow.rs", "crates/orbit-core/src/adapter/tool_host/workflow_tools.rs", "crates/orbit-core/src/adapter/tool_host/codebase_tools.rs", "crates/orbit-core/src/application/codebase/**", "crates/orbit-common/src/governance/search.rs", "crates/orbit-common/src/governance/agents.rs", "crates/orbit-tools/src/builtin/orbit/agents.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-core/src/adapter/tool_host/agents_tools.rs"]
 related_features: [operations-as-data, orbit-core]
-related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15940, ORB-15941, ORB-15942, ORB-16787, ORB-16957, ORB-17118]
+related_artifacts: [ORB-10358, ORB-15932, ORB-15933, ORB-15935, ORB-15936, ORB-15937, ORB-15938, ORB-15940, ORB-15941, ORB-15942, ORB-16787, ORB-16957, ORB-23582, ORB-21243, ORB-21248]
 ---
 
 # Operations as Data — Overview
@@ -32,8 +32,10 @@ field names. This is bearing 1 of
 auto-task noun followed in [ORB-15935] (phase 1). Drain and workspace claim
 followed in [ORB-15936] (phase 2), migrating nine tool-only verbs. The task
 read verbs (`show`, `list`, `eligible`, `lint`) followed in [ORB-15937]
-(phase 3a), which also settled that ID routing stays keyed by tool name, and
-task `add` and `update` followed in [ORB-15938] (phase 3b), with the guarded
+(phase 3a). Builtin ID routes are declared by
+`OperationSpec::id_route` or `Tool::declared_id_route` and resolved from
+registered builtin definitions. Task `add` and `update` followed in [ORB-15938]
+(phase 3b), with the guarded
 creation schema as a surface table. Task artifacts and locks followed in
 [ORB-15939] (phase 3c), adding registry-derived nested CLI groups, and the
 review, reject and delete tools in [ORB-15940] (phase 3d), adding CLI action
@@ -72,7 +74,7 @@ audit-metadata match. Six of those seven edits carried no information the other
 five did not already have.
 
 The drift that follows is not hypothetical. Before the pilot, `orbit.friction.show`
-and `orbit.friction.update` described the same `id` field two different ways
+and `orbit.friction` action `update` described the same `id` field two different ways
 because two files owned the wording. After the pilot, the same kind of drift
 survived one level down: the tool host classified friction `show`, `stats` and
 `tags` as read-only while the CLI opened the full read-write runtime for them,
@@ -117,11 +119,12 @@ and again in the tool handler.
 | The task registry and task enum value tables | [crates/orbit-common/src/governance/task/operations.rs](../../../crates/orbit-common/src/governance/task/operations.rs) | [ORB-15937] |
 | Task nested artifact and lock operations | [crates/orbit-common/src/governance/task/nested_operations.rs](../../../crates/orbit-common/src/governance/task/nested_operations.rs) | [ORB-15939] |
 | Task review and lifecycle operations (`reconcile_review` and its CLI actions, `review_reset`, inactive `reject` and `delete`) | [crates/orbit-common/src/governance/task/lifecycle_operations.rs](../../../crates/orbit-common/src/governance/task/lifecycle_operations.rs) | [ORB-15940] |
-| The workflow-run registry (five MCP-advertised tool-only verbs, including the multiplexed `orbit.workflow.auto`) | [crates/orbit-common/src/governance/workflow.rs](../../../crates/orbit-common/src/governance/workflow.rs) | [ORB-15941] |
+| The workflow-run registry (five MCP-advertised tool-only verbs, including the multiplexed `orbit.workflow` action `auto`) | [crates/orbit-common/src/governance/workflow.rs](../../../crates/orbit-common/src/governance/workflow.rs) | [ORB-15941] |
 | The search registry (root CLI query and tool-only friction listing) | [crates/orbit-common/src/governance/search.rs](../../../crates/orbit-common/src/governance/search.rs) | [ORB-15942] |
 | The codebase registry (read-only `analytics`, `show`, and `related`, on the CLI and MCP) | [crates/orbit-common/src/governance/codebase.rs](../../../crates/orbit-common/src/governance/codebase.rs) | [ORB-16787] |
 | The agent scorecard registry (`scorecard` and `show`, on the CLI and MCP) | [crates/orbit-common/src/governance/agents.rs](../../../crates/orbit-common/src/governance/agents.rs) | [ORB-16957] |
-| Deprecated orchestrator scorecard aliases of the agent tools | [crates/orbit-common/src/governance/orchestrator.rs](../../../crates/orbit-common/src/governance/orchestrator.rs) | [ORB-16957], [ORB-17118] |
+| The governed resident checkpoint write | [crates/orbit-common/src/governance/resident.rs](../../../crates/orbit-common/src/governance/resident.rs), [resident_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/resident_tools.rs) | [ORB-21243] |
+| The evolution ledger operations | [crates/orbit-common/src/governance/evolution.rs](../../../crates/orbit-common/src/governance/evolution.rs), [evolution_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/evolution_tools.rs) | [ORB-21248] |
 | MCP adapter: generic `OperationTool<V>`, schema, scope and execution kind | [crates/orbit-tools/src/builtin/orbit/operation.rs](../../../crates/orbit-tools/src/builtin/orbit/operation.rs) | [ORB-10358], [ORB-15932] |
 | Auto-task guarded modes (bounded list, acknowledged mint, checked toggle), keyed on `AutoTaskVerb` | [crates/orbit-tools/src/builtin/orbit/auto_task.rs](../../../crates/orbit-tools/src/builtin/orbit/auto_task.rs) | [ORB-15935] |
 | Task guarded modes (bounded `show`/`list`, versioned `show` snapshot), keyed on `TaskVerb` | [crates/orbit-tools/src/builtin/orbit/task/operation.rs](../../../crates/orbit-tools/src/builtin/orbit/task/operation.rs) | [ORB-15937] |
@@ -138,8 +141,8 @@ and again in the tool handler.
 | Handler table, keyed on `WorkspaceClaimVerb` | [crates/orbit-core/src/adapter/tool_host/workspace_claim_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/workspace_claim_tools.rs) | [ORB-15936] |
 | Handler table, keyed on `TaskVerb` | [crates/orbit-core/src/adapter/tool_host/task/operation.rs](../../../crates/orbit-core/src/adapter/tool_host/task/operation.rs) | [ORB-15937] |
 | Handler table, keyed on `WorkflowVerb` | [crates/orbit-core/src/adapter/tool_host/workflow_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/workflow_tools.rs) | [ORB-15941] |
-| ID routing, keyed by tool name (host prefix routing; owner-workspace binding is `ID_RESOLVED_WORKSPACE_TOOLS` in the CLI's MCP server) | [crates/orbit-tools/src/mcp_rules.rs](../../../crates/orbit-tools/src/mcp_rules.rs) | [ORB-15937] |
-| Redaction policy, derived from each parameter's `redact` class | [crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs](../../../crates/orbit-core/src/adapter/tool_host/artifact_redaction.rs) | [ORB-15932] |
+| Builtin ID routing, declared by `OperationSpec::id_route` or `Tool::declared_id_route` and resolved from registered definitions | [crates/orbit-tools/src/mcp/rules.rs](../../../crates/orbit-tools/src/mcp/rules.rs) | [ORB-15937] |
+| Redaction policy, derived from each parameter's `redact` class | [crates/orbit-core/src/adapter/tool_host/artifact_redaction/policy.rs](../../../crates/orbit-core/src/adapter/tool_host/artifact_redaction/policy.rs) | [ORB-15932] |
 | Claimed-worker routing, keyed on the migrated nouns' verb enums | [crates/orbit-core/src/adapter/tool_host/worker_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/worker_tools.rs) | [ORB-15932], [ORB-15935] |
 | Shared tool-input parsing and unknown-field refusal | [crates/orbit-common/src/protocol/tool_input.rs](../../../crates/orbit-common/src/protocol/tool_input.rs) | — |
 | Migration cookbook | [references/cookbook.md](./references/cookbook.md) | [ORB-10358] |
@@ -157,8 +160,7 @@ and again in the tool handler.
   object and CLI-only parameter kinds.
 - [ORB-15936] — phase 2: migrated the drain and workspace-claim tool-only nouns,
   preserving active/inactive registration, schemas and governance.
-- [ORB-15937] — phase 3a: migrated the task read verbs and kept ID routing keyed
-  by tool name.
+- [ORB-15937] — phase 3a: migrated the task read verbs.
 - [ORB-15938] — phase 3b: migrated task `add` and `update`, adding the array
   parameter kind, refuse-mode unknown fields and the schema extension table.
 - [ORB-15939] — phase 3c: migrated task artifacts and locks, adding
@@ -174,7 +176,9 @@ and again in the tool handler.
   registry, with its CLI and MCP surfaces derived from it.
 - [ORB-16957] — declared the agent scorecard registry behind the
   `orbit agents` CLI and MCP tools, with deprecated orchestrator aliases.
-- [ORB-17118] — reworked the orchestrator score the deprecated aliases
-  return so it measures spec quality.
+- [ORB-23582] — removed the orchestrator aliases and the orchestrators role.
+- [ORB-21243] — added the governed resident checkpoint write through the
+  shared operation registry.
+- [ORB-21248] — added evolution ledger operations through the shared registry.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

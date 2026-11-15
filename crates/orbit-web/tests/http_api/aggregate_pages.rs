@@ -180,6 +180,11 @@ fn fleet_drains_exposes_idle_ready_work_beside_a_live_workspace() {
                 assert!(row["queued_drains"].is_array());
                 assert!(row.get("top_wait_reason").is_some());
                 assert_eq!(row["counts_truncated"], false);
+                assert_eq!(
+                    row["baseline_red_hold"],
+                    serde_json::json!({"task_ids": [], "complete": true}),
+                    "no baseline-red holds in this fixture: {payload:#}"
+                );
             }
             // A waiting task gets a reason in the fleet, rather than looking
             // identical to an empty workspace.
@@ -314,6 +319,135 @@ fn fleet_drains_preserves_hosts_health_for_ten_workspaces() {
     );
 }
 
+/// A fleet row skips diagnostics and shares one status read, so its admission
+/// decisions must stay those of the workspace's own readiness, including a
+/// dependency held in another workspace of the shared registry (ORB-22421).
+#[test]
+fn fleet_drains_rows_match_workspace_readiness_across_workspaces() {
+    isolated(
+        "aggregate_pages::fleet_drains_rows_match_workspace_readiness_across_workspaces",
+        || {
+            let tmp = tempfile::tempdir().unwrap();
+            let global = tmp.path().join("global");
+            std::fs::create_dir_all(&global).unwrap();
+            std::fs::write(global.join("config.toml"),
+                "[workflow]\ndefault_crew = \"sol\"\n[crews.sol]\nprovider = \"codex\"\nmodel = \"fixture\"\n").unwrap();
+            let (alpha_orbit, alpha_repo) = seed_workspace(&global, tmp.path(), "alpha");
+            let (bravo_orbit, bravo_repo) = seed_workspace(&global, tmp.path(), "bravo");
+            write_registry(&global, &[("alpha", &alpha_repo), ("bravo", &bravo_repo)]);
+            let alpha = OrbitRuntime::from_roots(&global, &alpha_orbit)
+                .unwrap()
+                .with_actor(ActorIdentity::human("fixture"));
+            let bravo = OrbitRuntime::from_roots(&global, &bravo_orbit)
+                .unwrap()
+                .with_actor(ActorIdentity::human("fixture"));
+            let ready_task = |title: &str, repo: &Path, dependencies| {
+                let file = format!("{}.rs", title.replace(' ', "_"));
+                std::fs::write(repo.join(&file), "fixture").unwrap();
+                TaskAddParams {
+                    title: title.into(),
+                    description: "Fleet readiness fixture".into(),
+                    acceptance_criteria: vec!["The work is visible".into()],
+                    plan: "Fixture plan".into(),
+                    context_files: vec![format!("file:{file}")],
+                    complexity: orbit_core::TaskComplexity::Medium,
+                    status: Some(TaskStatus::Backlog),
+                    dependencies,
+                    ..Default::default()
+                }
+            };
+            let blocker = bravo
+                .add_task(ready_task("Blocker", &bravo_repo, Vec::new()))
+                .unwrap();
+            alpha
+                .add_task(ready_task(
+                    "Dependent",
+                    &alpha_repo,
+                    vec![blocker.id.clone()],
+                ))
+                .unwrap();
+            let drain = seed_run(
+                &alpha,
+                "jrun-fleet-read-only",
+                "workspace_auto_pipeline",
+                JobRunState::Running,
+            );
+            let server = spawn_server(
+                tmp.path(),
+                true,
+                false,
+                false,
+                &tmp.path().join("process.log"),
+                None,
+                &[],
+            );
+            let assert_rows_match_readiness = |payload: &serde_json::Value| {
+                for row in payload["items"].as_array().unwrap() {
+                    let id = row["workspace_id"].as_str().unwrap();
+                    let readiness = json_ok(
+                        server.get(&format!("/api/workflows/auto/readiness?workspace={id}")),
+                    );
+                    let tasks = readiness["tasks"].as_array().unwrap();
+                    assert_eq!(
+                        row["eligible_count"],
+                        tasks.iter().filter(|task| task["eligible"] == true).count(),
+                        "{id}: {payload:#} {readiness:#}"
+                    );
+                    assert_eq!(row["drain_phase"], readiness["capacity"]["drain_phase"]);
+                    assert_eq!(row["slots_used"], readiness["capacity"]["active_leaf_runs"]);
+                }
+            };
+
+            let blocked = json_ok(server.get("/api/fleet/drains"));
+            assert_rows_match_readiness(&blocked);
+            let alpha_row = &blocked["items"][0];
+            assert_eq!(alpha_row["workspace_id"], "alpha");
+            assert_eq!(alpha_row["eligible_count"], 0, "{blocked:#}");
+            assert_eq!(
+                alpha_row["top_wait_reason"], "unmet_dependency",
+                "{blocked:#}"
+            );
+            assert_eq!(blocked["items"][1]["eligible_count"], 1, "{blocked:#}");
+
+            // No read cache stands between the dependency's change and the row.
+            for status in [TaskStatus::InProgress, TaskStatus::Review, TaskStatus::Done] {
+                bravo
+                    .update_task_as_human(
+                        &blocker.id,
+                        orbit_core::application::task::TaskUpdateParams {
+                            status: Some(status),
+                            execution_summary: Some("Fixture work finished".into()),
+                            ..Default::default()
+                        },
+                        "test operator".into(),
+                    )
+                    .unwrap();
+            }
+            let released = json_ok(server.get("/api/fleet/drains"));
+            assert_rows_match_readiness(&released);
+            assert_eq!(released["items"][0]["eligible_count"], 1, "{released:#}");
+            assert_eq!(released["items"][1]["eligible_count"], 0, "{released:#}");
+
+            // The read reserved nothing and reconciled nothing.
+            assert_eq!(
+                json_ok(server.get("/api/fleet/drains")),
+                released,
+                "an unchanged store reads back identically"
+            );
+            assert_eq!(
+                alpha
+                    .sqlite_store()
+                    .unwrap()
+                    .get_job_run_for_workspace(&alpha.workspace_id().unwrap(), &drain.run_id)
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                JobRunState::Running
+            );
+        },
+    );
+}
+
 /// Regression guard for the aggregates' concurrent per-workspace fan-out:
 /// fleet rows stay in registry order and the merged task page is identical
 /// across repeated polls of one unchanged store state.
@@ -375,33 +509,98 @@ fn aggregate_fan_out_preserves_row_order_and_payloads_across_polls() {
     );
 }
 
+/// Regression check for ORB-21847: `/api/tasks/all` selects each pinned
+/// workspace's candidate keys concurrently. The server child holds every
+/// selection until `parties` of them are in flight together; a serialised
+/// scan waits out that bound and is reported unavailable, so the aggregate
+/// response shows the regression. A single-CPU host runs one fan-out worker,
+/// so one party is the most overlap that host can produce.
+#[test]
+fn aggregate_task_candidates_select_workspaces_concurrently() {
+    isolated(
+        "aggregate_pages::aggregate_task_candidates_select_workspaces_concurrently",
+        || {
+            let tmp = tempfile::tempdir().unwrap();
+            let global = tmp.path().join("global");
+            std::fs::create_dir_all(&global).unwrap();
+            let names = ["overlap0", "overlap1"];
+            let roots = names
+                .iter()
+                .map(|name| seed_workspace(&global, tmp.path(), name))
+                .collect::<Vec<_>>();
+            let bindings = names
+                .iter()
+                .zip(&roots)
+                .map(|(name, (_, repo))| (*name, repo.as_path()))
+                .collect::<Vec<_>>();
+            write_registry(&global, &bindings);
+            let parties = std::thread::available_parallelism()
+                .map_or(1, |parallelism| parallelism.get())
+                .min(names.len())
+                .to_string();
+            let server = spawn_server(
+                tmp.path(),
+                false,
+                false,
+                false,
+                &tmp.path().join("process.log"),
+                None,
+                &[(
+                    "ORBIT_HTTP_SELECTION_BARRIER",
+                    std::ffi::OsStr::new(&parties),
+                )],
+            );
+            let response = json_ok(server.get("/api/tasks/all"));
+            assert_eq!(
+                response["unavailable"],
+                serde_json::json!([]),
+                "each workspace's candidate selection must overlap the others; a serialised scan waits out the barrier and is reported unavailable"
+            );
+            assert_eq!(response["total"], names.len());
+        },
+    );
+}
+
 #[test]
 fn aggregate_job_runs_page_is_bounded_and_observational() {
     isolated(
         "aggregate_pages::aggregate_job_runs_page_is_bounded_and_observational",
-        || {
-            let tmp = tempfile::tempdir().expect("tempdir");
-            let global_root = tmp.path().join("global");
-            std::fs::create_dir_all(&global_root).expect("create global root");
-            let names = ["alpha", "bravo", "charlie", "delta", "echo"];
-            let repos = names
-                .iter()
-                .map(|name| seed_workspace(&global_root, tmp.path(), name).1)
-                .collect::<Vec<_>>();
-            let bindings = names
-                .iter()
-                .zip(&repos)
-                .map(|(name, repo)| (*name, repo.as_path()))
-                .collect::<Vec<_>>();
-            write_registry(&global_root, &bindings);
-            let alpha = OrbitRuntime::from_roots(&global_root, &repos[0].join(".orbit"))
-                .expect("alpha runtime");
-            let store = alpha.sqlite_store().expect("store");
-            {
-                let connection = store.connection();
-                let conn = connection.lock().expect("store connection");
-                for name in names {
-                    conn.execute(
+        || check_aggregate_job_runs_pages(false),
+    );
+}
+
+/// Warm-page latency is manual evidence, without a load-sensitive CI threshold.
+#[test]
+#[ignore = "manual latency evidence over 20,000 aggregate job runs"]
+fn aggregate_job_runs_page_latency() {
+    isolated("aggregate_pages::aggregate_job_runs_page_latency", || {
+        check_aggregate_job_runs_pages(true);
+    });
+}
+
+fn check_aggregate_job_runs_pages(measure_latency: bool) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let global_root = tmp.path().join("global");
+    std::fs::create_dir_all(&global_root).expect("create global root");
+    let names = ["alpha", "bravo", "charlie", "delta", "echo"];
+    let repos = names
+        .iter()
+        .map(|name| seed_workspace(&global_root, tmp.path(), name).1)
+        .collect::<Vec<_>>();
+    let bindings = names
+        .iter()
+        .zip(&repos)
+        .map(|(name, repo)| (*name, repo.as_path()))
+        .collect::<Vec<_>>();
+    write_registry(&global_root, &bindings);
+    let alpha =
+        OrbitRuntime::from_roots(&global_root, &repos[0].join(".orbit")).expect("alpha runtime");
+    let store = alpha.sqlite_store().expect("store");
+    {
+        let connection = store.connection();
+        let conn = connection.lock().expect("store connection");
+        for name in names {
+            conn.execute(
                 "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 3999)
                  INSERT INTO job_runs(run_id, workspace_id, job_id, attempt, state,
                      scheduled_at, started_at, finished_at, duration_ms, created_at)
@@ -411,62 +610,64 @@ fn aggregate_job_runs_page_is_bounded_and_observational() {
                 [format!("ws_{name}")],
             )
             .expect("seed runs");
-                }
-            }
+        }
+    }
 
-            let server = spawn_server(
-                tmp.path(),
-                true,
-                false,
-                false,
-                &tmp.path().join("process.log"),
-                None,
-                &[],
-            );
-            let page = |state_filter: &str| {
-                json_ok(server.get(&format!("/api/job-runs/all?limit=50&state={state_filter}")))
-            };
-            // Warm: every workspace runtime is open and the store pages are cached.
-            let warm = page("all");
-            assert_eq!(warm["items"].as_array().expect("items").len(), 50);
-            assert_eq!(warm["total"], 20_000);
-            assert_eq!(warm["truncated"], true);
-            assert_eq!(warm["unavailable"], serde_json::json!([]));
-            assert_eq!(warm["items"][0]["run_id"], "jrun-03999");
+    let server = spawn_server(
+        tmp.path(),
+        true,
+        false,
+        false,
+        &tmp.path().join("process.log"),
+        None,
+        &[],
+    );
+    let page = |state_filter: &str| {
+        json_ok(server.get(&format!("/api/job-runs/all?limit=50&state={state_filter}")))
+    };
+    // Warm: every workspace runtime is open and the store pages are cached.
+    let warm = page("all");
+    assert_eq!(warm["items"].as_array().expect("items").len(), 50);
+    assert_eq!(warm["total"], 20_000);
+    assert_eq!(warm["truncated"], true);
+    assert_eq!(warm["unavailable"], serde_json::json!([]));
+    assert_eq!(warm["items"][0]["run_id"], "jrun-03999");
 
-            // A terminal run whose timing is incomplete is exactly what reconciling
-            // reads repair. The dashboard must show it as stored.
-            let mut incomplete = seed_run(
-                &alpha,
-                "jrun-incomplete",
-                "bulk",
-                orbit_core::JobRunState::Failed,
-            );
-            incomplete.finished_at = None;
-            incomplete.duration_ms = None;
-            store
-                .upsert_job_run_for_workspace("ws_alpha", &incomplete, None)
-                .expect("store incomplete run");
+    // A terminal run whose timing is incomplete is exactly what reconciling
+    // reads repair. The dashboard must show it as stored.
+    let mut incomplete = seed_run(
+        &alpha,
+        "jrun-incomplete",
+        "bulk",
+        orbit_core::JobRunState::Failed,
+    );
+    incomplete.finished_at = None;
+    incomplete.duration_ms = None;
+    store
+        .upsert_job_run_for_workspace("ws_alpha", &incomplete, None)
+        .expect("store incomplete run");
 
-            let started = std::time::Instant::now();
-            let all = page("all");
-            let failed = page("failed");
-            let elapsed = started.elapsed();
-            assert_eq!(all["items"].as_array().expect("items").len(), 50);
-            assert_eq!(failed["items"][0]["run_id"], "jrun-incomplete");
-            assert!(
-                elapsed < std::time::Duration::from_millis(300),
-                "two warm aggregate pages over 20k runs took {elapsed:?}"
-            );
-            let stored = alpha
-                .show_job_run_observed("jrun-incomplete")
-                .expect("incomplete run");
-            assert_eq!(
-                (stored.state, stored.finished_at),
-                (orbit_core::JobRunState::Failed, None),
-                "a dashboard GET must not reconcile runs"
-            );
-        },
+    let started = measure_latency.then(std::time::Instant::now);
+    let all = page("all");
+    let failed = page("failed");
+    if let Some(started) = started {
+        use std::io::Write as _;
+        writeln!(
+            std::io::stderr(),
+            "test-note: two warm aggregate pages over 20k runs took {:?}",
+            started.elapsed()
+        )
+        .expect("write latency measurement");
+    }
+    assert_eq!(all["items"].as_array().expect("items").len(), 50);
+    assert_eq!(failed["items"][0]["run_id"], "jrun-incomplete");
+    let stored = alpha
+        .show_job_run_observed("jrun-incomplete")
+        .expect("incomplete run");
+    assert_eq!(
+        (stored.state, stored.finished_at),
+        (orbit_core::JobRunState::Failed, None),
+        "a dashboard GET must not reconcile runs"
     );
 }
 
@@ -532,6 +733,100 @@ fn aggregate_job_runs_total_sums_every_workspace_independent_of_page_size() {
                 assert_eq!(active["truncated"], limit < 5);
             }
             assert_eq!(page("state=all&limit=1")["total"], 7);
+        },
+    );
+}
+
+/// The failed-runs rail (`state=failed&limit=1`) over the review's
+/// 13-workspace topology: the exact failed total and the merged recency
+/// order survive the aggregate's fan-out and its bounded projection, an
+/// unavailable workspace stays named without contributing runs, and
+/// repeated polls of unchanged state return identical payloads.
+#[test]
+fn aggregate_failed_runs_over_thirteen_workspaces_keep_total_order_and_unavailable() {
+    isolated(
+        "aggregate_pages::aggregate_failed_runs_over_thirteen_workspaces_keep_total_order_and_unavailable",
+        || {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let global_root = tmp.path().join("global");
+            std::fs::create_dir_all(&global_root).expect("create global root");
+            let base = Utc::now() - chrono::Duration::hours(1);
+            let names = (0..13)
+                .map(|index| format!("ws{index:02}"))
+                .collect::<Vec<_>>();
+            let mut bindings = Vec::new();
+            for (index, name) in names.iter().enumerate() {
+                let (orbit_dir, repo_root) = seed_workspace(&global_root, tmp.path(), name);
+                let runtime =
+                    OrbitRuntime::from_roots(&global_root, &orbit_dir).expect("workspace runtime");
+                for (slot, state) in [
+                    (0_i64, JobRunState::Failed),
+                    (1, JobRunState::Timeout),
+                    (2, JobRunState::Success),
+                ] {
+                    let mut run = seed_run(&runtime, &format!("jrun-{name}-{slot}"), "bulk", state);
+                    let at = base + chrono::Duration::minutes((index * 10) as i64 + slot);
+                    run.created_at = at;
+                    run.scheduled_at = at;
+                    run.started_at = Some(at);
+                    run.finished_at = Some(at);
+                    write_seeded_run(&runtime, &run);
+                }
+                bindings.push((name.clone(), repo_root));
+            }
+            let (broken_orbit, broken_repo) = seed_workspace(&global_root, tmp.path(), "broken");
+            std::fs::write(broken_orbit.join("config.toml"), "[invalid TOML")
+                .expect("break workspace config");
+            bindings.push(("broken".to_string(), broken_repo));
+            let registry_bindings = bindings
+                .iter()
+                .map(|(name, repo)| (name.as_str(), repo.as_path()))
+                .collect::<Vec<_>>();
+            write_registry(&global_root, &registry_bindings);
+
+            let server = spawn_server(
+                tmp.path(),
+                true,
+                false,
+                false,
+                &tmp.path().join("process.log"),
+                None,
+                &[],
+            );
+            let page = |query: &str| json_ok(server.get(&format!("/api/job-runs/all?{query}")));
+            // Warm every workspace runtime before the measured-shape reads.
+            let _ = page("state=failed&limit=1");
+
+            let one = page("state=failed&limit=1");
+            assert_eq!(
+                one["total"], 26,
+                "exact failed count over 13 workspaces: {one:#}"
+            );
+            assert_eq!(one["truncated"], true);
+            assert_eq!(one["items"].as_array().expect("items").len(), 1);
+            assert_eq!(one["items"][0]["run_id"], "jrun-ws12-1");
+            assert_eq!(one["items"][0]["workspace_id"], "ws12");
+            let unavailable = one["unavailable"].as_array().expect("unavailable");
+            assert_eq!(unavailable.len(), 1, "{one:#}");
+            assert_eq!(unavailable[0]["workspace_id"], "broken");
+            assert!(unavailable[0]["error"].is_string());
+
+            let three = page("state=failed&limit=3");
+            let order = three["items"]
+                .as_array()
+                .expect("items")
+                .iter()
+                .map(|row| row["run_id"].as_str().expect("run id").to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(order, ["jrun-ws12-1", "jrun-ws12-0", "jrun-ws11-1"]);
+            assert_eq!(three["total"], 26);
+            for _ in 0..3 {
+                assert_eq!(
+                    page("state=failed&limit=1"),
+                    one,
+                    "aggregate payload must be identical for the same store state"
+                );
+            }
         },
     );
 }
@@ -624,9 +919,107 @@ fn aggregate_task_page_opens_only_the_returned_bundles() {
         },
     );
 }
+/// Human-crew identity is stamped from each task's own workspace: the same crew
+/// name is a human crew in `alpha` and an agent crew in `bravo`, and every read
+/// and write the dashboard consumes (aggregate list, detail, write response)
+/// answers for the workspace that owns the row.
+#[test]
+fn aggregate_rows_classify_human_crews_per_owning_workspace() {
+    isolated(
+        "aggregate_pages::aggregate_rows_classify_human_crews_per_owning_workspace",
+        || {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let global = tmp.path().join("global");
+            std::fs::create_dir_all(&global).unwrap();
+            let (alpha_orbit, alpha_repo) = seed_workspace(&global, tmp.path(), "alpha");
+            let (bravo_orbit, bravo_repo) = seed_workspace(&global, tmp.path(), "bravo");
+            std::fs::write(
+                alpha_orbit.join("config.toml"),
+                "[crews.ops]\nkind = \"human\"\ndescription = \"Operator work\"\n",
+            )
+            .unwrap();
+            std::fs::write(
+                bravo_orbit.join("config.toml"),
+                "[workflow]\ndefault_crew = \"ops\"\n[crews.ops]\nprovider = \"codex\"\nmodel = \"fixture\"\n",
+            )
+            .unwrap();
+            let mut ids = Vec::new();
+            for orbit_dir in [&alpha_orbit, &bravo_orbit] {
+                let runtime = OrbitRuntime::from_roots(&global, orbit_dir)
+                    .expect("runtime")
+                    .with_actor(ActorIdentity::human("human"));
+                let task = runtime
+                    .add_task(TaskAddParams {
+                        title: "ops backlog".into(),
+                        description: "assigned to ops".into(),
+                        status: Some(TaskStatus::Backlog),
+                        crew: Some("ops".into()),
+                        ..Default::default()
+                    })
+                    .expect("add ops task");
+                ids.push(task.id);
+            }
+            write_registry(&global, &[("alpha", &alpha_repo), ("bravo", &bravo_repo)]);
+            let server = spawn_server(
+                tmp.path(),
+                true,
+                false,
+                false,
+                &tmp.path().join("process.log"),
+                None,
+                &[],
+            );
+            let all = json_ok(server.get("/api/tasks/all"));
+            let row = |workspace: &str| {
+                all["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|item| {
+                        item["workspace_id"] == workspace && item["title"] == "ops backlog"
+                    })
+                    .unwrap_or_else(|| panic!("{workspace} ops row in {all}"))
+                    .clone()
+            };
+            let alpha_row = row("alpha");
+            assert_eq!(alpha_row["crew"], "ops");
+            assert_eq!(
+                alpha_row["human_crew"],
+                serde_json::json!({"name": "ops", "description": "Operator work"}),
+                "the aggregate row keeps the human crew of its own workspace"
+            );
+            let bravo_row = row("bravo");
+            assert_eq!(bravo_row["crew"], "ops");
+            assert!(
+                bravo_row.get("human_crew").is_none(),
+                "the same name is an agent crew in bravo: {bravo_row}"
+            );
+
+            let detail = json_ok(server.get(&format!("/api/tasks/{}?workspace=alpha", ids[0])));
+            assert_eq!(detail["human_crew"]["name"], "ops", "the detail carries it");
+            let detail = json_ok(server.get(&format!("/api/tasks/{}?workspace=bravo", ids[1])));
+            assert!(
+                detail.get("human_crew").is_none(),
+                "the agent task detail does not"
+            );
+
+            let written = json_ok(server.send(
+                "PATCH",
+                &format!("/api/tasks/{}?workspace=alpha", ids[0]),
+                serde_json::json!({"title": "ops backlog"}),
+            ));
+            assert_eq!(
+                written["human_crew"]["name"], "ops",
+                "a write response keeps it"
+            );
+        },
+    );
+}
+
 fn seed_run(runtime: &OrbitRuntime, run_id: &str, job_id: &str, state: JobRunState) -> JobRun {
     let now = Utc::now();
     let run = JobRun {
+        build: None,
         executed_on: None,
         run_id: run_id.to_string(),
         job_id: job_id.to_string(),

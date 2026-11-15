@@ -147,3 +147,48 @@ fn private_vcs_failure_preserves_the_execution_display_and_wire_contract() {
     );
     assert!(legacy.private_vcs_failure().is_none());
 }
+
+#[test]
+fn preserved_json_rpc_refusal_classifies_as_owner_route_unavailable() {
+    use orbit_types::workflow::StepFailureCode;
+
+    for rpc_code in [orbit_common::JSON_RPC_INVALID_PARAMS_CODE, -32601, -32000] {
+        let rpc_error = json!({
+            "code": rpc_code,
+            "message": "legacy owner rejection",
+        });
+        let preserved =
+            OrbitError::json_rpc_refusal("owner-machine", "orbit.drain.claim.bind", &rpc_error);
+        assert!(preserved.is_json_rpc_refusal());
+        let step_code = preserved
+            .step_failure_code()
+            .expect("preserved refusal must yield a step failure code");
+        assert_eq!(
+            step_code,
+            StepFailureCode::OwnerRouteUnavailable,
+            "preserved JSON-RPC refusal with code {rpc_code} must classify as owner-route unavailable"
+        );
+        assert!(step_code.is_owner_route_unavailable());
+    }
+
+    for wire_code in ["invalid_input", "not_found", "custom_tool_code"] {
+        let ordinary = OrbitError::RemoteTool {
+            code: orbit_common::RemoteToolCode::from(wire_code),
+            message: "tool failed".to_string(),
+            payload: json!({
+                "code": wire_code,
+                "message": "tool failed",
+            }),
+        };
+        assert!(!ordinary.is_json_rpc_refusal());
+        let step_code = ordinary
+            .step_failure_code()
+            .expect("remote tool error must yield a step failure code");
+        assert_eq!(
+            step_code,
+            StepFailureCode::parse(wire_code),
+            "ordinary remote tool answer must contribute its wire code verbatim"
+        );
+        assert!(!step_code.is_owner_route_unavailable());
+    }
+}

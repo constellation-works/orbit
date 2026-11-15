@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Task/Reservation Commit Boundary"
-last_validated: 2026-10-23
+last_validated: 2026-11-01
 ---
 # Task/Reservation Commit Boundary
 
@@ -52,7 +52,11 @@ queueing each of its dozens of reads behind every admission and commit made one 
 take seconds under drain load. It still takes the shared locks and settles a pending commit
 first, so it never sees a half-applied transition and still waits for an exclusive holder; a
 queued writer may wait for the few reads it enters meanwhile. A re-entrant acquisition never
-reaches either lock.
+reaches either lock. A delivery's CI poll reads its CI retry journal the same way, through
+`RuntimeHost::observe_task_artifact`: that read decides nothing and the run that writes the
+journal is its only writer. Queued behind owner admissions that were themselves waiting on
+long dashboard reads, it once made one PR completion wait 62.5 s, including a 30 s acquisition
+timeout. A changed journal is still written through ordinary sections.
 
 A pass that makes many task reads (a search, the config view's review section) enters one shared
 section around all of them with `TaskStoreBackend::in_read_section`. Its nested reads re-enter
@@ -88,7 +92,7 @@ ordinary regression check without a timed performance assertion.
 | Apply | After the admission section has released the partition, still under the bundle lock and lease: truncate `events.jsonl` to the intent's recorded pre-apply length (nothing to do, and no sync, when it is already there), append its events in one write and one sync, replay summary/comments/artifact bytes and manifest, republish `task.yaml` durably, settle the row `applied`, update the registry index, then unname the lease and release the bundle | Still decided: the next entrant replays it again |
 
 Recovery reads only `prepared` and `committed` rows; an `applied` or `aborted` row is never read
-again. `orbit gc journal` deletes applied rows older than `retention.journal_days`, keeping each
+again. `orbit gc journal` deletes applied rows older than 14 days, keeping each
 task's newest applied row. It selects candidates in one read and deletes them by key in short
 batches, and it never selects a row recovery would replay.
 
@@ -120,7 +124,10 @@ may show the decided envelope while its history is still being applied.
 
 The lease's name is not synced, which keeps every sync out of the section. A host crash can
 therefore lose a lease whose decision survived, so opening a partition's boundary, which every
-process does before it reads, replays any unsettled row whose lease nobody holds. A
+process does before it reads, replays any unsettled row whose lease nobody holds. Detection
+never rests on lease files or the legacy marker alone: the interrupted check, the sidecar
+fast path's nothing-to-recover check and pending recovery all also consult the unsettled
+journal rows and probe each row's lease. A
 compensation or replay that fails leaves the lease dead and returns the error: the partition
 stays closed until recovery succeeds, rather than opening with unknown commit state.
 
@@ -201,8 +208,14 @@ opens use `workspace_observational_backends` when a read-only command's partitio
 or coordination setup encounters a filesystem permission denial. This includes writable
 runtime opens before CLI tool dispatch: an absent partition reads as empty, and an actual
 mutation still fails at its storage write. The observation handle creates no partition,
-lock, or journal marker during construction and retains journal-binding verification and
-recovery before exposure. The task and
+lock, or journal marker during construction on a settled partition, and retains
+journal-binding verification. Recovery is fenced before exposure there too: when an
+unsettled journal row's lease nobody holds, a handle that may write replays the decision
+as the normal constructor does, and a genuinely read-only handle (a read-only store or
+registry) refuses construction with a recovery-required error instead of exposing the
+unapplied task, history, comment, artifact or reservation sidecars as settled. Reads
+through a composed handle likewise settle or fail before exposing state, never serving
+the old sidecars while recovery is owed. The task and
 reservation stores come from the same composition; the uncoordinated reservation factory
 has been removed. A durable `.task-commit-required` marker makes legacy task compositions
 refuse access to a coordinated partition, including compositions opened before activation.
@@ -231,11 +244,41 @@ tombstone; it never deletes the request identity and refuses unsettled claims.
 
 The pull and drain verbs (`orbit.task.pull`, `orbit.drain.*`) are absent from the public MCP
 tool list and reach an owner through the internal drain protocol. Generic task writes refuse
-active execution claims; claimed work writes through claim-scoped mutations. The one exception is an
+active execution claims; claimed work writes through claim-scoped mutations. A live landing attempt
+records its completion hold (the `completion_held` history entry and comment) through the handed-off
+claim as `RecordLandingCompletionHold`, never as an unscoped update. The one exception is an
 operator's comment-only update: orbit-core flags it, and `update_task_history` admits it under
 the claim only when its sole effect is appending one comment, recording no creation grant.
 Every other write inside that update still takes the ordinary fence. Frozen
 claim footprints also participate in ordinary reservation conflicts after TTL expiry.
+Backlog admission and readiness include those frozen footprints even when
+the owner's task envelopes or local leaf runs do not show the follower's
+work. Explicit task selection passes through the owner-wave admission
+section too: an overlapping live claim defers the task as a lock conflict
+before a leaf run is created, naming the claiming task and run. Releasing
+the claim makes the task eligible on the next pass, subject to other gates.
+Explicit `no-diff-expected` candidates also check their declared lock surface
+against live claim holders before owner-wave admission, while publishing an
+empty reservation footprint so they hold no context locks themselves.
+Claims whose task is known to carry `no-diff-expected` hold no context lock
+in backlog admission, readiness or the owner-wave section, even when their
+frozen footprint is nonempty. Their same-task admission and write fences
+remain in force. A claim whose task metadata is unavailable retains its
+frozen surface as a conservative lock holder.
+A coordinated record update that starts work (`started`, `pulled_by` or
+`resume_readmitted` into `in-progress`) runs the ordinary footprint guard
+before its companion artifact, document and history writes, against the
+footprint the update would start on; the guard inside `update_task_history`,
+under the task lock, remains the authoritative check. A claim refusal
+therefore leaves the task's fields, status, history and artifacts unchanged,
+while a proposed task's separate approval write to `backlog` still stands
+and is named in the refusal.
+
+A record update whose only document change is attribution (`planned_by`,
+`implemented_by`) publishes it in the `update_task_history` commit, so a
+transition that names who did the work costs one bundle commit, and a refused
+transition leaves the attribution unwritten. Any other document change keeps
+its own commit ahead of the history write.
 
 ## When to reach for it
 

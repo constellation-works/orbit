@@ -2,7 +2,7 @@
 title: Orbit MCP — Vision
 owner: codex
 last_updated: 2026-10-28
-last_validated: 2026-10-28
+last_validated: 2026-11-09
 status: Draft
 feature: mcp-bridge
 doc_role: vision
@@ -17,7 +17,7 @@ related_artifacts: [ORB-11009, ORB-11008]
 # Orbit MCP — Vision
 
 Direct v1 provides local stdio, direct SSH stdio, server-side resolution,
-destination-side caller policy, one Core dispatch boundary, and audit context.
+authority selected by the destination's startup argv, one Core dispatch boundary, and audit context.
 The separately selected federated mode adds an operator-configured mux and
 host-qualified routing. Future work should preserve the direct shape and add
 complexity only for a demonstrated requirement.
@@ -49,8 +49,7 @@ normal discovery and errors.
 ## 4. Other transports
 
 SSH is appropriate while every supported remote has a shell and the same operator
-controls both ends. The TCP listener exists for socket deployments and remains
-unauthenticated, with loopback as its default; a network MCP service with remote
+controls both ends. The TCP listener exists for socket deployments and admits only a peer whose uid matches the server uid (differing, missing, ambiguous, or unreadable peer uids are refused before any read [ORB-23052]), with loopback as its default and agent authority unchanged; a network MCP service with remote
 authentication would require Orbit-owned authentication, session lifecycle,
 exposure hardening, and operational support. Do not add one merely to avoid
 launching SSH.

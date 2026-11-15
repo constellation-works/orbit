@@ -3,7 +3,7 @@
 
 use chrono::{Duration, Utc};
 use orbit_core::application::experiment::{
-    ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
+    ExperimentActor, ExperimentChange, ExperimentDefinitionInput, ExperimentReadout,
 };
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
@@ -46,7 +46,7 @@ fn large_valid_arm_weights_produce_the_expected_sample_ratio() {
                     { "name": "control", "control": true, "weight": 3_000_000_000_u64 },
                     { "name": "treatment", "weight": 3_000_000_000_u64 }
                 ])),
-                primary_metric: Some("implement_tokens".into()),
+                primary_metric: Some("total_tokens".into()),
                 ..ExperimentDefinitionInput::default()
             },
             actor.clone(),
@@ -202,7 +202,7 @@ fn expired_readout_requires_a_primary_comparison_interval() {
                         { "name": "control", "control": true },
                         { "name": "treatment" }
                     ])),
-                    primary_metric: Some("implement_tokens".into()),
+                    primary_metric: Some("total_tokens".into()),
                     min_sample: Some(100),
                     max_days: Some(1),
                     ..ExperimentDefinitionInput::default()
@@ -273,7 +273,7 @@ fn expired_readout_requires_a_primary_comparison_interval() {
         let primary = readout
             .metrics
             .iter()
-            .find(|m| m.metric == "implement_tokens")
+            .find(|m| m.metric == "total_tokens")
             .unwrap();
         assert!(primary.measured);
         let difference = &primary.differences[0].overall;
@@ -288,7 +288,7 @@ fn expired_readout_requires_a_primary_comparison_interval() {
                     .iter()
                     .any(|reason| reason.contains("treatment")
                         && reason.contains("no interval")
-                        && reason.contains("implement_tokens")),
+                        && reason.contains("total_tokens")),
                 "{}: {:?}",
                 case.name,
                 readout.verdict.reasons
@@ -315,6 +315,77 @@ fn expired_readout_requires_a_primary_comparison_interval() {
 }
 
 /// Creates a backlog task of `complexity` and enrolls it in `arm_name`.
+/// No job applies an arm's overlay to a task worked in an interactive
+/// session, so an assignment that reached review without a job run is not
+/// treated: the readout leaves it out of every estimate and counts it, while
+/// assignments not yet implemented stay analysed with open outcomes.
+#[test]
+fn readout_leaves_interactive_assignments_out_of_the_treated_population() {
+    if !super::dispatch_admission::isolated(
+        "experiment_readout::readout_leaves_interactive_assignments_out_of_the_treated_population",
+    ) {
+        return;
+    }
+    use orbit_core::application::task::TaskUpdateParams;
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[experiments]\nenabled = true\n",
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let actor = ExperimentActor {
+        actor: "readout-test".into(),
+        reason: None,
+    };
+    let experiment = runtime
+        .create_experiment(
+            "interactive-excluded",
+            ExperimentDefinitionInput {
+                arms: Some(json!([{"name":"control","control":true},{"name":"treatment"}])),
+                primary_metric: Some("first_pass_acceptance".into()),
+                ..Default::default()
+            },
+            actor.clone(),
+        )
+        .unwrap();
+    runtime
+        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        .unwrap();
+    for arm in ["control", "treatment"] {
+        enroll_arm_task(&runtime, &experiment.id, arm, TaskComplexity::Low);
+    }
+    let interactive = enroll_arm_task(&runtime, &experiment.id, "treatment", TaskComplexity::Low);
+    for status in [TaskStatus::InProgress, TaskStatus::Review] {
+        runtime
+            .force_update_task_with_identity(
+                &interactive,
+                TaskUpdateParams {
+                    status: Some(status),
+                    ..Default::default()
+                },
+                None,
+                None,
+            )
+            .unwrap();
+    }
+
+    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    assert_eq!(
+        readout.enrollment.analysed, 2,
+        "unrun assignments stay analysed"
+    );
+    assert_eq!(readout.enrollment.interactive_excluded, 1);
+    assert_eq!(
+        readout.enrollment.unreadable, 0,
+        "an excluded task is not an unreadable one"
+    );
+}
+
 fn enroll_arm_task(
     runtime: &OrbitRuntime,
     experiment_id: &str,
@@ -433,6 +504,44 @@ fn enroll_first_edit_sample(
     task_id
 }
 
+/// Records one implement invocation for `task_id` whose tool calls are
+/// `calls`, in order. `tool_calls_incomplete` marks a suffix that outgrew the
+/// output capture. Inserts made in sequence get increasing `(ts, id)`, so the
+/// first one is the task's earlier invocation.
+fn insert_implement_calls(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    job_run_id: &str,
+    calls: &[&str],
+    tool_calls_incomplete: bool,
+) {
+    runtime
+        .insert_invocation_trace_record(&InvocationInsertParams {
+            agent_execution_id: None,
+            job_run_id: job_run_id.into(),
+            account: None,
+            activity_id: "agent_implement".into(),
+            agent: "grok".into(),
+            provider: None,
+            model: None,
+            task_ids: vec![task_id.into()],
+            trace: InvocationTrace {
+                tool_calls: calls
+                    .iter()
+                    .enumerate()
+                    .map(|(index, tool_name)| ToolCallTrace {
+                        seq: index as u32 + 1,
+                        tool_name: (*tool_name).into(),
+                        ..ToolCallTrace::default()
+                    })
+                    .collect(),
+                tool_calls_incomplete,
+                ..InvocationTrace::default()
+            },
+        })
+        .unwrap();
+}
+
 /// What a first-edit case's treatment arm settles to.
 #[derive(Clone, Copy)]
 enum FirstEdit {
@@ -478,6 +587,12 @@ fn first_edit_readout_scores_the_first_implement_invocation() {
             calls: Some(&[("read", 10), ("read", 20), ("file_change", 0)]),
             terminal: true,
             expected: FirstEdit::Measured(2.0, 30.0),
+        },
+        Case {
+            name: "read-then-hashline-edit",
+            calls: Some(&[("read_file", 8), ("hashline_edit", 0)]),
+            terminal: true,
+            expected: FirstEdit::Measured(1.0, 8.0),
         },
         Case {
             name: "edit-at-first-call",
@@ -540,7 +655,7 @@ fn first_edit_readout_scores_the_first_implement_invocation() {
                         { "name": "control", "control": true },
                         { "name": "treatment" }
                     ])),
-                    primary_metric: Some("turns_before_first_edit".into()),
+                    primary_metric: Some("total_tokens".into()),
                     ..ExperimentDefinitionInput::default()
                 },
                 actor.clone(),
@@ -548,6 +663,17 @@ fn first_edit_readout_scores_the_first_implement_invocation() {
             .unwrap();
         runtime
             .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+            .unwrap();
+        runtime
+            .sqlite_store()
+            .unwrap()
+            .connection()
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE experiments SET primary_metric = 'turns_before_first_edit' WHERE id = ?1",
+                [&experiment.id],
+            )
             .unwrap();
         enroll_first_edit_sample(
             &runtime,
@@ -598,7 +724,584 @@ fn first_edit_readout_scores_the_first_implement_invocation() {
             "{}: primary observations",
             case.name
         );
+        assert_eq!(readout.verdict.state, "withheld");
+        assert!(
+            readout
+                .verdict
+                .reasons
+                .iter()
+                .any(|r| r == "primary metric `turns_before_first_edit` is step-local")
+        );
     }
+}
+
+/// [ORB-20534] Seeded implement tool-call records: an arm counts tasks, not
+/// calls, that recorded an explorer delegation under any stored name.
+#[test]
+fn readout_counts_tasks_with_a_recorded_explorer_call() {
+    if !super::dispatch_admission::isolated(
+        "experiment_readout::readout_counts_tasks_with_a_recorded_explorer_call",
+    ) {
+        return;
+    }
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[experiments]\nenabled = true\n",
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let actor = ExperimentActor {
+        actor: "readout-test".into(),
+        reason: None,
+    };
+    let experiment = runtime
+        .create_experiment(
+            "explorer-uptake",
+            ExperimentDefinitionInput {
+                arms: Some(json!([
+                    { "name": "control", "control": true },
+                    { "name": "treatment" }
+                ])),
+                primary_metric: Some("total_tokens".into()),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor.clone(),
+        )
+        .unwrap();
+    runtime
+        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        .unwrap();
+
+    let seed = |arm: &str, activity: &str, calls: &[(&str, u64)], suffix: &str| {
+        let task_id = enroll_arm_task(&runtime, &experiment.id, arm, TaskComplexity::Low);
+        runtime
+            .insert_invocation_trace_record(&InvocationInsertParams {
+                agent_execution_id: None,
+                job_run_id: format!("fixture-{task_id}-{suffix}"),
+                account: None,
+                activity_id: activity.into(),
+                agent: "codex".into(),
+                provider: None,
+                model: Some("gpt-6.1-sol".into()),
+                task_ids: vec![task_id.clone()],
+                trace: InvocationTrace {
+                    tool_calls: calls
+                        .iter()
+                        .enumerate()
+                        .map(|(seq, &(tool_name, result_bytes))| ToolCallTrace {
+                            seq: seq as u32,
+                            tool_name: tool_name.into(),
+                            result_bytes,
+                            ..ToolCallTrace::default()
+                        })
+                        .collect(),
+                    ..InvocationTrace::default()
+                },
+            })
+            .unwrap();
+        runtime.archive_task(&task_id).unwrap();
+    };
+    seed(
+        "treatment",
+        "agent_implement",
+        &[("orbit_task_show", 2), ("orbit.agent.invoke", 0)],
+        "dotted",
+    );
+    seed(
+        "treatment",
+        "agent_implement",
+        &[("orbit_agent_invoke", 4)],
+        "stored",
+    );
+    seed(
+        "treatment",
+        "agent_implement",
+        &[("mcp__orbit__orbit_agent_invoke", 0)],
+        "mcp",
+    );
+    seed(
+        "treatment",
+        "agent_implement",
+        &[("Orbit.Agent.Invoke", 0)],
+        "case",
+    );
+    seed(
+        "treatment",
+        "agent_implement",
+        &[("orbit_task_show", 3)],
+        "other-tool",
+    );
+    seed(
+        "treatment",
+        "review",
+        &[("orbit_agent_invoke", 1)],
+        "not-implement",
+    );
+    let twice = enroll_arm_task(&runtime, &experiment.id, "treatment", TaskComplexity::Low);
+    for turn in 0..2 {
+        runtime
+            .insert_invocation_trace_record(&InvocationInsertParams {
+                agent_execution_id: None,
+                job_run_id: format!("fixture-{twice}-{turn}"),
+                account: None,
+                activity_id: "agent_implement".into(),
+                agent: "codex".into(),
+                provider: None,
+                model: Some("gpt-6.1-sol".into()),
+                task_ids: vec![twice.clone()],
+                trace: InvocationTrace {
+                    tool_calls: vec![ToolCallTrace {
+                        seq: 1,
+                        tool_name: "orbit_agent_invoke".into(),
+                        result_bytes: 0,
+                        ..ToolCallTrace::default()
+                    }],
+                    ..InvocationTrace::default()
+                },
+            })
+            .unwrap();
+    }
+    runtime.archive_task(&twice).unwrap();
+    seed(
+        "treatment",
+        "implement_one",
+        &[("mcp__orbit__orbit.agent.invoke", 0)],
+        "implement-one",
+    );
+    seed(
+        "control",
+        "agent_implement",
+        &[("orbit_agent_invoke", 0)],
+        "control-yes",
+    );
+    seed("control", "agent_implement", &[], "control-no");
+
+    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let arm = |name: &str| {
+        readout
+            .arms
+            .iter()
+            .find(|arm| arm.name == name)
+            .unwrap_or_else(|| panic!("missing arm {name}"))
+    };
+    assert_eq!(readout.schema_version, 1);
+    assert_eq!(readout.enrollment.analysed, 10);
+    assert_eq!(readout.enrollment.interactive_excluded, 0);
+    assert_eq!(
+        arm("treatment").n,
+        8,
+        "every enrolled treatment task is analysed"
+    );
+    assert_eq!(
+        arm("treatment").tasks_with_explorer_call,
+        6,
+        "a non-delegation tool and a non-implement activity do not count, and two calls are one task"
+    );
+    assert_eq!(arm("control").n, 2);
+    assert_eq!(arm("control").tasks_with_explorer_call, 1);
+
+    let json = serde_json::to_value(&readout).unwrap();
+    assert_eq!(json["schema_version"], 1);
+    for (name, tasks) in [("treatment", 6), ("control", 1)] {
+        let row = json["arms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == name)
+            .unwrap();
+        assert_eq!(row["tasks_with_explorer_call"], tasks, "{name}");
+    }
+}
+
+/// [ORB-20572] An invocation whose output outgrew the capture bound keeps only
+/// the suffix of its tool calls: its surviving editor is not a measured first
+/// edit, and a missing explorer call is not a confirmed absence.
+#[test]
+fn readout_does_not_measure_or_rule_out_calls_from_a_truncated_tool_trace() {
+    if !super::dispatch_admission::isolated(
+        "experiment_readout::readout_does_not_measure_or_rule_out_calls_from_a_truncated_tool_trace",
+    ) {
+        return;
+    }
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[experiments]\nenabled = true\n",
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let actor = ExperimentActor {
+        actor: "readout-test".into(),
+        reason: None,
+    };
+    let experiment = runtime
+        .create_experiment(
+            "truncated-tool-trace",
+            ExperimentDefinitionInput {
+                arms: Some(json!([
+                    { "name": "control", "control": true },
+                    { "name": "treatment" }
+                ])),
+                primary_metric: Some("total_tokens".into()),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor.clone(),
+        )
+        .unwrap();
+    runtime
+        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        .unwrap();
+
+    let seed = |arm: &str, calls: &[&str], tool_calls_incomplete: bool| {
+        let task_id = enroll_arm_task(&runtime, &experiment.id, arm, TaskComplexity::Low);
+        insert_implement_calls(
+            &runtime,
+            &task_id,
+            &format!("fixture-{task_id}"),
+            calls,
+            tool_calls_incomplete,
+        );
+        runtime.archive_task(&task_id).unwrap();
+    };
+    // The early explorer and read were lost; only the late editor survives.
+    seed("treatment", &["hashline_edit"], true);
+    // An explorer call that survived is a call whatever else was lost.
+    seed("treatment", &["orbit.agent.invoke", "hashline_edit"], true);
+    seed("control", &["read_file", "hashline_edit"], false);
+
+    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let arm = |name: &str| readout.arms.iter().find(|arm| arm.name == name).unwrap();
+    assert_eq!(arm("treatment").tasks_with_explorer_call, 1);
+    assert_eq!(
+        arm("treatment").tasks_explorer_unobserved,
+        1,
+        "the lost early calls may have held an explorer delegation"
+    );
+    assert_eq!(arm("control").tasks_with_explorer_call, 0);
+    assert_eq!(arm("control").tasks_explorer_unobserved, 0);
+
+    let first_edit = |arm_name: &str| {
+        let metric = readout
+            .metrics
+            .iter()
+            .find(|metric| metric.metric == "turns_before_first_edit")
+            .unwrap();
+        let arm = metric.arms.iter().find(|arm| arm.arm == arm_name).unwrap();
+        (arm.estimate.n, arm.estimate.mean, arm.unmeasured)
+    };
+    assert_eq!(
+        first_edit("treatment"),
+        (0, None, 2),
+        "a suffix's surviving editor is not a measured first edit"
+    );
+    assert_eq!(first_edit("control"), (1, Some(1.0), 0));
+    assert!(
+        readout
+            .warnings
+            .iter()
+            .any(|warning| warning.kind == "tool_trace_incomplete"),
+        "{:?}",
+        readout.warnings
+    );
+}
+
+/// [ORB-20590] A truncated later invocation leaves a task's complete first
+/// edit measured: only its explorer uptake is unconfirmed. A truncated first
+/// invocation is the case whose first edit stays unmeasured, so it alone
+/// raises `tool_trace_incomplete`.
+#[test]
+fn readout_keeps_a_complete_first_edit_when_a_later_invocation_is_truncated() {
+    if !super::dispatch_admission::isolated(
+        "experiment_readout::readout_keeps_a_complete_first_edit_when_a_later_invocation_is_truncated",
+    ) {
+        return;
+    }
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[experiments]\nenabled = true\n",
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let actor = ExperimentActor {
+        actor: "readout-test".into(),
+        reason: None,
+    };
+    let experiment = runtime
+        .create_experiment(
+            "complete-first-then-truncated-retry",
+            ExperimentDefinitionInput {
+                arms: Some(json!([
+                    { "name": "control", "control": true },
+                    { "name": "treatment" }
+                ])),
+                primary_metric: Some("total_tokens".into()),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor.clone(),
+        )
+        .unwrap();
+    runtime
+        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        .unwrap();
+
+    let first_edit = |readout: &ExperimentReadout, arm_name: &str| {
+        let metric = readout
+            .metrics
+            .iter()
+            .find(|metric| metric.metric == "turns_before_first_edit")
+            .unwrap();
+        let arm = metric.arms.iter().find(|arm| arm.arm == arm_name).unwrap();
+        (arm.estimate.n, arm.estimate.mean, arm.unmeasured)
+    };
+
+    // The complete invocation is recorded first, so it is the task's first
+    // edit; the truncated retry only leaves its explorer delegation unproven.
+    let retried = enroll_arm_task(&runtime, &experiment.id, "treatment", TaskComplexity::Low);
+    insert_implement_calls(
+        &runtime,
+        &retried,
+        "retry-first",
+        &["read_file", "hashline_edit"],
+        false,
+    );
+    insert_implement_calls(&runtime, &retried, "retry-later", &["hashline_edit"], true);
+    runtime.archive_task(&retried).unwrap();
+    let control = enroll_arm_task(&runtime, &experiment.id, "control", TaskComplexity::Low);
+    insert_implement_calls(
+        &runtime,
+        &control,
+        "control",
+        &["read_file", "hashline_edit"],
+        false,
+    );
+    runtime.archive_task(&control).unwrap();
+
+    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let arm = |name: &str| readout.arms.iter().find(|arm| arm.name == name).unwrap();
+    assert_eq!(
+        first_edit(&readout, "treatment"),
+        (1, Some(1.0), 0),
+        "the complete first invocation is the measured first edit"
+    );
+    assert_eq!(first_edit(&readout, "control"), (1, Some(1.0), 0));
+    assert_eq!(arm("treatment").tasks_with_explorer_call, 0);
+    assert_eq!(
+        arm("treatment").tasks_explorer_unobserved,
+        1,
+        "the truncated retry may have held an explorer delegation"
+    );
+    assert!(
+        readout
+            .warnings
+            .iter()
+            .any(|warning| warning.kind == "explorer_trace_incomplete"),
+        "{:?}",
+        readout.warnings
+    );
+    assert!(
+        readout
+            .warnings
+            .iter()
+            .all(|warning| warning.kind != "tool_trace_incomplete"),
+        "no first edit is unmeasured in this readout: {:?}",
+        readout.warnings
+    );
+
+    // A truncated first invocation on a second task leaves that task's first
+    // edit unmeasured, while the complete task's sample is still kept.
+    let truncated = enroll_arm_task(&runtime, &experiment.id, "treatment", TaskComplexity::Low);
+    insert_implement_calls(
+        &runtime,
+        &truncated,
+        "truncated-first",
+        &["hashline_edit"],
+        true,
+    );
+    runtime.archive_task(&truncated).unwrap();
+    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    assert_eq!(
+        first_edit(&readout, "treatment"),
+        (1, Some(1.0), 1),
+        "a truncated first invocation is unmeasured; the complete one still counts"
+    );
+    assert!(
+        readout
+            .warnings
+            .iter()
+            .any(|warning| warning.kind == "tool_trace_incomplete"),
+        "{:?}",
+        readout.warnings
+    );
+}
+
+/// [ORB-20573] Exactly 100,000 newer unrelated implement invocations must
+/// not evict an enrolled task's recorded explorer call from the readout.
+#[test]
+fn readout_counts_explorer_call_beyond_workspace_invocation_scan_limit() {
+    if !super::dispatch_admission::isolated(
+        "experiment_readout::readout_counts_explorer_call_beyond_workspace_invocation_scan_limit",
+    ) {
+        return;
+    }
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[experiments]\nenabled = true\n",
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let actor = ExperimentActor {
+        actor: "readout-test".into(),
+        reason: None,
+    };
+    let experiment = runtime
+        .create_experiment(
+            "explorer-uptake-beyond-scan-limit",
+            ExperimentDefinitionInput {
+                arms: Some(json!([
+                    { "name": "control", "control": true },
+                    { "name": "treatment" }
+                ])),
+                primary_metric: Some("total_tokens".into()),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor.clone(),
+        )
+        .unwrap();
+    runtime
+        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        .unwrap();
+
+    let seed = |activity: &str, tool_name: &str, suffix: &str| {
+        let task_id = enroll_arm_task(&runtime, &experiment.id, "treatment", TaskComplexity::Low);
+        runtime
+            .insert_invocation_trace_record(&InvocationInsertParams {
+                agent_execution_id: None,
+                job_run_id: format!("explorer-cap-{task_id}-{suffix}"),
+                account: None,
+                activity_id: activity.into(),
+                agent: "codex".into(),
+                provider: None,
+                model: Some("gpt-6.1-sol".into()),
+                task_ids: vec![task_id.clone()],
+                trace: InvocationTrace {
+                    tool_calls: vec![ToolCallTrace {
+                        seq: 0,
+                        tool_name: tool_name.into(),
+                        result_bytes: 0,
+                        ..ToolCallTrace::default()
+                    }],
+                    ..InvocationTrace::default()
+                },
+            })
+            .unwrap();
+        task_id
+    };
+
+    // Counted once, however many post-assignment implement calls it made.
+    let counted = seed("agent_implement", "orbit.agent.invoke", "counted");
+    runtime
+        .insert_invocation_trace_record(&InvocationInsertParams {
+            agent_execution_id: None,
+            job_run_id: format!("explorer-cap-{counted}-counted-again"),
+            account: None,
+            activity_id: "agent_implement".into(),
+            agent: "codex".into(),
+            provider: None,
+            model: Some("gpt-6.1-sol".into()),
+            task_ids: vec![counted.clone()],
+            trace: InvocationTrace {
+                tool_calls: vec![ToolCallTrace {
+                    seq: 0,
+                    tool_name: "mcp__orbit__orbit_agent_invoke".into(),
+                    result_bytes: 0,
+                    ..ToolCallTrace::default()
+                }],
+                ..InvocationTrace::default()
+            },
+        })
+        .unwrap();
+    runtime.archive_task(&counted).unwrap();
+
+    // An explorer call recorded before assignment does not count.
+    let before_assignment = seed("agent_implement", "orbit_agent_invoke", "before-assignment");
+    let store = runtime.sqlite_store().unwrap();
+    store
+        .connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE invocations SET ts = ?1 WHERE job_run_id = ?2",
+            rusqlite::params![
+                (Utc::now() - Duration::hours(2)).to_rfc3339(),
+                format!("explorer-cap-{before_assignment}-before-assignment")
+            ],
+        )
+        .unwrap();
+    runtime.archive_task(&before_assignment).unwrap();
+
+    // An explorer call outside an implement activity does not count.
+    let review_only = seed("review", "orbit_agent_invoke", "review-only");
+    runtime.archive_task(&review_only).unwrap();
+
+    // An implement invocation without an explorer call does not count.
+    let no_explorer = seed("agent_implement", "orbit_task_show", "no-explorer");
+    runtime.archive_task(&no_explorer).unwrap();
+
+    // One bounded fixture batch: exactly the old scan limit of newer,
+    // unrelated (unlinked) implement invocations, in a transaction.
+    let newer = Utc::now() + Duration::days(1);
+    {
+        let connection = store.connection();
+        let mut connection = connection.lock().unwrap();
+        let tx = connection.transaction().unwrap();
+        tx.execute(
+            "WITH RECURSIVE fixture(n) AS (
+                VALUES(1) UNION ALL SELECT n + 1 FROM fixture WHERE n < 100000
+             ) INSERT INTO invocations(ts, workspace_id, job_run_id, activity_id, agent)
+             SELECT ?1, ?2, 'explorer-cap-unrelated-' || n, 'agent_implement', 'codex'
+             FROM fixture",
+            rusqlite::params![newer.to_rfc3339(), runtime.workspace_id().unwrap()],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+
+    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    assert_eq!(readout.enrollment.analysed, 4);
+    let treatment = readout
+        .arms
+        .iter()
+        .find(|arm| arm.name == "treatment")
+        .unwrap();
+    assert_eq!(treatment.n, 4);
+    assert_eq!(
+        treatment.tasks_with_explorer_call, 1,
+        "100,000 newer unrelated invocations must not evict the enrolled \
+         task's post-assignment implement explorer call, and it counts once"
+    );
 }
 
 #[test]
@@ -632,7 +1335,7 @@ fn first_edit_readout_excludes_a_retry_when_same_timestamp_paging_stalls() {
                     { "name": "control", "control": true },
                     { "name": "treatment" }
                 ])),
-                primary_metric: Some("turns_before_first_edit".into()),
+                primary_metric: Some("total_tokens".into()),
                 guardrails: Some(json!({ "result_bytes_before_first_edit": "+0" })),
                 min_sample: Some(1),
                 ..ExperimentDefinitionInput::default()
@@ -642,6 +1345,17 @@ fn first_edit_readout_excludes_a_retry_when_same_timestamp_paging_stalls() {
         .unwrap();
     runtime
         .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        .unwrap();
+    runtime
+        .sqlite_store()
+        .unwrap()
+        .connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE experiments SET primary_metric = 'turns_before_first_edit' WHERE id = ?1",
+            [&experiment.id],
+        )
         .unwrap();
     enroll_first_edit_sample(
         &runtime,
@@ -755,7 +1469,7 @@ fn first_edit_readout_excludes_a_retry_when_same_timestamp_paging_stalls() {
         }
     }
     assert!(incomplete.primary_observations.is_empty());
-    assert_eq!(incomplete.verdict.state, "collecting");
+    assert_eq!(incomplete.verdict.state, "withheld");
     assert!(!incomplete.verdict.horizon_reached);
     assert!(incomplete.verdict.arm.is_none());
     assert_eq!(incomplete.guardrails[0].arms[0].status, "unknown");
@@ -952,4 +1666,146 @@ fn cost_readout_excludes_partial_sums_and_identifies_estimated_tasks() {
     );
 }
 
-mod visual;
+#[test]
+fn readout_warns_when_primary_is_unmeasured_on_every_settled_task() {
+    if !super::dispatch_admission::isolated(
+        "experiment_readout::readout_warns_when_primary_is_unmeasured_on_every_settled_task",
+    ) {
+        return;
+    }
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[experiments]\nenabled = true\n",
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let actor = ExperimentActor {
+        actor: "readout-test".into(),
+        reason: None,
+    };
+    let experiment = runtime
+        .create_experiment(
+            "primary-all-unmeasured",
+            ExperimentDefinitionInput {
+                arms: Some(json!([
+                    { "name": "control", "control": true },
+                    { "name": "treatment" }
+                ])),
+                primary_metric: Some("first_pass_acceptance".into()),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor.clone(),
+        )
+        .unwrap();
+    let started = runtime
+        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        .unwrap();
+    assert_eq!(started.status, "running");
+    let start_event = started
+        .events
+        .iter()
+        .find(|event| event.kind == "started")
+        .unwrap();
+    let start_warnings = start_event.detail["warnings"].as_array().unwrap();
+    assert_eq!(start_warnings.len(), 1);
+    let start_warning = start_warnings[0].as_str().unwrap();
+    assert!(
+        start_warning.contains("first_pass_acceptance")
+            && start_warning.contains("review.timing")
+            && start_warning.contains("no enrolled task has a review gate settlement"),
+        "{start_warning}"
+    );
+
+    for arm in ["control", "treatment"] {
+        for _ in 0..2 {
+            let task_id = enroll_arm_task(&runtime, &experiment.id, arm, TaskComplexity::Low);
+            runtime.archive_task(&task_id).unwrap();
+        }
+    }
+    // A still-open task must not suppress the warning.
+    enroll_arm_task(&runtime, &experiment.id, "control", TaskComplexity::Low);
+
+    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let warning = readout
+        .warnings
+        .iter()
+        .find(|warning| warning.kind == "primary_all_unmeasured")
+        .expect("primary_all_unmeasured warning");
+    assert!(
+        warning.message.contains("first_pass_acceptance")
+            && warning.message.contains("`control`: 2")
+            && warning.message.contains("`treatment`: 2")
+            && warning
+                .message
+                .contains("no enrolled task has a review gate settlement"),
+        "{}",
+        warning.message
+    );
+    let repairs = readout
+        .metrics
+        .iter()
+        .find(|metric| metric.metric == "review_repairs")
+        .unwrap();
+    for arm in &repairs.arms {
+        assert_eq!(arm.estimate.n, 0, "{}", arm.arm);
+        assert_eq!(arm.unmeasured, 2, "{}", arm.arm);
+    }
+    let primary = readout
+        .metrics
+        .iter()
+        .find(|metric| metric.metric == "first_pass_acceptance")
+        .unwrap();
+    for arm in &primary.arms {
+        assert_eq!(arm.estimate.n, 0, "{}", arm.arm);
+        assert_eq!(arm.unmeasured, 2, "{}", arm.arm);
+    }
+
+    // A task with a review gate settlement is measured (zero repairs for an
+    // `accept`), and one measured primary outcome silences the warning.
+    use orbit_core::application::task::TaskUpdateParams;
+    let settled = enroll_arm_task(&runtime, &experiment.id, "control", TaskComplexity::Low);
+    runtime
+        .force_update_task_with_identity(
+            &settled,
+            TaskUpdateParams {
+                comment: Some(
+                    "before-landing review settled attempt `attempt-1`: verdict **accept**".into(),
+                ),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    runtime.archive_task(&settled).unwrap();
+    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    assert!(
+        !readout
+            .warnings
+            .iter()
+            .any(|warning| warning.kind == "primary_all_unmeasured"),
+        "a measured primary outcome in one active arm silences the warning"
+    );
+    let repairs = readout
+        .metrics
+        .iter()
+        .find(|metric| metric.metric == "review_repairs")
+        .unwrap();
+    let control = repairs
+        .arms
+        .iter()
+        .find(|arm| arm.arm == "control")
+        .unwrap();
+    assert_eq!(control.estimate.n, 1);
+    assert_eq!(control.estimate.mean, Some(0.0));
+    assert_eq!(control.unmeasured, 2);
+}
+
+mod delivery;
+mod per_line;
+mod shadow_memory;

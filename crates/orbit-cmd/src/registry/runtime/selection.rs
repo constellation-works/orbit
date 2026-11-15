@@ -1,3 +1,7 @@
+use std::sync::Arc;
+
+use orbit_types::identity::{MACHINE_ID_PREFIX, WORKSPACE_ID_PREFIX};
+
 use super::*;
 
 pub(crate) fn retry_pipeline_worker_bootstrap<T>(
@@ -34,17 +38,24 @@ pub(super) fn load_registry_for_selector_resolution(
 
 /// The host data directory a registry lookup reads: the `--root` override when
 /// one was passed, the trusted managed registry locator for a managed child,
-/// and `~/.orbit` otherwise. Never derived from cwd, so a registry-first
-/// command works from any directory.
+/// and `~/.orbit` otherwise. A relative `--root` is joined to the process
+/// current directory, as workspace root resolution does, so the same relative
+/// path names a different registry from each directory. An absolute `--root`,
+/// the managed locator and the `~/.orbit` default are not derived from cwd, so
+/// a registry-first command resolves them from any directory.
 ///
 /// This is the single answer to "which registry does `--root` select?", shared
 /// by every root-aware surface — including the dashboard, which used to load
 /// the machine-global registry unconditionally (ORB-11388).
 pub fn global_root_for(root_override: Option<&Path>) -> Result<PathBuf, OrbitError> {
-    match root_override {
-        Some(root) => Ok(root.to_path_buf()),
+    let root = match root_override {
+        Some(root) if root.is_absolute() => Ok(root.to_path_buf()),
+        Some(root) => std::env::current_dir()
+            .map(|cwd| cwd.join(root))
+            .map_err(|error| OrbitError::Io(error.to_string())),
         None => orbit_core::runtime::resolve_global_root(),
-    }
+    }?;
+    Ok(orbit_core::runtime::resolve_existing_root_traversal(root))
 }
 
 pub(super) enum CliWorkspaceTarget<'a> {
@@ -129,7 +140,10 @@ fn local_workspace_selector<'a>(
     let Some((host, workspace)) = selector.split_once('/') else {
         return Ok(selector);
     };
-    if !host.starts_with("hm_") || !workspace.starts_with("ws_") || workspace.contains('/') {
+    if !host.starts_with(MACHINE_ID_PREFIX)
+        || !workspace.starts_with(WORKSPACE_ID_PREFIX)
+        || workspace.contains('/')
+    {
         return Ok(selector);
     }
     if local_machine_id == Some(host) {
@@ -389,7 +403,7 @@ pub(super) fn normalize_path(path: &Path) -> PathBuf {
 
 pub(super) fn unsupported_cli_workspace(selector: &str) -> OrbitError {
     OrbitError::InvalidInput(format!(
-        "unknown workspace selector '{selector}'; pass a registered workspace name, a logical workspace ID, or an absolute local checkout path"
+        "unknown workspace selector '{selector}'; run `orbit workspace list` to see registered workspaces, then pass a registered workspace name, a logical workspace ID, or an absolute local checkout path"
     ))
 }
 
@@ -434,21 +448,56 @@ impl RuntimeOpenInputs {
     }
 }
 
-/// Project the machine-owned task namespace into the neutral task allocator
-/// for a caller that already classified the identity. Custom/legacy roots
-/// without a `[machine]` table retain the historical default; a present
-/// identity must agree with the ids already minted locally.
-pub(super) fn sync_task_prefix_for_identity(
-    global_root: &Path,
-    identity: &MachineIdentityState,
-) -> Result<(), OrbitError> {
-    let task_prefix = match identity {
-        MachineIdentityState::Present(identity) => identity.task_prefix.clone(),
-        MachineIdentityState::Absent => return Ok(()),
-    };
+/// The task prefix a present machine identity projects onto the allocator.
+///
+/// Absent identity leaves the allocator prefix untouched. Callers hand this
+/// to the writable runtime build, which applies it on the `TaskRegistryStore`
+/// that build already opens. This does not open a store: a separate open
+/// only to project the prefix duplicated that one. A present identity must
+/// still agree with ids already minted locally; that check now fails the
+/// runtime open instead of a store open that ran before it.
+pub(super) fn sync_task_prefix_for_identity(identity: &MachineIdentityState) -> Option<&str> {
+    match identity {
+        MachineIdentityState::Present(identity) => Some(identity.task_prefix.as_str()),
+        MachineIdentityState::Absent => None,
+    }
+}
 
-    let registry = TaskRegistryStore::open(&task_registry_path(global_root))?;
-    registry.set_task_prefix(&task_prefix)
+/// Identity and workspace registry a runtime open already loaded.
+///
+/// The kernel stores this opaquely. Registry-owning callers downcast it
+/// instead of reading `config.toml` and `workspaces.json` again.
+#[derive(Clone)]
+pub(crate) struct OpenedSelectorInputs {
+    pub(crate) identity: MachineIdentityState,
+    pub(crate) registry: WorkspaceRegistry,
+}
+
+/// The selector inputs [`attach_registry_context`] stored, when this open had them.
+pub(crate) fn opened_selector_inputs(runtime: &OrbitRuntime) -> Option<&OpenedSelectorInputs> {
+    runtime
+        .composition_snapshot()
+        .and_then(|snapshot| snapshot.downcast_ref::<OpenedSelectorInputs>())
+}
+
+/// Identity and registry for a CLI tool bind.
+///
+/// A runtime this process already opened carries both. Cloning that snapshot
+/// does not re-read `workspaces.json` or `config.toml`. A runtime opened
+/// without the snapshot still reads both files.
+pub(super) fn cli_tool_bind_inputs(
+    runtime: &OrbitRuntime,
+) -> Result<(MachineIdentityState, WorkspaceRegistry), OrbitError> {
+    if let Some(opened) = opened_selector_inputs(runtime) {
+        return Ok((opened.identity.clone(), opened.registry.clone()));
+    }
+    let global_root = runtime.global_root();
+    let identity = inspect_machine_identity(&global_root)?;
+    let registry = load_registry_for_selector_resolution(
+        &workspace_registry::registry_path_for(&global_root),
+        &identity,
+    )?;
+    Ok((identity, registry))
 }
 
 pub(super) fn replica_owner_for_checkout(checkout: &WorkspaceCheckout) -> Option<String> {
@@ -586,6 +635,7 @@ pub(super) fn attach_registry_context(
     runtime: OrbitRuntime,
     global_root: &Path,
     identity: &MachineIdentityState,
+    registry: Option<&WorkspaceRegistry>,
 ) -> OrbitRuntime {
     let location = identity
         .id()
@@ -593,10 +643,14 @@ pub(super) fn attach_registry_context(
             machine_id: machine_id.to_string(),
             machine_name: identity.name().map(ToOwned::to_owned),
         });
-    let runtime = attach_workspace_catalog(
-        runtime.with_automation_execution_location(location),
-        global_root,
-    );
+    let mut runtime = runtime.with_automation_execution_location(location);
+    if let Some(registry) = registry {
+        runtime = runtime.with_composition_snapshot(Arc::new(OpenedSelectorInputs {
+            identity: identity.clone(),
+            registry: registry.clone(),
+        }));
+    }
+    let runtime = attach_workspace_catalog(runtime, global_root);
     // Creation-time crew draws on an owner may count a crew as runnable
     // when a host serving this workspace can run it, so declare the
     // registered hosts with their recorded operating systems, by machine
@@ -606,7 +660,8 @@ pub(super) fn attach_registry_context(
     // file leaves the list empty, which is exactly the single-host draw
     // behaviour, and never fails the open. Entries registered before
     // discovery reported an OS contribute nothing until re-added.
-    let registered = orbit_registry::hosts::load_host_registry(global_root)
+    // The caller already classified this machine; do not parse config.toml again.
+    let registered = orbit_registry::hosts::load_host_registry_with_identity(global_root, identity)
         .map(|registry| {
             registry
                 .hosts()

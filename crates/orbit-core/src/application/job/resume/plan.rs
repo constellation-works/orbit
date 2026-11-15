@@ -5,7 +5,9 @@ use orbit_store::contracts::JobRunQuery;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::activity_job::run_input_declares_trusted_host;
-use orbit_types::workflow::{DeliveryRefusal, JobRun, JobRunState, JobV2, PipelineState};
+use orbit_types::workflow::{
+    DeliveryRefusal, JobRun, JobRunState, JobV2, PipelineState, is_operator_stopped,
+};
 use serde_json::Value;
 
 use super::binding::{
@@ -192,8 +194,8 @@ impl OrbitRuntime {
         {
             return Err(OrbitError::JobValidation(format!(
                 "job run '{source_run_id}' was an operator-admitted trusted host invocation and \
-                 cannot be resumed; its admission covered that invocation only. Submit a new \
-                 `orbit.agent.invoke` to authorize another one"
+                 cannot be resumed; its admission covered that invocation only. Use \
+                 a task workflow instead"
             )));
         }
         // [ORB-14617] A run held because the forge refused its push resumes
@@ -209,7 +211,58 @@ impl OrbitRuntime {
                 || self
                     .read_run_state(&source.run_id)?
                     .is_some_and(|state| state.pull_drain.forge_hold.is_some()));
+        // Completion can safely re-observe the PR after a failed-job log
+        // became unreadable. The typed refusal also covers throttled reads;
+        // a fresh completion still enforces its head and evidence checks.
+        // Finalization records the refusal on a Job diagnostic, whose target
+        // is the job id rather than the completion activity or step id.
+        let check_evidence_held = source.state == JobRunState::Held
+            && source
+                .steps
+                .last()
+                .and_then(|step| step.error_code.as_deref())
+                == Some(DeliveryRefusal::CheckEvidenceInconclusive.error_code());
+        // A moving-base yield is resumable through the same certified
+        // checkpoints; recovery attempts are scoped to the new run.
+        let base_chase_held = source.state == JobRunState::Held
+            && source
+                .steps
+                .last()
+                .and_then(|step| step.error_code.as_deref())
+                == Some(DeliveryRefusal::BaseChaseExhausted.error_code());
+        // [ORB-23003] A delivery that succeeded at review handed its pull
+        // request to nobody: no completion step ran, so a red or conflicting
+        // PR it left is repaired by rewinding it to that step, exactly as a
+        // stopped delivery is. Only the completion-repair route admits it; a
+        // generic resume of a succeeded run stays refused.
+        let review_handoff = repair.is_some() && source.state == JobRunState::Success;
+        // [ORB-23809] A delivery held on a refusal a fresh forge read can
+        // clear is handed back to its completion step the same way, through
+        // the completion-repair route only.
+        let held_handback = repair.is_some()
+            && source.state == JobRunState::Held
+            && source
+                .steps
+                .last()
+                .and_then(|step| step.error_code.as_deref())
+                .and_then(DeliveryRefusal::from_error_code)
+                .is_some_and(crate::application::job::pr_repair::handed_back_hold);
+        // A host-manager stop is held, and the interruption note tells the
+        // operator to resume it. The alive-owner guard below covers it too:
+        // an observer writes the hold, the same way it writes `interrupted`.
+        let operator_stopped = is_operator_stopped(
+            source.state,
+            source
+                .steps
+                .last()
+                .and_then(|step| step.error_code.as_deref()),
+        );
         if !forge_held
+            && !check_evidence_held
+            && !base_chase_held
+            && !review_handoff
+            && !held_handback
+            && !operator_stopped
             && !matches!(
                 source.state,
                 JobRunState::Interrupted | JobRunState::Failed | JobRunState::Timeout
@@ -217,7 +270,9 @@ impl OrbitRuntime {
         {
             return Err(OrbitError::JobValidation(format!(
                 "job run '{}' is {} — resume requires an interrupted, failed, or timed-out run, \
-                 or one held because the forge refused its push or could not be read",
+                 one held because the host manager stopped its worker, or one held because the \
+                 forge refused its push, could not be read, check evidence was inconclusive, \
+                 or the base chase exhausted",
                 source_run_id, source.state
             )));
         }
@@ -243,7 +298,7 @@ impl OrbitRuntime {
         // *confirmed*-alive owner, so an unprobeable one (foreign PID
         // namespace, non-Unix) does not make a legitimately dead run
         // unresumable.
-        if source.state == JobRunState::Interrupted
+        if (source.state == JobRunState::Interrupted || operator_stopped)
             && run_owner_liveness(&source) == RunOwnerLiveness::Alive
         {
             return Err(OrbitError::JobValidation(format!(
@@ -262,11 +317,16 @@ impl OrbitRuntime {
             .input
             .clone()
             .unwrap_or_else(|| Value::Object(Default::default()));
+        // [ORB-20158] An auto-task run's checkpoint is kept even before any
+        // step succeeded: it carries the frozen definitions, the admission
+        // time and deadline, task bindings and succeeded branches, which a
+        // resume must preserve rather than remint or reset.
         let mut resume_state = self.read_run_state(&source.run_id)?.filter(|state| {
-            state
-                .step_states
-                .values()
-                .any(|step_state| *step_state == JobRunState::Success)
+            state.auto_task.is_some()
+                || state
+                    .step_states
+                    .values()
+                    .any(|step_state| *step_state == JobRunState::Success)
         });
         // [ORB-13559] A direct-YAML run already pinned its definition. Requiring
         // a catalog asset here would refuse a resume after the source file is

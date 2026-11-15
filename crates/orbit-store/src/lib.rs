@@ -3,6 +3,10 @@
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(
+    not(any(test, feature = "test-support")),
+    deny(clippy::disallowed_methods)
+)]
 //! Persistence contracts and storage composition for Orbit.
 //!
 //! File and SQLite drivers stay behind repositories and composition boundaries.
@@ -17,7 +21,6 @@ mod driver;
 mod fs;
 pub(crate) mod json_schema;
 mod repository;
-pub(crate) mod scope;
 pub mod workflow;
 
 /// Operator-only SQLite and coordination-registry access. Ordinary consumers
@@ -65,14 +68,14 @@ pub(crate) use contracts::{
 };
 pub use contracts::{
     ActivityInvocationCount, ActivityInvocationMetrics, AuditEventFilter, AuditEventInsertParams,
-    AuditToolAggregate, InvocationInsertParams, InvocationQuery, InvocationRecord,
-    InvocationRunCoverage, JobRunOutcomeFact, JobRunStepParams, RegisteredTaskResolution,
-    RoutineFireIntentParams, RoutineFireRecord, RoutineFireState, SessionLogAppendParams,
-    SessionLogEntry, SessionLogKind, TaskArtifactUpdateParams, TaskCompletionByComplexity,
-    TaskCreateParams, TaskDefectFiling, TaskInvocationMetrics, TaskLockConflict, TaskLockHolder,
-    TaskReservationReleaseReason, TaskReservationReserveParams, TaskStoreBackend,
-    TaskTerminalTransition, ToolInvocationMetrics, V2AuditEventFilter, V2AuditEventInsertParams,
-    V2AuditEventRow,
+    AuditToolAggregate, AuditToolModelAggregate, InvocationInsertParams, InvocationQuery,
+    InvocationRecord, InvocationRunCoverage, JobRunOutcomeFact, JobRunStepParams,
+    RegisteredTaskResolution, RoutineFireIntentParams, RoutineFireRecord, RoutineFireState,
+    SessionLogAppendParams, SessionLogEntry, SessionLogKind, TaskArtifactUpdateParams,
+    TaskCompletionByComplexity, TaskCreateParams, TaskDefectFiling, TaskInvocationMetrics,
+    TaskLockConflict, TaskLockHolder, TaskReservationReleaseReason, TaskReservationReserveParams,
+    TaskStoreBackend, TaskTerminalTransition, ToolInvocationMetrics, V2AuditEventFilter,
+    V2AuditEventInsertParams, V2AuditEventRow,
 };
 pub use driver::file::session_log_store::SessionLogStore;
 pub use driver::file::task_bundle::bundle_io::is_unpublished_stub;
@@ -90,6 +93,21 @@ pub mod test_support {
     pub use crate::repository::task::coordination::fallback_hook::with_repair_owner_fallback_elapsed;
     pub use crate::repository::task::coordination::lock_timeout_hook::with_task_commit_lock_timeout;
     pub use crate::repository::task::coordination::task_write_hold_hook::with_task_commit_write_hold;
+
+    /// Canonical (artifact-hashing) task-bundle reads on this thread.
+    pub fn canonical_bundle_reads() -> u64 {
+        crate::repository::task::v2_bundle::CANONICAL_BUNDLE_READS.with(std::cell::Cell::get)
+    }
+
+    /// Lightweight task-bundle reads on this thread, listing or by id.
+    pub fn lightweight_bundle_reads() -> u64 {
+        crate::repository::task::v2_bundle::LIGHTWEIGHT_BUNDLE_READS.with(std::cell::Cell::get)
+    }
+
+    /// Listing-path task-bundle reads on this thread.
+    pub fn listing_bundle_reads() -> u64 {
+        crate::repository::task::v2_bundle::LISTING_BUNDLE_READS.with(std::cell::Cell::get)
+    }
 }
 
 pub(crate) fn parse_timestamp(raw: &str) -> rusqlite::Result<DateTime<Utc>> {

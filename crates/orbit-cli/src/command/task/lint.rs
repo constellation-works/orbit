@@ -110,7 +110,7 @@ fn sweep_text(payload: &Value, restore_pruned: bool) -> String {
         }
         lines.push(format!("{}: {}", string(entry, "id"), notes.join("; ")));
     }
-    let total_restored = payload
+    let total_restorable = payload
         .get("total_restorable")
         .and_then(Value::as_u64)
         .unwrap_or_default();
@@ -120,11 +120,11 @@ fn sweep_text(payload: &Value, restore_pruned: bool) -> String {
         "would restore"
     };
     lines.push(format!(
-        "\n{action} {total_restored} recorded entr{} across {} task(s).",
-        if total_restored == 1 { "y" } else { "ies" },
+        "\n{action} {total_restorable} recorded entr{} across {} task(s).",
+        if total_restorable == 1 { "y" } else { "ies" },
         tasks.len()
     ));
-    if !restore_pruned {
+    if !restore_pruned && total_restorable > 0 {
         lines.push("Re-run with --restore-pruned to apply.".to_string());
     }
     lines.join("\n")

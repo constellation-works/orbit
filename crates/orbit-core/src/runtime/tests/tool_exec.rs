@@ -55,6 +55,89 @@ fn root_resolution_uses_owned_inspection_slot_and_rejects_planted_checkouts() {
     }
 }
 
+/// A failed first git probe must not poison the checkout for the process:
+/// after git recovers, the same process resolves the owned inspection slot,
+/// and the verified root is then memoised with no further git spawns.
+#[cfg(unix)]
+#[test]
+fn failed_first_checkout_probe_recovers_to_inspection_slot_in_same_process() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &failed_first_checkout_probe_recovers_to_inspection_slot_in_same_process,
+    )) {
+        return;
+    }
+    let fixture = GitRuntimeFixture::new();
+    let repo_root = canonical(&fixture.repo_root);
+    let revision = git_stdout(&repo_root, &["rev-parse", "HEAD"]);
+    let pool = repo_root.join(".orbit/state/source-inspections-v1");
+    let slot = inspection_slot(&pool.join("0"), &repo_root.join(".git"), &revision);
+    let count = install_fail_first_git(fixture._root.path());
+
+    assert_eq!(
+        resolved_root(&fixture.runtime, &slot),
+        Some(repo_root.clone()),
+        "a failed first probe falls back to the registered root"
+    );
+    assert_eq!(
+        resolved_root(&fixture.runtime, &slot),
+        Some(slot.clone()),
+        "recovery in the same process must resolve the inspection checkout"
+    );
+    std::fs::write(&count, "").expect("reset git spawn count");
+    assert_eq!(resolved_root(&fixture.runtime, &slot), Some(slot));
+    assert_eq!(
+        std::fs::read_to_string(&count)
+            .map(|text| text.lines().count())
+            .unwrap_or(0),
+        0,
+        "a memoised successful resolution must not spawn git"
+    );
+}
+
+/// Install a `git` shim first on PATH that fails its first spawn, counts
+/// every spawn, and delegates later spawns to the real git.
+#[cfg(unix)]
+fn install_fail_first_git(root: &Path) -> PathBuf {
+    let real_git = std::env::var_os("PATH")
+        .and_then(|paths| {
+            std::env::split_paths(&paths).find_map(|dir| {
+                let candidate = dir.join("git");
+                candidate.is_file().then_some(candidate)
+            })
+        })
+        .expect("real git on PATH");
+    let shim_dir = root.join("fail-first-git-shim");
+    std::fs::create_dir_all(&shim_dir).expect("shim dir");
+    let count = root.join("fail-first-git-spawns");
+    std::fs::write(&count, "").expect("count file");
+    let failed = root.join("fail-first-git-failed");
+    let shim = format!(
+        "#!/bin/sh\nprintf 'x\\n' >> '{}'\nif [ ! -e '{}' ]; then : > '{}'; echo injected-probe-failure >&2; exit 128; fi\nexec '{}' \"$@\"\n",
+        count.display(),
+        failed.display(),
+        failed.display(),
+        real_git.display()
+    );
+    let shim_path = shim_dir.join("git");
+    std::fs::write(&shim_path, shim).expect("shim");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&shim_path, std::fs::Permissions::from_mode(0o755))
+            .expect("shim permissions");
+    }
+    let mut paths = vec![shim_dir];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    // SAFETY: this test runs in an isolated child process (see
+    // `run_isolated_test`) executing exactly one test, so no other thread
+    // observes the PATH change.
+    unsafe {
+        std::env::set_var("PATH", std::env::join_paths(paths).expect("join PATH"));
+    }
+    count
+}
+
 fn resolved_root(runtime: &OrbitRuntime, cwd: &Path) -> Option<PathBuf> {
     let mut context = cwd_context(cwd, None, None);
     populate_filesystem_policy_context(runtime, &mut context).expect("populate context");

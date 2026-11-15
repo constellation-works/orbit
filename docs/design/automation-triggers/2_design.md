@@ -1,8 +1,8 @@
 ---
 title: Automation Triggers — Design
 owner: codex
-last_updated: 2026-10-30
-last_validated: 2026-10-29
+last_updated: 2026-11-15
+last_validated: 2026-11-15
 status: Draft
 feature: automation-triggers
 doc_role: design
@@ -59,13 +59,15 @@ A definition has one typed trigger and one action. Supported candidate variants:
 | `cron` / `interval` | One UTC slot identity; missed slots collapse or skip according to explicit policy. | Accepted action outcome; legacy definitions keep legacy semantics. |
 | `deliveries_landed` | Oldest uncovered verified deliveries reach `threshold`, or nonempty pending work reaches `max_wait_minutes`. | Validated coverage of the captured delivery/range obligations. |
 | `condition` | Due on a subject edge (true for `for_minutes`, held until `rearm`), owner only, under a durable fire identity. | Durable condition state per consumer; `orbit automation explain` shows arm state, holds, stalls and fires. |
-| `preparation_eligible` | Proposed/backlog task has no fresh assessment for its material fingerprint. | Per-task accepted assessment, including an unready verdict. |
+| `preparation_eligible` | Proposed/backlog task has never had an applied pilot assessment. | Per-task accepted assessment, including an unready verdict. |
 | `execution_failed` | Retired (see §7): still parses, no shipped target job. | None. |
-| `finding_unverified` | Review-filed bug finding in proposed/someday/backlog has no CONFIRMED verdict for its current material ([finding-verification](../finding-verification/2_design.md)). | Per-task recorded verdict. |
-| `pilot_warnings_held` | Proposed task whose latest applied task-pilot assessment holds promotion on warning findings, with no trusted operator decision and no triage marker for that assessment ([§6.1](#61-pilot-warning-holds-pilot_warnings_held)). | Per-assessment `pilot_warning_triaged` marker. |
-| `block_escalated` | Blocked task whose current block episode final recovery escalated, or that has no decision past the backstop's 72 hours, with no human touch and no triage marker since the block ([§6.2](#62-escalated-blocks-block_escalated)). | Per-episode `blocked_task_triaged` marker. |
+| `finding_unverified` | Retired [ORB-22844]: still parses, observes nothing, and the loader skips a routine that uses it ([archived finding verification](../_archived/finding-verification/2_design.md)). | None. |
+| `pilot_warnings_held` | Retired [ORB-22844] ([§6.1](#61-pilot-warning-holds-pilot_warnings_held)): still parses, and the loader skips a routine that uses it. | None. |
+| `block_escalated` | Retired ([§6.2](#62-retired-escalated-blocks-block_escalated)): still parses on a persisted definition, but the loader skips a routine that uses it. | None. |
 
-The last five are the state-transition/eligibility vocabulary. They are not
+The last five are the state-transition/eligibility vocabulary; only
+`preparation_eligible` (with `resident_due`, [resident orchestrator](../resident-orchestrator/2_design.md))
+still schedules work. They are not
 arbitrary `on status = ...` subscriptions: a human block or routine metadata
 change must not invoke a model. Evaluation returns a stable reason code, such as
 `not_due`, `threshold_reached`, `debouncing` or `fresh_unready`, with source
@@ -212,7 +214,7 @@ and consumed as `excluded` state and batch `exclusions`; see
 ## 4. Observation, dispatch, and successful coverage
 
 Keyed task mint retries return the existing task without appending creation
-crew provenance or emitting another `TaskAdded` session event. They preserve
+crew provenance. They preserve
 the task's current crew and revision, including operator changes after minting.
 A durable key reservation whose bundle has not yet been published still counts
 as a new creation when recovery publishes it; replay is determined under the
@@ -335,9 +337,17 @@ long enough to reject replay; missing state is a diagnostic, not a fresh baselin
 
 Observe proposed/backlog tasks authorized for preparation. No-diff tasks retain
 the current exclusion unless an explicitly supported preparation contract needs
-them. Missing selectors are one reason to prepare, not the general definition of
-staleness. Tasks in progress, review, terminal, withdrawn, or human-blocked are
-not automatic pilot candidates. Preparing proposed work does not approve it.
+them. Missing selectors are one reason for a first assessment. Description or
+acceptance-criteria edits after an assessment queue a fresh automatic pilot
+when no live execution claim or unresolved failed pilot holds the task. Other
+material or policy changes never request another automatic pilot through the
+routine. An `--approve-proposed` drain repilots a stale assessment automatically
+when its certified description/criteria or other material drifted; scheduled
+discovery does so only when its certified description/criteria drifted. Both
+require that no live execution claim or unresolved failed pilot holds the task.
+Tasks in progress, review, terminal, withdrawn, or
+human-blocked are not automatic pilot candidates. Preparing proposed work does
+not approve it.
 
 A material fingerprint (`material_v2`) covers the pilot contract version, the
 eligibility verdict, and the task inputs the consumer's resolved freshness names
@@ -347,8 +357,10 @@ resolved model/provider, required tools, type, complexity, relations, dependency
 evidence and repository instructions are opt-in fields, and the pinned
 integration revision is recorded as evidence but is material only under
 `source_sensitivity: context_files` (a commit touched a selector path) or `any`
-(every head move). `material_v1` hashed all of them and treated any head move
-as stale, so every merge re-piloted every assessed task. Resolve dependency
+(every head move). The retired pre-2026-09-27 contract hashed all of them and
+treated any head move as stale, so every merge re-piloted every assessed task.
+An assessment accepted under that contract is piloted again; it is not compared
+against the old hash. Resolve dependency
 evidence, not raw done statuses, when it is opted in. Priority-only edits
 reorder candidates; comments, summaries, timestamps, run linkage and
 instrumentation never invalidate. Proposed/backlog share an eligibility class
@@ -389,19 +401,65 @@ field such as dependencies, crew, instructions or source — when preparation
 recorded the component. Stable ordering by oldest pending time then task ID
 prevents repeatedly edited work from starving other tasks.
 
+Pilot audits live in task artifacts `pilot/assessment-<operation-id>.json`.
+The single-line receipt comment carries the summary, artifact path and digest;
+readers resolve that reference and retain the legacy inline-JSON fallback.
+See [Task pilot — assessment persistence](../task-pilot/1_scope.md) for write
+ordering, evidence integrity and the mixed-version follower bridge.
+
 The prepare/apply domain boundary recomputes fingerprints and eligibility under
 task locks. Accepted selectors/assessment fields written by that same apply are
 part of the certified *post-apply* fingerprint, with the pre-apply fingerprint
 retained for audit. A preparation routine also reuses the latest atomic task
-receipt when its certified post-apply fingerprint matches that consumer's
-current fingerprint, including evidence from an explicit pilot. Matching
-evidence reports `fresh` or `fresh_unready` without another provider run,
-preparation hold or a new consumer-local receipt. The fingerprint must match
-under the consumer's resolved material fields, source sensitivity and
-eligibility policy; missing markers or a different contract require normal
-preparation. Active pilots still withhold their tasks before this reuse check,
-and explicit task selections can deliberately request another assessment. Accepted writes do not invalidate their own
-assessment; external material edits still do.
+receipt as evidence that the task has already been piloted, including an
+unready verdict and evidence from an explicit pilot. Routine windows report
+`fresh` or `fresh_unready` without another provider run or consumer-local
+receipt. Description/criteria edits renew automatic preparation eligibility for
+proposed and backlog tasks without an applied assessment. For tasks with an
+applied assessment, this scheduling reuse is independent of dispatch freshness:
+a description or acceptance-criteria edit queues a fresh automatic routine
+pilot when no live execution claim or unresolved failed pilot holds the task,
+and other material or policy edits do not. An `--approve-proposed`
+drain still queues a fresh pilot automatically for a stale assessment whose
+certified description/criteria or other material drifted and no live execution
+claim holds it, while scheduled discovery still queues one automatically only
+for a stale assessment whose certified description/criteria drifted and no live
+execution claim holds it. Active pilots and live execution claims keep their
+holds, and failed attempts retain their retry bounds before reuse. Other
+repilots, such as one for a material or policy-only change or one held by an
+unresolved failed attempt, need an explicit operator request:
+`orbit task repilot <id>`, tool `orbit.task.recover` action `repilot`, task update `repilot: true`,
+or a decision option action `re_pilot`. The explicit legacy command
+`orbit run task-pilot <id>` remains supported. Pending/live pilot and delivery
+holders and owner authority guard explicit submission.
+
+Description or acceptance-criteria edits invalidate the assessment for delivery.
+Shared admission fails closed (`pilot_assessment_stale`) and names its remedies:
+a new assessment via `orbit task repilot <id>` (an `--approve-proposed` drain also repilots a stale assessment automatically when no live execution claim holds it), or an operator's skip with the `no-pilot` tag. It
+never silently dispatches using old requirements unless an operator explicitly
+skips with `no-pilot` [ORB-21238]. A task carrying the tag is not held by a stale
+assessment or by an ordinary receipt hold (operator validation, native OS,
+duplicate, already landed) at drain, `orbit run ship` or pull admission. A
+current host-operational hold stays: `no-pilot` is removed from that hold's
+fingerprint, and admission returns the hold before the general skip. It remains
+until an operator records `task-pilot-admission: evaluated`, `clear` or
+`approve-anyway` with evidence, the acceptance criteria are re-scoped, or a
+newer assessment supersedes it. Unverified review findings, readiness gaps,
+context locks, dependencies and delivery holds still apply, and an explicit
+repilot still works. Adding the tag to a task with a pilot receipt or a pending
+pilot is operator authority: any other writer is refused, never stripped. The
+operator's write records a `pilot_skipped` history entry naming the actor, the
+receipt and the requirements digest the write leaves. Filing a task with the
+tag keeps its first-pilot meaning, and removing it restores the gate for holds
+the tag releases. The dashboard Readiness card offers "Skip pilot" only for a
+hold the tag releases
+([decision](4_decisions.md#no-pilot-is-an-operator-skip-of-pilot-admission)).
+A `host_operational_handoff` offers re-scope and the operator decision instead,
+and does not say dispatch proceeds while that hold remains
+([narrowing](4_decisions.md#no-pilot-leaves-a-current-host-operational-hold)).
+The atomic receipt seals those requirements independently of configurable
+scheduling fingerprints. A subsequent accepted assessment (explicit, routine, or drain repilot) clears the
+stale hold. Administrative edits and promotion leave it current.
 Apply owns the prepared `context_files_before` snapshot and fills it
 into the persisted assessment; an agent need only return `context_files_after`.
 Legacy before echoes are ignored, so ordering, selector spelling, or an omitted
@@ -415,7 +473,10 @@ in `partition_decisions` and `task_outcomes`. The state consumer releases these
 members for observation and preparation under their current eligibility and
 fingerprint, without a failure record or spending retry budget. Retired or
 active tasks therefore leave the eligible set; an edited eligible task is
-prepared afresh. Invalid assessments and unresolved write failures still fail.
+prepared afresh. An apply whose unresolved tasks are all apply-rejected
+assessments (`invalid` after the targeted repair round) passes the guard as
+held regardless of its applied count; other invalid outcomes and unresolved
+write failures still fail.
 A blocked-by-decision, duplicate, or low-utility verdict is a fresh
 assessment with `ready=false`; do not rerun it every clock tick. Invalid or failed
 assessments retry within budget, then wait for material change or explicit reset.
@@ -490,33 +551,40 @@ separate grant; populated selectors or a successful wrapper are insufficient.
 
 A pilot warning finding (an unenforced prerequisite, a conflict, or a holding
 surface, utility or validation-tool warning) withholds a proposed task's
-promotion until an operator decides it. Without this trigger such a hold waits
-for someone to notice it. `pilot_warnings_held` targets
-`job:escalation_triage_pipeline` and reads each hold once:
+promotion until an operator decides it. The `pilot_warnings_held` trigger and
+its seeded `pilot_warning_triage` routine are retired [ORB-22844]: a definition
+on the kind loads as retired and names the dashboard's Triage action
+(`POST /tasks/{id}/triage`), which still runs `escalation_triage_pipeline` for
+one held task. The pipeline, decision and trust rules below are that lane's.
+The membership, exit and timing rules record how the trigger read each hold
+once:
 
 - **Membership.** A `proposed` task is a member while the shared promotion
   predicate (the one drain approvals and the CI sweep apply, and task show
   prints) finds a holding warning in its latest applied task-pilot assessment.
   A task in any other status holds nothing, so backlog tasks are never members.
   The member key is the task ID; the freshness fingerprint is the assessment
-  receipt's `operation_id`. A material edit that re-pilots into a new holding
-  assessment is a new member; one that re-pilots clean retires it.
+  receipt's `operation_id`. An explicitly requested pilot that produces a new holding
+  assessment is a new member; one that assesses clean retires it. A material
+  edit alone starts no pilot and creates no new triage member or decision.
 - **Exit.** A member leaves when an operator who is not Orbit's automation
   records a task-pilot admission decision on that assessment, when it leaves
   `proposed` (an approval to backlog included), or when a
   `pilot_warning_triaged` history marker names its `operation_id`.
-- **Timing.** The seeded `pilot_warning_triage` routine ships `enabled: false`
+- **Timing.** The seeded `pilot_warning_triage` routine shipped `enabled: false`
   with debounce 2 minutes, max-wait 10 minutes, at most 50 candidates and
-  batches of 5 that share one stored crew.
+  batches of 5 that share one stored crew, until it was retired.
 - **Pipeline.** `prepare_escalation_triage` pins the source revision,
-  re-checks each claimed member and draws one triager per task from the hard
-  tier through the finding-verifier draw, passing over the crew that wrote
-  the assessment (the pilot run's frozen draw) while the pool offers another,
-  else the inspection-capable default crew. It partitions the tasks by crew,
-  at most five per partition. `triage_escalation` then reads each hold at the
-  pinned revision. There is no apply step: members settle applied from their
-  markers, and a member the run left unmarked fails `no_triage_marker` and is
-  retried within the routine's budget.
+  re-checks each claimed member and draws one triager per task from
+  `workflow.purpose_crews.pilot_warning_triage` when it is set and holds an
+  inspection-capable member (recorded as `purpose:pilot_warning_triage`),
+  else from the hard tier, passing over
+  the crew that wrote the assessment (the pilot run's frozen draw) while the
+  pool offers another, else the inspection-capable default crew. It
+  partitions the tasks by crew, at most five per partition.
+  `triage_escalation` then reads each hold at the pinned revision. There is
+  no apply step: a task settles from its marker, and one the run left
+  unmarked fails `no_triage_marker`.
 - **Decision.** The triager calls `orbit.task.block_triage` with
   `subject: "pilot_warning"`. `candidates` lists the qualifying holds and why
   each other held task is excluded. `propose` records two or three options with
@@ -531,47 +599,31 @@ for someone to notice it. `pilot_warnings_held` targets
   verification read past the marker, so recording a triage does not re-pilot
   the task.
 
-### 6.2 Escalated blocks (`block_escalated`)
+### 6.2 Retired: escalated blocks (`block_escalated`)
 
-Final recovery, or the blocked-task backstop outside a pipeline, makes one
-decision on each block; what it escalates waits for a reader.
-`block_escalated` targets the same `job:escalation_triage_pipeline` with
-`subject: block`, so one hard-tier lane reads pilot warning holds and
-escalated blocks. It replaced the hourly `blocked-task-triage` auto-task
-([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)):
+Final recovery is the single decider for a blocked task, so there is no
+second lane that reads escalated blocks. It runs bounded mechanical steps
+(resume the run, rerun the failed CI jobs, requeue, complete a no-diff task,
+link a friction) before it escalates, the backstop tick re-checks blocked tasks
+deterministically (merged externally, base green on the failing required
+check, infrastructure cleared), and what remains gets a decision card an
+operator answers ([human decision channel](../human-decision-channel/2_design.md)).
 
-- **Membership.** A `blocked` task is a member while `triage_candidacy`, the
-  one rule `orbit.task.block_triage` also applies, qualifies its current
-  episode: final recovery escalated it, or it has no decision and is older
-  than the backstop's 72 hours; no `blocked_task_triaged` marker records it;
-  and nobody outside Orbit's automation set the block or touched the task
-  since. The member key is the task ID; the freshness fingerprint is the
-  episode (the latest transition into `blocked`, to the nanosecond), so each
-  episode is read once and a later block on the same task is a new member.
-  The time-only backstop branch is re-read on every pass, so an undecided
-  block joins once it ages past the limit. Because candidacy needs final
-  recovery's decision first, the trigger never races in-pipeline recovery.
-- **Exit.** A member leaves when its episode is triaged, when it leaves
-  `blocked` (a requeue included), or when a human touch excludes it.
-- **Timing.** The seeded `blocked_task_triage` routine ships `enabled: false`
-  with debounce 2 minutes, max-wait 10 minutes, at most 50 candidates and
-  batches of 5 that share one stored crew.
-- **Pipeline.** `prepare_escalation_triage` checks that the claim is of the
-  `block` subject, re-checks each member against the shared rule and draws
-  one hard-tier triager per task exactly as for a pilot warning, with no
-  author to pass over. `triage_escalation` branches on the subject.
-- **Decision.** The triager calls `orbit.task.block_triage` without
-  `subject`: `requeue` as a final-recovery requeue counted against the shared
-  bound (2 per 24 hours) and refused for a run another machine executed or a
-  `security`/`security-review` tag; `propose` with one options comment; or
-  `report` naming the human action. A block whose cause is an Orbit defect
-  gets one friction record and is reported. Members settle applied from the
-  `blocked_task_triaged` marker; one the run left untriaged fails
-  `no_triage_marker` and is retried within the routine's budget.
-- **Auto-task retirement.** `orbit workspace sync` retires a seeded copy of
-  the `blocked-task-triage` auto-task by its retired template's provenance,
-  preserves an operator-edited copy and reports when an enabled copy is
-  replaced. It never enables the routine.
+The `block_escalated` trigger kind and the `subject: block` claim of
+`escalation_triage_pipeline` are retired with the seeded `blocked_task_triage`
+routine and the `blocked_task_triaged` producer:
+
+- **Persisted definitions.** The kind still parses so a stored definition does
+  not fail to load. The routine loader skips a state routine that uses it as
+  retired, reporting a migration message that names final recovery, so an
+  existing `blocked-task-triage-*` routine file is inert rather than an error.
+- **Seeding.** `orbit workspace sync` removes an unedited seeded
+  `blocked_task_triage` routine, keeps an edited copy inert and never
+  re-seeds it. It likewise retires a seeded copy of the older
+  `blocked-task-triage` auto-task.
+- **Tool.** `orbit.task.block_triage` refuses `subject: block` with a message
+  naming final recovery; `pilot_warning` is the only subject left.
+- **History.** Old `blocked_task_triaged` markers and comments still render.
 
 ## 7. Retired: failed-run triage
 
@@ -664,7 +716,12 @@ Preparation eligibility includes both selector-free tasks and tasks whose
 persisted complexity remains `unassessed`. Task-pilot records the bounded
 repair's certainty, behavioral change, coupling, validation difficulty,
 rationale, confidence, evidence gaps, validation approach, and reassessment
-triggers. Its apply step commits concrete selectors, complexity, audit evidence,
+triggers. A footprint the pilot cannot establish is not a reason to return
+`unassessed`: `unassessed` means the repair cannot be identified at all. When
+an `unassessed` recommendation reaches a task that already has an assessed tier,
+apply keeps that tier and its pool and writes a `footprint_unresolved` hold
+that drain approval reports whatever the tier or selectors are [ORB-22153]. Its
+apply step commits concrete selectors, complexity, audit evidence,
 and the idempotency receipt at one task-bundle boundary. `context_files` are
 optional for admission, but empty context holds no context lock. A
 single-slot local drain, an explicit ship and owner pull admit selector-free
@@ -835,5 +892,9 @@ to change; implementation scope and defaults still require approval.
   current head and recomputes freshness. An unavailable source comparison can
   still follow ordinary-failure handling.
 - [ORB-15191] — bounds how long multi-slot admission waits for a task pilot to prepare empty-context backlog work.
+- [ORB-11314] — designed the operation-mode presets for automated preparation and delivery; the mode concept was later removed.
+- [ORB-11316] — extended the operation-mode design with review timing and repair policy; the mode concept was later removed.
+- [ORB-21238] — let an operator skip a stale pilot with the `no-pilot` tag, which admission honors even when a receipt exists.
+- [ORB-22153] — kept an assessed complexity tier when a later pilot cannot establish the footprint, recording a `footprint_unresolved` hold.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

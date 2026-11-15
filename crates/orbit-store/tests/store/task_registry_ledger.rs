@@ -1,6 +1,6 @@
 //  The task registry (`tasks/index.sqlite`) on its own versioned ledger,
 //  through the public registry open boundary.
-// 
+//
 //  - Every shipped pre-ledger shape (path-coupled bindings, v5 with or without
 //    action keys and envelope stamps, the recognized v6) adopts the ledger
 //    without losing a row, and keeps `user_version` 5.
@@ -8,7 +8,7 @@
 //    binaries, which read only `user_version` and the action-keys column.
 //  - A pre-ledger v5 registry with action keys stays readable read-only.
 //  - A newer registry is decided from its compatibility record.
-// 
+//
 //  Every test re-runs itself in a child of this binary with inherited Orbit
 //  authority cleared and a disposable `HOME`.
 
@@ -16,7 +16,11 @@ const PARTITION: &str = "ws_prior";
 
 /// The registry ledger this binary ships, as `(version, name)`. Every entry
 /// is additive, so adoption applies all of them and keeps the pre-ledger fence.
-const SHIPPED: [(u32, &str); 2] = [(1, "registry_baseline"), (2, "index_task_type")];
+const SHIPPED: [(u32, &str); 3] = [
+    (1, "registry_baseline"),
+    (2, "index_task_type"),
+    (3, "decision_snapshots"),
+];
 
 fn task_registry_ledger_isolated(test: &str) -> bool {
     const MARKER: &str = "ORBIT_TASK_REGISTRY_LEDGER_CHILD";
@@ -80,7 +84,8 @@ fn populated(root: &Path) -> PathBuf {
 fn as_pre_ledger(path: &Path, user_version: u32, action_keys: bool) {
     let conn = Connection::open(path).unwrap();
     conn.execute_batch(
-        "DROP TABLE schema_meta; DROP TABLE task_envelope_stamps;
+        "DROP TABLE task_decision_request_owners; DROP TABLE task_decision_snapshots;
+         DROP TABLE schema_meta; DROP TABLE task_envelope_stamps;
          DROP INDEX idx_task_bundle_index_workspace_type_created;
          ALTER TABLE task_bundle_index DROP COLUMN task_type;",
     )
@@ -197,7 +202,9 @@ fn assert_adopted(conn: &Connection) {
 
 #[test]
 fn every_pre_ledger_v5_shape_adopts_the_ledger_without_losing_rows() {
-    if !task_registry_ledger_isolated("every_pre_ledger_v5_shape_adopts_the_ledger_without_losing_rows") {
+    if !task_registry_ledger_isolated(
+        "every_pre_ledger_v5_shape_adopts_the_ledger_without_losing_rows",
+    ) {
         return;
     }
     for (shape, user_version_before, action_keys) in [
@@ -235,7 +242,9 @@ fn every_pre_ledger_v5_shape_adopts_the_ledger_without_losing_rows() {
 
 #[test]
 fn a_path_coupled_registry_adopts_without_cascading_into_its_children() {
-    if !task_registry_ledger_isolated("a_path_coupled_registry_adopts_without_cascading_into_its_children") {
+    if !task_registry_ledger_isolated(
+        "a_path_coupled_registry_adopts_without_cascading_into_its_children",
+    ) {
         return;
     }
     let root = std::env::current_dir().unwrap();
@@ -346,7 +355,8 @@ fn an_unrecognized_v6_is_refused_and_left_unadopted() {
 /// hold, and it never consults `schema_meta`.
 #[test]
 fn an_adopted_registry_passes_the_pre_ledger_acceptance_rules() {
-    if !task_registry_ledger_isolated("an_adopted_registry_passes_the_pre_ledger_acceptance_rules") {
+    if !task_registry_ledger_isolated("an_adopted_registry_passes_the_pre_ledger_acceptance_rules")
+    {
         return;
     }
     let root = std::env::current_dir().unwrap();
@@ -390,7 +400,9 @@ fn an_adopted_registry_passes_the_pre_ledger_acceptance_rules() {
 
 #[test]
 fn a_pre_ledger_registry_with_action_keys_stays_readable_read_only() {
-    if !task_registry_ledger_isolated("a_pre_ledger_registry_with_action_keys_stays_readable_read_only") {
+    if !task_registry_ledger_isolated(
+        "a_pre_ledger_registry_with_action_keys_stays_readable_read_only",
+    ) {
         return;
     }
     let root = std::env::current_dir().unwrap();

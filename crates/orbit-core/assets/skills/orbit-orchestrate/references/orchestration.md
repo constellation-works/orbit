@@ -5,10 +5,10 @@ when job/activity internals or a particular run command need explanation.
 
 ## Entry points
 
-Use `orbit_workflow_ship` with explicit `task_ids`, `workspace`, and attribution
+Use `orbit_workflow` action `ship` with explicit `task_ids`, `workspace`, and attribution
 when driving an authoritative MCP connection. Observe with
-`orbit_workflow_run_show/list`; resume eligible terminal work with
-`orbit_workflow_run_resume`, which returns a new linked run. These operations
+`orbit_run action show/list`; resume eligible terminal work with
+`orbit_run` action `resume`, which returns a new linked run. These operations
 require operator authority. Managed leaf runs cannot dispatch follow-up runs.
 See [tool-surface.md](../../orbit/references/tool-surface.md).
 
@@ -77,7 +77,7 @@ error and shadow decisions, and `orbit run show <drain-run-id> --json` for the
 recorded pass. For one local drain, `orbit run auto --auto-concurrency <MODE>`
 selects an explicit mode (`off`, `shadow` or `enforce`); omitting the flag
 follows `machine.auto_concurrency.mode` each admission pass. MCP
-`orbit_workflow_auto` `action: "start"` accepts the same `auto_concurrency`
+`orbit_workflow` action `auto` `mode: "start"` accepts the same `auto_concurrency`
 values. Explicit overrides and inheritance source (`explicit` or `configured`)
 survive restart/resume without writing configuration. Host thresholds and
 provider-limit policy refresh next pass; unchanged config is cached by mtime,
@@ -92,7 +92,7 @@ host thresholds, or the worker ceiling. Settings and limits:
 ## Backlog forecast
 
 The drain card's **Backlog forecast** line estimates how long the workspace's
-backlog could take to drain and what it could cost. It resamples delivery
+startable backlog could take to drain and what the full backlog could cost. It resamples delivery
 history and simulates the drain's admission behavior: dependencies, file locks,
 dispatch order, CPU and memory fit, blocked, failed and retried runs, review
 modes, and expected regression rework. The line shows p50–p90 time to drain and
@@ -100,25 +100,141 @@ estimated cost. Open **Analytics › Forecast** for token and exact-cost ranges,
 backlog and in-progress counts, assumptions, and how earlier forecasts scored
 against actual outcomes.
 
+Time to drain excludes tasks whose effective `not_before` is still in the
+future and tasks admission excludes with `no-drain`. The Forecast task table
+shows scheduled work as **starts YYYY-MM-DD**, and **Outside this drain** lists
+scheduled starts and exclusion reasons separately; the drain card summarizes
+those holds too. Their own work hours, tokens and cost remain in spending
+totals, without occupying simulated slots or extending time to drain. Their
+regression follow-up is outside this drain. Already-running tasks remain in
+the drain even if their tags or scheduled date later change. Operator schedule
+overrides are respected. A dependency on held work remains unforecastable
+until that work becomes startable or finishes. Model 19 separates these drain
+and spending populations; calibration keeps earlier model versions apart.
+
 This is separate from the `machine.auto_concurrency` forecast above. That
 admission forecast checks resource fit for the next admission and can affect
 which work proceeds when enforcement is enabled. Backlog Forecast estimates
 the whole drain's time and cost; it does not decide or change live admissions.
+Exploring scenarios or switching tabs starts, stops, prioritizes, or admits
+no work: dispatch authority stays with the ship and drain commands named in
+[Entry points](#entry-points), and admission stays with the drain's
+ceiling and readiness above.
+
+A switch above the panel picks **Backlog forecast** (this section) or
+**Resource forecast** ([below](#resource-forecast-view)). Each view reads only
+when first shown and on its own refresh, so switching never refetches the
+other. The Backlog forecast has three tabs, each with its own address.
+Switching tabs only shows another tab: it never refetches and changes nothing.
+
+- **Forecast** (`#analytics/forecast`): the totals, the scenario switch, the
+  task table in dispatch order, scheduled and excluded work with its reasons,
+  and the collapsed wait breakdown.
+- **Accuracy** (`#analytics/forecast/accuracy`): how earlier forecasts scored.
+  The calibration card compares actuals against p50 and p90 for task hours,
+  task cost, task tokens, and the whole backlog (about half of actuals under
+  p50 and nine in ten under p90 when well calibrated), with the newest earlier
+  model's task-hour score below the table. Residual charts, the stored
+  forecasts, and the method note (which tasks were sampled, since when) sit
+  behind it.
+- **Data gaps** (`#analytics/forecast/data-gaps`): one sentence on where the
+  figures stand and why, then only the coverage checks that are not zero,
+  grouped into **This backlog** and **History** cards with a count and a
+  definition behind each info icon. The tab label carries the open-check
+  count, and the header says how many other checks are clear. A collapsed
+  **Details** section holds the unavailable-forecast note with its evidence,
+  a partial-history note when historical checkpoints could not be read, and
+  the full coverage checklist of every check.
+
+The **Scenario** switch on the Forecast tab chooses which tasks the figures
+forecast:
+
+- **Current backlog** (default): the backlog and in-progress tasks, assuming
+  no new tasks arrive.
+- **With N proposed**: the same tasks with the N proposed tasks approved, from
+  the response's if-approved evidence. The time-to-drain tile notes the p50
+  change against the current backlog. The choice is disabled while no
+  proposed-work forecast exists (for example, nothing is proposed in this
+  workspace), and a proposed selection the response cannot back reads as the
+  current backlog. Under **With new arrivals** the time-to-drain tile still
+  carries the if-approved figures, since that read includes them.
+- **With new arrivals**: adds new tasks arriving at the recent rate, refetching
+  for that assumption. The info note beside the switch states the assumption
+  with the recent filing and completion rates. An arrival sample missing
+  tokens or cost leaves that simulation's total for that measure unavailable
+  (never zero); time to drain and the other measure stay independent. A
+  simulation that reaches a bound withholds its totals and points back to
+  Current backlog.
+
+Every total is one p50–p90 range: a missing percentile reads **unknown**, a
+total with neither reads **Unknown**, never zero. When the regression-adjusted
+forecast is unavailable, the tiles show the labelled pre-regression baseline
+instead, with one warning line and a **Why** link into Data gaps; with a
+proposed scenario the warning names that scenario's reason. A task that cannot
+be scheduled says why in place of its start, and unforecastable dependencies
+withhold the full totals in favor of the schedulable subset.
 
 To verify the card, use a single-workspace dashboard, open its Tasks drain card,
-then follow the forecast link to **Analytics › Forecast**. The card uses the
+then follow the forecast link to **Analytics › Forecast**. The header names the
+source: **Stored** with the snapshot's age when the default view is served from
+the newest stored snapshot, or **Live** when computed for the read (hover for
+the computation time); **Refresh** recomputes live. The card uses the
 default read: a 30-day history, no new arrivals, and the drain's leaf-run
 ceiling. The default read may be served from the newest stored snapshot while
 it is under 120 minutes old, so that ceiling is the one the drain had when the
 snapshot was stored. `refresh=1`, other inputs, or no snapshot that recent
-compute the read live, with the live ceiling. The diagnostics read is available
+compute the read live, with the live ceiling. Only this default read is stored
+and scored: the **History** select and **With new arrivals** refetch, and the
+**With N proposed** figures come from the same response's if-approved evidence
+without refetching. The switch's pressed button names the displayed scenario,
+with the proposed count in its label. The diagnostics read is available
 at `GET /api/diagnostics/backlog_forecast`; `lookback_days`, `concurrency`, and
 `arrivals=on` can change its assumptions, so omit them to compare with the
 card. The aggregate dashboard has no
 workspace-specific forecast.
 
+### Resource forecast view
+
+**Analytics › Forecast › Resource forecast**
+(`#analytics/forecast/resources`) shows the `machine.auto_concurrency`
+admission forecast that the CLI prints with `orbit run profiles`. It reads the
+same profiles and accuracy report and builds no forecast of its own. Its
+header cards show:
+
+- the mode the drain admits with (off, shadow or enforce) and its source: the
+  host's `machine.auto_concurrency.mode`, or a mode set explicitly when the
+  drain started;
+- the host's cores and memory;
+- the admit thresholds as percentages and as absolute limits;
+- the live baseline, which is the drain's newest recorded admission pass as
+  the Tasks drain card draws it, with its peaks and admit or hold decisions.
+
+It has three tabs, each with its own address:
+
+- **Profiles** (`#analytics/forecast/resources`): one row per delivery
+  profile, with its delivery count, horizon, peak CPU and memory and the
+  minute each lands, per-delivery p50/p90 peaks, spread and build-like
+  deliveries. Sparse profiles, which fall back to their base class, are
+  badged, and a filter narrows the rows to change, no-diff, auto-task or
+  sparse profiles. The per-minute curves are in **Analytics › Resources**.
+- **Accuracy** (`#analytics/forecast/resources/accuracy`): forecast error per
+  offset over the newest 5,000 host forecasts (`orbit run profiles
+  --accuracy`). It shows paired and unmeasured minutes, mean and absolute CPU
+  and memory error, the share forecast under the measured load (marked above
+  60%), and the worst CPU and memory misses with their runs.
+- **Decisions** (`#analytics/forecast/resources/decisions`): per drain run,
+  newest first, its mode, passes and admissions, the tasks enforce held, and
+  the tasks shadow would have held or added. When a drain sent pull requests,
+  their sent and held counts are shown too. Hovering a count lists its task
+  ids, and a run link opens that drain's recorded admission pass (`orbit run
+  show <run-id>`).
+
+The view is read-only. To change the mode or thresholds, use the
+`machine.auto_concurrency.*` settings in
+[configuration.md](../../orbit-setup/references/configuration.md#common-settings).
+
 That ceiling is adjustable while the drain runs. `orbit run concurrency <run-id>
---set N` (MCP: `orbit_workflow_auto` with `action: "resize"` and `concurrency`;
+--set N` (MCP: `orbit_workflow` action `auto` with `mode: "resize"` and `concurrency`;
 omit `id` to target the workspace's one live drain) records a live ceiling on the run
 itself, so **do not cancel a drain to change how many workers it uses** — that
 mints a new run id, restarts the window, and re-states the completion
@@ -149,7 +265,11 @@ for a pull drain is only after every leaf it claimed has settled.
   it has stopped admitting.
 - It is refused for a drain stopped with `--stop` or being cancelled (an
   extension never reopens one) and for a drain started without `--for`, which
-  makes a single admission pass.
+  makes a single admission pass. A pull drain is refused too once a pass has
+  closed its window with nothing left to settle: that drain is ending.
+- The run ID, its completion authorization and every task in flight are
+  preserved. `--concurrency` changes the ceiling as `orbit run concurrency
+  --set` does, so a pull drain keeps the bounded review credit above.
 - Each request is audited on the run with the old and new deadline, and
   `orbit run show` prints `Window: extended to …` (`drain_window_extension`
   in JSON). `orbit run readiness` reports the extended `ends_at`.
@@ -179,7 +299,18 @@ other admission error still fails the drain at once.
 A drain's own `State: success` says the coordinator ran, not that its leaves
 shipped: it dispatches them detached. Read the `Leaves:` line on `orbit run
 show <drain-run-id>` (JSON: `drain_summary`) for admitted / succeeded / failed
-counts. It lists each failed leaf with its `orbit job resume <leaf-run-id>`, and
+/ running / cancelled counts. A leaf whose task is in `review` because its
+newest delivery run ended `held` on a `delivery_*` refusal, or because a
+`completion.hold` rule is still current, is counted in `held_in_review`
+instead of `succeeded`. That is not a failure: `failed` does not change.
+With no such leaf the succeeded and failed counts stay as they were and the
+printed line omits `held_in_review`. When the count is above zero, the card
+prints `held_in_review=N`, a `Held in review:` breakdown (the delivery code
+or the completion-hold rule, with the task ids) and one line per held task
+naming the leaf run, the hold, the reason, the delivery run and the pull
+request. `--json` always includes `held_in_review`,
+`held_in_review_by_reason` and `held_leaves`, including zeros. The card
+lists each failed leaf with its `orbit job resume <leaf-run-id>`, and
 a `Still waiting:` block for backlog tasks the last pass never started.
 
 `--allow-crew` restricts a ship or drain to the crews you name — the lever for
@@ -292,8 +423,8 @@ names the `execution.env.pass` variables its start did not hold, and the
 snapshot names any Claude crew in its window left with no worker credential.
 JSON records these queued drains in `capacity.queued_drains`.
 
-It also names a scheduled host shutdown or reboot and its mode. Within
-`machine.host_shutdown_hold_minutes` (default 180), tasks report
+It also names a scheduled host shutdown or reboot and its mode. Within the
+fixed 180-minute hold, tasks report
 `host_shutdown_scheduled` and new unattended admissions hold; running workers
 are left alone. A later schedule is reported while admissions continue. Pull
 drains report the same hold as `Pull drain requests held:`. Report the time and
@@ -302,7 +433,7 @@ cancel the schedule or override the hold automatically. See
 [authorization.md](authorization.md#keep-authorized-work-moving).
 
 While sustained host resource pressure throttles admissions
-(`[workflow.resource_throttle]`), every task reports `resource_throttled` and
+(`[workflow.resource_throttle]`), held tasks report `resource_throttled` and
 the output names the resource, its value, threshold and since-when. Unknown
 readings never throttle; JSON lists them in
 `capacity.resource_telemetry_unknown`. On a replica the throttle is this
@@ -313,7 +444,7 @@ example `circuit_open` once three of its claims in a row settled as failures,
 until its breaker half-opens to admit one probe claim.
 
 When CPU is the only held resource, `no-diff-expected` auto-tasks (marked
-`cpu-light`) still start within the `cpu_light_leaves` reserved slots. Once
+`cpu-light`) still start within two reserved slots. Once
 those are taken they report `cpu_light_budget_full`; memory, disk or I/O
 pressure holds them too. On Linux, sustained disk I/O stall (`io full`, from
 `/proc/pressure/io`) is one of the held resources; hosts without it are not gated.
@@ -356,15 +487,6 @@ Two of its answers separate contention from capacity:
   `context_lock_conflict`. Before any agent of that run that may edit, the run
   takes the task's own footprint locks, waiting while another task holds them,
   so two writers never share a file.
-- `unverified_review_finding` means the workspace sets
-  `review.verify_findings = true` and a review-filed bug has no CONFIRMED
-  verdict for its current material. Claim and evidence-selector edits require
-  verification again; comment-only edits retain confirmation. Legacy verdicts
-  without a finding fingerprint also remain held. Run
-  `finding_verification_pipeline` on it, or change its type
-  or remove its review tag to accept it without verification, or set
-  `review.verify_findings = false` to stop gating findings; `detail` gives
-  the command.
 - `awaiting_footprint` and `awaiting_exclusive_slot` mean the task declares
   no `context_files` and has no `no-diff-expected` tag in a run with more than
   one slot. It would hold no file lock, so it waits for the task pilot, then
@@ -394,7 +516,7 @@ surface holds no context lock, so it protects no files.
 `context_files` while a drain is live.** File it `proposed`, run the pilot or
 set selectors, then promote. On 2026-10-10 three tasks filed straight into a
 live four-slot drain's backlog with no selectors were admitted together and
-all edited `website/src/styles/custom.css`; two of the runs were cancelled.
+all edited the website's then-shared stylesheet; two of the runs were cancelled.
 A drain or ship with more than one slot now treats such a task (no
 `context_files`, no `no-diff-expected` tag) as a whole-tree footprint. While
 an enabled task-pilot routine this host owns would still prepare it, the task
@@ -413,6 +535,75 @@ orbit run task-pilot <id> <id>                  # audit exactly these
 orbit run job task_pilot_pipeline --input 'task_ids=["<id>"]' --json
 ```
 
+The first pilot is automatic once for eligible tasks. Creators can add `no-pilot`
+when the footprint, complexity, testable criteria and deduplication are already
+settled; readiness still applies and an explicit pilot remains available. The routine queues a later pilot automatically only when a certified description or acceptance-criteria edit makes the applied assessment stale on a proposed or backlog task, and no live execution claim or unresolved failed pilot holds the task. Edits to other material (title, plan, selectors) or policy never queue one through the routine; every other later routine assessment requires an explicit
+request: `orbit task repilot <id>`, `orbit.task.recover` action `repilot` with `id` and the
+owning `workspace`, or `orbit task update <id> --repilot` / `orbit.task.update`
+with `repilot: true`. An `--approve-proposed` drain still queues a fresh pilot automatically when a stale explicit/routine assessment's certified description/criteria or other material drifted and no live execution claim holds the task, while scheduled discovery still queues one automatically only when its certified description/criteria drifted and no live execution claim holds the task; a failed repilot holds it until its meaning changes again or an operator acts. These operator requests submit one pending pilot and
+refuse a second request while a pilot is pending or running, while delivery
+holds the task, or on a replica. A refusal reports the same stable `code` on
+the CLI, MCP and dashboard (`task_pilot_unsupported_status`, `_human_crew`,
+`_already_running`, `_delivery_running` or `_replica_checkout`). A decision option with action `re_pilot`
+also explicitly requests one pilot; it needs no material rewrite. Existing
+`orbit run task-pilot <id>` remains an explicit assessment command.
+
+**Skipping a stale pilot.** When an operator has settled a task's edited
+requirements, admission's `pilot_assessment_stale` hold need not wait for a new
+assessment: adding `no-pilot` (the dashboard Readiness card's "Skip pilot", or
+`orbit task update <id> --tag <current tags>,no-pilot`, since `--tag` replaces
+the list) makes drain, `orbit run ship` and pull admission ignore a stale
+assessment and an ordinary receipt hold (operator validation, native OS,
+duplicate, already landed). A current host-operational hold is the exception:
+the tag does not release it, Skip pilot is not offered for
+`host_operational_handoff`, and dispatch does not proceed while that hold
+remains. Re-scope the acceptance criteria, or record an operator decision
+(`task-pilot-admission: evaluated`, `clear` or `approve-anyway`, with the
+evidence on the following lines). Readiness gaps, context locks,
+dependencies and delivery holds still apply; removing the tag restores the
+gate for the holds the tag releases. On a task with a pilot receipt or a pending pilot this is operator
+authority: a managed agent's `orbit.task.update` adding the tag is refused, and
+the operator's write records `pilot_skipped` in history with the requirements
+digest the write leaves. Never add it from a managed run to get
+past your own gate. Do not add it to get past a host-operational hold.
+
+**Re-check and full modes.** An explicit re-pilot of a task whose latest
+assessment holds promotion runs as a *re-check*. The pilot receives the prior
+assessment, its holding findings (each with an id such as `blocked_by[0]` or
+`duplicate_of`) and a field-level diff of the task since that assessment:
+title and description (with a word-overlap similarity), criteria, context
+files, tags, dependencies, relations and answered decisions. It returns a
+verdict per holding finding, `resolved`, `still_holds` or `changed` (with the
+replacement finding), plus only the fields the diff touched. Apply keeps every
+other prior field, drops resolved findings, records `mode: recheck` and
+`prior_assessment_id`, and validates it with the same source-revision proofs as
+a full assessment. A re-check missing a verdict for any holding finding goes to
+repair. A pilot that judges a re-check insufficient may return a complete
+assessment instead; it is recorded as full with `mode_reason:
+recheck_escalated`.
+
+The pilot runs a full assessment, recording why as `mode_reason`, when there
+is no held prior assessment, the operator passed `orbit task repilot <id>
+--full` (`full: true`; job input `full_pilot: true`), the prior assessment is
+older than the job input `recheck_max_age_hours` (default 72; 0 disables
+re-checks), the prior was itself a re-check, the prior receipt predates the
+recorded re-check basis, the objects at the task's selector paths changed
+between the prior and current source revisions, or the title or description
+was rewritten beyond the bounded edit threshold (word-set similarity below
+0.6) or first added. Analytics › Agents › Pilots reports `pilot_modes`: per
+mode, assessments, runs, median and total run seconds and tokens, plus
+re-checks later followed by a full pilot and the combined re-check-to-full
+rate.
+
+Certified description/criteria or other material drift makes the assessment stale for an `--approve-proposed` drain, while only certified description/criteria drift makes it stale for scheduled discovery. The drain queues a fresh pilot automatically for either kind of drift, and scheduled discovery queues one automatically only for description/criteria drift, when no live execution claim holds the task; a failed repilot holds it until its meaning changes again or an operator acts. Dispatch fails closed as `pilot_assessment_stale` until
+a new assessment completes against the edited requirements, unless an
+operator skips the pilot with `no-pilot` as described above. A held
+warning keeps its one pending decision across routine windows; routine ticks
+create no additional pilot, triage, or decision for that same assessment.
+
+When explicit ids store different crews, `orbit run task-pilot` submits one
+homogeneous run per crew. Each run audits only its own task group.
+
 The shipped pilot steps draw their crew from `workflow.purpose_crews.task_pilot`,
 or from `workflow.low_complexity_crews` while that is unset.
 Neither a `--crew` flag nor `--input crew=<name>` changes those steps. Inspect
@@ -420,13 +611,16 @@ the effective job and that pool before promising a provider; see
 [crew selection](loop.md#select-an-allowed-crew).
 
 Zero-input mode discovers only `proposed`/`backlog` tasks in the invoking
-workspace whose `context_files` is empty, and skips tasks tagged as needing no
-diff. It also excludes a task already named by the durable prepare checkpoint
+workspace needing its first assessment, and skips tasks tagged as needing no
+diff or carrying an already applied assessment (ready or held), even after edits. It also excludes a task already named by the durable prepare checkpoint
 of an active pilot run and reports the owning run ID, so a later discovery run
 can inspect new work without repeating the expensive assessment. Explicit
 `task_ids` audits exactly the named tasks, including ones that already have
 selectors, while excluding tasks held by another active run as
-`already_preparing` with `prepared_by_run_ids`. Preparation continues for the
+`already_preparing` with `prepared_by_run_ids`. A child pilot, such as one an
+approve-proposed drain dispatched, is not this operator request: it reuses an
+assessment an explicit or routine pilot already certified instead of calling
+the provider again. Preparation continues for the
 free named tasks. Apply settles each held task as `superseded` with reason
 `piloted_elsewhere`; if every named task is held, the run succeeds without
 agent work. Inspect or resume the owning run for that task's assessment.
@@ -463,16 +657,17 @@ The pilot agent inspection is read-only; its deterministic apply step mutates
 validated task selectors. It runs five
 partitions concurrently, and returns selector proposals plus duplicate,
 already-landed, dependency, and conflicting-decision warnings. The shipped
-workspace routine is disabled by default and uses a `preparation_eligible`
-state trigger, not a periodic cron: each tick fingerprints eligible tasks and
-queues those without a fresh assessment after the 2-minute debounce or the
-10-minute maximum wait. A material change can make a task due again; an
-unchanged backlog stays quiet. Inspect the workspace's actual `task_pilot.yaml`
+`task_pilot` workspace routine seeds enabled by default, as does `worktree-gc`.
+It uses a `preparation_eligible` state trigger, not a periodic cron: each tick
+fingerprints eligible tasks and
+queues only tasks without an applied assessment after the 2-minute debounce or
+the 10-minute maximum wait. Once assessed, a task stays quiet across routine
+windows until a certified description or acceptance-criteria edit makes its assessment stale; it then gets a fresh routine pilot unless a live execution claim or an unresolved failed pilot holds it. Edits to other material or policy never queue one; request another routine pilot explicitly. An `--approve-proposed` drain still repilots a stale assessment automatically as described below. Inspect the workspace's actual `task_pilot.yaml`
 before relying on that cadence, because a customized routine or preserved
 legacy cron definition can differ from the shipped seed.
 
 A local drain (`orbit run auto`, the dashboard start, MCP
-`orbit.workflow.auto`) warns when no task pilot will prepare its tasks on this
+`orbit.workflow` action `auto`) warns when no task pilot will prepare its tasks on this
 machine: the workspace declares no `preparation_eligible` routine, or its
 routine names another `owner_machine`, is disabled, or is paused here
 (`orbit routine resume <name>`). The warning names the workspace, the machine
@@ -566,7 +761,7 @@ Every blocked-to-backlog return, including a plain
 `orbit task update <task-id> --status backlog`, runs the same publication
 pre-flight as `orbit task requeue`. Once the task's run has stopped, an
 operator can use `orbit task requeue <task-id> --reason '<why>'` (MCP
-`orbit.task.requeue`) to resume that candidate; while the run is live the
+`orbit.task.recover` action `requeue`) to resume that candidate; while the run is live the
 requeue is refused, since its failure handoff may still be publishing. Add
 `--discard-candidate` to close the task's undelivered Orbit PRs and rerun fresh,
 which a changed task specification requires; `orbit task update <task-id>
@@ -588,9 +783,18 @@ a human commented on, or whose publication did not authenticate, for
 ## Retry a stopped owner landing
 
 A healthy accepted handoff can keep its native leaf binding while its owner landing
-stops on a provider gate. Inspect the owner's distributed claim panel, original stop,
-latest landing attempt and provider state. Do not resume or rebind the foreign leaf
-just to retry landing. Only a trusted operator may request a same-handoff retry:
+stops on a provider gate. A `BLOCKED` pull request with only running checks and no
+review refusal keeps polling within the landing job's existing check-wait budget;
+once the checks pass and the forge permits merging, that job lands without operator
+action. Running checks grant no merge authority, and the wait never extends the
+configured deadline. A review or administrative refusal still stops the job.
+
+After a stop or an exhausted wait budget, inspect the owner's distributed claim
+panel, original stop, latest landing attempt and provider state. `orbit.workflow` action `land`
+reports the recorded stop cause and the retry path while completion authority remains
+active; it reports an operator revoke only when that authority was revoked. Do not
+resume or rebind the foreign leaf just to retry landing. Only a trusted operator may
+request a same-handoff retry:
 
 ```bash
 orbit task retry-handoff <handoff-id> --owner-workspace <owner-workspace-id> \
@@ -599,7 +803,7 @@ orbit task retry-handoff <handoff-id> --owner-workspace <owner-workspace-id> \
   --reason '<why the same candidate can land now>' --request <saved-request-key>
 ```
 
-The MCP equivalent is `orbit.task.retry_handoff` with `workspace`, `handoff_id`,
+The MCP equivalent is `orbit.task.recover` action `retry_handoff` with `workspace`, `handoff_id`,
 `expected_candidate_commit`, `expected_base_commit`, `expected_latest_attempt`,
 `expected_latest_state`, `reason`, and `request_key`. The workspace must be the owner's
 logical workspace ID or absolute checkout path. This is operator-only and unavailable
@@ -687,7 +891,7 @@ workspace configuration, an environment variable, or a routine.
   `proposed` work into the backlog and is not an independent review verdict; the
   transition is recorded against the authorizing run and operator.
 
-`orbit run auto --approve-proposed` (MCP `orbit_workflow_auto` `start` with
+`orbit run auto --approve-proposed` (MCP `orbit_workflow` action `auto` `start` with
 `approve_proposed: true`) is the explicit authorization for one drain to approve
 `proposed` work, independent of `--complete`. Default-off and never enabled by
 configuration.
@@ -695,7 +899,10 @@ configuration.
 - When none of its pilots is running, a pass selects up to ten qualifying
   proposed tasks, including ones filed mid-window. A task qualifies with the
   `no-diff-expected` tag, or with non-empty `context_files` and an assessed
-  complexity.
+  complexity. A fresh assessment from an explicit request or a routine pilot
+  is approved on that pass without another pilot. A stale assessment whose certified description/criteria or other material drifted is selected again for a fresh pilot like a new proposal when no live execution claim holds it; a holding warning keeps the task proposed and is not selected again. A task another pilot is assessing is held as
+  `pilot_running` until it finishes. A new explicit request still starts one
+  pilot; the drain's targeted task ids are not that request.
 - The drain pilots them through a detached `task_pilot_pipeline` run, and the
   pilot's apply step approves a task only under the existing promotion rules:
   no duplicate, already-landed, blocked-by, conflict or warning finding, and
@@ -722,15 +929,18 @@ configuration.
   least one is on the base branch. Human- and orchestrator-filed tasks are
   never closed this way; archive or re-scope them yourself.
 - Everything else stays `proposed`. `orbit run show` and `orbit run readiness`
-  report approved, closed and held counts with each hold reason. A held task
-  is not piloted again until it changes.
+  report approved, closed and held counts with each hold reason, and
+  `awaiting_reuse` lists fresh assessments a later pass approves. A task this
+  drain held is not piloted again until it changes, except a stale assessment the drain repilots automatically as above. A fresh explicit or
+  routine assessment is approved without another pilot, and a stale one held for a live claim, a failed repilot, or a warning stays
+  proposed until the task changes or an operator acts.
 - `--approve-proposed` with `--pull` is refused before anything is submitted:
   a follower does not approve another host's tasks.
 
 ### Per-run review
 
 `orbit run ship --review before-landing` and `orbit run auto --review
-before-landing` (MCP `orbit_workflow_ship` and `orbit_workflow_auto` `start`
+before-landing` (MCP `orbit_workflow` action `ship` and `orbit_workflow` action `auto` `start`
 with `review: "before-landing"`) add a second-agent review before landing to
 one run. Use it when the user asks for review on specific work and the
 workspace applies none. It only adds review and never changes configuration.
@@ -818,7 +1028,26 @@ It cannot be combined with `--pull` or `--stop`.
   `blocked` or `backlog` that records a PR, not a window of recent leaves. A write-free pass scans and persists nothing.
   Operator holds, `no-auto-approve` tasks, PRs not opened by Orbit and a leaf
   started with `--complete` under a drain without it are left alone.
-  The dashboard's **Fix PR** action on a `review` task starts the same
+- A `review` task whose newest leaf ended `held` with its PR open is handed
+  back the same way when its hold is one a fresh forge read can clear:
+  `delivery_check_evidence_inconclusive`, `delivery_completion_budget_expired`,
+  `delivery_evidence_stale`, `delivery_requirements_unsatisfied`,
+  `delivery_base_checks_pending`, `delivery_forge_observation_unavailable`, or
+  `delivery_check_runs_absent` once the unchanged head reports a pending or
+  passed required check. Until that check exists the pass lists
+  `delivery_check_runs_absent` under its code and spends no hand-back.
+  Completion reruns with a fresh budget and repairs only what its own watcher
+  then finds; the record and started entry carry `hold_code`. A blocker on the
+  PR goes through the ledger as above; otherwise the hand-back spends no
+  repair budget and is bounded on its own: the pass waits 5 minutes after
+  the leaf held, doubled for each earlier hand-back of that PR for that code
+  (dashboard Fix PR skips the wait), and stops after 3 hand-backs per PR,
+  head and code. A waiting or spent lineage is listed under
+  `auto_fix.skipped` with the hold code as its `reason`. A task a
+  `completion.hold` rule keeps in review is skipped as `completion_held`.
+  Other holds keep their own next step (see the delivery-refusal table in
+  run debugging), and the source leaf still counts as `held`.
+- The dashboard's **Fix PR** action on a `review` task starts the same
   hand-back for that one task without a drain (operator session, governed as
   `auto_drain.auto_fix`); a refusal is a `409` coded `task_auto_fix_<reason>`.
 

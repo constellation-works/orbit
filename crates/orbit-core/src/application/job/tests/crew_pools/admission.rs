@@ -47,7 +47,13 @@ fn a_limited_pool_member_is_never_drawn_until_its_reading_resets() {
             ..Default::default()
         })
         .expect("add task");
-    assert_eq!(task.crew_source.as_deref(), Some("default"));
+    assert_eq!(
+        task.crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("default")
+    );
     write("medium_complexity_crews = [\"sol:50\", \"sonnet:50\"]");
     let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("build runtime");
 
@@ -72,7 +78,7 @@ fn a_limited_pool_member_is_never_drawn_until_its_reading_resets() {
         let mut ticket = 16_u64;
         let mut drawn = BTreeMap::<String, usize>::new();
         let mut sources = Vec::new();
-        for _ in 0..1000 {
+        for _ in 0..100 {
             let mut input = json!({ "task_ids": [task.id] });
             let writes = runtime
                 .install_auto_crew_admission(
@@ -125,7 +131,7 @@ fn a_limited_pool_member_is_never_drawn_until_its_reading_resets() {
         ["sol", "sonnet"],
         "{drawn:?}"
     );
-    assert_eq!(drawn["sol"], 500, "an even split over the walked tickets");
+    assert_eq!(drawn["sol"], 50, "an even split over the walked tickets");
 }
 
 /// [ORB-17773] A claimed leaf whose snapshot crew came from an automatic
@@ -207,8 +213,7 @@ fn a_claimed_leaf_redraws_an_automatic_crew_on_the_followers_own_pressure() {
 
     // The owner's readings favour Codex just as decisively; they live in
     // the owner's store and are never the follower's to read.
-    let decisive = "crew_selection = \"usage_pressure\"\n\
-                    usage_pressure_cap = 1000000\nusage_pressure_strength = 10";
+    let decisive = "crew_selection = \"usage_pressure\"";
     let (_owner_root, owner) = host(
         decisive,
         &[

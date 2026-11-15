@@ -7,7 +7,7 @@ pub(in crate::command::mcp::setup) const ORBIT_FEDERATED_MCP_SERVER_ID: &str = "
 /// The launch identity a generated client config is written for.
 ///
 /// Local and federated servers are separate variants because the federated mux
-/// cannot carry local operator authority or a local workspace binding. The
+/// does not carry a local workspace binding. The
 /// registration path chooses the variant explicitly, so bare `orbit mcp init`
 /// cannot silently convert an existing v1 integration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,7 +24,7 @@ pub(in crate::command::mcp::setup) enum ServerLaunch<'a> {
         orbit_root: Option<&'a Path>,
     },
     /// The session-unbound mux over operator-configured destinations.
-    Federated,
+    Federated { operator: bool },
 }
 
 impl Default for ServerLaunch<'_> {
@@ -70,14 +70,14 @@ impl<'a> ServerLaunch<'a> {
                 workspace,
                 orbit_root,
             },
-            Self::Federated => ServerLaunch::Federated,
+            Self::Federated { operator } => ServerLaunch::Federated { operator },
         }
     }
 
     const fn orbit_root(self) -> Option<&'a Path> {
         match self {
             Self::Local { orbit_root, .. } => orbit_root,
-            Self::Federated => None,
+            Self::Federated { .. } => None,
         }
     }
 }
@@ -85,7 +85,7 @@ impl<'a> ServerLaunch<'a> {
 pub(super) fn server_id(launch: ServerLaunch<'_>) -> &'static str {
     match launch {
         ServerLaunch::Local { .. } => ORBIT_MCP_SERVER_ID,
-        ServerLaunch::Federated => ORBIT_FEDERATED_MCP_SERVER_ID,
+        ServerLaunch::Federated { .. } => ORBIT_FEDERATED_MCP_SERVER_ID,
     }
 }
 
@@ -116,11 +116,14 @@ pub(super) fn server_args(launch: ServerLaunch<'_>) -> Vec<String> {
                 args.push(workspace.to_string());
             }
         }
-        ServerLaunch::Federated => {
+        ServerLaunch::Federated { operator } => {
             args.push("mcp".to_string());
             args.push("serve".to_string());
             args.push("--mode".to_string());
             args.push("federated".to_string());
+            if operator {
+                args.push("--operator".to_string());
+            }
         }
     }
     args
@@ -190,13 +193,11 @@ pub(super) fn supply_json_root(entry: &mut serde_json::Value, launch: ServerLaun
 /// binding and any other options. Removing the entry first is the explicit
 /// way to replace that authority with a new agent-only registration.
 pub(super) fn preserve_operator<'a>(
-    launch: ServerLaunch<'_>,
+    _launch: ServerLaunch<'_>,
     args: impl IntoIterator<Item = &'a str>,
 ) -> bool {
     let args = args.into_iter().collect::<Vec<_>>();
-    matches!(launch, ServerLaunch::Local { .. })
-        && args.windows(2).any(|pair| pair == ["mcp", "serve"])
-        && args.contains(&"--operator")
+    args.windows(2).any(|pair| pair == ["mcp", "serve"]) && args.contains(&"--operator")
 }
 
 pub(super) fn preserve_json_operator(launch: ServerLaunch<'_>, entry: &serde_json::Value) -> bool {

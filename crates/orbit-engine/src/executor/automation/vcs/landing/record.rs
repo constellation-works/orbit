@@ -2,11 +2,16 @@
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::DeliveryRefusal;
-use orbit_types::workflow::handoff::HandoffCandidate;
+use orbit_types::workflow::handoff::{
+    HandoffCandidate, LandingWaitGate, OwnerLandingRefusal, OwnerLandingRefusalKind,
+};
 use serde_json::{Value, json};
 
 use crate::context::{HandoffLandingStep, HandoffLandingUpdate, RuntimeHost};
 
+use super::super::completion_hold::{
+    ChangedPaths, evaluate_completion_hold, record_landing_completion_hold,
+};
 use super::super::pr::diagnostics;
 use super::super::pr::{PrMergeState, PullRequestStatus};
 use super::run::LandingPass;
@@ -87,7 +92,22 @@ pub(super) fn hold_pr<H: RuntimeHost + ?Sized>(
     refusal: DeliveryRefusal,
     reason: &str,
 ) -> Result<OrbitError, OrbitError> {
-    let stopped = stop_pr(host, context, observation, repairable, reason)?;
+    let stopped = record_refusal(
+        host,
+        context,
+        observation,
+        HandoffLandingStep::Stop { repairable },
+        reason,
+        match refusal {
+            DeliveryRefusal::BaseChecksPending => Some(LandingWaitGate::BaseChecksPending),
+            DeliveryRefusal::ForgeObservationUnavailable
+                if observation.get("log_read_gap").is_some() =>
+            {
+                Some(LandingWaitGate::JobLogsUnavailable)
+            }
+            _ => None,
+        },
+    )?;
     Ok(match stopped {
         OrbitError::Execution(message) => OrbitError::DeliveryRefused { refusal, message },
         other => other,
@@ -103,13 +123,46 @@ pub(super) fn refuse_pr<H: RuntimeHost + ?Sized>(
     step: HandoffLandingStep,
     reason: &str,
 ) -> Result<OrbitError, OrbitError> {
+    record_refusal(host, context, observation, step, reason, None)
+}
+
+pub(super) fn stop_waiting_checks<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &LandingPass,
+    observation: &Value,
+    reason: &str,
+) -> Result<OrbitError, OrbitError> {
+    record_refusal(
+        host,
+        context,
+        observation,
+        HandoffLandingStep::Stop { repairable: false },
+        reason,
+        Some(LandingWaitGate::RequiredChecksPending),
+    )?;
+    Ok(OrbitError::DeliveryRefused {
+        refusal: DeliveryRefusal::RequirementsUnsatisfied,
+        message: format!("handoff_land: {reason}"),
+    })
+}
+
+fn record_refusal<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &LandingPass,
+    observation: &Value,
+    step: HandoffLandingStep,
+    reason: &str,
+    waiting_gate: Option<LandingWaitGate>,
+) -> Result<OrbitError, OrbitError> {
     let requeue = matches!(step, HandoffLandingStep::StopForRequeue);
     let repairable = requeue || matches!(step, HandoffLandingStep::Stop { repairable: true });
-    let reason = diagnostics::reason(reason);
-    let mut evidence = json!({
-        "schema_version":1, "kind":"owner_landing_refusal",
-        "reason":reason, "repairable":repairable,
-        "accepted":{
+    let refusal = OwnerLandingRefusal {
+        schema_version: 1,
+        kind: OwnerLandingRefusalKind::OwnerLandingRefusal,
+        reason: diagnostics::reason(reason),
+        repairable,
+        waiting_gate,
+        accepted: json!({
             "task":diagnostics::text(&context.task_id),
             "handoff":diagnostics::text(&context.handoff_id),
             "repository":diagnostics::text(&context.candidate.repository),
@@ -118,20 +171,32 @@ pub(super) fn refuse_pr<H: RuntimeHost + ?Sized>(
             "source_branch":diagnostics::text(&context.candidate.source_branch),
             "base_branch":diagnostics::text(&context.candidate.base_branch),
             "landing_branch":diagnostics::text(&context.candidate.landing_branch),
-        },
-        "owner_owed": diagnostics::collection(&context.owed_hosted_checks, |name| diagnostics::text(name)),
-        "observation":observation,
-        "workflow_prerequisites":{"state":"not_collected"},
-        "emission_proof":{"state":"not_collected"},
-    });
-    if requeue {
-        evidence["requeue"] = json!(true);
-    }
+        }),
+        owner_owed: diagnostics::collection(&context.owed_hosted_checks, |name| {
+            diagnostics::text(name)
+        }),
+        observation: observation.clone(),
+        workflow_prerequisites: json!({"state":"not_collected"}),
+        emission_proof: json!({"state":"not_collected"}),
+        requeue: requeue.then_some(true),
+    };
+    let evidence = serde_json::to_value(&refusal).map_err(|error| {
+        OrbitError::Execution(format!("handoff_land: encode landing refusal: {error}"))
+    })?;
     record(host, context, step, None, &evidence)?;
-    Ok(OrbitError::Execution(format!(
-        "handoff_land: {}",
-        reason["value"].as_str().unwrap_or_default()
-    )))
+    let message = format!("handoff_land: {}", refusal.reason.value);
+    // A candidate requeue already ended the claim and returned the task to
+    // the backlog (or blocked it). Hold the run so that designed return is not
+    // counted as a landing failure. Every non-requeue stop recorded here still
+    // fails the run, including the one automatic repair's.
+    if requeue {
+        Ok(OrbitError::DeliveryRefused {
+            refusal: DeliveryRefusal::LandingRepairRequeue,
+            message,
+        })
+    } else {
+        Ok(OrbitError::Execution(message))
+    }
 }
 
 /// Record a durable stop and return the error the run fails with, so the
@@ -168,6 +233,43 @@ pub(super) fn record_stop<H: RuntimeHost + ?Sized>(
         &Value::String(reason.to_string()),
     )?;
     Ok(OrbitError::Execution(format!("handoff_land: {reason}")))
+}
+
+/// [ORB-23365] The `completion.hold` gate of an owner landing under
+/// `workflow.distributed_completion = "done"`: when a rule matches the
+/// accepted candidate's diff or its task, record the same
+/// `completion_held` hold `pr_complete` records and stop the attempt
+/// before anything merges or lands, leaving the task in review for a
+/// person to approve. Returns the error the run fails with when held,
+/// `None` when the landing may proceed. Callers that first observe the
+/// candidate already merged or contained settle that fact instead and
+/// never reach this gate: a merge that already happened cannot be held.
+pub(super) fn completion_hold_stop<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &LandingPass,
+    changed: &ChangedPaths,
+    run_id: &str,
+) -> Result<Option<OrbitError>, OrbitError> {
+    if !context.owner_distributed_completion_done {
+        return Ok(None);
+    }
+    let rules = host.completion_hold_rules();
+    if rules.is_empty() {
+        return Ok(None);
+    }
+    let task = host.get_task(&context.task_id)?;
+    let Some(hold) =
+        evaluate_completion_hold(&rules, std::slice::from_ref(&task), changed, run_id)?
+    else {
+        return Ok(None);
+    };
+    record_landing_completion_hold(host, &context.handoff_id, &context.task_id, &hold)?;
+    let reason = format!(
+        "{}; the owner's landing stopped before merging anything, so the candidate \
+         stays in review for a person to approve",
+        hold.summary()
+    );
+    Ok(Some(stop(host, context, &reason)?))
 }
 
 /// Whether the provider reports the pull request's branch as behind its base,

@@ -2,12 +2,12 @@ use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_store::contracts::TaskCreateParams as StoreTaskCreateParams;
 use orbit_types::identity::{Crew, all_agent_families};
-use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     OrchestratorModelSource, REQUIRES_LABELS_FIELD, Task, TaskOrigin, TaskStatus, TaskType,
     normalize_host_labels, normalize_required_tools, normalize_task_dependencies,
     normalize_task_tags, validate_os_tags,
 };
+use orbit_types::tool::{TOOL_ACTION_SEPARATOR, tool_family_action, tool_requirement_name};
 
 use crate::OrbitRuntime;
 use crate::application::contracts::CreationCrewAssignment;
@@ -34,7 +34,8 @@ const TASK_PROVENANCE_TITLE_PREFIXES: &[(&str, &str)] = &[
 ];
 
 impl OrbitRuntime {
-    /// Validate task-scoped tool requirements against the current registry.
+    /// Validate task-scoped tool requirements against the current registry
+    /// and the implementing activity's disallow list.
     ///
     /// A requirement is durable metadata, so a name an operator has disabled is
     /// kept: `orbit tool enable` restores it, so that state is only a warning.
@@ -42,11 +43,35 @@ impl OrbitRuntime {
     /// at all, are both rejected — activity admission refuses them and
     /// `required_tools` is immutable after creation, so the record would be
     /// impossible to dispatch and impossible to repair.
+    ///
+    /// A name that activity disallows, and that no grant could lift, is
+    /// rejected with the same classification dispatch admission uses. The
+    /// error names the tool, the activity and the reason. An exact denial of
+    /// a read/repeat-safe tool can still be required, because a grant could
+    /// lift it later. A missing activity or allow-mode catalog does not invent
+    /// a refusal; a catalog that fails to load fails the call.
     pub fn validate_required_tools(
         &self,
         required_tools: &[String],
     ) -> Result<Vec<String>, OrbitError> {
-        self.validate_task_tool_names("required_tools", required_tools)
+        // The activity catalog is fail-closed for the global and explicit
+        // layers: one malformed file makes `v2_activity_catalog` return
+        // `Err`. Nothing below needs the catalog when there is no
+        // requirement to check, so skip the read entirely and keep filing
+        // tasks with no `required_tools` working. [ORB-23413]
+        if normalize_required_tools(required_tools.to_vec()).is_empty() {
+            return Ok(Vec::new());
+        }
+        let warnings = self.validate_task_tool_names("required_tools", required_tools)?;
+        let Some(disallow_list) = self.required_tool_implementer_disallow_list()? else {
+            return Ok(warnings);
+        };
+        for name in normalize_required_tools(required_tools.to_vec()) {
+            if let Some(message) = self.unliftable_implementer_requirement(&disallow_list, &name) {
+                return Err(OrbitError::InvalidInput(message));
+            }
+        }
+        Ok(warnings)
     }
 
     /// Validate durable requirement names against the current registry, as
@@ -59,6 +84,21 @@ impl OrbitRuntime {
     ) -> Result<Vec<String>, OrbitError> {
         let mut warnings = Vec::new();
         for name in normalize_required_tools(names.to_vec()) {
+            // A family action names its family's registry entry. An operation
+            // behind a family, as a definition written before tool families
+            // names it, reads as that family action [ORB-23280].
+            let name = tool_requirement_name(&name).into_owned();
+            let name = match name.split_once(TOOL_ACTION_SEPARATOR) {
+                Some(_) => match tool_family_action(&name) {
+                    Some((family, _)) => family.name.to_string(),
+                    None => {
+                        return Err(self.ungrantable_required_tool(format!(
+                            "{field} contains unknown tool family action '{name}'"
+                        )));
+                    }
+                },
+                None => name,
+            };
             if !self.tool_registry().has(&name) {
                 return Err(self.ungrantable_required_tool(format!(
                     "{field} contains unregistered tool '{name}'"
@@ -144,6 +184,14 @@ impl OrbitRuntime {
         digest: Option<&str>,
     ) -> Result<(Task, Vec<String>), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
+        // A requirement from a definition written before tool families is
+        // stored as its family action, so the new task never holds an old
+        // name [ORB-23552].
+        if let Some(required_tools) =
+            orbit_types::tool::family_action_tool_names(&params.required_tools)
+        {
+            params.required_tools = required_tools;
+        }
         let required_tool_warnings = self.validate_required_tools(&params.required_tools)?;
         self.validate_granted_tools(&params.granted_tools)?;
 
@@ -156,6 +204,13 @@ impl OrbitRuntime {
         params.plan = redact_all(&params.plan);
         for criterion in params.acceptance_criteria.iter_mut() {
             *criterion = redact_all(criterion);
+        }
+        if params
+            .comment
+            .as_deref()
+            .is_some_and(orbit_types::workflow::ResidentComment::is_resident_comment)
+        {
+            return Err(OrbitError::InvalidInput("resident records require an existing mandate assignment; append them after creating the task".into()));
         }
         params.comment = params.comment.map(|comment| redact_all(&comment));
 
@@ -197,7 +252,9 @@ impl OrbitRuntime {
         let planned_by = authored_role_value(params.plan.as_str(), &create_label);
         let comments = build_task_comments(params.comment.clone(), create_label.as_str())?;
         let dependencies = normalize_task_dependencies(params.dependencies.clone())?;
-        self.validate_crew_name(params.crew.as_deref())?;
+        // A task may name a human crew: it then waits for that operator, and
+        // no drain, follower or pilot picks it up.
+        self.canonical_task_crew_name(params.crew.as_deref())?;
         // [ORB-12717] Crew is initially decided here, and never by a later status
         // transition. A caller-supplied crew is kept verbatim; otherwise the
         // purpose pool its tags name, then the complexity pools (then
@@ -221,7 +278,9 @@ impl OrbitRuntime {
         params.crew = crew_assignment
             .as_ref()
             .map(|assignment| assignment.crew.clone());
-        if let Some(crew) = params.crew.as_deref() {
+        if let Some(crew) = params.crew.as_deref()
+            && !self.is_human_crew(Some(crew))
+        {
             // An explicit crew is kept, including one this host cannot run: it
             // waits for a host that can. An empty intersection with the task's
             // `os:` tags is refused here, before the task is stored.
@@ -262,65 +321,56 @@ impl OrbitRuntime {
             )));
         }
 
-        let task = self.with_optional_mutation_event(|| {
-            let (task, replayed) = self.stores().task_records().create_guarded(
-                StoreTaskCreateParams {
-                    actor: create_label.clone(),
-                    parent_id: params.parent_id.clone(),
-                    title: params.title.clone(),
-                    description: params.description.clone(),
-                    acceptance_criteria: params.acceptance_criteria.clone(),
-                    dependencies: dependencies.clone(),
-                    relations: params.relations.clone(),
-                    tags: normalized_tags.clone(),
-                    required_tools: normalize_required_tools(params.required_tools.clone()),
-                    granted_tools: normalize_required_tools(params.granted_tools.clone()),
-                    requires_labels: requires_labels.clone(),
-                    not_before: params.not_before,
-                    plan: params.plan.clone(),
-                    execution_summary: String::new(),
-                    context_files,
-                    repo_root: None,
-                    created_by: Some(create_label.clone()),
-                    created_by_model: created_by_model.clone(),
-                    planned_by,
-                    implemented_by: None,
-                    status: initial_status,
-                    priority: params.priority,
-                    complexity: Some(params.complexity),
-                    task_type,
-                    external_refs: params.external_refs.clone(),
-                    source_task_id: params.source_task_id.clone(),
-                    crew: params.crew.clone(),
-                    crew_source: crew_assignment
-                        .as_ref()
-                        .map(|assignment| assignment.source.clone()),
-                    orchestrator: params.orchestrator.clone(),
-                    orchestrator_model: orchestrator_model.clone(),
-                    orchestrator_model_source,
-                    origin,
-                    rule_fingerprint: params.rule_fingerprint.clone(),
-                    comments: comments.clone(),
-                    context_creation: params.context_creation.authorize.clone(),
-                    creation_decision: params.creation_decision.clone(),
-                },
-                action_key,
-                digest,
-            )?;
-            // The insert is committed from here on, so its event is published
-            // even when the provenance write below fails.
-            let event = (!replayed).then(|| OrbitEvent::TaskAdded {
-                id: task.id.clone(),
-            });
-            self.schedule_task_quality_after_commit(&task);
-            let task = match &crew_assignment {
-                Some(assignment) if !replayed => {
-                    self.record_creation_crew_provenance(task, assignment, digest)
-                }
-                _ => Ok(task),
-            };
-            Ok((task, event))
-        })??;
+        let (task, replayed) = self.stores().task_records().create_guarded(
+            StoreTaskCreateParams {
+                actor: create_label.clone(),
+                parent_id: params.parent_id.clone(),
+                title: params.title.clone(),
+                description: params.description.clone(),
+                acceptance_criteria: params.acceptance_criteria.clone(),
+                dependencies: dependencies.clone(),
+                relations: params.relations.clone(),
+                tags: normalized_tags.clone(),
+                required_tools: normalize_required_tools(params.required_tools.clone()),
+                granted_tools: normalize_required_tools(params.granted_tools.clone()),
+                requires_labels: requires_labels.clone(),
+                not_before: params.not_before,
+                plan: params.plan.clone(),
+                execution_summary: String::new(),
+                context_files,
+                repo_root: None,
+                created_by: Some(create_label.clone()),
+                created_by_model: created_by_model.clone(),
+                planned_by,
+                implemented_by: None,
+                status: initial_status,
+                priority: params.priority,
+                complexity: Some(params.complexity),
+                task_type,
+                external_refs: params.external_refs.clone(),
+                source_task_id: params.source_task_id.clone(),
+                crew: params.crew.clone(),
+                crew_source: crew_assignment
+                    .as_ref()
+                    .map(|assignment| assignment.source.clone()),
+                orchestrator: params.orchestrator.clone(),
+                orchestrator_model: orchestrator_model.clone(),
+                orchestrator_model_source,
+                origin,
+                rule_fingerprint: params.rule_fingerprint.clone(),
+                comments: comments.clone(),
+                context_creation: params.context_creation.authorize.clone(),
+                creation_decision: params.creation_decision.clone(),
+            },
+            action_key,
+            digest,
+        )?;
+        let task = match &crew_assignment {
+            Some(assignment) if !replayed => {
+                self.record_creation_crew_provenance(task, assignment, digest)?
+            }
+            _ => task,
+        };
 
         Ok((task, required_tool_warnings))
     }
@@ -343,7 +393,11 @@ impl OrbitRuntime {
             &task.id,
             StoreTaskUpdateParams {
                 actor: SYSTEM_ACTOR_LABEL.to_string(),
-                append_history: vec![crew_assigned_history(assignment)],
+                // Creation is the first assignment: no crew preceded it.
+                append_history: vec![crew_assigned_history(
+                    orbit_types::task::CrewAssignmentState::default(),
+                    assignment,
+                )],
                 ..Default::default()
             },
         );

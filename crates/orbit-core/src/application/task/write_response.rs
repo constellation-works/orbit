@@ -9,59 +9,91 @@
 //!
 //! The profiles preserve the contracts each surface already had:
 //!
-//! - [`TaskWriteResponsePolicy::FullRecord`] — [`task_record_json`]:
+//! - [`TaskWriteResponsePolicy::FullRecord`] — `task_record_json`:
 //!   sidecars, `review` and `pilot_warnings`. The local CLI and the
 //!   HTTP mutations serve it.
 //! - [`TaskWriteResponsePolicy::DashboardFullRecord`] — the full
 //!   record plus the dashboard extras (linked pull requests,
 //!   `status_transitions`, `job_run_navigable`,
-//!   `readiness.preparing`). Only HTTP serves it.
+//!   `readiness.preparing`, `active_triage`). Only HTTP serves it.
 //! - [`TaskWriteResponsePolicy::Compact`] — [`task_base_json`] plus
 //!   OS and crew enrichments, no sidecar hydration. The tool host
 //!   (MCP) and therefore a routed remote CLI answer serve it.
 //! - [`TaskWriteResponsePolicy::Projected`] — the caller's explicit
-//!   `fields`/`field` projection, a bare value for one field. Only
-//!   the tool host selects it; the CLI rehydrates the full record
-//!   and HTTP has no selector.
+//!   `fields`/`field` projection. A `fields` array always answers an
+//!   object keyed by field name, even for one field; the `field`
+//!   alias answers one field's bare value. Only the tool host selects
+//!   it; the CLI rehydrates the full record and HTTP has no selector.
 //!
 //! Writes never carry the show-only `block`, `next_step`,
 //! `final_recovery` or `owed_criteria` guidance: those stay on
 //! [`super::task_show_json`].
 
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
-use orbit_types::task::{Task, TaskStatus, is_valid_orb_task_id, task_base_json};
+use orbit_store::contracts::JobRunQuery;
+use orbit_types::task::{
+    Task, TaskStatus, is_valid_orb_task_id, ordered_external_refs_for_show, task_base_json,
+};
+use orbit_types::workflow::{
+    FINAL_RECOVERY_CREWS_CONFIG_KEY, FINAL_RECOVERY_CREWS_KEY, JobRunState,
+};
 use serde_json::{Map, Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::task::TaskAutomationPort;
+use crate::application::task::{TaskAutomationPort, TaskJobPort};
 
 use super::lifecycle::{task_status_transition_allowed, task_status_transition_required_field};
 use super::pull_request_links::PullRequestLinks;
-use super::record_json::{task_record_json, task_show_field_json};
+use super::record_json::{task_record_json, task_show_field_json_with_row};
 use super::screened::ScreenedTaskWrite;
 use super::{TaskOsReadout, TaskRow};
 
 /// Which existing write profile a surface serves. See the module docs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskWriteResponsePolicy {
-    /// [`task_record_json`] with sidecars.
+    /// `task_record_json` with sidecars.
     FullRecord,
     /// The full record plus the dashboard extras.
     DashboardFullRecord,
     /// Base record plus OS/crew enrichments, no sidecars.
     Compact,
-    /// Only the named show fields; one field answers its bare value.
-    Projected(Vec<String>),
+    /// Only the named show fields.
+    Projected(TaskFieldProjection),
+}
+
+/// A caller's `fields`/`field` projection and its single-field shape.
+///
+/// `keyed_single` is true when the fields came from the `fields`
+/// array: even a one-element array then answers an object keyed by
+/// field name. It is false for the `field` alias, which answers one
+/// field's bare value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskFieldProjection {
+    /// The requested field names, in request order.
+    pub fields: Vec<String>,
+    /// Whether a one-element projection stays keyed by field name.
+    pub keyed_single: bool,
+}
+
+impl TaskFieldProjection {
+    /// A projection from the given source shape.
+    pub fn new(fields: Vec<String>, keyed_single: bool) -> Self {
+        Self {
+            fields,
+            keyed_single,
+        }
+    }
 }
 
 impl TaskWriteResponsePolicy {
     /// The tool host's policy for a write: the requested projection
-    /// when `fields` names any, otherwise [`Self::Compact`].
-    pub fn from_fields(fields: Option<&[String]>) -> Self {
+    /// when one was supplied, otherwise [`Self::Compact`].
+    pub fn from_fields(fields: Option<&TaskFieldProjection>) -> Self {
         match fields {
-            Some(fields) => Self::Projected(fields.to_vec()),
+            Some(projection) => Self::Projected(projection.clone()),
             None => Self::Compact,
         }
     }
@@ -153,11 +185,29 @@ pub fn task_write_response_json(
     policy: &TaskWriteResponsePolicy,
     metadata: &TaskWriteMetadata,
 ) -> Result<Value, OrbitError> {
+    task_write_response_from_row(runtime, task, None, policy, metadata)
+}
+
+/// [`task_write_response_json`] using `row` for a full record when the write
+/// already holds that bundle. `None` reads the sidecars, as before.
+pub(crate) fn task_write_response_from_row(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    row: Option<&TaskRow>,
+    policy: &TaskWriteResponsePolicy,
+    metadata: &TaskWriteMetadata,
+) -> Result<Value, OrbitError> {
     let mut response = match policy {
         TaskWriteResponsePolicy::FullRecord | TaskWriteResponsePolicy::DashboardFullRecord => {
             let status_by_id = runtime.dependency_status_index([task])?;
-            let row = runtime.task_row_with_sidecars(task.clone())?;
-            let object = task_record_json(runtime, &row, &status_by_id)?;
+            let loaded;
+            let row = if let Some(row) = row {
+                row
+            } else {
+                loaded = runtime.task_row_with_sidecars(task.clone())?;
+                &loaded
+            };
+            let object = task_record_json(runtime, row, &status_by_id)?;
             if *policy == TaskWriteResponsePolicy::DashboardFullRecord {
                 with_dashboard_extras(runtime, &row.task, object)?
             } else {
@@ -171,8 +221,15 @@ pub fn task_write_response_json(
             runtime.task_crew_read(task).insert_into(&mut object);
             Value::Object(object)
         }
-        TaskWriteResponsePolicy::Projected(fields) => {
-            task_fields_response_json(runtime, task, fields)?
+        TaskWriteResponsePolicy::Projected(projection) => {
+            task_fields_response_json_projected_hydrated(
+                runtime,
+                task,
+                row,
+                &projection.fields,
+                projection.keyed_single,
+                None,
+            )?
         }
     };
     metadata.insert_into(&mut response);
@@ -186,9 +243,10 @@ pub fn screened_task_write_response_json(
     written: &ScreenedTaskWrite,
     policy: &TaskWriteResponsePolicy,
 ) -> Result<Value, OrbitError> {
-    task_write_response_json(
+    task_write_response_from_row(
         runtime,
         &written.task,
+        written.row.as_ref(),
         policy,
         &TaskWriteMetadata::from_screened(written),
     )
@@ -217,29 +275,57 @@ pub fn task_write_response_from_tool_answer(
     Ok((document, task, metadata))
 }
 
-/// One task reduced to the requested show fields: the bare value
-/// for a single field, otherwise an object keyed by field name.
-pub fn task_fields_response_json(
+/// One task reduced to the requested show fields. With
+/// `keyed_single`, even a single field answers an object keyed by
+/// field name (the `fields` array shape); without it a single field
+/// answers its bare value (the `field` alias shape).
+pub fn task_fields_response_json_projected(
     runtime: &OrbitRuntime,
     task: &Task,
     fields: &[String],
+    keyed_single: bool,
 ) -> Result<Value, OrbitError> {
-    let status_by_id = if fields
+    task_fields_response_json_projected_hydrated(runtime, task, None, fields, keyed_single, None)
+}
+
+/// [`task_fields_response_json_projected`] over a caller-hydrated `row` and,
+/// when supplied, a caller-owned status index (for example a list page's
+/// `status_by_id`). With a status override no per-row status-index query
+/// runs; without one the bounded [`task_reference_status_index`] is computed
+/// once for the whole projection, not per field. With no row, sidecars are
+/// read from the store exactly as the unhydrated projection reads them.
+pub(crate) fn task_fields_response_json_projected_hydrated(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    row: Option<&TaskRow>,
+    fields: &[String],
+    keyed_single: bool,
+    status_override: Option<&BTreeMap<String, TaskStatus>>,
+) -> Result<Value, OrbitError> {
+    let computed_status;
+    let status_by_id: Option<&BTreeMap<String, TaskStatus>> = if fields
         .iter()
         .any(|field| matches!(field.as_str(), "resolved_dependencies" | "relations"))
     {
-        Some(task_reference_status_index(runtime, task)?)
+        match status_override {
+            Some(index) => Some(index),
+            None => {
+                computed_status = task_reference_status_index(runtime, task)?;
+                Some(&computed_status)
+            }
+        }
     } else {
-        None
+        // Pilot warnings still consult the index when one is supplied.
+        status_override
     };
-    if fields.len() == 1 {
-        return task_show_field_json(runtime, task, &fields[0], status_by_id.as_ref());
+    if fields.len() == 1 && !keyed_single {
+        return task_show_field_json_with_row(runtime, task, row, &fields[0], status_by_id);
     }
     let mut object = Map::new();
     for field in fields {
         object.insert(
             field.clone(),
-            task_show_field_json(runtime, task, field, status_by_id.as_ref())?,
+            task_show_field_json_with_row(runtime, task, row, field, status_by_id)?,
         );
     }
     Ok(Value::Object(object))
@@ -276,16 +362,46 @@ pub(crate) fn task_reference_status_index(
     Ok(status_by_id)
 }
 
+/// Workspace-wide reads a dashboard page already made for its rows, lent to
+/// the detail it bundles so one request reads each of them once. Every
+/// field left `None` is read by the detail itself, as a standalone detail
+/// does; a lent value must come from the same request and the same runtime.
+#[derive(Default)]
+pub struct DashboardPageReads<'a> {
+    /// The page's origin-remote reader for unlinked pull-request refs.
+    pub pull_request_links: Option<&'a PullRequestLinks>,
+    /// The page's [`active_task_triage_map`].
+    pub active_triage: Option<&'a BTreeMap<String, Value>>,
+    /// The page's [`tasks_in_pilot_preparation`], filled on first use.
+    pub preparing: Option<&'a OnceCell<BTreeSet<String>>>,
+    /// The page's delivery-attention map from the same rows
+    /// ([`OrbitRuntime::delivery_attention_map`]); a task without an entry
+    /// has no attention.
+    pub delivery_attention: Option<&'a BTreeMap<String, Value>>,
+}
+
 /// Linked pull requests, lifecycle transitions, run navigability and
-/// `readiness.preparing`. These are dashboard controls, not part of
+/// `readiness.preparing` and active triage/recovery bindings. These are dashboard controls, not part of
 /// the shared task record; the dashboard detail and its write
 /// responses add them, no other profile does.
 pub fn with_dashboard_extras(
     runtime: &OrbitRuntime,
     task: &Task,
-    mut object: Map<String, Value>,
+    object: Map<String, Value>,
 ) -> Result<Value, OrbitError> {
-    link_pull_requests(&mut object, task, &PullRequestLinks::new(runtime));
+    with_dashboard_extras_from(runtime, task, object, &DashboardPageReads::default())
+}
+
+fn with_dashboard_extras_from(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    mut object: Map<String, Value>,
+    page: &DashboardPageReads<'_>,
+) -> Result<Value, OrbitError> {
+    match page.pull_request_links {
+        Some(links) => link_pull_requests(&mut object, task, links),
+        None => link_pull_requests(&mut object, task, &PullRequestLinks::new(runtime)),
+    }
     object.insert(
         "status_transitions".to_string(),
         dashboard_status_transitions(runtime, task)?,
@@ -302,19 +418,33 @@ pub fn with_dashboard_extras(
             task,
         )),
     );
+    let triage = match page.active_triage {
+        Some(map) => map.get(&task.id).cloned(),
+        None => active_task_triage_map(runtime)?.remove(&task.id),
+    };
+    if let Some(triage) = triage {
+        object.insert("active_triage".to_string(), triage);
+    }
     let mut value = Value::Object(object);
     if value.get("readiness").is_some() {
-        let preparing = tasks_in_pilot_preparation(runtime).contains(&task.id);
+        let preparing = match page.preparing {
+            Some(cell) => cell
+                .get_or_init(|| tasks_in_pilot_preparation(runtime))
+                .contains(&task.id),
+            None => tasks_in_pilot_preparation(runtime).contains(&task.id),
+        };
         mark_readiness_preparing(&mut value, preparing);
     }
     Ok(value)
 }
 
 /// Fill the page of a `github-pr` ref recorded without one, so the
-/// dashboard can link every delivered pull request.
+/// dashboard can link every delivered pull request. The refs keep the show
+/// projection's current-delivery order (latest `github-pr` first).
 pub fn link_pull_requests(object: &mut Map<String, Value>, task: &Task, links: &PullRequestLinks) {
     let mut external_refs = task.external_refs.clone();
     links.link(&mut external_refs);
+    let external_refs = ordered_external_refs_for_show(&external_refs);
     object.insert("external_refs".to_string(), json!(external_refs));
 }
 
@@ -345,6 +475,153 @@ pub fn tasks_in_pilot_preparation(runtime: &OrbitRuntime) -> BTreeSet<String> {
             tracing::warn!(%error, "task readiness: active pilot preparations unreadable");
             BTreeSet::new()
         })
+}
+
+/// Active triage and recovery run bindings, read once for a dashboard page.
+///
+/// Preparation checkpoints bind escalation partitions; a final-recovery
+/// checkpoint binds an inline recovery, and the backstop's input and prepared
+/// output bind its separate run. Crew names come from those recorded choices,
+/// never from the task's implementer or current configuration. A pending run
+/// can name a task before drawing its crew, in which case `crew` is null.
+///
+/// The binding is decoration: when an active run's pipeline state cannot be
+/// read, this logs a warning and returns no bindings rather than failing the
+/// task read or the write that rendered it.
+pub fn active_task_triage_map(
+    runtime: &OrbitRuntime,
+) -> Result<BTreeMap<String, Value>, OrbitError> {
+    let workspace = match runtime.paths().repo_root.canonicalize() {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::warn!(%error, "task triage: workspace path unreadable");
+            return Ok(BTreeMap::new());
+        }
+    };
+    let mut by_task = BTreeMap::<String, BTreeMap<String, Value>>::new();
+    let mut runs = Vec::new();
+    for status in [
+        JobRunState::Pending,
+        JobRunState::Running,
+        JobRunState::Retrying,
+    ] {
+        match runtime
+            .stores()
+            .jobs()
+            .list_job_runs_filtered(&JobRunQuery {
+                state: Some(status),
+                include_steps: false,
+                ..Default::default()
+            }) {
+            Ok(found) => runs.extend(found),
+            Err(error) => {
+                tracing::warn!(%error, "task triage: active runs unreadable");
+                return Ok(BTreeMap::new());
+            }
+        }
+    }
+    let run_ids = runs
+        .iter()
+        .map(|run| run.run_id.clone())
+        .collect::<Vec<_>>();
+    // One store call for every active run. The exact read stays exact: the
+    // lenient page read would treat unreadable JSON as absent and fall back to
+    // submitted bindings. An unreadable state fails only this decoration, so
+    // every task stays unmarked, the way `tasks_in_pilot_preparation` degrades.
+    let states = match runtime.stored_run_states_exact(&run_ids) {
+        Ok(states) => states,
+        Err(error) => {
+            tracing::warn!(%error, "task triage: active run states unreadable");
+            return Ok(BTreeMap::new());
+        }
+    };
+    for run in runs {
+        let mut bind = |task_id: &str, crew: Option<&str>| {
+            by_task.entry(task_id.to_string()).or_default().insert(
+                run.run_id.clone(),
+                json!({"run_id": run.run_id, "crew": crew}),
+            );
+        };
+        let Some(state) = states.get(&run.run_id).and_then(Option::as_ref) else {
+            // Pending runs can be visible before their worker creates
+            // pipeline state. Only explicit submitted bindings count.
+            if let Some(input) = run.input.as_ref() {
+                if run.job_id == super::BLOCKED_TASK_RECOVERY_JOB {
+                    if let Some(id) = input.get("task_id").and_then(Value::as_str) {
+                        bind(id, None);
+                    }
+                } else if run.job_id == crate::application::contracts::ESCALATION_TRIAGE_JOB
+                    && let Some(ids) = input.get("task_ids").and_then(Value::as_array)
+                {
+                    for id in ids.iter().filter_map(Value::as_str) {
+                        bind(id, None);
+                    }
+                }
+            }
+            continue;
+        };
+        let recovery_crew = state
+            .activity_crew_draws
+            .get(FINAL_RECOVERY_CREWS_CONFIG_KEY)
+            .or_else(|| state.activity_crew_draws.get(FINAL_RECOVERY_CREWS_KEY))
+            .map(|draw| draw.crew.as_str());
+        if let Some(recovery) = state.final_recovery.as_ref()
+            && recovery.key.run_id == run.run_id
+            && recovery.decision.is_none()
+        {
+            bind(&recovery.task_id, recovery_crew);
+        }
+        if run.job_id == super::BLOCKED_TASK_RECOVERY_JOB {
+            // The run is bound on submission, including while prepare is
+            // pending. Its output names the same task after preparation.
+            let prepared = state.step_outputs.iter().find_map(|(index, output)| {
+                (state.step_states.get(index) == Some(&JobRunState::Success)
+                    && output.get("proceed").is_some())
+                .then_some(output)
+            });
+            if prepared.and_then(|output| output.get("proceed")) == Some(&Value::Bool(false)) {
+                continue;
+            }
+            if let Some(task_id) = prepared
+                .and_then(|output| output.pointer("/recovery/task_id"))
+                .or_else(|| state.initial_input.get("task_id"))
+                .and_then(Value::as_str)
+            {
+                bind(task_id, recovery_crew);
+            }
+        } else if run.job_id == crate::application::contracts::ESCALATION_TRIAGE_JOB {
+            let prepared = state.step_outputs.iter().find_map(|(index, output)| {
+                (state.step_states.get(index) == Some(&JobRunState::Success)
+                    && output.get("partitions").is_some()
+                    && output.get("tasks").is_some())
+                .then_some(output)
+            });
+            if let Some(prepared) = prepared {
+                if prepared.get("workspace_path").and_then(Value::as_str) != workspace.to_str() {
+                    continue;
+                }
+                if let Some(tasks) = prepared.get("tasks").and_then(Value::as_array) {
+                    for task in tasks {
+                        if let Some(task_id) = task.get("task_id").and_then(Value::as_str) {
+                            bind(task_id, task.get("crew").and_then(Value::as_str));
+                        }
+                    }
+                }
+            } else if let Some(ids) = state
+                .initial_input
+                .get("task_ids")
+                .and_then(Value::as_array)
+            {
+                for task_id in ids.iter().filter_map(Value::as_str) {
+                    bind(task_id, None);
+                }
+            }
+        }
+    }
+    Ok(by_task
+        .into_iter()
+        .map(|(id, runs)| (id, Value::Array(runs.into_values().collect())))
+        .collect())
 }
 
 /// Add `readiness.preparing` to a projection that carries readiness.
@@ -400,14 +677,23 @@ pub fn summary_status_transitions(task: &Task) -> Value {
 /// The dashboard detail record for `row`: the show record plus the
 /// dashboard extras. Kept beside the write projection so the detail
 /// and a mutation response enrich a record the same way.
+///
+/// `page` lends the reads a list page already made for its rows (see
+/// [`DashboardPageReads`]); a standalone detail passes the default and reads
+/// them itself. Either way the record is the same.
 pub fn task_detail_with_dashboard_extras(
     runtime: &OrbitRuntime,
     row: &TaskRow,
     status_by_id: &BTreeMap<String, TaskStatus>,
+    page: &DashboardPageReads<'_>,
 ) -> Result<Value, OrbitError> {
     let object = super::record_json::task_show_json(runtime, row, status_by_id)?;
-    let mut value = with_dashboard_extras(runtime, &row.task, object)?;
-    if let Some(attention) = runtime.delivery_attention(row)?
+    let mut value = with_dashboard_extras_from(runtime, &row.task, object, page)?;
+    let attention = match page.delivery_attention {
+        Some(map) => map.get(&row.task.id).cloned(),
+        None => runtime.task_row_delivery_attention(row)?,
+    };
+    if let Some(attention) = attention
         && let Some(object) = value.as_object_mut()
     {
         object.insert("delivery_attention".to_string(), attention);

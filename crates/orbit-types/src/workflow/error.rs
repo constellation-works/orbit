@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use super::activity_job::{Provider, RETIRED_BACKEND_MIGRATION, provider_sandbox_modes};
+use super::activity_job::RETIRED_BACKEND_MIGRATION;
 use super::final_recovery::MAX_DECISION_TEXT_CHARS;
 use super::review::{
     REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION, REVIEW_REPORT_ARTIFACT,
@@ -34,22 +34,6 @@ pub enum JobRunStateError {
          cancelled, interrupted, or held)"
     )]
     StepState { state: JobRunState },
-}
-
-/// A `provider_sandbox` override the provider does not offer.
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub enum ProviderSandboxError {
-    #[error(
-        "`provider_sandbox` is empty; expected one of {}",
-        provider_sandbox_modes(*.provider).join(", ")
-    )]
-    Empty { provider: Provider },
-    #[error(
-        "`provider_sandbox` `{mode}` is not supported for {}; expected one of {}",
-        .provider.as_str(),
-        provider_sandbox_modes(*.provider).join(", ")
-    )]
-    Unsupported { provider: Provider, mode: String },
 }
 
 /// A value of the retired `backend` key other than the inert `cli`.
@@ -248,4 +232,37 @@ pub enum ConventionTemplateError {
     Unterminated { key: String },
     #[error("{key}: {reason}")]
     Invalid { key: String, reason: String },
+}
+
+/// Why a mandate artifact is refused.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ResidentMandateError {
+    /// The artifact is not a JSON mandate object.
+    #[error("the mandate is not valid JSON for resident.mandate/v1: {0}")]
+    Malformed(String),
+    /// The schema id is not the supported one.
+    #[error("the mandate schema must be `resident.mandate/v1`, not `{0}`")]
+    Schema(String),
+    /// A required field is empty.
+    #[error("mandate `{0}` must not be empty")]
+    Empty(&'static str),
+    /// A one-line field spans lines or is too long.
+    #[error("mandate `{0}` must be one line of at most 240 characters")]
+    NotOneLine(String),
+    /// Exit criteria count outside 1–8.
+    #[error("a mandate holds 1-8 exit criteria, not {0}")]
+    ExitCriteriaCount(usize),
+    /// A workspace is listed twice.
+    #[error("mandate workspace `{0}` is listed twice")]
+    DuplicateWorkspace(String),
+    /// The cadence floor or heartbeat is out of range.
+    #[error("{0}")]
+    Cadence(String),
+}
+
+/// Why a structured resident comment is refused; core judges cycle freshness.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ResidentCommentError {
+    #[error("resident_record_invalid: {0}")]
+    Invalid(String),
 }

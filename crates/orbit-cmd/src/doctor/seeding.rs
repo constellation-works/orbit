@@ -1,12 +1,9 @@
 //! The `seeding-policy` rows: what a workspace's `seeding.routines` and
-//! `seeding.auto_tasks` leave out, and a crew-performance mode no refresh
-//! routine serves.
+//! `seeding.auto_tasks` leave out.
 
-use orbit_config::{CrewPerformanceMode, SeedingPolicy};
+use orbit_config::SeedingPolicy;
 use orbit_core::OrbitRuntime;
-use orbit_core::application::seeding_policy::{
-    CREW_PERFORMANCE_REFRESH_ROUTINE, SeedingPolicyExclusions,
-};
+use orbit_core::application::seeding_policy::SeedingPolicyExclusions;
 
 use super::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
 
@@ -28,7 +25,7 @@ pub(super) fn doctor_check_seeding_policy(runtime: &OrbitRuntime) -> Vec<Workspa
         return Vec::new();
     }
     let left_out = SeedingPolicyExclusions::of(&policies);
-    let mut rows = vec![row(
+    vec![row(
         WorkspaceDoctorStatus::Info,
         format!(
             "seeding.routines = {}, seeding.auto_tasks = {}: this workspace leaves out {} \
@@ -40,27 +37,7 @@ pub(super) fn doctor_check_seeding_policy(runtime: &OrbitRuntime) -> Vec<Workspa
             left_out.auto_tasks.len(),
         ),
         None,
-    )];
-    let mode = runtime.crew_performance();
-    if mode != CrewPerformanceMode::Off
-        && !policies.routines.includes(CREW_PERFORMANCE_REFRESH_ROUTINE)
-    {
-        rows.push(row(
-            WorkspaceDoctorStatus::Warning,
-            format!(
-                "workflow.crew_performance is `{}`, but seeding.routines leaves out \
-                 `{CREW_PERFORMANCE_REFRESH_ROUTINE}`, so nothing refreshes the snapshot crew \
-                 draws read.",
-                mode.as_str()
-            ),
-            Some(format!(
-                "Set `workflow.crew_performance = \"off\"`, or add \
-                 `{CREW_PERFORMANCE_REFRESH_ROUTINE}` to `seeding.routines` and run `orbit \
-                 workspace sync`."
-            )),
-        ));
-    }
-    rows
+    )]
 }
 
 fn label(policy: &SeedingPolicy) -> String {

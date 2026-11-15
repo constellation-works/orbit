@@ -41,10 +41,6 @@ pub(super) fn latest_push_at(
         .max()
 }
 
-pub(super) fn run_at(run: &JobRun) -> DateTime<Utc> {
-    run.finished_at.or(run.started_at).unwrap_or(run.created_at)
-}
-
 pub(super) fn single_task(run: &JobRun, task_id: &str) -> bool {
     let carried = run.input.as_ref().map(carried_task_ids).unwrap_or_default();
     carried.len() == 1 && carried.contains(task_id)

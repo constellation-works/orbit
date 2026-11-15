@@ -6,13 +6,12 @@
 // poll never rescans bundles. How well task pilots predicted landed diffs is
 // graded under Agents › Pilots.
 //
-// Four views, each a hash route that keeps the selection's query:
+// Three views, each a hash route that keeps the selection's query:
 //   #analytics/codebase             Hotspots: one table, a column per path signal
 //   #analytics/codebase/file?path=  one path: its signals, regression sites
 //                                   (/api/codebase/show), regressed tasks and the
 //                                   files that land with it (/api/codebase/related)
 //   #analytics/codebase/coupling    reserved-together pairs and lock waits
-//   #analytics/codebase/marks       the regression-risk marks comparison
 // The other view choices (Show all, the path search, release grouping, the
 // lock sort) live here, not in the hash. Every node is keyed and hashed for
 // `syncNodes`, so a poll that answers the same payload leaves the page exactly
@@ -25,7 +24,7 @@ const $ = (id) => document.getElementById(id);
 const BODY_ID = "codebase-body";
 const WINDOWS = ["7d", "30d", "90d", "all"];
 const ROLLUPS = ["file", "dir", "crate"];
-const VIEWS = ["hotspots", "file", "coupling", "marks"];
+const VIEWS = ["hotspots", "file", "coupling"];
 // The dimensions a regression is filtered by, each value in the server's
 // breakdown order. `absent` (a link stored without a classification) and
 // `unclassified` (the filer could not tell) stay apart.
@@ -57,6 +56,8 @@ const WIDE_TASK_PATHS = 5;
 const TASKS_SHOWN = 3;
 // Paths each signal contributes to "One signal" before Show all.
 const SINGLES_SHOWN = 3;
+// Initial entries in each Coupling list, after release grouping or lock sorting.
+const COUPLING_SHOWN = 5;
 // Unranked known paths a search offers to open.
 const OTHER_PATHS_SHOWN = 8;
 // Partners the file view's "Changes with" lists.
@@ -83,7 +84,6 @@ const PURPOSES = {
   hotspots: "Paths that are costly for agents to change. Rates are over tasks that declared the path, which is not always the landed diff; Regressed counts a regression only where its links record a site.",
   coupling: "Files that are reserved together, and files that make tasks wait for a lock.",
   file: "",
-  marks: "Whether regression-risk marks in implement and review prompts lowered regressions on the marked paths.",
 };
 
 let codebaseQuery = { ...DEFAULT_QUERY };
@@ -91,30 +91,39 @@ let codebaseQuery = { ...DEFAULT_QUERY };
 let route = { view: "hotspots", path: null };
 // What the reader picked on the page: every ranked path or the top of each
 // signal, the path search, whether release files are grouped, the lock sort
-// (`wait` or `rate`), whether every regressed task is listed, and which path
-// was last copied or failed to copy.
-let view = { showAll: false, search: "", groupRelease: true, lockSort: "wait", allTasks: false, copied: null, copyFailed: null };
+// (`wait` or `rate`), whether each Coupling list or every regressed task is
+// expanded, and which path was last copied or failed to copy.
+let view = { showAll: false, search: "", groupRelease: true, lockSort: "wait", allPairs: false, allLocks: false, allTasks: false, copied: null, copyFailed: null };
 let lastData = null;
 let lastPayloadKey = null;
 let paintedView = null;
-// The file view's related-files request: the key it answers, its response or
-// error, and a counter that retires superseded requests.
-let related = { key: null, data: null, error: null, loading: false, request: 0 };
+// The file view's related-files request: the key it answers, the selection its
+// data belongs to, its response or error, and a counter that retires superseded
+// requests. Only data whose `selection` is the open one is shown or kept across
+// a refetch: a changed path, window or minimum never relabels an older answer.
+let related = { key: null, selection: null, data: null, error: null, loading: false, request: 0 };
 // The file view's path-detail request (/api/codebase/show), which carries the
 // path's regression sites: the same shape as `related`.
-let pathDetail = { key: null, data: null, error: null, loading: false, request: 0 };
+let pathDetail = { key: null, selection: null, data: null, error: null, loading: false, request: 0 };
 let requestHashChange = () => {};
 
+// A changed selection retires the payload on hand: it answers the old window,
+// support or filters, so nothing repaints it until the new read lands.
+function dropQueryData() {
+  lastData = null;
+  lastPayloadKey = null;
+}
+
 function resetRelated() {
-  related = { key: null, data: null, error: null, loading: false, request: related.request + 1 };
-  pathDetail = { key: null, data: null, error: null, loading: false, request: pathDetail.request + 1 };
+  related = { key: null, selection: null, data: null, error: null, loading: false, request: related.request + 1 };
+  pathDetail = { key: null, selection: null, data: null, error: null, loading: false, request: pathDetail.request + 1 };
 }
 
 onWorkspaceChange(() => {
   lastData = null;
   lastPayloadKey = null;
   resetRelated();
-  view = { ...view, search: "", showAll: false };
+  view = { ...view, search: "", showAll: false, allPairs: false, allLocks: false };
   if ($("codebase-path-search")) $("codebase-path-search").value = "";
 });
 
@@ -158,6 +167,7 @@ function applyCodebaseHashQuery(query, viewName = null) {
     ...Object.fromEntries(REGRESSION_DIMENSIONS.map(({ key }) => [key, query.get(key)])),
   });
   const sameQuery = JSON.stringify(next) === JSON.stringify(codebaseQuery);
+  if (!sameQuery) dropQueryData();
   codebaseQuery = next;
   setRoute(normalizedRoute(viewName, query.get("path")));
   syncCodebaseControls();
@@ -218,15 +228,15 @@ function syncCodebaseControls() {
     }
     support.value = value;
   }
-  // The file and marks views have their own heading and no toolbar; Coupling
+  // The file view has its own heading and no toolbar; Coupling
   // keeps the window, rollup and minimum but has no path search.
   const toolbar = $("codebase-toolbar");
-  if (toolbar) toolbar.hidden = route.view === "file" || route.view === "marks";
+  if (toolbar) toolbar.hidden = route.view === "file";
   const search = $("codebase-search");
   if (search) search.hidden = route.view !== "hotspots";
   const views = $("codebase-views");
   if (views) {
-    views.hidden = route.view === "file" || route.view === "marks";
+    views.hidden = route.view === "file";
     for (const link of views.querySelectorAll("a")) {
       const on = link.dataset.view === route.view;
       link.classList.toggle("on", on);
@@ -250,6 +260,7 @@ function updateQuery(update) {
     syncCodebaseControls();
     return;
   }
+  dropQueryData();
   codebaseQuery = next;
   syncCodebaseControls();
   requestHashChange();
@@ -701,24 +712,8 @@ function hotspotTable(model) {
   });
 }
 
-function linkTo(text, target) {
-  return viewLink(target, [text]);
-}
-
-function riskMarksLine(data) {
-  const marks = section(data, "regressions").risk_marks || {};
-  if (!marks.enabled_at) return ["No implement or review prompt has marked a regression-prone file yet, so there is nothing to compare."];
-  const sample = (rates) => Number(rates?.denominator)
-    ? `${pct(rates.rate)} (${count(rates.numerator)} of ${count(rates.denominator)})`
-    : "no tasks";
-  return [
-    `Regression-risk marks: ${sample(marks.with_marks)} of marked tasks regressed, against ${sample(marks.before)} in the ${count(marks.window_days)} days before marking. `,
-    linkTo("Per-path comparison", { view: "marks" }),
-  ];
-}
-
 /// The footnotes that stand in for whole sections: hidden columns, blocks
-/// that never count, the regression-risk marks and where defect trends live.
+/// that never count and where defect trends live.
 function notesNode(model) {
   const { data, signals } = model;
   const lines = [];
@@ -740,17 +735,15 @@ function notesNode(model) {
   if (data.rollup === "crate") {
     lines.push(["At crate grouping nearly every crate clears the minimum, so most crates turn up under several signals. Group by file or directory to find hotspots."]);
   }
-  lines.push(riskMarksLine(data));
   const defects = el("a", { text: "Metrics › Defects" });
   defects.setAttribute("href", scopedHashHref("#analytics/metrics"));
   defects.addEventListener("click", (event) => followLink(event, "#analytics/metrics"));
   lines.push(["Defect trends are on ", defects, "."]);
   const node = el("div", { class: "codebase-notes" }, lines.map((parts) => el("p", { class: "codebase-note" }, parts)));
-  const marks = section(data, "regressions").risk_marks || {};
   return keyed(node, "notes", {
     hidden: SIGNALS.filter((signal) => !signals.includes(signal)), rejected: section(data, "rejected").rejected_with_run,
     causes, rollup: data.rollup, min: data.min_support, attribution: regressions.attribution || null, unsited: regressions.unsited || null,
-    marks: [marks.enabled_at, marks.window_days, marks.with_marks, marks.before], links: [scopedHashHref(buildCodebaseHash({ view: "marks" })), scopedHashHref("#analytics/metrics")],
+    links: [scopedHashHref("#analytics/metrics")],
   });
 }
 
@@ -969,11 +962,13 @@ function fileSymbols(model, path) {
   const body = el("div", { class: "codebase-box-body" });
   box.appendChild(body);
   const done = (hash) => keyed(box, "file-symbols", { path, ...hash });
-  if (pathDetail.error) {
+  // Detail read for another path, window, minimum or filter is not this selection's.
+  const answers = pathDetail.selection === pathDetailSelection(path);
+  if (answers && pathDetail.error) {
     body.appendChild(el("p", { class: "codebase-empty", text: `Could not load regression sites: ${pathDetail.error}` }));
     return done({ error: pathDetail.error });
   }
-  const data = pathDetail.data && pathDetail.data.path === path ? pathDetail.data : null;
+  const data = answers && pathDetail.data && pathDetail.data.path === path ? pathDetail.data : null;
   if (!data) {
     body.appendChild(el("p", { class: "codebase-empty", text: "Loading regression sites…" }));
     return done({ loading: true });
@@ -1080,11 +1075,13 @@ function fileRelated(path) {
     body.appendChild(el("div", { class: "codebase-actions" }, [actionButton("Group by file", () => updateQuery({ rollup: "file" }))]));
     return done({ path, rollup: true });
   }
-  if (related.error) {
+  // An answer for another path, window or minimum is not this selection's.
+  const answers = related.selection === relatedSelection(path);
+  if (answers && related.error) {
     body.appendChild(el("p", { class: "codebase-empty", text: `Could not load related files: ${related.error}` }));
     return done({ path, error: related.error });
   }
-  const data = related.data;
+  const data = answers ? related.data : null;
   if (!data) {
     body.appendChild(el("p", { class: "codebase-empty", text: "Loading related files…" }));
     return done({ path, loading: true });
@@ -1110,8 +1107,14 @@ function fileNodes(model) {
   return [fileHead(model, path), fileTiles(model, path), fileSymbols(model, path), fileTasks(model, path), fileRelated(path)];
 }
 
-// The related query reads only the window and minimum support; a changed
-// payload refetches it too.
+// What the related answer is for: the related query reads only the path, the
+// window and the minimum support.
+function relatedSelection(path) {
+  return JSON.stringify([path, codebaseQuery.window, codebaseQuery.min_support]);
+}
+
+// A changed payload refetches the related answer too, keeping it on screen only
+// while the selection is unchanged.
 function relatedFetchKey(path) {
   return JSON.stringify([path, codebaseQuery.window, codebaseQuery.min_support, lastPayloadKey]);
 }
@@ -1130,9 +1133,10 @@ function ensureRelated() {
 
 async function fetchRelated(path, key) {
   const request = related.request + 1;
-  // Keep the last answer for the same file on screen while a refresh runs.
-  const keep = related.data && related.data.path === path ? related.data : null;
-  related = { key, data: keep, error: null, loading: true, request };
+  // Keep the last answer for the same selection on screen while a refresh runs.
+  const selection = relatedSelection(path);
+  const keep = related.selection === selection && related.data ? related.data : null;
+  related = { key, selection, data: keep, error: null, loading: true, request };
   paint();
   const visit = captureWorkspaceVisit();
   const sp = new URLSearchParams({ path, window: codebaseQuery.window, min_support: String(codebaseQuery.min_support), top: String(RELATED_TOP) });
@@ -1148,7 +1152,13 @@ async function fetchRelated(path, key) {
   if (route.view === "file" && route.path === path) paint();
 }
 
-// The path detail reads the whole selection; a changed payload refetches it.
+// What the path detail is for: it reads the path and the whole selection.
+function pathDetailSelection(path) {
+  return JSON.stringify([path, analyticsPath()]);
+}
+
+// A changed payload refetches the path detail too, keeping it on screen only
+// while the selection is unchanged.
 function pathDetailFetchKey(path) {
   return JSON.stringify([path, analyticsPath(), lastPayloadKey]);
 }
@@ -1162,8 +1172,9 @@ function ensurePathDetail() {
 
 async function fetchPathDetail(path, key) {
   const request = pathDetail.request + 1;
-  const keep = pathDetail.data && pathDetail.data.path === path ? pathDetail.data : null;
-  pathDetail = { key, data: keep, error: null, loading: true, request };
+  const selection = pathDetailSelection(path);
+  const keep = pathDetail.selection === selection && pathDetail.data ? pathDetail.data : null;
+  pathDetail = { key, selection, data: keep, error: null, loading: true, request };
   const visit = captureWorkspaceVisit();
   const sp = new URLSearchParams(analyticsPath().split("?")[1] || "");
   sp.set("path", path);
@@ -1183,6 +1194,24 @@ async function fetchPathDetail(path, key) {
 }
 
 // ---- coupling & locks -------------------------------------------------------
+
+function couplingListFooter(total, state, listId) {
+  const footer = el("div", { class: "codebase-list-footer" });
+  if (total > COUPLING_SHOWN) {
+    const expanded = view[state];
+    const toggle = actionButton(expanded ? "Show fewer" : `Show all ${count(total)}`, () => {
+      view = { ...view, [state]: !view[state] };
+      paint();
+    }, "small codebase-list-toggle");
+    toggle.setAttribute("aria-expanded", String(expanded));
+    toggle.setAttribute("aria-controls", listId);
+    footer.appendChild(el("div", { class: "codebase-list-disclosure" }, [
+      el("span", { class: "codebase-extra", text: `Showing ${count(expanded ? total : COUPLING_SHOWN)} of ${count(total)}` }),
+      toggle,
+    ]));
+  }
+  return footer;
+}
 
 function pairRow(pair) {
   const [left, right] = pair.paths || [];
@@ -1253,14 +1282,19 @@ function pairsNode(model) {
     return keyed(box, "pairs", { coupling, rollup: data.rollup, min: data.min_support });
   }
   const grouped = view.groupRelease && release.length > 0;
-  const list = el("ul", { class: "codebase-pair-list" });
+  const list = el("ul", { class: "codebase-pair-list", id: "codebase-pair-list" });
+  const entries = pairs.filter((pair) => !(grouped && releasePair(pair.paths)));
+  const total = entries.length + (grouped ? 1 : 0);
   if (grouped) list.appendChild(releaseRow(release));
-  for (const pair of pairs) if (!(grouped && releasePair(pair.paths))) list.appendChild(pairRow(pair));
+  const shown = view.allPairs ? entries : entries.slice(0, COUPLING_SHOWN - (grouped ? 1 : 0));
+  for (const pair of shown) list.appendChild(pairRow(pair));
   box.appendChild(list);
+  const footer = couplingListFooter(total, "allPairs", list.id);
   const parts = [`${plural(below, "pair")} below ${count(data.min_support)} shared reservations ${below === 1 ? "is" : "are"} hidden.`];
   if (largeNote) parts.push(largeNote);
-  box.appendChild(note(parts.join(" "), "codebase-box-note"));
-  return keyed(box, "pairs", { coupling, rollup: data.rollup, min: data.min_support, grouped: view.groupRelease });
+  footer.appendChild(note(parts.join(" ")));
+  box.appendChild(footer);
+  return keyed(box, "pairs", { coupling, rollup: data.rollup, min: data.min_support, grouped: view.groupRelease, allPairs: view.allPairs });
 }
 
 function lockRow(row, byWait, maxTotal, recorded) {
@@ -1290,10 +1324,10 @@ function locksNode(model) {
     el("div", {}, [el("h4", { text: "Lock waits" }), el("span", { class: "codebase-extra", text: recorded ? "time tasks spent denied a lock on the file" : "requesters denied a lock on the file" })]),
   ]);
   if (rowsByWait(data).length) {
-    const sorts = el("div", { class: "codebase-segs small", role: "group", "aria-label": "Sort locks" });
+    const sorts = el("div", { class: "mx-seg mx-seg-wrap", role: "group", "aria-label": "Sort locks" });
     for (const [key, label] of [["wait", "Total wait"], ["rate", "Denial rate"]]) {
       const on = (key === "wait") === byWait;
-      const button = el("button", { class: `codebase-seg${on ? " on" : ""}`, type: "button", text: label, "aria-pressed": String(on) });
+      const button = el("button", { class: `mx-seg-btn${on ? " on" : ""}`, type: "button", text: label, "aria-pressed": String(on) });
       button.dataset.value = key;
       button.addEventListener("click", () => {
         if (view.lockSort === key) return;
@@ -1305,6 +1339,7 @@ function locksNode(model) {
     head.appendChild(sorts);
   }
   const box = el("section", { class: "codebase-box codebase-locks", "aria-label": "Lock waits" }, [head]);
+  const footer = couplingListFooter(rows.length, "allLocks", "codebase-lock-list");
   if (lockIsQuiet(data)) {
     box.appendChild(el("div", { class: "codebase-empty-state good" }, [
       el("p", { class: "codebase-empty-title", text: "No lock was refused in this window." }),
@@ -1315,74 +1350,21 @@ function locksNode(model) {
     box.appendChild(el("p", { class: "codebase-empty", text: below ? `No path reaches minimum support ${count(data.min_support)}; ${count(below)} fall below it.` : "No path has lock data in this window." }));
   } else {
     const maxTotal = Math.max(0, ...rows.map((row) => Number(row.wait?.total_ms) || 0));
-    const list = el("ul", { class: "codebase-lock-list" });
-    for (const row of rows) list.appendChild(lockRow(row, byWait, maxTotal, recorded));
+    const list = el("ul", { class: "codebase-lock-list", id: "codebase-lock-list" });
+    for (const row of view.allLocks ? rows : rows.slice(0, COUPLING_SHOWN)) list.appendChild(lockRow(row, byWait, maxTotal, recorded));
     box.appendChild(list);
   }
   const foot = [];
   if (Number(lock.below_support) > 0 && rows.length) foot.push(`${plural(lock.below_support, "path")} below minimum support ${count(data.min_support)} hidden.`);
   if (!recorded) foot.push("Lock wait time is not recorded, so waits cannot be shown.");
   else if (rowsByWait(data).length) foot.push("A wait runs from a task's first denial to its admission or its leaving the backlog; its retries add no wait. A wait still in progress is measured to now.");
-  if (foot.length) box.appendChild(note(foot.join(" "), "codebase-box-note"));
-  return keyed(box, "locks", { lock, min: data.min_support, byWait });
+  if (foot.length) footer.appendChild(note(foot.join(" ")));
+  box.appendChild(footer);
+  return keyed(box, "locks", { lock, min: data.min_support, byWait, allLocks: view.allLocks });
 }
 
 function couplingNodes(model) {
   return [pairsNode(model), locksNode(model)];
-}
-
-// ---- marks ------------------------------------------------------------------
-
-// A rate with the counts behind it, so a small sample reads as one.
-function sampleNode(rates) {
-  const denominator = Number(rates && rates.denominator) || 0;
-  if (!denominator) return el("td", { class: "codebase-risk-none", text: "no tasks" });
-  return el("td", {}, [
-    el("span", { class: "codebase-rate", text: pct(rates.rate) }),
-    " ",
-    el("span", { class: "codebase-frac", text: `${count(rates.numerator)}/${count(denominator)}` }),
-  ]);
-}
-
-/// Regression-risk marks: the marked paths' regression rate for tasks
-/// delivered with marks against the same paths before the first mark.
-function marksNode(model) {
-  const marks = section(model.data, "regressions").risk_marks || {};
-  const box = el("section", { class: "codebase-box codebase-risk-marks", "aria-label": "Regression-risk marks" }, [
-    el("div", { class: "codebase-box-head" }, [el("h4", { text: "Regression-risk marks: with marks vs before" })]),
-  ]);
-  const body = el("div", { class: "codebase-box-body" });
-  box.appendChild(body);
-  if (!marks.enabled_at) {
-    body.appendChild(note("No implement or review prompt has marked a regression-prone file yet, so there is nothing to compare."));
-    return keyed(box, "marks", { marks });
-  }
-  const header = (text, scope) => {
-    const cell = el("th", { text });
-    cell.setAttribute("scope", scope);
-    return cell;
-  };
-  const rowNode = (label, row, total) => {
-    const name = header(total ? label : "", "row");
-    if (!total) name.appendChild(viewLink({ view: "file", path: label }, [pathNode(label)], "codebase-path-link"));
-    const item = el("tr", { class: total ? "codebase-risk-total" : "" }, [name, sampleNode(row.with_marks), sampleNode(row.before)]);
-    item.dataset.path = total ? "" : label;
-    return item;
-  };
-  const tbody = el("tbody", {}, [
-    rowNode(`All ${plural(marks.marked_paths, "marked path")}`, marks, true),
-    ...(Array.isArray(marks.rows) ? marks.rows : []).map((row) => rowNode(row.path, row, false)),
-  ]);
-  const head = el("tr", {}, [header("", "col"), header("With marks", "col"), header(`${count(marks.window_days)} days before`, "col")]);
-  body.appendChild(el("div", { class: "codebase-hot-scroll" }, [
-    el("table", { class: "codebase-risk-table", "aria-label": "Regression rate on marked paths with marks and before" }, [el("thead", {}, [head]), tbody]),
-  ]));
-  body.appendChild(note(`With marks: done tasks in this window whose implement or review prompt marked the path, regressed ÷ marked. Before: done tasks that touched the path in the ${count(marks.window_days)} days before the first mark (${String(marks.enabled_at).slice(0, 10)}). Recent tasks have had less time to be named by a regression.`));
-  return keyed(box, "marks", { marks, query: buildCodebaseHash({ view: "hotspots" }) });
-}
-
-function marksNodes(model) {
-  return [keyed(el("div", { class: "codebase-file-head" }, [backLink()]), "marks-head", { back: buildCodebaseHash({ view: "hotspots" }) }), marksNode(model)];
 }
 
 // ---- render -----------------------------------------------------------------
@@ -1393,8 +1375,7 @@ function paint() {
   const model = buildModel(lastData);
   const nodes = route.view === "file" ? fileNodes(model)
     : route.view === "coupling" ? couplingNodes(model)
-      : route.view === "marks" ? marksNodes(model)
-        : hotspotNodes(model);
+      : hotspotNodes(model);
   body.dataset.view = route.view;
   syncNodes(body, nodes);
   // Opening another view starts at its top, not where the last one scrolled.

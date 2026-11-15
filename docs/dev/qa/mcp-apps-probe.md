@@ -2,9 +2,9 @@
 
 The candidate provides Tasks, Runs, Review, Auto-drain and Automation views in the existing Orbit plugin.
 It serves `ui://orbit/control-center/v1/index.html` as
-`text/html;profile=mcp-app`; the old `ui://orbit/task-panel/v1/index.html` remains
-readable so an already-open panel can reload. `orbit_ui_open` advertises a
-global entrypoint and `orbit_ui_inspect` a thread entrypoint. Opening either
+`text/html;profile=mcp-app`; the retired `ui://orbit/task-panel/v1/index.html`
+answers `resource_not_found` like any other unknown URI. `orbit_ui` action `open` advertises a
+global entrypoint and `orbit_ui` action `inspect` a thread entrypoint. Opening either
 only reads. Existing data tools have no automatic widget metadata.
 
 **Actual desktop validation is NOT RUN and is deferred.**
@@ -28,13 +28,13 @@ resource. Markdown escapes raw HTML before sanitization, strips resource-loading
 and form elements, and permits only HTTP(S) links with `noopener noreferrer`.
 Other UI text uses text sinks. CSP still blocks external assets, connections and
 frames. The protocol crate adds no dependency on the web runtime.
-Resource lookup accepts only the two exact versioned URIs. It does not resolve
+Resource lookup accepts only the exact versioned URI. It does not resolve
 paths, query strings or arbitrary artifact contents.
 
 The panel discovers workspaces and requires an explicit returned selector.
 The selected host/workspace/entity stays visible. Existing domain readers expose
 `view: "bounded"` on `orbit_task_list`, `orbit_task_show`,
-`orbit_workflow_run_list`, `orbit_workflow_run_show` and `orbit_auto_task_list`.
+`orbit_run` action `list`, `orbit_run` action `show` and `orbit_auto_task` action `list`.
 `orbit_task_show` retains its full-record default, while `orbit_task_list`
 defaults to compact task rows. A `snapshot: true` `orbit_task_show` call
 returns an opaque revision plus server-computed actions.
@@ -108,6 +108,19 @@ Existing gate certificates and open findings are projected from canonical review
 evidence when available. A manual desktop verdict is a separate recorded review;
 it does not rewrite a workflow certificate or bypass PR merge checks.
 
+Historical PR references are retained after discard/requeue. When several PRs
+are linked, desktop review selects the current delivery only from the exact
+host-qualified task-bound native run's authenticated successful publication
+chain, or the accepted foreign handoff. References corroborate its identity;
+reference order grants no authority. Missing or contradictory proof refuses
+review. For the native publication, a provider repository, number, URL, branch,
+base or head mismatch refuses review. For an accepted foreign handoff, a provider
+repository, number, URL, source branch or landing branch mismatch refuses review;
+a provider head that differs from the handed-off candidate does not refuse. It
+binds `reviewed_head` to that head, and completion stays refused until the pull
+request has merged and, when the merged head is not the candidate, until an
+accepted review reconciliation covers it (see the next paragraph).
+
 The PR head is read from the provider by the PR's exact number or URL, never
 searched for in a recent-PR listing. When the task's linked run executed on
 another machine (`job_run_machine`), completion reads the owner-held claim and
@@ -133,10 +146,10 @@ actual model-context delivery still requires the desktop host.
 
 ## Auto-drain and Automation
 
-`orbit_workflow_auto` observes readiness with `action: "status"`, starts a
-bounded window with `action: "start"` (1–604800 seconds and optional positive
-u32 concurrency), stops admissions with `action: "stop"`, or changes a live
-drain's worker ceiling with `action: "resize"` (`concurrency`, optional `id`,
+`orbit_workflow` action `auto` observes readiness with `mode: "status"`, starts a
+bounded window with `mode: "start"` (1–604800 seconds and optional positive
+u32 concurrency), stops admissions with `mode: "stop"`, or changes a live
+drain's worker ceiling with `mode: "resize"` (`concurrency`, optional `id`,
 `if_revision` and `reason`) without cancelling anything. It uses the same
 runtime as CLI/dashboard. Completion defaults to review. Selecting **Complete
 automatically** explicitly authorizes completion of every task admitted during the
@@ -144,15 +157,15 @@ window. Stopping preserves admitted workers. Readiness samples up to 50 tasks;
 eligibility may change immediately.
 
 `orbit_routine_control` lists workspace routine status or toggles a definition
-using its observed enabled state and target. `orbit_auto_task_update` with
+using its observed enabled state and target. `orbit_auto_task` action `update` with
 `enabled` accepts an optional `expected_enabled` for an atomic checked toggle, and
-`orbit_auto_task_mint` accepts `acknowledge_unconditional: true` for an operator
+`orbit_auto_task` action `mint` accepts `acknowledge_unconditional: true` for an operator
 acknowledgement that schedule, enabled and dedupe are ignored. Mint creates a task
 without dispatch. The guarded modes require explicit workspace and trusted
 operator authority and refuse managed-run callers; their ordinary modes retain
 existing behavior.
 
-`orbit_workflow_run_list` with `view: "bounded", include_catalog: true` returns
+`orbit_run` action `list` with `view: "bounded", include_catalog: true` returns
 bounded `runs` and `catalog` observations. Existing `orbit_pipeline_invoke` is
 now advertised; ordinary calls require explicit job name and input. Its optional
 `default_input: true` submits an enabled no-input catalog job with defaults,
@@ -271,8 +284,8 @@ versions. A local no-op provider stub satisfies disposable initialization only.
 
 The production stdio probe checks:
 
-- Resource discovery, MIME/CSP metadata, global/thread entrypoints, the old URI
-  alias, arbitrary-resource refusal and ordinary-client data tools.
+- Resource discovery, MIME/CSP metadata, global/thread entrypoints, old-URI
+  refusal, arbitrary-resource refusal and ordinary-client data tools.
 - Proposed creation and matching retry, conflicting request-ID refusal,
   filtering/pagination, a fresh edit and stale-revision refusal without overwrite.
 - A comment and retry without duplicate evidence; independent detail page inputs.
@@ -360,8 +373,8 @@ Totals and truncation remain visible when a cap is reached. No arbitrary artifac
 reader, dispatch/retry/cancel, bulk action, merge, release, scheduler editor or
 operator-authority acquisition is provided. The candidate does not establish a
 full browser accessibility pass, real remote compatibility or long-lived upgrade
-compatibility. The old resource alias preserves one concrete reload contract;
-it is not proof of every live-client migration scenario.
+compatibility. The retired panel URI is refused; it is not a reload contract
+for live clients.
 
 Metadata and bridge contracts follow the official
 [UI guide](https://developers.openai.com/plugins/build/chatgpt-ui),

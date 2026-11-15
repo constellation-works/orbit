@@ -9,6 +9,10 @@ use crate::application::contracts::PullSettlementEntry;
 use crate::application::job::JobPullSettlementPort;
 
 impl JobPullSettlementPort for OrbitRuntime {
+    fn settle_orphaned_admissions(&self) -> Vec<PullSettlementEntry> {
+        self.settle_orphaned_pulls()
+    }
+
     fn settle_workspace_pulls(&self) -> Vec<PullSettlementEntry> {
         self.settle_pending_pulls()
     }

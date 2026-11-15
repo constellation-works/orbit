@@ -1,23 +1,12 @@
 //! Crew admission and task-local workflow values from the frozen arm capture.
 
 use orbit_common::OrbitError;
-use orbit_config::{CrewPoolEntry, ExperimentConfigKey, canonical_crew_pool_entries};
-use orbit_types::workflow::{CapturedExperiments, TagInstructionRole};
+use orbit_config::{CrewPoolEntry, canonical_crew_pool_entries};
 use serde_json::Value;
 
-use super::capture::{EXPERIMENT_CAPTURE_KEY, validate_experiment_capture};
-use super::definition::{ExperimentOverlay, OverlayRole};
+use super::definition::ExperimentOverlay;
 use crate::OrbitRuntime;
-
-pub(crate) struct ExperimentCrewPool {
-    pub(crate) entries: Vec<CrewPoolEntry>,
-    pub(crate) source: String,
-    pub(crate) digest: String,
-    /// The experiment and arm whose overlay this pool is, which a crew
-    /// written back to the task names.
-    pub(crate) experiment: String,
-    pub(crate) arm: String,
-}
+use crate::application::contracts::ExperimentCrewPool;
 
 impl OrbitRuntime {
     /// Freeze a claimed leaf's treatment once on the executing host. Its
@@ -61,9 +50,9 @@ impl OrbitRuntime {
             job_run_id: None,
             job_run_machine: None,
             crew: None,
-            crew_source: Some(format!(
-                "pool:{}",
-                task.complexity.map_or("medium", |tier| tier.as_str())
+            crew_source: Some(orbit_types::task::CrewSource::Pool(
+                task.complexity
+                    .unwrap_or(orbit_types::task::TaskComplexity::Medium),
             )),
             orchestrator: None,
             orchestrator_model: None,
@@ -146,6 +135,16 @@ impl OrbitRuntime {
                     })
                     .collect::<Vec<_>>();
                 let source = format!("experiment `{name}` arm `{arm}` crew pool");
+                // A human crew is not in the agent registry, so the pool check
+                // below would call it undefined; name what it is instead.
+                if let Some(human) = entries
+                    .iter()
+                    .find_map(|member| self.human_crew(Some(&member.name)))
+                {
+                    return Err(OrbitError::InvalidInput(
+                        orbit_types::identity::human_crew_refusal(&source, &human.name),
+                    ));
+                }
                 canonical_crew_pool_entries(&entries, self.context.settings().crews(), &source)?;
                 for member in &entries {
                     self.resolve_crew_for_task(Some(&member.name), None)?;
@@ -153,104 +152,5 @@ impl OrbitRuntime {
             }
         }
         Ok(())
-    }
-
-    /// Read a typed value from this run's admission, never a sibling's or a
-    /// follower's local experiments. An absent overlay inherits `fallback`.
-    pub(crate) fn experiment_explore_max_calls(
-        &self,
-        input: &Value,
-        task_id: &str,
-        activity: &str,
-        fallback: u32,
-    ) -> Result<u32, OrbitError> {
-        let capture = if self.worker_invocation().is_some() {
-            Some(self.existing_task_experiment_capture(task_id)?)
-        } else {
-            input
-                .get(EXPERIMENT_CAPTURE_KEY)
-                .cloned()
-                .map(serde_json::from_value::<CapturedExperiments>)
-                .transpose()
-                .map_err(|error| {
-                    OrbitError::PolicyDenied(format!("invalid experiment capture: {error}"))
-                })?
-        };
-        let Some(capture) = capture else {
-            return Ok(fallback);
-        };
-        validate_experiment_capture(Some(&capture), task_id)?;
-        let Some(role) = TagInstructionRole::for_activity(activity) else {
-            return Ok(fallback);
-        };
-        let role = match role {
-            TagInstructionRole::Implement => OverlayRole::Implement,
-            TagInstructionRole::Review => OverlayRole::Review,
-            TagInstructionRole::Recovery => OverlayRole::Recovery,
-        };
-        let key = ExperimentConfigKey::ExploreMaxCallsPerRun;
-        for entry in capture.assignments.iter().filter(|entry| entry.live) {
-            let overlay = ExperimentOverlay::parse(
-                &entry.arm,
-                serde_json::from_str(&entry.overlay_json).map_err(|error| {
-                    OrbitError::Store(format!("invalid experiment overlay: {error}"))
-                })?,
-            )?;
-            if let Some(config) = overlay.config.filter(|config| config.roles.contains(&role))
-                && let Some(value) = config.values.get(key.config_key())
-            {
-                key.validate_experiment_value(value)?;
-                return serde_json::from_value(value.clone()).map_err(|error| {
-                    OrbitError::PolicyDenied(format!("invalid experiment config: {error}"))
-                });
-            }
-        }
-        Ok(fallback)
-    }
-
-    /// `visual_review.reviewer` for `task_id`'s delivery: a live arm's
-    /// config overlay, whatever roles it names, else `fallback` (§12.1).
-    pub(crate) fn experiment_visual_reviewer(
-        &self,
-        task_id: &str,
-        fallback: bool,
-    ) -> Result<bool, OrbitError> {
-        Ok(self
-            .experiment_visual_reviewer_arm(task_id)?
-            .unwrap_or(fallback))
-    }
-
-    /// The `visual_review.reviewer` value a live experiment arm assigns
-    /// `task_id`, or `None` when the task is in no such experiment. The
-    /// owner reads the task's sticky assignments, a claimed leaf its
-    /// receipt's capture.
-    pub(crate) fn experiment_visual_reviewer_arm(
-        &self,
-        task_id: &str,
-    ) -> Result<Option<bool>, OrbitError> {
-        let capture = match self.existing_task_experiment_capture(task_id) {
-            Ok(capture) => capture,
-            // A leaf whose receipt carries no experiments, or a store with
-            // none, runs the contract's setting.
-            Err(_) => return Ok(None),
-        };
-        let key = ExperimentConfigKey::VisualReviewReviewer;
-        for entry in capture.assignments.iter().filter(|entry| entry.live) {
-            let overlay = ExperimentOverlay::parse(
-                &entry.arm,
-                serde_json::from_str(&entry.overlay_json).map_err(|error| {
-                    OrbitError::Store(format!("invalid experiment overlay: {error}"))
-                })?,
-            )?;
-            if let Some(value) = overlay
-                .config
-                .as_ref()
-                .and_then(|config| config.values.get(key.config_key()))
-            {
-                key.validate_experiment_value(value)?;
-                return Ok(value.as_bool());
-            }
-        }
-        Ok(None)
     }
 }

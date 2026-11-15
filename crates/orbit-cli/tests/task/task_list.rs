@@ -29,7 +29,7 @@ fn task_grants_are_visible_beside_requirements_and_in_history() {
             "--required-tools",
             "github.run.list",
             "--granted-tools",
-            "orbit.auto_task.update",
+            "orbit.auto_task:update",
             "--json",
         ],
         "create a granted task",
@@ -43,7 +43,7 @@ fn task_grants_are_visible_beside_requirements_and_in_history() {
         let output = workspace.run(&args, "list granted task");
         let text = String::from_utf8_lossy(&output.stdout);
         assert!(text.contains("github.run.list"), "{text}");
-        assert!(text.contains("orbit.auto_task.update"), "{text}");
+        assert!(text.contains("orbit.auto_task:update"), "{text}");
         assert!(text.contains("REQUIRED TOOLS"), "{text}");
         assert!(text.contains("GRANTED TOOLS"), "{text}");
     }
@@ -51,7 +51,7 @@ fn task_grants_are_visible_beside_requirements_and_in_history() {
     let text = String::from_utf8_lossy(&shown.stdout);
     assert!(text.contains("Required Tools: github.run.list"), "{text}");
     assert!(
-        text.contains("Granted Tools: orbit.auto_task.update"),
+        text.contains("Granted Tools: orbit.auto_task:update"),
         "{text}"
     );
     let history = workspace.run(
@@ -70,7 +70,7 @@ fn task_grants_are_visible_beside_requirements_and_in_history() {
         text.contains(&grant["at"].as_str().unwrap()[..19]),
         "{text}"
     );
-    assert!(text.contains("orbit.auto_task.update"), "{text}");
+    assert!(text.contains("orbit.auto_task:update"), "{text}");
 
     let mut denied = cargo_bin_cmd!("orbit");
     test_env::clear_inherited_authority(|name| {
@@ -82,14 +82,14 @@ fn task_grants_are_visible_beside_requirements_and_in_history() {
         .env("USERPROFILE", &workspace.home)
         .env("ORBIT_TASK_ACTOR_KIND", "agent")
         .env("ORBIT_ACTIVITY_TOOL_POLICY", "deny")
-        .env("ORBIT_ACTIVITY_TOOLS_DENY", "orbit.auto_task.update")
+        .env("ORBIT_ACTIVITY_TOOLS_DENY", "orbit.auto_task:update")
         .env("ORBIT_ACTIVITY_NAME", "agent_implement")
         .args([
             "tool",
             "run",
-            "orbit.auto_task.update",
+            "orbit.auto_task",
             "--input",
-            r#"{"name":"never-applied"}"#,
+            r#"{"action":"update","name":"never-applied"}"#,
         ])
         .output()
         .unwrap();
@@ -118,7 +118,7 @@ fn task_grants_are_visible_beside_requirements_and_in_history() {
             "audit",
             "stats",
             "--tool",
-            "orbit.auto_task.update",
+            "orbit.auto_task:update",
             "--json",
         ],
         "count denied call once",
@@ -488,7 +488,8 @@ fn task_origin_is_recorded_validated_and_filtered() {
         "a sweep finding is filed by automation"
     );
 
-    // The tool surface refuses an unknown value and names the allowed set.
+    // The tool surface refuses an unknown value, names the allowed set, and
+    // directs the rationale to `description` (ORB-24229).
     let refused = workspace.run_raw(&[
         "tool",
         "run",
@@ -511,6 +512,10 @@ fn task_origin_is_recorded_validated_and_filtered() {
             "refusal must list `{allowed}`: {refusal}"
         );
     }
+    assert!(
+        refusal.contains("description"),
+        "refusal must direct the free-text reason to `description` (ORB-24229): {refusal}"
+    );
     let unstated_id = unstated["id"].as_str().unwrap();
     let rejected_update = workspace.run_raw(&["task", "update", unstated_id, "--origin", "human"]);
     assert!(!rejected_update.status.success());
@@ -669,4 +674,183 @@ fn scheduled_list_orders_future_tasks_and_labels_proposed() {
     );
     let text = workspace.run(&["task", "show", &early], "show actual start");
     assert!(String::from_utf8_lossy(&text.stdout).contains("Actual start:"));
+}
+
+#[test]
+fn unknown_task_status_refusal_names_every_valid_status() {
+    let workspace = workspace();
+    // ORB-20838: agents guess statuses such as `open` or `todo`. The refusal must
+    // list the valid statuses so the agent can correct itself, and the guessed
+    // alias must still be refused rather than accepted.
+    const VALID_STATUSES: [&str; 9] = [
+        "proposed",
+        "backlog",
+        "in-progress",
+        "review",
+        "done",
+        "blocked",
+        "archived",
+        "rejected",
+        "someday",
+    ];
+    for guessed in ["open", "todo", "cancelled"] {
+        let input = format!(r#"{{"status":"{guessed}","workspace":"task-list-test"}}"#);
+        let refused = workspace.run_raw(&["tool", "run", "orbit.task.list", "--input", &input]);
+        let refusal = format!(
+            "{}{}",
+            String::from_utf8_lossy(&refused.stdout),
+            String::from_utf8_lossy(&refused.stderr)
+        );
+        assert!(
+            !refused.status.success(),
+            "unknown status `{guessed}` accepted: {refusal}"
+        );
+        for valid in VALID_STATUSES {
+            assert!(
+                refusal.contains(valid),
+                "refusal for `{guessed}` must list `{valid}`: {refusal}"
+            );
+        }
+    }
+}
+
+/// The attention delta contract must retain changed rows and suppress unchanged
+/// rows through the real CLI, including across a limited first page.
+#[test]
+fn attention_cursor_resurfaces_material_changes_at_cli_boundary() {
+    let workspace = workspace();
+    let [first, second] =
+        workspace.add_tasks(["First operator warning", "Second operator warning"]);
+    let receipt = |task: &str, operation: char, warning: &str| {
+        let message = format!(
+            "operation_id={}\n{}",
+            operation.to_string().repeat(64),
+            serde_json::json!({
+                "assessment": {"utility_warnings": [{"text": warning, "holds_promotion": true}]}
+            })
+        );
+        let mut command = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(&workspace.work)
+            .env("HOME", &workspace.home)
+            .env("USERPROFILE", &workspace.home)
+            .env("ORBIT_ACTOR", "task-pilot")
+            .args(["task", "update", task, "--comment", &message, "--json"])
+            .assert()
+            .success();
+    };
+    receipt(&first, 'a', "First prerequisite needs an operator");
+    receipt(&second, 'b', "Second prerequisite needs an operator");
+    let query = |extra: &[&str]| {
+        let mut args = vec!["attention", "--kind", "pilot_warning", "--json"];
+        args.extend_from_slice(extra);
+        serde_json::from_slice::<Value>(&workspace.run_as_operator(&args, "read attention").stdout)
+            .unwrap()
+    };
+    let full = query(&[]);
+    assert_eq!(full["counts"]["returned"], 2, "{full}");
+    let warnings: Value = serde_json::from_slice(
+        &workspace
+            .run(
+                &["task", "list", "--pilot-warnings", "--json"],
+                "read pilot warnings",
+            )
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(
+        warnings.as_array().unwrap().len(),
+        full["items"].as_array().unwrap().len()
+    );
+    let cursor = full["cursor"]["next"].as_str().unwrap();
+    let quiet = query(&["--since", cursor]);
+    assert_eq!(quiet["cursor"]["status"], "accepted");
+    assert_eq!(quiet["counts"]["unchanged"], 2);
+    assert_eq!(quiet["counts"]["returned"], 0);
+    receipt(&first, 'c', "Changed prerequisite now needs credentials");
+    let changed = query(&["--since", cursor]);
+    assert_eq!(changed["counts"]["returned"], 1, "{changed}");
+    assert_eq!(changed["counts"]["unchanged"], 1);
+    assert_eq!(changed["items"][0]["refs"]["task_id"], first);
+    let before = full["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["refs"]["task_id"] == first)
+        .unwrap();
+    assert_eq!(changed["items"][0]["id"], before["id"]);
+    assert_ne!(changed["items"][0]["fingerprint"], before["fingerprint"]);
+    let page = query(&["--limit", "1"]);
+    assert_eq!(page["counts"]["matching"], 2);
+    let next_page = query(&[
+        "--limit",
+        "1",
+        "--since",
+        page["cursor"]["next"].as_str().unwrap(),
+    ]);
+    assert_eq!(next_page["counts"]["returned"], 1);
+    assert_ne!(page["items"][0]["id"], next_page["items"][0]["id"]);
+    for (token, status) in [("not-a-cursor", "invalid"), ("atc2.future", "unsupported")] {
+        let restarted = query(&["--since", token]);
+        assert_eq!(restarted["cursor"]["status"], status);
+        assert_eq!(restarted["counts"]["returned"], 2);
+    }
+    let empty = query(&["--task", "UNKNOWN-1"]);
+    assert_eq!(empty["counts"]["returned"], 0);
+    assert!(
+        empty["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Nothing needs attention")
+    );
+    assert_eq!(empty["filters"]["task"], serde_json::json!(["UNKNOWN-1"]));
+    // Reproduced on the first implementation: the unbound host runtime was
+    // incorrectly asked for a current workspace partition before resolving --all.
+    for extra in [vec![], vec!["--all"]] {
+        let mut command = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(&workspace.home)
+            .env("HOME", &workspace.home)
+            .env("USERPROFILE", &workspace.home)
+            .env("ORBIT_OPERATOR", "1")
+            .args(["attention", "--kind", "pilot_warning", "--json"])
+            .args(extra);
+        let output = command.assert().success().get_output().stdout.clone();
+        let result: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(result["counts"]["returned"], 2, "{result}");
+    }
+}
+
+/// A `review` task whose review has not settled has no review-gate certificate.
+/// Reproduced on dk-server-2: every such task printed a `source_unavailable`
+/// degraded line from `orbit attention`, hiding real source failures.
+#[test]
+fn attention_review_task_without_certificate_is_not_degraded() {
+    let workspace = workspace();
+    let mut seed = workspace.task_seed("Review not yet settled");
+    seed.status = TaskStatus::Review;
+    let task = workspace.seed_tasks(&[seed]).remove(0);
+    assert_eq!(task["status"], "review");
+    let result: Value = serde_json::from_slice(
+        &workspace
+            .run_as_operator(
+                &["attention", "--kind", "review_waiting", "--json"],
+                "read attention",
+            )
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(result["counts"]["returned"], 0, "{result}");
+    assert!(
+        result["degraded"]
+            .as_array()
+            .is_none_or(|degraded| degraded.is_empty()),
+        "a review task without a certificate is not a source failure: {result}"
+    );
 }

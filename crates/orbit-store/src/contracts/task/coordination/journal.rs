@@ -1,6 +1,6 @@
 //! Atomic task commit and recovery journal contracts.
 
-use orbit_types::task::{TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{TaskDecision, TaskHistoryEntry, TaskStatus};
 use serde::{Deserialize, Serialize};
 
 use crate::contracts::{
@@ -38,6 +38,9 @@ pub struct TaskCoordinationCommitParams {
     /// when the status actually moves.
     pub status_event: Option<String>,
     pub status_note: Option<String>,
+    /// Typed decision recorded on the status event beside its note, such as
+    /// the hold a red-base claim release records.
+    pub status_decision: Option<TaskDecision>,
     pub append_history: Vec<TaskHistoryEntry>,
     pub reservation: Option<TaskReservationReserveParams>,
     pub rows: Vec<TaskCoordinationRow>,

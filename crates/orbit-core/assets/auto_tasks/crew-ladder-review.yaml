@@ -31,7 +31,7 @@ template:
     evidence rather than list position, and exclude this task. Inspect their
     artifact metadata with orbit.task.show and fetch the newest available
     crew-ladder-review.json through
-    orbit.task.artifact.get. Missing/unreadable prior evidence makes this a
+    orbit.task.artifact action get. Missing/unreadable prior evidence makes this a
     baseline; record why. Analyze newly settled evidence since that review,
     with at least 30 days of context and full relevant trials. A monthly
     window must never truncate follow-up to manufacture maturity or a verdict.
@@ -96,7 +96,7 @@ template:
     delta (including newly settled counts), proposals,
     duplicate mappings, overflow and no-op reasons. Fetch previous artifacts
     through tools, never infer a baseline from a final message. Attach it with
-    orbit.task.artifact.put (id=this chore, source_path=the scratch file,
+    orbit.task.artifact action put (id=this chore, source_path=the scratch file,
     path=crew-ladder-review.json). The execution summary maps evidence to
     criteria and reports gaps, delta, proposals and artifact paths. A run with
     nothing to change still persists the artifact and succeeds.
@@ -116,8 +116,8 @@ template:
   - orbit.experiment.readout
   - orbit.search
   - orbit.task.add
-  - orbit.task.artifact.get
-  - orbit.task.artifact.put
+  - orbit.task.artifact:get
+  - orbit.task.artifact:put
   - orbit.task.list
   - orbit.task.show
   priority: medium

@@ -10,13 +10,13 @@
 //!
 //! **Every string below is shipped contract.**
 
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
-use super::operations::{IDENTITY_PARAMS, TASK_HOST_HELP, TaskOperation, TaskVerb};
+use super::operations::{TASK_HOST_HELP, TaskOperation, TaskVerb};
 use super::write_operations::WRITE_PROJECTION_PARAMS;
 use crate::governance::operation::{
-    CliAction, CliArgKind, CliHelp, Effect, EnumValue, ParamSpec, ParamType, UnknownFields, both,
-    cli_actions, cli_only, free_text, mcp_only, required,
+    CliAction, CliArgKind, CliHelp, Effect, EnumValue, ParamSpec, ParamType, RETIRED_AGENT_FIELD,
+    UnknownFields, both, cli_actions, cli_only, free_text, mcp_only, required,
 };
 
 /// `--host`, inherited by every reconcile-review action.
@@ -38,7 +38,7 @@ const HOST_PARAM: ParamSpec = cli_only(
 const WORKSPACE_PARAM: ParamSpec = mcp_only(
     "workspace",
     ParamType::String,
-    "Workspace selector from discovery. Omitted, a bound session uses its workspace and an unbound one resolves the task id through this host's task registry",
+    "Optional workspace selector; defaults to the binding or task ID lookup if unbound.",
 );
 
 const fn flag_named(long: &'static str, value_name: &'static str) -> CliArgKind {
@@ -171,7 +171,7 @@ pub(super) const RECONCILE_REVIEW: TaskOperation = TaskOperation {
         mcp_only(
             "reconciliation_id",
             ParamType::String,
-            "status, accept_baseline: the reconciliation to act on",
+            "status, accept_baseline: the target reconciliation",
         ),
         // Selects an already-authorized stored command, so it is kept
         // byte-for-byte for exact evidence matching.
@@ -195,6 +195,7 @@ pub(super) const RECONCILE_REVIEW: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Task,
 };
 
 pub(super) const REVIEW_RESET: TaskOperation = TaskOperation {
@@ -241,6 +242,7 @@ pub(super) const REVIEW_RESET: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Task,
 };
 
 /// Requeue a blocked task onto the candidate its stopped run published, or
@@ -282,90 +284,121 @@ pub(super) const REQUEUE: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Task,
 };
 
-const BLOCK_TRIAGE_SUBJECT_VALUES: &[EnumValue] =
-    &[EnumValue::plain("block"), EnumValue::plain("pilot_warning")];
-
-const BLOCK_TRIAGE_ACTION_VALUES: &[EnumValue] = &[
-    EnumValue::plain("candidates"),
-    EnumValue::plain("requeue"),
-    EnumValue::plain("propose"),
-    EnumValue::plain("report"),
-];
-
-/// Read the block episodes or pilot warning holds awaiting triage, or record
-/// one triage decision on one: the agent surface of the blocked-task triage
-/// and of the pilot-warning escalation triage.
-pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
-    verb: TaskVerb::BlockTriage,
-    cli_path: &[],
-    tool_name: "orbit.task.block_triage",
-    tool_description: "Triage blocked tasks whose final recovery escalated, or that the backstop never decides. `candidates` lists those awaiting triage; `propose` records options and a recommendation, `report` records a human action, and `requeue` returns the task to the backlog within the requeue bound shared with final recovery. Never completes, rejects or archives a task. With `subject` `pilot_warning`, the same actions triage proposed tasks held by a task-pilot warning instead, and `requeue` is refused. A refused requeue leaves the task blocked. A decision on a task a live triage run holds needs that run's inspection proof. Policy detail, the requeue bound, the pilot-warning marker and the proof recipe: the orbit skill's references/tool-surface.md, section `Blocked-task triage`.",
-    cli_about: "",
+/// Explicit operator request for one task-pilot assessment.
+pub(super) const REPILOT: TaskOperation = TaskOperation {
+    verb: TaskVerb::Repilot,
+    cli_path: &["repilot"],
+    tool_name: "orbit.task.repilot",
+    tool_description: "Explicitly request one new pilot assessment for a proposed or backlog task. Only the first assessment is automatic; requirements edits do not request another pilot. When the latest assessment holds promotion, the pilot re-checks its holding findings and keeps the fields the task's changes leave untouched, falling back to a full assessment when the repository moved at its footprint, the scope changed beyond a bounded edit, or the prior assessment is too old or was itself a re-check; `full` forces a full assessment. Requires operator authority on the owner. Refuses pending or running pilots, live delivery, human crews and replica checkouts. Never promotes or dispatches the task.",
+    cli_about: "Explicitly request one new pilot assessment",
     cli_help: CliHelp::NONE,
-    // `candidates` only reads, but the decisions write.
     effect: Effect::Write,
-    params: &[
-        &[
-            WORKSPACE_PARAM,
-            required(mcp_only(
-                "action",
-                ParamType::Enum(BLOCK_TRIAGE_ACTION_VALUES),
-                "candidates, requeue, propose, or report",
-            )),
-            mcp_only(
-                "subject",
-                ParamType::Enum(BLOCK_TRIAGE_SUBJECT_VALUES),
-                "what is triaged: block (default), a blocked task's block episode; pilot_warning, a proposed task's pilot warning hold",
-            ),
-            mcp_only(
-                "id",
-                ParamType::String,
-                "requeue, propose, report: the blocked or pilot-held task",
-            ),
-            free_text(mcp_only(
-                "blocker",
-                ParamType::String,
-                "block requeue, propose, report: the escalation reason, quoted in the comment; pilot_warning quotes the holding findings itself and refuses it",
-            )),
-            free_text(mcp_only(
-                "reason",
-                ParamType::String,
-                "requeue: the repair applied and why the task can run again; report: the specific action only a human can take",
-            )),
-            mcp_only(
-                "options",
-                ParamType::Array,
-                "propose: two or three {summary, consequences, target, replacement} objects; target is `acceptance_criteria` or `description`, and replacement is that field's complete new value (one criterion per line), which an operator's answer applies; without a target the option cannot be applied",
-            ),
-            mcp_only(
-                "recommended",
-                ParamType::Integer,
-                "propose: 1-based index of the recommended option",
-            ),
-            mcp_only(
-                "source_revision",
-                ParamType::String,
-                "inspection proof: the pinned commit id the caller inspected, or null in a non-Git workspace; supply with observed_revision and observed_tree",
-            ),
-            mcp_only(
-                "observed_revision",
-                ParamType::String,
-                "inspection proof: `git rev-parse HEAD` in the inspection checkout",
-            ),
-            mcp_only(
-                "observed_tree",
-                ParamType::String,
-                "inspection proof: `git rev-parse 'HEAD^{tree}'` in the inspection checkout",
-            ),
-        ],
-        IDENTITY_PARAMS,
-    ],
+    params: &[&[
+        HOST_PARAM,
+        WORKSPACE_PARAM,
+        required(both(
+            "id",
+            ParamType::String,
+            "Task to assess again",
+            CliArgKind::Positional,
+            "Task to assess again",
+        )),
+        both(
+            "full",
+            ParamType::Switch,
+            "Run a full assessment instead of re-checking a held one",
+            CliArgKind::flag("full"),
+            "Run a full assessment instead of re-checking the held one",
+        ),
+    ]],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Task,
+};
+
+const BLOCK_TRIAGE_SUBJECT_VALUES: &[EnumValue] = &[EnumValue::plain("pilot_warning")];
+
+const BLOCK_TRIAGE_ACTION_VALUES: &[EnumValue] = &[
+    EnumValue::plain("candidates"),
+    EnumValue::plain("propose"),
+    EnumValue::plain("report"),
+];
+
+/// Read the pilot warning holds awaiting triage, or record one triage
+/// decision on one: the agent surface of the pilot-warning escalation triage.
+/// The tool keeps its name; blocked tasks are decided by final recovery.
+pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
+    verb: TaskVerb::BlockTriage,
+    cli_path: &[],
+    tool_name: "orbit.task.block_triage",
+    tool_description: "Triage proposed tasks a task-pilot warning holds. `candidates` lists those awaiting triage; `propose` opens a decision request with a summary, options and a recommendation, which the operator answers with one click; `report` records the exact human action when only something outside Orbit resolves the hold. Prefer `propose` whenever the operator resolves the hold by choosing. Never approves, rejects or archives a task itself. Blocked tasks are refused here: final recovery decides them. A decision on a task a live triage run holds needs that run's inspection proof. Policy detail, the pilot-warning marker and the proof recipe: the orbit skill's references/tool-surface.md, section `Pilot-warning triage`.",
+    cli_about: "",
+    cli_help: CliHelp::NONE,
+    // `candidates` only reads, but the decisions write.
+    effect: Effect::Write,
+    params: &[&[
+        WORKSPACE_PARAM,
+        required(mcp_only(
+            "action",
+            ParamType::Enum(BLOCK_TRIAGE_ACTION_VALUES),
+            "candidates, propose, or report",
+        )),
+        mcp_only(
+            "subject",
+            ParamType::Enum(BLOCK_TRIAGE_SUBJECT_VALUES),
+            "what is triaged: pilot_warning (the default and only subject), a proposed task's pilot warning hold",
+        ),
+        mcp_only(
+            "id",
+            ParamType::String,
+            "propose and report: the pilot-held task",
+        ),
+        free_text(mcp_only(
+            "summary",
+            ParamType::String,
+            "propose and report: one or two plain-language sentences naming the decision needed, readable without opening the code",
+        )),
+        free_text(mcp_only(
+            "reason",
+            ParamType::String,
+            "report: the exact action only a human outside Orbit can take",
+        )),
+        mcp_only(
+            "options",
+            ParamType::Array,
+            "propose: two or three {summary, consequence, rewrite, action} objects; rewrite is {description?, acceptance_criteria?} with the field's complete new value; action is {kind: requeue | re_pilot | change_crew (crew) | split (title, description, acceptance_criteria) | reject | archive}; every option needs a rewrite, an action or both",
+        ),
+        mcp_only(
+            "recommended",
+            ParamType::Integer,
+            "propose: 1-based index of the recommended option",
+        ),
+        mcp_only(
+            "source_revision",
+            ParamType::String,
+            "inspection proof: the pinned commit id the caller inspected, or null in a non-Git workspace; supply with observed_revision and observed_tree",
+        ),
+        mcp_only(
+            "observed_revision",
+            ParamType::String,
+            "inspection proof: `git rev-parse HEAD` in the inspection checkout",
+        ),
+        mcp_only(
+            "observed_tree",
+            ParamType::String,
+            "inspection proof: `git rev-parse 'HEAD^{tree}'` in the inspection checkout",
+        ),
+    ]],
+    at_least_one_of: &[],
+    retired_fields: &[RETIRED_AGENT_FIELD],
+    unknown_fields: UnknownFields::Refuse,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 /// The task a lifecycle tool acts on.
@@ -395,12 +428,12 @@ pub(super) const REJECT: TaskOperation = TaskOperation {
             )),
         ],
         WRITE_PROJECTION_PARAMS,
-        IDENTITY_PARAMS,
     ],
     at_least_one_of: &[],
-    retired_fields: &[],
-    unknown_fields: UnknownFields::Warn,
+    retired_fields: &[RETIRED_AGENT_FIELD],
+    unknown_fields: UnknownFields::Refuse,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Task,
 };
 
 pub(super) const DELETE: TaskOperation = TaskOperation {
@@ -421,20 +454,30 @@ pub(super) const DELETE: TaskOperation = TaskOperation {
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
-    unknown_fields: UnknownFields::Warn,
+    unknown_fields: UnknownFields::Refuse,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Task,
 };
 
-const RECOVER_STATUS_VALUES: &[EnumValue] =
-    &[EnumValue::plain("blocked"), EnumValue::plain("backlog")];
+/// Statuses a claim recovery may choose; the owner narrows them to what the
+/// task lifecycle allows from the task's current status.
+const RECOVER_STATUS_VALUES: &[EnumValue] = &[
+    EnumValue::plain("blocked"),
+    EnumValue::plain("backlog"),
+    EnumValue::plain("review"),
+    EnumValue::plain("done"),
+    EnumValue::plain("archived"),
+    EnumValue::plain("rejected"),
+    EnumValue::plain("someday"),
+];
 
-/// Recover a follower claim to blocked or backlog, fencing its attempt.
+/// Recover a follower claim to a lifecycle-valid status, fencing its attempt.
 pub(super) const RECOVER_CLAIM: TaskOperation = TaskOperation {
     verb: TaskVerb::RecoverClaim,
     cli_path: &["recover-claim"],
     tool_name: "orbit.task.recover_claim",
-    tool_description: "Recover a live execution claim on its owner workspace to blocked or backlog, fencing the attempt, invalidating pending landing authority and releasing its reservation in one transaction. Requires trusted operator authority; unavailable to managed runs. Supply the claim phase you observed, the target status, a required reason and a durable request_key; resubmitting the same request_key with the same input replays the original recovery.",
-    cli_about: "Recover a live claim to blocked or backlog with an audited reason",
+    tool_description: "Recover a live execution claim on its owner workspace, fencing the attempt, invalidating pending landing authority, releasing its reservation and moving the task to the chosen status in one transaction. The target must be a status the task lifecycle allows from the task's current status; done also needs the ordinary completion evidence (done follows only review, and needs an execution summary or a successful run). A refused target names the rule. Requires trusted operator authority; unavailable to managed runs. Supply the claim phase you observed, the target status, a required reason and a durable request_key; resubmitting the same request_key with the same input replays the original recovery.",
+    cli_about: "Recover a live claim to a lifecycle-valid status with an audited reason",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[
@@ -457,9 +500,9 @@ pub(super) const RECOVER_CLAIM: TaskOperation = TaskOperation {
         required(both(
             "status",
             ParamType::Enum(RECOVER_STATUS_VALUES),
-            "Target status: blocked for diagnosis or backlog for retry",
+            "Lifecycle-allowed target; done needs completion evidence",
             flag_named("status", "STATUS"),
-            "Move the task to blocked or backlog",
+            "Lifecycle-valid status to move the task to",
         )),
         required(free_text(both(
             "reason",
@@ -480,6 +523,7 @@ pub(super) const RECOVER_CLAIM: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 /// Revoke a handoff's completion authority.
@@ -534,6 +578,7 @@ pub(super) const REVOKE_HANDOFF: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 /// Retry an existing authorized handoff, preserving its immutable foreign binding.
@@ -611,4 +656,5 @@ pub(super) const RETRY_HANDOFF: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };

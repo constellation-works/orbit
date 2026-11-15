@@ -13,17 +13,15 @@ use crate::application::job::seed_default_jobs;
 use crate::application::managed_assets::MANAGED_ASSET_MANIFEST_FILE;
 use crate::application::routines::seed::RoutineSeedIdentity;
 use crate::application::skill::{
-    default_skill_ids, is_default_skill_tree_for_root, seed_default_skills,
+    default_skill_ids, is_default_skill_tree_for_root, seed_default_skills, skill_link_roots,
 };
-use crate::application::workspace_sync::{
-    ManagedArtifactOutcome, reconcile_workspace_managed_artifacts,
-};
+use crate::application::workspace_product_profile::ProductProfile;
+use crate::application::workspace_sync::{self, ManagedArtifactOutcome};
 use crate::bootstrap::activity::seed_default_activities;
 use crate::bootstrap::global_defaults::{
     global_defaults_are_current, record_global_defaults_reconciled,
 };
 use crate::bootstrap::policy::seed_default_policies;
-use crate::bootstrap::product_profile::ProductProfile;
 use orbit_common::fs::io::{create_dir_symlink, create_private_dir_all, remove_path_if_exists};
 
 use crate::runtime::resolve_global_root;
@@ -123,6 +121,39 @@ pub(crate) fn ensure_orbit_root_initialized(
     let workspace_layout = prepare_workspace_root_layout(workspace_root, global_root);
     ignore_denied_implicit_bootstrap_write("workspace layout", workspace_root, workspace_layout)?;
     Ok(())
+}
+
+/// Refresh legacy catalog copies even when a registered checkout opens
+/// directly through composition, bypassing implicit global initialization.
+pub(crate) fn refresh_workspace_catalog_copies_on_open(global_root: &Path, workspace_root: &Path) {
+    let copies =
+        workspace_sync::reconcile_workspace_catalog_copies(global_root, workspace_root, false);
+    match copies {
+        Ok(report) => {
+            for warning in report.warnings {
+                tracing::warn!(target: "orbit.core.bootstrap", "{warning}");
+            }
+            for action in report.actions {
+                if action.outcome == ManagedArtifactOutcome::Refreshed {
+                    tracing::info!(
+                        target: "orbit.core.bootstrap",
+                        path = %action.path.display(),
+                        "refreshed stale managed workspace catalog copy from this binary's shipped defaults"
+                    );
+                }
+            }
+        }
+        Err(error) => {
+            // A broken legacy manifest must not make every job unavailable.
+            // Doctor diagnoses it; explicit sync returns the repair failure.
+            tracing::warn!(
+                target: "orbit.core.bootstrap",
+                root = %workspace_root.display(),
+                error = %error,
+                "could not refresh managed workspace catalog copies; stale managed copies may remain; repair the named path or manifest, then run `orbit workspace sync`"
+            );
+        }
+    }
 }
 
 fn ignore_denied_implicit_bootstrap_write<T>(
@@ -300,7 +331,7 @@ pub fn init_workspace_at_root(
             // Machine identity is owned by higher-level composition and
             // injected; Core never resolves it or falls back to an OS hostname.
             {
-                let reconciliation = reconcile_workspace_managed_artifacts(
+                let reconciliation = workspace_sync::reconcile_workspace_managed_artifacts(
                     &global_root,
                     &orbit_root,
                     options.routine_seed_identity.as_ref(),
@@ -407,13 +438,6 @@ fn resolve_init_target_from_root(orbit_root: &Path) -> InitTarget {
         orbit_root,
         skills_links_roots,
     }
-}
-
-pub(crate) fn skill_link_roots(base_root: &Path) -> Vec<PathBuf> {
-    [".agents", ".claude"]
-        .into_iter()
-        .map(|dir| base_root.join(dir).join("skills"))
-        .collect()
 }
 
 fn prepare_workspace_root_layout(

@@ -1,4 +1,7 @@
-use orbit_types::workflow::{FinalRecoveryDecision, FinalRecoveryResume};
+use orbit_types::workflow::{
+    FaultAttribution, FinalRecoveryDecision, FinalRecoveryResume, RecoveryFault, SYNC_BASE_STEP_ID,
+    WORKTREE_SETUP_STEP_ID,
+};
 
 use crate::context::{
     CompletionObservationAdmission, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
@@ -23,6 +26,7 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
     ctx: &ExecCtx<'_>,
     step_index: usize,
     error: &DispatchError,
+    failure_code: Option<&orbit_types::workflow::StepFailureCode>,
     budget: &mut types::FinalRecoveryBudget,
 ) -> types::FinalRecoveryVerdict {
     let error_text = error.to_string();
@@ -41,79 +45,63 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
     // A normal base race is owned by the deterministic preparation boundary.
     // Its refusal/exhaustion preserves the candidate; an agent cannot renew
     // its host authority or replenish its bounded attempts and deadline.
-    if step.id == "sync_base" && error_message.contains("prepared_base_refresh_refused:") {
+    if step.id == SYNC_BASE_STEP_ID && error_message.contains("prepared_base_refresh_refused:") {
         return skip(
             "host-owned preparation recovery refused or exhausted; preserve the candidate without source repair",
         );
     }
-    // [ORB-19224] No decision about the task lets a lane run a required check
-    // its sandbox refuses, such as `orbit plugin test` inside a macOS worker
-    // that did not hand it to the host replay: the failure handoff keeps the
-    // candidate and a claimed leaf releases its claim.
-    if orbit_types::workflow::is_validation_route_unavailable(None, Some(error_message)) {
-        return skip(
-            "required validation cannot run in the lane that tried it and was not handed to its \
-             host replay; the candidate was not judged",
-        );
-    }
-    // [ORB-13987] No decision about the task fixes a host that lacks a tool;
-    // the failure handoff keeps the candidate for a resume instead.
-    if orbit_types::workflow::is_validation_environment_failure(None, Some(error_message)) {
-        return skip(
-            "required validation lacked a tool in its environment; the candidate was not judged",
-        );
-    }
-    // [ORB-14258] Nor fix a required command the base fails the same way; the
-    // failure handoff holds the task until the command passes on a new base.
-    if orbit_types::workflow::is_baseline_red_failure(None, Some(error_message)) {
-        return skip(
-            "required validation fails on the base exactly as on the candidate; the candidate \
-             did not cause it",
-        );
-    }
-    // [ORB-14269] Nor does another agent clear a blocker the implementer or
-    // step recovery [ORB-14268] declared. The failure handoff records the
-    // kind and keeps the candidate.
-    if orbit_types::workflow::is_task_blocked_by_agent(None, Some(error_message)) {
-        return skip("an agent declared a blocker; the candidate was not judged by another agent");
-    }
-    // Nor judges a candidate whose agent an Orbit upgrade refused mid-step;
-    // the failure handoff keeps it for the run after the upgrade.
-    if orbit_types::workflow::is_upgrade_pending(None, Some(error_message)) {
-        return skip("an Orbit upgrade refused the step's agent; the candidate was not judged");
-    }
-    // [ORB-14149] Nor does any decision give the provider's model capacity;
-    // the candidate stays in the worktree for a resume.
-    if orbit_types::workflow::is_provider_capacity_exhausted(None, Some(error_message)) {
-        return skip(
-            "the provider reported the selected model at capacity; the candidate was not judged",
-        );
-    }
-    // [ORB-14695] Nor outlasts the provider account's usage limit; run
-    // finalization holds the task until the reset the provider reported.
-    if orbit_types::workflow::is_provider_limit(None, Some(error_message)) {
-        return skip(
-            "the provider reported its account's usage limit reached; the candidate was not judged",
-        );
-    }
-    // [ORB-14266] Nor makes an unusable provider usable, or gets past its
-    // content policy. Run finalization holds the task in the backlog with
-    // that provider's crews excluded for a while instead.
-    if orbit_types::workflow::is_provider_unavailable(None, Some(error_message)) {
-        return skip("the provider could not be used on this host; the candidate was not judged");
-    }
-    if orbit_types::workflow::is_provider_refusal(None, Some(error_message)) {
-        return skip(
-            "the provider's content policy refused the turn; the candidate was not judged",
-        );
-    }
-    // [ORB-14260] Nor can a recovery agent in the same sandbox reach the
-    // claimed task's owner its step could not; the claim is released.
-    if orbit_types::workflow::is_owner_route_unavailable(None, Some(error_message)) {
-        return skip(
-            "the claimed worker could not reach its owner through the run's coordinator; the \
-             candidate was not judged",
-        );
+    // No class in the one unrepairable table is judged by another agent:
+    // no decision lets a lane run a required check its sandbox refuses,
+    // fixes a host that lacks a tool, fixes a required command the base
+    // fails the same way, clears a blocker already declared, judges a
+    // candidate whose agent an upgrade refused, gives the provider's
+    // model capacity, outlasts its account's usage limit, makes an
+    // unusable provider usable or gets past its content policy, reaches
+    // a claimed task's owner, or records the owner approval the
+    // implementer is waiting on. The failure handoff keeps the candidate
+    // (and a claimed leaf releases its claim). Branch on the typed code
+    // the step failure carried (or the dispatch error's own); only a
+    // failure with no code reaches the legacy marker fallback.
+    let typed_code = failure_code.cloned().or_else(|| error.step_failure_code());
+    if let Some(unrepairable) = unrepairable_failure(typed_code.as_ref(), Some(error_message)) {
+        return skip(match unrepairable {
+            UnrepairableFailure::ValidationRouteUnavailable => {
+                "required validation cannot run in the lane that tried it and was not handed to its \
+                 host replay; the candidate was not judged"
+            }
+            UnrepairableFailure::ValidationEnvironment => {
+                "required validation lacked a tool in its environment; the candidate was not judged"
+            }
+            UnrepairableFailure::BaselineRed => {
+                "required validation fails on the base exactly as on the candidate; the candidate \
+                 did not cause it"
+            }
+            UnrepairableFailure::BlockedByAgent => {
+                "an agent declared a blocker; the candidate was not judged by another agent"
+            }
+            UnrepairableFailure::UpgradePending => {
+                "an Orbit upgrade refused the step's agent; the candidate was not judged"
+            }
+            UnrepairableFailure::ProviderCapacityExhausted => {
+                "the provider reported the selected model at capacity; the candidate was not judged"
+            }
+            UnrepairableFailure::ProviderLimit => {
+                "the provider reported its account's usage limit reached; the candidate was not judged"
+            }
+            UnrepairableFailure::ProviderUnavailable => {
+                "the provider could not be used on this host; the candidate was not judged"
+            }
+            UnrepairableFailure::ProviderRefusal => {
+                "the provider's content policy refused the turn; the candidate was not judged"
+            }
+            UnrepairableFailure::OwnerRouteUnavailable => {
+                "the claimed worker could not reach its owner through the run's coordinator; the \
+                 candidate was not judged"
+            }
+            UnrepairableFailure::OwnerSignoffRequired => {
+                "recorded owner approval is still missing; another agent cannot record it"
+            }
+        });
     }
     // A `worktree_setup` that could not find a dependency is not transient:
     // the dependency is either resolvable through its registered owner or
@@ -134,13 +122,14 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
         return skip("the run has no assigned worktree for final recovery to inspect");
     };
 
-    if let types::FinalRecoveryBudget::Replay(decision) =
+    if let types::FinalRecoveryBudget::Replay(decision, fault) =
         std::mem::replace(budget, types::FinalRecoveryBudget::Spent)
     {
         let application = FinalRecoveryApplication {
             task_id,
             failed_step_id: step.id.clone(),
             decision,
+            fault,
             resume_step_index: None,
             preserved_steps: Vec::new(),
             repair_commit: None,
@@ -201,10 +190,25 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
     // (`orbit task recheck-blocked --confirm` and the owner's clock tick).
     // A claimed leaf is left to its agent: its task is the owner's, which
     // settles the claim through its own recovery and never sees this class.
-    if let DispatchError::DeterministicActionFailed { action, message } = error
-        && ctx.input.get("claimed").and_then(Value::as_bool) != Some(true)
-        && let Some(class) =
+    let infra_failure = match error {
+        DispatchError::DeterministicActionFailed { action, message } => {
             orbit_types::workflow::TransientInfrastructure::of_action_failure(action, message)
+                .map(|class| (class, message.clone()))
+        }
+        // A tag-instructions load surfaces an owner's host-config refusal as
+        // a CLI invocation failure, not a delivery action; it still judged
+        // nothing about the candidate.
+        DispatchError::CliInvocationFailed(message) => {
+            orbit_types::workflow::TransientInfrastructure::of_action_failure(&step.id, message)
+                .filter(|class| {
+                    *class == orbit_types::workflow::TransientInfrastructure::HostConfiguration
+                })
+                .map(|class| (class, message.clone()))
+        }
+        _ => None,
+    };
+    if let Some((class, _infra_message)) = infra_failure
+        && ctx.input.get("claimed").and_then(Value::as_bool) != Some(true)
     {
         let application = FinalRecoveryApplication {
             task_id,
@@ -224,7 +228,17 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
                                published. After the run stops, `orbit task requeue` does it at \
                                once."
                     .into(),
+                summary: None,
             },
+            fault: FaultAttribution::new(
+                RecoveryFault::Infrastructure,
+                format!(
+                    "run {} step `{}` failed on transient infrastructure ({})",
+                    ctx.run_id,
+                    step.id,
+                    class.as_str()
+                ),
+            ),
             resume_step_index: None,
             preserved_steps: Vec::new(),
             repair_commit: None,
@@ -260,6 +274,14 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
                         step_id: step.id.clone(),
                         rationale: rationale.clone(),
                     },
+                    fault: FaultAttribution::new(
+                        RecoveryFault::Infrastructure,
+                        format!(
+                            "run {} step `{}` could not observe completion of an unchanged, \
+                             authenticated publication",
+                            ctx.run_id, step.id
+                        ),
+                    ),
                     resume_step_index: Some(step_index as u32),
                     preserved_steps: Vec::new(),
                     repair_commit: None,
@@ -301,6 +323,11 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
                             "policy-changed: {reason}; transient completion observation requires current-policy source repair"
                         ),
                     },
+                    fault: FaultAttribution::unknown(format!(
+                        "run {} step `{}` could not observe completion and its policy changed \
+                         since publication",
+                        ctx.run_id, step.id
+                    )),
                     resume_step_index: None,
                     preserved_steps: Vec::new(),
                     repair_commit: None,
@@ -324,8 +351,13 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
             failed_step_id: step.id.clone(),
             decision: FinalRecoveryDecision::Escalate {
                 diagnosis: format!("unchanged completion reuse refused: candidate-changed: {refusal}; original error: {error_message}"),
-                human_action: "Inspect the publication and admit current-policy source repair when its evidence or inputs changed.".into(),
+                human_action: "Inspect the publication and admit current-policy source repair when its evidence or inputs changed.".into(), summary: None,
             },
+            fault: FaultAttribution::unknown(format!(
+                "run {} step `{}` could not observe completion and reuse of its publication \
+                 was refused",
+                ctx.run_id, step.id
+            )),
             resume_step_index: None,
             preserved_steps: Vec::new(),
             repair_commit: None,
@@ -347,6 +379,11 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
                 let application = FinalRecoveryApplication {
                     task_id,
                     failed_step_id: step.id.clone(),
+                    fault: FaultAttribution::unknown(format!(
+                        "run {} step `{}` spent its watch budget before the required checks \
+                         concluded",
+                        ctx.run_id, step.id
+                    )),
                     decision: FinalRecoveryDecision::Requeue { reason },
                     resume_step_index: None,
                     preserved_steps: Vec::new(),
@@ -387,22 +424,33 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
             input
         })
         .and_then(|input| decision::dispatch_final_recovery(ctx, step, activity, &input));
-    let (decision, recovery_model) = match dispatch {
-        Ok((output, model)) => (
-            FinalRecoveryDecision::from_output(Some(&decision::decision_payload(&output))),
-            model,
-        ),
+    let ((decision, fault), recovery_model) = match dispatch {
+        Ok(dispatched) => {
+            let (decision, fault) =
+                FinalRecoveryDecision::from_attributed_output(Some(&dispatched.payload));
+            (
+                (decision, fault.judged_by(dispatched.judge)),
+                dispatched.model,
+            )
+        }
         Err(message) => (
-            FinalRecoveryDecision::Escalate {
-                diagnosis: format!(
-                    "final recovery activity `{}` did not return a decision: {message}",
-                    activity.name
-                ),
-                human_action:
-                    "Inspect the failed run and its final-recovery invocation, then move \
+            (
+                FinalRecoveryDecision::Escalate {
+                    diagnosis: format!(
+                        "final recovery activity `{}` did not return a decision: {message}",
+                        activity.name
+                    ),
+                    human_action:
+                        "Inspect the failed run and its final-recovery invocation, then move \
                                the task by hand."
-                        .to_string(),
-            },
+                            .to_string(),
+                    summary: None,
+                },
+                FaultAttribution::unknown(format!(
+                    "final recovery activity `{}` for run {} returned no decision",
+                    activity.name, ctx.run_id
+                )),
+            ),
             None,
         ),
     };
@@ -438,6 +486,7 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
             human_action:
                 "Inspect the refused repair and its candidate ownership before resuming the run."
                     .into(),
+            summary: None,
         };
         resume_index = None;
     }
@@ -490,6 +539,7 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
         task_id,
         failed_step_id: step.id.clone(),
         decision: decision.clone(),
+        fault,
         resume_step_index: resume_index.map(|index| index as u32),
         preserved_steps,
         repair_commit,
@@ -514,7 +564,7 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
 /// counts, and only when it carries the remote `not_found` / `task not
 /// found` text the owner lookup produces.
 fn is_worktree_setup_dependency_not_found(step_id: &str, error: &DispatchError) -> bool {
-    if step_id != "worktree_setup" {
+    if step_id != WORKTREE_SETUP_STEP_ID {
         return false;
     }
     let message = error.to_string();

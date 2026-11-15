@@ -21,6 +21,7 @@ impl GuardedModes for ExperimentVerb {
             | Self::Reweight
             | Self::Conclude
             | Self::Abandon
+            | Self::Delete
             | Self::Show
             | Self::List
             | Self::Readout => None,
@@ -43,6 +44,7 @@ impl GuardedModes for ExperimentVerb {
             | Self::Reweight
             | Self::Conclude
             | Self::Abandon
+            | Self::Delete
             | Self::Show
             | Self::List
             | Self::Readout => None,
@@ -61,6 +63,7 @@ impl GuardedModes for ExperimentVerb {
             | Self::Reweight
             | Self::Conclude
             | Self::Abandon
+            | Self::Delete
             | Self::Show
             | Self::List
             | Self::Readout => Ok(()),
@@ -79,6 +82,7 @@ impl GuardedModes for ExperimentVerb {
             | Self::Reweight
             | Self::Conclude
             | Self::Abandon
+            | Self::Delete
             | Self::Show
             | Self::List
             | Self::Readout => None,

@@ -4,8 +4,8 @@ summary: Inspect before-PR and before-landing review verdicts, findings, and evi
 tags: [operations, review-gate, delivery]
 paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure/handoff.rs"]
 related_features: [review-gate]
-related_artifacts: ["ORB-13989", "ORB-13992", "ORB-14194", "ORB-14849"]
-last_validated: 2026-10-27
+related_artifacts: ["ORB-13989", "ORB-13992", "ORB-14194", "ORB-14849", "ORB-22808"]
+last_validated: 2026-11-14
 ---
 
 # Operate the Review Gate
@@ -45,21 +45,11 @@ readiness holds that backlog as `local_route_before_pr` or
 > `before_pr` input and internal handlers is a later separately scoped
 > decision; ORB-20087 consumed this deprecation without waiting for it.
 
-> Selective before-landing review [ORB-20087]: with `review.timing = "off"`,
-> `[review.selective_before_landing]` may `observe` or `enforce` review
-> selection by estimated `diff_lines` risk (strictly above
-> `risk_threshold`) and/or repository-relative `paths` globs over the
-> complete pinned PR diff. It ships `off`; nothing here enables it. To
-> adopt: configure a pre-landing reviewer crew, set `mode = "observe"`,
-> inspect the host-authored `review-selection.json` receipts (selection
-> volume per predicate, unknown/unavailable counts, gaps) and the doctor /
-> `orbit config show` selective line, then separately decide on
-> `mode = "enforce"`. An enforced `required` decision runs the ordinary
-> before-landing reviewer and cannot be skipped by review-skip tags; a
-> `selection_unavailable` or `selection_stale` hold means the diff could
-> not be read or the live head moved after selection — re-evaluate with a
-> fresh delivery run rather than merging around it. Observations and
-> skips are selection evidence only, never a passed review.
+> Selective before-landing review [ORB-20087] was removed [ORB-22808]: no
+> candidate is selected by risk or path, and the
+> `[review.selective_before_landing]` keys load with a deprecation warning and
+> are ignored until 2026-12-08. Delete the table. Review before landing with
+> `review.timing = "before_landing"` or `review.before_landing_hosts`.
 
 ## 1. What the gate does
 
@@ -93,15 +83,17 @@ PR head ref (`refs/pull/<number>/head`) can briefly report the previous
 published head. Completion retries only that recorded SHA, checking each read
 with `git ls-remote origin refs/pull/<number>/head`. A PR head ref already at
 the new candidate lets stale metadata settle. A PR head ref still at the
-recorded previous head also settles, but only while `git ls-remote origin
-refs/heads/<task branch>` independently names the new candidate; a ref seen at
-the candidate that later regresses is refused. It makes at most three re-reads
-at the configured poll interval, capped at 60 seconds and one quarter of the
-completion wait budget. `merge.stale_head_observations` records the lag on
-successful delivery. An unrelated SHA, a missing or moved remote ref, an absent
-or different task branch ref, an unknown, empty or candidate-equal previous
-head, a failed `ls-remote`, or an exhausted bound (including a PR head ref
-still at the previous head) still refuses with `delivery_evidence_stale` (or
+recorded previous head, or briefly absent, also settles, but only while `git
+ls-remote origin refs/heads/<task branch>` independently names the new
+candidate; a ref seen at the candidate that later regresses is refused. It
+makes at most three re-reads at the configured poll interval, capped at 60
+seconds and one quarter of the completion wait budget.
+`merge.stale_head_observations` records the lag on successful delivery. An
+unrelated SHA, a moved remote ref, an absent remote ref whose task branch is
+missing or names another commit, an absent or different task branch ref, an
+unknown, empty or candidate-equal previous head, a failed `ls-remote`, or an
+exhausted bound (including a PR head ref still at the previous head or absent)
+still refuses with `delivery_evidence_stale` (or
 `review_gate_stale` when only the review pin applies), leaving the task in
 review. Completion must observe the exact candidate in PR metadata before
 sending the unchanged SHA-conditioned merge request; waiting never extends the
@@ -266,8 +258,8 @@ The owner enforces what it is owed in two places:
   inherited from the base gets a branch update; while the base stays red the
   landing waits within its deadline for a newer passing base and updates
   again, at most three updates per handoff, recording each wait and update
-  in task history. A transient one gets one rerun, and one the candidate
-  caused gets the claim's one automatic repair
+  in task history. A logged transient one uses the configured bounded
+  infrastructure reruns, and one classified as caused by the candidate returns the task to the backlog with its candidate for repair
   ([distributed drain runbook](distributed-drain.md)). A new failure whose
   log cites only files the candidate did not change is base-suspect: it waits
   for a successful same-check push run on the accepted base ancestry, then
@@ -280,12 +272,51 @@ The owner enforces what it is owed in two places:
   `github.event.pull_request.head.sha`; they do not build a merge with the
   current base. A passing rerun clears the failure, while the same signature
   failing again with a successful same-check run on the accepted base ancestry
-  enters candidate recovery. If the evidence remains incomplete,
-  `handoff_land` stops in review after `max_base_ci_cycles` observation cycles
-  (default 3) or `max_wait_seconds` (default 3600 seconds), whichever comes
+  enters candidate recovery. When that rerun's evidence stays unreadable for
+  `max_base_ci_cycles` polls, a same-check base pass sends a flaky failure to
+  candidate recovery. A candidate set with no cause evidence (no aggregate, no
+  changed-file citation, and no transient, inherited, unknown or inconclusive
+  job) on a head with no prior rerun first gets one eligible classification
+  rerun on the unchanged head. `ci_check_rerun_reserved` spends the shared
+  once-per-head budget before sending; a repeated candidate failure returns the
+  task to the backlog for repair. Other candidate failures take the same route,
+  and inherited failures keep their
+  base update/wait route. Other
+  failure classes with unreadable rerun evidence stop naming the read failure.
+  Logged infrastructure/transient failures use
+  `workflow.ci_infrastructure_retry.max_attempts` (default 3 total reruns)
+  and `workflow.ci_infrastructure_retry.backoff_seconds` (default 60, doubled
+  between retries). The budget survives watcher/completion restarts and
+  unknown replies; the same provider attempt is never resent. Candidate
+  siblings prevent this recovery. Exhaustion appends
+  `ci_infrastructure_retry_exhausted`, naming the transient classification
+  and attempt count in `orbit task show` history, and keeps the task in review.
+  The existing completion deadline still bounds the wait. Rate-limited log
+  reads follow the recorded read-deferral path without spending an attempt.
+  Owner-local review deliveries use the same planner from their existing
+  review watcher, then resume check observation; merge authorization is unchanged.
+  Conclusion-only cancellations/timeouts, a failure whose log is only a ci-await timeout, and flaky failures still get one rerun.
+  If the evidence remains incomplete,
+  `handoff_land` holds in review (`delivery_base_checks_pending`) after
+  `max_base_ci_cycles` observation cycles (default 3) or `max_wait_seconds`
+  (default 3600 seconds), whichever comes
   first, and names the missing evidence. Branch protection may still treat a skipped or
-  neutral required check as satisfied; this gate does not. The candidate
+  neutral rerun of the failed required check as satisfied; this gate does not. The candidate
   stays in review. A local candidate owed a hosted check stops too.
+
+  Auto-fix completion uses a separate repair-admission policy: a source
+  failure gets a repair on its first completion poll unless the known-red-base
+  path applies. Untouched-file suspicion, a missing unchanged-head repeat,
+  and eligible-set authorization do not delay that repair. The merge gate
+  still requires the latest required results on the head being merged to
+  pass, even when GitHub reports it as mergeable. A flaky or base-suspect
+  classification never clears a red required check; only a later passing
+  run of that check on the same head or the repaired head does. A skipped
+  or neutral required result counts as passed only when the head's check
+  history shows no failed run of that check, such as a docs-only change whose
+  required job never ran. Remaining
+  suspicion records are written once per head, check and signature across
+  base-tip changes.
 
 Any other Linux CodeQL keeps the hold, as it does on a before-PR review: a
 rule without `hosted_check` (a custom query, or a workspace with no hosted
@@ -295,7 +326,7 @@ before the held candidate lands. A before-PR review always keeps the hold,
 since no hosted CI runs before the pull request opens.
 
 ```bash
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"review-gate.json"}' \
+orbit tool run orbit.task.artifact --input '{"action":"get","id":"<task-id>","path":"review-gate.json"}' \
   | jq '.content | fromjson | {verdict, host_validation, owner_owed_evidence, known_red}'
 ```
 
@@ -326,11 +357,42 @@ Repeated stops of the same review leave its preservation evidence unchanged.
 
 Final recovery may repair a rejected candidate once. If it appends a commit,
 the engine records the exact HEAD advance around that invocation and resumes
-at commit or an earlier requested step. Required validation and before-PR
+at commit or an earlier requested step. Required validation and the applicable
 review run again for the new candidate; the rejected attempt cannot approve
-it. The commit guard accepts only the recorded repair HEAD in the same
-worktree, descended from the pinned base. Any later unrecorded HEAD change
-still fails with `worktree_head_changed`.
+it. On the final-recovery route the commit guard accepts only the recorded
+repair HEAD in the same worktree, descended from the pinned base. Any later
+unrecorded HEAD change still fails with `worktree_head_changed`.
+
+There is a second, independent route that needs no final-recovery repair
+receipt. A before-landing reviewer may commit its own repair in the same
+worktree and settle with that commit as its final candidate. The commit
+step admits that HEAD, when it descends from the pinned base, only from
+trusted settlement evidence:
+
+- the typed settlement in the task's history, which the gate writes with
+  the verdict and which an ordinary task comment cannot create
+- a legacy comment settlement from before that typed record, and only when
+  the comment's stored author is `system` (the host stamp on a system
+  write)
+
+The comment's sentences are display text. An implementer, reviewer, or
+other caller can post the same format through the public task update, and
+that comment does not admit HEAD: the step still fails with
+`worktree_head_changed` before it stages anything. A clean tree whose HEAD
+matches trusted evidence is accepted as already committed. A resumed
+implementation that edits on top of that HEAD has its changes committed as
+one workflow-authored commit on top of it. The match is exact: an extra
+commit above the recorded final commit, a HEAD no trusted settlement
+recorded, or a recorded HEAD that does not descend from the pin still fails
+closed. Legacy settlements that abbreviate the commit id only authorize the
+commit their hexadecimal prefix resolves to; a symbolic revision such as
+`HEAD` proves nothing. Settlements from a before-PR review never grant this
+permission, so a before-PR verdict still needs its own delivery route.
+
+Admission is not approval. Neither route accepts the candidate for landing:
+the admitted HEAD re-enters the pipeline at the commit step and still needs
+fresh required validation and a fresh review verdict for its tree, exactly
+like any other newly committed candidate.
 
 For file repairs made before review, final recovery's resume uses the host's
 guarded recovery commit path before rewinding delivery. The agent's Git metadata
@@ -456,7 +518,7 @@ The full evidence is in the task artifacts `review-manifest.json`,
 `review-report.json`, and `review-gate.json`:
 
 ```bash
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"review-gate.json"}'
+orbit tool run orbit.task.artifact --input '{"action":"get","id":"<task-id>","path":"review-gate.json"}'
 ```
 
 A required check can fail on the candidate only because the base it was
@@ -552,11 +614,27 @@ When a broader run, such as `cargo test -p <crate> --test <target> <module>`,
 defers some of its tests, name each one as a `host_sandbox_test` requirement
 whose command is `cargo test -p <crate> --test <target> <test>`. Use the same
 package and target, and the full test path the notice prints as the filter.
+A package-wide run, `cargo test -p <crate>` with no target selector, that
+defers a library unit test is named the same way with
+`cargo test -p <crate> --lib <test>`: the same package and that exact filter.
+A `--test` requirement does not cover the package-wide run, and a `--lib`
+requirement does not cover a `--test` run. A broader command that itself
+carries `--lib` or another target selector stays uncovered.
 Record each requirement as its own `required`, `not_run` record too. A host
 result for each requirement then establishes the broader record. A notice no
 requirement names exactly leaves the record `not_run`, and the review blocks
 instead of holding
 ([design](../design/review-gate/2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545)).
+
+One exception: when the reviewer accepted with no open findings, settlement
+itself reads a `DEFERRED: bubblewrap unavailable:` notice in a required
+record and synthesizes the Linux `host_sandbox_test` requirement for the
+test it names (from the record's cargo scope, or a reviewer-named Linux
+requirement for that test in the same package and target), so the review
+holds for the host run instead of blocking as `validation_incomplete`
+[ORB-24656]. Reviewers should still name
+each deferred test as above; settlement's synthesis is the backstop, and a
+Bubblewrap notice it cannot name a command for still blocks.
 
 A test runner may instead exit nonzero because nested Seatbelt application
 or a required child-process spawn was refused by the review sandbox. Record
@@ -612,18 +690,34 @@ denied:` notices from an owner-run or non-macOS implementer and the other
 required commands are not deferrable ([development guide](../DEVELOPMENT.md#test-process-environment)).
 
 A reviewer whose sandbox cannot run a sandbox-gated test names it as
-`host_sandbox_test` evidence for an OS. A claimed leaf's host runs it outside
-the agent sandbox when it settles
+`host_sandbox_test` evidence for an OS and reports `incomplete` when that is
+the only gap. A claimed leaf's host, or an owner host settling a before-landing
+review, runs it outside the agent sandbox when it settles
 ([design](../design/review-gate/2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545)). The certificate's
 `host_evidence` lists each attempt with its typed `reason`. The run's output
 and validation environment are in the log artifact beside the named result
 (`<artifact>.log.json`):
 
 ```bash
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"review-gate.json"}' \
+orbit tool run orbit.task.artifact --input '{"action":"get","id":"<task-id>","path":"review-gate.json"}' \
   | jq '.content | fromjson | .host_evidence'
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"<artifact>.log.json"}'
+orbit tool run orbit.task.artifact --input '{"action":"get","id":"<task-id>","path":"<artifact>.log.json"}'
 ```
+
+Owner landing settlement uses this immediate replay because the published
+task is already in `review`; the fulfilment tick selects only `in-progress`
+holds. Replay still requires an otherwise complete evidence-only report:
+each requirement needs its own required unavailable record, and every
+broader record's deferral must match an exact test filter in the same package
+and integration target. A build-budget wrapper, a whole-crate run without
+`--test`, or a notice naming a different test cannot establish that match.
+These shapes still block; settlement does not infer missing records or erase
+uncovered deferrals. Open findings, failed required checks and an explicit
+owner `reject` also block without running anything. A refused command, OS
+mismatch, self-skipped or zero-test host run never becomes passing evidence.
+When immediate replay cannot establish the checks, the owner landing review
+keeps the PR open and follows the recorded-decision route below; it does not
+create an `in-progress` hold or approve the candidate through fulfilment.
 
 A workspace `[[review.host_evidence]]` rule makes this deterministic for a
 claimed leaf. A Rust change on a macOS leaf owes the Linux CodeQL run (before
@@ -646,7 +740,7 @@ reuses the held certificate without a reviewer, and the certificate's
 ([design](../design/review-gate/2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545)).
 
 ```bash
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"review-gate.json"}' \
+orbit tool run orbit.task.artifact --input '{"action":"get","id":"<task-id>","path":"review-gate.json"}' \
   | jq '.content | fromjson | {owed_evidence, resumed_hold_attempt}'
 ```
 
@@ -655,8 +749,9 @@ claimed leaf's host could not run it — is fulfilled by a Linux owner whose
 host can create Bubblewrap namespaces. The owner's clock sweep dispatches
 `review_evidence_fulfilment_pipeline` for it, one run at a time, and stands
 down on a follower, a worker, another platform or a host without namespaces.
-The run admits only an exact owner-required validation command or
-`cargo test -p <crate> --test <target> [<filter>]`, written in
+The run admits only an exact owner-required validation command,
+`cargo test -p <crate> --test <target> [<filter>]`, or
+`cargo test -p <crate> --lib [<filter>]`, written in
 `[A-Za-z0-9._/:@+=-]` and spaces. A single `--` immediately before the
 one filter is also admitted and normalized to the same host command;
 a bare `--`, further arguments and test-harness options remain refused.
@@ -676,7 +771,7 @@ orbit audit list --tool review.evidence_fulfilment --json
 # The step's output: fulfilled, reason, detail, retryable, requeued.
 orbit run show <run-id>
 # The command line run, its output, tests passed and validation environment.
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"<artifact>.log.json"}'
+orbit tool run orbit.task.artifact --input '{"action":"get","id":"<task-id>","path":"<artifact>.log.json"}'
 ```
 
 The run also comments its outcome on the task.
@@ -712,7 +807,7 @@ Identify the failed step from `orbit run show`, then act:
   To keep the change, fix it on the PR branch and land it with an operator
   decision, or re-queue the task for a fresh run (a new lineage reviews the
   new candidate, and the requeue closes this PR). To drop it, reject the
-  task; `pr.close_on_terminal` closes the PR then. `push_lease_lost` means the PR branch moved after the review
+  task; Orbit closes the PR then. `push_lease_lost` means the PR branch moved after the review
   settled: inspect who pushed before deciding. `review_repair_after_merge`
   means the pull request was merged at the head the review settled on while
   the repair was still unpublished. The comment names the preserved ref.
@@ -769,17 +864,19 @@ Identify the failed step from `orbit run show`, then act:
 
 - **A claimed reviewer reported `incomplete` because its manifest or report
   call was refused** (distributed drain follower): the reviewer's
-  `orbit.task.artifact.get`/`put` reaches the owner only through the run's
+  `orbit.task.artifact` action `get`/`put` reaches the owner only through the run's
   coordinator, the step runner outside the sandbox, which carries those two
   calls and a claimed worker's other owner calls, and nothing else. The
   refusal names the cause:
   `review_attempt_stale` (the reviewer ran past its attempt or the attempt
   was settled), `review_manifest_stale` (the owner holds another attempt's
   manifest), `stale_claim` (the owner released, failed, revoked or superseded
-  the claim), `claimed_review_bridge_refused` (another activity, task, path or
-  field), or `owner_route_unavailable` "could not reach this run's
-  coordinator" (no usable response; the run skips recovery and releases the
-  claim).
+  the claim), `claimed_review_bridge_refused` (another activity, path or
+  field), `claimed_owner_bridge_refused` (a `review-*` call naming another
+  task, refused before any review scope), or `owner_route_unavailable`
+  "could not reach this run's coordinator" (no usable response; the run skips
+  recovery and preserves release evidence while the owner holds the task for an
+  operator decision).
   Preserve the exact call and inspect the task, run, claim and review ledger
   before recovery. Do not replay a stale, expired, settled or cancelled
   attempt. A transport loss has an unknown outcome and must use existing
@@ -809,8 +906,8 @@ After the delivery run, read `review-gate.json` through the public artifact
 tool and verify its `verdict`, `validation_complete` and `final_candidate`:
 
 ```bash
-orbit tool run orbit.task.artifact.get --input \
-  '{"id":"<task-id>","path":"review-gate.json"}'
+orbit tool run orbit.task.artifact --input \
+  '{"action":"get","id":"<task-id>","path":"review-gate.json"}'
 orbit run show <leaf-run-id> --step handoff --json --no-reconcile
 ```
 

@@ -5,5 +5,7 @@ mod bounded;
 // Linux fault injection and macOS native libproc identity/liveness coverage.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod identity;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod signal;
 #[cfg(target_os = "linux")]
 mod stopped_descendants;

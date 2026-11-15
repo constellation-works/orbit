@@ -1,19 +1,19 @@
 ---
 title: Review Gate — Overview
 owner: codex
-last_updated: 2026-10-30
-last_validated: 2026-10-28
-status: Accepted
+last_updated: 2026-11-08
+last_validated: 2026-11-08
+status: Implemented
 stage: shipped
-next: "ORB-20087 shipped selective before-landing risk/path rules (§3.3, default off) after ORB-20099 staged before-PR deprecation (§1.1); observe/enforce adoption is an operator decision; symbols deferred."
+next: "Remove the legacy selective fields after 2026-12-08"
 feature: review-gate
 doc_role: overview
 type: design
-summary: Independent automatic review with captured timing and exact-tree coverage; shipped staged before-PR deprecation and shipped selective before-landing risk/path rules (default off) preserve existing runs and evidence.
+summary: Independent automatic review with captured timing and exact-tree coverage; shipped staged before-PR deprecation preserves existing runs and evidence; selective before-landing rules were removed.
 tags: [review-gate, review-policy, automation, delivery]
-paths: ["crates/orbit-config/src/operation.rs", "crates/orbit-core/src/application/review/**", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs"]
+paths: ["crates/orbit-config/src/operation/**", "crates/orbit-core/src/application/review/**", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs"]
 related_features: [automation-triggers, activity-job, auditability]
-related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13989, ORB-13992, ORB-14849, ORB-20087, ORB-20099]
+related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13989, ORB-13992, ORB-14849, ORB-20087, ORB-20099, ORB-22808]
 ---
 
 # Review Gate — Overview
@@ -29,22 +29,24 @@ reruns on the reviewer commit before the PR opens, and the PR body gains a
 preserved; there is no second review round), or `incomplete` (the review
 could not finish or required evidence is unavailable). An evidence-only gap
 can hold the candidate for the owner to supply the named checks. Passed
-certificates exclude exactly reproduced landings from redundant after-landing
+certificates cover landings that reproduce the reviewed tree, plus clean rebases when a
+reviewed head merges onto a moved base; that coverage excludes them from redundant after-landing
 review while QA stays independent.
 Neither review timing nor a reviewer verdict grants merge permission.
 
 **Shipped prerequisite:** [Design §1.1](./2_design.md#11-staged-deprecation-of-before-pr-review-orb-20099-shipped)
 deprecates before-PR mode with warnings and explicit migration to
 before-landing, preserving legacy inputs, captured runs, budgets and review
-evidence. Selective review ([ORB-20087]) builds on it; removal of legacy
-handlers is separate later work.
+evidence. Removal of legacy handlers is separate later work.
 
-**Shipped, default off:** [Design §3.3](./2_design.md#33-selective-before-landing-review-orb-20087)
-adds optional risk-threshold and repository-relative path rules that select
-the existing before-landing reviewer, with observation before enforcement.
-It includes the `review.selective_before_landing` settings in `config.toml`,
-exact-head receipts and owner/follower enforcement. Symbol-history triggers
-remain deferred.
+**Removed [ORB-22808]:** [Design §3.3](./2_design.md#33-selective-before-landing-review-orb-20087)
+records the selective risk-threshold and path rules [ORB-20087] that shipped
+default off and were never enabled. They were removed on 2026-11-08: the
+`review.selective_before_landing` keys load with a deprecation warning and are
+ignored until 2026-12-08, and the legacy admission, handoff and capability
+fields stay readable. A stored claim that captured only that policy is not a
+review requirement. The fields are never produced, so the distributed protocol
+fingerprint is unchanged.
 
 Review runs at three timings [ORB-13992] [ORB-14849]: `review.timing =
 "before_pr"` in `config.toml` holds PR creation for the reviewer;
@@ -74,8 +76,9 @@ given that evidence and is accountable for a verdict — before the PR exists,
 where a defect is still cheap, or after landing, where debt can be batched.
 
 The second motivation is not paying for the same review twice. A landing that
-reproduces an already-reviewed tree exactly is covered by that certificate;
-anything else stays an ordinary review obligation.
+reproduces an already-reviewed tree is covered by that certificate, as is a
+reviewed head that merges cleanly onto a moved base (`rebased_clean` coverage);
+other landings stay ordinary review obligations.
 
 ## 2. Core Concepts
 
@@ -119,7 +122,7 @@ a second time.
 | Shipped before-PR deprecation, explicit migration and preservation contract | [Design §1.1](./2_design.md#11-staged-deprecation-of-before-pr-review-orb-20099-shipped) | [ORB-20099] (shipped prerequisite) |
 | Verdicts, the two-commit shape, the findings comment, and revalidation | [Design §3.1](./2_design.md#31-verdicts-the-two-commit-shape-and-revalidation-orb-13989) | [ORB-13989] |
 | Before-landing review of the open PR, and its claimed-leaf placement | [Design §3.2](./2_design.md#32-before-landing-review-of-the-open-pr-orb-14849) | [ORB-14849] |
-| Selective risk/path rules (shipped, default off), configuration and rollout; symbols deferred | [Design §3.3](./2_design.md#33-selective-before-landing-review-orb-20087) | [ORB-20087] (shipped) |
+| Selective risk/path rules (removed; history and legacy fields) | [Design §3.3](./2_design.md#33-selective-before-landing-review-orb-20087) | [ORB-20087], [ORB-22808] (removed) |
 | Operating a blocked review | [Review gate runbook](../../runbooks/review-gate.md) | [ORB-13989] |
 | What a validation record establishes | [Design §4](./2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545) | [ORB-11528], [ORB-11545] |
 | After-landing scheduling and coverage consumers | [Delivery automation operations](../automation-triggers/5_operations.md) | [ORB-11331] |
@@ -128,6 +131,7 @@ a second time.
 ## Task References
 
 - [ORB-11333] — implements independent review policy, the before-PR gate, lineage budgets, and delivery coverage.
+- [ORB-13992] — splits review into the config.toml timing and the delivery-code-review auto-task flag, and makes `review.minutes` the wall-clock limit of one review per candidate.
 - [ORB-11528] — adds validation-record roles to the certificate contract.
 - [ORB-11545] — tightens what a superseded validation record may claim.
 - [ORB-11331] — owns the delivery automation consumers that spend certificates.
@@ -135,5 +139,6 @@ a second time.
 - [ORB-14849] — adds before-landing review of the open PR beside hosted CI.
 - [ORB-20087] — shipped configurable risk/path selection of before-landing review, default off; symbol triggers deferred.
 - [ORB-20099] — shipped staged before-PR deprecation preserving runs and evidence; [ORB-20087] depends on it.
+- [ORB-22808] — removed selective before-landing review; deprecated its four keys until 2026-12-08 and kept its wire and persisted fields as ignored legacy fields.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

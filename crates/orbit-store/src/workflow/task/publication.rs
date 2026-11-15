@@ -232,36 +232,6 @@ impl PublicationEnvelope {
     }
 }
 
-/// A scanner input whose bytes are never retained in the publication envelope.
-pub struct AttachmentScanInput<'a> {
-    pub task_id: &'a str,
-    pub path: &'a str,
-    pub media_type: &'a str,
-    pub bytes: &'a [u8],
-}
-
-/// Sensitivity verdict for one attachment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AttachmentScanOutcome {
-    Clear,
-    Sensitive,
-}
-
-/// Content-free scanner failure classes safe to surface in policy errors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AttachmentScanFailure {
-    Unavailable,
-    Failed,
-}
-
-/// Pluggable sensitivity boundary used by `include` publication.
-pub trait AttachmentSensitivityScanner {
-    fn scan(
-        &self,
-        input: AttachmentScanInput<'_>,
-    ) -> Result<AttachmentScanOutcome, AttachmentScanFailure>;
-}
-
 /// Result of a successfully published snapshot tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicationSnapshotOutcome {
@@ -287,7 +257,6 @@ pub(crate) fn build_publication_snapshot_from_task_workspace(
     metadata: PublicationSnapshotMetadata,
     task_workspace_id: &str,
     policy: &AttachmentPolicy,
-    scanner: Option<&dyn AttachmentSensitivityScanner>,
 ) -> Result<PublicationSnapshotOutcome, OrbitError> {
     metadata.validate()?;
     validate_registry_identifier("task_workspace_id", task_workspace_id)
@@ -360,7 +329,7 @@ pub(crate) fn build_publication_snapshot_from_task_workspace(
             &mut omitted_attachments,
         )?;
         if policy.kind == AttachmentPolicyKind::Include {
-            scan_captured_attachments(task_id, &target, &files, policy, scanner)?;
+            scan_captured_attachments(task_id, &target, &files, policy)?;
         }
     }
 
@@ -606,19 +575,19 @@ fn apply_attachment_metadata_policy(
     Ok(())
 }
 
-/// Scan the staged copy, not the canonical source: the staged bytes were
-/// verified against the captured manifest and are exactly what publishes, so
-/// the scanner can run without holding writers off the canonical bundle.
+/// Verify the staged copy, not the canonical source: the staged bytes were
+/// verified against the captured manifest and are exactly what publishes.
+/// There is no sensitivity scanner, so `include` refuses unless the policy
+/// explicitly waives scanning via `ScannerFailureBehavior::AllowUnchecked`.
 fn scan_captured_attachments(
     task_id: &str,
     captured: &Path,
     files: &[ArtifactManifestFileV2],
     policy: &AttachmentPolicy,
-    scanner: Option<&dyn AttachmentSensitivityScanner>,
 ) -> Result<(), OrbitError> {
     for file in files {
         let artifacts_root = captured.join(TASK_ARTIFACTS_DIR_NAME);
-        let bytes = match read_contained_artifact_blob(&artifacts_root, &file.blob) {
+        let _bytes = match read_contained_artifact_blob(&artifacts_root, &file.blob) {
             Ok(Some(bytes)) => bytes,
             Ok(None) => {
                 return Err(OrbitError::Store(format!(
@@ -637,33 +606,12 @@ fn scan_captured_attachments(
                 });
             }
         };
-        let scan_result = scanner.map(|scanner| {
-            scanner.scan(AttachmentScanInput {
+        if policy.scanner_failure_behavior == ScannerFailureBehavior::Reject {
+            return Err(policy_error(
                 task_id,
-                path: &file.path,
-                media_type: &file.media_type,
-                bytes: &bytes,
-            })
-        });
-        match scan_result {
-            Some(Ok(AttachmentScanOutcome::Clear)) => {}
-            Some(Ok(AttachmentScanOutcome::Sensitive)) => {
-                return Err(policy_error(
-                    task_id,
-                    &file.path,
-                    "attachment was classified as sensitive",
-                ));
-            }
-            Some(Err(_)) | None
-                if policy.scanner_failure_behavior == ScannerFailureBehavior::Reject =>
-            {
-                return Err(policy_error(
-                    task_id,
-                    &file.path,
-                    "attachment sensitivity scanner did not produce a verdict",
-                ));
-            }
-            Some(Err(_)) | None => {}
+                &file.path,
+                "attachment sensitivity scanner did not produce a verdict",
+            ));
         }
     }
     Ok(())

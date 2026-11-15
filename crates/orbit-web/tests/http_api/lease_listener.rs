@@ -541,7 +541,9 @@ async fn client_address_comes_from_the_peer_or_the_rightmost_untrusted_forwarded
 
 /// Failed authentication is limited per address so a token cannot be
 /// guessed online, and the limit lifts when its window ends.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Freeze the limiter clock across token verification as well as the requests;
+// only the explicit advance below expires the failed-auth window.
+#[tokio::test(start_paused = true)]
 async fn repeated_failed_authentication_gets_429_until_the_window_ends() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("orbit-lease");
@@ -606,7 +608,7 @@ async fn repeated_failed_authentication_gets_429_until_the_window_ends() {
         "another address is not limited"
     );
 
-    tokio::time::sleep(window + Duration::from_millis(200)).await;
+    tokio::time::advance(window).await;
     let (status, _, _) = send(
         &router,
         "GET",

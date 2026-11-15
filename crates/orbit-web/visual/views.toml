@@ -53,6 +53,17 @@ states = ["default", "empty"]
 mask = []
 
 [[view]]
+id = "notices"
+app = "dashboard"
+title = "Notices"
+route = "#notices"
+fixture = "fleet-notices"
+ready = "#notices-body .notice-row"
+responsive = true
+states = ["default"]
+mask = []
+
+[[view]]
 id = "analytics-metrics"
 app = "dashboard"
 title = "Analytics metrics"
@@ -70,6 +81,18 @@ title = "Analytics implementers"
 route = "#analytics/agents/implementers"
 fixture = "busy-workspace"
 ready = "#agents-panel"
+responsive = true
+states = ["default"]
+mask = []
+
+[[view]]
+id = "analytics-implementer-detail"
+app = "dashboard"
+title = "Analytics implementer detail"
+route = "#analytics/agents/implementers"
+fixture = "implementers-scorecard"
+ready = "#agents-detail"
+clip = "#agents-detail .agents-stats"
 responsive = true
 states = ["default"]
 mask = []
@@ -94,6 +117,18 @@ fixture = "experiments"
 ready = "#experiments-panel"
 responsive = true
 states = ["default", "empty"]
+mask = []
+
+[[view]]
+id = "analytics-experiment-detail"
+app = "dashboard"
+title = "Experiment detail"
+route = "#analytics/experiments/{experiment}"
+fixture = "experiments"
+ready = ".ex-crew-rows"
+clip = ".ex-crew-rows"
+responsive = true
+states = ["default"]
 mask = []
 
 [[view]]
@@ -130,12 +165,78 @@ states = ["default", "empty"]
 mask = []
 
 [[view]]
+id = "automation-residents"
+app = "dashboard"
+title = "Automation residents"
+route = "#operations/residents"
+fixture = "residents"
+ready = "#residents-panel"
+responsive = true
+states = ["default", "empty"]
+mask = []
+
+[[view]]
 id = "settings"
 app = "dashboard"
 title = "Settings"
 route = "#config"
 fixture = "busy-workspace"
 ready = "#config-panel"
+responsive = true
+states = ["default"]
+mask = []
+
+[[view]]
+id = "knowledge"
+app = "dashboard"
+title = "Knowledge"
+route = "#knowledge"
+fixture = "busy-workspace"
+ready = "#knowledge-panel"
+responsive = true
+states = ["default"]
+mask = []
+
+[[view]]
+id = "plugins"
+app = "dashboard"
+title = "Plugins"
+route = "#plugins"
+fixture = "busy-workspace"
+ready = "#plugins-panel"
+responsive = true
+states = ["default"]
+mask = []
+
+[[view]]
+id = "analytics-agents-implementers-ranking"
+app = "dashboard"
+title = "Analytics implementers ranking with score intervals"
+route = "#analytics/agents/implementers?window=30d&span=30d"
+fixture = "agent-scorecards"
+ready = "#agents-panel"
+responsive = true
+states = ["default"]
+mask = []
+
+[[view]]
+id = "analytics-agents-reviewers-ranking"
+app = "dashboard"
+title = "Analytics reviewers ranking with score intervals"
+route = "#analytics/agents/reviewers?window=30d&span=30d"
+fixture = "agent-scorecards"
+ready = "#agents-panel"
+responsive = true
+states = ["default"]
+mask = []
+
+[[view]]
+id = "analytics-agents-pilots-ranking"
+app = "dashboard"
+title = "Analytics pilots ranking with score intervals"
+route = "#analytics/agents/pilots?window=30d&span=30d"
+fixture = "agent-scorecards"
+ready = "#agents-panel"
 responsive = true
 states = ["default"]
 mask = []

@@ -3,6 +3,10 @@
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(
+    not(any(test, feature = "test-support")),
+    deny(clippy::disallowed_methods)
+)]
 //! Orbit's runtime kernel: [`RuntimeKernel`], the mechanisms it owns, the
 //! actor context, root paths and the cost summaries its engine records.
 //!
@@ -39,6 +43,11 @@
 orbit_common::isolate_test_process!();
 
 mod activity_catalog;
+/// Host-local application authority audit hooks.
+pub mod application_authority {
+    pub use crate::application_consent::{finish_application_dispatch, take_application_audit};
+}
+mod application_consent;
 mod application_port;
 pub mod assets;
 pub mod audit;
@@ -87,7 +96,6 @@ mod tests;
 
 pub use application_port::ApplicationPort;
 pub use config_path::{CONFIG_TOML_FILE, existing_config_file_path};
-pub use orbit_runtime::CrewLadderControls;
 pub use orbit_runtime::RuntimeConfigLoader;
 pub use orbit_runtime::{HostLifetime, OrbitRuntimeRoots, RuntimeKernel};
 pub use workspace::binding::{WorkspaceRuntimeBinding, workspace_runtime_binding};
@@ -106,9 +114,9 @@ pub use resolve::{
 // `pub` for the runtime-less `orbit migrate --dry-run` inspection that moved
 // to `orbit-cmd` [ORB-10016].
 pub use resolve::{
-    is_global_orbit_root, refuse_indirect_uninitialized_caller_orbit, resolve_generation_root,
-    resolve_global_root, resolve_process_generation_root, resolve_root_path_value,
-    try_resolve_initialized_roots,
+    is_global_orbit_root, refuse_indirect_uninitialized_caller_orbit,
+    resolve_existing_root_traversal, resolve_generation_root, resolve_global_root,
+    resolve_process_generation_root, resolve_root_path_value, try_resolve_initialized_roots,
 };
 // `pub` for host task-store maintenance in `orbit-cmd`, which must recognize
 // the one partition id no registry claims [ORB-12119].

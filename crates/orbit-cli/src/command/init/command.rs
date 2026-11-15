@@ -11,6 +11,7 @@ use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use super::collect_config_seed_for_init;
+use super::human_crew::{self, HumanCrewReport};
 use super::prompt_stdin;
 use super::registered_workspaces::{WorkspaceSeed, seed_registered_workspaces};
 use serde_json::json;
@@ -65,6 +66,13 @@ pub struct InitCommand {
     /// namespaces cannot be chosen.
     #[arg(long, value_name = "PREFIX")]
     pub task_prefix: Option<String>,
+
+    /// Name of your human crew, the crew for operator work that no drain or
+    /// task pilot picks up. Used only when no human crew exists yet;
+    /// otherwise the OS user is the default (offered at an interactive
+    /// prompt, taken as-is without a terminal or with --non-interactive)
+    #[arg(long, value_name = "NAME")]
+    pub human_name: Option<String>,
 }
 
 impl Execute for InitCommand {
@@ -99,9 +107,10 @@ impl InitCommand {
                 || self.force
                 || self.machine_name.is_some()
                 || self.task_prefix.is_some()
+                || self.human_name.is_some()
             {
                 return Err(OrbitError::InvalidInput(
-                    "--host-prerequisites-only cannot be combined with --root, --force, --machine-name, or --task-prefix"
+                    "--host-prerequisites-only cannot be combined with --root, --force, --machine-name, --task-prefix, or --human-name"
                         .to_string(),
                 ));
             }
@@ -120,6 +129,12 @@ impl InitCommand {
             self.non_interactive,
             self.machine_name.as_deref(),
             self.task_prefix.as_deref(),
+        )?;
+        human_crew::reject_unusable_human_name(
+            &resolve_global_root(root_override)?.join("config.toml"),
+            self.force,
+            self.non_interactive,
+            self.human_name.as_deref(),
         )?;
         // A custom root is used for isolated fixtures and does not authorize
         // changes to the machine's package/security policy. Normal init and
@@ -157,6 +172,18 @@ impl InitCommand {
             self.machine_name,
             self.task_prefix,
         )?;
+        // After the identity, like it a `config.toml` edit init alone makes:
+        // the operator's own crew for work no agent picks up.
+        let human_crew = human_crew::ensure_human_crew_for_init(
+            &resolve_global_root(root_override)?.join("config.toml"),
+            self.non_interactive,
+            self.human_name,
+        )?;
+        // First-run creation of the scheduler store belongs to init, so the
+        // routine reads that follow find it (STD-01 R31). The store rejects
+        // parent-relative paths, so it takes the canonical root.
+        let global_root = std::fs::canonicalize(resolve_global_root(root_override)?)?;
+        orbit_core::application::routines::ensure_routine_store(&global_root)?;
         // A release that ships a workspace routine or auto-task must reach
         // every registered workspace here, not only at the next `workspace sync`.
         let registered =
@@ -166,6 +193,7 @@ impl InitCommand {
         let paths = reported_init_paths(root_override);
         Ok(init_payload(
             &identity,
+            &human_crew,
             InitOutput {
                 skills_root: paths.skills_root,
                 refreshed_skill_files: result.refreshed_skill_files,
@@ -311,8 +339,7 @@ fn minted_prefix_conflict(
 
 /// Create this machine's identity in the global `config.toml`. Machine name
 /// and task prefix are only consulted when the identity is absent (a fresh
-/// create); a present identity is preserved unchanged and a pre-ORB-12725
-/// `host.toml` is folded in without prompting.
+/// create); a present identity is preserved unchanged.
 fn ensure_machine_identity_for_init(
     root_override: Option<&Path>,
     non_interactive: bool,
@@ -368,7 +395,6 @@ fn ensure_machine_identity_for_init(
     Ok(IdentityReport {
         outcome: match outcome {
             MachineIdentityOutcome::Created(_) => "created",
-            MachineIdentityOutcome::Migrated(_) => "migrated",
             MachineIdentityOutcome::Unchanged(_) => "unchanged",
         },
         name: identity.name.clone(),
@@ -432,7 +458,8 @@ where
     }
 
     Err(OrbitError::InvalidInput(format!(
-        "machine name remained invalid after {MAX_MACHINE_NAME_ATTEMPTS} attempts; pass --machine-name or --non-interactive"
+        "machine name remained invalid after {MAX_MACHINE_NAME_ATTEMPTS} attempts; {}",
+        prompt_stdin::PROMPT_REMEDY
     )))
 }
 
@@ -462,11 +489,13 @@ where
     }
 
     Err(OrbitError::InvalidInput(format!(
-        "task prefix remained invalid after {MAX_TASK_PREFIX_ATTEMPTS} attempts; pass --task-prefix or --non-interactive"
+        "task prefix remained invalid after {MAX_TASK_PREFIX_ATTEMPTS} attempts; {}",
+        prompt_stdin::PROMPT_REMEDY
     )))
 }
 
 fn prompt_io_to_orbit(error: io::Error) -> OrbitError {
+    let error = prompt_stdin::with_remedy(error, prompt_stdin::PROMPT_REMEDY);
     match error.kind() {
         ErrorKind::UnexpectedEof | ErrorKind::TimedOut => {
             OrbitError::InvalidInput(error.to_string())
@@ -475,7 +504,11 @@ fn prompt_io_to_orbit(error: io::Error) -> OrbitError {
     }
 }
 
-fn init_payload(identity: &IdentityReport, output: InitOutput) -> CommandOutput {
+fn init_payload(
+    identity: &IdentityReport,
+    human_crew: &HumanCrewReport,
+    output: InitOutput,
+) -> CommandOutput {
     let mut text = format!(
         "machine identity ({}): name=\"{}\", id={}, task_prefix={}\n\
          skills: root={}, refreshed={}, symlink_created={}; config: path={}, created={}; default_activities_refreshed={}, retired={}; default_jobs_refreshed={}, retired={}; default_executors_refreshed={}; default_policies_refreshed={}",
@@ -495,6 +528,10 @@ fn init_payload(identity: &IdentityReport, output: InitOutput) -> CommandOutput 
         output.refreshed_default_executors,
         output.refreshed_default_policies,
     );
+    text.push_str(&format!(
+        "\nhuman crew ({}): name={}",
+        human_crew.outcome, human_crew.name
+    ));
     for seed in &output.workspace_seeds {
         text.push_str(&format!(
             "\nworkspace {}: created={}",
@@ -514,6 +551,10 @@ fn init_payload(identity: &IdentityReport, output: InitOutput) -> CommandOutput 
             "name": identity.name,
             "id": identity.id,
             "task_prefix": identity.task_prefix,
+        },
+        "human_crew": {
+            "outcome": human_crew.outcome,
+            "name": human_crew.name,
         },
         "skills": {
             "root": output.skills_root,

@@ -13,9 +13,13 @@ mod audit_events;
 mod backlog_forecasts;
 mod baseline;
 mod condition_triggers;
+mod crew_memory;
 mod crew_performance;
+mod evolution;
 mod executor_census;
 mod experiments;
+use crew_memory::apply_crew_memory;
+use evolution::apply_evolution;
 mod feature;
 mod feature_ledgers;
 mod friction;
@@ -28,6 +32,7 @@ mod job_runs;
 mod landed_diff_stats;
 mod learning;
 mod ledger;
+mod notices;
 mod operation_mode;
 mod plugins;
 mod resource_minutes;
@@ -44,17 +49,18 @@ use agent_execution::apply_agent_execution_identity;
 use assistance::apply_decision_assistance;
 use audit_events::{
     apply_audit_actor_alias_v2, apply_audit_actor_identity, apply_audit_machine_name_columns,
-    apply_audit_plugin_grants, apply_audit_self_reported_actor, apply_audit_tool_call_index,
-    apply_invocation_audit_context, apply_trusted_mcp_audit_provenance,
-    apply_v2_audit_event_type_ts_index,
+    apply_audit_plugin_grants, apply_audit_self_reported_actor, apply_audit_session_model,
+    apply_audit_tool_call_index, apply_invocation_audit_context,
+    apply_trusted_mcp_audit_provenance, apply_v2_audit_event_type_ts_index,
 };
 use backlog_forecasts::apply_backlog_forecasts;
 use baseline::apply_baseline_schema;
 use condition_triggers::apply_condition_triggers;
-use crew_performance::apply_crew_performance_snapshot;
+use crew_performance::{apply_agent_task_facts, apply_crew_performance_snapshot};
 use executor_census::apply_executor_census;
 use experiments::{
-    apply_experiment_admissions, apply_experiments, apply_reopen_legacy_experiment_admissions,
+    apply_experiment_admissions, apply_experiment_delete, apply_experiments,
+    apply_reopen_legacy_experiment_admissions,
 };
 use feature::apply_feature_schema_ledger;
 use feature_ledgers::apply_absorb_feature_ledgers;
@@ -66,19 +72,22 @@ use host_registry::{
 use introspect::table_exists;
 use invocation::{
     apply_invocation_long_prompt_requests, apply_invocation_provider,
-    apply_invocation_telemetry_columns, apply_invocation_workspace_scope,
+    apply_invocation_reliability_window_index, apply_invocation_telemetry_columns,
+    apply_invocation_tool_calls_incomplete, apply_invocation_workspace_scope,
     apply_invocations_ts_index, apply_provider_crew_accounts, apply_provider_crew_outages,
     apply_provider_limit_observations, apply_provider_limit_readings,
 };
 use job_run_tasks::apply_job_run_task_recency;
 use job_runs::{
     apply_execution_provenance, apply_flat_crew_model, apply_job_run_archive_stage,
-    apply_job_run_id_allocations, apply_job_run_states, apply_job_run_step_activity_window_index,
-    apply_job_run_step_lock_wait, apply_job_runs_created_index,
-    apply_job_runs_job_created_and_retry_indexes, apply_job_runs_recency_index,
+    apply_job_run_build, apply_job_run_host_id_indexes, apply_job_run_id_allocations,
+    apply_job_run_states, apply_job_run_step_activity_window_index, apply_job_run_step_lock_wait,
+    apply_job_runs_created_index, apply_job_runs_job_created_and_retry_indexes,
+    apply_job_runs_recency_index,
 };
-use landed_diff_stats::apply_landed_diff_stats;
+use landed_diff_stats::{apply_landed_diff_reviewable_lines, apply_landed_diff_stats};
 use learning::{apply_learning_index_workspace_scope, apply_remove_native_learning_subsystem};
+use notices::apply_notices;
 use operation_mode::apply_remove_operation_mode;
 use plugins::{
     apply_audit_brokered_call, apply_audit_plugin_secret_updates, apply_audit_plugin_secrets,
@@ -94,10 +103,11 @@ use resource_minutes::{
 use retention_analytics::apply_retention_analytics;
 use routine::apply_routine_scheduler_schema;
 use scripts::apply_script_grants;
-use task_commit_journal::apply_task_commit_journal;
+use task_commit_journal::{apply_task_commit_journal, apply_task_coordination_claim_indexes};
 use task_reservations::{
     apply_lease_notices, apply_task_reservation_lease_queue, apply_task_reservation_lease_token,
-    apply_task_reservation_leases, apply_workspace_claim_scope,
+    apply_task_reservation_leases, apply_task_reservation_unreleased_expires_indexes,
+    apply_workspace_claim_scope,
 };
 use worker_resource_limits::apply_worker_resource_limits;
 
@@ -240,5 +250,7 @@ pub fn pending_schema_migrations_after(current_version: u32) -> Vec<PendingSchem
         .collect()
 }
 
+mod application_consent;
 #[cfg(test)]
 mod tests;
+use application_consent::apply_application_consent;

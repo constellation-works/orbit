@@ -82,6 +82,50 @@ class UnitTestRatchetTests(unittest.TestCase):
         self.assertEqual(self.run_inventory("--write-baseline", str(self.baseline)).returncode, 0)
         self.assertEqual(self.run_inventory("--check", str(self.baseline)).returncode, 0)
 
+    def test_const_and_duplicate_test_attributes_are_inventoried(self):
+        self.write("crates/alpha/src/lib.rs", (
+            "#[test]\nconst fn const_test() {}\n"
+            "#[test]\n#[test]\nfn duplicated() {}\n"
+            "#[test] #[test] fn same_line_duplicate() {}\n"
+            "#[tokio::test]\npub unsafe fn qualified() {}\n"
+        ))
+        result = self.run_inventory()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["crates"]["alpha"]["test_function_paths"], [
+            "lib.rs::const_test", "lib.rs::duplicated", "lib.rs::qualified",
+            "lib.rs::same_line_duplicate",
+        ])
+
+    def test_separated_test_attribute_fails_with_first_location(self):
+        self.write("crates/alpha/src/lib.rs", (
+            "#[test]\nmake_test!();\n"
+            "#[test]\nfn real() {}\n"
+        ))
+        result = self.run_inventory()
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("lib.rs:1: test attribute has no function name", result.stderr)
+        self.assertNotIn("real", result.stdout)
+
+    def test_extern_test_function_is_inventoried(self):
+        self.write("crates/alpha/src/lib.rs", (
+            "#[test]\nextern \"C\" fn ext_test() {}\n"
+            "#[test]\nconst fn ok() {}\n"
+        ))
+        result = self.run_inventory()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["crates"]["alpha"]["test_function_paths"], [
+            "lib.rs::ext_test", "lib.rs::ok",
+        ])
+        self.write("crates/alpha/src/lib.rs", (
+            "#[test]\nfn ok() {}\n"
+            "#[test]\nextern \"C\" fn ext_test() {}\n"
+        ))
+        swapped = self.run_inventory()
+        self.assertEqual(swapped.returncode, 0, swapped.stderr)
+        self.assertEqual(json.loads(swapped.stdout)["crates"]["alpha"]["test_function_paths"], [
+            "lib.rs::ext_test", "lib.rs::ok",
+        ])
+
     def test_raw_test_attribute_survives_print_check_and_baseline(self):
         self.write("crates/alpha/src/lib.rs", "#[r#test]\nfn real_test() {}\n")
         source = self.root / "crates/alpha/src/lib.rs"
@@ -158,6 +202,58 @@ class UnitTestRatchetTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout)["crates"]["alpha"]["test_function_paths"], [
             "lib.rs::one", "lib.rs::r#type", "lib.rs::two",
         ])
+
+    def test_same_line_attributes_before_test_fail_an_empty_baseline(self):
+        # A test attribute later on the line is still a unit test. An empty
+        # schema-v2 baseline must refuse it; literals and comments must not.
+        source = (
+            "#[cfg(test)]\nfn not_counted() {}\n"
+            "#[cfg(test)] #[test] fn cfg_hidden() {}\n"
+            "#[allow(dead_code)] #[test] fn allow_hidden() {}\n"
+            "#[cfg(test)] #[tokio::test] async fn namespaced_hidden() {}\n"
+            "#[cfg(test)] #[tokio::test(flavor = \"multi_thread\")] async fn flavored() {}\n"
+            "#[cfg(test)] #[r#test] fn raw_hidden() {}\n"
+            "#[allow(dead_code)] #[r#tokio::r#test] fn raw_path_hidden() {}\n"
+            "#[allow(dead_code)] #[test]\nfn split_hidden() {}\n"
+            "#[test]\nfn ordinary() {}\n"
+        )
+        expected = [
+            "lib.rs::allow_hidden",
+            "lib.rs::cfg_hidden",
+            "lib.rs::flavored",
+            "lib.rs::namespaced_hidden",
+            "lib.rs::ordinary",
+            "lib.rs::raw_hidden",
+            "lib.rs::raw_path_hidden",
+            "lib.rs::split_hidden",
+        ]
+        self.write("crates/alpha/src/lib.rs", source)
+        printed = self.run_inventory()
+        self.assertEqual(printed.returncode, 0, printed.stderr)
+        self.assertEqual(json.loads(printed.stdout)["crates"]["alpha"]["test_function_paths"], expected)
+        empty = {"schema_version": 2, "crates": {"alpha": {"test_function_paths": []}}}
+        self.baseline.write_text(json.dumps(empty), encoding="utf-8")
+        refused = self.run_inventory("--check", str(self.baseline))
+        self.assertEqual(refused.returncode, 1, refused.stderr)
+        for identity in expected:
+            self.assertIn(identity, refused.stderr)
+        self.assertNotIn("not_counted", refused.stderr)
+        written = self.run_inventory("--write-baseline", str(self.baseline))
+        self.assertEqual(written.returncode, 0, written.stderr)
+        self.assertEqual(json.loads(self.baseline.read_text())["crates"]["alpha"]["test_function_paths"], expected)
+        self.assertEqual(self.run_inventory("--check", str(self.baseline)).returncode, 0)
+        again = self.run_inventory("--write-baseline", str(self.baseline))
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(json.loads(self.baseline.read_text())["crates"]["alpha"]["test_function_paths"], expected)
+
+        hidden = "#[cfg(test)] #[test] fn cfg_hidden() {}\n"
+        self.write("crates/alpha/src/lib.rs", f'pub const FIXTURE: &str = r#"{hidden}"#;\n')
+        self.baseline.write_text(json.dumps(empty), encoding="utf-8")
+        masked = self.run_inventory("--check", str(self.baseline))
+        self.assertEqual(masked.returncode, 0, masked.stderr)
+        self.write("crates/alpha/src/lib.rs", "// #[allow(dead_code)] #[test] fn allow_hidden() {}\n")
+        commented = self.run_inventory("--check", str(self.baseline))
+        self.assertEqual(commented.returncode, 0, commented.stderr)
 
     def test_removal_passes_but_replacement_cannot_reuse_an_admission(self):
         self.write("crates/alpha/src/lib.rs", "#[test]\nfn one() {}\n#[test]\nfn two() {}\n")

@@ -1,16 +1,5 @@
-//! The single canonical definition of Orbit's agent response envelope frame.
-//!
-//! [ORB-10746] Two consumers must agree on this frame: the Rust parser in
-//! [`super::envelope`], and any provider transport able to *enforce* it at the
-//! output boundary (today Claude's `--json-schema` structured output). Before
-//! this module the frame existed only as prose in
-//! `crate::providers::common::ORBIT_RESPONSE_CONTRACT`, so compliance was a
-//! matter of model obedience — `jrun-20260812-0312-9` spent ~11.5 minutes and
-//! $3.17 on completed work that ended in a prose summary and was rejected at
-//! the completion guard.
-//!
-//! The prose contract stays as human-readable guidance. This module is what
-//! actually binds the shape.
+//! Defines the response envelope schema for provider transports that constrain
+//! output and the parser that validates it.
 
 use serde_json::{Value, json};
 
@@ -27,27 +16,21 @@ pub const RESPONSE_ENVELOPE_STATUSES: [&str; 3] = ["success", "failed", "timeout
 /// Orbit's response envelope as a JSON Schema, for providers that can
 /// constrain their own output.
 ///
-/// # What this deliberately does not express
+/// # Status/error correlation
 ///
-/// The status/error correlation — `failed` requiring a non-empty `error.code`
-/// — is *not* here, and cannot be. Expressing it needs a conditional
-/// subschema, and Anthropic's structured-output schema subset rejects those:
+/// The schema does not tie `status` to `error`. Expressing that correlation
+/// needs a conditional on the root object, and the Claude API rejects
+/// `oneOf`, `allOf` and `anyOf` at the top level of a tool `input_schema` with
+/// a 400 error, failing every invocation ([ORB-21567]). The `super::envelope`
+/// parser enforces it instead: `success` carries no error object (absent or
+/// `null`), while `failed` and `timeout` must carry one. The schema still pins
+/// `error` to an object and its shape ([ORB-21612]), and expresses non-blank `code` and `message` with
+/// a `pattern` because the Claude structured-output subset rejects
+/// string-length constraints (`minLength`/`maxLength`) (see "JSON Schema
+/// limitations" in the Claude structured-outputs docs).
 ///
-/// ```text
-/// API Error: 400 tools.0.custom.input_schema: input_schema does not support
-/// oneOf, allOf, or anyOf at the top level
-/// ```
-///
-/// That correlation therefore stays where it already was, in
-/// [`super::envelope`]'s parse checks. This is a constraint of the provider's
-/// schema subset, not a choice about where validation belongs — and it is why
-/// the Rust checks remain load-bearing rather than redundant.
-///
-/// `error` is typed as an object and omitted on success. The subset cannot
-/// express "object on failure, absent on success" without a top-level
-/// conditional, so this is the tightest type the provider will accept.
-/// `durationMs` is omitted entirely and rides through on unconstrained
-/// additional properties.
+/// `durationMs` is not declared here and passes through as an unconstrained
+/// additional property.
 pub fn response_envelope_json_schema() -> Value {
     json!({
         "type": "object",
@@ -78,10 +61,12 @@ pub fn response_envelope_json_schema() -> Value {
                 "properties": {
                     "code": {
                         "type": "string",
+                        "pattern": "\\S",
                         "description": "Stable machine-readable error code.",
                     },
                     "message": {
                         "type": "string",
+                        "pattern": "\\S",
                         "description": "Human-readable error message.",
                     },
                 },

@@ -76,7 +76,7 @@ impl ReleaseVersion {
         ))
     }
 
-    /// The `vMAJOR.MINOR.PATCH` release tag for this version.
+    /// The `v`-prefixed release tag for this version, including any `-pre` suffix.
     pub fn tag(&self) -> String {
         format!("v{self}")
     }

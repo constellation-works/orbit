@@ -1,6 +1,5 @@
 //! Versioned logical workspace catalog and machine-local checkout bindings.
 
-mod legacy;
 mod lookup;
 mod mutations;
 mod validation;

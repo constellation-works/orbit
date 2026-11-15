@@ -4,21 +4,30 @@ Use this when choosing task projections, editing context selectors, or setting
 dependencies, relations or additional tool requirements.
 The connected tool schema is authoritative for supported fields.
 
+## Refused proposed pickup
+
+Starting a proposed task records approval before the start. If the start fails
+once approval has landed, the refusal reports the fresh task status and the
+underlying reason. A backlog task can be selected by a drain: if it must not
+start, promptly move it to `blocked`, then resolve the refusal before retrying.
+If the status could not be read, inspect the task before taking further action.
+A separate approval continues to authorize backlog admission on its own.
+
 ## Context selectors
 
-`orbit.task.update` accepts `context_files` as a comma-separated string or an
-array of strings. The legacy `context` alias accepts a string;
-`context_files` takes precedence when both are supplied.
+`orbit.task.update` accepts `context_files` as an array of selectors on MCP.
+The CLI also accepts a comma-separated string. A `context` input is refused;
+the only field is `context_files`.
 
-- Omitting both fields preserves the current list. Supplying either replaces
+- Omitting `context_files` preserves the current list. Supplying it replaces
   the **whole list**, never appends.
 - To extend the list, first read the durable `context_files` with
   `orbit.task.show`, then send the deduplicated union of **all existing
   selectors and the additions**. Re-read afterward to verify none were lost.
 - `context_files: []` clears the list. A comma-only string such as `","`
-  also clears it through either field. An empty string is rejected by the
-  tool; the human CLI's `--context ""` clears it. The string `"[]"` is a
-  selector, not an empty list.
+  also clears it. An empty string is rejected by the tool; the human CLI's
+  `--context ""` clears it. The string `"[]"` is a selector, not an empty
+  list.
 - Add only files, directories or symbols the task expects to modify or
   delete, or files it will create as described below. Do not add entries only
   for background reading. Prefer `symbol:path#name:kind` for existing
@@ -44,8 +53,9 @@ For the read → full-union update → verify command sequence, see
 default. Cwd, MCP initialize metadata and linked-worktree runtime identities
 are not filters. Optional `workspace` is an explicit fail-closed filter.
 
-For `orbit.task.show`, `orbit.task.add` and `orbit.task.update`, use `fields`
-as a string or array of field names, or `field` as a single-field alias.
+For `orbit.task.show`, `orbit.task.add` and `orbit.task.update`, MCP accepts
+`fields` as an array of field names, or `field` as a single-field alias.
+The CLI also accepts a repeated flag or a comma-separated string.
 `fields` takes precedence when both are supplied. The projection catalogue is:
 
 ```text
@@ -57,31 +67,76 @@ created_by, created_by_model, planned_by, implemented_by, status, terminal, prio
 complexity, type, pr_status, external_refs, relations,
 source_task_id, job_run_id, job_run_machine, crew, resolved_crew,
 crew_model, crew_unresolved, os_requirement, placement_wait, experiments,
-readiness, pilot_warnings, open_decisions, orchestrator, orchestrator_model,
-orchestrator_model_source, origin, rule_fingerprint, created_at, updated_at, comments,
-history, artifacts
+readiness, pilot_warnings, open_decisions, final_recovery, completion_hold,
+orchestrator, orchestrator_model, orchestrator_model_source, origin,
+rule_fingerprint,
+created_at, updated_at, comments, history, artifacts
 ```
 
+`final_recovery` is the task's last final-recovery decision (`run_id`,
+`decision`, `outcome`, `fault`, `fault_evidence`, `fault_judged_by`, `at`),
+or `null`. `fault` says whose fault the failed run was: `implementer`,
+`specification`, `review`, `infrastructure`, `orbit`, `external` or `unknown`
+(also how a decision recorded before faults reads). `fault_judged_by` is the
+provider of the agent that judged it, as Orbit observed it; it is `null`
+when Orbit decided without an agent or did not observe a provider. Older
+decisions may retain a model name. The field does not name the implementer's crew or model.
+
+`completion_hold` is the `completion.hold` rule that kept a `--complete`
+run's task in `review` (`rule`, `field`, `pattern`, `matched`, `run_id`, and
+`matched_task_id` when another task of its bundle matched), while the task is
+still in that review; otherwise `null`. Approve the task to finish it.
+
 Show without a projection returns the full task. A projection returns only
-the requested fields as JSON: a single field returns its value, and multiple
-fields return an object keyed by field name. A single derived `terminal`
-selection remains keyed as `{"terminal": ...}`. It is read-only and reports
-whether the task refuses implementer writes.
+the requested fields, and its shape depends on the surface and on whether
+the names came from `fields` or from the `field` alias:
+
+- Over MCP (and `orbit tool run`), a `fields` array of any length returns an
+  object keyed by field name: `fields: ["status"]` returns
+  `{"status": "proposed"}` and `fields: ["artifacts"]` returns
+  `{"artifacts": [...]}`. Multiple fields return that same keyed object.
+- The `field` alias returns one field's bare value: `field: "status"`
+  returns `"proposed"` and `field: "artifacts"` returns a bare array. On
+  the MCP wire a bare non-object is carried as `{"value": ...}`, or as
+  `{"items": [...]}` for an array; that envelope is the transport's, not
+  the projection's.
+- A single derived `terminal` selection remains keyed as
+  `{"terminal": ...}` under both forms. It is read-only and reports
+  whether the task refuses implementer writes.
 
 On the CLI, `orbit task show --fields` takes the same names, repeated or
 comma-separated. Without `--json`, a single field prints its bare value and
-several fields print each under a `Field:` heading; with `--json`, the shapes
-above apply.
+several fields print each under a `Field:` heading. With `--json`, a single
+field returns its bare JSON value (`--fields status` returns `"proposed"`,
+`--fields artifacts` returns a bare array; `terminal` alone stays keyed as
+above) and several fields return an object keyed by field name, whether the
+task was read locally or from another host.
 
 Write responses without a projection omit the append-heavy `comments` and
 `history`; request those fields explicitly when needed. Write projections
-use the same field catalogue above.
+use the same field catalogue and the same shapes above: a `fields` array
+keys even one field by name, and the `field` alias returns its bare value.
 
-`crew` selects execution; `orchestrator` records separate orchestration
-attribution. `created_by` is the creator's agent family; `created_by_model` is
-the full model id (`claude-opus-5-5`) recorded once when `orbit.task.add` was
-given one as `model`. It is never rewritten, and it is `null` for family-only
-creates and tasks filed before it existed. The derived, never-persisted `os_requirement` reports the task's
+A write response may also carry optional `warnings` metadata. It is not a task
+field: `warnings` is absent when empty, is attached to every object response
+(including a one-field `fields` projection), and is refused as a `fields`
+selector. A bare single-field projection such as `field: "id"` returns the
+bare value and cannot carry it, so use `fields` or omit the projection on
+the write when warnings matter.
+
+`crew` selects execution; work only a human can do (credentials, approvals,
+physical access, operator-only decisions) sets it to the human-kind crew
+(`orbit config get crews.<name>.kind` answers `human`), never an agent crew; with
+no human crew, file a `setup`, `needs-operator` chore instead. A human crew
+never bypasses an agent gate. Its body is short: a 1-2 line summary, numbered
+steps, fenced `sh` commands and a `Verify:` command, at most 2000 characters;
+filing warns otherwise (see [task-authoring.md](task-authoring.md#work-only-a-human-can-do)).
+`orchestrator` records separate orchestration
+attribution. `created_by` is the creator's agent family from the session
+(`ORBIT_AGENT_*`, the `--orchestrator` crew, or CLI `--model`);
+`created_by_model` is the full model id (`claude-opus-5-5`) recorded once
+when that session identity is a full id. It is never rewritten, and it is
+`null` for family-only creates and tasks filed before it existed. The derived, never-persisted `os_requirement` reports the task's
 OS tags intersected with the stored crew executor `host_os`, its source, and
 unresolved/conflict states.
 
@@ -94,7 +149,13 @@ Delivery reports what the run committed and landed for the task: typed status,
 base/head and landed commit SHAs, PR number, timestamps and provenance only,
 from the host's own commit and merge step records. Missing or inconsistent
 evidence is reported as unavailable, never inferred. Full run details remain
-on the operator-only `orbit.workflow.run.show`.
+on the operator-only `orbit.run` action `show`.
+
+A paginated claimed read of `orbit.task.show` (any of `limit`,
+`comments_offset`, `history_offset` or `artifacts_offset`) accepts only `id`,
+`model`, `limit` and the three offsets, and cannot be combined with `fields`,
+`field` or `run_id`. Drop the projection to page the full task, or drop
+pagination for a projection.
 
 ## Behavior-affecting optional fields
 
@@ -121,7 +182,7 @@ on the operator-only `orbit.workflow.run.show`.
   workspace on this host is rejected with `friction_not_local` — resolve the
   friction from its owning workspace instead: `orbit friction resolve <id>` is
   the operator CLI path, or an agent runs `orbit tool run
-  orbit.friction.update --input '{"id":"<id>","status":"resolved"}'` (same
+  orbit.friction --input '{"action":"update","id":"<id>","status":"resolved"}'` (same
   resolution metadata); a covering task there also counts. Other types
   (`produces`, `blocked_by`, `child_of`,
   `spawned_from`, `regression_from`, `supersedes`, `related_to`) are tracked
@@ -140,8 +201,8 @@ on the operator-only `orbit.workflow.run.show`.
     without one is refused. A link the task already holds may be re-sent
     without it and keeps its recorded severity and source. Every link reads
     back with `severity_source`: `filer` (set by the writer, the default),
-    `verified` (finding verification confirmed or adjusted it; only
-    verification sets it), `operator` (an operator override), `backfill` (a
+    `verified` (finding verification confirmed or adjusted it; that job was
+    removed with finding verification, so only older links carry it), `operator` (an operator override), `backfill` (a
     backfill of older links), or `default` (stored before severity existed;
     reads as `medium`). Send `"severity_source": "operator"` only for an
     operator's override.
@@ -162,22 +223,34 @@ on the operator-only `orbit.workflow.run.show`.
     - `contract_drift`: docs, schemas or a contract drifted from the behavior the culprit shipped.
     - `unclassified`: the evidence does not settle the nature.
   - `escape` — why the delivery gates missed it:
-    - `no_test`: no test covered the broken behavior.
-    - `test_not_selected`: a covering test existed but the delivery's gates did not run it.
+    - `no_test`: no test exercised the broken behavior at the culprit commit.
+    - `test_not_selected`: a covering test existed at the culprit commit but its gates did not run it.
     - `platform_only`: it shows only on a platform or host the gates did not exercise.
     - `review_missed`: it was visible in the diff and review did not flag it.
     - `spec_ambiguous`: the task or spec left the expected behavior open to the shipped reading.
     - `nondeterministic`: it depends on timing, ordering or environment and passed when gated.
     - `unclassified`: the evidence does not settle the escape.
+    Choose the escape by inspecting the tests and gate selection at the culprit
+    commit: `no_test` when no test exercises the broken behavior there, and
+    `test_not_selected` when a covering test exists but the culprit's gates did
+    not run it. Choose `unclassified` only when the evidence does not settle
+    the escape, and state the unresolved evidence in the finding's description.
+    Mere visibility in the diff is not evidence for `review_missed` when no test
+    exercises the broken behavior.
 - `parent_id` is not an `orbit.task.add` input and is refused as an unknown
   field, like `plan`, `status` and `dependencies`; use a `child_of` relation
-  in `relations` when creating a subtask. `source_task_id` is also retired
-  from `orbit.task.add`; for bug tasks, set it after creation with
-  `orbit.task.update` (which accepts the field), and use an empty string there
-  to clear it. `tags` (reuse existing before inventing new).
+  in `relations` when creating a subtask. For bug tasks, set `source_task_id`
+  at creation on `orbit.task.add` (or `--source-task` on the CLI), or after
+  creation with `orbit.task.update` (which also accepts an empty string to
+  clear it). `tags` (reuse existing before inventing new).
 - `required_tools: ["<exact.canonical.tool>", ...]` — tools the task requires.
   Allowlist activities add them to their baseline; deny-list activities refuse
   a requirement covered by `tool_disallow_list`, which it never overrides.
+  Filing refuses a covered name no grant could lift — a mutating tool, an
+  always-operator-only tool, or a name a wildcard entry still covers — and
+  names the tool, the activity and the reason. Have an operator perform that
+  step, or file it as a separate operator-owned task. A read/repeat-safe tool
+  denied by an exact entry can still be required.
   Use only exact, active, agent-facing registered
   names; wildcards and prefixes are rejected at dispatch. The list is normalized,
   sorted, and deduplicated at creation. It is immutable afterward, and every
@@ -214,11 +287,18 @@ on the operator-only `orbit.workflow.run.show`.
   the deny list only for a tool classified read/repeat-safe. Every tool
   `agent_implement` denies today is classified mutating, so such a grant
   stays denied and is never called live, and also listing it in
-  `required_tools` still fails implementer admission. A lifted tool still
+  `required_tools` is refused at filing and still fails implementer admission.
+  A lifted tool still
   passes every other check: capability and field-level operator gates,
   filesystem and process policy, and claimed-mode denials.
+  Two tools read the grant at call time as well. `orbit.memory.show` and
+  `orbit.memory.history` refuse an agent unless its run's task grants that
+  tool; a granted run reads every crew memory space, read only. An
+  auto-task definition can carry the same list
+  (`orbit auto-task update <name> --granted-tools …`, operator only), which
+  is copied to every task it mints.
 - **Mutation proposals** carry a mutating grant's call instead. Attach
-  `mutation-proposals/<name>.json` with `orbit.task.artifact.put`, content
+  `mutation-proposals/<name>.json` with `orbit.task.artifact` action `put`, content
   `{"tool": "<granted tool>", "input": {…exact tool input…}, "rationale":
   "<why>"}`. It is refused unless the task grants the tool, the tool is a
   grantable mutation, and an agent session could make that exact call (a
@@ -246,6 +326,13 @@ on the operator-only `orbit.workflow.run.show`.
   (`host_labels_missing`), and while no live host carries them task show/list
   and `orbit run readiness` name the wait in `placement_wait`. Use it for a
   real capability (a GPU, a signed toolchain), not to pin a hostname.
+  `workflow.tag_requires_labels` adds configured labels for every matching
+  task tag (trimmed, case-insensitive). Admission uses their union with this
+  field, including for existing tasks; the owner applies its map on pulls.
+  Derived labels are not persisted here, and clearing this field cannot remove
+  a tag requirement. A workspace can map `ui = ["visual-fixture"]` and declare
+  that label only on hosts whose managed worker can run its fixture backend;
+  the built-in browser-kit check still applies.
 - `not_before: "<RFC 3339 instant>"` — the earliest time a dispatcher may
   start the task, stored in UTC and shown only when set. Give an instant with
   an offset (`2026-11-06T09:00:00Z`); the CLI's `--not-before` also takes a
@@ -255,7 +342,7 @@ on the operator-only `orbit.workflow.run.show`.
   for any field. Until then a `backlog` task waits `scheduled`, with the time
   in `detail`, in drain listings, `orbit run readiness` and `run show`. No
   local or pull drain starts it, and `orbit run ship <id>` and
-  `orbit.workflow.ship` refuse it with `task_scheduled`. The hold lifts by
+  `orbit.workflow` action `ship` refuse it with `task_scheduled`. The hold lifts by
   itself on the first admission pass after that time, which can be later
   than the time itself. Only an operator's
   `orbit run ship <id> --ignore-schedule` starts it early, recording a
@@ -273,17 +360,105 @@ on the operator-only `orbit.workflow.run.show`.
   value. `orbit.task.update` can correct an origin but not clear it, an unknown
   value is refused with the allowed list, and `orbit task list --origin`
   (`origin` on `orbit.task.list`) filters by it.
-- `rule_fingerprint` is the stable rule-result fingerprint the
-  `file_rule_findings` filer stamps at filing, so one open task owns one
-  failing rule result however it is retitled. It is absent on every task
-  the filer did not create, is not settable through task create or update,
-  and is readable through the `rule_fingerprint` show projection.
+- `rule_fingerprint` is the rule-result fingerprint the ux-rules filer
+  (`file_rule_findings`, now removed) stamped on the tasks it
+  filed. Those tasks keep it; no task gains one now. It is not settable through
+  task create or update, and is readable through the `rule_fingerprint` show
+  projection.
 - `covered_by` names a task or GitHub PR covering an archived/rejected CI
   sweep finding. Its target is a task ID or an external key such as
   `github-pr:NUMBER` (this checkout's repository) or
   `github-pr:https://github.com/OWNER/REPO/pull/NUMBER`. Preserve existing
   relations and append it in the same update that archives/rejects the finding;
   see [CI recovery](../../orbit-orchestrate/references/recovery.md).
+
+## Review verdict
+
+`orbit.task.update` accepts `verdict` as an object. MCP advertises the object
+without repeating its fields; the host still checks them.
+
+- `decision` is `accept` or `changes_requested`.
+- `rationale` is a string.
+- `criteria` is an array of `{criterion, met, evidence}`. `criterion` is a
+  string, `met` is a boolean, and `evidence` is an array of strings.
+- `evidence` is an array of strings.
+- `expected_run_id` and `expected_head` are a string or null.
+
+`decision`, `rationale`, `criteria` and `evidence` are required. A review
+write also requires `request_id` and `expected_revision` from task show with
+`snapshot` true.
+
+Relation types and `regression_from` attribution are in
+[Behavior-affecting optional fields](#behavior-affecting-optional-fields).
+Status transitions are in [Task lifecycle and listing](#task-lifecycle-and-listing).
+Context-file creation intent is in [Context selectors](#context-selectors).
+Granted tools, required tools, capability labels and OS tags are in
+[Behavior-affecting optional fields](#behavior-affecting-optional-fields).
+Field projection is in [Task projections and delivery evidence](#task-projections-and-delivery-evidence).
+
+## Task lifecycle and listing
+
+The `--status` values on `orbit task list`, `orbit task lint` and the
+minted-task `--status` on `orbit auto-task add`/`update` name the same
+lifecycle:
+
+- `proposed` — awaiting human approval before entering the backlog.
+- `backlog` — approved and queued for work; not yet started.
+- `in-progress` — actively being worked on.
+- `review` — implementation complete; awaiting review/merge.
+- `done` — accepted and closed. Terminal: reopening requires a human
+  operator to use `task update --force`.
+- `blocked` — temporarily paused (waiting on a dependency or decision).
+- `archived` — soft-deleted. Terminal: restoration requires a human
+  operator to use `task update --force`.
+- `rejected` — declined. Ordinary edits may return it to backlog or
+  in-progress; other transitions require a human operator to use
+  `task update --force`.
+- `someday` — future-scoped, wanted but not yet actionable; agents skip
+  someday tasks.
+
+`orbit task list` ordering: with no `--status`, tasks of every status are
+listed with non-terminal tasks first and terminal tasks after, each group
+newest first; an explicit `--status` filter is newest first. `--limit`
+(default 50, at least 1) caps the rows; `total` counts all matching tasks
+and `truncated` reports whether the limit omitted any. `--scheduled`
+keeps only future `not_before` schedules, soonest first, including
+proposed tasks. `--path` keeps tasks whose `context_files` selectors
+apply to the path (`file:`, `dir:`, `symbol:` and bare paths, with
+bidirectional containment: a directory matches every selector under it).
+`--all` is a deprecated no-op, accepted and ignored.
+
+## Human CLI task update
+
+`orbit task update -h` keeps one line per flag; these are the rules behind
+them. The fields above apply to the CLI flags of the same name.
+
+- `--approve` takes the task's next approval step: `proposed` -> `backlog`, or
+  `review` -> `done`. The transition is chosen from the current status, so it
+  cannot be combined with field edits or an explicit `--status`; `--note` is
+  recorded on that status history entry.
+- `--status` on a task assigned to a human crew takes any status directly,
+  with no plan, evidence or review and no `--force`; task history records it
+  as a human-crew bypass. Such a task needs `--force` only to leave `done` or
+  `archived`.
+- `--force` applies `--status` even when the task lifecycle refuses the
+  transition (for example reopening a `done` task). It is a human-operator
+  override, recorded in task history as `forced`; `orbit.task.update` refuses
+  `force`.
+- `--discard-candidate` discards the candidate the last failed run preserved,
+  so the next run implements fresh instead of resuming it. Combine it with
+  `--status backlog` to requeue.
+- `--tag` replaces the list. `os:linux`, `os:macos` or `os:windows` limits
+  which host OS may run the task from its next admission; any other `os:`
+  value is rejected. `--allow-drop-system-tags` permits a replacement that
+  drops a system identity tag (`ci-failure:*`).
+- `--granted-tools` is accepted only before the task's next attempt is
+  dispatched; see `granted_tools` above.
+- `--context` replaces the whole list and `--context ""` clears it; repeat or
+  comma-separate selectors, and to extend send every existing selector plus
+  the new ones. `--allow-missing-context` records creation intent per missing
+  selector. Both follow [Context selectors](#context-selectors).
+- `--not-before` and `--clear-not-before` follow `not_before` above.
 
 ## Severity rubric
 
@@ -309,8 +484,14 @@ between two levels, take the lower and say why.
   Examples: a stale sentence in a reference doc; a misspelled help string;
   an off-by-one-pixel border.
 
-The agent scorecards use these weights: a held review finding earns its
-weight, and an escaped or missed regression costs twice its weight.
+The agent scorecards apply coefficients to regression rates, not fixed
+score-point penalties. A held review finding earns its severity weight. For
+Implementers, escaped regressions have a coefficient of -0.5 on the
+actual-minus-expected rate, compared with the expected rate: the rate among the
+other rows for the same tier and expected-size bucket, falling back to other
+rows in the tier, then other rows overall, or zero without peers. Each escape is
+weighted by severity. For Reviewers, missed regressions have a coefficient of
+-2 on the actual rate; each missed link is weighted by severity.
 
 ## Operator runbook: granting tools
 
@@ -319,12 +500,14 @@ exact tool schema first (`orbit task show <id>`, `orbit tool show <tool>`).
 Decide whether the work needs a reviewed mutation or a prerequisite operator
 action: all currently denied implementer tools are mutating, so a grant does
 not enable their live execution. Do not also put a denied mutation in
-`required_tools`; that still refuses implementer admission.
+`required_tools`; filing refuses it, and a task that already carries it
+still refuses implementer admission. Have an operator perform that step,
+or file it as a separate operator-owned task.
 
 1. Before dispatch, set the complete grant list with
-   `orbit task update <id> --granted-tools orbit.auto_task.update`.
+   `orbit task update <id> --granted-tools orbit.auto_task:update`.
    Creation also accepts `orbit task add --title "<title>" --complexity low --granted-tools
-   orbit.auto_task.update`. These are operator commands; an agent must not
+   orbit.auto_task:update`. These are operator commands; an agent must not
    claim operator authority to run them. A replacement is the whole list,
    not an append; `--granted-tools ""` revokes it before the next attempt.
 2. Confirm `Granted Tools` beside `Required Tools` in task show/list and
@@ -335,8 +518,8 @@ not enable their live execution. Do not also put a denied mutation in
    a follower carrying the labels cannot take over the grant.
 3. Have the implementer attach the proposal described above, then inspect it
    with `orbit task show <id> --fields artifacts` and
-   `orbit tool run orbit.task.artifact.get --input
-   '{"id":"<id>","path":"mutation-proposals/<name>.json"}'`.
+   `orbit tool run orbit.task.artifact --input
+   '{"action":"get","id":"<id>","path":"mutation-proposals/<name>.json"}'`.
    Review the exact input with the diff. A proposal-only delivery without a
    reviewed diff is refused. Approval applies the reviewed proposal before
    push/landing; verify its system-written receipt afterward.
@@ -350,7 +533,7 @@ not enable their live execution. Do not also put a denied mutation in
 the `command = "authorization"` rows include grant authorizations (operation
 `orbit.task.grant_tools`) and activity-policy/capability denials. Match them
 with task history to distinguish an authorized attempt from a committed grant
-change. `orbit audit stats --tool orbit.auto_task.update --json` gives the
+change. `orbit audit stats --tool orbit.auto_task:update --json` gives the
 existing denial-by-operation breakdown; it counts a decision once even when
 an entry-point audit row repeats it.
 
@@ -363,14 +546,17 @@ new review; it must not be used to repeat an unknown outcome.
 
 ## Validation your lane can actually run
 
-A criterion that names a tool is a promise about the lane that will run it, and
+A criterion that asks the implementer to call a tool is a promise about the lane that will run it, and
 `required_tools` records that requirement — which is why it
 has to be right at creation. Task-pilot preparation reads each criterion
 against the registered tool surface, the canonical MCP tool list, the
 implementation activity's allowlist, and the governed-operation registry, and
 reports one `validation_tool_warnings` finding per contradiction before the
-task is admitted. Preparation stays advisory. Transport, allowlist, credential,
-and utility findings do not withhold an already-approved backlog task. A current
+task is admitted, including a stored `required_tools` entry the implementing
+activity disallows and no grant could lift. That finding holds promotion of
+a proposed task. Preparation itself still completes. Transport, allowlist,
+credential, and utility findings do not withhold an already-approved backlog
+task. A current
 operator-reserved validation requirement holds local workflow admission and
 owner pull claims until an operator handles it, and a criterion that needs
 native evidence from an OS the task's `os:` tags do not name holds a host of
@@ -382,8 +568,7 @@ another OS (see [Native host evidence](#native-host-evidence)).
   the MCP surface to be widened to match a criterion's wording.
   `proc.spawn` clamps a larger `timeout_ms` to its ceiling: 60 seconds (60000
   ms) outside a managed activity; inside one, the activity's remaining
-  wall-clock budget, at most `execution.proc_spawn_max_timeout_minutes`
-  (default 45). Its result reports the applied `timeout_ms`,
+  wall-clock budget, at most 45 minutes. Its result reports the applied `timeout_ms`,
   `timeout_ceiling_ms`, `timeout_ceiling_source`, `timeout_clamped` with a
   `timeout_notice` when clamped, and the explicit `requested_timeout_ms` when
   supplied. A timed-out result includes a `hint` with `transport: native_shell`
@@ -396,21 +581,35 @@ another OS (see [Native host evidence](#native-host-evidence)).
 - **Activity tools.** For an allowlist activity, a tool outside its baseline
   has to be in `required_tools`. A deny-list activity exposes registered
   agent-facing tools except its disallowed names; `required_tools` cannot
-  override a denial, and such a requirement refuses dispatch. Screenshot and
+  override a denial. Filing refuses an unliftable covered requirement, and a
+  stored one still refuses dispatch. Task-pilot reports that stored
+  requirement as a blocking `validation_tool_warnings` finding before
+  dispatch. A read/repeat-safe exact denial can still be required. Screenshot and
   task-artifact attachment is part of the implement lane. Owner mode attaches
-  with `orbit.task.artifact.put`. Claimed mode attaches declared files through
+  with `orbit.task.artifact` action `put`. Claimed mode attaches declared files through
   the `task_artifacts` handoff even without that tool. A criterion that only
   requires those screenshots is feasible; task-pilot does not warn that
   artifact attachment is unavailable because `required_tools` is empty. A
-  criterion that names a tool the lane does not grant, and that
-  `required_tools` does not declare, is still reported.
+  criterion that asks the implementer to call a tool the lane does not grant,
+  and that `required_tools` does not declare, is reported. A criterion that
+  names an ungranted tool only as the subject of the change — its behaviour,
+  schema or documentation, proven by the task's own tests or doc check rather
+  than by calling it — is not reported by the deterministic allowlist check.
 - **Operator capability.** Governed operations — workflow run observation and
-  resume, `orbit.command.exec`, `orbit.agent.invoke`,
+  resume, `orbit.command.exec`,
   and the other destructive surfaces — are reserved for an operator.
   `required_tools` grants allowlist membership, not capability, and an
   implementing agent must never set an authority environment variable to get
   past that gate. Write the criterion as an explicit operator handoff, or scope
-  it to the registered dispatch path an agent can reach.
+  it to the registered dispatch path an agent can reach. A criterion that
+  names an operator-only tool only as the **subject** of the change (its code,
+  description, schema, docs or tests: "`orbit.task.recover` action `requeue` refuses a dirty
+  handoff, shown by a runtime test") does not hold: the pilot classifies each
+  detected mention as `subject` or `invoke` with a one-line reason in its
+  assessment's `operator_tool_classifications`. Only `invoke` (meeting the
+  criterion means running the tool) becomes an operator validation hold and
+  keeps this finding; a mention the pilot leaves unclassified, or classifies
+  malformed, holds as `invoke`.
 - **External credentials.** `github.*` reads depend on authentication the lane
   may not hold, so state that precondition instead of treating a
   capability-unavailable result as a pass.
@@ -477,7 +676,8 @@ machine stays a `utility_warnings` finding for an operator to arrange.
 
 A claimed leaf that finds its base already resolves such a task hands off
 `NoDiff` with an `already_resolved` outcome naming `cargo test -p <crate>
---test <target> [<filter>]` selectors. Its claim host replays each on the base
+--test <target> [<filter>]` or `cargo test -p <crate> --lib [<filter>]`
+selectors. Its claim host replays each on the base
 outside the agent sandbox and pins the passing logs for the owner, so the task
 settles without a PR; a failing replay fails the claim with its output, and an
 empty list or a selector that runs no test is refused.

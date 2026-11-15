@@ -7,12 +7,30 @@
 //! module, so a decision means the same thing whichever path produced it.
 
 mod apply;
+mod mechanical;
 mod request;
 mod revision;
 mod verify;
 
 pub use crate::runtime::task::FINAL_RECOVERY_REQUEUED_EVENT;
+pub(in crate::application::task) use apply::FINAL_RECOVERY_COMPLETED_EVENT;
+pub(in crate::application::task) use mechanical::{
+    base_red_block_episode, base_red_owner, operator_only_requeue,
+};
 pub(crate) use request::TERMINAL_REFUSAL_MARK;
+
+/// History event a `resume_run` step appends; the requeue bound counts it
+/// with requeues, and its note names the resumed run so a run resumes once.
+pub const FINAL_RECOVERY_RESUMED_EVENT: &str = "final_recovery_resumed";
+/// History event a `rerun_ci` step appends; its note names the head whose
+/// failed checks were re-run so a head is re-run once.
+pub const FINAL_RECOVERY_CI_RERUN_EVENT: &str = "final_recovery_ci_rerun";
+/// History event a final-recovery requeue appends when it refuses to
+/// preserve a publication whose source the next run's candidate resume would
+/// refuse; its JSON note names the source run and the failed identity
+/// predicate (`reason`).
+pub const FINAL_RECOVERY_UNRESUMABLE_PUBLICATION_EVENT: &str =
+    "final_recovery_unresumable_publication";
 pub use request::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, FinalRecoveryRequeueBound,
 };

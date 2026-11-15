@@ -49,6 +49,16 @@ spec:
       # The original retry-exhausted error, before any recovery ran.
       error_message:
         type: string
+      # A candidate workflow failed before the forge created any jobs.
+      workflow_run_failure:
+        type: object
+        additionalProperties: false
+        required: [classification, evidence]
+        properties:
+          classification:
+            const: candidate_owned
+          evidence:
+            type: string
       # Fresh current-head evidence, collected after required checks conclude.
       required_check_failures:
         type: object
@@ -106,14 +116,25 @@ spec:
       # Tail of the run log around the failure.
       log_tail:
         type: string
-      # The decisions this caller can apply, when it cannot apply all of them.
-      # The blocked-task backstop has no live run, so it omits `resume`.
+      # The decisions this caller can apply. In the pipeline the run is live,
+      # so `resume_run` is omitted; the blocked-task backstop has no live run,
+      # so it omits `resume`.
       decisions:
         type: array
         minItems: 1
         uniqueItems: true
         items:
-          enum: [resume, complete_no_diff, reject, archive, requeue, escalate]
+          enum:
+            - resume
+            - complete_no_diff
+            - reject
+            - archive
+            - requeue
+            - escalate
+            - decide
+            - resume_run
+            - rerun_ci
+            - friction_reported
       # What this caller's lane cannot do; overrides any guidance below that
       # depends on a decision outside `decisions`.
       lane_contract:
@@ -133,14 +154,45 @@ spec:
       # draws under.
       crew_config_key:
         const: workflow.final_recovery_crews
-  # Mirrors orbit_types::workflow::FinalRecoveryDecision. Orbit parses the
-  # result strictly against that type; anything else escalates.
+  # Mirrors orbit_types::workflow::FinalRecoveryDecision plus the required
+  # fault and fault_evidence every decision carries, and an optional
+  # repair_evidence handoff on resume. The host imports that field before
+  # Orbit strictly parses the remaining decision; anything else escalates.
   output_schema_json:
     type: object
     oneOf:
       - additionalProperties: false
-        required: [decision, step_id, rationale]
+        required: [decision, step_id, rationale, fault, fault_evidence]
         properties:
+          fault:
+            enum: [implementer, specification, review, infrastructure, orbit, external, unknown]
+          fault_evidence:
+            type: string
+            minLength: 1
+            maxLength: 500
+          repair_evidence:
+            type: object
+            additionalProperties: false
+            required: [execution_summary]
+            properties:
+              execution_summary:
+                type: string
+                minLength: 1
+                maxLength: 65536
+              task_artifacts:
+                type: array
+                maxItems: 32
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [path, source_path]
+                  properties:
+                    path:
+                      type: string
+                      minLength: 1
+                    source_path:
+                      type: string
+                      minLength: 1
           decision:
             const: resume
           step_id:
@@ -150,8 +202,14 @@ spec:
             type: string
             minLength: 1
       - additionalProperties: false
-        required: [decision, evidence_commit, rationale]
+        required: [decision, evidence_commit, rationale, fault, fault_evidence]
         properties:
+          fault:
+            enum: [implementer, specification, review, infrastructure, orbit, external, unknown]
+          fault_evidence:
+            type: string
+            minLength: 1
+            maxLength: 500
           decision:
             const: complete_no_diff
           evidence_commit:
@@ -161,8 +219,14 @@ spec:
             type: string
             minLength: 1
       - additionalProperties: false
-        required: [decision, reason, evidence]
+        required: [decision, reason, evidence, fault, fault_evidence]
         properties:
+          fault:
+            enum: [implementer, specification, review, infrastructure, orbit, external, unknown]
+          fault_evidence:
+            type: string
+            minLength: 1
+            maxLength: 500
           decision:
             const: reject
           reason:
@@ -172,30 +236,173 @@ spec:
             type: string
             minLength: 1
       - additionalProperties: false
-        required: [decision, reason]
+        required: [decision, reason, fault, fault_evidence]
         properties:
+          fault:
+            enum: [implementer, specification, review, infrastructure, orbit, external, unknown]
+          fault_evidence:
+            type: string
+            minLength: 1
+            maxLength: 500
           decision:
             const: archive
           reason:
             type: string
             minLength: 1
       - additionalProperties: false
-        required: [decision, reason]
+        required: [decision, reason, fault, fault_evidence]
         properties:
+          fault:
+            enum: [implementer, specification, review, infrastructure, orbit, external, unknown]
+          fault_evidence:
+            type: string
+            minLength: 1
+            maxLength: 500
           decision:
             const: requeue
           reason:
             type: string
             minLength: 1
       - additionalProperties: false
-        required: [decision, diagnosis, human_action]
+        required: [decision, diagnosis, human_action, fault, fault_evidence]
         properties:
+          fault:
+            enum: [implementer, specification, review, infrastructure, orbit, external, unknown]
+          fault_evidence:
+            type: string
+            minLength: 1
+            maxLength: 500
           decision:
             const: escalate
           diagnosis:
             type: string
             minLength: 1
           human_action:
+            type: string
+            minLength: 1
+          summary:
+            type: string
+            minLength: 1
+      - additionalProperties: false
+        required: [decision, summary, options, recommended, fault, fault_evidence]
+        properties:
+          fault:
+            enum: [implementer, specification, review, infrastructure, orbit, external, unknown]
+          fault_evidence:
+            type: string
+            minLength: 1
+            maxLength: 500
+          decision:
+            const: decide
+          summary:
+            type: string
+            minLength: 1
+          options:
+            type: array
+            minItems: 2
+            maxItems: 3
+            items:
+              type: object
+              additionalProperties: false
+              required: [summary, consequence]
+              properties:
+                summary:
+                  type: string
+                  minLength: 1
+                consequence:
+                  type: string
+                  minLength: 1
+                rewrite:
+                  type: object
+                  additionalProperties: false
+                  properties:
+                    description:
+                      type: string
+                      minLength: 1
+                    acceptance_criteria:
+                      type: array
+                      minItems: 1
+                      items:
+                        type: string
+                        minLength: 1
+                action:
+                  type: object
+                  required: [kind]
+                  properties:
+                    kind:
+                      enum: [requeue, re_pilot, change_crew, split, reject, archive]
+                    crew:
+                      type: string
+                    title:
+                      type: string
+                    description:
+                      type: string
+                    acceptance_criteria:
+                      type: array
+                      items:
+                        type: string
+          recommended:
+            type: integer
+            minimum: 1
+            maximum: 3
+      - additionalProperties: false
+        required: [decision, run_id, reason, fault, fault_evidence]
+        properties:
+          fault:
+            enum: [implementer, specification, review, infrastructure, orbit, external, unknown]
+          fault_evidence:
+            type: string
+            minLength: 1
+            maxLength: 500
+          decision:
+            const: resume_run
+          run_id:
+            type: string
+            minLength: 1
+          reason:
+            type: string
+            minLength: 1
+      - additionalProperties: false
+        required: [decision, head_sha, reason, fault, fault_evidence]
+        properties:
+          fault:
+            enum: [implementer, specification, review, infrastructure, orbit, external, unknown]
+          fault_evidence:
+            type: string
+            minLength: 1
+            maxLength: 500
+          decision:
+            const: rerun_ci
+          head_sha:
+            type: string
+            minLength: 1
+          reason:
+            type: string
+            minLength: 1
+      - additionalProperties: false
+        required: [decision, human_action, fault, fault_evidence]
+        properties:
+          fault:
+            enum: [implementer, specification, review, infrastructure, orbit, external, unknown]
+          fault_evidence:
+            type: string
+            minLength: 1
+            maxLength: 500
+          decision:
+            const: friction_reported
+          friction_id:
+            type: string
+            minLength: 1
+          friction_title:
+            type: string
+            minLength: 1
+          friction_body:
+            type: string
+            minLength: 1
+          human_action:
+            type: string
+            minLength: 1
+          summary:
             type: string
             minLength: 1
   instruction: |
@@ -220,7 +427,8 @@ spec:
     - Do not edit the task record (status, fields or comments), start or resume
       runs, or invoke agents or pipelines; the applier refuses a decision on a
       task that changed after the failure. Recording root causes with
-      `orbit.friction.add` and repairing files are fine.
+      `orbit.friction` action `add` and repairing files are fine. Return repair evidence
+      through the host handoff below, without calling task-write tools.
     - Inspect `retained_candidate` (the failed run's own worktree) read-only:
       never edit, copy from or run Git writes in it. Name it in an escalation
       when that work should continue.
@@ -233,7 +441,7 @@ spec:
       using the shell. Report a tool unavailable only after a trivial call to
       it (for the shell, `true`) is also denied, quoting that denial. A
       denial never excuses skipping required validation or the friction you
-      record with `orbit.friction.add`.
+      record with `orbit.friction` action `add`.
 
     Evidence:
     - Every input field except task_id, run_id, workspace_path, repo_root,
@@ -247,6 +455,11 @@ spec:
       incomplete or about an older head. Examine each check and its evidence
       before deciding the cause: a shared-base failure in one job does not
       explain a candidate failure in a sibling job.
+    - `workflow_run_failure` classifies a workflow that completed unsuccessfully
+      before creating jobs and whose file the candidate changed. Its absent
+      check runs cannot be rerun with `rerun_ci`. Repair the workflow and resume
+      the candidate repair/validation path when admitted; otherwise requeue
+      within the lane contract or escalate with the workflow path and run.
     - `absorbed_refusal` means conflict recovery left the branch on its base
       with no candidate commit, but Orbit refused to settle it (`reason`,
       `detail`). Treat the error's settlement claim as unverified and judge from
@@ -254,7 +467,7 @@ spec:
     - Reads you can make, also on a claimed run: `orbit.task.show` with the
       task_id (the task record); the same with `field: "delivery"` and `run_id`
       set to the input run_id (this run's commit and landing evidence); and,
-      when the run reached review, `orbit.task.artifact.get` for the review
+      when the run reached review, `orbit.task.artifact` action `get` for the review
       artifacts `review-manifest.json`, `review-report.json`,
       `review-report-history.json`, `review-gate.json` and
       `review-baseline.json`, spelled exactly. List them first with
@@ -296,7 +509,23 @@ spec:
          environmental fix.
        - The only unmet criterion is a post-deploy one: see Post-deploy
          criteria.
-       - Anything else, or any doubt: `escalate`.
+       - A mechanical fix is enough, and you have verified it applies:
+         `resume_run` (the blocked run can continue from its checkpoints; at
+         most once per run), `rerun_ci` (the required checks failed on the
+         pull request's current head for a reason a rerun clears, such as a
+         cancelled or timed-out job; at most once per head, never for a
+         failure the candidate or its base owns). Both are bounded by the
+         shared requeue bound and record why in the task history. A refused
+         step escalates with the refusal as its reason.
+       - An Orbit defect, not a task problem: `friction_reported` with an
+         existing `friction_id`, or a `friction_title` and `friction_body` to
+         file one, plus the exact `human_action`.
+       - A human has to choose between ways forward: `decide` (see
+         Decisions). Prefer it over `escalate` whenever you can name two or
+         three concrete options. Only a step no click can take, such as
+         granting access or fixing the host, is an `escalate`.
+       - Anything else, or any doubt: `decide` when options exist, otherwise
+         `escalate`.
 
     3. For `resume`, choose `step_id` from `allowed_resume_step_ids`: the failed
        step or an earlier listed one, so the pipeline reruns the failed contract
@@ -306,7 +535,72 @@ spec:
     4. When you repaired a diff and will `resume`, first run the pre-handoff
        checks the workspace guide names for a diff (static guards, formatter,
        linters for what you changed) and fix what they report. They do not
-       replace `task.final_validation_commands`.
+       replace `task.final_validation_commands`, which comes only from the
+       injected execution envelope, is absent when empty, and is not an
+       `orbit.task.show` field.
+
+    Fault:
+    Every decision also names whose fault the failure was, as `fault`, with
+    `fault_evidence`: one line citing the run, check or file that shows it
+    (for example `run jrun-… step validate: the test suite fails in
+    tests/parser.rs on the candidate only`). Judge from the evidence, not
+    from who did the work: the packet leaves out the implementer's crew and
+    model, and you must not look them up (the task's `crew`, run crew draws or
+    invocation records). Pick the first that the evidence supports:
+    - `implementer`: the candidate itself was wrong, incomplete, unvalidated
+      or broke a check the base passes; the task was clear and achievable.
+    - `specification`: the task was wrong, contradictory, underspecified,
+      obsolete or already done; a correct implementer could not satisfy it
+      as written.
+    - `review`: a review refused or demanded something the task and the
+      workspace guide do not require.
+    - `infrastructure`: the host, sandbox, network, provider, credentials or
+      CI runner failed; the candidate was not judged.
+    - `orbit`: an Orbit defect (a gate, pipeline step or the applier
+      misbehaved); a `friction_reported` decision is usually this.
+    - `external`: something outside Orbit and the task, such as a concurrent
+      change on the base, an upstream service or a dependency release.
+    - `unknown`: the evidence does not settle it. Prefer it to a guess.
+    Fault is about the failure, not the decision: a `resume` after you
+    finished an incomplete implementation is `implementer`; a `requeue` after
+    a provider outage is `infrastructure`.
+
+    Evidence handoff:
+    - When a repair produces evidence and will `resume`, add `repair_evidence` beside
+      the typed decision:
+      `{"execution_summary": "Outcome: success\nChanges: ...", "task_artifacts":
+      [{"path": "screenshots/view.png", "source_path": ".orbit/tmp/view.png"}]}`.
+      The host attaches it to this recovery's admitted task before resuming,
+      including on a claimed run; no operator attachment is needed. Only a
+      `resume` accepts this handoff; a backstop lane that excludes `resume`
+      returns its original decision without a `repair_evidence` field.
+    - Include validation commands and outcomes in `execution_summary` (at most
+      65536 characters). Return at most 32 artifacts, each at most 1 MiB. Every
+      source must be a regular file under this worktree's `.orbit/tmp/`.
+      Artifact names must be unique and may not use reserved namespaces,
+      including `review-`, `validation/` or `no-diff-handoff/`. The handoff
+      accepts no task ID, lifecycle change, scope edit or comment. An invalid
+      handoff refuses the decision before any evidence is written.
+
+    Decisions:
+    A `decide` becomes a card the operator answers with one click, so write it
+    for someone who has not opened the code:
+    - `summary`: one or two plain sentences naming what is stuck and what has
+      to be chosen. No file paths, step ids or stack traces.
+    - `options`: two or three, each with a one-sentence `summary`, a one-line
+      `consequence` the operator can weigh, and at least one of `rewrite` and
+      `action`. `rewrite` is the complete new value of `description` and/or
+      `acceptance_criteria` (never a diff). `action` is `{"kind": ...}` with
+      `requeue` (back to backlog for a fresh run), `re_pilot` (back to backlog
+      for a fresh task-pilot assessment), `change_crew` (`crew`), `split`
+      (`title`, `description`, `acceptance_criteria` of the follow-up task;
+      the option's `rewrite` narrows this task) or `reject` / `archive`
+      (neither takes a rewrite).
+    - `recommended`: the 1-based index of the option you would pick.
+    An option with neither a rewrite nor an action, an unknown action or a
+    count outside two to three is refused and the task escalates unresolved.
+    An `escalate` or `friction_reported` also carries a short `summary` and the
+    one exact `human_action`: the card shows both.
 
     Post-deploy criteria:
     When the implementation is otherwise complete and its only unmet criterion
@@ -319,13 +613,19 @@ spec:
 
     Return:
     Exactly one Orbit response envelope whose `result` is one of these, limited
-    to `decisions` when listed:
-    - {"decision": "resume", "step_id": "<a step id from allowed_resume_step_ids>", "rationale": "..."}
+    to `decisions` when listed, each with `"fault": "<one of the faults
+    above>"` and `"fault_evidence": "<one line citing a run, check or file>"`
+    beside its fields (a decision without them escalates):
+    - {"decision": "resume", "step_id": "<a step id from allowed_resume_step_ids>", "rationale": "...", "fault": "implementer", "fault_evidence": "..."}
     - {"decision": "complete_no_diff", "evidence_commit": "<sha on base_ref>", "rationale": "..."}
     - {"decision": "reject", "reason": "...", "evidence": "..."}
     - {"decision": "archive", "reason": "..."}
     - {"decision": "requeue", "reason": "<the verified change>"}
-    - {"decision": "escalate", "diagnosis": "...", "human_action": "<the one next step>"}
+    - {"decision": "escalate", "diagnosis": "...", "human_action": "<the one next step>", "summary": "<optional, one or two sentences>"}
+    - {"decision": "decide", "summary": "...", "options": [{"summary": "...", "consequence": "...", "rewrite": {"description": "...", "acceptance_criteria": ["..."]}, "action": {"kind": "requeue"}}], "recommended": 1}
+    - {"decision": "resume_run", "run_id": "<the blocking run>", "reason": "..."}
+    - {"decision": "rerun_ci", "head_sha": "<the head the failed checks ran on>", "reason": "..."}
+    - {"decision": "friction_reported", "friction_id": "<existing id>" or "friction_title" and "friction_body", "human_action": "...", "summary": "<optional>"}
     Anything else is treated as `escalate`.
   steering_instruction: |
     Mid-run steering checkpoint (advisory pull)
@@ -347,20 +647,21 @@ spec:
     - An operator comment withdrawing the task, or a task that no longer
       accepts writes, still means `escalate` or `archive`, never `resume` or
       `requeue`.
+  fleet_notices: post
   tool_disallow_list:
-    - orbit.agent.invoke
-    - orbit.auto_task.add
-    - orbit.auto_task.mint
-    - orbit.auto_task.update
+    - orbit.auto_task:add
+    - orbit.auto_task:mint
+    - orbit.auto_task:update
     - orbit.command.exec
     - orbit.pipeline.invoke
-    - orbit.workflow.run.resume
-    - orbit.workflow.run.show
-    - orbit.workflow.run.list
-    - orbit.workflow.ship
+    - orbit.run:resume
+    - orbit.run:show
+    - orbit.run:list
+    - orbit.workflow:land
+    - orbit.workflow:ship
     - orbit.task.add
     - orbit.task.update
-    - orbit.task.artifact.put
+    - orbit.task.artifact:put
   proc_disallowed_programs:
     - sudo
     - su

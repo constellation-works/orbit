@@ -11,7 +11,7 @@ use crate::driver::sqlite::task_registry::{
 };
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_bytes, with_exclusive_file_lock};
-use orbit_types::task::{ORB_TASK_ID_MAX, task_id_prefix, validate_orb_task_id};
+use orbit_types::task::{ORB_TASK_ID_MAX, format_task_id, task_id_prefix, validate_orb_task_id};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -113,6 +113,17 @@ struct ImportTarget {
 /// `target_workspace_id` overrides the destination; otherwise the archive's
 /// source workspace is used (registering it if unknown). Conflicts on
 /// already-used ids are resolved by `policy`.
+///
+/// After that selection, and before any workspace registration, canonical
+/// bundle write, or task binding, a relation target under a prefix this
+/// registry knows — or under a prefix of an id this import will register —
+/// must already be registered or be one of the final ids this import will
+/// land. A miss names the source task, the relation type and the missing
+/// target and leaves the destination unchanged. A prefix this import does
+/// not register, and that the registry has never issued, may still dangle.
+/// Cycles and other failures that surface only while the index is rebuilt
+/// still roll back fresh bundles and a workspace registration this import
+/// created.
 ///
 /// Import is a restore of existing records, not a create-time assessment:
 /// a source task with no complexity stays unlabeled (`None`) so re-import
@@ -263,6 +274,20 @@ pub fn import_tasks(
         })
     };
 
+    // Assign renumber ids from the counter the write phase will bump to, then
+    // reject unresolved known-prefix targets before any registry or bundle
+    // mutation. The write phase allocates for real; a counter that moved in
+    // between is checked again below, before the first bundle write.
+    let preview_remap = preview_import_remap(registry, &to_renumber, renumber_floor)?;
+    preflight_landing_relations(
+        registry,
+        &target.workspace_id,
+        &kept,
+        &to_renumber,
+        &to_overwrite,
+        &preview_remap,
+    )?;
+
     // ---- Phase 2: mutate. Track writes for best-effort rollback. ----
     // Note: the monotonic allocator bumps below are intentionally never rolled
     // back — the counter only moves forward and holes are expected. A newly
@@ -303,6 +328,19 @@ pub fn import_tasks(
         .map(|staged| staged.source_id.clone())
         .zip(new_ids)
         .collect();
+    if id_remap != preview_remap
+        && let Err(err) = preflight_landing_relations(
+            registry,
+            &target.workspace_id,
+            &kept,
+            &to_renumber,
+            &to_overwrite,
+            &id_remap,
+        )
+    {
+        guard.rollback();
+        return Err(err);
+    }
 
     // Write kept + renumbered bundles, rewriting relation targets in the set,
     // then replace the mirrors their owner has changed.
@@ -537,17 +575,93 @@ fn remap_bundle(
     id_remap: &BTreeMap<String, String>,
 ) -> TaskBundleV2 {
     let mut out = bundle.clone();
-    out.envelope.id = final_id.to_string();
-    for relation in &mut out.envelope.relations {
-        // Rewrite whenever the target is being renumbered, regardless of relation
-        // type. A `ChildOf` target is the task's parent, so this covers parent
-        // rewrites; `Produces`/`Resolves` may point at F-/L-/ADR- ids that are
-        // never in the renumber set, so they are left untouched.
+    apply_id_remap(&mut out.envelope, final_id, id_remap);
+    out
+}
+
+/// Set the envelope id and rewrite relation targets renumbered within the
+/// imported set. A `ChildOf` target is the task's parent, so this covers
+/// parent rewrites; `Produces`/`Resolves` may point at F-/L-/ADR- ids that
+/// are never in the renumber set, so they are left untouched.
+fn apply_id_remap(
+    envelope: &mut orbit_types::task::TaskEnvelopeV2,
+    final_id: &str,
+    id_remap: &BTreeMap<String, String>,
+) {
+    envelope.id = final_id.to_string();
+    for relation in &mut envelope.relations {
         if let Some(mapped) = id_remap.get(&relation.target) {
             relation.target = mapped.clone();
         }
     }
-    out
+}
+
+/// The ids [`allocate_task_ids`](TaskRegistryStore::allocate_task_ids) will
+/// hand out after [`bump_allocator_to_at_least`](TaskRegistryStore::bump_allocator_to_at_least)
+/// raises the counter to `floor`. Read-only: a rejected import must not burn ids.
+fn preview_import_remap(
+    registry: &TaskRegistryStore,
+    to_renumber: &[StagedBundle],
+    floor: Option<u32>,
+) -> Result<BTreeMap<String, String>, OrbitError> {
+    if to_renumber.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let prefix = registry.local_task_prefix()?;
+    let next = registry.allocator_next_number()?;
+    let start = floor.map_or(next, |floor| next.max(floor));
+    let mut sources: Vec<&str> = to_renumber
+        .iter()
+        .map(|staged| staged.source_id.as_str())
+        .collect();
+    sources.sort_unstable();
+    let span =
+        u32::try_from(sources.len() - 1).map_err(|err| OrbitError::Store(err.to_string()))?;
+    // `start + span` is the last id, and `ORB_TASK_ID_MAX` is `u32::MAX`, so a
+    // sum that does not fit is the same refusal `allocate_task_ids` makes.
+    if start.checked_add(span).is_none() {
+        return Err(OrbitError::Store("ORB task id allocator exhausted".into()));
+    }
+    let mut remap = BTreeMap::new();
+    for (index, source_id) in sources.into_iter().enumerate() {
+        let number =
+            start + u32::try_from(index).map_err(|err| OrbitError::Store(err.to_string()))?;
+        remap.insert(source_id.to_string(), format_task_id(&prefix, number)?);
+    }
+    Ok(remap)
+}
+
+/// Reject known-prefix relation targets on the bundles this import will land.
+///
+/// Final ids in `id_remap`, plus every kept and overwritten id, count as
+/// resolved even though they are not registered yet. A prefix of one of those
+/// ids counts as known, because the index rebuild sees it once the binding
+/// exists. Owner-wins replacements keep their source ids and are not remapped.
+fn preflight_landing_relations(
+    registry: &TaskRegistryStore,
+    workspace_id: &str,
+    kept: &[StagedBundle],
+    to_renumber: &[StagedBundle],
+    to_overwrite: &[MirrorReplacement],
+    id_remap: &BTreeMap<String, String>,
+) -> Result<(), OrbitError> {
+    let mut accepted_ids = BTreeSet::new();
+    let mut envelopes = Vec::new();
+    for staged in kept.iter().chain(to_renumber.iter()) {
+        let final_id = id_remap
+            .get(&staged.source_id)
+            .cloned()
+            .unwrap_or_else(|| staged.source_id.clone());
+        let mut envelope = staged.bundle.envelope.clone();
+        apply_id_remap(&mut envelope, &final_id, id_remap);
+        accepted_ids.insert(final_id);
+        envelopes.push(envelope);
+    }
+    for replacement in to_overwrite {
+        accepted_ids.insert(replacement.staged.source_id.clone());
+        envelopes.push(replacement.staged.bundle.envelope.clone());
+    }
+    registry.reject_unresolved_import_relations(workspace_id, &envelopes, &accepted_ids)
 }
 
 /// Rebuild the target workspace's index rows from the bundles currently on disk.

@@ -58,18 +58,8 @@ Code, Codex, Gemini CLI, Antigravity, Grok, GitHub Copilot, or Muse Code (the
 Cursor, Pi, and OpenCode lanes were [retired](/concepts/agents/#retired-providers)).
 It passes the agent your task's context, such as the task
 description, prompts, and workspace files. The agent may send that content to
-its provider, under the provider's own terms and privacy policy. Aside from
-the optional decision assistance described below, Orbit itself does not
-contact any AI provider's API.
-
-### Optional decision assistance (off by default)
-
-If you enable it, Orbit sends a bounded assistance request directly to the
-fixed OpenAI Decisions endpoint (`https://api.openai.com/v1/decisions`). Each
-request carries only the policy's allowed evidence fields and its question
-text, using the model fixed in the policy. The host-only `[assistance]` table
-ships with an empty policy list, so this traffic is off by default and never
-leaves your machine until you add a policy. No agent crew makes these calls.
+its provider, under the provider's own terms and privacy policy. Orbit itself
+does not contact any AI provider's API.
 
 ### Your Git host
 
@@ -77,13 +67,13 @@ Delivery workflows run `git push` and `git fetch` against your repository's
 remotes. They use the GitHub CLI (`gh`) to open, update, and merge pull requests
 and to read code-scanning and Dependabot alerts. These requests go to the Git
 host you configured, under that host's terms. Scheduled routines that contact
-GitHub or perform delivery are shipped disabled until you enable them. The
-crew-performance refresh is a local exception: it is seeded enabled and
-scheduled hourly. While `workflow.crew_performance` is `off` (the default),
-its action skips the scan and writes no snapshot. Unattended hourly runs
-require the host's Orbit scheduler clock to be enabled, but an operator can
-still run a due refresh with `orbit clock tick` while scheduled ticks are
-paused.
+GitHub or perform delivery are shipped disabled until you enable them. When
+selected by the seeding policy, the local `worktree-gc`, `task-pilot` and
+`crew-memory-dream` routines seed enabled (`crew-memory-dream` mints
+nothing while `crew_memory.enabled` is false or no running memory-arm
+experiment applies); the local `host-health`
+auto-task does too. Unattended scheduled runs require the
+host's Orbit scheduler clock to be enabled.
 
 ### Task publication (optional)
 
@@ -125,7 +115,9 @@ under their own terms.
 - `orbit mcp serve`, the MCP server the plugins start, talks to your agent
   client over standard input and output. It opens no network port.
 - `orbit mcp listen` binds `127.0.0.1:7879` by default and refuses any other
-  interface unless you pass `--allow-non-loopback`.
+  interface unless you pass `--allow-non-loopback`. It accepts a connection
+  only when the peer's user id is the server's, and refuses a different user
+  or a remote TCP client before reading any message.
 - `orbit web serve` (the dashboard) binds `127.0.0.1:7878` and refuses
   addresses that are not loopback. Its content security policy lets pages load
   scripts, styles, and other resources only from the dashboard itself.

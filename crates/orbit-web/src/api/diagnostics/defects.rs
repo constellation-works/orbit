@@ -4,16 +4,18 @@
 //! classified twice: by lineage (what its `regression_from` relations name as
 //! the cause) and by origin (the provenance tag of whatever filed it).
 
-use axum::extract::Query;
+use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_core::OrbitRuntime;
 use orbit_types::task::TaskType;
 use serde_json::{Map, Value, json};
+use std::sync::Arc;
 
 use super::super::{DiagnosticsQuery, map_runtime_error};
 use super::metrics::DiagnosticsRange;
 use super::trend::{TrendWindow, trend_range};
-use crate::state::Ws;
+use crate::runtime_memo::DASHBOARD_POLL_MEMO_TTL;
+use crate::state::{DashboardState, Ws};
 
 /// Lineage series, bottom of the stack first.
 const LINEAGES: [&str; 3] = ["fix_for_fix", "regression", "unattributed"];
@@ -35,6 +37,7 @@ const ORIGINS: [&str; 11] = [
 ];
 
 pub(in crate::api) async fn diagnostics_defects(
+    State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Query(q): Query<DiagnosticsQuery>,
 ) -> Response {
@@ -42,9 +45,17 @@ pub(in crate::api) async fn diagnostics_defects(
         Ok(range) => range,
         Err(error) => return map_runtime_error(error),
     };
-    match super::super::blocking("defect trend", move || defect_trend(&runtime, &range)).await {
-        Ok(value) => Json(value).into_response(),
-        Err(response) => *response,
+    let key = ("defects".to_string(), range.key.clone());
+    let compute_runtime = Arc::clone(&runtime);
+    match state
+        .metrics_trends_memo()
+        .get_or_compute(&runtime, key, DASHBOARD_POLL_MEMO_TTL, move || {
+            defect_trend(&compute_runtime, &range)
+        })
+        .await
+    {
+        Ok(served) => (served.age_header(), Json((*served.body).clone())).into_response(),
+        Err(error) => map_runtime_error(error),
     }
 }
 

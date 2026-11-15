@@ -29,6 +29,7 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
+    crate::scenarios::require_isolated_mutable_fixture("decision_requested::fixture");
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let repo = root.path().join("repo");
@@ -114,6 +115,7 @@ impl Fixture {
         self.runtime.run_tool("orbit.task.update", input).unwrap();
     }
 
+    /// Start `task` and let final recovery escalate it as a two-option decision.
     fn escalate(&self, task: &str) {
         self.update(json!({"id": task, "status": "in_progress"}));
         self.runs.set(self.runs.get() + 1);
@@ -133,9 +135,13 @@ impl Fixture {
                     requeue_bound: Default::default(),
                 },
                 Some(&json!({
-                    "decision": "escalate",
-                    "diagnosis": "the worker crashed",
-                    "human_action": "choose a scope",
+                    "decision": "decide",
+                    "summary": "Criterion 2 contradicts the retired API.",
+                    "options": [
+                        {"summary": "Drop criterion 2", "consequence": "the old API stays retired", "rewrite": {"acceptance_criteria": ["Recovered."]}},
+                        {"summary": "Keep the API", "consequence": "the retirement is reverted", "rewrite": {"acceptance_criteria": ["Recovered.", "The API answers."]}},
+                    ],
+                    "recommended": 1,
                 })),
             )
             .unwrap();
@@ -145,23 +151,8 @@ impl Fixture {
         );
     }
 
-    /// Raise one open decision request on `task`'s escalated episode.
+    /// The one open decision request `escalate` raised on `task`'s episode.
     fn raise_request(&self, task: &str) -> orbit_types::task::DecisionRequest {
-        let input = json!({
-            "action": "propose",
-            "id": task,
-            "blocker": "criterion 2 contradicts the retired API",
-            "options": [
-                {"summary": "Drop criterion 2", "consequences": "the old API stays retired", "replacement": "- Recovered."},
-                {"summary": "Keep the API", "consequences": "the retirement is reverted", "replacement": "- Recovered.\n- The API answers."},
-            ],
-            "recommended": 1,
-            "model": "claude",
-            "workspace": self.repo.to_string_lossy(),
-        });
-        self.runtime
-            .run_tool("orbit.task.block_triage", input)
-            .unwrap();
         let requests = self.runtime.get_task_decision_requests(task).unwrap();
         assert_eq!(requests.len(), 1, "{requests:?}");
         assert_eq!(
@@ -311,7 +302,6 @@ fn stop_run(fx: &Fixture, run_id: &str, state: JobRunState) {
         .unwrap();
 }
 
-#[test]
 fn an_open_request_fires_once_per_binding_and_does_not_refire() {
     let fx = fixture();
     fx.install_job();
@@ -371,14 +361,16 @@ fn an_open_request_fires_once_per_binding_and_does_not_refire() {
         now + Duration::minutes(6),
     )
     .unwrap();
-    assert_ne!(again.reason, "would_fire", "{again:?}");
+    // A non-dry pass over an already-assessed request reports nothing new
+    // and starts no attempt.
+    assert_eq!(again.reason, "fresh", "{again:?}");
+    assert!(again.batch.is_empty(), "{again:?}");
     assert!(
         fx.members().active.is_none(),
         "the same request never refires"
     );
 }
 
-#[test]
 fn a_member_settles_when_its_request_is_superseded_before_it_fires() {
     let fx = fixture();
     fx.install_job();
@@ -413,7 +405,6 @@ fn a_member_settles_when_its_request_is_superseded_before_it_fires() {
     assert!(members.active.is_none(), "a superseded request never fires");
 }
 
-#[test]
 fn an_active_member_settles_when_its_request_is_answered() {
     let fx = fixture();
     fx.install_job();
@@ -438,6 +429,9 @@ fn an_active_member_settles_when_its_request_is_answered() {
                     provenance: None,
                     note: None,
                     answered_at: Utc::now(),
+                    precedent: None,
+                    model: None,
+                    confirmation: None,
                 })
                 .ok(),
                 from_status: None,
@@ -472,7 +466,6 @@ fn an_active_member_settles_when_its_request_is_answered() {
     );
 }
 
-#[test]
 fn an_active_member_settles_when_its_request_is_superseded() {
     let fx = fixture();
     fx.install_job();
@@ -502,7 +495,6 @@ fn an_active_member_settles_when_its_request_is_superseded() {
     assert!(!members.assessed.contains_key(&task), "{members:?}");
 }
 
-#[test]
 fn member_state_from_before_the_variant_still_loads_and_runs() {
     let fx = fixture();
     fx.install_job();
@@ -574,7 +566,6 @@ fn member_state_from_before_the_variant_still_loads_and_runs() {
     assert!(fx.members().active.is_none());
 }
 
-#[test]
 fn a_notification_run_that_does_not_complete_leaves_its_member_to_retry() {
     let fx = fixture();
     fx.install_job();
@@ -601,7 +592,6 @@ fn a_notification_run_that_does_not_complete_leaves_its_member_to_retry() {
     assert!(members.failed.contains_key(&task), "{members:?}");
 }
 
-#[test]
 fn no_member_is_observed_while_the_decision_channel_is_off() {
     let fx = fixture();
     fx.install_job();
@@ -625,7 +615,6 @@ fn no_member_is_observed_while_the_decision_channel_is_off() {
     assert!(members.active.is_none(), "{members:?}");
 }
 
-#[test]
 fn a_pending_member_does_not_fire_after_the_decision_channel_is_turned_off() {
     let fx = fixture();
     fx.install_job();
@@ -650,3 +639,15 @@ fn a_pending_member_does_not_fire_after_the_decision_channel_is_turned_off() {
     assert_ne!(due.reason, "would_fire", "{due:?}");
     assert!(due.batch.is_empty(), "{due:?}");
 }
+
+crate::scenario_table!(
+    mutable_scenarios,
+    an_open_request_fires_once_per_binding_and_does_not_refire,
+    a_member_settles_when_its_request_is_superseded_before_it_fires,
+    an_active_member_settles_when_its_request_is_answered,
+    an_active_member_settles_when_its_request_is_superseded,
+    member_state_from_before_the_variant_still_loads_and_runs,
+    a_notification_run_that_does_not_complete_leaves_its_member_to_retry,
+    no_member_is_observed_while_the_decision_channel_is_off,
+    a_pending_member_does_not_fire_after_the_decision_channel_is_turned_off,
+);

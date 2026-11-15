@@ -2,17 +2,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_common::observability::log_rotation::LogRotationConfig;
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{
     Crew, resolve_crew, validate_machine_id, validate_machine_name, validate_stored_task_prefix,
 };
 use orbit_types::workflow::automation::members::MaterialField;
 use orbit_types::workflow::{ConventionTemplate, PrBodyTemplateSource, Provider, TemplateSurface};
-use serde::de::DeserializeOwned;
 
 use super::super::{
-    CONSTELLATION_DEFAULT_PROVIDER_ENV, DEFAULT_WORKFLOW_CREW, LEGACY_DEFAULT_WORKFLOW_CREW,
+    CONSTELLATION_DEFAULT_PROVIDER_ENV, ConfigAllowedValues, DEFAULT_WORKFLOW_CREW,
+    LEGACY_DEFAULT_WORKFLOW_CREW, describe,
 };
 use crate::memory_limit::MemoryLimit;
 
@@ -144,6 +143,15 @@ pub(super) fn resolve_non_code_paths(raw: Option<Vec<String>>) -> Result<Vec<Str
     resolve_path_filter_default("workflow.non_code_paths", raw, DEFAULT_NON_CODE_PATHS)
 }
 
+/// `workflow.non_reviewable_paths`: unset and `[]` exclude nothing. The
+/// default is empty so Orbit does not hard-code a toolchain's generated
+/// files; docs and config stay reviewable until a workspace lists them.
+pub(super) fn resolve_non_reviewable_paths(
+    raw: Option<Vec<String>>,
+) -> Result<Vec<String>, OrbitError> {
+    resolve_path_filter_default("workflow.non_reviewable_paths", raw, &[])
+}
+
 /// `workflow.unlocked_path_validation_commands`: blank entries are dropped,
 /// so a list of only blanks keeps full validation like an unset key.
 pub(super) fn resolve_unlocked_path_validation_commands(
@@ -182,41 +190,6 @@ pub(super) fn resolve_generated_paths(
 /// the last automated look at a failed task is the most capable one.
 pub(crate) const DEFAULT_FINAL_RECOVERY_CREWS: &[&str] = &["sol:100", "opus:20"];
 
-pub(crate) fn read_optional<T: DeserializeOwned>(
-    document: &toml::Value,
-    key: &str,
-    config_path: &Path,
-) -> Result<Option<T>, OrbitError> {
-    let mut value = document;
-    for segment in key.split('.') {
-        let table = value.as_table().ok_or_else(|| {
-            OrbitError::InvalidInput(format!(
-                "invalid runtime config '{}': table path for '{key}' contains a non-table value",
-                redact_home_dir(&config_path.display().to_string())
-            ))
-        })?;
-        let Some(next) = table.get(segment) else {
-            return Ok(None);
-        };
-        value = next;
-    }
-    value.clone().try_into().map(Some).map_err(|error| {
-        // `orbit config set` falls back to a plain string when the value is not
-        // a TOML literal, so `A,B` for a list key lands here as a string.
-        let error = error.to_string();
-        let error = error.trim_end();
-        let hint = if value.is_str() && error.contains("expected a sequence") {
-            "; a list is a TOML array, e.g. '[\"A\",\"B\"]' (quote it in the shell)"
-        } else {
-            ""
-        };
-        OrbitError::InvalidInput(format!(
-            "invalid runtime config '{}': invalid value for '{key}': {error}{hint}",
-            redact_home_dir(&config_path.display().to_string())
-        ))
-    })
-}
-
 /// Trim forge logins, drop blanks and duplicates, and keep a stable order.
 /// Forge logins are case-insensitive, so they are compared lowercased.
 pub(super) fn normalize_logins(raw: Vec<String>) -> Vec<String> {
@@ -230,85 +203,32 @@ pub(super) fn normalize_logins(raw: Vec<String>) -> Vec<String> {
     logins
 }
 
-/// Default `execution.proc_spawn_max_timeout_minutes`: long enough for a
-/// cold workspace build and test gate, still bounded below a typical activity.
-pub(super) const DEFAULT_PROC_SPAWN_MAX_TIMEOUT_MINUTES: u32 = 45;
-
-/// Default `execution.agent_stall_minutes`: long enough that a provider
-/// thinking quietly is not cut off, short enough that a wedged one does not
-/// hold a deploy for hours. Zero disables the check.
-pub(super) const DEFAULT_AGENT_STALL_MINUTES: u32 = 30;
-
 /// Default `retention.audit_days` and `retention.runs_days`.
 pub(super) const DEFAULT_RETENTION_DAYS: u32 = 60;
-
-/// Default `retention.journal_days`. Recovery never reads an applied journal
-/// row, so the window only keeps recent commit decisions for diagnosis; at
-/// about 600 rows of about 80 KB a day, 60 days would let the table pass
-/// 2.5 GiB before anything went.
-pub(super) const DEFAULT_JOURNAL_RETENTION_DAYS: u32 = 14;
-
-/// Default `retention.store_warn_bytes`: 1 GiB. A host store past this with
-/// store GC disabled is worth a warning; a normal fixture store is not.
-/// Zero is allowed and warns for any non-empty store file.
-pub(super) const DEFAULT_STORE_WARN_BYTES: u64 = 1024 * 1024 * 1024;
 
 pub(super) fn resolve_retention_days(
     raw: Option<u32>,
     key: &str,
     default: u32,
 ) -> Result<u32, OrbitError> {
-    const MAX_DAYS: u32 = 36_500;
+    let (min, _) = declared_integer_bounds(key)?;
     match raw {
-        Some(value) if key == "retention.runs_days" && value < 30 => {
+        Some(value) if key == "retention.runs_days" && u64::from(value) < min => {
             // Older releases recommended 14 days. Keep those persisted
             // files loadable so operators can repair them through config set.
             // ConfigStore refuses new writes below the floor separately.
+            let effective_days = u32::try_from(min).unwrap_or(u32::MAX);
             tracing::warn!(
                 key,
                 stored_days = value,
-                effective_days = 30,
-                "stored run retention is below the supported minimum; using 30 days; \
-                 persist the correction with orbit config set retention.runs_days 30 \
+                effective_days,
+                "stored run retention is below the supported minimum; using {effective_days} days; \
+                 persist the correction with orbit config set retention.runs_days {effective_days} \
                  (add --global for the global config)"
             );
-            Ok(30)
+            Ok(effective_days)
         }
-        Some(value) if value == 0 || value > MAX_DAYS => Err(OrbitError::InvalidInput(format!(
-            "{key} has invalid value {value}; expected 1..={MAX_DAYS}"
-        ))),
-        Some(value) => Ok(value),
-        None => Ok(default),
-    }
-}
-
-/// Admit `execution.agent_stall_minutes`. Zero disables the stall check and
-/// leaves only the wall-clock deadline. A day is the ceiling.
-pub(super) fn resolve_agent_stall_minutes(raw: Option<u32>) -> Result<u32, OrbitError> {
-    const MAX_MINUTES: u32 = 1440;
-    match raw {
-        Some(value) if value > MAX_MINUTES => Err(OrbitError::InvalidInput(format!(
-            "execution.agent_stall_minutes has invalid value {value}; expected 0..={MAX_MINUTES}"
-        ))),
-        Some(value) => Ok(value),
-        None => Ok(DEFAULT_AGENT_STALL_MINUTES),
-    }
-}
-
-/// Admit a positive minute budget, defaulting when unset. A day is the
-/// ceiling: anything longer is indistinguishable from never escalating.
-pub(super) fn resolve_bounded_minutes(
-    raw: Option<u32>,
-    default: u32,
-    key: &str,
-) -> Result<u32, OrbitError> {
-    const MAX_MINUTES: u32 = 1440;
-    match raw {
-        Some(value) if value == 0 || value > MAX_MINUTES => Err(OrbitError::InvalidInput(format!(
-            "{key} has invalid value {value}; expected 1..={MAX_MINUTES}"
-        ))),
-        Some(value) => Ok(value),
-        None => Ok(default),
+        _ => resolve_bounded_range(raw, default, key),
     }
 }
 
@@ -343,19 +263,8 @@ pub(super) fn resolve_memory_limit(
 }
 
 pub(super) fn resolve_worker_tasks_max(raw: Option<u32>) -> Result<u32, OrbitError> {
-    match raw {
-        Some(0) => Err(OrbitError::InvalidInput(
-            "machine.worker_tasks_max has invalid value 0; expected >= 1".to_string(),
-        )),
-        Some(value) => Ok(value),
-        None => Ok(DEFAULT_WORKER_TASKS_MAX),
-    }
+    resolve_bounded_range(raw, DEFAULT_WORKER_TASKS_MAX, "machine.worker_tasks_max")
 }
-
-/// Default `machine.host_shutdown_hold_minutes`: long enough for work admitted
-/// now to finish, short enough that a reboot scheduled for tomorrow does not
-/// idle the host all day.
-pub(super) const DEFAULT_HOST_SHUTDOWN_HOLD_MINUTES: u32 = 180;
 
 /// Admit `machine.labels`: opaque capability labels, normalized the way a
 /// task's `requires_labels` are, so the two compare exactly.
@@ -364,36 +273,17 @@ pub(super) fn resolve_machine_labels(raw: Option<Vec<String>>) -> Result<Vec<Str
         .map_err(|error| OrbitError::InvalidInput(error.to_string()))
 }
 
-/// Admit a positive shutdown-hold horizon. There is no upper bound: a host
-/// that wants a longer quiet period before a reboot may set one.
-pub(super) fn resolve_host_shutdown_hold_minutes(raw: Option<u32>) -> Result<u32, OrbitError> {
-    match raw {
-        Some(0) => Err(OrbitError::InvalidInput(
-            "machine.host_shutdown_hold_minutes has invalid value 0; expected >= 1".to_string(),
-        )),
-        Some(value) => Ok(value),
-        None => Ok(DEFAULT_HOST_SHUTDOWN_HOLD_MINUTES),
-    }
-}
-
 /// Default `workflow.mid_run_steering.max_rounds`.
 const DEFAULT_MID_RUN_STEERING_MAX_ROUNDS: u8 = 2;
 
-/// Each steering round re-dispatches an agent step, so a run may spend at
-/// most this many before it holds instead.
-const MAX_MID_RUN_STEERING_ROUNDS: u8 = 10;
-
+/// Each steering round re-dispatches an agent step, so the key's declared
+/// maximum bounds how many a run may spend before it holds instead.
 pub(super) fn resolve_mid_run_steering_max_rounds(raw: Option<u8>) -> Result<u8, OrbitError> {
-    match raw {
-        Some(value) if value == 0 || value > MAX_MID_RUN_STEERING_ROUNDS => {
-            Err(OrbitError::InvalidInput(format!(
-                "workflow.mid_run_steering.max_rounds has invalid value {value}; expected \
-                 1..={MAX_MID_RUN_STEERING_ROUNDS}"
-            )))
-        }
-        Some(value) => Ok(value),
-        None => Ok(DEFAULT_MID_RUN_STEERING_MAX_ROUNDS),
-    }
+    resolve_bounded_range(
+        raw,
+        DEFAULT_MID_RUN_STEERING_MAX_ROUNDS,
+        "workflow.mid_run_steering.max_rounds",
+    )
 }
 
 pub(super) fn resolve_machine_id(raw: Option<String>) -> Result<Option<String>, OrbitError> {
@@ -424,12 +314,14 @@ pub(super) fn resolve_task_prefix(raw: Option<String>) -> Result<Option<String>,
     Ok(Some(value))
 }
 
+/// One of the key's declared [`ConfigAllowedValues::OneOf`] choices,
+/// `default` when unset.
 pub(super) fn resolve_choice(
     raw: Option<String>,
     default: &str,
     key: &str,
-    choices: &[&str],
 ) -> Result<String, OrbitError> {
+    let choices = declared_choices(key)?;
     let value = raw.as_deref().unwrap_or(default).trim();
     if choices.contains(&value) {
         Ok(value.to_string())
@@ -444,9 +336,8 @@ pub(super) fn resolve_choice(
 pub(super) fn resolve_optional_choice(
     raw: Option<String>,
     key: &str,
-    choices: &[&str],
 ) -> Result<Option<String>, OrbitError> {
-    raw.map(|value| resolve_choice(Some(value), "", key, choices))
+    raw.map(|value| resolve_choice(Some(value), "", key))
         .transpose()
 }
 
@@ -477,37 +368,8 @@ pub(super) fn resolve_material_fields(
     }
 }
 
-/// `review` unless the owner opts into landing claimed handoffs itself.
 pub(super) fn resolve_distributed_completion(raw: Option<String>) -> Result<String, OrbitError> {
-    match raw.as_deref().map(str::trim) {
-        None | Some("review") => Ok("review".to_string()),
-        Some("done") => Ok("done".to_string()),
-        Some(other) => Err(OrbitError::InvalidInput(format!(
-            "workflow.distributed_completion must be `review` or `done`, not `{other}`"
-        ))),
-    }
-}
-
-/// `lease.intake.peer_user`: unset, or a non-empty OS user name. Whether the
-/// user exists, and is neither root nor the operator, is decided when Orbit
-/// Web resolves it at startup.
-pub(super) fn resolve_lease_intake_peer_user(
-    raw: Option<String>,
-) -> Result<Option<String>, OrbitError> {
-    resolve_optional_non_empty(raw, crate::registry::LEASE_INTAKE_PEER_USER_KEY)
-}
-
-/// Admit `lease.intake.peer_user` alone from one `config.toml` document.
-pub(crate) fn admit_lease_intake_peer_user(
-    document: &toml::Value,
-    config_path: &Path,
-) -> Result<Option<String>, OrbitError> {
-    let raw = read_optional(
-        document,
-        crate::registry::LEASE_INTAKE_PEER_USER_KEY,
-        config_path,
-    )?;
-    resolve_at(resolve_lease_intake_peer_user(raw), config_path)
+    resolve_choice(raw, "review", "workflow.distributed_completion")
 }
 
 pub(super) fn resolve_optional_non_empty(
@@ -573,10 +435,6 @@ pub(super) fn resolve_default_crew(
     )))
 }
 
-pub(super) fn default_log_rotation() -> LogRotationConfig {
-    LogRotationConfig::default()
-}
-
 pub(super) fn default_pass_list() -> Vec<String> {
     #[allow(unused_mut)]
     let mut vars = vec!["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER"];
@@ -604,68 +462,60 @@ pub(super) fn normalize_pass_list(pass: Vec<String>) -> Result<Vec<String>, Orbi
     Ok(normalized.into_iter().collect())
 }
 
-pub(super) fn resolve_validation_path_mode(raw: Option<String>) -> Result<String, OrbitError> {
-    let mode = raw.unwrap_or_else(|| "prepend".to_string());
-    match mode.trim() {
-        "prepend" | "replace" => Ok(mode.trim().to_string()),
-        other => Err(OrbitError::InvalidInput(format!(
-            "workflow.validation_env.path_mode must be `prepend` or `replace`, got `{other}`"
-        ))),
-    }
-}
-
-/// Ceiling for `workflow.resource_throttle.cpu_light_leaves`: a reservation,
-/// not a second concurrency limit.
-const MAX_CPU_LIGHT_LEAVES: u8 = 32;
-
-pub(super) fn resolve_cpu_light_leaves(raw: Option<u8>) -> Result<u8, OrbitError> {
-    let value = raw.unwrap_or(2);
-    if value <= MAX_CPU_LIGHT_LEAVES {
-        Ok(value)
-    } else {
-        Err(OrbitError::InvalidInput(format!(
-            "workflow.resource_throttle.cpu_light_leaves must be in 0..={MAX_CPU_LIGHT_LEAVES}"
-        )))
-    }
-}
-
 pub(crate) fn resolve_percent(raw: Option<u8>, default: u8, key: &str) -> Result<u8, OrbitError> {
+    resolve_bounded_range(raw, default, key)
+}
+
+/// A bounded whole-number setting: `default` when unset, else a value within
+/// the key's declared [`ConfigAllowedValues::Integer`] bounds, so what
+/// `orbit config keys` shows is what load accepts [ORB-22809].
+pub(super) fn resolve_bounded_range<T>(
+    raw: Option<T>,
+    default: T,
+    key: &str,
+) -> Result<T, OrbitError>
+where
+    T: Copy + Into<u64> + std::fmt::Display,
+{
+    let (min, max) = declared_integer_bounds(key)?;
     let value = raw.unwrap_or(default);
-    if (1..=100).contains(&value) {
+    if value.into() >= min && max.is_none_or(|max| value.into() <= max) {
         Ok(value)
     } else {
         Err(OrbitError::InvalidInput(format!(
-            "{key} must be in 1..=100"
+            "{key} has invalid value {value}; expected {}",
+            expected_range(min, max)
         )))
     }
 }
 
-/// A `workflow.regression_risk.*` count: `default` when unset, else
-/// `1..=max`.
-pub(super) fn resolve_bounded_count(
-    raw: Option<u32>,
-    default: u32,
-    max: u32,
-    key: &str,
-) -> Result<u32, OrbitError> {
-    resolve_bounded_range(raw, default, 1, max, key)
+/// The declared integer bounds of registry key `key`.
+fn declared_integer_bounds(key: &str) -> Result<(u64, Option<u64>), OrbitError> {
+    match describe(key).map(|descriptor| descriptor.allowed) {
+        Some(ConfigAllowedValues::Integer { min, max, .. }) => Ok((min, max)),
+        _ => Err(undeclared(key, "an integer range")),
+    }
 }
 
-/// A bounded setting whose representation or behavior requires a minimum.
-pub(super) fn resolve_bounded_range(
-    raw: Option<u32>,
-    default: u32,
-    min: u32,
-    max: u32,
-    key: &str,
-) -> Result<u32, OrbitError> {
-    let value = raw.unwrap_or(default);
-    if (min..=max).contains(&value) {
-        Ok(value)
-    } else {
-        Err(OrbitError::InvalidInput(format!(
-            "{key} has invalid value {value}; expected {min}..={max}"
-        )))
+/// The declared choices of registry key `key`.
+fn declared_choices(key: &str) -> Result<&'static [&'static str], OrbitError> {
+    describe(key)
+        .and_then(|descriptor| descriptor.allowed.choices())
+        .ok_or_else(|| undeclared(key, "a choice list"))
+}
+
+/// A resolver asked for allowed values its registry row does not declare: a
+/// registry defect, reported on every load so no build ships it.
+fn undeclared(key: &str, shape: &str) -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "{key}: the config registry declares no {shape} for this key; report this Orbit defect"
+    ))
+}
+
+fn expected_range<T: std::fmt::Display>(min: T, max: Option<T>) -> String {
+    match max {
+        Some(max) => format!("{min}..={max}"),
+        None => format!("at least {min}"),
     }
 }
 
@@ -761,12 +611,39 @@ pub(super) fn resolve_pr_body_template(
 }
 
 /// Trimmed, non-empty entries in first-seen order without duplicates.
-/// `machine.mcp.toolsets`: every entry names a toolset (or `all`).
+/// `machine.mcp.toolsets`: every entry names a toolset (or `all`). The
+/// retired `agent-invoke` entry is ignored with a warning so hosts that
+/// opted in before its removal keep resolving.
 pub(super) fn resolve_mcp_toolsets(raw: Option<Vec<String>>) -> Result<Vec<String>, OrbitError> {
     let names = raw.unwrap_or_default();
     orbit_types::tool::McpToolsetSelection::from_names(names.iter().map(String::as_str))
         .map_err(|error| OrbitError::InvalidInput(format!("machine.mcp.toolsets: {error}")))?;
-    Ok(names.iter().map(|name| name.trim().to_string()).collect())
+    let mut kept = Vec::new();
+    for name in &names {
+        let trimmed = name.trim();
+        if orbit_types::tool::McpToolset::is_retired_toolset_name(trimmed) {
+            tracing::warn!(
+                key = "machine.mcp.toolsets",
+                value = trimmed,
+                note = orbit_types::tool::McpToolset::RETIRED_AGENT_INVOKE_NOTE,
+                "machine.mcp.toolsets entry 'agent-invoke' was removed and is ignored; remove it from config.toml",
+            );
+            continue;
+        }
+        kept.push(trimmed.to_string());
+    }
+    Ok(kept)
+}
+
+/// `machine.mcp.role`: unset, or one role name.
+pub(super) fn resolve_mcp_role(raw: Option<String>) -> Result<Option<String>, OrbitError> {
+    let Some(raw) = resolve_optional_non_empty(raw, "machine.mcp.role")? else {
+        return Ok(None);
+    };
+    let role = raw
+        .parse::<orbit_types::tool::McpRole>()
+        .map_err(|error| OrbitError::InvalidInput(format!("machine.mcp.role: {error}")))?;
+    Ok(Some(role.as_str().to_string()))
 }
 
 pub(super) fn resolve_name_list(
@@ -832,4 +709,32 @@ fn resolve_optional_non_empty_raw(
         }
         other => Ok(other),
     }
+}
+
+/// Admit exact activity names with finite, positive wall-clock budgets.
+pub(super) fn resolve_activity_timeouts(
+    raw: Option<BTreeMap<String, u64>>,
+) -> Result<BTreeMap<String, u64>, OrbitError> {
+    let timeouts = raw.unwrap_or_default();
+    for (activity, seconds) in &timeouts {
+        if activity.is_empty() || activity.chars().any(char::is_whitespace) {
+            return Err(OrbitError::InvalidInput(format!(
+                "workflow.activity_timeouts: activity name '{activity}' must be non-empty and contain no whitespace"
+            )));
+        }
+        if !(1..=43200).contains(seconds) {
+            return Err(OrbitError::InvalidInput(format!(
+                "workflow.activity_timeouts.{activity} must be between 1 and 43200 seconds (12 hours), got {seconds}"
+            )));
+        }
+    }
+    Ok(timeouts)
+}
+
+/// Admit the shared tag-to-host-capability policy at config load.
+pub(super) fn resolve_tag_requires_labels(
+    raw: Option<BTreeMap<String, Vec<String>>>,
+) -> Result<orbit_types::task::TagLabelRequirements, OrbitError> {
+    orbit_types::task::TagLabelRequirements::try_from(raw.unwrap_or_default())
+        .map_err(|error| OrbitError::InvalidInput(error.to_string()))
 }

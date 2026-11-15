@@ -22,7 +22,9 @@
 //! The two callbacks that read the decision-channel key store, which no
 //! plugin child may read, run on the host instead: the host hands the child a
 //! route back to itself beside the credential and answers those calls under
-//! the session it minted ([`host_route`]).
+//! the session it minted ([`host_route`]). So do an application-bound
+//! session's application callbacks, which are admitted against a consent
+//! witness no plugin child may read either.
 //!
 //! **A descriptor is a credential only if the host wrote what is on it.** A
 //! backend can open any file it likes on the number, so three things must
@@ -59,8 +61,8 @@ mod session;
 mod storage;
 
 pub use self::host_route::{
-    HOST_ROUTED_CALLBACK_TOOLS, HostRouteOutcome, PLUGIN_HOST_ROUTE_FD,
-    forward_host_routed_callback, is_host_routed_callback_tool,
+    HostRouteOutcome, PLUGIN_HOST_ROUTE_FD, forward_host_routed_callback,
+    is_host_routed_callback_tool, pin_routed_application_task,
 };
 pub use self::resolution::*;
 pub use self::session::*;

@@ -729,8 +729,8 @@ fn native_artifact_put_preserves_operator_evidence_and_requeues_once() {
     }).to_string()).unwrap();
     runtime
         .run_tool(
-            "orbit.task.artifact.put",
-            json!({
+            "orbit.task.artifact",
+            json!({"action": "put",
                 "id": id, "model": "codex", "path": REVIEW_REPORT_ARTIFACT, "source_path": report,
             }),
         )

@@ -540,6 +540,14 @@ fn stream_bounded_log(
             collector.push(&chunk[..read]);
         }
     })?;
+    // The supervisor's verdict, not the stderr note it appends, says the read
+    // was killed; callers bounding the read by a deadline match this variant.
+    if result.timed_out {
+        return Err(OrbitError::ProcessTimeout {
+            timeout_ms: request.timeout_ms.unwrap_or_default(),
+            detail: format!("{label}: {}", result.stderr.trim()),
+        });
+    }
     check_read_result(&result, label)?;
     Ok(log)
 }

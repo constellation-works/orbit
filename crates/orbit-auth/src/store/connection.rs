@@ -5,20 +5,11 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::open_private;
 
-use crate::environment::{LISTENER_USER, check_listener_execution_environment};
+use crate::environment::LISTENER_USER;
 
 use super::{LEASE_TOKEN_STORE_FILE, LeaseTokenStore, private_access, schema};
 
 impl LeaseTokenStore {
-    /// Run the execution-environment check, then open the store in the
-    /// running user's Orbit home. Every listener-user surface opens it this
-    /// way.
-    pub fn open_for_listener_user() -> Result<Self, OrbitError> {
-        let orbit_home = orbit_common::fs::path::global_orbit_dir()?;
-        check_listener_execution_environment(&orbit_home)?;
-        Self::open_in_orbit_home(&orbit_home)
-    }
-
     /// Open the store in `orbit_home` without the execution-environment
     /// check; the home and store ownership and mode checks still apply.
     pub fn open_in_orbit_home(orbit_home: &Path) -> Result<Self, OrbitError> {
@@ -53,10 +44,8 @@ impl LeaseTokenStore {
 
 fn no_store_here(path: &Path) -> OrbitError {
     OrbitError::PolicyDenied(format!(
-        "no lease token store at {}: lease token commands run as the lease listener user \
-         ({LISTENER_USER} by convention), whose Orbit home holds the store. Run them as that \
-         user, for example `sudo -H -u {LISTENER_USER} orbit lease token list`. Setting up the \
-         user and its store is described in the orbit-setup skill's remote-access reference.",
+        "no lease token store at {}: the lease token store belongs to the lease listener user \
+         ({LISTENER_USER} by convention), whose Orbit home holds it; run as that user.",
         PathBuf::from(path).display()
     ))
 }

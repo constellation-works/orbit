@@ -10,12 +10,10 @@
 //! through [`admit_config_key`].
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::CODEX_PROVIDER_SANDBOX_MODES;
 
 const DEFAULT_WORKFLOW_BASE_BRANCH: &str = "main";
 /// Approval policies `execution.codex.approval_policy` admits.
 const CODEX_APPROVAL_POLICIES: &[&str] = &["untrusted", "on-request", "never"];
-const SECURITY_ALERT_SEVERITIES: &[&str] = &["low", "moderate", "high", "critical"];
 const DEFAULT_WORKFLOW_CREW: &str = "opus";
 const LEGACY_DEFAULT_WORKFLOW_CREW: &str = "claude";
 const CONSTELLATION_DEFAULT_PROVIDER_ENV: &str = "CONSTELLATION_DEFAULT_PROVIDER";
@@ -29,6 +27,7 @@ pub(crate) const CREW_CONFIG_FIELDS: &[&str] = &[
     "effort",
     "enabled",
     "env",
+    "kind",
     "model",
     "provider",
     "tags",
@@ -154,7 +153,7 @@ impl ConfigKeyTier {
 }
 
 /// One settable `config.toml` key, as advertised by `orbit config keys`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConfigKeyDescriptor {
     /// Dotted key path.
     pub key: &'static str,
@@ -162,9 +161,15 @@ pub struct ConfigKeyDescriptor {
     pub value_type: &'static str,
     /// What the setting controls.
     ///
-    /// One sentence of at most 100 characters. Defaults, ranges and
-    /// interactions live in `docs/CONFIG.md`.
+    /// One sentence of at most 100 characters. Accepted values are in
+    /// `allowed`, the built-in default comes from the snapshot, and longer
+    /// explanation is in `detail` or `docs/CONFIG.md`.
     pub description: &'static str,
+    /// Further explanation a detail view shows under `description`.
+    pub detail: Option<&'static str>,
+    /// The values the key accepts beyond its type; the shared resolvers
+    /// read their bounds and choices from here [ORB-22809].
+    pub allowed: ConfigAllowedValues,
     /// Grouping for `orbit config show`/`keys`.
     pub section: ConfigSection,
     /// Visibility in the ordinary configuration overview.
@@ -175,13 +180,15 @@ pub struct ConfigKeyDescriptor {
     pub order: u16,
 }
 
+mod allowed;
 mod keys;
 mod settings;
 
+pub use allowed::ConfigAllowedValues;
+
 pub(crate) use keys::{
-    DEPRECATED_CONFIG_KEYS, DEPRECATED_VALUE_FORMS, LEASE_INTAKE_PEER_USER_KEY,
-    LEASE_LISTENER_KEY_PREFIX, REMOVED_CONFIG_KEYS, is_compatibility_config_key,
-    is_machine_identity_key, parse_crew_field_key,
+    DEPRECATED_CONFIG_KEYS, DEPRECATED_VALUE_FORMS, REMOVED_CONFIG_KEYS,
+    is_compatibility_config_key, is_machine_identity_key, parse_crew_field_key,
 };
 pub use keys::{
     GLOBAL_ONLY_KEY_PREFIX, admit_config_key, admit_settable_config_key, config_key_options,
@@ -189,11 +196,9 @@ pub use keys::{
 };
 pub(crate) use settings::resolve_percent;
 pub use settings::{
-    AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigSnapshot, ExperimentSettings,
-    ExploreBriefSettings, ExploreSettings, MachineSettings, MidRunSteeringSettings,
-    RegressionRiskSettings, ResourceThrottleSettings, WorkerContainmentSettings,
-};
-pub use settings::{LeaseListenerSettings, LeaseListenerTlsSettings};
-pub(crate) use settings::{
-    admit_lease_intake_peer_user, admit_lease_listener_settings, read_optional,
+    AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT, AUTO_CONCURRENCY_HEAD_MAX_WAIT_MINUTES,
+    AUTO_CONCURRENCY_HEAD_STUCK_PASSES, AUTO_CONCURRENCY_HORIZON_CAP_MINUTES,
+    AUTO_CONCURRENCY_PROFILE_WINDOW, AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigSnapshot,
+    ExperimentSettings, MachineSettings, MidRunSteeringSettings, ResourceThrottleSettings,
+    WorkerContainmentSettings,
 };

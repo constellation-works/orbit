@@ -1,13 +1,11 @@
 ---
 title: Set up a distributed drain
-description: "Let a second machine pull work from the machine that owns your backlog: ask your agent to set it up, then start a pull drain on the replica."
-sidebar:
-  order: 4
+description: "Let a second machine pull tasks from the machine that owns your backlog, run them, and hand back pull requests."
 ---
 
 A distributed drain spreads one backlog across machines. The **owner** keeps
-the task store and decides what runs. A **replica** pulls one task at a time
-over SSH, runs it locally, and hands back a pull request. The owner lands it.
+the task store and decides what runs. A **replica** pulls tasks over SSH, runs
+each one locally, and hands back a pull request. The owner lands it.
 
 :::tip[Let your agent do it]
 On the second machine, ask your agent to **set this repository up as a replica
@@ -23,162 +21,184 @@ task that fails.
   If two machines already own the same repository, collapse them to one first;
   the [runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/distributed-drain.md)
   shows how.
-- **Matching machines.** Every replica runs the same Orbit version and
-  distributed-drain protocol revision and fingerprint as the owner. A leaf
-  runs the owner's captured `workflow.required_validation_commands`; a
-  difference from the replica's list warns when the drain starts. If the owner
-  turns on before-PR review (`review.timing = "before_pr"`), every replica must be able to run
-  the owner's pre-landing reviewer (`workflow.purpose_crews.pre_landing_review`,
-  or `workflow.purpose_crews.review` while that is unset): each pulled task is then reviewed, and the
-  reviewer's fixes committed, on the replica before its pull request opens.
-  Crews may differ: a replica only receives tasks whose crew it can run. Operating systems may differ too: a
-  task tagged `os:macos` (or `os:linux`, `os:windows`) only goes to a machine
-  running that OS, and waits in the owner's backlog until one asks for work.
-  The crew's executor can also restrict its OS. A task tagged `ui` additionally
-  needs a verified browser kit on the executing host (`orbit browser-kit status`).
-  A task's `requires_labels` go only to a machine whose `machine.labels`, plus
-  its OS, include every one; the replica declares its labels with each pull, so
-  the owner knows them once it has pulled. Owner and replicas must run releases
-  that agree on this field: an older peer is refused as protocol skew.
+- **Matching builds.** Every replica runs the same Orbit version and
+  distributed-drain protocol as the owner. A mismatch is refused.
+- **The owner's checks.** A replica runs the owner's
+  `workflow.required_validation_commands`. If the replica's own list differs,
+  the drain warns when it starts.
 - **SSH is the access control.** Anyone who can `ssh` to the owner owns it. To
   shut a replica out, remove its key from the owner's `authorized_keys`.
-- **Landing stays on the owner.** Approve each handoff on the owner's
-  dashboard, or set `workflow.distributed_completion = "done"` on the owner to
-  land every validated handoff, the way `--complete` lands its own tasks.
+- **Landing stays on the owner.** Replicas never merge. Approve each handoff
+  on the owner's dashboard, or set `workflow.distributed_completion = "done"`
+  on the owner to land every validated handoff.
 
-The owner can also require review after the replica opens its PR, with
-`review.timing = "before_landing"`, or only for selected replica machine IDs
-with `review.before_landing_hosts`. The replica runs the captured reviewer
-and hands back evidence for the reviewed head; it never merges.
+The owner sends a replica only the tasks it can run. The rest wait in the
+owner's backlog until a machine that qualifies asks for work.
 
-Admission uses a live executor census. Within a dispatch band, work only the
-requesting host can run leads ahead of priority; among the remaining work,
-scarcer tasks lead within a priority. `workflow.admission_affinity` defaults
-to `"band"`; choose `"priority"` to keep exclusive work within its priority,
-or `"off"` for the plain order. This also applies to the owner's local drain.
+| The task has | It goes to a machine that |
+|---|---|
+| A crew | Can run that crew: enabled, with the provider CLI installed. |
+| An `os:macos`, `os:linux` or `os:windows` tag | Runs that OS. A crew's executor can also restrict its OS. |
+| A `ui` tag | Has a verified browser kit (`orbit config browser-kit status`). |
+| `requires_labels` | Has every label in its `machine.labels`. The machine's OS counts as a label. |
+
+When several tasks qualify, work that only the asking machine can run goes
+first. After that, scarcer work leads within a priority. The owner's local
+drain follows the same order.
+
+**Review runs on the replica.** If the owner sets
+`review.timing = "before_landing"`, or lists the replica's machine ID in
+`review.before_landing_hosts`, the replica reviews each pull request it opens
+and hands back the evidence. The replica must be able to run the owner's
+reviewer crew: `workflow.purpose_crews.pre_landing_review`, or
+`workflow.purpose_crews.review` while that is unset. The deprecated
+`before_pr` value has the same requirement and reviews before the pull
+request opens.
 
 ## Set it up by hand
 
 On the second machine, run `orbit init` and pick a task prefix different from
-the owner's, then register the checkout as a replica:
-
-```bash
-orbit init
-cd <repo>
-orbit workspace init --role replica --owner <owner-machine-id>
-```
-
-`orbit config get machine.id` on the owner prints its machine ID. Then register
-the owner on this machine, as in
-[Connect Your Agent](../mcp-integration/#register-the-federated-mux):
+the owner's. Then register the owner as a host; see
+[Run Orbit across hosts](/how-to/multi-host/) for what registration stores.
 
 ```bash
 orbit host add <owner-ssh-target>
-# Confirm that the owner is reachable and reports its version and protocol.
-orbit host list
+orbit host list    # the owner is reachable, with no SKEW
 ```
 
-Check that the two machines match. On each one:
+Register the checkout as a replica. `orbit config get machine.id` on the
+owner prints its machine ID.
 
 ```bash
-orbit --version
-# The owner's value decides. With review.timing at before_pr,
-# the replica must be able to run the reviewer crew.
-orbit config get review.timing
-orbit config get workflow.purpose_crews.pre_landing_review
-orbit config get workflow.purpose_crews.review
+cd <repo>
+orbit workspace init --role replica --owner <owner-machine-id>
 orbit doctor
 ```
 
-Then probe the owner. On the owner, run this read-only check; it reports the
-first reason a real pull would be refused. Read `protocol_schema` from the
-installed binary instead of copying a revision from this page. Use that value
-for `caller_schema` only after confirming the replica runs the matching
-build; it is the distributed-drain revision, not the MCP protocol revision.
-Replace `<replica-version>` with the replica's `orbit --version` value and
-set `caller_before_pr` to `true` when its `review.timing` is `before_pr`, else
-`false`:
+Optionally, probe the owner before the first pull. Run this read-only check
+on the owner. It reports the first reason a real pull would be refused.
 
 ```bash
-DRAIN_SCHEMA=$(
-  ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input '{}' |
-    node -pe 'JSON.parse(require("fs").readFileSync(0))
-      .protocol_schema'
-)
-ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input "{
-  \"caller_version\": \"<replica-version>\",
-  \"caller_schema\": $DRAIN_SCHEMA,
-  \"caller_before_pr\": false
-}"
+# Read protocol_schema from the owner's build.
+ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input '{}'
+
+# Probe as the replica would call.
+ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input '{
+  "caller_version": "<replica-version>",
+  "caller_schema": <protocol_schema>,
+  "caller_before_pr": false
+}'
 ```
+
+`<replica-version>` is the replica's `orbit --version`. Set `caller_before_pr`
+to `true` when the replica's `review.timing` is `before_pr`.
 
 ## Start the pull drain
 
-On the replica:
+On the replica, from the replica checkout:
 
 ```bash
-orbit run auto --pull <owner-machine>/<ws_id> --for 8h --concurrency 3
+orbit run auto --pull <workspace> --host <owner> --for 8h --concurrency 3
 ```
 
-The selector is the owner workspace's `selector` from federated discovery.
-`orbit run auto --pull <workspace> --host <owner>` resolves the same selector
-from the owner's live workspace list.
-Each task the replica claims runs as a local run that implements, validates,
-pushes, and opens a pull request, then hands it to the owner, which moves the
-task to `review`.
+`<workspace>` is the owner's workspace name or `ws_*` ID, and `<owner>` is the
+host's name or machine ID from `orbit host list`. Without `--host`, pass the
+full `<owner-machine>/<ws_id>` selector that federated discovery reports.
 
-When the drain starts, it checks which crews this machine can run: enabled,
-with the provider CLI installed. Tasks on other crews stay in the owner's
-backlog for another machine. `orbit run show <drain-run>` lists the runnable
-crews and why the others were left out. An authentication failure sends its
-task back to `backlog` and excludes that provider account's crews. A crew with
-its own `env` has its own account, so other accounts remain usable. Delayed
-authentication probes can re-admit the affected account within the same drain.
+Each claimed task runs locally: it implements, validates, pushes, and opens a
+pull request. The replica hands the pull request to the owner, which moves
+the task to `review`.
+
+`orbit run show <drain-run>` lists the crews this machine can run and why the
+others were left out. If a provider's sign-in fails, the task returns to
+`backlog` and the drain stops taking tasks for that provider account's crews.
 
 ## Stop, cancel, and settle
 
-`orbit run auto --stop` on the replica stops new claims. Running tasks still
-finish and hand off, and it delivers any result still waiting to reach the
-owner. It is safe to repeat, and `orbit doctor` on the replica warns when
-results are waiting.
+| You want to | Run on the replica |
+|---|---|
+| Stop claiming; let running tasks finish and hand off | `orbit run auto --stop` |
+| Cancel the drain; wait for launched tasks | `orbit run cancel <drain-run> --confirm` |
+| Cancel the drain and stop its running tasks now | `orbit run cancel <drain-run> --confirm --force` |
 
-`orbit run cancel <drain-run> --confirm` cancels a running pull drain
-gracefully. It stops new claims immediately and returns claims it has not
-launched to the owner's `backlog`. Launched leaves keep running until they
-finish and their outcomes reach the owner; the drain reports `cancelling`
-during that wait, then ends `cancelled`. The command returns immediately;
-follow the wait with `orbit run show <drain-run>`.
+`--stop` also delivers any result still waiting to reach the owner. It is
+safe to repeat. `orbit doctor` on the replica warns while results are waiting.
 
-Add `--force` to stop the drain and its running leaves without waiting for
-them to finish. Their claims return to the owner's `backlog` with the reason.
-A leaf whose stop cannot be confirmed keeps its claim on the owner, is
-reported, and makes the command exit 1. Only that drain's leaves are affected.
+`run cancel` returns immediately. Claims the drain has not launched go back to
+the owner's `backlog`. The drain reports `cancelling` until its launched tasks
+finish, then `cancelled`; follow it with `orbit run show <drain-run>`.
 
-Cancelling a task leaf directly returns its task to the owner's `backlog`
-and keeps its candidate available to resume. Add `--block` to keep that task
-blocked for manual recovery instead.
+With `--force`, the stopped tasks' claims return to the owner's `backlog`. If
+a task's stop cannot be confirmed, its claim stays on the owner and the
+command exits 1.
+
+Cancelling one task's run returns that task to the owner's `backlog` and
+keeps its candidate available to resume. Add `--block` to leave the task
+`blocked` for manual recovery.
 
 ## Recover a failed task
 
 A task that fails on a replica goes to `blocked` on the owner, with a summary
-naming the replica's run. `orbit run show <run>` on the replica has the full
+naming the replica's run. `orbit run show <run>` on the replica has the
 detail. After several failures in a row the drain stops asking for work. Fix
-the cause, move the blocked tasks back to `backlog`, and start a new drain. Or
-ask your agent on the replica what went wrong: the `orbit-orchestrate` skill
-reads the run's evidence and names the cause.
+the cause, move the blocked tasks back to `backlog`, and start a new drain.
 
-Nothing reclaims a stuck claim on its own. On the owner's dashboard, open the
-task and use **Recover claim → blocked** or **Recover claim → backlog**; both
-ask for a reason.
+Nothing reclaims a stuck claim on its own, and a dead replica holds its claims
+until you recover them. On the owner's dashboard, open the task, choose a
+target status in the Recovery panel, and use **Recover claim**. The picker
+offers only the statuses the task can move to, such as `blocked` to diagnose
+or `backlog` to retry. Recovery asks for a reason and a confirmation.
 
-## What this is not
+## Recover missing settlement evidence
 
-- **Not a fleet.** A replica works only while someone runs
-  `orbit run auto --pull` on it; a clean probe starts nothing.
-- **Not auto-recovery.** A dead replica holds its claims until you recover
-  them on the owner.
-- **Not follower merge.** Replicas never merge; landing is the owner's.
+A replica's runs never appear in the owner's run history. The owner knows a
+failed run's build and failing step only from the evidence the replica sent
+when it settled the claim:
 
-The [distributed drain runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/distributed-drain.md)
-covers protocol details, receipts, and every refusal. For a drain on one
-machine, see [Run a Delivery Window](../continuous-delivery/).
+```bash
+orbit run settlements --no-reconcile --json
+```
+
+Each entry in `settlements` has a `claim_id` and a `run_evidence` object. Read
+its `provenance` first:
+
+| `provenance` | Meaning |
+|---|---|
+| `null` | The owner holds no run record. The build and failing step are unknown, not absent. |
+| `settlement` | The replica sent the record with the settlement. |
+| `hydrated` | An operator fetched the record afterwards. |
+
+When a record is present, `build_state` or `root_cause_state` of `unrecorded`
+means the record itself lacks that field.
+
+To fetch missing records, run this on the owner as operator. Agents are
+refused.
+
+```bash
+orbit run settlements-hydrate --follower-workspace <workspace> --limit 10 --json
+```
+
+`--follower-workspace` is the workspace name or `ws_*` ID on the replica where
+the runs happened. Narrow the selection with `--claim`, `--task`, `--machine`
+or `--since`. The command visits claims newest first, 25 per run by default
+and at most 100. When the output's `remaining` is above zero, pass
+`next_after_claim_id` as `--after` to continue.
+
+Each row in `rows` reports one `outcome`:
+
+| Outcome | Meaning |
+|---|---|
+| `hydrated` | The record was stored as the claim's evidence. |
+| `replayed` | The claim already held the same record. |
+| `conflict` | The claim holds a different record and keeps it. |
+| `mismatch` | The replica answered with a record that does not belong to this claim. |
+| `absent` | The replica holds no such run. |
+| `unreachable` | The replica did not answer. Retry later. |
+| `no_leaf_run` | The claim never started a run. |
+
+Stored evidence never changes. A default run skips claims that already hold
+evidence; add `--recheck` to revisit them. Hydration starts, retries and
+cancels no work.
+
+For a drain on one machine, see
+[Run a delivery window](/how-to/continuous-delivery/).

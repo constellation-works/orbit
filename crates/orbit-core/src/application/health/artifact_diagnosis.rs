@@ -13,18 +13,89 @@ use super::activity_catalog::{
 };
 use super::artifact::{
     ArtifactCondition, ArtifactFinding, ArtifactHealth, ArtifactKind, ArtifactProvenance,
-    ManagedCatalog, init_command, provenance, read_artifact,
+    ManagedCatalog, catalog_auto_task_base_branch, init_command, provenance, read_artifact,
 };
 use crate::OrbitRuntime;
 use crate::application::auto_tasks::collect_auto_tasks;
 use crate::application::auto_tasks::settings::classify_bundled_file;
 use crate::application::managed_assets::{
-    ConfinedAssetPath, MANAGED_ASSET_MANIFEST_FILE, load_managed_asset_manifest,
-    resolve_confined_asset_path,
+    ConfinedAssetPath, MANAGED_ASSET_MANIFEST_FILE, ManagedAssetOutcome, ManagedAssetReconcileMode,
+    load_managed_asset_manifest, reconcile_managed_assets_in_mode, resolve_confined_asset_path,
 };
 use crate::application::routines::seed::RETIRED_ROUTINE_FILES;
 use crate::application::routines::template::{ShippedShape, shipped_shape_of};
 use orbit_automation::auto_tasks::settings::{AutoTaskOverrides, load_settings_table};
+
+/// Inspect legacy workspace copies without adopting user files, reporting
+/// absent defaults or retiring anything. Startup uses the same refresh mode.
+pub(super) fn diagnose_workspace_catalog_copies(
+    runtime: &OrbitRuntime,
+    kind: ArtifactKind,
+) -> Vec<ArtifactFinding> {
+    let (dir, files) = match kind {
+        ArtifactKind::Activity => (
+            &runtime.paths().activities_dir,
+            crate::runtime::assets::DEFAULT_ACTIVITY_FILES,
+        ),
+        ArtifactKind::Job => (
+            &runtime.paths().jobs_dir,
+            crate::application::job::DEFAULT_JOB_FILES,
+        ),
+        _ => return Vec::new(),
+    };
+    let manifest_path = dir.join(MANAGED_ASSET_MANIFEST_FILE);
+    let global_manifest = runtime
+        .global_root()
+        .join("resources")
+        .join(if kind == ArtifactKind::Activity {
+            "activities"
+        } else {
+            "jobs"
+        })
+        .join(MANAGED_ASSET_MANIFEST_FILE);
+    if same_catalog_file(&manifest_path, &global_manifest) {
+        return Vec::new();
+    }
+    match reconcile_managed_assets_in_mode(
+        dir,
+        kind.asset_kind(),
+        kind.layout(),
+        files,
+        false,
+        ManagedAssetReconcileMode::RefreshExisting { check: true },
+        |_, content| Ok(std::borrow::Cow::Borrowed(content)),
+    ) {
+        Ok(report) => report
+            .actions
+            .into_iter()
+            .filter(|action| action.outcome == ManagedAssetOutcome::Refreshed)
+            .map(|action| {
+                let detail = format!(
+                    "`{}` is a stale managed workspace copy of {} `{}`: its bytes match the recorded Orbit-written digest, but differ from this binary's shipped default; automatic refresh has not persisted",
+                    action.path.display(), kind.singular(), action.name,
+                );
+                ArtifactFinding {
+                    kind,
+                    name: action.name,
+                    path: action.path,
+                    condition: ArtifactCondition::Stale,
+                    provenance: ArtifactProvenance::OrbitWritten,
+                    detail,
+                    remediation: "Make the catalog and its managed manifest writable, then run `orbit workspace sync`; normal workspace opening also refreshes unmodified managed copies.".to_string(),
+                }
+            })
+            .collect(),
+        Err(error) => vec![ArtifactFinding {
+            kind,
+            name: MANAGED_ASSET_MANIFEST_FILE.to_string(),
+            path: manifest_path,
+            condition: ArtifactCondition::Faulty,
+            provenance: ArtifactProvenance::OrbitWritten,
+            detail: format!("cannot inspect managed workspace catalog copies: {error}"),
+            remediation: "Repair the named path or managed manifest, then run `orbit workspace sync`.".to_string(),
+        }],
+    }
+}
 
 pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog) -> ArtifactHealth {
     let kind = catalog.kind;
@@ -86,7 +157,7 @@ pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog)
 
     // Deprecated: tracked by the manifest, still on disk, no longer shipped.
     for (name, digest) in &tracked {
-        if catalog.shipped.contains(name) {
+        if catalog.shipped.contains(name) || catalog.kept.contains(name) {
             continue;
         }
         let path = catalog.path_of(name);
@@ -203,6 +274,8 @@ pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog)
         } else {
             Default::default()
         };
+        let auto_task_base_branch =
+            (kind == ArtifactKind::AutoTask).then(|| catalog_auto_task_base_branch(runtime));
         for (name, rendered) in embedded {
             if opted_out.contains(name) {
                 continue;
@@ -223,7 +296,7 @@ pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog)
                     &on_disk,
                     tracked.get(name),
                     auto_task_settings.get(name),
-                    runtime.workspace_base_branch(),
+                    auto_task_base_branch.as_deref().unwrap_or_default(),
                 )
             {
                 findings.push(auto_task_fork_finding(
@@ -456,8 +529,6 @@ fn finish_catalog_health(
                 "Review the residual skill directory at `{}` and remove it manually if it is no longer needed.",
                 fault.path.display()
             )
-        } else if let Some(command) = fault.repair_command {
-            format!("Run `{command}`.")
         } else if stale_shipped_default {
             format!("Run `{}`.", init_command(kind))
         } else if provenance == ArtifactProvenance::OrbitWritten {
@@ -499,7 +570,6 @@ struct LoadFault {
     path: PathBuf,
     condition: ArtifactCondition,
     detail: String,
-    repair_command: Option<&'static str>,
 }
 
 impl From<ActivityCatalogFault> for LoadFault {
@@ -509,7 +579,6 @@ impl From<ActivityCatalogFault> for LoadFault {
             path: fault.path,
             condition: ArtifactCondition::Faulty,
             detail: fault.detail,
-            repair_command: fault.repair_command,
         }
     }
 }
@@ -534,7 +603,6 @@ fn collect_faults(runtime: &OrbitRuntime, catalog: &ManagedCatalog) -> (usize, V
                     path: catalog.dir.clone(),
                     condition: ArtifactCondition::Faulty,
                     detail: format!("cannot enumerate skills: {error}"),
-                    repair_command: None,
                 });
                 return (0, faults);
             }
@@ -549,7 +617,6 @@ fn collect_faults(runtime: &OrbitRuntime, catalog: &ManagedCatalog) -> (usize, V
                         path: row.path,
                         condition: ArtifactCondition::Residual,
                         detail: row.message,
-                        repair_command: None,
                     });
                 }
                 crate::skill_catalog::SkillCatalogDoctorStatus::Error => {
@@ -558,7 +625,6 @@ fn collect_faults(runtime: &OrbitRuntime, catalog: &ManagedCatalog) -> (usize, V
                         path: row.path.join("SKILL.md"),
                         condition: ArtifactCondition::Faulty,
                         detail: row.message,
-                        repair_command: None,
                     });
                 }
             }
@@ -584,7 +650,6 @@ fn collect_faults(runtime: &OrbitRuntime, catalog: &ManagedCatalog) -> (usize, V
                 path,
                 condition: ArtifactCondition::Faulty,
                 detail: error.message,
-                repair_command: None,
             });
         }
         return (scanned, faults);
@@ -619,7 +684,6 @@ fn collect_faults(runtime: &OrbitRuntime, catalog: &ManagedCatalog) -> (usize, V
                 path,
                 condition: ArtifactCondition::Faulty,
                 detail: "file is unreadable".to_string(),
-                repair_command: None,
             });
             continue;
         };
@@ -636,7 +700,6 @@ fn collect_faults(runtime: &OrbitRuntime, catalog: &ManagedCatalog) -> (usize, V
                 path,
                 condition: ArtifactCondition::Faulty,
                 detail,
-                repair_command: None,
             });
         }
     }

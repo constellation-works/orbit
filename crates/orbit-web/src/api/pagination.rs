@@ -13,7 +13,7 @@ use super::HISTORY_MAX_LIMIT;
 
 const CURSOR_VERSION: u8 = 1;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct TaskCursor {
     version: u8,
     scope: String,
@@ -21,10 +21,18 @@ pub(super) struct TaskCursor {
     pub(super) created_at: DateTime<Utc>,
     pub(super) id: String,
     pub(super) offset: usize,
+    /// The workspace the last row belonged to, for the aggregate listing,
+    /// which orders workspace by workspace: earlier workspaces are spent,
+    /// this one resumes after `created_at`/`id`, later ones start fresh.
+    /// Absent on single-workspace cursors.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) workspace_id: Option<String>,
     checksum: String,
 }
 
+#[derive(Clone)]
 pub(super) struct TaskPageQuery {
+    pub(super) workspaces: Vec<String>,
     statuses: Vec<TaskStatus>,
     no_statuses: bool,
     pilot_warnings: bool,
@@ -35,6 +43,12 @@ pub(super) struct TaskPageQuery {
     detail_id: Option<String>,
     detail_runs: bool,
     limit: usize,
+    /// `group=status`: answer one section per status, each with its own
+    /// total, rows and continuation, instead of one page across statuses.
+    group_by_status: bool,
+    /// `status_limit=<status>:<n>`: how many rows a section's first read
+    /// returns, overriding `limit` for that status in the grouped form.
+    status_limits: Vec<(TaskStatus, usize)>,
     raw_cursor: Option<String>,
     cursor: Option<TaskCursor>,
 }
@@ -42,6 +56,7 @@ pub(super) struct TaskPageQuery {
 impl Default for TaskPageQuery {
     fn default() -> Self {
         Self {
+            workspaces: Vec::new(),
             statuses: Vec::new(),
             no_statuses: false,
             pilot_warnings: false,
@@ -52,6 +67,8 @@ impl Default for TaskPageQuery {
             detail_id: None,
             detail_runs: false,
             limit: DEFAULT_TASK_LIST_LIMIT,
+            group_by_status: false,
+            status_limits: Vec::new(),
             raw_cursor: None,
             cursor: None,
         }
@@ -63,6 +80,7 @@ impl TaskPageQuery {
         let mut query = Self::default();
         for (key, value) in url::form_urlencoded::parse(raw_query.unwrap_or_default().as_bytes()) {
             match key.as_ref() {
+                "workspaces" => query.workspaces.push(value.into_owned()),
                 "pilot" => query.pilot_warnings = value == "warnings",
                 "status" => query.parse_statuses(&value)?,
                 "tag" | "tags" => query.tags.extend(split_values(&value).map(str::to_string)),
@@ -99,25 +117,54 @@ impl TaskPageQuery {
                 "cursor" => {
                     query.raw_cursor = Some(value.into_owned()).filter(|value| !value.is_empty())
                 }
+                "group" => match value.trim() {
+                    "" => query.group_by_status = false,
+                    "status" => query.group_by_status = true,
+                    other => {
+                        return Err(format!(
+                            "invalid `group` value `{other}` (expected `status`)"
+                        ));
+                    }
+                },
+                "status_limit" => query.parse_status_limits(&value)?,
                 _ => {}
             }
+        }
+        if !query.status_limits.is_empty() && !query.group_by_status {
+            return Err("`status_limit` needs `group=status`".to_string());
         }
         Ok(query)
     }
 
     pub(super) fn bind_cursor(&mut self, scope: &str) -> Result<(), String> {
         if let Some(raw_cursor) = self.raw_cursor.take() {
+            if self.group_by_status && (self.no_statuses || self.statuses.len() != 1) {
+                return Err(
+                    "a per-status cursor continues one section; pass exactly that one `status`"
+                        .to_string(),
+                );
+            }
             self.cursor = Some(TaskCursor::decode(&raw_cursor, scope, &self.filter_key())?);
         }
         Ok(())
     }
 
     pub(super) fn filter(&self) -> TaskListFilter {
-        TaskListFilter {
-            scan_before: self
-                .cursor
+        self.filter_scanning_before(
+            self.cursor
                 .as_ref()
                 .map(|cursor| (cursor.created_at, cursor.id.clone())),
+        )
+    }
+
+    /// [`Self::filter`] with an explicit resume point instead of the cursor's,
+    /// for a listing that applies the cursor to one source only.
+    pub(super) fn filter_scanning_before(
+        &self,
+        scan_before: Option<(DateTime<Utc>, String)>,
+    ) -> TaskListFilter {
+        TaskListFilter {
+            scan_before,
             search: self.search.clone(),
             statuses: if self.no_statuses {
                 Some(Vec::new())
@@ -151,6 +198,45 @@ impl TaskPageQuery {
         self.cursor.as_ref().map_or(0, |cursor| cursor.offset)
     }
 
+    pub(super) fn cursor(&self) -> Option<&TaskCursor> {
+        self.cursor.as_ref()
+    }
+
+    /// Whether the request asked for the per-status form (`group=status`).
+    pub(super) fn groups_by_status(&self) -> bool {
+        self.group_by_status
+    }
+
+    /// The single-status queries of the per-status form, one per requested
+    /// status in request order (every lifecycle status when none was named).
+    /// Each reads its `status_limit`, or `limit`, and mints cursors that
+    /// continue that status alone; a bound cursor goes to its one section.
+    pub(super) fn status_section_queries(&self) -> Vec<(TaskStatus, Self)> {
+        let statuses = if self.no_statuses {
+            Vec::new()
+        } else if self.statuses.is_empty() {
+            TaskStatus::ALL.to_vec()
+        } else {
+            self.statuses.clone()
+        };
+        statuses
+            .into_iter()
+            .map(|status| {
+                let mut section = self.clone();
+                section.statuses = vec![status];
+                section.no_statuses = false;
+                section.limit = self
+                    .status_limits
+                    .iter()
+                    .rev()
+                    .find(|(limited, _)| *limited == status)
+                    .map_or(self.limit, |(_, limit)| *limit);
+                section.status_limits.clear();
+                (status, section)
+            })
+            .collect()
+    }
+
     pub(super) fn next_cursor(
         &self,
         scope: &str,
@@ -158,7 +244,28 @@ impl TaskPageQuery {
         id: String,
         offset: usize,
     ) -> Result<String, serde_json::Error> {
-        TaskCursor::new(scope, &self.filter_key(), created_at, id, offset).encode()
+        TaskCursor::new(scope, &self.filter_key(), created_at, id, offset, None).encode()
+    }
+
+    /// [`Self::next_cursor`] for the aggregate listing, naming the workspace
+    /// the page's last row belongs to.
+    pub(super) fn next_workspace_cursor(
+        &self,
+        scope: &str,
+        workspace_id: &str,
+        created_at: DateTime<Utc>,
+        id: String,
+        offset: usize,
+    ) -> Result<String, serde_json::Error> {
+        TaskCursor::new(
+            scope,
+            &self.filter_key(),
+            created_at,
+            id,
+            offset,
+            Some(workspace_id.to_string()),
+        )
+        .encode()
     }
 
     fn parse_statuses(&mut self, value: &str) -> Result<(), String> {
@@ -175,6 +282,22 @@ impl TaskPageQuery {
             if !self.statuses.contains(&status) {
                 self.statuses.push(status);
             }
+        }
+        Ok(())
+    }
+
+    fn parse_status_limits(&mut self, value: &str) -> Result<(), String> {
+        for raw in split_values(value) {
+            let (status, limit) = raw.rsplit_once(':').ok_or_else(|| {
+                format!("invalid `status_limit` value `{raw}` (expected `<status>:<limit>`)")
+            })?;
+            let status = status
+                .trim()
+                .to_ascii_lowercase()
+                .parse::<TaskStatus>()
+                .map_err(|error| format!("invalid `status_limit` status `{status}`: {error}"))?;
+            let limit = parse_limit(limit.trim())?;
+            self.status_limits.push((status, limit));
         }
         Ok(())
     }
@@ -200,6 +323,15 @@ impl TaskPageQuery {
             "search": self.search,
             "limit": self.limit,
         });
+        // A per-status cursor continues one section by any page size: the
+        // first read and each "more" read choose their own `limit`. Keyed
+        // only when set, so plain listing cursors keep their binding.
+        if self.group_by_status {
+            key["group"] = json!("status");
+            if let Some(map) = key.as_object_mut() {
+                map.remove("limit");
+            }
+        }
         // Keyed only when set, so a cursor issued before the origin filter
         // existed still binds to the same unfiltered listing.
         if self.pilot_warnings {
@@ -207,6 +339,12 @@ impl TaskPageQuery {
         }
         if let Some(origin) = self.origin {
             key["origin"] = json!(origin.as_str());
+        }
+        if !self.workspaces.is_empty() {
+            let mut workspaces = self.workspaces.clone();
+            workspaces.sort();
+            workspaces.dedup();
+            key["workspaces"] = json!(workspaces);
         }
         key.to_string()
     }
@@ -239,6 +377,7 @@ impl TaskCursor {
         created_at: DateTime<Utc>,
         id: String,
         offset: usize,
+        workspace_id: Option<String>,
     ) -> Self {
         let mut cursor = Self {
             version: CURSOR_VERSION,
@@ -247,6 +386,7 @@ impl TaskCursor {
             created_at,
             id,
             offset,
+            workspace_id,
             checksum: String::new(),
         };
         cursor.checksum = cursor.expected_checksum();
@@ -291,19 +431,21 @@ impl TaskCursor {
     }
 
     fn expected_checksum(&self) -> String {
-        blake3::hash(
-            format!(
-                "{}\0{}\0{}\0{}\0{}\0{}",
-                self.version,
-                self.scope,
-                self.filters,
-                self.created_at.to_rfc3339(),
-                self.id,
-                self.offset,
-            )
-            .as_bytes(),
-        )
-        .to_hex()
-        .to_string()
+        let mut material = format!(
+            "{}\0{}\0{}\0{}\0{}\0{}",
+            self.version,
+            self.scope,
+            self.filters,
+            self.created_at.to_rfc3339(),
+            self.id,
+            self.offset,
+        );
+        // Appended only when set, so a single-workspace cursor keeps the
+        // checksum it had before aggregate cursors named a workspace.
+        if let Some(workspace_id) = &self.workspace_id {
+            material.push('\0');
+            material.push_str(workspace_id);
+        }
+        blake3::hash(material.as_bytes()).to_hex().to_string()
     }
 }

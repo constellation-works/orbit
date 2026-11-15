@@ -290,10 +290,7 @@ pub(crate) fn verify_absorbed_candidate<H: RuntimeHost + ?Sized>(
     let head = git_output(workspace, &["rev-parse", "--verify", "HEAD^{commit}"])?;
     if head != landed
         || head_sha != landed
-        || !git_command_success(
-            workspace,
-            &["merge-base", "--is-ancestor", &pinned, &landed],
-        )?
+        || !crate::executor::automation::vcs::git::is_ancestor(workspace, &pinned, &landed)?
     {
         return Err(AbsorbedRefusal::new(
             Reason::NotOnPinnedBase,
@@ -327,10 +324,7 @@ pub(crate) fn verify_absorbed_candidate<H: RuntimeHost + ?Sized>(
         workspace,
         &["rev-parse", "--verify", &format!("{base_ref}^{{commit}}")],
     )?;
-    if !git_command_success(
-        workspace,
-        &["merge-base", "--is-ancestor", &covering, &live],
-    )? {
+    if !crate::executor::automation::vcs::git::is_ancestor(workspace, &covering, &live)? {
         return Err(AbsorbedRefusal::new(
             Reason::CoveringUnreachable,
             format!("{covering} is not reachable from '{base_ref}' ({live})"),

@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use orbit_common::OrbitError;
 use orbit_types::identity::ReasoningEffort;
-use orbit_types::telemetry::InvocationTrace;
 
 use crate::agent::{AgentConfig, ProviderOptions};
 use crate::providers::muse::muse_cli::{MUSE_PROMPT_FILE_FLAG, MuseCliTransport};
@@ -32,7 +31,6 @@ const MUSE_CLI_FIXED_ENV: &[(&str, &str)] = &[("MUSE_NO_AUTO_UPDATE", "1"), ("MU
 pub(crate) struct MuseRuntime {
     command: String,
     cli: MuseCliTransport,
-    runtime_key: &'static str,
     required_env_vars: &'static [&'static str],
 }
 
@@ -43,13 +41,11 @@ impl MuseRuntime {
         command: String,
         model: Option<String>,
         reasoning_effort: Option<ReasoningEffort>,
-        runtime_key: &'static str,
         required_env_vars: &'static [&'static str],
     ) -> Self {
         Self {
             command,
             cli: MuseCliTransport::new(model, reasoning_effort),
-            runtime_key,
             required_env_vars,
         }
     }
@@ -77,7 +73,6 @@ impl AgentRuntimeFactory for MuseFactory {
                 cfg.command.clone(),
                 cfg.model.clone(),
                 cfg.reasoning_effort,
-                self.key(),
                 self.required_env_vars(),
             ))),
             _ => Err(OrbitError::InvalidInput(format!(
@@ -89,12 +84,8 @@ impl AgentRuntimeFactory for MuseFactory {
 }
 
 impl AgentRuntime for MuseRuntime {
-    fn invoke(
-        &self,
-        req: AgentRequest,
-    ) -> Result<(AgentInvocationSpec, InvocationTrace), OrbitError> {
+    fn invoke(&self, req: AgentRequest) -> Result<AgentInvocationSpec, OrbitError> {
         let mut spec = crate::providers::build_invocation_spec(
-            self.runtime_key,
             self.required_env_vars,
             self.command.clone(),
             self.cli.args(),
@@ -106,7 +97,7 @@ impl AgentRuntime for MuseRuntime {
         // Muse Code 1.4.10. Account windows (1.4.12 `status`, 1.4.13
         // `run.usage`) come from the separate `run_usage` allowance via
         // `provider_usage_windows`; per-run token accounting remains unreported here.
-        Ok((spec, InvocationTrace::default()))
+        Ok(spec)
     }
 
     fn model_name(&self) -> Option<&str> {

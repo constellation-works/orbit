@@ -1,21 +1,22 @@
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::OrbitError;
+use crate::{OrbitError, text};
 
 /// Top-level keys that are transport/session wrappers, not tool arguments.
 ///
 /// MCP `_meta` and the workspace routing selector may appear beside the
 /// advertised parameters. They stay allowed even when the tool's JSON Schema
 /// sets `additionalProperties: false` on the argument object.
-pub const TOOL_INPUT_TRANSPORT_WRAPPER_KEYS: &[&str] = &["_meta", "workspace"];
+pub const TOOL_INPUT_TRANSPORT_WRAPPER_KEYS: &[&str] = &["_meta", "workspace", "task_list_compact"];
 
 /// Top-level attribution keys the tool boundary reads for every Orbit builtin.
 ///
-/// Identity resolution takes the caller's agent family from these keys when
-/// the session asserts none, so they are meaningful input even for an
-/// operation that declares no parameter of that name.
-pub const TOOL_INPUT_IDENTITY_KEYS: &[&str] = &["agent", "model"];
+/// Identity resolution takes a model id from this key when the session asserts
+/// none, so it is meaningful input even for an operation that does not
+/// advertise a `model` parameter. The MCP schema does not list it. `agent` is
+/// not an identity key; operations that used to accept it refuse it.
+pub const TOOL_INPUT_IDENTITY_KEYS: &[&str] = &["model"];
 
 /// Refuse unknown top-level tool-argument keys with a did-you-mean hint.
 ///
@@ -78,7 +79,8 @@ fn suggest_tool_field<'a>(unknown: &str, allowed: &[&'a str]) -> Option<&'a str>
 
     let mut best: Option<(&'a str, usize)> = None;
     for name in allowed {
-        let distance = levenshtein(unknown, name).min(levenshtein(&normalized, name));
+        let distance = text::unicode_edit_distance(unknown, name)
+            .min(text::unicode_edit_distance(&normalized, name));
         if best.is_none_or(|(_, best_distance)| distance < best_distance) {
             best = Some((*name, distance));
         }
@@ -124,23 +126,6 @@ fn normalize_tool_field_name(raw: &str) -> String {
         normalized.push(ch);
     }
     normalized
-}
-
-fn levenshtein(left: &str, right: &str) -> usize {
-    let right_chars = right.chars().collect::<Vec<_>>();
-    let mut previous = (0..=right_chars.len()).collect::<Vec<_>>();
-    let mut current = vec![0; right_chars.len() + 1];
-    for (i, left_ch) in left.chars().enumerate() {
-        current[0] = i + 1;
-        for (j, right_ch) in right_chars.iter().enumerate() {
-            let cost = usize::from(left_ch != *right_ch);
-            current[j + 1] = (previous[j + 1] + 1)
-                .min(current[j] + 1)
-                .min(previous[j] + cost);
-        }
-        std::mem::swap(&mut previous, &mut current);
-    }
-    previous[right_chars.len()]
 }
 
 pub fn required_string(
@@ -374,21 +359,27 @@ fn decode_json_string_array(raw: &str) -> Option<Vec<String>> {
 ///
 /// One vocabulary for every surface that accepts a window: `s`, `m`, `h`,
 /// `d`, and `w`. Empty, unitless, unknown-unit, and overflowing inputs are
-/// refused with the offending text.
+/// refused with the offending text; malformed forms include the accepted
+/// syntax and an example.
 pub fn parse_duration_seconds(raw: &str) -> Result<u64, OrbitError> {
     let value = raw.trim();
     if value.is_empty() {
         return Err(OrbitError::InvalidInput(
-            "duration must not be empty".to_string(),
+            "duration must not be empty (expected <integer><unit>, e.g. 30m; units: s/m/h/d/w)"
+                .to_string(),
         ));
     }
-    let split_at = value
-        .find(|c: char| c.is_alphabetic())
-        .ok_or_else(|| OrbitError::InvalidInput(format!("invalid duration: {raw}")))?;
+    let split_at = value.find(|c: char| c.is_alphabetic()).ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "invalid duration: {raw} (expected <integer><unit>, e.g. 30m; units: s/m/h/d/w)"
+        ))
+    })?;
     let (number, unit) = value.split_at(split_at);
-    let number: u64 = number
-        .parse()
-        .map_err(|_| OrbitError::InvalidInput(format!("invalid duration number: {raw}")))?;
+    let number: u64 = number.parse().map_err(|_| {
+        OrbitError::InvalidInput(format!(
+            "invalid duration number: {raw} (expected <integer><unit>, e.g. 30m; units: s/m/h/d/w)"
+        ))
+    })?;
     let seconds = match unit {
         "s" => Some(number),
         "m" => number.checked_mul(60),

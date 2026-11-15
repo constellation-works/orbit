@@ -93,6 +93,73 @@ def tokens(source):
             yield Token(value, start, raw_literal)
 
 
+def rust_string_value(literal):
+    """Decode an ordinary Rust string body. None when an escape is unsupported."""
+    text = literal.replace("\r\n", "\n")
+    escapes = {"n": "\n", "r": "\r", "t": "\t", "0": "\0", "\\": "\\", '"': '"', "'": "'"}
+    value = []
+    index = 0
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if char != "\\":
+            value.append(char)
+            index += 1
+            continue
+        if index + 1 >= length:
+            return None
+        escaped = text[index + 1]
+        if escaped in escapes:
+            value.append(escapes[escaped])
+            index += 2
+            continue
+        if escaped == "x" and index + 3 < length:
+            digits = text[index + 2:index + 4]
+            if re.fullmatch(r"[0-7][0-9a-fA-F]", digits):
+                value.append(chr(int(digits, 16)))
+                index += 4
+                continue
+            return None
+        if escaped == "u" and index + 2 < length and text[index + 2] == "{":
+            end = text.find("}", index + 3)
+            if end < 0:
+                return None
+            digits = text[index + 3:end].replace("_", "")
+            if not digits or len(digits) > 6 or re.fullmatch(r"[0-9a-fA-F]+", digits) is None:
+                return None
+            scalar = int(digits, 16)
+            if scalar > 0x10FFFF or 0xD800 <= scalar <= 0xDFFF:
+                return None
+            value.append(chr(scalar))
+            index = end + 1
+            continue
+        if escaped == "\n":
+            index += 2
+            while index < length and text[index] in " \t\r\n":
+                index += 1
+            continue
+        return None
+    return "".join(value)
+
+
+def rust_path_literal(token):
+    """Filesystem text of a `#[path]` string, or None when it is not one.
+
+    Ordinary quotes are unescaped. Raw strings (`r"..."`, `r#"..."#`, and the
+    byte/cstr raw forms) are literal aside from newline normalization. An
+    identifier or an undecodable escape is not a path.
+    """
+    if token.raw_literal is not None:
+        match = re.fullmatch(r'(?:br|cr|r)(#*)"(.*)"\1', token.raw_literal, re.DOTALL)
+        if match is None:
+            return None
+        return match.group(2).replace("\r\n", "\n") or None
+    value = token.value
+    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+        return rust_string_value(value[1:-1]) or None
+    return None
+
+
 def pairs(items):
     stack = []
     result = {}
@@ -196,20 +263,32 @@ class Block:
     head: tuple
 
 
+@dataclass(frozen=True)
+class ModuleContext:
+    """A source file and the directory rule of this particular loading context."""
+    path: Path
+    parent_owned: bool
+
+
+def module_context(path, parent_owned=False):
+    """Normalize mod.rs to the same directory rule in every loading context."""
+    return ModuleContext(path, parent_owned or path.name == "mod.rs")
+
+
 @dataclass
 class Module:
-    """A `mod` declaration at token `index`; `child` is its file for `mod name;`."""
+    """A `mod` declaration at token `index`; `child` is its loading context for `mod name;`."""
     name: str
     index: int
     block: int
-    child: object
+    child: ModuleContext | None
     active: bool
     attrs: tuple
 
 
 class Source:
-    def __init__(self, path, crate_root=False, platform="windows"):
-        self.path = path
+    def __init__(self, context, platform="windows"):
+        path = self.path = context.path
         self.platform = platform
         self.text = path.read_text(encoding="utf-8")
         self.items = list(tokens(self.text))
@@ -220,7 +299,7 @@ class Source:
         self.heads = []
         self.blocks = []
         self.modules = []
-        directory = path.parent if crate_root or path.name == "mod.rs" else path.with_suffix("")
+        directory = path.parent if context.parent_owned else path.with_suffix("")
         self.walk(0, len(self.items), True, directory, path.parent)
 
     def walk(self, start, end, enabled, directory, path_directory, comma_items=False, block=-1):
@@ -248,7 +327,7 @@ class Source:
                 else:
                     active = active and allowed
                 if len(attr) == 3 and attr[:2] == ["path", "="]:
-                    path_override = attr[2].strip('"')
+                    path_override = rust_path_literal(self.items[opening + 3])
                 index = closing + 1
                 header = index
                 continue
@@ -273,17 +352,25 @@ class Source:
                         directory / f"{module}.rs", directory / module / "mod.rs"]
                     for candidate in candidates:
                         if candidate.is_file():
-                            self.edges.append((candidate.resolve(), active))
-                            child = child or candidate.resolve()
+                            context = module_context(candidate.resolve(), parent_owned=path_override is not None)
+                            self.edges.append((context, active))
+                            child = child or context
                 if module:
                     self.modules.append(Module(module, header + module_at, block, child, active,
                                                tuple(attrs)))
                 if value == "{":
                     closing = self.ends[index]
-                    child_directory = directory / module if module else directory
-                    # #[path] on children of an inline module is relative to
-                    # that module's directory (normal foo.rs children differ).
-                    child_path_directory = child_directory if module else path_directory
+                    # An inline #[path] replaces that module's directory for
+                    # its children, relative to the enclosing file. Ordinary
+                    # children of a file module still use its stem, and a
+                    # nested #[path] stays relative to the directory this
+                    # module established.
+                    if module and path_override:
+                        child_directory = path_directory / path_override
+                        child_path_directory = child_directory
+                    else:
+                        child_directory = directory / module if module else directory
+                        child_path_directory = child_directory if module else path_directory
                     inner = block
                     if is_item:
                         self.blocks.append(Block(index, closing, block, tuple(attrs), tuple(head)))
@@ -357,35 +444,62 @@ def cargo_roots(root, directories=("crates",)):
 
 
 def scan(root, platform, directories=("crates",)):
-    """Parse every Rust file below `directories`; return the sources and the set reachable
-    on `platform` through ungated module edges from crate roots and unreferenced files."""
-    paths = sorted(path.resolve() for name in directories for path in (root / name).rglob("*.rs")
-                   if "target" not in path.relative_to(root).parts)
-    targets = cargo_roots(root, directories)
+    """Return sources and platform-reachable ModuleContext keys.
+
+    Index declarations even when gated off, so excluded descendants do not
+    become orphan roots. Parse each actual directory-ownership context on its
+    own; edges from an excluded context must not leak into a reachable one.
+    """
+    paths = {path.resolve() for name in directories for path in (root / name).rglob("*.rs")
+             if "target" not in path.relative_to(root).parts}
+    targets = cargo_roots(root, directories) & paths
     targets.update(path for path in paths if path.name in ("lib.rs", "main.rs", "build.rs"))
-    sources = {path: Source(path, crate_root=path in targets, platform=platform) for path in paths}
-    incoming = {child for source in sources.values() for child, _ in source.edges if child in sources}
-    # Unreferenced files are checked too. Never trust a Unix-looking filename.
-    roots = set(sources) - incoming
-    roots.update(targets & set(sources))
+    sources = {}
+
+    def index_contexts(contexts):
+        pending = list(contexts)
+        while pending:
+            context = pending.pop()
+            if context in sources or context.path not in paths:
+                continue
+            source = sources[context] = Source(context, platform=platform)
+            pending.extend(child for child, _ in source.edges)
+
+    roots = {module_context(path, parent_owned=True) for path in targets}
+    index_contexts(roots)
+    # Check unreferenced files too, without inventing ordinary contexts for
+    # files already owned by a #[path] tree. Infer the remaining ordinary
+    # roots, then follow their real contexts before considering more orphans.
+    orphan_roots = set()
+    while remaining := paths - {context.path for context in sources}:
+        defaults = {module_context(path): Source(module_context(path), platform=platform)
+                    for path in remaining}
+        incoming = {child.path for source in defaults.values() for child, _ in source.edges}
+        inferred = {context for context in defaults if context.path not in incoming}
+        if not inferred:
+            break
+        orphan_roots.update(inferred)
+        index_contexts(inferred)
+    incoming = {child.path for source in sources.values() for child, _ in source.edges}
+    roots.update(context for context in orphan_roots if context.path not in incoming)
     reachable = set()
     pending = list(roots)
     while pending:
-        path = pending.pop()
-        if path in reachable:
+        context = pending.pop()
+        if context in reachable or context not in sources:
             continue
-        reachable.add(path)
-        pending.extend(child for child, enabled in sources[path].edges if enabled and child in sources)
+        reachable.add(context)
+        pending.extend(child for child, enabled in sources[context].edges if enabled)
     return sources, reachable
 
 
 def check(root):
     sources, reachable = scan(root, "windows")
-    failures = []
-    for path in sorted(reachable):
-        for line, label in sources[path].findings():
-            failures.append(f"{path.relative_to(root)}:{line}: {label} needs an enclosing cfg that excludes Windows")
-    return failures
+    failures = set()
+    for context in reachable:
+        for line, label in sources[context].findings():
+            failures.add(f"{context.path.relative_to(root)}:{line}: {label} needs an enclosing cfg that excludes Windows")
+    return sorted(failures)
 
 
 def main():

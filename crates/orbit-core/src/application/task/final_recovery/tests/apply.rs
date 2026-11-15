@@ -185,6 +185,93 @@ fn terminal_replay_finishes_side_effects_after_a_post_lock_read_failure() {
     }
 }
 
+/// A failed history read on the post-commit effects of a final recovery keeps
+/// text and relation targets owed; a replay resolves them with the verified
+/// covering commit, once.
+#[test]
+fn replay_resolves_text_targets_with_the_covering_commit_after_a_failed_history_read() {
+    if !enter_isolated_child(
+        module_path!(),
+        "replay_resolves_text_targets_with_the_covering_commit_after_a_failed_history_read",
+    ) {
+        return;
+    }
+    let (root, runtime) = test_runtime();
+    let repo = root.path().join("repo");
+    let (commit, _) = repository(&repo);
+    let frictions = FrictionStore::open(
+        runtime.sqlite_store().expect("store"),
+        runtime.workspace_id().expect("workspace id"),
+        runtime.data_root().join("frictions"),
+    )
+    .expect("friction store");
+    let add = || {
+        frictions
+            .add(FrictionAddParams {
+                model: "codex".to_string(),
+                title: None,
+                body: "Original report".to_string(),
+                tags: vec!["tooling".to_string()],
+                status: FrictionStatus::Open,
+                during_task: None,
+                created_at: Utc::now(),
+            })
+            .expect("add friction")
+            .record
+    };
+    let targets = [add(), add(), add()];
+    let task = failed_task(&runtime, "Recover named frictions");
+    let task = runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                description: Some(format!("Fix {}.", targets[0].id)),
+                acceptance_criteria: Some(vec![format!("{} is resolved.", targets[1].id)]),
+                relations: Some(vec![TaskRelation {
+                    relation_type: TaskRelationType::Resolves,
+                    target: targets[2].id.clone(),
+                    regression: None,
+                }]),
+                ..Default::default()
+            },
+        )
+        .expect("name frictions");
+    let request = request(&runtime, &task, &repo, FinalRecoveryCompletion::Done);
+    let output =
+        json!({"decision": "complete_no_diff", "evidence_commit": commit, "rationale": "landed"});
+    crate::application::task::resolves::FAIL_HISTORY_READ.with(|fail| fail.set(true));
+    let outcome = apply(&runtime, &request, output.clone());
+    assert_eq!(status(&runtime, &task.id), TaskStatus::Done);
+    for target in &targets {
+        assert_eq!(
+            frictions.show(&target.id).unwrap().unwrap().record.status,
+            FrictionStatus::Open
+        );
+    }
+
+    assert_eq!(apply(&runtime, &request, output.clone()), outcome);
+    let mut bodies = Vec::new();
+    for target in &targets {
+        let resolved = frictions.show(&target.id).unwrap().unwrap().record;
+        assert_eq!(resolved.status, FrictionStatus::Resolved);
+        assert!(
+            resolved.body.contains(&format!("commit {commit}; PR none")),
+            "{}",
+            resolved.body
+        );
+        bodies.push(resolved.body);
+    }
+    let history = runtime.get_task_history(&task.id).unwrap();
+    assert_eq!(apply(&runtime, &request, output), outcome);
+    assert_eq!(runtime.get_task_history(&task.id).unwrap(), history);
+    for (target, body) in targets.iter().zip(bodies) {
+        assert_eq!(
+            frictions.show(&target.id).unwrap().unwrap().record.body,
+            body
+        );
+    }
+}
+
 /// A repository whose `main` holds one commit and whose `side` branch holds
 /// one more that never reached `main`. Returns `(on_main, off_main)`.
 fn repository(path: &Path) -> (String, String) {

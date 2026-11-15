@@ -94,14 +94,12 @@ pub(crate) fn gate_admission_stop(
     // still accepts, so status alone cannot stop a gate that was queued before
     // the claim landed.
     let claimed: BTreeSet<String> = runtime
-        .inspect_execution_claims()
+        .inspect_live_execution_claims()
         .map_err(|err| {
             DispatchError::action_failed(action, format!("read execution claims: {err}"))
         })?
         .into_iter()
-        .map(|inspection| inspection.claim)
-        .filter(|claim| claim.phase.protects_footprint())
-        .map(|claim| claim.task_id)
+        .map(|inspection| inspection.claim.task_id)
         .collect();
 
     let mut task_statuses = Vec::with_capacity(task_ids.len());
@@ -126,24 +124,6 @@ pub(crate) fn gate_admission_stop(
         }
         match runtime.ensure_task_can_enter_workflow_as_system(task_id, workflow) {
             Ok(task) => {
-                // A `verify-mock-ui` task whose mocks fail validation at
-                // this re-check is refused like any other admission hold:
-                // the child never launches, so its mock digests are frozen
-                // (at workflow admission) only for a delivery that starts.
-                if let Err(detail) = runtime.mock_admission_check(&task) {
-                    let status = task.status;
-                    task_statuses.push(serde_json::json!({
-                        "task_id": task.id,
-                        "status": status.to_string(),
-                        "admissible": false,
-                    }));
-                    refused.push((
-                        task_id.clone(),
-                        status.to_string(),
-                        format!("task '{task_id}' is not admitted: {detail}"),
-                    ));
-                    continue;
-                }
                 task_statuses.push(serde_json::json!({
                     "task_id": task.id,
                     "status": task.status.to_string(),

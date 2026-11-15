@@ -1,6 +1,10 @@
 #![deny(clippy::print_stderr, clippy::print_stdout)]
 #![allow(missing_docs)]
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(
+    not(any(test, feature = "test-support")),
+    deny(clippy::disallowed_methods)
+)]
 //! Shared mechanism crate for the Orbit workspace.
 //!
 //! Domain contracts live in `orbit-types`. This crate owns `OrbitError` and
@@ -31,10 +35,13 @@ pub mod test_process;
 
 pub use error::{
     ArtifactOrigin, ArtifactOriginMode, CandidateAbsorbed, ClaimRefusalKind, ConflictedFile,
-    DecisionRefusalCode, DependencyNotDelivered, HostRegistryCode, LOCK_BUSY_ERROR_CODE,
-    NotFoundKind, OrbitError, PrivateVcsFailure, PrivateVcsFailureClass, ProviderReadThrottle,
-    RecoverableVcsConflict, RemoteToolCode, SqliteContention, StorageLayer, WorkspaceClaimHeld,
-    is_lock_busy_message,
+    DecisionRefusalCode, DependencyNotDelivered, ForceOverridableKind, ForceOverridableRefusal,
+    ForgePushHoldFailure, HostRegistryCode, JSON_RPC_INVALID_PARAMS_CODE, LOCK_BUSY_ERROR_CODE,
+    NotFoundKind, NoticeRefusalCode, OrbitError, PrivateVcsFailure, PrivateVcsFailureClass,
+    ProviderReadThrottle, RecoverableVcsConflict, RemoteToolCode, SourceRepairAuthorityRefusal,
+    SourceRepairRunStateRefusal, SqliteContention, StorageLayer, TaskPilotRefusalCode,
+    UpgradeAdmissionRefusal, UpgradeAdmissionRefusalKind, WorkflowEvidenceUnavailable,
+    WorkspaceClaimHeld, is_lock_busy_message,
 };
 pub use model::pricing::derive_cost_usd;
 pub use tracing;

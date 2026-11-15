@@ -153,6 +153,7 @@ impl Fleet {
             .current_dir(cwd)
             .env("HOME", home)
             .env("USERPROFILE", home)
+            .env("RUST_LOG", "off")
             .env("PATH", std::env::join_paths(paths).expect("join PATH"))
             .args(args);
         command
@@ -216,10 +217,6 @@ impl Fleet {
 
     pub(crate) fn hosts_file(&self) -> PathBuf {
         self.local.home.join(".orbit/hosts.toml")
-    }
-
-    pub(crate) fn legacy_file(&self) -> PathBuf {
-        self.local.home.join(".orbit/mcp-destinations.toml")
     }
 
     pub(crate) fn hosts_bytes(&self) -> Option<Vec<u8>> {

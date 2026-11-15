@@ -14,8 +14,11 @@
 //! [`orbit_tools::canonical_builtin_mcp_tool_definitions`], the implementation
 //! activity's tool allowlist, and the governed-operation registry.
 //!
-//! Preparation findings remain advisory; admission separately holds a current
-//! operator-reserved requirement for an explicit operator decision:
+//! Preparation itself still completes. An unliftable `required_tools` entry
+//! is reported as a `validation_tool_warnings` finding, and that field holds
+//! promotion, so a task filed before the filing check is caught before
+//! dispatch. Admission separately holds a current operator-reserved
+//! requirement for an explicit operator decision:
 //!
 //! - Prose never grants. A tool named in a criterion stays ungranted;
 //!   `required_tools` remains the only grant, and this check merely reports
@@ -39,17 +42,16 @@ use orbit_types::workflow::activity_job::{
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::task::validation_tools::{names_tool, positive_validation_sentences};
-use crate::application::task::{OperatorValidationRequirement, operator_validation_requirements};
-
-/// Activity that implements a task. Its tool allowlist is the baseline a
-/// task's `required_tools` extends, so it is the lane a validation criterion
-/// has to be feasible in.
-const IMPLEMENTATION_ACTIVITY: &str = "agent_implement";
+use crate::application::task::validation_tools::{
+    names_tool, positive_validation_sentences, sentence_requires_tool_invocation,
+};
+use crate::application::task::{
+    OperatorValidationRequirement, TaskJobPort, operator_validation_requirements,
+};
 
 /// Owner-mode attachment tool. Claimed mode does not need it: the implement
 /// handoff attaches declared `task_artifacts` either way.
-const ARTIFACT_ATTACHMENT_TOOL: &str = "orbit.task.artifact.put";
+const ARTIFACT_ATTACHMENT_TOOL: &str = "orbit.task.artifact:put";
 
 /// Cap on findings reported for one task. A criterion set that contradicts the
 /// lane this many times needs rewriting, not a longer list.
@@ -60,6 +62,26 @@ const MAX_FINDINGS_PER_TASK: usize = 8;
 const EXTERNAL_CREDENTIALS: &[(&str, &str)] = &[("github.", "GitHub authentication")];
 
 const MCP_TRANSPORT_MARKERS: &[&str] = &["mcp", "tools/call", "tools/list"];
+
+/// Wording that asks for a sign-off or approval only a person can give.
+const SIGN_OFF_TERMS: &[&str] = &[
+    "sign-off",
+    "sign off",
+    "signs off",
+    "signoff",
+    "signed off",
+    "signed-off",
+    "approval",
+];
+
+/// Authority words that, with a [`SIGN_OFF_TERMS`] entry, name an owner or
+/// operator as the one who must give the sign-off.
+const SIGN_OFF_AUTHORITIES: &[&str] = &["owner", "operator"];
+
+/// Finding for a criterion that needs an owner or operator sign-off recorded.
+/// No implementing lane can record it: `orbit.decision.submit` is operator-only
+/// and governance refuses it to agent sessions.
+const OWNER_SIGN_OFF_FINDING: &str = "acceptance criterion requires an owner or operator sign-off to be recorded, which no implementing agent can record: `orbit.decision.submit` is operator-only and governance refuses it to agent sessions, so route this validation to an explicit operator handoff instead of expecting the implementing agent to record the decision";
 
 /// The execution lane a task's validation criteria have to be feasible in.
 ///
@@ -80,10 +102,14 @@ pub(super) struct ImplementationLane {
     /// A deny-mode implementation activity's disallow list, which a task's
     /// `required_tools` cannot override.
     disallow_list: Vec<String>,
+    /// The implementing activity these findings name, read from the job port
+    /// so it stays the activity admission checks.
+    activity: String,
 }
 
 impl ImplementationLane {
     pub(super) fn resolve(runtime: &OrbitRuntime) -> Self {
+        let activity = runtime.implementer_activity_name().to_string();
         let mut registered = runtime.allowlist_known_tool_names();
         registered.sort();
 
@@ -97,7 +123,7 @@ impl ImplementationLane {
             });
 
         let policy = runtime.v2_activity_catalog().ok().and_then(|catalog| {
-            match &catalog.get(IMPLEMENTATION_ACTIVITY)?.spec {
+            match &catalog.get(activity.as_str())?.spec {
                 ActivityV2Spec::AgentLoop(spec) => Some(match &spec.tool_disallow_list {
                     Some(disallow_list) => (
                         tools_allowed_by_disallow_list(
@@ -121,6 +147,7 @@ impl ImplementationLane {
             mcp_exposed,
             baseline,
             disallow_list,
+            activity,
         }
     }
 
@@ -133,11 +160,11 @@ impl ImplementationLane {
     pub(super) fn prompt_input(&self) -> Value {
         match &self.baseline {
             Some(tools) => json!({
-                "activity": IMPLEMENTATION_ACTIVITY,
+                "activity": self.activity,
                 "tools": tools,
                 "artifact_attachment": {
                     "owner": ARTIFACT_ATTACHMENT_TOOL,
-                    "owner_granted": tools.iter().any(|tool| tool == ARTIFACT_ATTACHMENT_TOOL),
+                    "owner_granted": tool_allowed(ARTIFACT_ATTACHMENT_TOOL, tools),
                     "claimed": "task_artifacts handoff",
                 },
             }),
@@ -167,13 +194,17 @@ impl ImplementationLane {
         Some(granted)
     }
 
-    /// Findings for every tool this task's acceptance criteria positively
-    /// require.
+    /// Findings for an unliftable `required_tools` entry, then for every tool
+    /// this task's acceptance criteria positively require.
     ///
-    /// Only acceptance criteria are read. They are the task's validation
-    /// contract; a tool named in the problem statement describes what broke,
-    /// not what the implementing agent has to call.
-    pub(super) fn validation_warnings(&self, task: &Task) -> Vec<String> {
+    /// Stored requirements are checked with the same classification filing
+    /// and dispatch admission use. An unread catalog or an allow-mode
+    /// activity has an empty disallow list, so this reports nothing rather
+    /// than inventing a refusal. Only acceptance criteria are read for the
+    /// remaining findings. They are the task's validation contract; a tool
+    /// named in the problem statement describes what broke, not what the
+    /// implementing agent has to call.
+    pub(super) fn validation_warnings(&self, runtime: &OrbitRuntime, task: &Task) -> Vec<String> {
         let granted = self.baseline.as_ref().map(|baseline| {
             baseline
                 .iter()
@@ -187,7 +218,23 @@ impl ImplementationLane {
         });
 
         let mut findings = Findings::default();
+        for tool in &task.required_tools {
+            if let Some(message) =
+                runtime.unliftable_implementer_requirement(&self.disallow_list, tool)
+            {
+                findings.push(message);
+                if findings.is_full() {
+                    return findings.ordered;
+                }
+            }
+        }
         for (_, sentence) in positive_validation_sentences(task) {
+            if requires_owner_sign_off(&sentence) {
+                findings.push(OWNER_SIGN_OFF_FINDING.into());
+                if findings.is_full() {
+                    return findings.ordered;
+                }
+            }
             for tool in self.tools_named_in(&sentence) {
                 self.report(tool, &sentence, granted.as_deref(), &mut findings);
                 if findings.is_full() {
@@ -238,19 +285,22 @@ impl ImplementationLane {
             ));
         }
 
-        if granted.is_some_and(|granted| !tool_allowed(tool, granted)) {
+        // Only a criterion that asks the implementer to call the tool is an
+        // allowlist requirement. A tool named as the subject whose
+        // behaviour, schema or documentation the task changes is proven by
+        // the task's own tests or doc check, not by granting the tool, so
+        // it must not hold promotion [ORB-23615].
+        if sentence_requires_tool_invocation(sentence, tool)
+            && granted.is_some_and(|granted| !tool_allowed(tool, granted))
+        {
             findings.push(format!(
-                "acceptance criterion requires `{tool}`, which the `{IMPLEMENTATION_ACTIVITY}` allowlist does not grant and this task's `required_tools` does not declare; declare it in `required_tools` at creation, because that field is immutable once the task exists"
+                "acceptance criterion requires `{tool}`, which the `{}` allowlist does not grant and this task's `required_tools` does not declare; declare it in `required_tools` at creation, because that field is immutable once the task exists",
+                self.activity
             ));
         }
 
-        if let Some(operation) = governed_tool(tool)
-            && !operation.allowed.contains(&McpCapability::Agent)
-        {
-            findings.push(format!(
-                "acceptance criterion requires `{tool}`, a governed operation reserved for the {} capability; `required_tools` grants allowlist membership only, so route this validation to an explicit operator handoff instead of expecting the implementing agent to perform it",
-                capability_label(operation.allowed)
-            ));
+        if let Some(finding) = operator_reserved_finding(tool) {
+            findings.push(finding);
         }
 
         if let Some((_, credential)) = EXTERNAL_CREDENTIALS
@@ -261,6 +311,65 @@ impl ImplementationLane {
                 "acceptance criterion requires `{tool}`, whose result depends on {credential} in the executing lane; `required_tools` cannot supply credentials, so state that precondition or hand the check to an operator"
             ));
         }
+    }
+}
+
+/// Whether `sentence` requires an owner or operator sign-off. A sign-off term
+/// and an authority word must both appear, so a criterion that only mentions a
+/// decision in docs stays unflagged.
+fn requires_owner_sign_off(sentence: &str) -> bool {
+    let lowered = sentence.to_ascii_lowercase();
+    SIGN_OFF_TERMS.iter().any(|term| lowered.contains(term))
+        && SIGN_OFF_AUTHORITIES
+            .iter()
+            .any(|authority| lowered.contains(authority))
+}
+
+/// The finding for a tool reserved for a non-agent capability, or `None` when
+/// the implementing agent may call it.
+fn operator_reserved_finding(tool: &str) -> Option<String> {
+    let operation = governed_tool(tool)?;
+    (!operation.allowed.contains(&McpCapability::Agent)).then(|| {
+        format!(
+            "acceptance criterion requires `{tool}`, a governed operation reserved for the {} capability; `required_tools` grants allowlist membership only, so route this validation to an explicit operator handoff instead of expecting the implementing agent to perform it",
+            capability_label(operation.allowed)
+        )
+    })
+}
+
+/// Drop the operator-reserved finding for each tool whose every detected
+/// criterion mention the pilot classified as the change's subject
+/// [ORB-21291]. Such a criterion edits or tests the tool; nobody has to run
+/// it, so neither a hold nor this warning applies. A tool with any mention
+/// left unclassified, malformed or classified `invoke` keeps its finding.
+pub(super) fn drop_subject_operator_warnings(
+    assessment: &mut Value,
+    lane: &ImplementationLane,
+    task: &Task,
+) {
+    let detected = lane.operator_requirements(task);
+    if detected.is_empty() {
+        return;
+    }
+    let invoked = super::admission::invoked_operator_requirements(assessment, detected.clone());
+    let subject_only = detected
+        .iter()
+        .map(|requirement| requirement.tool.as_str())
+        .filter(|tool| !invoked.iter().any(|requirement| requirement.tool == *tool))
+        .filter_map(operator_reserved_finding)
+        .collect::<BTreeSet<_>>();
+    if subject_only.is_empty() {
+        return;
+    }
+    if let Some(warnings) = assessment
+        .get_mut(super::VALIDATION_TOOL_WARNINGS)
+        .and_then(Value::as_array_mut)
+    {
+        warnings.retain(|warning| {
+            warning
+                .as_str()
+                .is_none_or(|text| !subject_only.contains(text))
+        });
     }
 }
 
@@ -356,7 +465,9 @@ fn claims_artifact_attachment_unavailable(text: &str) -> bool {
 }
 
 fn mentions_artifact_attachment(lowered: &str) -> bool {
-    lowered.contains(ARTIFACT_ATTACHMENT_TOOL)
+    // The family name covers `orbit.task.artifact` action `put` however a
+    // warning spells it.
+    lowered.contains("orbit.task.artifact")
         || lowered.contains("task artifact")
         || (lowered.contains("screenshot") && lowered.contains("artifact"))
 }

@@ -20,8 +20,8 @@ use orbit_types::resource::ResourceError;
 use orbit_types::task::TaskError;
 use orbit_types::tool::WorkerBindingError;
 use orbit_types::workflow::{
-    FinalRecoveryError, JobRunStateError, ProviderSandboxError, RetiredBackendError,
-    ReviewAdmissionError, ReviewHistoryError, ReviewReportError, WorkflowError,
+    FinalRecoveryError, JobRunStateError, RetiredBackendError, ReviewAdmissionError,
+    ReviewHistoryError, ReviewReportError, WorkflowError,
 };
 
 // Translators for `orbit-types` errors. The orphan rule puts each `From` impl
@@ -124,12 +124,6 @@ impl From<WorkerBindingError> for OrbitError {
 impl From<JobRunStateError> for OrbitError {
     fn from(error: JobRunStateError) -> Self {
         Self::JobRunStateTransition(error.to_string())
-    }
-}
-
-impl From<ProviderSandboxError> for OrbitError {
-    fn from(error: ProviderSandboxError) -> Self {
-        Self::InvalidInput(error.to_string())
     }
 }
 

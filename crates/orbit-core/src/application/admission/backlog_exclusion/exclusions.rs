@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
+use chrono::Utc;
 use orbit_types::task::{
-    ExecutorOsLimit, ReadinessGap, ReadinessStage, Task, browser_kit_wait, readiness_gaps,
-    requires_browser_kit,
+    ExecutorOsLimit, NO_DRAIN_TAG, ReadinessGap, ReadinessStage, Task, TaskHistoryEntry,
+    browser_kit_wait, readiness_gaps, requires_browser_kit,
 };
 
 use super::super::auto_admission::{DeferralReason, DeferredAdmission};
@@ -10,7 +11,7 @@ use super::super::pass_error::PassError;
 use super::{BacklogTaskConflict, BacklogTaskExclusion, BacklogTaskExclusionReason};
 use crate::OrbitRuntime;
 use crate::application::job::crew_pools::CapturedCrewPools;
-use crate::application::task::PilotAdmissionHold;
+use crate::application::task::{PilotAdmissionHold, schedule_hold_in};
 
 /// A ship's exclusion for a task the unknown-footprint rule withheld. A
 /// whole-tree conflict is a context lock on every path, named by its holder.
@@ -101,20 +102,44 @@ pub(super) fn browser_kit_exclusion(
     })
 }
 
-/// The exclusion for a `verify-mock-ui` task whose mocks fail validation
-/// against the manifest at the base revision. Shared by automatic
-/// selection and the readiness snapshot, like [`browser_kit_exclusion`].
-pub(super) fn mock_validation_exclusion(
+/// The exclusion for a task carrying the reserved `no-drain` tag. Automatic
+/// selection only: the explicit ship override in `listing.rs` deliberately
+/// does not apply it, so `orbit run ship <id>` still runs the task.
+pub(crate) fn no_drain_exclusion(task: &Task) -> Option<BacklogTaskExclusion> {
+    if !task.tags.iter().any(|tag| tag == NO_DRAIN_TAG) {
+        return None;
+    }
+    Some(BacklogTaskExclusion {
+        id: task.id.clone(),
+        reason: BacklogTaskExclusionReason::NoDrainTag,
+        conflicts: Vec::new(),
+        crew: None,
+        detail: Some(format!(
+            "tagged `{NO_DRAIN_TAG}`: no automatic drain or follower admits it; \
+             run it explicitly with `orbit run ship <id>`, claim it interactively, \
+             or remove the tag to make it eligible again"
+        )),
+    })
+}
+
+/// The exclusion for a task assigned to a human crew: operator work no drain
+/// or ship admits. Shared by automatic selection and the explicit ship
+/// override, like [`scheduled_exclusion`].
+pub(super) fn human_crew_exclusion(
     runtime: &OrbitRuntime,
     task: &Task,
 ) -> Option<BacklogTaskExclusion> {
-    let detail = runtime.mock_admission_check(task).err()?;
+    let human = runtime.human_crew(task.crew.as_deref())?;
     Some(BacklogTaskExclusion {
         id: task.id.clone(),
-        reason: BacklogTaskExclusionReason::MockValidationFailed,
+        reason: BacklogTaskExclusionReason::HumanCrew,
         conflicts: Vec::new(),
-        crew: None,
-        detail: Some(detail),
+        crew: Some(human.name.clone()),
+        detail: Some(format!(
+            "assigned to human crew `{}`: operator work that no drain, follower or task pilot \
+             picks up; the operator completes it, or reassigns it to an agent crew",
+            human.name
+        )),
     })
 }
 
@@ -127,17 +152,35 @@ pub(super) fn scheduled_exclusion(
     task: &Task,
 ) -> Option<BacklogTaskExclusion> {
     match runtime.schedule_hold(task) {
-        Ok(hold) => hold.map(|hold| BacklogTaskExclusion {
-            id: task.id.clone(),
-            reason: BacklogTaskExclusionReason::Scheduled,
-            conflicts: Vec::new(),
-            crew: None,
-            detail: Some(hold.detail()),
-        }),
+        Ok(hold) => hold.map(|hold| scheduled_hold_exclusion(task, hold.detail())),
         Err(error) => {
             tracing::warn!(task_id = %task.id, "could not read scheduled hold: {error}");
             None
         }
+    }
+}
+
+/// [`scheduled_exclusion`] from history the caller already read.
+pub(super) fn scheduled_exclusion_from_history(
+    task: &Task,
+    history: &[TaskHistoryEntry],
+) -> Option<BacklogTaskExclusion> {
+    match schedule_hold_in(task, Utc::now(), &|| Ok(history.to_vec())) {
+        Ok(hold) => hold.map(|hold| scheduled_hold_exclusion(task, hold.detail())),
+        Err(error) => {
+            tracing::warn!(task_id = %task.id, "could not read scheduled hold: {error}");
+            None
+        }
+    }
+}
+
+fn scheduled_hold_exclusion(task: &Task, detail: String) -> BacklogTaskExclusion {
+    BacklogTaskExclusion {
+        id: task.id.clone(),
+        reason: BacklogTaskExclusionReason::Scheduled,
+        conflicts: Vec::new(),
+        crew: None,
+        detail: Some(detail),
     }
 }
 
@@ -202,8 +245,21 @@ pub(super) fn pilot_finding_exclusion(
     let hold = runtime
         .pilot_admission_hold(&task.id)
         .map_err(|error| PassError::store(action, "read pilot findings", error))?;
-    Ok(hold.and_then(|hold| {
+    Ok(pilot_hold_exclusion(runtime, task, hold))
+}
+
+/// The exclusion `hold` reports for `task`. `None` admits it. `task` is the
+/// snapshot's task: native-host waits read its tags.
+pub(super) fn pilot_hold_exclusion(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    hold: Option<PilotAdmissionHold>,
+) -> Option<BacklogTaskExclusion> {
+    hold.and_then(|hold| {
         let (reason, detail) = match hold {
+            PilotAdmissionHold::StaleAssessment(detail) => {
+                (BacklogTaskExclusionReason::PilotAssessmentStale, detail)
+            }
             PilotAdmissionHold::HostOperational(hold) => (
                 BacklogTaskExclusionReason::HostOperationalHandoff,
                 hold.detail(),
@@ -224,10 +280,6 @@ pub(super) fn pilot_finding_exclusion(
                 BacklogTaskExclusionReason::PilotDuplicate,
                 pilot_decision_detail("duplicate_of"),
             ),
-            PilotAdmissionHold::UnverifiedFinding(hold) => (
-                BacklogTaskExclusionReason::UnverifiedReviewFinding,
-                hold.detail(),
-            ),
             PilotAdmissionHold::AlreadyLanded => (
                 BacklogTaskExclusionReason::PilotAlreadyLanded,
                 pilot_decision_detail("already_landed"),
@@ -240,7 +292,7 @@ pub(super) fn pilot_finding_exclusion(
             crew: None,
             detail: Some(detail),
         })
-    }))
+    })
 }
 
 fn pilot_decision_detail(field: &str) -> String {

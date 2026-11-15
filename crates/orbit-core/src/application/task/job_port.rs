@@ -7,27 +7,51 @@
 //! find a forge, light delivery reads the candidate's validation gates, the
 //! baseline-hold refresh and the blocked-task backstop submit their routine
 //! runs, completion and requeue ask whether a run's owner is still
-//! executing, and requeue asks whether an owner publication is unbound. `job` owns all of that, and it also drives task
-//! writes, so a direct call from here would close a cycle. This port is the
-//! way in: `job` implements it on [`OrbitRuntime`](crate::OrbitRuntime), so
+//! executing, requeue asks whether an owner publication is unbound, backlog
+//! reads ask for a task's host-OS wait, mock admission asks which delivery
+//! runs are live, and filing and task-pilot ask whether a required tool is
+//! one the implementer can be granted. `job` owns all of that, and it also
+//! drives task writes, so a direct call from here would close a cycle. This
+//! port is the way in: `job` implements it on [`OrbitRuntime`](crate::OrbitRuntime), so
 //! composing the runtime binds it. The values both sides name live in
 //! [`contracts`](crate::application::contracts).
 
+use std::collections::{BTreeMap, HashMap};
+
 use orbit_common::OrbitError;
-use orbit_types::identity::Crew;
-use orbit_types::task::{Task, TaskComplexity, TaskHistoryEntry};
+use orbit_types::identity::{AutoEffortChoice, Crew};
+use orbit_types::task::{
+    CrewSource, DecisionRequest, ExecutorOsLimit, Task, TaskComplexity, TaskHistoryEntry,
+};
 use orbit_types::workflow::{
-    HostValidationGates, JobRun, JobRunTrigger, PipelineState, RunDeliveryObservation, ShipMode,
-    SourceRepairBinding,
+    CrewPurpose, HostValidationGates, JobRun, JobRunTrigger, PipelineState, RunDeliveryObservation,
+    ShipMode, SourceRepairBinding,
 };
 use serde_json::Value;
 
+use super::TaskRow;
 use crate::application::contracts::{
-    CreationCrewAssignment, CrewCandidate, CrewPoolDraw, InspectionPool, RetryKey,
+    AutoEffortSubject, CreationCrewAssignment, CrewCandidate, CrewPoolDraw, InspectionPool,
+    OwnerSourceIdentityRefusal, RetryKey,
 };
 
 /// The crew pools an admitting pipeline captured, as task code names them.
 pub(in crate::application::task) type CrewPools = <crate::OrbitRuntime as TaskJobPort>::CrewPools;
+
+/// The authenticated identity of the pull request a task's own native run
+/// published, as desktop review compares it with the forge.
+pub(in crate::application) struct NativePublicationIdentity {
+    /// The published head branch.
+    pub(in crate::application) branch: String,
+    /// The published head commit.
+    pub(in crate::application) head: String,
+    /// The branch the pull request targets.
+    pub(in crate::application) base_branch: String,
+    /// The pull request number, as recorded.
+    pub(in crate::application) number: String,
+    /// The pull request URL, when recorded.
+    pub(in crate::application) url: Option<String>,
+}
 
 /// The job-dispatch and crew-pool operations task code calls, implemented
 /// by `job`.
@@ -46,9 +70,30 @@ pub(in crate::application) trait TaskJobPort {
     fn task_tool_availability_refusal(&self, tool_name: &str)
     -> Result<Option<String>, OrbitError>;
 
+    /// The activity whose tool contract `required_tools` names.
+    fn implementer_activity_name(&self) -> &'static str;
+
+    /// That activity's deny list when it is a deny-mode agent loop.
+    ///
+    /// `Ok(None)` when the activity is absent, not an agent loop, or still in
+    /// allow mode, so filing does not invent a refusal. A catalog that fails
+    /// to load is an error.
+    fn required_tool_implementer_disallow_list(&self) -> Result<Option<Vec<String>>, OrbitError>;
+
+    /// Why `required_tools` cannot name `tool_name` against `disallow_list`,
+    /// using the same classification dispatch admission uses. `None` when the
+    /// name is not covered, or an exact read/repeat-safe grant could lift the
+    /// denial later.
+    fn unliftable_implementer_requirement(
+        &self,
+        disallow_list: &[String],
+        tool_name: &str,
+    ) -> Option<String>;
+
     /// The crew a task is created or re-rated with: `explicit` verbatim,
     /// else the purpose pool its tags name, then its complexity pool, then
-    /// the default crew; `None` when the workspace names no crew. `random`
+    /// the default crew; `None` when the workspace names no crew or every
+    /// drawable member of the selected pool is provider-limited. `random`
     /// supplies the draw's tickets.
     fn creation_crew(
         &self,
@@ -62,6 +107,12 @@ pub(in crate::application) trait TaskJobPort {
 
     /// A fresh ticket from the system RNG for a crew draw.
     fn random_crew_draw_ticket(&self) -> Result<u64, OrbitError>;
+
+    /// The `<crew>@<effort>` a `<crew>@auto` member (`crew`, its
+    /// `[crews.<name>]` entry) runs at for `subject`: its bands' choice, the
+    /// exploration share's, or the subject's forced effort.
+    fn auto_effort_crew_choice(&self, crew: &Crew, subject: &AutoEffortSubject)
+    -> AutoEffortChoice;
 
     /// Reproducible tickets for a crew draw that must come out the same
     /// when it is retried, seeded by `seed`.
@@ -90,7 +141,7 @@ pub(in crate::application) trait TaskJobPort {
     /// The provenance `task`'s crew was assigned with: its recorded
     /// `crew_source`, else the latest assignment history entry naming its
     /// current crew; `None` for a task with no crew or no such evidence.
-    fn recorded_crew_source(&self, task: &Task) -> Result<Option<String>, OrbitError>;
+    fn recorded_crew_source(&self, task: &Task) -> Result<Option<CrewSource>, OrbitError>;
 
     /// Whether `task`, last delivered by an owner PR run, has a pull request
     /// or a publication-preservation record that no failure-handoff receipt
@@ -150,6 +201,15 @@ pub(in crate::application) trait TaskJobPort {
         task: &Task,
         run_id: &str,
     ) -> Result<Option<TaskHistoryEntry>, OrbitError>;
+
+    /// Why a requeue of `task` must not preserve `run_id`'s published
+    /// candidate: the next run's candidate resume would refuse its source
+    /// identity. `None` when nothing is published or the source passes.
+    fn published_requeue_identity_refusal(
+        &self,
+        task: &Task,
+        run_id: &str,
+    ) -> Result<Option<OwnerSourceIdentityRefusal>, OrbitError>;
 
     /// The authenticated failure-handoff preservation record for `task` and
     /// the binding its next run resumes.
@@ -214,4 +274,84 @@ pub(in crate::application) trait TaskJobPort {
         task_id: &str,
         run_id: Option<&str>,
     ) -> Result<RunDeliveryObservation, OrbitError>;
+
+    /// Apply a human's answer `answer_id` to the script-grant decision
+    /// `request`.
+    fn answer_script_grant_decision(
+        &self,
+        request: &DecisionRequest,
+        answer_id: &str,
+        actor_label: &str,
+        via: &str,
+    ) -> Result<(), OrbitError>;
+
+    /// Whether a decision option may request a task-pilot for `task_id`;
+    /// the refusal or failure is returned as its display text.
+    fn decision_pilot_preflight(&self, task_id: &str) -> Result<(), String>;
+
+    /// Submit an explicit task-pilot run for `task_id`; the refusal or
+    /// failure is returned as its display text.
+    fn request_explicit_task_pilot(
+        &self,
+        task_id: &str,
+        actor: Option<&str>,
+        trigger: JobRunTrigger,
+    ) -> Result<(), String>;
+
+    /// The authenticated publication identity of the exact native run
+    /// `task` names.
+    fn native_publication_identity(
+        &self,
+        task: &Task,
+    ) -> Result<NativePublicationIdentity, OrbitError>;
+
+    /// The enabled members of `purpose`'s `workflow.purpose_crews` pool,
+    /// with the draw's source. With `inspection`, only members whose provider
+    /// inspects source natively and that hold a ticket are kept. `None` when
+    /// no such member remains, so the fallback route applies.
+    fn purpose_pool_members(
+        &self,
+        purpose: CrewPurpose,
+        inspection: bool,
+    ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError>;
+
+    /// Resume the failed run `source_run_id` as `actor`, returning the new
+    /// run's ID.
+    fn resume_failed_run(
+        &self,
+        source_run_id: &str,
+        actor: Option<&str>,
+        claim_token: Option<&str>,
+    ) -> Result<String, OrbitError>;
+
+    /// The task-pilot run still pending or running for `task_id`, if any.
+    fn live_pilot_run(&self, task_id: &str) -> Result<Option<String>, OrbitError>;
+
+    /// A claimed leaf's candidates for `task` before any provider failure
+    /// hold, drawn from the owner's captured `pools`, with their provenance.
+    fn claimed_leaf_candidates_before_holds(
+        &self,
+        task: &Task,
+        pools: &Self::CrewPools,
+    ) -> Result<(Vec<CrewCandidate>, String), OrbitError>;
+
+    /// The persisted pipeline states of `run_ids` in one exact read: an
+    /// unreadable state fails the whole read.
+    fn stored_run_states_exact(
+        &self,
+        run_ids: &[String],
+    ) -> Result<HashMap<String, Option<PipelineState>>, OrbitError>;
+
+    /// The delivery attention marker for one task row, if any.
+    fn task_row_delivery_attention(&self, row: &TaskRow) -> Result<Option<Value>, OrbitError>;
+
+    /// The host-OS wait `task` meets on this host under `limits`, judged
+    /// over the same candidates `pools` give the draw; `None` when it can
+    /// start here.
+    fn host_os_wait_for_task(
+        &self,
+        task: &Task,
+        pools: &Self::CrewPools,
+        limits: &BTreeMap<String, ExecutorOsLimit>,
+    ) -> Option<String>;
 }

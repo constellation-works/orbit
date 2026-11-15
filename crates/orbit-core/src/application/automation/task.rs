@@ -1,7 +1,8 @@
 //! Task/job adapters retain existing creation and evidence provenance boundaries.
 
-use super::{COVERAGE_ARTIFACT, source::Source};
+use super::{COVERAGE_ARTIFACT, consumer_states, source::Source};
 use crate::OrbitRuntime;
+use crate::application::automation::AutomationAutoTaskPort;
 use crate::runtime::run_input::recorded_task_ids;
 use chrono::{DateTime, Utc};
 use orbit_automation::{
@@ -12,24 +13,26 @@ use orbit_automation::{
     },
 };
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_types::task::{DERIVED_EXECUTION_SUMMARY_PREFIX, Task};
+use orbit_types::task::{
+    CrewSource, DERIVED_EXECUTION_SUMMARY_PREFIX, Task, TaskHistoryEntry, TaskStatus,
+};
 use orbit_types::workflow::automation::*;
 use orbit_types::workflow::{AutoTaskDefinition, JobRunState};
 use std::collections::BTreeMap;
+use std::ops::ControlFlow;
 
 pub(super) fn mint(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
     attempt: &BatchAttempt,
 ) -> Result<String, OrbitError> {
-    let mut params =
-        crate::application::auto_tasks::scheduler::template_params(runtime, definition);
+    let mut params = runtime.auto_task_template_task_params(definition);
     // [ORB-13896] After-landing review is reviewed by `workflow.purpose_crews.review`,
     // one crew drawn per batch when it is a pool [ORB-15195], from the members
     // whose executor can run under the task's `os:` tags.
     if let Some(crew) = super::after_landing::minted_review_crew(runtime, definition, attempt)? {
         params.crew = Some(crew);
-        params.crew_source = Some(orbit_config::REVIEW_CREW_KEY.to_string());
+        params.crew_source = Some(CrewSource::Other(orbit_config::REVIEW_CREW_KEY.to_string()));
     }
 
     let invalid = |e: serde_json::Error| OrbitError::InvalidInput(e.to_string());
@@ -40,7 +43,7 @@ pub(super) fn mint(
     .map_err(invalid)?;
 
     params.description.push_str(&format!(
-        "\n\nFrozen automation input (inspect these exact revisions):\n```json\n{frozen_input}\n```\nSubmit versioned coverage evidence as {COVERAGE_ARTIFACT} with orbit.task.artifact.put. Examination, including findings, must be complete before setting examination_complete=true. Task completion alone does not certify coverage."
+        "\n\nFrozen automation input (inspect these exact revisions):\n```json\n{frozen_input}\n```\nSubmit versioned coverage evidence as {COVERAGE_ARTIFACT} with orbit.task.artifact action put. Examination, including findings, must be complete before setting examination_complete=true. Task completion alone does not certify coverage."
     ));
     params.description.push_str(&format!(
         "\n\nGive every frozen delivery one delivery_examinations entry. Its examined_paths is an array of path strings, and its skipped_paths is an array of {{\"path\": ..., \"reason\": ...}} objects. Together they must be exactly the paths `git diff --name-only --no-renames <before.commit> <after.commit>` lists for that delivery. Its verdict is \"clean\" or {{\"findings\": [\"<finding task ID>\", ...]}}, and its rationale (at least {MIN_RATIONALE_CHARS} characters, different for each delivery) says why the verdict holds for that change. Persist an execution summary of what you examined: a review whose agent records none leaves its batch owed."
@@ -108,7 +111,7 @@ fn task_outcome(
         }
         Err(error) => return Err(error.into()),
     };
-    let stopped = task.status.is_terminal();
+    let stopped = task.status.is_terminal() || blocked_run_stopped(runtime, &task)?;
     let artifact = runtime.get_task_artifact(id, COVERAGE_ARTIFACT)?;
 
     if let Some(artifact) = artifact {
@@ -158,7 +161,67 @@ fn task_outcome(
     Ok(ActionOutcome::Pending)
 }
 
-const CONSUMER_PAGE_LIMIT: usize = 100;
+/// [F2026-10-694] A frozen review whose executor exits early with a
+/// declared `incomplete_*` failure ends its run `failed`, which blocks the
+/// task rather than closing it. Task-terminal alone therefore never proved
+/// the action stopped: settlement saw the retained incomplete evidence as
+/// still replaceable and held the batch `admitted` forever, so the bounded
+/// retry over the same frozen batch never fired. A task blocked by its own
+/// coupled run's failure is that proof — the block is written only at run
+/// terminalization, after final recovery settled, and a blocked task admits
+/// no executor that could still submit evidence for that run. Cancellation,
+/// timeout, interruption and holds keep their existing explicit-recovery
+/// paths and are not proven stopped here.
+///
+/// Terminalization writes the same `workflow_run_failed` block for a
+/// `timeout` and a `cancelled` run, so the history match alone cannot tell
+/// them from `failed`; a local run's own state decides. A timed-out run is
+/// resumed, which re-admits this task, and a retry minted meanwhile would
+/// review the same batch twice. Run ids are machine-local and that block is
+/// written only for the local run, so a foreign run has no state to read and
+/// the history match stands alone.
+fn blocked_run_stopped(runtime: &OrbitRuntime, task: &Task) -> Result<bool, AutomationError> {
+    if task.status != TaskStatus::Blocked {
+        return Ok(false);
+    }
+    let Some(run_id) = task.job_run_id.as_deref() else {
+        return Ok(false);
+    };
+    if !blocked_by_failed_run(&runtime.get_task_history(&task.id)?, run_id) {
+        return Ok(false);
+    }
+    if !runtime.task_run_is_local(task) {
+        return Ok(true);
+    }
+    match runtime.show_job_run_observed(run_id) {
+        Ok(run) => Ok(run.state == JobRunState::Failed),
+        Err(OrbitError::NotFound {
+            kind: NotFoundKind::JobRun,
+            ..
+        }) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Whether the task's latest status transition is the block its coupled
+/// run's failure wrote (`workflow_run_failed` naming `run_id`). Only the
+/// latest transition counts: a later move — a requeue, a resume, an
+/// operator's block — supersedes the failure's block.
+pub(super) fn blocked_by_failed_run(history: &[TaskHistoryEntry], run_id: &str) -> bool {
+    history
+        .iter()
+        .rev()
+        .find(|entry| entry.to_status.is_some())
+        .is_some_and(|entry| {
+            entry.event == "workflow_run_failed"
+                && entry.to_status == Some(TaskStatus::Blocked)
+                && entry
+                    .note
+                    .as_deref()
+                    .is_some_and(|note| note.contains(&format!("run_id={run_id},")))
+        })
+}
+
 const RECEIPT_LIMIT: usize = 100;
 
 /// [ORB-14837] The coverage evidence task `task_id` submitted as a delivery
@@ -179,21 +242,11 @@ pub(crate) fn accepted_action_coverage(
     };
     let prefix = format!("{machine}/{}/", runtime.workspace_id()?);
     let store = runtime.automation_store()?;
-    let mut after: Option<String> = None;
-    loop {
-        let page = store.automation_states_page(&prefix, after.as_deref(), CONSUMER_PAGE_LIMIT)?;
-        for state in &page {
-            if after.as_ref().is_some_and(|key| state.consumer <= *key) {
-                return Err(OrbitError::Store(
-                    "automation state page is not strictly ordered".into(),
-                ));
-            }
-            after = Some(state.consumer.clone());
-        }
-        if page.is_empty() {
-            return Ok(None);
-        }
-        for state in page {
+    let result = consumer_states::for_each_workspace_consumer_state(
+        &prefix,
+        |after, limit| store.automation_states_page(&prefix, after, limit),
+        |state| &state.consumer,
+        |state| {
             let accepted = match state
                 .active
                 .as_ref()
@@ -206,13 +259,15 @@ pub(crate) fn accepted_action_coverage(
                     .find(|receipt| receipt.action_id == task_id)
                     .map(|receipt| receipt.evidence),
             };
-            if let Some(bytes) = accepted {
-                return serde_json::from_slice(&bytes)
-                    .map(Some)
-                    .map_err(|error| OrbitError::Store(format!("accepted coverage: {error}")));
+            match accepted {
+                Some(bytes) => serde_json::from_slice(&bytes)
+                    .map(ControlFlow::Break)
+                    .map_err(|error| OrbitError::Store(format!("accepted coverage: {error}"))),
+                None => Ok(ControlFlow::Continue(())),
             }
-        }
-    }
+        },
+    )?;
+    Ok(result.break_value())
 }
 
 /// Bytes settlement would accept for `attempt` now. Unverifiable evidence is

@@ -31,9 +31,11 @@ pub fn work_class(tags: &[String]) -> String {
     CHANGE_WORK_CLASS.to_string()
 }
 
-/// The template named by the first non-empty `auto-task:` tag.
+/// The template named by the first non-empty `auto-task:` tag. An empty
+/// suffix names no template, so it does not hide a valid tag after it.
 pub fn auto_task_template(tags: &[String]) -> Option<&str> {
-    tags.iter()
-        .find_map(|tag| tag.strip_prefix(AUTO_TASK_TAG_PREFIX))
-        .filter(|template| !template.is_empty())
+    tags.iter().find_map(|tag| {
+        tag.strip_prefix(AUTO_TASK_TAG_PREFIX)
+            .filter(|template| !template.is_empty())
+    })
 }

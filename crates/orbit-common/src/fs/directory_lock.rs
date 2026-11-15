@@ -171,13 +171,26 @@ impl DirectoryLockGuard {
     fn acquire(path: PathBuf, label: &str, options: DirectoryLockOptions) -> io::Result<Self> {
         let started = Instant::now();
         loop {
-            let reclaimed = match create_private_dir(&path) {
+            match create_private_dir(&path) {
                 Ok(()) => break,
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                    reclaim_stale_lock(&path, options.stale_after)?
-                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(error) => return Err(error),
-            };
+            }
+            if reclaim_stale_lock(&path, options.stale_after)? {
+                // The blocker is gone, so the next mkdir should succeed. Retry
+                // it immediately without charging the wait budget: a scheduling
+                // stall before this point must not turn a successful reclaim
+                // into a timeout. If a racing peer recreated the lock in the
+                // meantime, the retry observes `AlreadyExists` again and falls
+                // through to the timed wait below, so this bypass is bounded to
+                // one extra mkdir per pass and the loop still ends in `break`,
+                // `TimedOut`, or `Err`.
+                match create_private_dir(&path) {
+                    Ok(()) => break,
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(error),
+                }
+            }
             let elapsed = started.elapsed();
             if elapsed >= options.timeout {
                 return Err(io::Error::new(
@@ -188,10 +201,8 @@ impl DirectoryLockGuard {
                     ),
                 ));
             }
-            if !reclaimed {
-                notify_directory_lock_wait(&path);
-                thread::sleep(Duration::from_millis(50).min(options.timeout - elapsed));
-            }
+            notify_directory_lock_wait(&path);
+            thread::sleep(Duration::from_millis(50).min(options.timeout - elapsed));
         }
 
         let directory = open_directory(&path)?;

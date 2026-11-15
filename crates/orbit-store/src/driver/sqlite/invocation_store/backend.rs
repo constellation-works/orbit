@@ -29,6 +29,13 @@ impl crate::contracts::InvocationStoreBackend for crate::driver::sqlite::connect
         Self::agent_executions(self, workspace, run_id)
     }
 
+    fn list_agent_executions(
+        &self,
+        query: &crate::contracts::AgentExecutionQuery,
+    ) -> Result<Vec<crate::contracts::AgentExecutionRecord>, orbit_common::OrbitError> {
+        Self::list_agent_executions(self, query)
+    }
+
     fn insert_invocation_trace_record(
         &self,
         workspace_id: &str,

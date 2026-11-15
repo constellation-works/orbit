@@ -8,6 +8,7 @@ use crate::isolated_cli_fixture::Fixture;
 
 fn add_condition(fixture: &Fixture, name: &str, condition: Value) {
     let input = json!({
+        "action": "add",
         "name": name,
         "description": "condition fixture",
         "schedule": {"condition": condition},
@@ -19,7 +20,7 @@ fn add_condition(fixture: &Fixture, name: &str, condition: Value) {
     })
     .to_string();
     fixture
-        .command(&["tool", "run", "orbit.auto_task.add", "--input", &input])
+        .command(&["tool", "run", "orbit.auto_task", "--input", &input])
         .assert()
         .success();
 }

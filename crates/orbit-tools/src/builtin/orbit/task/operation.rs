@@ -10,7 +10,7 @@
 //! verbs refuse a managed run before any field check.
 
 use orbit_common::OrbitError;
-use orbit_common::governance::operation::{OperationInput, OperationVerb};
+use orbit_common::governance::operation::OperationInput;
 use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb, artifact_listing_hint};
 use orbit_common::protocol::tool_input::{reject_unknown_tool_fields, required_string};
 use serde_json::Value;
@@ -23,28 +23,23 @@ use crate::{OrbitBuiltinAction, ToolContext};
 
 impl GuardedModes for TaskVerb {
     fn preempt(self, ctx: &ToolContext, input: &Value) -> Option<Result<Value, OrbitError>> {
+        // Task calls have always required an object; the shared spec also
+        // accepts null as empty input for other nouns.
+        if !input.is_object() {
+            return Some(Err(OrbitError::InvalidInput(
+                "task tool arguments must be an object".into(),
+            )));
+        }
+        if matches!(self, TaskVerb::Add | TaskVerb::Update)
+            && ctx.session_context.origin_session_id.is_some()
+            && input.get(TASK_CLI_OPTIONS_PARAM).is_some()
+        {
+            return Some(Err(OrbitError::InvalidInput(format!(
+                "unknown field '{TASK_CLI_OPTIONS_PARAM}'"
+            ))));
+        }
         match self {
             TaskVerb::ArtifactPut => super::artifact_put::preempt(ctx, input),
-            TaskVerb::ArtifactGet => {
-                // Preserve the list-before-read remedy before required-field
-                // validation; the alias keys still come from the declaration.
-                let path = self
-                    .spec()
-                    .wire_params()
-                    .find(|param| param.name == "path")?;
-                let keys = std::iter::once(path.name)
-                    .chain(path.aliases.iter().copied())
-                    .collect::<Vec<_>>();
-                let listing_hint = artifact_listing_hint(&ctx.session_context);
-                required_string(input, &["id"], "id")
-                    .and_then(|_| {
-                        required_string(input, &keys, "path").map_err(|error| {
-                            OrbitError::InvalidInput(format!("{error}; {listing_hint}"))
-                        })
-                    })
-                    .err()
-                    .map(Err)
-            }
             TaskVerb::Add => {
                 guarded::is_guarded(input).then(|| guarded::write(ctx, input.clone(), true))
             }
@@ -58,6 +53,9 @@ impl GuardedModes for TaskVerb {
                         "an implementation activity cannot set status to blocked; return result.blocker as {kind, evidence} so the step boundary records the blocker and stops the run"
                             .to_string(),
                     )));
+                }
+                if guarded::is_guarded(input) && input.get("repilot") == Some(&Value::Bool(true)) {
+                    return Some(Err(OrbitError::InvalidInput("repilot cannot accompany a guarded update; request orbit.task.recover action repilot after the guarded write completes".into())));
                 }
                 if guarded::is_guarded(input) {
                     return Some(guarded::write(ctx, input.clone(), false));
@@ -86,6 +84,9 @@ impl GuardedModes for TaskVerb {
             TaskVerb::ReviewReset => {
                 managed_run_refusal(ctx, "managed runs cannot reset review budgets")
             }
+            TaskVerb::Repilot => {
+                managed_run_refusal(ctx, "managed runs cannot request another task pilot")
+            }
             TaskVerb::Requeue => {
                 managed_run_refusal(ctx, "managed runs cannot requeue blocked tasks")
             }
@@ -93,6 +94,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::List
             | TaskVerb::Eligible
             | TaskVerb::Lint
+            | TaskVerb::ArtifactGet
             | TaskVerb::LocksList
             | TaskVerb::LocksReserve
             | TaskVerb::LocksRelease
@@ -105,7 +107,7 @@ impl GuardedModes for TaskVerb {
     fn normalize_input(self, input: &mut Value) {
         let boolean_fields: &[&str] = match self {
             TaskVerb::Add => &["allow_missing_context"],
-            TaskVerb::Update => &["allow_missing_context", "allow_drop_system_tags"],
+            TaskVerb::Update => &["allow_missing_context", "allow_drop_system_tags", "repilot"],
             TaskVerb::Delete => &["force"],
             TaskVerb::Show
             | TaskVerb::List
@@ -117,6 +119,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::LocksReserve
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
+            | TaskVerb::Repilot
             | TaskVerb::Requeue
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
@@ -202,6 +205,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::LocksReserve
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
+            | TaskVerb::Repilot
             | TaskVerb::Requeue
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
@@ -216,7 +220,17 @@ impl GuardedModes for TaskVerb {
     fn shape_input(self, ctx: &ToolContext, input: &mut Value) -> Result<(), OrbitError> {
         match self {
             TaskVerb::ArtifactPut => {
-                *input = super::artifact_put::prepare_remote_payload(input.take(), ctx)?;
+                *input = crate::artifact_materialize::prepare_remote_payload(input.take(), ctx)?;
+                Ok(())
+            }
+            TaskVerb::ArtifactGet => {
+                required_string(input, &["id"], "id")?;
+                required_string(input, &["path"], "path").map_err(|error| {
+                    OrbitError::InvalidInput(format!(
+                        "{error}; {}",
+                        artifact_listing_hint(&ctx.session_context)
+                    ))
+                })?;
                 Ok(())
             }
             TaskVerb::Add => {
@@ -237,11 +251,11 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::List
             | TaskVerb::Eligible
             | TaskVerb::Lint
-            | TaskVerb::ArtifactGet
             | TaskVerb::LocksList
             | TaskVerb::LocksReserve
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
+            | TaskVerb::Repilot
             | TaskVerb::Requeue
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
@@ -267,6 +281,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::LocksReserve
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
+            | TaskVerb::Repilot
             | TaskVerb::Requeue
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
@@ -284,9 +299,7 @@ fn managed_run_refusal(
     ctx: &ToolContext,
     refusal: &'static str,
 ) -> Option<Result<Value, OrbitError>> {
-    ctx.orbit_host
-        .as_ref()
-        .is_some_and(|host| host.task_scope().run_id.is_some())
+    ctx.is_managed_run()
         .then(|| Err(OrbitError::CapabilityDenied(refusal.into())))
 }
 

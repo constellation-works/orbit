@@ -1,0 +1,14 @@
+# Weekly crew memory dreaming mint, run by the seeded `crew_memory_dream`
+# routine. Experimental: the action mints nothing until crew memory is
+# enabled and a memory experiment is running.
+schemaVersion: 2
+kind: Job
+metadata:
+  name: crew_memory_dream_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 1
+  steps:
+    - id: mint
+      target: activity:crew_memory_dream

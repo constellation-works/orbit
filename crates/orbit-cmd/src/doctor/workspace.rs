@@ -1,7 +1,6 @@
 use std::fs;
 
 use orbit_common::protocol::yaml::parse_routine_yaml;
-use orbit_config::{ConfigRoots, ResolvedConfig};
 
 use super::system::human_bytes;
 use super::*;
@@ -431,8 +430,8 @@ pub(super) fn doctor_check_task_reservations(runtime: &OrbitRuntime) -> Workspac
 /// `retention.runs_days`. Measured without the blob reference scan, so the
 /// blob figure is an upper bound; `orbit gc audit` reports the exact one.
 ///
-/// Warns when the store file is larger than `retention.store_warn_bytes` and
-/// this workspace has no enabled routine targeting `store_gc_pipeline`.
+/// Warns when the store file is larger than [`STORE_WARN_BYTES`] and this
+/// workspace has no enabled routine targeting `store_gc_pipeline`.
 pub(super) fn doctor_check_store_retention(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     const CHECK: &str = "store-retention";
     let overview = match runtime.store_retention_overview() {
@@ -460,16 +459,7 @@ pub(super) fn doctor_check_store_retention(runtime: &OrbitRuntime) -> WorkspaceD
         human_bytes(overview.store.file_bytes),
         human_bytes(overview.store.freelist_bytes),
     );
-    let threshold = match store_warn_bytes(runtime) {
-        Ok(threshold) => threshold,
-        Err(error) => {
-            return check(
-                CHECK,
-                WorkspaceDoctorStatus::Warning,
-                format!("cannot read retention.store_warn_bytes: {error}"),
-            );
-        }
-    };
+    let threshold = STORE_WARN_BYTES;
     let routine = match store_gc_routine(runtime) {
         Ok(routine) => routine,
         Err(error) => {
@@ -485,7 +475,7 @@ pub(super) fn doctor_check_store_retention(runtime: &OrbitRuntime) -> WorkspaceD
             CHECK,
             WorkspaceDoctorStatus::Warning,
             format!(
-                "store file {} exceeds retention.store_warn_bytes ({}). No store-gc routine is \
+                "store file {} exceeds the {} store-size warning threshold. No store-gc routine is \
                  enabled. {message} On a large store, set retention.runs_days to 30 to reclaim \
                  more terminal run state than the 60-day default while preserving 30-day reliability \
                  and forecast-accuracy evidence. Audit pruning removes older Health Events, Incidents, \
@@ -501,13 +491,12 @@ pub(super) fn doctor_check_store_retention(runtime: &OrbitRuntime) -> WorkspaceD
     check(CHECK, WorkspaceDoctorStatus::Ok, message)
 }
 
-fn store_warn_bytes(runtime: &OrbitRuntime) -> Result<u64, OrbitError> {
-    let config = ResolvedConfig::load(&ConfigRoots::new(
-        runtime.global_root(),
-        runtime.shared_root(),
-    ))?;
-    Ok(config.snapshot.retention_store_warn_bytes)
-}
+/// Store file size above which `orbit doctor` warns without store GC: 1 GiB.
+/// A host store past this with store GC disabled is worth a warning; a normal
+/// fixture store is not.
+///
+/// The former `retention.store_warn_bytes` default, fixed when the key was removed [ORB-22808].
+const STORE_WARN_BYTES: u64 = 1024 * 1024 * 1024;
 
 struct StoreGcRoutine {
     enabled: bool,

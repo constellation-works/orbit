@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit development reference: validation, tests, docs index, MSRV, supply chain, vendored JS"
-last_validated: 2026-10-30
+last_validated: 2026-11-14
 ---
 
 # Development Reference
@@ -17,6 +17,25 @@ The detailed rules behind [CONTRIBUTING.md](../CONTRIBUTING.md). Read the sectio
 | Changing the dashboard or website | [Dashboard fixtures](#dashboard-http-integration-fixtures), [Browser checks](#browser-checks-on-a-prepared-host) |
 | Changing the desktop app in `desktop/` | [Desktop app](#desktop-app) |
 | Changing toolchains, platforms or dependencies | [MSRV](#toolchain-msrv), [Windows](#windows), [Supply-chain](#supply-chain-cargo-deny), [Vendored JS](#vendored-dashboard-javascript) |
+
+## Run build provenance
+
+New job runs store `build` with the compiled Orbit `version`, full `source_commit`,
+and `dirty` flag. `orbit run show --json` and `orbit run history --json` expose
+that record at `.run.build` and `.runs[].build`, respectively. Admission records the submitting build; the winning first
+start replaces it with the worker's build, and subsequent updates preserve it.
+Historical rows remain `null`, including after migration or inspection.
+
+`orbit-cli/build.rs` embeds Git identity while compiling the `orbit` binary,
+watching worktree HEAD, branch refs and source changes so an incremental
+rebuild refreshes it. `main` registers that identity before any store opens.
+The embed sits on the leaf binary so a provenance refresh recompiles `orbit`
+alone. Processes that never register (other crates' tests and examples)
+record unknown provenance: no source commit and `dirty: true`. Builds from
+source archives without Git record a null source commit. Dirty builds
+identify their base commit but cannot prove a fix was included. Deployment
+analysis must use clean run builds and commit ancestry, never the current
+checkout, semantic version order, or today's installed binary.
 
 ## Validation and CI
 
@@ -41,8 +60,9 @@ silently become a zero-test pass.
 
 The macOS and CodeQL workflows do not run on pull requests: GitHub's
 hosted-runner concurrency was the merge bottleneck, and none of their checks is
-required. They run on `agent-main` and `main` pushes (CodeQL also weekly), and a
-failure there becomes a repair task, as a CodeQL alert does. Website checks run
+required. The macOS workflow runs on `agent-main` and `main` pushes; CodeQL runs
+on `main` pushes and daily on `agent-main`. A failure there becomes a repair
+task, as a CodeQL alert does. Website checks run
 on pull requests only when they change `website/**`, `CHANGELOG.md` or the
 website workflow, and on `main` pushes with the same paths. Their check names stay stable:
 `macOS Clippy (informational)`,
@@ -53,7 +73,16 @@ target/filter listings and native execution evidence validation. Push runs of
 `ci-macos.yml` and `codeql.yml` share one group per branch with cancellation off: one run
 executes and one waits, and a newer push replaces the waiting run. An
 intermediate commit can therefore get no macOS run, while the newest commit
-always does. Scheduled and dispatch runs keep a group per run. Required-check
+always does. A `workflow_dispatch` of `ci-macos.yml` keeps a group per run, so later pushes do not replace it. `codeql.yml` uses one group per ref for push, schedule and dispatch, still with cancellation off. A docs-only push
+whose parent already has a successful completed run of the same workflow skips
+that workflow's heavy jobs: both macOS build jobs, or all three CodeQL analysis
+jobs. The parent's result still covers that unchanged code. A push that changes
+any non-docs path, or a docs-only push whose parent has no such proof, starts
+those jobs.
+`workflow_dispatch` and CodeQL's daily schedule always run every job. A
+docs-only `agent-main` tip therefore has no macOS result from the push; the
+dispatch route under [Getting a completed result for a chosen agent-main SHA](#getting-a-completed-result-for-a-chosen-agent-main-sha)
+is how that SHA gets one. A dispatch run is not docs-scoped. Required-check
 settings are managed separately in the repository's provider rules.
 
 The task and MCP CLI integration binaries use named contract tables, with
@@ -72,8 +101,9 @@ asks for it. Keep the brief's evidence artifacts and execution summary.
 - `make ci-guards` (or `scripts/ci-guardrails.sh --static`) runs the file and
   metadata-only subset of the fast repository guards before candidate handoff.
   It includes unit-test admissions, QA surface inventory, public artifact IDs,
-  test shell waits, dependency direction, orphan modules, doc links and indexes,
-  and the skill mirror check. The QA inventory uses `--check --static` to omit
+  test shell waits, dependency direction, orphan modules, vendored standards
+  integrity (`docs/standards/check.sh`), doc links and indexes, and the skill
+  mirror check. The QA inventory uses `--check --static` to omit
   its fixture self-tests and explicitly request offline metadata. Cargo is used
   only for metadata, with `CARGO_NET_OFFLINE=true`; no compilation, formatting,
   Rust tests or network requests run. It needs Python 3.11+, PyYAML, ripgrep and
@@ -91,9 +121,9 @@ asks for it. Keep the brief's evidence artifacts and execution summary.
   passes and warnings-denied rustdoc for each changed crate, sequentially:
 
   ```bash
-  scripts/build-budget.py -- cargo clippy -p <crate> --lib --bins -- -D warnings -D clippy::disallowed_methods
+  scripts/build-budget.py -- cargo clippy -p <crate> --lib --bins -- -D warnings -A clippy::disallowed_methods
   scripts/build-budget.py -- cargo clippy -p <crate> --all-targets -- -D warnings -A clippy::disallowed_methods
-  RUSTDOCFLAGS="-D warnings" scripts/build-budget.py -- cargo doc --no-deps -p <crate>
+  RUSTDOCFLAGS="-D warnings" scripts/with-test-build-lint.sh scripts/build-budget.py -- cargo doc --no-deps -p <crate>
   ```
 
   Replace `<crate>` with the package name. For a crate with no library
@@ -101,21 +131,27 @@ asks for it. Keep the brief's evidence artifacts and execution summary.
   production Clippy command. Keep the whole final-validation
   commands with the pipeline. These scoped checks cover production channel
   restrictions, test targets, and private/broken documentation links.
-- `make ci-fast` runs independent repository script checks through a background pool. Its width is the build budget's Cargo job count (`scripts/build-budget.py --cargo-jobs`: `ORBIT_CARGO_JOBS`, then `CARGO_BUILD_JOBS`, then the `cargo-jobs` file, default 4), so guard fan-out never exceeds the same budget Cargo receives. The pool is a sliding window over launch order: a new guard starts only when the oldest launched guard finishes, even if later guards finished earlier, so a slow early guard keeps the slots of those finished guards occupied until it ends. Each script's output is captured separately and printed in launch order, per-script wall times are printed, and every failing script is named before the first failure's exit code is returned. Fixture self-tests run only when their inputs change: `scripts/`, `.github/`, `Makefile`, `.cargo/`, the root Cargo manifest/lockfile, `install.sh`, `RELEASING.md`, `plugin/`, `npm/`, `.agents/` or `.claude-plugin/`. Self-tests that assert wall-clock time or timeouts, measure build-budget admission, or drive a real Cargo target run one at a time, at normal priority, in a separate exclusive lane: `test-build-budget.sh`, `test-ci-fast-guards.py`, `test-ci-test-affected.py`, `test-codeql-rust-local.py`, `test-compiler-cache.sh` and `test-compiler-cache-namespaces.sh`. The lane starts after formatting, beside the pool. Each pool guard and, in full mode, the workflow test build starts in Linux's idle scheduling class, with a direct `nice -n 19` launch where idle scheduling is unavailable. Priority changes apply to the launching command itself, so macOS workers need no permission to renice a parent process. Nice scheduling lowers competition for CPU; Linux's idle class uses only CPU time the exclusive suites leave idle. `test-ci-download-verified.py` spends nearly all of its wall time in fixed slow-child and hang delays, so it starts beside the pool, outside its window, and is reaped after the pool drains. Its helper deadlines run on an injected clock, and a fixture step fails only after 120 s without output. Pooled workflow and fixture self-tests that used a short subprocess wall-clock cap share one hang ceiling in `scripts/self_test_hang.py` (`HANG_CEILING_SECONDS`, 120 s, the fixture-step deadline). A step that exits is not failed for wall time. A step still running at the ceiling is killed, and the failure names the step or command. The removed 10 s and 20 s caps failed correct release and PR-state steps when idle scheduling stretched wall time. Timeouts that are the subject of a test, including the exclusive-lane suites and the QA sweep's supervision cases, stay as they are. Every other guard and self-test shares the pool. In full mode the pool and the exclusive lane overlap the workflow test build. Both join before the workspace tests start, the pool first, so no guard shares the host with their elapsed-time and timeout assertions and a pool failure stays the job's exit status. Nothing in the pool depends on that build or takes the Cargo build lock. Selection uses the same `CI_TEST_BASE` override and merge-base fallback as affected tests and includes committed, staged, unstaged, deleted and untracked paths. If Git cannot resolve the base or diff, every self-test runs. The QA sweep inventory check still runs for crates-only changes because it reads live CLI/MCP/web surfaces. Full `make ci` always runs all self-tests. The MSRV compile check is timed on its own, separate from those scripts: make prints `ci-fast: MSRV check <seconds> s` for `cargo +<MSRV> check --workspace --locked`, and each guardrail keeps its own `ci-guardrails: <name> <seconds> s` line.
+  All three run under the one lint environment (`-D warnings -A
+  clippy::disallowed_methods`, matching `Makefile` `ci-lint`): the
+  crate-root `deny(clippy::disallowed_methods)` attributes reject
+  disallowed methods in production code over the command-line `-A`,
+  test and test-feature code stays exempt, and the doc build reuses
+  Clippy's check instead of re-checking with plain rustc.
+- `make ci-fast` runs independent repository script checks through a background pool. Its width is the build budget's Cargo job count (`scripts/build-budget.py --cargo-jobs`: `ORBIT_CARGO_JOBS`, then `CARGO_BUILD_JOBS`, then the `cargo-jobs` file, default 4), so guard fan-out never exceeds the same budget Cargo receives. The pool admits a new guard whenever any running member finishes, so a slow early guard does not keep the slots of guards that have already exited; at most that many guards run at once. Each script's output is captured separately and printed in launch order, per-script wall times are printed, and every failing script is named before the first failure's exit code is returned. Fixture self-tests run only when their inputs change: `scripts/`, `.github/`, `Makefile`, `.cargo/`, the root Cargo manifest/lockfile, `install.sh`, `RELEASING.md`, `docs/dev/qa/path-leases-listener-sudo.md`, `docs/standards/`, `AGENTS.md`, `CLAUDE.md`, `plugin/`, `npm/`, `.agents/` or `.claude-plugin/`. Self-tests that assert wall-clock time or timeouts, measure build-budget admission, or drive a real Cargo target run one at a time, at normal priority, in a separate exclusive lane: `test-build-budget.sh`, `test-ci-fast-guards.py`, `test-ci-test-affected.py`, `test-codeql-rust-local.py`, `test-compiler-cache.sh` and `test-compiler-cache-namespaces.sh`. The lane starts after formatting, beside the pool. Each pool guard and, in full mode, the workflow test build starts in Linux's idle scheduling class, with a direct `nice -n 19` launch where idle scheduling is unavailable. Priority changes apply to the launching command itself, so macOS workers need no permission to renice a parent process. Nice scheduling lowers competition for CPU; Linux's idle class uses only CPU time the exclusive suites leave idle. `test-ci-download-verified.py` spends nearly all of its wall time in fixed slow-child and hang delays, so it starts beside the pool, outside its window, and is reaped after the pool drains. Its helper deadlines run on an injected clock, and a fixture step fails only after 120 s without output. Pooled workflow and fixture self-tests that used a short subprocess wall-clock cap share one hang ceiling in `scripts/self_test_hang.py` (`HANG_CEILING_SECONDS`, 120 s, the fixture-step deadline). A step that exits is not failed for wall time. A step still running at the ceiling is killed, and the failure names the step or command. The removed 10 s and 20 s caps failed correct release and PR-state steps when idle scheduling stretched wall time. Timeouts that are the subject of a test, including the exclusive-lane suites and the QA sweep's supervision cases, stay as they are. Every other guard and self-test shares the pool. In full mode the pool and the exclusive lane overlap the workflow test build. Both join before the workspace tests start, the pool first, so no guard shares the host with their elapsed-time and timeout assertions and a pool failure stays the job's exit status. Nothing in the pool depends on that build or takes the Cargo build lock. Selection uses the same `CI_TEST_BASE` override and merge-base fallback as affected tests and includes committed, staged, unstaged, deleted and untracked paths. If Git cannot resolve the base or diff, every self-test runs. The QA sweep inventory check still runs for crates-only changes because it reads live CLI/MCP/web surfaces. Full `make ci` always runs all self-tests. The MSRV compile check is timed on its own, separate from those scripts: make prints `ci-fast: MSRV check <seconds> s` for `cargo +<MSRV> check --workspace --locked`, and each guardrail keeps its own `ci-guardrails: <name> <seconds> s` line.
 - The pooled hang guard and verified-download fixture reserve each command's process group with a separate owned child blocked on an stdin pipe. Polling or communicating with an exited command may reap it; the anchor stays unreaped through the final group signal, then both owned children are reaped and their pipes closed. Cleanup also runs after successful commands and startup failures. This uses Python 3.11's `process_group`, without `preexec_fn`, so threaded fixtures can use it. Descendants that intentionally leave the group need their own identity-bound guard. The public runner regressions in `test-pr-state-workflows.py` and `test-ci-download-verified.py` share an intercepted process model in `scripts/self_test_hang_regression.py`: reaping immediately permits a replacement group, and every signal must still have an owned reservation. They cover exited leaders and escaped pipe holders without PID churn or synthetic load; the real descendant-cleanup fixtures remain enabled.
 - `make ci-fast` passing says nothing about the Rust tests. Focused test filters help you investigate but do not replace `make ci-test-affected`: an existing test can encode behavior your change breaks even when your new tests pass.
 - Run Cargo-based gates (`ci-fast`, `ci-test-affected`, `goldens`, `ci-lint`, `cargo test` / `nextest`) one at a time when they share a target directory, or give each its own `CARGO_TARGET_DIR`. Concurrent gates in one target can rebuild `target/debug/orbit` under running generation-bound fixtures and fail them.
 - Guardrails need Python 3.11+ for `tomllib`; stock macOS `/usr/bin/python3` is 3.9. [require-python.sh](../scripts/require-python.sh) runs first in `make ci-fast`, `make ci-lint` and `ci-guardrails.sh` and stops with the version and interpreter it found. The selected fixture self-tests also require PyYAML (`import yaml`), including the verified-download fixture. After resolving self-test selection, `ci-guardrails.sh` checks that import with the same `python3` before Cargo or any repository guard runs. Full CI always requires it; fast mode requires it whenever self-tests are selected, including unresolved selection. Missing prerequisites fail; nothing installs automatically. Put a supported `python3` first on `PATH`, then set up its environment as below. The standalone local workflow YAML linter may still warn and skip without PyYAML; that optional boundary never substitutes for the mandatory selected fixtures. The compiler-cache namespace regression (`scripts/test-compiler-cache-namespaces.sh`) also needs Python 3.11+ for `subprocess.Popen(process_group=...)`; when the cache and user namespaces are available, it runs the same preflight before starting any participant.
-- Linux CI installs nextest, cargo-deny, uv and ripgrep through [ci-download-verified.sh](../scripts/ci-download-verified.sh): `scripts/ci-download-verified.sh HTTPS_URL SHA256 NEW_FILE`. Each invocation allows at most three GET attempts under one 60-second monotonic budget, including backoff and digest verification. Only curl DNS, connection and timeout exits (6, 7, 28), and HTTP 429/500/502/503/504 with curl exit 22, can retry. TLS, authentication, partial transfers, unknown outcomes and digest mismatches fail closed. HTTPS-only redirects and normal certificate checks remain enabled; curl configuration files and internal retries are disabled. Each attempt uses fresh bytes, and only a matching digest publishes the new destination; existing destinations are refused. Installer traps remove scratch archives on success or failure, and archive/version checks never retry. Attempt diagnostics and total elapsed time remain in the Check job log: all setup attempts, backoff, failures and post actions count toward the complete job's 600-second budget. Offline public helper and workflow installer fixtures run in the existing guardrails via [test-ci-download-verified.py](../scripts/test-ci-download-verified.py).
-  The short-deadline fixtures publish completed receipts by atomic replacement and signal readiness through an inherited pipe. That self-test points `ORBIT_CI_DOWNLOAD_FAKE_CLOCK` at a file holding a decimal second count. The helper sleeps by advancing that clock exactly, and a stalled transport waits until the helper arms the attempt deadline, then crosses it so the same watchdog kills and reaps the child. Budgets stay 0.3s and 1.4s; host scheduling cannot move the outcome. The fixtures assert exact receipt counts, remaining second-attempt budget, unsuccessful exit, destination absence, scratch cleanup and child reaping. Cancellation barriers reproduce interrupted in-place receipts and transport startup without synthetic host load. Backoff in the transient-table, checksum and attempt-limit cases also runs on that virtual clock: those cases record their delays (one second; one then two seconds) instead of sleeping them. The real-TLS boundary case and the remaining download and installer cases leave the variable unset and use `time.monotonic` with the helper's real `subprocess` timeout, so the real-TLS recovery case keeps its one-second backoff as a real sleep. The self-test does not put a short wall-clock cap on those commands: a child that exits, or keeps writing, is not failed for host speed, and a child that produces no progress is killed at a hang ceiling no correct local run approaches, with a diagnostic that names the hung step.
+- Linux CI installs nextest, cargo-deny, uv and ripgrep through [ci-download-verified.sh](../scripts/ci-download-verified.sh): `scripts/ci-download-verified.sh HTTPS_URL SHA256 NEW_FILE`. Each invocation retries transient responses until one monotonic deadline is spent; there is no fixed attempt count. The default and maximum budget is 60 seconds, and `--budget-seconds` may lower it. The deadline covers every GET attempt, the backoff between attempts (one second more after each failed attempt, capped at five seconds) and digest verification. A retry starts only when the remaining budget exceeds its backoff; if the budget runs out after transient responses, the last line reports `class=transient`. Only curl DNS, connection and timeout exits (6, 7, 28), and HTTP 429/500/502/503/504 with curl exit 22, can retry. TLS, authentication, partial transfers, unknown outcomes and digest mismatches fail closed. HTTPS-only redirects and normal certificate checks remain enabled; curl configuration files and internal retries are disabled. Each attempt uses fresh bytes, and only a matching digest publishes the new destination; existing destinations, including those created during publication, are refused without replacement. Warm-cache cross-filesystem copies are verified in destination-local scratch before no-replace publication. Installer traps remove scratch archives on success or failure, and archive/version checks never retry. Attempt diagnostics and total elapsed time remain in the Check job log: all setup attempts, backoff, failures and post actions count toward the complete job's 400-second budget. Offline fixtures inject file and symlink publication races on warm and cold paths, exercise the cross-filesystem cache fallback, and check QA workspace and artifact readback against the real built-in validators. Public helper and workflow installer fixtures run in the existing guardrails via [test-ci-download-verified.py](../scripts/test-ci-download-verified.py).
+  The short-deadline fixtures publish completed receipts by atomic replacement and signal readiness through an inherited pipe. That self-test points `ORBIT_CI_DOWNLOAD_FAKE_CLOCK` at a file holding a decimal second count. The helper sleeps by advancing that clock exactly, and a stalled transport waits until the helper arms the attempt deadline, then crosses it so the same watchdog kills and reaps the child. Budgets stay 0.3s and 1.4s; host scheduling cannot move the outcome. The fixtures assert exact receipt counts, remaining second-attempt budget, unsuccessful exit, destination absence, scratch cleanup and child reaping. Cancellation barriers reproduce interrupted in-place receipts and transport startup without synthetic host load. Backoff in the transient-table, checksum and budget-exhaustion cases also runs on that virtual clock: the transient-table and checksum cases record one second, and the exhaustion case records 1, 2, 3 and 4 seconds before its next five-second delay exceeds the remaining budget. Each case records its delays instead of sleeping them. The real-TLS boundary case and the remaining download and installer cases leave the variable unset and use `time.monotonic` with the helper's real `subprocess` timeout, so the real-TLS recovery case keeps its one-second backoff as a real sleep. The self-test does not put a short wall-clock cap on those commands: a child that exits, or keeps writing, is not failed for host speed, and a child that produces no progress is killed at a hang ceiling no correct local run approaches, with a diagnostic that names the hung step.
 - Skill docs are canonical under `crates/orbit-core/assets/skills/`. Edit them there and run `scripts/sync-plugin-skills.sh` to regenerate `plugin/skills/`; `make ci-fast` fails on a stale mirror.
 - [check-doc-links.py](../scripts/check-doc-links.py) checks tracked and non-ignored untracked Markdown, and fails on a missing relative link target, heading anchor or backticked repository path that is not a tracked or non-ignored untracked file present in the worktree. Website links resolve through Starlight routes and code blocks are ignored; its exclusions (historical decisions, RCAs, templates, changelog, fixture prose) are listed in the script. Run `python3 scripts/check-doc-links.py`; its fixtures are in `python3 scripts/test-ci-fast-guards.py`.
-- Repository source guards reuse work only within one invocation. The orphan-module guard enumerates the same production and sibling-test trees and masks each source once for lexical module declarations. Its scan includes hidden, ignored and symlinked source files, matching the physical tree checked for orphans so ignore rules cannot hide module owners. Symlinked `lib.rs` and `main.rs` entrypoints are discovered directly, including roots that share a physical source but own different logical directories. It resolves ordinary declarations and direct `#[path = "..."]` literals, accepting whitespace and Rust comments between attribute tokens, including between `#` and `[` (for example, `# /* comment */ [path = "other.rs"]`), as well as trailing line and nested block comments, ordinary Rust escapes (quote, backslash, ASCII `\xNN`, Unicode `\u{...}`, control characters and line continuations), and raw `r"..."` and hash-delimited `r#"..."#` strings (with matching hash counts), using [Rust's enclosing module directory rules](https://doc.rust-lang.org/reference/items/modules.html#the-path-attribute): explicit paths outside inline modules start at the source directory; ordinary declarations and inline modules add their directory components and, for ordinarily loaded file modules, the source stem. A file loaded through an explicit path instead owns its containing directory for ordinary children and inline descendants; the guard follows declarations to carry that ownership into each child. Symlinked source files retain their logical owner directory and filename for child resolution, while canonical file identity is used for registration and source caching. Indexing distinguishes each source-directory/child-directory context for a physical owner; canonical source directories make growing directory-symlink spellings converge on already indexed contexts, without rejecting finite nested reuse of the same physical file. Directory discovery does not follow symlinks; declared file destinations may resolve through them. An inline module's own path attribute replaces its default directory. An external module's explicit path replaces its ordinary destination: `#[path="other.rs"] mod lost;` registers only `other.rs`, leaving a sibling `lost.rs` orphaned. The scan masks comments and literals to find declarations, then masks only comments within each attribute to preserve its actual path literal. It tracks nested braces and compares actual destination files, including `.` and `..` components; an unrelated file with the same basename cannot register a production module or sibling test. It accepts declarations regardless of cfg, rather than evaluating build configurations, and does not expand macros. The disposable command fixtures in `python3 scripts/test-ci-fast-guards.py OrphanModuleTests` compile miniature crates with `rustc --test` and enumerate their tests to verify ordinary, raw-string, redirected, inline and nested path registration while keeping same-name and same-basename orphan files rejected. Escaped/spaced attribute (including separated hash/bracket openings), trailing-comment attribute, symlink-owner and symlinked crate-root regressions also execute the registered tests, retain genuine orphan controls, and check that a growing symlink cycle terminates. The CLI import guard reads each source once with the same comment/string masking and per-crate diagnostics. The unused-dependency guard collects reference names once per file and combines them only within the original normal, dev or build scope. Each later invocation reads the current files again; no persisted source cache, reduced guard selection or wider concurrency is involved.
+- Repository source guards reuse work only within one invocation. The orphan-module guard enumerates the same production and sibling-test trees and masks each source once for lexical module declarations. Its scan includes hidden, ignored and symlinked source files, matching the physical tree checked for orphans so ignore rules cannot hide module owners. Symlinked `lib.rs` and `main.rs` entrypoints are discovered directly, including roots that share a physical source but own different logical directories. It resolves ordinary declarations and direct `#[path = "..."]` literals, accepting whitespace and Rust comments between attribute tokens, including between `#` and `[` (for example, `# /* comment */ [path = "other.rs"]`), as well as trailing line and nested block comments, ordinary Rust escapes (quote, backslash, ASCII `\xNN`, Unicode `\u{...}`, control characters and line continuations), and raw `r"..."` and hash-delimited `r#"..."#` strings (with matching hash counts), using [Rust's enclosing module directory rules](https://doc.rust-lang.org/reference/items/modules.html#the-path-attribute): explicit paths outside inline modules start at the source directory; ordinary declarations and inline modules add their directory components and, for ordinarily loaded file modules, the source stem. A file loaded through an explicit path instead owns its containing directory for ordinary children and inline descendants; the guard follows declarations to carry that ownership into each child. Symlinked source files retain their logical owner directory and filename for child resolution, while canonical file identity is used for registration and source caching. Indexing distinguishes each source-directory/child-directory context for a physical owner; canonical source directories make growing directory-symlink spellings converge on already indexed contexts, without rejecting finite nested reuse of the same physical file. Directory discovery does not follow symlinks; declared file destinations may resolve through them. An inline module's own path attribute replaces its default directory. An external module's explicit path replaces its ordinary destination: `#[path="other.rs"] mod lost;` registers only `other.rs`, leaving a sibling `lost.rs` orphaned. The scan masks comments and literals to find declarations, then masks only comments within each attribute to preserve its actual path literal. It tracks nested braces and compares actual destination files, including `.` and `..` components; an unrelated file with the same basename cannot register a production module or sibling test. It accepts declarations regardless of cfg, rather than evaluating build configurations, and does not expand macros. Traversal starts only at conventional Cargo entrypoints (`src/lib.rs`, `src/main.rs`, and binaries under `src/bin/`); directory `mod.rs` files, including sibling `tests/mod.rs`, must themselves be reachable. A disconnected owner cannot register its children. The disposable command fixtures in `python3 scripts/test-ci-fast-guards.py OrphanModuleTests` compile miniature crates with `rustc --test` and enumerate their tests to verify ordinary, raw-string, redirected, inline and nested path registration while keeping same-name and same-basename orphan files rejected. Escaped/spaced attribute (including separated hash/bracket openings), trailing-comment attribute, symlink-owner and symlinked crate-root regressions also execute the registered tests, retain genuine orphan controls, and check that a growing symlink cycle terminates. The CLI import guard reads each source once with the same comment/string masking and per-crate diagnostics. The unused-dependency guard collects reference names once per file and combines them only within the original normal, dev or build scope. Each later invocation reads the current files again; no persisted source cache, reduced guard selection or wider concurrency is involved.
 - The guard fixtures retain full runner success/failure checks for shell-wait routing, then exercise the remaining syntax and exception rows directly through the checker executable. Action-pin fixtures record interleaved curl attempts and exact sleep requests instead of waiting for simulated network retries; the production guard still performs its normal backoff.
 - [check-unused-dependencies.py](../scripts/check-unused-dependencies.py) fails on a manifest dependency its sources never use, a normal dependency only test targets use, or a `[workspace.dependencies]` entry no member declares. Keep a feature-only dependency in its `FEATURE_ONLY` allowlist with a reason. Self-test: `python3 scripts/test-check-unused-dependencies.py`.
-- [check-dashboard-browser-fixtures.py](../scripts/check-dashboard-browser-fixtures.py) runs in the static guard list beside `check-windows-portability.py` (`make ci-guards`) and fails when a Playwright `*_browser.mjs` fixture under `crates/orbit-web/` queries a literal element id, CSS class, `data-*` attribute or `/api/...` path with no occurrence in `crates/orbit-web/assets/dashboard/` or the web API routes; each failure names the fixture, line and missing hook. An id or class the assets build from a template satisfies only a hook of that kind the whole template can produce. An element-id probe is exempt only in a supported explicit absence assertion, such as `assert.equal(document.getElementById('removed'), null)` or `assert.ok(document.getElementById('removed') === null)`. A comparison alone, including an `if (... === null) throw ...` required-element guard, stays a query. For absence booleans returned by browser fixtures, use `await page.locator('#removed').count() === 0`. It catches removed or renamed hooks, not computed geometry such as a hard-coded track width. Self-test: `python3 scripts/test-dashboard-browser-fixtures.py`.
 - [check-linux-gated-test-items.py](../scripts/check-linux-gated-test-items.py) runs in the static guard list beside `check-windows-portability.py` (`make ci-guards`) and fails when an import, test helper `fn`/`const`/`static` or fixture `mod` in a Rust test file or `#[cfg(test)]` module is left ungated while every use site is compiled out on macOS (typically `#[cfg(target_os = "linux")]`), which turns native macOS Clippy red under `-D warnings` with `unused import` or `never used`. It reuses the Windows guard's cfg evaluation and module edges for a macOS target, scans `crates/` and `desktop/`, and names the file, line and item of each failure. It is lexical: it matches use sites by name within the item's block and the modules declared or `include!`d in it, skips `pub` items, UpperCamel imports (a trait import is also used implicitly through method calls) and items under `allow(dead_code)`/`allow(unused_imports)` (a `cfg_attr` allowance counts only where its condition may hold on macOS), and does not reach dead code behind macros. Self-test: `python3 scripts/test-linux-gated-test-items.py`.
-- [check-windows-portability.py](../scripts/check-windows-portability.py) runs in `make ci-fast` and rejects recognizable Unix std APIs reachable on Windows, including test helpers. It checks Rust files under `crates/`, follows external and inline module declarations (including `#[path]`), and accepts enclosing item, module or file gates that exclude Windows. It evaluates `unix`, `windows`, `target_os`, `target_family`, `all`/`any`/`not`, and conditional `cfg_attr`; unknown features and test flags remain potentially enabled. `cfg!(unix)` does not remove code from compilation. The static approach runs on every worker without installing a Windows target or linker, and needs no path allowlist. It scans Unix std paths/grouped imports, distinctive extension calls such as `from_mode`, `pre_exec` and `ino`, qualified permission/metadata trait calls and `permissions().mode()`. It ignores comments and literals. It does not expand macros or infer receiver types, so ambiguous application methods such as `mode`, `set_mode` and `blocks` are checked only in recognizable std forms; hosted Windows compilation remains the complete check. Self-test: `python3 scripts/test-windows-portability.py`.
+- [check-openpty-portability.py](../scripts/check-openpty-portability.py) runs in `make ci-guards` and rejects recognizable immutable fourth or fifth `libc::openpty` arguments in Rust code reachable on macOS. It shares the Windows guard tokenizer, cfg evaluation and module reachability, ignores comments and literals, and reports the argument and file:line. This lexical check does not resolve aliased calls, function pointers, macro-generated calls, pointer locals, turbofish `null::<T>()` or other unknown pointer expressions; native compilation remains necessary. Self-test: `python3 scripts/test-openpty-portability.py`, also selected by the existing guard self-test route when script inputs change.
+- [check-windows-portability.py](../scripts/check-windows-portability.py) runs in `make ci-fast` and rejects recognizable Unix std APIs reachable on Windows, including test helpers. It checks Rust files under `crates/`, follows external and inline module declarations (including `#[path]`). An inline module's `#[path]` replaces that module's directory for its children, the same way an external `#[path]` replaces the file, and both ordinary and raw string literals (`r"..."`, `r#"..."#`) count as path attributes. It accepts enclosing item, module or file gates that exclude Windows. Ordinary file modules resolve children under their stem directory; `mod.rs`, Cargo roots and files loaded through `#[path]` resolve children beside the file. The shared scanner tracks these loading contexts separately, including inline descendants, so excluding one context does not activate its children through another, while independent Cargo targets remain checked. It evaluates `unix`, `windows`, `target_os`, `target_family`, `all`/`any`/`not`, and conditional `cfg_attr`; unknown features and test flags remain potentially enabled. `cfg!(unix)` does not remove code from compilation. The static approach runs on every worker without installing a Windows target or linker, and needs no path allowlist. It scans Unix std paths/grouped imports, distinctive extension calls such as `from_mode`, `pre_exec` and `ino`, qualified permission/metadata trait calls and `permissions().mode()`. It ignores comments and literals. It does not expand macros or infer receiver types, so ambiguous application methods such as `mode`, `set_mode` and `blocks` are checked only in recognizable std forms; hosted Windows compilation remains the complete check. Self-test: `python3 scripts/test-windows-portability.py`.
 
 For contributor setup, create a virtual environment with your supported Python,
 activate it before validation, and install the mandatory module there:
@@ -190,7 +226,7 @@ elapsed time instead of sleeping, and does not wake on a reaped worker).
 The quiet-deadline child fixture injects its bound through
 `run_child_test_within`. The real child and the real reap stay in place.
 
-`make ci-test-affected` (`scripts/ci-test-affected.py`) reads Cargo metadata without compiling. It selects every crate with changed paths plus all transitive reverse workspace dependents (dev, build, renamed, optional and target-specific edges), then runs their library, binary and integration test targets with nextest (Cargo if nextest is missing) and Cargo doctests, under the shared [build-budget admission](runbooks/build-budget.md). A change under `crates/orbit-core/` selects `orbit-core`, `orbit-cmd`, `orbit-web` and `orbit-cli`.
+`make ci-test-affected` (`scripts/ci-test-affected.py`) reads Cargo metadata without compiling. It selects every crate with changed paths plus all transitive reverse workspace dependents (dev, build, renamed, optional and target-specific edges), then runs their library, binary and integration test targets with nextest (Cargo if nextest is missing), under the shared [build-budget admission](runbooks/build-budget.md). Doctests are disabled workspace-wide (`[lib] doctest = false`); `scripts/check-doctest-fences.sh` fails a runnable fence instead of running it. A change under `crates/orbit-core/` selects `orbit-core`, `orbit-cmd`, `orbit-web` and `orbit-cli`.
 
 - **Diff:** committed, staged, unstaged and non-ignored untracked paths; a move selects both crates.
 - **Base:** the merge base of `HEAD` with `origin/agent-main` (local `agent-main` if the remote ref is absent). Override with `CI_TEST_BASE=<rev>`; a reviewer with a pinned delivery base must run `CI_TEST_BASE=<base.commit> make ci-test-affected`. An unavailable base fails the gate.
@@ -200,7 +236,7 @@ The quiet-deadline child fixture injects its bound through
 - **Inspect:** `python3 scripts/ci-test-affected.py --list [--base <commit>]`.
 - **Hosted CI:** `--pull-request-scope FILE` and `--test-build-packages CRATES` are the pull-request CI's entry points ([PR test selection](#pr-test-selection)). They read Cargo metadata (and `cargo tree`) but no diff and run no test.
 - **Test environment:** nextest runs with `--success-output immediate`. The gate archives its complete merged stdout/stderr in a unique `ci-test-affected-nextest-*.log` under `.orbit/tmp/` and streams progress, summaries, diagnostics and failing-test blocks. Passing-test blocks stream only host-evidence notices (`DEFERRED:`, `SKIP:`, `skipping:` or `skipping `, and sandbox-unavailable markers), so a full selection stays within the executor's default capture limit while the host judge still sees every refusal. The no-nextest `cargo test` fallback is unchanged and does not expose passing-test captured output. A temporary directory inside the checkout is added to `GIT_CEILING_DIRECTORIES`. `ORBIT_WORKER_CONTEXT_REQUIRED` is dropped ([why](#test-process-environment)); the rest of the run envelope passes through.
-- **Observed streams:** Cargo fallback and doctest commands drain stdout and stderr independently and capture whole lines. A relay I/O failure stops the command's process group before waiting for the readers, then propagates the original error. These commands own a separate session; the gate forwards graceful SIGTERM shutdown through cleanup, with SIGKILL escalation after a short grace to stop descendants holding the pipes. Killing the gate directly with SIGKILL cannot run this cleanup.
+- **Observed streams:** The Cargo fallback command drains stdout and stderr independently and captures whole lines. A relay I/O failure stops the command's process group before waiting for the readers, then propagates the original error. These commands own a separate session; the gate forwards graceful SIGTERM shutdown through cleanup, with SIGKILL escalation after a short grace to stop descendants holding the pipes. Killing the gate directly with SIGKILL cannot run this cleanup.
 
 To check whether a failure is pre-existing, replay the same command on the unmodified base: extract it under `.orbit/tmp/` (for example `git archive <base> | tar -x -C .orbit/tmp/base`), refresh its timestamps, give it its own `CARGO_TARGET_DIR` (any path works; the `orbit update` fixtures copy the tested binary to their own `target/debug/orbit`), and set `GIT_CEILING_DIRECTORIES` to `.orbit/tmp` so its fixtures cannot find the surrounding checkout. Replay only the failing tests, not the whole selection: hand the candidate's summary `selection` back with `failing_tests` added (below), or run nextest with `-E 'binary_id(=<binary-id>) & test(=<test>)'` for each failure it printed. Replay soon after the candidate run, since fixture deadlines depend on host load.
 
@@ -340,7 +376,7 @@ Captured output stays in the task's `validation/<run>/<index>.json` and
 `<index>.baseline.json` artifacts (claimed runs use their claim namespace).
 `orbit run show --json` and Incidents retain these references in the leaf's
 message; follow a parent's recorded `root_cause` to that leaf. Read the logs
-with `orbit.task.artifact.get` using the owning task and artifact path. Recovery
+with `orbit.task.artifact` action `get` using the owning task and artifact path. Recovery
 uses those same artifacts before choosing a repair.
 
 Parent gates echo only the leaf run, task, step and code. Incident codes use
@@ -354,8 +390,8 @@ selection needed for a safe replay; the artifacts retain the evidence.
 
 When a required command fails, Orbit reruns it on the base to tell a red base from a candidate failure ([decision rules](CONFIG.md#workflowvalidation_env--the-toolchain-required-validation-runs-with)). A command that selects tests from the diff would test nothing on the base, so the runner passes two variables, both implemented by `scripts/ci-test-affected.py`:
 
-- `ORBIT_VALIDATION_SUMMARY`: a file outside the checkout where the script writes `{"schema_version": 1, "selection": {"packages", "target_flags", "doctest_packages"}, "tests_run": N, "executed_tests": [...], "command", "base", "exit_code", "notices", "compile_ms", "test_ms", "package_timings"}`. `compile_ms` and `test_ms` are millisecond totals. `package_timings` is a list of `{package, compile_ms, test_ms}` sorted by package name. Each total equals the sum of the per-package integers for that phase, except under the `cargo test` fallback described below. Compile time is the sum of Cargo unit durations from the `--timings` report of the build the gate already runs (those durations overlap when compilation is parallel, so the total can exceed the build's wall time). Test time is the sum of nextest JUnit testcase durations plus per-package doctest durations (testcase durations overlap when tests run in parallel). Cargo labels doctest output with library target names; the gate resolves those names through Cargo metadata to the selected package identities, including explicit library names and hyphen normalization. A target shared by multiple selected packages cannot be attributed from that label alone, so its doctest duration is omitted. A phase that was not measured is `null` on the total and on every package. The `cargo test` fallback has no per-package test split: libtest's `finished in` time has no package, so those `test_ms` values stay `null`, and the total is that libtest time plus the per-package doctest durations. Under the fallback the total is therefore not the sum of the `test_ms` values. Nothing selected writes `compile_ms` 0, `test_ms` 0 and an empty `package_timings`. The record written before the run starts leaves all three `null`. `tests_run` comes from nextest's JUnit report (enabled with `--tool-config-file`); it is `null` after a build failure or under the `cargo test` fallback, and excludes doctests. `executed_tests` contains sorted, deduplicated nextest `<binary-id> <test>` identities from non-skipped JUnit testcases; a missing or malformed report leaves it `null`. The selection is written before the tests start (with `tests_run: null`), so a run stopped part-way still reports it. The other fields are what an [implementer's deferral](#test-process-environment) is derived from: `command` is `ORBIT_VALIDATION_GATE`, which the make target sets to `make ci-test-affected` (`null` when the script runs directly); `base` is the comparison base (`null` when given a selection); `exit_code` is the run's final status, doctests included (`null` until it finishes); and `notices` lists every line of the nextest stream that leads with `SKIP:`, `DEFERRED:`, `skipping:` or `skipping ` (empty under the `cargo test` fallback).
-- `ORBIT_VALIDATION_SELECTION`: the candidate's `selection`. The script tests exactly those packages; a package the checkout lacks fails the run without a summary. A selection that also names `failing_tests` (each a nextest `<binary-id> <test>` or a bare test name, as the failed run printed them) runs only those tests: it builds only the packages their binary ids name, filters with a nextest filterset (`cargo test -- --exact <names>` in the fallback), skips doctests and reports the selection it was handed. A malformed list, or a binary id outside the packages, fails the run without a summary.
+- `ORBIT_VALIDATION_SUMMARY`: a file outside the checkout where the script writes `{"schema_version": 1, "selection": {"packages", "target_flags"}, "tests_run": N, "executed_tests": [...], "command", "base", "exit_code", "notices", "compile_ms", "test_ms", "package_timings"}`. `compile_ms` and `test_ms` are millisecond totals. `package_timings` is a list of `{package, compile_ms, test_ms}` sorted by package name. Each total equals the sum of the per-package integers for that phase, except under the `cargo test` fallback described below. Compile time is the sum of Cargo unit durations from the `--timings` report of the build the gate already runs (those durations overlap when compilation is parallel, so the total can exceed the build's wall time). Test time is the sum of nextest JUnit testcase durations (testcase durations overlap when tests run in parallel). A phase that was not measured is `null` on the total and on every package. The `cargo test` fallback has no per-package test split: libtest's `finished in` time has no package, so those `test_ms` values stay `null`, and the total is that libtest time. Under the fallback the total is therefore not the sum of the `test_ms` values. Nothing selected writes `compile_ms` 0, `test_ms` 0 and an empty `package_timings`. The record written before the run starts leaves all three `null`. `tests_run` comes from nextest's JUnit report (enabled with `--tool-config-file`); it is `null` after a build failure or under the `cargo test` fallback. `executed_tests` contains sorted, deduplicated nextest `<binary-id> <test>` identities from non-skipped JUnit testcases; a missing or malformed report leaves it `null`. The selection is written before the tests start (with `tests_run: null`), so a run stopped part-way still reports it. The other fields are what an [implementer's deferral](#test-process-environment) is derived from: `command` is `ORBIT_VALIDATION_GATE`, which the make target sets to `make ci-test-affected` (`null` when the script runs directly); `base` is the comparison base (`null` when given a selection); `exit_code` is the run's final status (`null` until it finishes); and `notices` lists every line of the nextest stream that leads with `SKIP:`, `DEFERRED:`, `skipping:` or `skipping ` (empty under the `cargo test` fallback).
+- `ORBIT_VALIDATION_SELECTION`: the candidate's `selection`. The script tests exactly those packages; a package the checkout lacks fails the run without a summary. A selection that also names `failing_tests` (each a nextest `<binary-id> <test>` or a bare test name, as the failed run printed them) runs only those tests: it builds only the packages their binary ids name, filters with a nextest filterset (`cargo test -- --exact <names>` in the fallback), and reports the selection it was handed. A malformed list, or a binary id outside the packages, fails the run without a summary.
 
 A base run counts only if it reports the same selection, and a base pass only if it ran at least one test; a replay of `failing_tests` must prove every requested identity ran, whether it passed or failed. Qualified requests match both binary and test; bare requests match the exact test path in any binary. Missing, malformed, empty or partial `executed_tests` evidence refuses comparison. A run without the required selection or execution evidence is not comparable: it never makes a failure `baseline_red`, never refutes a reviewer's red-base claim and never lifts a hold that recorded the selection.
 
@@ -365,19 +401,24 @@ Required-command artifacts share a 256 KiB source-output budget across stdout an
 
 A command that writes no summary has no selection check, so only `make ci-test-affected` is guarded against a zero-test base pass. Reproduction requires comparable completed runs. When the candidate reports failure identities, it must report at least one, and every candidate identity must be present in the base failure set. Full comparisons also require equal exit status; exact test replays can use a different status because they run only part of the selection. When neither run reports failure identities, matching nonempty `diagnostic fingerprint sha256:` values and the same exit status establish reproduction; timeouts and coverage refusals cannot establish this identity-less match, including on exact test replays. Both logs retain the parsed sets even when captured output is bounded. A run stopped by the executor's output capture limit or by a signal is an infrastructure failure, never a test verdict. When a capture limit closes a pipe and its producer exits with SIGPIPE, the primary diagnostic names the observed capture limit; the supervisor retains both causes and the original child status. SIGPIPE without a capture stop and other termination signals retain their signal diagnostics. Candidate stops report the validation-environment marker without a base replay; stopped base runs are inconclusive, never cached as conclusive results and never establish `baseline_red` or lift a hold. Owner known-red claim settlement retains inconclusive attempted runs separately so retries reuse its refusal; ordinary validation and reviewer base comparisons ignore those records. Candidate validation reports the infrastructure cause when its base comparison was stopped.
 
-When a comparable base passes but the candidate names at most three failed tests, delivery validation makes one isolated candidate replay using the `failing_tests` selection. The affected-test runner executes that selection serially (`--test-threads 1`) with nextest retries disabled; it skips doctests and unrelated tests. Acceptance requires a passing replay with the exact requested selection, at least as many executed tests as named failures, and no host coverage refusals. Missing summaries, unknown failures, timeouts, or larger failure sets do not qualify. A repeated failure keeps the ordinary candidate verdict. A passing replay records `flaky_validation` in the run and task history, preserves the initial failure and passing base/replay outputs, and names the tests with captured rerun evidence in the PR. The owner files each command/test signature once as a friction, including for accepted claimed handoffs.
+When a comparable base passes but the candidate names at most three failed tests, delivery validation makes one isolated candidate replay using the `failing_tests` selection. The affected-test runner executes that selection serially (`--test-threads 1`) with nextest retries disabled; it skips unrelated tests. Acceptance requires a passing replay with the exact requested selection, at least as many executed tests as named failures, and no host coverage refusals. Missing summaries, unknown failures, timeouts, or larger failure sets do not qualify. A repeated failure keeps the ordinary candidate verdict. A passing replay records `flaky_validation` in the run and task history, preserves the initial failure and passing base/replay outputs, and names the tests with captured rerun evidence in the PR. The owner files each command/test signature once as a friction, including for accepted claimed handoffs.
 
 
 ### Hosted CI
 
-Hosted CI runs the work of the full `make ci` on open PRs, split across jobs as described below. Each PR-triggered workflow starts with a checkout-free `Live PR state` job (`pull-requests: read` only); if the PR merged or closed while queued, the build and analysis jobs are skipped under unchanged check names, which GitHub treats as passing. An API error fails the gate rather than admitting an unknown state; a PR that closes after the gate read `open` can still finish. Push, scheduled and manual runs skip the gate, so agent-main/main CI and CodeQL still cover merged changes, narrowed in `ci.yml` as described next. `make ci-fast` selects `scripts/test-pr-state-workflows.py` when self-test inputs change; full `make ci` always runs it. The script replays each gate against recorded API responses.
+Hosted CI runs the work of the full `make ci` on open PRs, split across jobs as described below. Each PR-triggered workflow starts with a checkout-free `Live PR state` job (`pull-requests: read` only); if the live read says the PR merged or closed while queued, the build and analysis jobs are skipped under unchanged check names, which GitHub treats as passing. In `ci.yml`, `desktop.yml` and `website-check.yml`, an API or projection error instead publishes `unknown` with a warning and admits the build jobs. The event payload never supplies fallback state: stale closed or merged data could suppress a reopened PR's required checks, and stale open data is not a live read. A PR that closes after the gate read `open` can still finish. Push, scheduled and manual runs skip the gate, so agent-main/main CI and CodeQL still cover merged changes, narrowed in `ci.yml` as described next. `make ci-fast` selects `scripts/test-pr-state-workflows.py` when self-test inputs change; full `make ci` always runs it. The script replays each gate against recorded API responses, rate limits and failures.
+
+The same live response supplies `changed_files` to `ci.yml`'s change-scope job, avoiding a second PR-object request. An unavailable count runs in full; a numeric count narrows only when the files listing agrees. Orbit's absent-context landing proof accepts the exact fail-soft command, both output bindings and the dependent `open`-or-`unknown` condition. A changed fallback or a condition that excludes `unknown` refuses the proof; the historical strict live-read form remains supported for older workflow revisions.
 
 PR jobs use two revisions: the primary checkout, build and tests use
 `github.event.pull_request.head.sha`, while workflow orchestration helpers use
 `github.sha`, the revision supplying the workflow (the PR merge ref). In
 `ci.yml`, a separate sparse checkout under `.orbit/tmp/workflow-ci` supplies
-`ci-await-jobs.py` and `ci-download-verified.sh`; all their invocations use that
-path. The scope job checks out `github.sha` directly. Keep this rule when adding
+`ci-download-verified.sh`, `ci-repack-nextest.py`, `ci-probe-bubblewrap.sh` and
+`ci-workspace-cache.py`; their invocations use that path. The Check job's
+`Await the test build and nextest shards` step instead runs
+`scripts/ci-await-jobs.py` as a dependency-producer from a full checkout of the
+base revision under `.orbit/tmp/dependency-producer`. The scope job checks out `github.sha` directly. Keep this rule when adding
 workflow-coupled `scripts/ci-*.py` or `scripts/ci-*.sh` helpers to any workflow:
 check them out before their first call and invoke them from that checkout.
 Candidate validation scripts such as `ci-guardrails.sh` stay in the primary
@@ -392,12 +433,47 @@ Two workspace checkouts that name different commits stay ambiguous.
 
 In `ci.yml`, a `Change scope` job ([ci-change-scope.sh](../scripts/ci-change-scope.sh)) narrows each run before build runners start:
 
-- **`docs`**: every changed path, on a PR or in a push, is Markdown outside `crates/` and `plugin/`. A push additionally requires a successful completed GitHub Actions `Check / Clippy / Test` on its `before` commit. A missing, pending, cancelled, failed or skipped check, or an API error, runs the full gate instead: the previous tip may contain code whose pending run was replaced. Markdown under `crates/` is compiled in as assets, `plugin/` is the generated skill mirror, `orbit-cli`'s tests read `website/src/content/docs/reference/config.md`, and the `scripts/test-*` self-tests execute or digest `RELEASING.md` and `npm/README.md`, so each still takes the full gate. Only `Docs guards` runs (`ci-guardrails.sh --static`: doc links and indexes, the skill mirror and the other file and metadata guards).
-- **`affected:<crate>,...`**: a PR whose changed paths all sit inside workspace crates, apart from Markdown outside `crates/` and `plugin/`. Every job runs, but `Test build` compiles and archives only the tests of the changed crates and their reverse dependents, so the shards run only those (see [PR test selection](#pr-test-selection)). Pushes are never narrowed this way.
+- **`docs`**: every changed path, on a PR or in a push, is Markdown outside `crates/` and `plugin/`. A push additionally requires a successful completed GitHub Actions `Check / Clippy / Test` on its `before` commit. A missing, pending, cancelled, failed or skipped check, or an API error, runs the full gate instead: the previous tip may contain code whose pending run was replaced. Markdown under `crates/` is compiled in as assets, `plugin/` is the generated skill mirror, `orbit-cli`'s tests read `website/src/content/docs/reference/config.md`, and the `scripts/test-*` self-tests execute or digest `RELEASING.md`, `npm/README.md` and `docs/dev/qa/path-leases-listener-sudo.md`, so each still leaves the docs-only lane. The self-test pages take the full gate. Only `Docs guards` runs (`ci-guardrails.sh --static`: doc links and indexes, the skill mirror and the other file and metadata guards).
+- **`affected:<crate>,...`**: a PR whose changed paths all sit inside workspace crates or are declared in `FILE_READERS`, apart from Markdown outside `crates/` and `plugin/`. Every job runs, but `Test build` compiles and archives only the build set of the changed crates, their reverse dependents and the always-run crates, and every partition runs only those crates' tests (see [PR test selection](#pr-test-selection)). Pushes are never narrowed this way.
 - **`skip`**: a push whose commit has exactly the tree of the merged PR's head, when that head's latest `Check / Clippy / Test` succeeded in a run that tested every crate. The same bytes already passed the full gate, so nothing reruns. A PR run that tests every crate says so in its `Change scope` job with a `Test selection` notice reading `full`, and the push requires that notice from the same run (check suite) as the passing check. An `affected:` PR run, or a head whose run left no notice, gets a full push run. A merge whose tree differs from what the PR tested also runs in full. With non-strict required checks, most merges differ: the PR was tested against an older base.
 - **`full`**: everything else, including any classification error. The job never fails, and an empty mode admits the full run.
 
-Push runs of `ci.yml` share one group per branch without cancelling the running workflow, as `ci-macos.yml` does: one run executes, one waits, and a newer push replaces the waiting run. The surviving tip runs in full unless its entire tree already passed on the PR head, or its changes from a successfully checked `before` commit qualify for docs mode. Replacing a pending code push therefore cannot let a later Markdown-only delta hide its untested code. Skipped jobs keep their check names and report as skipped, which GitHub's required checks treat as passing. Orbit's landing pays an owed check only with an explicit success, so a skipped owed check keeps it waiting; its absent-context repair recognises this exact scope job when it proves that a missing required check will report after a branch update. The macOS and CodeQL workflows are unaffected. `scripts/test-pr-state-workflows.py` runs the classifier against recorded API answers and checks which jobs each mode admits.
+Push runs of `ci.yml` share one group per branch without cancelling the running workflow, as `ci-macos.yml` does: one run executes, one waits, and a newer push replaces the waiting run. The surviving tip runs in full unless its entire tree already passed on the PR head, or its changes from a successfully checked `before` commit qualify for docs mode. Replacing a pending code push therefore cannot let a later Markdown-only delta hide its untested code. Skipped jobs keep their check names and report as skipped, which GitHub's required checks treat as passing. Orbit's landing pays an owed check only with an explicit success, so a skipped owed check keeps it waiting; its absent-context repair recognises this exact scope job when it proves that a missing required check will report after a branch update. `ci-macos.yml` and `codeql.yml` run the same classifier before their build and analysis jobs. They set `DOCS_BEFORE_CHECKS` (one GitHub check name per line) so a docs-only push is `docs` only when every named check on `BEFORE` is a successful completed GitHub Actions run, and that result overrides `skip`. Unset, as in `ci.yml` and `ci-cache-seed.yml`, the parent check stays `Check / Clippy / Test` and `skip` still wins. macOS names `macOS Clippy (informational)` and `macOS Sandbox`. CodeQL names `Analyze (actions)`, `Analyze (javascript-typescript)` and `Analyze (rust)`. An empty mode, or a missing, failed, cancelled or unfinished parent check, keeps the heavy jobs. `workflow_dispatch` and the CodeQL `schedule` event run those jobs even when the mode is `docs`. `scripts/test-pr-state-workflows.py` runs the classifier against recorded API answers and checks which jobs each mode admits.
+
+#### Getting a completed result for a chosen agent-main SHA
+
+RB-15 deploys only an exact agent-main SHA with a completed successful `CI` result, plus a completed successful `macOS Platform` result for the Mac. On a busy day that SHA may never get one from its push: each workflow keeps one running and one pending push run per branch, so the next merge replaces the pending run and the replaced SHA ends `cancelled` with no jobs started. A `gh run rerun` of the cancelled run re-enters the same push group and can be replaced again the same way. Use a manual dispatch instead. Both workflows accept `workflow_dispatch`, and a dispatch run gets a concurrency group per run (`run-<run_id>`: the existing fall-through in `ci.yml`, the dispatch branch of the group in `ci-macos.yml`) with cancellation off for that event, so later agent-main pushes neither replace nor cancel it. Ordinary push and `pull_request` groups and cancellation are unchanged, no extra macOS push runs are added, and the required PR checks and ruleset are untouched. A dispatch run always takes the `full` change scope, so its `ci.yml` result covers every crate. It is not a push, so macOS and CodeQL also run every build and analysis job rather than the docs skip. A docs-only push whose parent already completed both macOS checks starts no macOS build job; this dispatch is how that SHA gets a macOS result.
+
+If the chosen SHA is still the `agent-main` head, dispatch both workflows on that branch and confirm the runs report that SHA before relying on them (a merge landing between choosing and dispatching moves the head):
+
+```bash
+SHA=<full agent-main commit>
+gh workflow run ci.yml --ref agent-main
+gh workflow run ci-macos.yml --ref agent-main
+gh run list --workflow ci.yml --branch agent-main --event workflow_dispatch --limit 1 --json databaseId,headSha,status,conclusion
+gh run list --workflow ci-macos.yml --branch agent-main --event workflow_dispatch --limit 1 --json databaseId,headSha,status,conclusion
+```
+
+If the chosen SHA is no longer the head, pin it with a throwaway `deploy-candidate/*` ref first. Pushing that ref alone starts no workflow (it is not a push-trigger branch); it only names the commit for the dispatch:
+
+```bash
+SHA=<full agent-main commit>
+git push origin "$SHA:refs/heads/deploy-candidate/${SHA:0:12}"
+gh workflow run ci.yml --ref "deploy-candidate/${SHA:0:12}"
+gh workflow run ci-macos.yml --ref "deploy-candidate/${SHA:0:12}"
+```
+
+Wait for both runs, then verify each run's `headSha` is exactly `$SHA` and its `conclusion` is `success` before treating the SHA as deployable under RB-15. A dispatch on `agent-main` whose `headSha` differs from `$SHA` tested the newer head, not the chosen commit: redo it through the `deploy-candidate/*` ref.
+
+```bash
+gh run watch <ci-run-id> --exit-status
+gh run watch <macos-run-id> --exit-status
+gh run view <ci-run-id> --json headSha,conclusion,event
+gh run view <macos-run-id> --json headSha,conclusion,event
+git push origin --delete "deploy-candidate/${SHA:0:12}" # only for the pinned-ref route, after both runs complete
+```
+
+Delete the candidate ref only once both runs have completed. Workflow helpers still run from the workflow's own revision (the dispatched ref's `github.sha`), as on push and pull-request runs.
 
 The ephemeral Linux runner installs sandbox packages with needrestart's
 per-invocation `NEEDRESTART_MODE=l` (list-only) setting through `sudo env`.
@@ -434,51 +510,46 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   is capped at the same 512 MiB window the encoder may emit. The job uploads
   each part as its own one-day artifact, then runs
   `ci-guardrails.sh --test-partitions PATH`:
+  it extracts the archive once, and
   [check-nextest-partitions.py](../scripts/check-nextest-partitions.py) lists
-  the archive once unpartitioned and once per `--partition count:k/N`
+  that extraction (`--binaries-metadata` and `--cargo-metadata`) once
+  unpartitioned and once per `--partition count:k/N`
   (`NEXTEST_PARTITIONS` in `ci.yml`). It fails unless every test the full list
   selects is in exactly one partition, every partition selects at least one
   test (except for an [affected-crates archive](#pr-test-selection)), and no
   partition selects a test outside the full list. A failure fails
-  `Test build`, and so the Check job's wait, while the shards already run.
-  After the doctests below, the build job also runs one of the partitions
-  itself from the archive it built (no transfer), with the same ripgrep, uv
-  and Bubblewrap preparation and the same nextest command as a shard; the
-  shard jobs run the remaining partitions. Its failure fails `Test build`
-  exactly like a shard failure, and it uploads its JUnit report as
-  `nextest-junit-build`.
-  The build job then runs workspace doctests through `with-test-build-lint.sh`,
-  using the same lint environment as the folded build. Calling the existing
-  wrapper directly supports PR heads whose guard CLI predates the workflow;
-  `ci-guardrails.sh --test-doctests` provides the same command for local replays.
-  It reuses those linked libraries;
-  running doctests in Check would compile them again after its metadata-only
-  production Clippy. This still runs every workspace doctest for an affected
-  selection, compiling any libraries that selection did not build. A doctest
-  failure fails `Test build` and the Check wait. The step also runs after an
-  earlier build-job failure unless cancelled, retaining its diagnostics.
-  The shards continue to await
-  the final upload, so neither this check nor the partition proof delays their
-  start.
-- `Test shard k/N` jobs, one per shard, start beside the build and set up
-  their runner. Each waits through
-  [ci-await-jobs.py](../scripts/ci-await-jobs.py) `--step` for the build's
-  last `Upload nextest archive part N/N` step rather than the whole job,
-  downloads every part at once (one stream per artifact; a single stream ran
-  at 3–10 MB/s on some runners), restores a native small-window encoding of
+  `Test build`, and so every test job's first step and the Check job's wait.
+  Doctests are disabled workspace-wide (`[lib] doctest = false`), so the
+  build job runs no doctest step; `scripts/check-doctest-fences.sh` (in the
+  guard pool) fails a runnable fence instead. Cargo unit timings from the
+  folded compile (`--timings`) are uploaded as `test-build-timings`,
+  including when a later step fails. This separates compilation critical
+  paths from filter listing and archive time. Each test job needs the whole
+  `Test build` job, so it starts only once that job has finished, including
+  its post-upload partition proof.
+- `Test shard k/N` jobs, one per shard, each need the `Test build` job (`needs: [pr-state, scope, test-build]`), so each starts once the whole build job has finished, including its post-upload partition proof. If the build did not succeed, the job fails in its first step, `Require a successful test build`, with `ci-await: Test build concluded <result>: <run url>`. Each job then downloads every part at once (one
+  stream per artifact; a single stream ran at 3–10 MB/s on some runners),
+  in at most three download attempts. The first two attempts continue on
+  error; the third fails the job, so nextest does not run without the
+  archive. It restores a native small-window encoding of
   their concatenation with
   `ci-repack-nextest.py unpack SOURCE DESTINATION --parts N`, and runs
   `cargo nextest run --profile ci --partition count:k/N`
-  from it, where N is `NEXTEST_PARTITIONS` and k is the job's `PARTITION`
-  (the build job runs the remaining partition, above). Profile `ci`
+  from it, where N is `NEXTEST_PARTITIONS` and k is the job's `PARTITION`.
+  The `Test extra partition`, `Test partition 2` and `6`–`12` jobs
+  run the same steps on nine more test runners, selecting partitions 5, 2 and
+  6–12 and uploading `nextest-junit-extra` and `nextest-junit-partition-k`.
+  They start after the whole build job has finished, including the post-upload partition proof. None of them is a `Test shard k/N` job, so
+  `NEXTEST_SHARDS` and the ruleset's names stay unchanged; the Check job
+  awaits them like shards. Profile `ci`
   starts the measured long tests first, using nextest's per-test priority
   (requires nextest 0.9.91 or newer).
   This changes scheduling within each shard, keeping every test identity,
   ignored-test rule, count partition, group cap and isolated process. The
   default local profile keeps its ordinary order. See the
-  [timing notes](design-patterns/test_strategy.md#quality-and-the-10-minute-budget)
+  [timing notes](design-patterns/test_strategy.md#quality-and-the-400-second-budget)
   before interpreting a local replay as hosted budget evidence.
-  A build that fails before the upload fails the wait at once.
+  A build that did not succeed fails each test job in that first step at once instead of running nextest.
   Repacking preserves every tar byte; it never extracts members or replaces
   an existing destination. Both zstd stages must succeed before publishing
   the destination, and corrupt input, a missing part, missing zstd or encoder
@@ -498,53 +569,94 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   `Test shard 1/3` to `Test shard 3/3`, so changing `NEXTEST_SHARDS` or a shard
   name needs the same ruleset change before merge. Requiring only
   `Check / Clippy / Test`, which awaits every shard, would not depend on the
-  shard count. `scripts/test-pr-state-workflows.py` runs each shard's nextest
-  step and wait, the build job's own partition step and the Check job's wait
-  with stub tools, and fails unless the shards and the build together select
-  `count:1/N` through `count:N/N` once each, each shard waits for the upload
-  step ahead of the partition guard, and the Check job's wait names the build
-  and every shard. After a change to this layout, re-measure the budget over
+  shard count. `scripts/test-pr-state-workflows.py` runs each test job's nextest and
+  archive-restore steps (every additional partition job's too), the build's pack
+  step and the Check job's wait with stub tools, and fails unless
+  those jobs together select `count:1/N` through `count:N/N` once each, the
+  build's last upload precedes the partition guard, each test job needs the whole
+  build job with `Require a successful test build` as its first step and downloads
+  every uploaded part with no archive-poll wait, and the Check
+  job's wait names the build, every shard, every additional partition job, `CI guardrails` and `CI QA guardrails`. After a change to this layout, re-measure the budget over
   the latest 20 completed PR runs with `scripts/ci-p90.py` (nearest-rank p90
-  of the executed Check jobs against 600 s, with skipped and cancelled runs
+  of the executed Check jobs against 400 s, with skipped and cancelled runs
   reported as gaps).
-- `Check / Clippy / Test` runs `ci-guardrails.sh --checks`: formatting, every
-  repository guard and self-test, production Clippy, documentation
-  and the supply-chain gate, with no workspace test build or nextest. It then
-  waits for `Test build` and every shard, and fails as soon as one of them
+- `CI guardrails` runs `ci-guardrails.sh --guards-core` on its own runner, beside
+  `Test build`: the repository guards and, with the bundled auto-task body
+  history, the self-tests, except the QA sweep. `CI QA guardrails` runs
+  `ci-guardrails.sh --guards-qa` on another standard runner: its inventory
+  check and selected fixture self-test. Check awaits both jobs. Local
+  `--guards`, `--fast` and `--static` keep the QA check in their guard pool.
+  On a pull request (`CI_SELF_TESTS=changed`) each hosted route runs
+  the `scripts/test-*` self-tests only when their inputs changed against the
+  PR base, by the rule `make ci-fast` uses (`scripts/`, `.github/`, `Makefile`,
+  `.cargo/`, the root manifests, `install.sh`, `RELEASING.md`, `docs/dev/qa/path-leases-listener-sudo.md`, `docs/standards/`,
+  `AGENTS.md`, `CLAUDE.md`, `plugin/`, `npm/`, `.agents/`, `.claude-plugin/`); `test-qa-full-sweep.py --check`
+  always runs its inventory check and runs its fixture self-test under the
+  same rule. That process fixture accepts an identity-bound pidfd signal only
+  on Linux. On macOS and other hosts it records an unsupported identity-signal
+  result and does not send a numeric kill. A push runs every self-test. The core job builds no workspace target, so
+  it carries the compiler-cache namespace regression's sccache and Bubblewrap
+  setup. Its shared Bubblewrap step calls
+  `scripts/ci-probe-bubblewrap.sh` from the workflow revision, keeping repeated
+  setup out of expanded workflow source without changing its probes or bounds.
+- `Check / Clippy / Test` runs `ci-guardrails.sh --checks`: formatting,
+  production Clippy, documentation, an Apple-target type-check and the
+  supply-chain gate, with no
+  workspace test build, guard or nextest. The type-check is
+  `cargo check --workspace --lib --bins --tests --target aarch64-apple-darwin`
+  on the Linux runner. That job's toolchain step installs the Apple target.
+  Its C compiler, `scripts/ci-apple-target-cc.sh`, is a stub: build scripts
+  run, C is not compiled, and nothing is linked. Rust gated on
+  `cfg(target_os = "macos")`, including tests, is type-checked. Hosted macOS
+  is ARM, and no gate pairs that `cfg` with one `target_arch`, so this single
+  target covers those items. It then
+  waits for `Test build`, every shard, `Test extra partition`, `Test partition 2`,
+  `6`–`12`, `CI guardrails` and `CI QA guardrails`, and fails as soon as one of them
   completes without success. Its elapsed time therefore covers the whole gate,
   including any queue wait for the other jobs' runners. That is the time the
-  10-minute budget and the `ci-budget-watch` auto-task measure, and its
+  400-second budget measures, and its
   conclusion is the gate's result. The wait prints one
   `ci-await: <job> succeeded started=... completed=... elapsed_s=...` line per
-  job. A shard's wait prints `ci-await: Test build step 'Upload nextest
-  archive' succeeded started=...` instead.
+  job. The Check job still awaits the build, every test job and both
+  guardrails jobs.
   `--timeout-seconds` (default 2400) is one absolute budget for the whole
-  wait, for the Check job and each shard's upload wait alike: every `gh api`
+  Check wait: every `gh api`
   listing runs under the remaining budget, the poll sleep is clipped to it, and a
   listing still running at expiry is killed and reaped. A blocked listing
   therefore ends the wait at the timeout plus at most 5 s of cleanup, with a
   `timed out` diagnostic naming the unavailable listing or the jobs still
   pending. A listing that arrives after expiry is never accepted as success,
-  even when every awaited job succeeded. Failed, skipped or cancelled jobs and
-  steps still fail the wait at once, and transient API errors are retried within
+  even when every awaited job succeeded. Failed, skipped or cancelled jobs
+  still fail the wait at once. A named job missing from a complete
+  listing stays pending while any other listed job (apart from the Check job
+  itself) is unfinished. Once every other listed job has completed, it stays
+  pending for `--absent-grace-seconds` (default 120 s), because GitHub creates
+  a job shortly after its `needs` finish. A job listed within that time is
+  awaited normally. One still missing after the grace period fails the wait
+  with `ci-await: <job> is absent from the run` (several names use `are`).
+  An incomplete listing or an API error is not absence: it is retried within
   the remaining budget.
-  For a single-page response with an ETag, both waits issue authenticated
-  conditional requests every three seconds. An unchanged `304 Not Modified` reuses
-  the last complete listing and consumes no primary GitHub API quota
+  Transient API errors are retried within the remaining budget.
+  For a single-page job-listing response with an ETag, the job wait issues
+  authenticated conditional requests every three seconds. An unchanged
+  `304 Not Modified` reuses the last complete listing and consumes no primary
+  GitHub API quota
   ([GitHub conditional requests](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api#use-conditional-requests)).
-  This shortens the two detection delays between upload, shard execution and
-  the final Check result. A changed response still checks every named job and
-  step. Missing ETags, API errors, fewer than 100 remaining primary requests,
-  or a paginated listing use the fallback interval, `--poll-seconds` (default
-  15 seconds). A first-page ETag never stands in for later pages: those runs use
-  the full paginated listing. Server `X-Poll-Interval`, `Retry-After` and, once
-  the primary quota is exhausted, `X-RateLimit-Reset` minimums raise both
-  intervals. A 403 or 429 without `Retry-After` also sets a 60-second minimum on
-  single-page and paginated listings alike, so its interval is at least 60
-  seconds. The absolute deadline applies to both intervals. Each wait prints
+  This shortens the detection delay between the test jobs and
+  the final Check result. A changed response still checks every named job.
+  Missing ETags, API errors, fewer than 100 remaining primary requests,
+  or a paginated job listing use the fallback interval, `--poll-seconds`
+  (default 15 seconds). A first-page ETag never stands
+  in for later pages: those runs use the full paginated listing. Server
+  `X-Poll-Interval`, `Retry-After` and, once the primary quota is exhausted,
+  `X-RateLimit-Reset` minimums raise the job interval. A 403
+  or 429 without `Retry-After` also sets a 60-second minimum on single-page and
+  paginated job listings alike, so its interval is at least 60
+  seconds. The absolute
+  deadline applies to the job interval. The wait prints
   `ci-await-api: listings=... not_modified=... paginated=...` for the hosted
-  phase and quota readout. Across four waits, a three-second cadence makes at
-  most 80 listing calls per minute before API latency, below the secondary
+  phase and quota readout. A three-second cadence makes at
+  most 80 job-listing calls per minute before API latency, below the secondary
   [REST limit of 900 points per minute](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#about-secondary-rate-limits) for these GET requests; other repository
   traffic shares the limits, and changed responses still consume primary
   quota. Check those counters and response fallback behavior on candidate
@@ -556,16 +668,19 @@ nextest from its binary listing.
 In full mode, `ci-guardrails.sh` repeats its phase breakdown in the final log
 tail, including on failure: format, workflow test listing/build (which folds in
 the all-targets Clippy lint), the exclusive self-test lane, workspace test
-listing, workspace tests, production Clippy, doctests, documentation,
+listing, workspace tests, production Clippy, documentation,
 supply-chain checks and repository guards. `--test-archive` mode records only
-`workflow-test-list-build` and `workspace-test-archive`, `--test-partitions`
-mode only `workspace-test-partitions`, and `--test-doctests` mode only
-`doctests`. `--checks` mode records every phase except the workflow test build,
-the workspace test phases and doctests: the hosted Check job leaves doctests to
-the Test build job. That job runs them through `with-test-build-lint.sh`
-directly and logs a `doctests_seconds=` timing, with no `ci-guardrails-phase`
-record. `--test-doctests` runs the same command through the guard and records
-its `doctests` phase for local replays.
+`workflow-test-list-build` and `workspace-test-archive`, and `--test-partitions`
+mode `workspace-test-archive-extract` followed by `workspace-test-partitions`.
+An extraction failure stops before the proof, so no `workspace-test-partitions` record is emitted. `--checks` mode records `fmt`, `clippy-production`,
+`documentation`, `apple-target-check` and `supply-chain`, and `--guards`/`--guards-core` modes
+`guard-pool`, `exclusive-self-tests` and `repository-guards`. The dedicated
+`--guards-qa` mode records `qa-guards` and explicitly reports whether its
+fixture self-test ran or was skipped by input selection.
+`apple-target-check` is the Apple-target type-check: plain rustc, with the
+Clippy wrapper unset, lowered like the other check-chain commands. Full mode
+does not run it, so `make ci` stays on the host target. The informational
+macOS Clippy job is unchanged.
 `guard-pool` times the background pool from its start to its join. In fast mode
 that is the pool's own wall time. In full mode the join follows the workflow
 test build, so `guard-pool` includes the overlapped build.
@@ -573,15 +688,20 @@ test build, so `guard-pool` includes the overlapped build.
 to its join.
 `workspace-test-listing` lists the test binaries of the folded build, and
 `workspace-tests` runs nextest from that listing without invoking Cargo.
-Meanwhile production Clippy, doctests and then documentation run in the
+Meanwhile production Clippy and then documentation run in the
 background, with each command launched in Linux's idle scheduling class
 (or directly under `nice -n 19` where idle scheduling is unavailable).
 The idle class uses only CPU time the tests leave idle; nice scheduling
 lowers competition for CPU without changing a parent process's priority.
 Production Clippy checks lib and bin targets and writes no test binary nextest executes. It runs as `cargo check`
 under the environment `cargo clippy` sets (`RUSTC_WORKSPACE_WRAPPER=clippy-driver`
-and `CLIPPY_ARGS` denying warnings and `clippy::disallowed_methods`), and
-documentation runs under the same environment. Cargo fingerprints it, so
+and `CLIPPY_ARGS` denying warnings while allowing `clippy::disallowed_methods`:
+`-D warnings -A clippy::disallowed_methods`, the one lint environment in
+`scripts/with-test-build-lint.sh` and `scripts/ci-guardrails.sh`), and
+documentation runs under the same environment. Production code still denies
+`clippy::disallowed_methods` through the crate-root `deny` attributes, which
+override the command-line `-A`; test and test-feature code stays exempt.
+Cargo fingerprints it, so
 `cargo doc` reuses that check of every workspace library and only runs rustdoc. Their records time each
 command from its own start and overlap `workspace-tests`; the chain joins
 before the supply-chain gate, and a failure in it still reports the later
@@ -604,8 +724,8 @@ These are wall seconds at Bash's one-second resolution with
 the original command exit status. They let bounded hosted excerpts retain build/check costs
 separately from nextest testcase sums and the full GitHub job elapsed time.
 
-The Rust build caches in `ci.yml` are the `Swatinem/rust-cache` dependency
-archives, one each for `Test build`, the Check job and the MSRV job. They hold
+The Rust build caches are the `Swatinem/rust-cache` dependency
+archives, one each for `Test build` and the Check job in `ci.yml`, plus the MSRV entry saved by `msrv.yml` push runs (same key). They hold
 dependency artifacts only; every run compiles the workspace members from its
 checkout. Each step sets `save-if: ${{ github.event_name == 'push' }}`, so a
 pull request restores the base branch's entries and never writes one: only a
@@ -624,23 +744,86 @@ save on a non-push event.
 
 #### PR test selection
 
-On a pull request that is not docs-only, the `Change scope` job runs `scripts/ci-test-affected.py --pull-request-scope`, the same graph walk as `make ci-test-affected`, over the PR's changed paths and the merge ref's Cargo metadata (read with the runner's stable toolchain). It selects the changed crates, their transitive reverse workspace dependents, and the crates `FILE_READERS` declares as readers of a changed path, and outputs `affected:<crate>,...`. It runs every test instead (`full`) when any of these holds:
+On a pull request that is not docs-only, the `Change scope` job runs `scripts/ci-test-affected.py --pull-request-scope`, the same graph walk as `make ci-test-affected`, over the PR's changed paths and the merge ref's Cargo metadata (read with the runner's stable toolchain). It selects the changed crates, their transitive reverse workspace dependents, the crates `FILE_READERS` declares as readers of a changed path, and the `ALWAYS_RUN` crates, and outputs `affected:<crate>,...`.
 
-- a path outside `crates/`: the root `Cargo.toml` or `Cargo.lock`, `rust-toolchain.toml`, `.cargo/`, `.github/`, `scripts/`, `plugin/` or any other repository file, since a test may read it at run time. Markdown outside `crates/` and `plugin/` is the exception unless `FILE_READERS` names a reader for it.
+`ALWAYS_RUN` is the security and recovery set every PR runs whatever it changed: `orbit-exec` (the sandbox and Bubblewrap boundary; its presence also admits shard 1's Linux sandbox gate), `orbit-policy` and `orbit-auth` (authorization), and `orbit-store` (store migrations). The partition guard runs on every test build. Their tests are about 2% of the suite's test time. In the 2026-10-28 to 10-31 CI history, every failing migration test was in `orbit-store`; the other failures were in `orbit-engine`, `orbit-mcp`, `orbit-cli` and `orbit-web`, which the reverse-dependency walk selects for any change they can observe.
+
+It runs every test instead (`full`) when any of these holds:
+
+- a path outside `crates/` that `FILE_READERS` does not declare: the root `Cargo.toml` or `Cargo.lock`, `rust-toolchain.toml`, `.cargo/`, `.github/`, `scripts/`, `plugin/` or any other repository file, since a test may read it at run time. Markdown outside `crates/` and `plugin/` is the exception. A declared path selects its readers, or no crate (`scripts/qa-full-sweep-inventory.json`, read only by the guardrail sweep; `scripts/unit-test-baseline.json`, read only by the always-run `unit-test-inventory.py --check` guard; `plugin/evals/`, the `claude plugin eval` suite no CI job reads; `scripts/ux-rules/ui/`, `scripts/ux-rules/cli/`, `scripts/ux-rules/tests/`, `scripts/ux-rules/README.md`, `scripts/ux-rules/lib/ui-context.mjs`, `scripts/ux-rules/lib/cli-context.mjs` and `scripts/ux-rules/lib/manifest.mjs`, which no Cargo test reads since the ux-rules routine was removed [ORB-22844]), so its PR runs the always-run set alone. `scripts/ux-rules/run.mjs` is not declared, so a change to it runs the full suite.
 - a member's `Cargo.toml`, which can change the features of every crate in the workspace build;
 - a path under `crates/` that no current member owns, such as a removed crate;
 - every workspace crate is selected anyway (for example, a change to `orbit-types` or `orbit-common`);
 - the PR file listing is incomplete, or the selection fails for any reason, including unreadable Cargo metadata.
 
-Cargo metadata cannot see a test reading another crate's files. The ones that matter are those whose reader does not already depend on the owner, and they are declared in `FILE_READERS`. `orbit-engine`'s tests read `orbit-core`'s job and activity assets, and `orbit-mcp` compiles in `orbit-web`'s vendored dashboard scripts. Every other cross-crate read found (`orbit-cli` reading `orbit-core` and `orbit-tools` fixtures, `orbit-web` compiling an `orbit-store` fixture, `orbit-core` running an `orbit-engine` fixture) is by a dependent, so the reverse-dependency walk covers it. Reads of repository files outside `crates/` (workflows, `scripts/`, `server.json`, `plugin/hooks/`) are covered by the outside-`crates/` rule.
+Cargo metadata cannot see a test reading another crate's files. The ones that matter are those whose reader does not already depend on the owner, and they are declared in `FILE_READERS`. `orbit-engine`'s tests read `orbit-core`'s job and activity assets, and `orbit-mcp` compiles in `orbit-web`'s vendored dashboard scripts. Every other cross-crate read found (`orbit-cli` reading `orbit-core` and `orbit-tools` fixtures, `orbit-web` compiling an `orbit-store` fixture, `orbit-core` running an `orbit-engine` fixture) is by a dependent, so the reverse-dependency walk covers it. Reads of repository files outside `crates/` are declared there too (`scripts/build-budget.py`, `server.json`, `plugin/hooks/`, `plugin/skills/`, the skill mirror the sync guard checks against its source, with no reader, the configuration reference page, the QA sweep script and its inventory, the unit-test baseline, the plugin evals, and the UX rule files named above); any other such path runs the full suite.
 
-`Test build` passes the mode to `ci-guardrails.sh --test-archive` as `CI_TEST_SCOPE`. For an `affected:` scope, `ci-test-affected.py --test-build-packages` checks the crates against the PR head's metadata and adds the unselected members that keep every dependency's resolved features equal to the workspace build's (`cargo tree`). Resolver 2 unifies features over the selected packages only, so a narrower set would rebuild dependencies the CI caches hold with the workspace's features. `orbit-cli` depends on every other crate, so it is in every selection, and `orbit-web`'s dev-dependency features on `tokio` and `rusqlite` usually add `orbit-web`. Both the folded build (`check-ci-macos.sh --workspace-build --packages`, which lists only the macOS workflow's filters for crates in the build) and `cargo nextest archive` then take `-p` for that set. A crate the head lacks, or a feature gap no member closes, builds the whole workspace. The archive's package list is written to `PATH.packages`, and the partition guard then runs with `--allow-empty`: an archive with few tests can leave a count partition empty, but every test must still be in exactly one shard.
+`Test build` passes the mode to `ci-guardrails.sh --test-archive` as `CI_TEST_SCOPE`. For an `affected:` scope, `ci-test-affected.py --test-build-packages` checks the crates against the PR head's metadata and adds the unselected members that keep every dependency's resolved features equal to the workspace build's (`cargo tree`). Resolver 2 unifies features over the selected packages only, so a narrower set would rebuild dependencies the CI caches hold with the workspace's features. `orbit-cli` depends on every other crate, so it is in nearly every selection, and its dev-dependencies name the features only other crates' tests enable (`tokio`'s `test-util`, `rusqlite`'s `hooks`, the `test-support` of `orbit-exec` and `orbit-mcp`), so it normally needs no anchor: an anchor compiles its unit-test harness, which no target flag excludes. A new gap adds an anchor at that compile cost, and the build's reason line names it. Both the folded build (`check-ci-macos.sh --workspace-build --packages`, which lists only the macOS workflow's filters for crates in the build) and `cargo nextest archive` then take `-p` for that set. A crate the head lacks, or a feature gap no member closes, builds the whole workspace. The archive's package list is written to `PATH.packages`, and the partition guard then runs with `--allow-empty`: an archive with few tests can leave a count partition empty, but every test must still be in exactly one shard.
 
-The shards keep their names and run with `--no-tests pass`, so a shard whose partition is empty runs nothing and passes. The full archive cannot have an empty shard, because its partition guard fails `Test build`. Shard 1's Linux sandbox/policy enforcement gate runs on every full run and on every `affected:` run that includes `orbit-exec`; without `orbit-exec`, neither the sandbox code nor its dependencies changed, and the gate is skipped. Production Clippy, doctests, documentation, the guardrails and the MSRV check stay workspace-wide, and the `Check / Clippy / Test` wait is unchanged: every test job still runs, and a failed or skipped one fails it.
+The archive holds the build set's tests, but every partition (the shards and the nine additional test runners) passes `-E 'package(a) | package(b) …'` for the `affected:` crates, so a feature anchor's tests are built, not run; the partition guard lists the same filter. The shards keep their names and run with `--no-tests pass`, so a shard whose partition is empty runs nothing and passes. The full archive cannot have an empty shard, because its partition guard fails `Test build`. Shard 1's Linux sandbox/policy enforcement gate runs on every full run and on every `affected:` run that includes `orbit-exec`; without `orbit-exec`, neither the sandbox code nor its dependencies changed, and the gate is skipped. Production Clippy, documentation and the repository guards stay workspace-wide, and every test job still runs: a failed or skipped one fails the `Check / Clippy / Test` wait. The MSRV check is no longer part of pull-request runs; it runs push-only in `.github/workflows/msrv.yml`.
 
 A PR run can still miss a failure only the full suite shows, such as a test reading another crate's file through a path neither a dependency edge nor `FILE_READERS` records. The `agent-main` push run after the merge is the check of the merged tree and always tests every crate.
 
 `scripts/test-pr-state-workflows.py` replays the selection against a recorded crate graph (`scripts/fixtures/ci-crate-graph.json`): a leaf crate, a mid-graph and a core crate, workspace-level and toolchain files, a member manifest, non-crate paths, cross-crate fixture paths, a removed crate and a selection error. It also checks the push `skip` evidence and the shards' empty-partition and sandbox-gate conditions.
+
+### Hosted CI budget handoff
+
+After a CI scheduling change merges, the operator collects the latest 20
+completed `ci.yml` PR runs, waiting for a cohort that uses the merged layout.
+Record collection time, each run ID, reported head, conclusion and workflow
+revision. Save raw job timestamps and replay the same population offline:
+
+```bash
+mkdir -p .orbit/tmp/ci-budget-after
+# Collect the completed PR population, including executed failures.
+gh run list --workflow ci.yml --event pull_request --status completed \
+  --limit 20 --json databaseId,headSha,conclusion,createdAt \
+  > .orbit/tmp/ci-budget-after/list.json
+python3 - <<'PYTHON'
+import json
+import subprocess
+from pathlib import Path
+root = Path('.orbit/tmp/ci-budget-after')
+runs = []
+for entry in json.loads((root / 'list.json').read_text()):
+    run = str(entry['databaseId'])
+    # Keep the raw REST data: gh run view's job projection omits fields that
+    # may be useful when diagnosing scheduling, such as job created_at.
+    data = subprocess.run(['gh', 'api', '--paginate', '--slurp',
+        f'repos/{{owner}}/{{repo}}/actions/runs/{run}/jobs?filter=latest&per_page=100'],
+        capture_output=True, text=True, check=True).stdout
+    (root / f'{run}-jobs.json').write_text(data)
+    runs.append(dict(entry, jobs=[job for page in json.loads(data) for job in page['jobs']]))
+(root / 'runs.json').write_text(json.dumps(runs, indent=2) + '\n')
+PYTHON
+python3 scripts/ci-p90.py --from-json .orbit/tmp/ci-budget-after/runs.json \
+  --budget-seconds 400 > .orbit/tmp/ci-budget-after/p90.log
+```
+
+Preserve the p90 command's exit status: 0 means within budget, 1 over budget,
+2 no executed Check job. Report nearest-rank `ceil(0.9 * n)`, the ascending
+executed Check start-to-completion durations, median and maximum, with
+skipped, cancelled, missing/invalid jobs and executed failures counted
+separately. Never treat a gap as a zero-duration pass. Include earlier attempts
+separately if reruns occurred; the command above explicitly selects the latest
+attempt. Mixed workflow revisions and fewer than 20 usable runs are limits
+to disclose, not evidence to discard slow runs.
+
+Report queue wait independently from Check elapsed. When job `created_at`
+is available, record Check `started_at - created_at` separately. For each
+awaited job report its queue interval's overlap with Check's elapsed window:
+`max(0, min(job.started_at, check.completed_at) - max(job.created_at,
+check.started_at))`. Queue intervals overlap, so report each and their union,
+not their sum as extra elapsed time. Job creation can precede dependency
+readiness: label these intervals as scheduling/queue upper bounds unless an
+actual ready/queued timestamp is available. If the API lacks `created_at`,
+report exact queue wait as unavailable; `workflow.createdAt` to job start
+includes dependencies and is only an upper bound. Also report the lag from
+`Change scope` completion to each runner's start, which can reveal the
+additional test runner waiting for capacity. None of these fields subtracts
+queue time from the 400 s Check budget. Attach raw records, the replay log
+and gaps to the operator's measurement record. A p90 over 400 s requires a
+follow-up repair; it must not be recorded as restored.
 
 ## Filesystem writes
 
@@ -700,7 +883,9 @@ fn fixture_orbit(work: &Path, home: &Path) -> Command {
 
 `clear_inherited_authority` removes the managed-run routing, identity and grant variables, including `ORBIT_WORKER_CONTEXT_REQUIRED`. [`tool_list.rs`](../crates/orbit-cli/tests/tool/tool_list.rs) uses this pattern; [`isolated_cli_fixture.rs`](../crates/orbit-cli/tests/support/isolated_cli_fixture.rs) is a shared disposable home, registry and workspace. Orbit core's libtest fixtures use `application::tests::run_isolated_test`, which re-executes one exact test this way and verifies it passed in the child. CLI MCP and output bodies that write databases or change process authority use [`isolated_test::run_in_child`](../crates/orbit-cli/tests/support/isolated_test.rs) before any setup; it verifies exactly one passed test and supplies a private home under the checkout's `.orbit/tmp/`, outside Bubblewrap's `/tmp` overlay. It includes ignored entry points only when their parent has already been selected by the caller.
 
-Runtime integration permutations use `scenario_table!` in the existing runtime binary. Each named row keeps its setup and assertions; the shared [table fixture](../crates/orbit-core/tests/runtime/scenarios.rs) re-executes one isolated table with inherited authority cleared, gives each sequential row a fresh HOME/cwd, restores its environment, and verifies one passed child. Families that install process-wide worker substitutions retain a separate child per row. Keep self-reexecuting entry points as standalone tests, since their exact libtest names are part of their fixture protocol. Table failures report the original row identity, and sandbox deferrals still reach the gate output. Each row and child prints its elapsed time, and a fixture may copy setup from a per-process template under the [fixture template rules](design-patterns/test_strategy.md#quality-and-the-10-minute-budget).
+Runtime integration permutations use `scenario_table!` in the existing runtime binary. Each named row keeps its setup and assertions; the shared [table fixture](../crates/orbit-core/tests/runtime/scenarios.rs) re-executes one isolated table with inherited authority cleared, gives each sequential row a fresh HOME/cwd, restores its environment, and verifies one passed child. Families that install process-wide worker substitutions retain a separate child per row. Keep self-reexecuting entry points as standalone tests, since their exact libtest names are part of their fixture protocol. Table failures report the original row identity, and sandbox deferrals still reach the gate output. Each row and child prints its elapsed time, and a fixture may copy setup from a per-process template under the [fixture template rules](design-patterns/test_strategy.md#quality-and-the-400-second-budget).
+
+Shared mutable runtime fixture constructors refuse to run in the libtest parent. `scenarios::require_isolated_mutable_fixture` panics unless the process is already a re-executed child. `dispatch_admission::isolated` ([`dispatch_admission.rs`](../crates/orbit-core/tests/runtime/dispatch_admission.rs)) sets `ORBIT_TEST_DISPATCH_ADMISSION_CHILD`. `scenario_table!` sets `ORBIT_TEST_TASK_FIXTURE_CHILD` and `ORBIT_RUNTIME_SCENARIO_ROW`; a row re-executed with only `ORBIT_RUNTIME_SCENARIO_ROW` still counts. The panic names this rule and tells the author to call `dispatch_admission::isolated` or place the case in a `scenario_table!` row. Covered constructors include `resident_cycle::fixture`, `recovery_fixture` (`fixture`, `fixture_with_config`, `fixture_with_forge`), `resident_authority::runtime_at`, the decision, script, tag-instruction, external-merge, attention, audit-commit, sandbox-off and review-gate fixture builders, `human_crew_work`'s fixture, and the dispatch-admission runtime builders (`runtime`, `configured_runtime`, `gap_fit::build`, `submission_notices::throttled_runtime`). A custom child that calls one of them sets `ORBIT_TEST_TASK_FIXTURE_CHILD` or `ORBIT_TEST_DISPATCH_ADMISSION_CHILD` on that child. New mutable setup goes through a covered constructor, or calls `require_isolated_mutable_fixture` before `OrbitRuntime::from_roots`.
 
 Runtime fixtures create write-heavy temporary roots with `bulk_write_temp_dir()`. Runtime tables use the host build budget's resolved test-thread count, without a binary-wide serialization group. Record both wall and summed time under matched host build-budget settings when measuring the binary. The owner-read retry fixture uses the feature-gated `with_owner_read_retry_wait` hook to exercise the same retries in milliseconds; production keeps its one- and three-second waits. Outcome fixtures may opt into `with_pipeline_poll_wait` while retaining real elapsed time, deadlines and child/process transitions. Immutable proc fixtures use `with_host_load_sampling_wait` only when sampling cannot gain tick data by waiting; raw reads, CPU unknowns and reservation behavior remain real, and native `/proc` keeps the production interval. These callbacks have independent thread-local scopes and restore the previous callback on return or unwind. Changing-proc, polling-cadence and deadline controls keep system waits.
 
@@ -726,36 +911,50 @@ Detached-worker tests use `tests/support/workflow_gate.rs` to hold a step at a s
 
 ### Manual QA from a managed lane
 
-A managed lane exports Orbit routing and authority: `ORBIT_REGISTRY_ROOT`, `ORBIT_WORKSPACE`, `ORBIT_ROOT`, `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_TASK_ID` and about two dozen more. Unsetting a few of them, or overriding only `HOME`, still lets a dev binary resolve the live global registry. Run from a run worktree with the real home, a candidate build also opens the host's primary workspace `.orbit` and global store, and opening them applies the candidate's pending layout and schema migrations: a read-only command or `web serve` is enough. Once they advance, the installed binary is refused on that host. Orbit refuses a breaking migration from a build that is not the installed orbit ([upgrades runbook](runbooks/upgrades.md#a-build-that-is-not-the-installed-orbit)), but that guard is a backstop for hosts with an installed binary, not isolation. Run every candidate command, reads and `web serve` included, against a disposable home and its own workspace: clear the whole environment and point `HOME` at a disposable directory. Run the steps below as one shell session, from the managed checkout:
+A managed lane exports Orbit routing and authority: `ORBIT_REGISTRY_ROOT`, `ORBIT_WORKSPACE`, `ORBIT_ROOT`, `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_TASK_ID` and about two dozen more. Unsetting a few of them, or overriding only `HOME`, still lets a dev binary resolve the live global registry. Run from a run worktree with the real home, a candidate build also opens the host's primary workspace `.orbit` and global store, and opening them applies the candidate's pending layout and schema migrations: a read-only command or `web serve` is enough. Once they advance, the installed binary is refused on that host. Orbit refuses a breaking migration from a build that is not the installed orbit ([upgrades runbook](runbooks/upgrades.md#a-build-that-is-not-the-installed-orbit)), but that guard is a backstop for hosts with an installed binary, not isolation. Run every candidate command, reads and `web serve` included, against a disposable home and its own workspace: clear the whole environment and point `HOME` at a disposable directory.
+
+Workspace selection depends on the working directory, not only on `HOME`. Without an explicit root, `crates/orbit-runtime/src/resolve.rs` can select the main checkout's `.orbit/` from a linked worktree or discover an ancestor workspace by walking up. Changing `HOME` does not stop linked-worktree discovery. A home under a managed checkout's `.orbit/tmp/` therefore does not isolate a command run inside it: even a read-only command can open the primary checkout's live state. An explicit `--root` takes precedence over both discovery paths and selects the registry root too. The wrapper below supplies it to every candidate command, and every command runs from an independent disposable directory outside the checkout. `HOME` also remains disposable for any home-relative files.
+
+Run the steps below as one shell session, from the managed checkout:
 
 ```bash
 CHECKOUT="$(git rev-parse --show-toplevel)"
 ORBIT_BIN="$CHECKOUT/target/debug/orbit"   # cargo build -p orbit-cli --bin orbit --locked
-QA_HOME="$(mktemp -d "$CHECKOUT/.orbit/tmp/manual-qa.XXXXXX")/home"
-QA_REPO="$(mktemp -d "${TMPDIR:-/tmp}/orbit-qa-repo.XXXXXX")"
+QA_BASE="$(mktemp -d "$CHECKOUT/.orbit/tmp/manual-qa.XXXXXX")"
+QA_HOME="$QA_BASE/home"
+QA_REPO="$(mktemp -d /tmp/orbit-qa-repo.XXXXXX)"
+QA_CWD="$(mktemp -d /tmp/orbit-qa-cwd.XXXXXX)"
 mkdir -p "$QA_HOME"
-qa() { env -i PATH=/usr/bin:/bin HOME="$QA_HOME" "$@"; }
+qa() { env -i PATH=/usr/bin:/bin HOME="$QA_HOME" "$ORBIT_BIN" --root "$QA_REPO/.orbit" "$@"; }
 
-qa git -C "$QA_REPO" init -q -b main
+# Mint the scratch root's machine identity first: `workspace init` does not create one,
+# and `host list` and the dashboard's /api/hosts refuse until `orbit init` has run.
+# Run it from QA_CWD, outside QA_REPO, so QA_REPO stays free of Orbit state.
+(cd "$QA_CWD" && qa init --non-interactive --machine-name manual-qa --task-prefix MQA)
 
-# Confirm the global root from the scratch home, outside any repository, so no
-# other workspace can be discovered.
-cd "$QA_HOME"
-qa "$ORBIT_BIN" config show --scope global --format json | jq -r '.global_root'
-
-# Register the scratch repository, then confirm its routing before any mutating command.
+# Initialize the workspace; no Git repository is required.
 cd "$QA_REPO"
-qa "$ORBIT_BIN" workspace init --name manual-qa
-qa "$ORBIT_BIN" config show --format json | jq -r '.global_root, .shared_root, .local_root'
-qa "$ORBIT_BIN" workspace show --format json | jq -r '.checkout.repo_root, .checkout.orbit_dir'
+qa workspace init --name manual-qa
+
+# Check all routing before previews or destructive commands.
+qa config show --scope global --format json | jq -r '.global_root'
+qa config show --format json | jq -r '.global_root, .shared_root, .local_root'
+qa workspace show --format json | jq -r '.checkout.repo_root, .checkout.orbit_dir'
+qa workspace list --format json
+qa host list --format json
 
 # Dashboard QA: serve only the scratch registry, from the scratch repository.
-qa "$ORBIT_BIN" web serve --port 0
+# Run it in the foreground and stop it with Ctrl-C; it must exit before cleanup.
+qa web serve --port 0 --no-open
+
+# Cleanup, once the server has exited.
+cd "$CHECKOUT"
+rm -rf -- "${QA_BASE:?}" "${QA_REPO:?}" "${QA_CWD:?}"
 ```
 
-The global root must print `$QA_HOME/.orbit`; the real `~/.orbit` must never appear. After `workspace init`, `shared_root` and `local_root` must be under `$QA_REPO`, and the workspace must report `$QA_REPO` as its checkout. Do not add `--confirm` until those paths match. Preview a destructive command first, then confirm it with the same `qa "$ORBIT_BIN" …` prefix. Stderr warnings such as "no actor identity resolved" are expected in a cleared environment.
+With this explicit-root recipe, `global_root`, `shared_root` and `local_root` must all print `$QA_REPO/.orbit`; the real `~/.orbit` must never appear. `host list` must succeed rather than report a missing `[machine]` identity. If any check fails or prints another path, stop before running another command. The workspace must report `$QA_REPO` as its checkout. The scratch registry's workspace list must contain only `manual-qa`, with its checkout under `$QA_REPO`; no live workspace identity may appear. Do not add `--confirm` until those checks match. Preview a destructive command first, then confirm it with the same `qa …` wrapper. Stderr warnings such as "no actor identity resolved" are expected in a cleared environment.
 
-Do not run any other Orbit command in `QA_REPO` before `workspace init`. The first command there writes a `.orbit/config.yaml` with a generated workspace identity, and `workspace init` then refuses with an identity conflict. Keep `QA_REPO` outside the checkout, not under `.orbit/tmp/`, because the checkout's own `.orbit` is an ancestor of that directory. Keep `QA_HOME` under `.orbit/tmp/`, as the fixtures do, and delete both directories when the QA is finished.
+`orbit init` mints the machine identity in the scratch root's global `config.toml` (`$QA_REPO/.orbit` under `--root`); `workspace init` does not. The `qa init` step passes `--non-interactive` with an explicit `--machine-name` and `--task-prefix`, so it never prompts. It runs from `QA_CWD`, not `QA_REPO`: do not run any other Orbit command in `QA_REPO` before `workspace init`. The first such command writes a `.orbit/config.yaml` with a generated workspace identity, and `workspace init` then refuses with an identity conflict. Keep `QA_REPO` outside every checkout; the recipe uses `/tmp` explicitly so an inherited `TMPDIR` inside the checkout cannot redirect it. `QA_BASE` stays under `.orbit/tmp/`, outside Bubblewrap's `/tmp` overlay, as the fixtures' homes are. Every candidate command uses the cleared environment and explicit root in `qa`. Delete `QA_BASE`, `QA_REPO` and `QA_CWD` when the QA is finished, after the server has exited.
 
 ## Testing & Coverage
 
@@ -846,6 +1045,8 @@ Submitting a run (ship, resume, auto, job) spawns a detached worker by re-execut
 
 Install a substitute with `orbit_core::test_support::install_substitute_pipeline_worker` (`crate::test_support` inside `orbit-core`), enabling the orbit-core `test-support` feature from `[dev-dependencies]` only. It is process-wide and the last install wins, so it covers other threads (such as a dashboard's blocking pool); install one argv per test binary, as `crates/orbit-web/tests/http_api/support.rs` does. `{run_id}` in the argv becomes the run id. CLI tests that run the real `orbit` binary use its production entry point instead.
 
+Detached workers also monitor their actual working directory throughout admission, execution and resumed work. If that directory is deleted, they terminate themselves; on Unix, SIGTERM first reaches supervised children, with SIGKILL as a bounded fallback. This protects against a removed checkout or fixture whose cleanup never reached the worker, even with its registry still open. Fixtures still own cancellation and must wait for worker exit before ordinary teardown. The MCP `a_fixture_auto_drain_worker_exits_when_its_cwd_is_deleted` regression deliberately removes the cwd, both with an intact registry and by dropping the whole fixture.
+
 ### Tests that depend on host process visibility
 
 `orbit_common::process::identity` derives process-start tokens from `/proc` on Linux, libproc on macOS and `ps -o lstart=` elsewhere, keeping the UTC/C-locale `ps` format so persisted tokens stay compatible. When the probe is `Unavailable`, production takes its fail-safe branch: an owner it cannot verify is neither finalized nor signalled.
@@ -884,6 +1085,8 @@ macOS `TMPDIR` is under `/var/folders`, and `/var` is a symlink to `/private/var
 
 File-size fault injection keeps the hard limit and restores the soft `RLIMIT_FSIZE` before the child exits, even on unwind: LLVM writes profiles at exit, and a lowered limit truncates them and fails `cargo llvm-cov report`.
 
+When a `.profraw` is left truncated (for example, a test process killed while LLVM writes its profile), `llvm-profdata merge` rejects every profile (`file header is corrupt`, `no profile can be merged`) although all tests passed. The `Render lcov report` step captures the first render's status under GitHub's `bash -e`; if the log names one to five unreadable profiles, it drops them with a `::warning::` annotation per file and renders again. The retry's result is the step's result. More than five named profiles, or an error that names no profile, emits `::error::` and fails with the first render's status. A `::warning::` that recurs for the same test is a defect to fix at the process that writes the profile.
+
 Line-coverage **targets** steer test investment; they do not fail CI. Check the CI log or run `cargo llvm-cov nextest -p <crate> --summary-only`.
 
 | Crate | Target | Why |
@@ -903,99 +1106,58 @@ orbit gc tmp --workspace my-workspace --confirm          # empty it, keep the di
 
 ## Dashboard HTTP integration fixtures
 
-`cargo test -p orbit-web --test http_api` drives the public dashboard server over loopback HTTP; helpers and cases are in `crates/orbit-web/tests/http_api/`. Put routine API coverage there. `orbit-web` unit tests are for admitted security safeguards and deterministic shutdown and cache-publication races; dashboard JavaScript behavior belongs in a JS runner, not Rust tests that launch Node.
+`cargo test -p orbit-web --test http_api` drives the public dashboard server over loopback HTTP; helpers and cases are in `crates/orbit-web/tests/http_api/`. Put routine API coverage there. `orbit-web` unit tests are for admitted security safeguards and deterministic shutdown and cache-publication races. Dashboard JavaScript has no automated test layer: the workspace guide forbids browser, Playwright and DOM-stub UI tests, so check UI changes through manual QA and the screenshots described in [Browser checks on a prepared host](#browser-checks-on-a-prepared-host).
 
 - Each mutable fixture re-executes its exact test with inherited authority cleared and launches `serve_from_env` against a disposable registry and workspace, under the [shared hang guard](#fixtures-on-a-loaded-host). Readiness and each HTTP request are bounded by `FIXTURE_STEP_DEADLINE` (120 s) with host load reported on expiry, and process guards reap servers after a failed assertion.
 - Servers bind port zero and the launcher reads the address from the child's listening announcement. Never reserve and release a port: a concurrent fixture can take it and receive your first request.
 - Submission fixtures use a harmless worker stub. The replay fixture runs the real worker through the ignored `replay_worker_child` entry point and waits for terminal run state before dropping its roots.
 - The security table discovers literal routes from the API router and their mutating methods from HTTP `Allow` responses, then checks origin/Host protection on every mutation and operator admission on governed actions. A new mutating route defaults to operator-only; existing ordinary writes have explicit exceptions. The table asserts HTTP behavior, not source text; never expose a private router API for testing.
 
+The waiting-count refresh (`GET /api/decisions`) enumerates registered bundle
+ids. Whole-bundle freshness proofs replace a separate envelope-index
+freshness pass and envelope hydration. It still probes every bundle,
+including terminal tasks, so corrupt-bundle warnings and `include_closed`
+keep the same population. Large bundle-stamp scans use at most 16 helper
+threads; bundle reads and request-state derivation stay on the caller.
+On Linux, probes share an open bundle directory so each file avoids walking
+the workspace path prefix again; other platforms retain ordinary metadata probes.
+After the first clean scan, unchanged bundles with no decision-request event
+need no further bundle read. The remaining filesystem probes still scale with
+the workspace's task count. Measure changes with paired base and candidate
+builds using identical optimization settings and the same disposable store:
+record the first observation, then at least 20 sequential warm requests
+250 ms apart, raw responses and samples, and nearest-rank p50/p95. Keep the
+measurement harness with that evidence, and stop each server before the next
+run. Never measure against a live workspace or generate competing load.
+
+Scheduled dashboard refreshes on Tasks, Jobs Catalogue, Run detail, Frictions
+and Metrics combine their due notice, routine-health, failing-job and audit
+summary reads through `GET /api/dashboard/chrome`. The endpoint dispatches only
+those fixed read handlers and returns each original JSON body and HTTP status
+separately; a component refusal does not discard successful siblings. The
+summary keeps its selected `since` window. Routine and failure reads remain
+optional, so the Tasks five-minute cadence and Metrics failure-peek cadence do
+not change. Explicit refresh and change-stream recovery use fresh direct
+reads. Older forwarded hosts without the endpoint fall back to direct reads;
+the ten-read budget applies to hosts serving the combined endpoint. Host
+resource and fleet timers remain independent.
+
 ## Browser checks on a prepared host
 
-Browser checks need Playwright and Chromium, plus Chromium's shared libraries and a font configuration on Linux. A prepared host has a kit at `~/.local/chromium-deps`, built and verified by `orbit browser-kit install` (`status`, `verify` and `remove` manage it; see the orbit-setup [browser kit reference](../crates/orbit-core/assets/skills/orbit-setup/references/browser-checks.md)). Once it is verified, every agent receives `PLAYWRIGHT_BROWSERS_PATH`, `PLAYWRIGHT_MODULE` (Playwright's `index.mjs`) and `ORBIT_BROWSER_KIT_ENV`, the kit's `env.sh`, which on Linux also exports `LD_LIBRARY_PATH` and `FONTCONFIG_FILE` when the kit unpacked them. Source it in the shell that runs the check; in a hand-run shell, source `~/.local/chromium-deps/env.sh`. `orbit doctor` reports a missing, mismatched or unverified kit, unresolved libraries and `node` missing from workers' PATH. On a host without a kit, run `orbit browser-kit install` there rather than installing Playwright into a checkout: `.orbit/tmp/` is cleared, so it holds only a sandboxed run's disposable copy when the kit is absent ([runbook](runbooks/website-validation.md#stage-playwright-and-chromium-without-root)). Skia FontConfig crashes and missing `lib*.so` errors are host evidence, not a failed check.
+Browser checks need Playwright and Chromium, plus Chromium's shared libraries and a font configuration on Linux. A prepared host has a kit at `~/.local/chromium-deps`, built and verified by `orbit config browser-kit install` (`status`, `verify` and `remove` manage it; see the orbit-setup [browser kit reference](../crates/orbit-core/assets/skills/orbit-setup/references/browser-checks.md)). Once it is verified, every agent receives `PLAYWRIGHT_BROWSERS_PATH`, `PLAYWRIGHT_MODULE` (Playwright's `index.mjs`) and `ORBIT_BROWSER_KIT_ENV`, the kit's `env.sh`, which on Linux also exports `LD_LIBRARY_PATH` and `FONTCONFIG_FILE` when the kit unpacked them. Source it in the shell that runs the check; in a hand-run shell, source `~/.local/chromium-deps/env.sh`. `orbit doctor` reports a missing, mismatched or unverified kit, unresolved libraries and `node` missing from workers' PATH. On a host without a kit, run `orbit config browser-kit install` there rather than installing Playwright into a checkout: `.orbit/tmp/` is cleared, so it holds only a sandboxed run's disposable copy when the kit is absent ([runbook](runbooks/website-validation.md#stage-playwright-and-chromium-without-root)). Skia FontConfig crashes and missing `lib*.so` errors are host evidence, not a failed check.
 
 ```bash
 . "${ORBIT_BROWSER_KIT_ENV:-$HOME/.local/chromium-deps/env.sh}"
-node crates/orbit-web/src/tests/dashboard_operations_browser.mjs \
-  "$PLAYWRIGHT_MODULE" .orbit/tmp/dashboard-browser
 ```
 
 `.orbit/tmp/` is cleaned with the worktree, so screenshots kept only there are lost. A task whose diff changes something a user sees (the dashboard, the website, docs pages, a desktop app UI) attaches screenshots of each changed view as task artifacts, whether or not it is tagged `ui`:
 
 - every theme the view supports (the dashboard is dark-only; the website has light and dark), and a 375px phone width when the layout is responsive;
 - a before shot from the base revision when it is practical and it shows the change;
-- each attached with `orbit.task.artifact.put` from `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`) at a stable path such as `screenshots/<view>-<theme>-<width>.png`, and the paths listed in the execution summary;
+- each attached with `orbit.task.artifact` action `put` from `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`) at a stable path such as `screenshots/<view>-<theme>-<width>.png`, and the paths listed in the execution summary;
 - each under the 1 MiB artifact limit (`MAX_TASK_ARTIFACT_CONTENT_BYTES`): prefer a viewport capture to a full-page one, or JPEG or WebP when a PNG is too large.
 
-In a workspace with `visual_review.mode = "live"`, the mocked views of a `verify-mock-ui` task are the exception: Orbit's `visual_capture` captures them beside their mocks as the evidence of record, so the implementer attaches no screenshots for them. Every other changed view, including an unmocked view of the same task, still needs them.
-
 When the host has no browser kit or the view cannot render, say so in the handoff instead of claiming visual verification. A claimed leaf on another host attaches the same way; the broker forwards the put to the owner.
-
-To check a fixture under the worker sandbox on macOS without dispatching a run, substitute the placeholders in the leaf-worker profile golden and run the fixture under `sandbox-exec`:
-
-```bash
-SCRATCH="$(mktemp -d)"
-sed -e "s#<HOME>#$HOME#g" -e "s#<ROOT>#$SCRATCH#g" \
-  crates/orbit-exec/tests/sandbox_profile_goldens/macos/leaf_worker.sbpl >"$SCRATCH/leaf_worker.sb"
-sandbox-exec -f "$SCRATCH/leaf_worker.sb" /bin/zsh -c '. ~/.local/chromium-deps/env.sh &&
-  node crates/orbit-web/src/tests/dashboard_operations_browser.mjs "$PLAYWRIGHT_MODULE" '"$SCRATCH"'/dashboard-browser'
-```
-
-The golden only approximates a live run's profile, so use a real worker run as the final proof.
-
-### Dashboard browser fixtures
-
-`dashboard_loading_browser.mjs --review-repairs` runs the focused navigation and label scenarios in `dashboard_navigation_repairs_browser.mjs`: routine job links with browser Back, error disclosure clicks, in-place Codebase task and Defects links, Pilots matrix header scope, and multi-week metrics labels. The default loading suite also runs them; dark desktop/375px screenshots include the Tokens legend with a joined line across an empty bucket.
-
-The gzip forward check uses two real dashboards and the stub SSH tunnel.
-Set `ORBIT_PLAYWRIGHT_MODULE` and `ORBIT_COMPRESSION_BROWSER_EVIDENCE_DIR`,
-then run the ignored HTTP test
-`host_forward::gzip_forward_returns_json_to_the_browser`. Chromium fetch must
-decode the forwarded routines and job-runs JSON; `result.json` records both
-responses in the evidence directory.
-
-The run-detail scenarios also check the Requests held panel for open and half-open
-breakers, refused settlements and owner-busy backoff, including healthy-drain absence
-and safe text wrapping at 1440 and 375 px. `dashboard_loading_browser.mjs --run-detail`
-(with the usual module and evidence arguments before the flag) writes
-`requests-held-result.json` and `requests-held-*.png`. Both browser color preferences
-are checked; the dashboard retains its supported dark palette in each.
-
-Each runs as `node <script> "$PLAYWRIGHT_MODULE" .orbit/tmp/<evidence-dir>` and saves screenshots and any JSON named below. The dashboard is dark-only, so there is no light-theme pass. The loading and distributed scenarios also run in the QA sweep.
-
-The Cost scenario in `dashboard_loading_browser.mjs` measures every rendered model-token caption against its computed card background at 1280, 1440 and 375 px, and checks visible Cost text for disabled-token use (`cost-contrast-result.json`, `cost-{1280,1440,375}.png`).
-
-| Script | Evidence dir | Covers |
-|---|---|---|
-| `crates/orbit-web/tests/http_api/dashboard_experiments_browser.mjs` | `experiments-browser` | Cumulative tooltips for first, middle and last buckets at 1440 and 375 px, with short and long unbroken arm names and an increased tooltip width: the complete tooltip, labels and every metric value stay inside the chart and viewport without document or pane overflow (`bounds.json`, `cumulative-<scenario>-dark-<width>.png`). Source the browser kit, then run `ORBIT_PLAYWRIGHT_MODULE="$PLAYWRIGHT_MODULE" ORBIT_EXPERIMENTS_BROWSER_EVIDENCE_DIR="$PWD/.orbit/tmp/experiments-browser" scripts/build-budget.py -- cargo test -p orbit-web --test http_api dashboard_assets::experiment_cumulative_tooltips_stay_inside_the_chart_and_viewport -- --ignored --exact --nocapture`. The script also runs directly with the module and evidence arguments; `--before` names before screenshots while retaining the bounds assertions. With `--authoring` (cargo: `dashboard_assets::experiment_authoring_creates_edits_and_starts_a_draft`, same variables) it instead drives the operator authoring flow against a fixture server at 1440 and 375 px: the New experiment form creates a draft (a refused guardrail threshold shows under Guardrails; crew pickers list only the configured crews), the draft card's Start shows core's refusal, Edit patches the stored definition, Start confirms arms, weights and population and leaves it running with its arms, Save and start does both and locks the definition it confirms (its controls are disabled while the confirmation is open, and Confirm starts the captured definition even if an edit reaches the form; Back to editing unlocks it), and the running experiment's detail says it is no longer editable (`authoring.json`, `experiment-form-*`, `field-error-*`, `start-confirm-*`, `frozen-arms-*`, `start-confirm-frozen-*`, `running-dark-<width>.png`). Without arguments, `node --experimental-vm-modules` runs the ordinary timestamp regression without Chromium. |
-| `crates/orbit-web/src/tests/dashboard_loading_browser.mjs` | `loading-browser` | Task search dismissal (`--task-lookup` narrows to this control): Clear beside search works with empty input and listed or filtered-out ID results, direct links, keyboard Enter/Space at 1440 and 375 px, query/route reload and history, not-found/server errors and held lookup/hash/refresh responses (`task-lookup-clear-result.json`, `task-lookup-*.png`, `task-deep-link-*.png`). The UTC/Local clock (`--clock` narrows to this check): with unchanged API responses in America/Los_Angeles, switching repaints an open task detail's History and comment times and an unchanged run row's time, while the detail keeps an opened section, a comment draft with its selection, and focus (`clock-task-local-dark-1440.png`, `clock-task-local-dark-375.png`). Task labels and navigation (a run's task link opens the task under the operator's filter, a copied URL reopens it in a new tab, Back returns to the run, and a link into another workspace adds one history entry so Back and Forward restore each entry's workspace and requests; `task-link-history-result.json`), workspace scope (the Events workspace chip names the selected workspace as the header picker does, in one- and multi-workspace mode; actual host-picker transitions with a shared workspace ID remove or restore the chip removal control to match the destination cardinality, hold the destination workspace response open while current and retired chip activations preserve workspace state, request scope and the full URL (`events-host-loading-dark-{1440,375}.png`), preserve sole-workspace request scope after loading, and allow aggregate selection on return to multiple workspaces (`events-host-scope-result.json`, `events-host-single-dark-{1440,375}.png`); a host or window change retires the previous Reliability report while the replacement read is held or fails; a same-scope refresh keeps it labeled refreshing or stale), responsive layout, row keyboard access, Ship dispatch. Controlled `/api/fleet/drains` responses show a drain outside the idle selected workspace in the header; opening the header shows both fleet rows and retains the count in aggregate scope without workspace readiness or crew reads (`result.json` → `fleetScope`). These mock responses exercise shipped dashboard assets, not production drain execution. Task titles stay on one line with an ellipsis and a consistent compact row height, the full title stays reachable by tooltip and accessible name, and the status/crew chips reveal their native editors on focus or click. Checks title capacity beside the default dock at 1280×800 and 1440×900, the stacked row at 390 and 375 px, and edits (`task-titles-result.json`, `task-titles-<width>.png`): Tab reveals the crew editor before a selected-option mutation; status uses native keyboard typeahead (`i` for `in-progress`) and requires a trusted change event plus the exact status PATCH. Native popup ArrowDown/Enter does not select an option in macOS headless Chromium. A saved status change from the detail pane closes it, clears `open=` and keeps its feedback and undo on the row, or in a notice when the new status is filtered out; a failed or declined change keeps the detail open with its feedback, and a refreshed status leaves rows as they were (`task-status-folded.png`, `task-status-notice.png`). Review and in-progress rows and the detail link a task's pull request only when its `github-pr` ref has an http(s) page (`pull-request-links-result.json`). `--run-detail` narrows it to run detail, cancel/replay and child outcome tallies, state colors, durations and navigation at desktop/mobile widths (`run-detail-result.json`, `run-actions-result.json`, `run-child-outcomes-result.json`). |
-| `crates/orbit-web/tests/http_api/dashboard_provider_usage_browser.mjs` | `provider-usage-browser` | Runs through `cargo test -p orbit-web --test http_api provider_auth::dashboard_top_bar_shows_provider_usage_on_every_tab -- --ignored --exact --nocapture` with `ORBIT_PLAYWRIGHT_MODULE="$PLAYWRIGHT_MODULE"` and `ORBIT_PROVIDER_USAGE_BROWSER_EVIDENCE_DIR="$PWD/.orbit/tmp/provider-usage-browser"`. Seeds stored readings (one stale, one with gating off), then checks the top bar's per-provider usage chips (name, worst value, meter and pressure, set apart by a divider only while the host warning chip is shown; no native tooltip) against the real server at 1920 px and the same chips on five destinations. It then replaces the readings with a busy host's (a five-window scoped provider, a gating-off one and `+2 more`) to drive the dialogs with a real pointer, keyboard and touch (hover intent and grace, focus, click and Pin, Esc, outside click, one dialog at a time, `aria-expanded`, dialog placement inside the viewport), resizes across 1900 px with the all-providers dialog open or as a focus preview (`aria-expanded` and keyboard focus move to the chip on screen, Tab reaches Pin, Esc returns focus, and both stay there through an unchanged poll), a provider's dialog closes with focus moved to the summary chip, and a poll that changes the readings keeps keyboard focus on the open dialog's Pin button (the fixture refuses `/api/events/stream`, which would otherwise push host samples past the rewritten `/api/host/resources`); the summary chip's all-providers dialog at 1440, 1280 and 375 px (`topbar-*`, `provider-*`, `provider-resize-*`, `all-providers-*`, `summary-*` screenshots, `result.json`). |
-| `crates/orbit-web/tests/http_api/dashboard_run_events_browser.mjs` | `run-events-browser` | Newest event page and total count, earlier pages, timeline retry markers and legend independent of paging/Refresh, delayed retry responses after run/workspace round trips, retry truncation and scan failure/recovery, ISO day labels and absolute seconds on the dashboard clock, activity folding within one invocation and separation of interleaved children (including equal or missing messages and legacy missing parents, `activity-result.json`), first-load skeleton and loaded steps retained during delayed Refresh, read failure, desktop and narrow layout (`result.json`), and an opened event's fields as a bordered inset panel without page overflow at 1440 and 375 px (`event-fields-open-dark-{1440,375}.png`). |
-| `crates/orbit-web/src/tests/dashboard_operations_browser.mjs` | `dashboard-browser` | Responsive shell at 375×812: the first panel or view tabs start at or above y=200 while every destination and active view remains reachable by keyboard; panel layout and focus, Jobs Live / History / Catalogue visits and retired list routes, Catalogue routine navigation, the Tasks dock Start card (the simple Start card with six durations posting its own fields, and its receipt beside Start across pending, success, refusal and lost responses, one POST each, `tasks-dock-feedback-*.png`), a replica Start that a carried-over Mark shipped tasks done choice blocks, with the reason named beside the switch (`tasks-replica-carried-complete-dark-1440.png`), the phone dock route at 375 px, where the top-bar drain indicator and a Log deep link show the dock in place of the list, with a keyboard **Back to tasks** control and no overflow (`tasks-dock-phone-{drain,log}-dark-375.png`), the Drain dock **Start a window** card (six duration buttons, and a footer whose summary, any throttle or refusal note and Start button are child elements, with stray direct text rejected, `drain-start-*.png`) beside the live-window card whose start feedback keeps its warning lines after the confirmation clears (`drain-feedback-warnings-retained.png`), a task's running run with a long job id wrapping inside its 280px Running now card while the task and run links stay scoped (`running-now-280.png`), routine toggle and trigger-editor repaints after a Catalogue visit retaining fresh enabled state and failure streaks, and an open schedule/trigger editor keeping its observed expectation after a background refresh and a second editor opening, so a stale save is refused and its draft is kept (`schedule-stale-editor-dark-*.png`), a held save from a retired Auto-tasks or Routines editor that resolves or fails after A→B→A leaves the replacement editor open with its draft, and an opened Routines or Auto-tasks **Details** body as a bordered inset panel on a contrasting background that sits inside its row, ends clear of the next row, adds no page overflow at 1440 and 375 px and leaves the collapsed row height unchanged (`details-{routines,auto-tasks}-open-dark-{1440,375}.png`). |
-| `crates/orbit-web/src/tests/dashboard_operations_phone_dock_browser.mjs` | `phone-dock-browser` | Focused Tasks dock regression at 1440×900, 1440×420, 375×812 and 375×420. Repeated Drain → Locks held → Log switches retain tab, pane and task-list positions with empty, state, pending, multiline error and success feedback in idle/empty and active drains; Drain retains its notices while Locks hides them. Checks first-card and bottom alignment, lock counts, filter, expansion, warning badges, keyboard tabs, scrolled refresh and persisted/deep-linked selection (`dock-alignment.json`, `tasks-dock-{drain,locks}-dark-1440.png`, `tasks-dock-{drain,locks,log}-dark-375-{812,420}.png`). Uses the production router and log-tail initializer to open Drain and Log in place of the list, then returns by keyboard and verifies the status and search filters remain active (`tasks-dock-phone-{drain,log}-dark-375.png`). At 1440px, selects each Drain, Locks and Log tab through the shipped toggle, resizes to 375px, then checks the same route through reload-equivalent routing (`tasks-dock-resize-{drain,locks,log}-dark-375.png`). After a desktop Log selection resized to 375px, a plain hash navigation to the list URL shows the list and hides the dock, matching a reload of that URL (`tasks-list-hash-navigation-dark-375.png`). Run directly with `node crates/orbit-web/src/tests/dashboard_operations_phone_dock_browser.mjs "$PLAYWRIGHT_MODULE" .orbit/tmp/phone-dock-browser` after sourcing the prepared browser kit. |
-| [dashboard_rail_browser.mjs](../crates/orbit-web/src/tests/dashboard_rail_browser.mjs) | `rail-browser` | Rail label/count geometry at 1440, 1280, 1024, 761, 760, 390 and 375 px. Health and Analytics retain readable labels, Health with its three counts (doctor, denials, routines), including large pills and removal of the attention count; desktop attention pills use a second line, while mobile destinations remain horizontal. Checks text clipping, sibling separation, button containment and page overflow, and captures every mobile destination. Repeated destination and Health subtab changes through the shipped router keep one indicator per bar. With populated host/workspace pickers and attention counts, direct Settings Hosts/All keys and Analytics Agents loads stay unobscured at 1440×900 and visible beside their destination at 375 px; Tab and Shift+Tab through every Settings view keep the full focus ring above the sticky host block, including after its verdict wraps (`measurements.json`, `rail-<width>-<case>[-<tab>].png`, `<section>-<view>-dark-<width>.png`, `config-all-keys-focus-dark-1440.png`). |
-| `crates/orbit-web/src/tests/dashboard_orchestrators_browser.mjs` | `orchestrators-browser` | Analytics › Agents › Orchestrators ranking header boxes do not overlap at 1440 and 375 px and the ranking scrolls in its own box at 375 px, the Jobs badge reads `N runs`, and the UTC/Local control defaults to UTC, switches the refresh line, and survives a reload. The refresh line and the one clock control sit at the foot of the rail at every width from 1024 px while the top bar stays one row (`agents-orchestrators-chrome-dark-<width>.png`, `clock-dark-<width>.png`, `jobs-rail-dark-<width>.png`, `result.json`). |
-| `crates/orbit-web/tests/http_api/dashboard_agents_browser.mjs` | `agents-browser` | Analytics › Agents from contract-shaped `/api/agents` payloads: `#analytics/orchestrators` opening `#analytics/agents/orchestrators`, role tab counts, row selection driving the detail column, "How the score works" staying open across a refresh that brings a newer scan, the Reviewers provisional banner, `accepts often` tag, unjudged row (listed last, no rank, score or bar, its detail and disclosure) and verdict-outcome bars, the Pilots tier matrices, Implementers with no role panel and no empty panel grid row or its gap at 1440 and 375 px (that track is 16 px and 12 px after the disclosure; `implementers-track.json`), the not-computed and empty states, `all` labelled as 90d, and the 375 px layout (no page overflow, ranking scrolling in its own box, detail stacked below, 44 px touch targets) (`agents-<role>-dark-<width>.png`, `result.json`). |
-| `crates/orbit-web/tests/http_api/dashboard_fleet_drains_browser.mjs` | `fleet-drains-browser` | Initial Tasks and Run detail render local data while a remote fleet response is held; warmup and the first refresh share one in-flight fleet read per host, and late completion updates the indicator while preserving the selected view (`warmup-*-held.png`). In All workspaces on the Tasks dock (`tasks?dock=drain`), ready hosts are shown while another host is still loading (marked `loading`, distinct from idle and unavailable) at 1440 and 1024 px in dark theme; releasing the held host with success or an explicit 502 settles only that host without dropping ready rows, changing the selected workspace, or refetching, and a ready workspace button focused before release keeps focus so Enter still selects it (`dashboard-fleet-remote-{pending,settled,failed}-dark-{1440,1024}.png`, `fleet-partial.json`). With a connected selected-workspace EventSource, a non-selected host changing from idle to draining updates the global indicator on the independent 60-second fleet cadence without a scope switch; a selected-workspace panel refresh does not refetch fleet data outside the stream scope (`fleet-stream-cadence.json`, `fleet-indicator-live-stream-dark-{1440,375}.jpg`). Fleet indicator from an idle default workspace, host errors, idle eligible work, keyboard selection on a remote host and row selection on the serving host through the complete app, and separate 375 px page/card geometry with one line per workspace that has nothing waiting. With two registered hosts, one refresh on Tasks, Run detail, every Metrics trend tab, and the other listed views issues at most 10 requests and does not read `/fleet/drains`; the indicator and fleet card still show phase, slots, eligible count, top wait, and holds (`result.json`, `fleet-375.png`). Exact per-view request lists are retained in `poll-requests.json` even if a budget assertion fails. |
-| `crates/orbit-web/tests/http_api/dashboard_durations_browser.mjs` | `durations-browser` | Duration formats and wrapping in the Metrics actor tables and Automation, running `↻` durations (`measurements.json`). |
-| `crates/orbit-web/tests/http_api/dashboard_metrics_browser.mjs` | `metrics-browser` | Analytics › Metrics trends: duration series cards and deltas, line gaps and hollow low-sample points, hover and keyboard tooltips, series toggles (the last one stays), Succeeded / All outcome filtering with URL reload and history, statistic and Table views, the Tasks completed stacks, the Defects lineage and origin groupings, detail cards, a window change, the empty window's widen action and a 390px phone. A held full-panel refresh released after a token-filter change applies its current-window duration, completion, defect, actor and outcome data while retaining the newest tokens (`metrics-assertions.json`, `refresh-race-dark-{1440,375}.jpg`). Tokens, Lines changed and Delivery friction load on selection; a panel poll reads only the selected filtered trend, alongside the duration/completion/defect and detail data. Lines changed and Delivery friction also check workspace/window/filter persistence on refresh and unavailable-host recovery (`diff-dark-{1440,375}.jpg`, `friction-dark-{1440,375}.jpg`); `metrics-assertions.json` retains API request lists. |
-| `crates/orbit-web/tests/http_api/dashboard_resource_profiles_browser.mjs` | `resources-browser` | Analytics › Resources from its rail subtab: the work-class selector (Change, No-diff, a template), complexity series ending at their horizons on the shared minutes axis, the dimmed and hollow sparse profile, hover and keyboard tooltips with the live-region reading, series toggles (the last one stays), % of host with both admit thresholds, the profile table, the empty state, the aggregate placeholder issuing no read, an OS light preference and a 390px phone (`resources-assertions.json`, `resources-*.png`). |
-| `crates/orbit-web/tests/http_api/dashboard_audit_browser.mjs` | `audit-browser` | Health › Incidents › Events and Analytics › Reliability › Tools tables across widths; Tools window controls through the complete app (24h/7d/30d clicks, summary requests, shared state and URL reload, labeled 24h fallback for 1h/all, roving keyboard focus and 1440/375 px layout; `tools-windows.json`, `tools-window-<window>-dark-<width>.png`, `--before` captures the base view); flush Tools column bottoms with either column taller and every nonempty subset of side cards at 1500/1600/1920 px, with natural single-column spacing at 1499/375 px (`tools-columns.json`, `tools-columns-<case>-<mask>-<width>.png`); a long Events list growing the panel under the pane's scroll, keyboard expansion, Events paging (Load older, shown-of-window header, refresh keeping loaded pages, status and hide-unconfirmed filters on every page, and a fixture-clock advance that expires retained tail rows out of a relative window on refresh while keeping still-valid ones). Held responses order an older page against a filter change: a retired older page that succeeds while the new head is pending, or succeeds or fails after that head fails, paints no rows or paging feedback, and a same-scope refresh landing under a held older page keeps the loaded tail. A second older-page revalidation failure still renders the successful fresh head without a panel error, retaining the complete prior tail (`tail-failure.json`, `events-tail-failure-dark-<width>.png`). The full-width Analytics › Codebase views: the Hotspots table (signal columns, flagged paths first), a poll keeping the scroll, a path opening its file view (tiles, regressed tasks, the below-minimum Changes with message and Use all time) and the back link, the Group by segment, view tabs and Coupling empty-state action rewriting the hash, the toolbar wrapping and the table scrolling in its own box at 375 px against 1280 px, and 4.5:1 text contrast in Hotspots, the file view and Coupling (`codebase-<width>.png`, `codebase-file-1440.png`). |
-| `crates/orbit-web/tests/http_api/dashboard_task_create_browser.mjs` | `proposal-browser` | Runs through `cargo test -p orbit-web --test http_api task_create::dashboard_proposal_form_retry_and_scope_recovery -- --ignored --exact --nocapture` with `ORBIT_PLAYWRIGHT_MODULE="$PLAYWRIGHT_MODULE"` and `ORBIT_CREATE_BROWSER_EVIDENCE_DIR="$PWD/.orbit/tmp/proposal-browser"`. Uses a disposable HTTP server and browser profile to check the modal dialog (Escape, Cancel, focus start, Tab containment, inert background, focus return, dismissal of an in-flight request without a resend), cancellation, inline validation, proposed-only creation, committed/lost-response retry, reload, frozen key/payload/target, double submit, scope changes, aggregate target selection, correction after refusal and mobile layout; also boots the complete dashboard, where opening, a validation error, a saved proposal and closing leave the board, the dock and its `--tasks-dock-lead` exactly where they were, and the dialog stays inside the viewport with reachable fields and actions at 1280×420, 375×800 and 375×480. Saves `proposal-result.json`, `proposal-mobile.png` and `task-create-after-*-dark-*.png`. |
-| `crates/orbit-web/tests/http_api/dashboard_polish_browser.mjs` | `polish-browser` | Settings, Health, Analytics and Automation deep links, including Analytics › Agents › Pilots; at 375 px, load/reload with counts arriving after routing keeps the destination and selected sub-view visible together, as do clicks through every rail sub-view (`navigation-<route>-dark-375-<visit>.png`, `navigation-<section>-click-dark-375.png`); a click walk through every Observe destination, rail view and secondary tab (Incidents, Events and Errors; Pipeline and Tools) checking the one visible view, the active rail entry, view and tab, the hash, remembered views and filters, Back and direct loads (`observe-<n>-<route>.png`); crew labels and usage references, Crews geometry (`measurements.json`). |
-| `crates/orbit-web/src/tests/dashboard_refresh_browser.mjs` | `refresh-browser` | Failed and recovered refreshes: retained counts with `as of HH:MM`, the connection dot, failed run streams. |
-| `crates/orbit-web/src/tests/dashboard_config_topics_browser.mjs` | `config-topics` | Settings drawer value and CLI round trips (including a boolean draft trimmed to its choice, an invalid boolean refused before any PUT, and a CLI preview matching Save), latest-click Raw TOML reads, held Save/Remove feedback, and the Seed from global / Start empty choice for a missing or plugin-only workspace file (Close and a refused write create none). Its `dashboard_settings_mutations.mjs` shipped-module harness checks bulk deletion, drawer Save/Remove, throttle key Save/Clear and crew Save/Delete across host changes, workspace round trips and replacement editors; current failures keep drafts, bulk deletion preserves per-key outcomes, and plugin-only workspace files offer the first-policy seed/fresh choices for key and crew writes. |
-| `crates/orbit-web/src/tests/dashboard_host_switch_browser.mjs` | `host-switch` | Host switcher: requests routed through `/api/on/<host>/…`, host precedence, failure and recovery. A host that refuses forwarded writes still lists Jobs › Live, Jobs › Catalogue and Auto-tasks with their write controls disabled. Holding the first Settings bulk DELETE across a real host-picker switch sends no subsequent DELETE and publishes no completion to the new visit. The log tail drops the old host's rows, buffered count and status line at the switch, while the new host's snapshot is held, failed, stale or empty, and reopens the stream from that host's cursor. Back and Forward between hosts, with a shared workspace ID and with different ones, restore routing, both pickers and write capability, and a held workspace list from the host left behind repaints nothing. Back and Forward from a single-workspace host restore All workspaces on a multiple-workspace host, preserve aggregate intent while destination discovery is held, and fetch aggregate tasks or runs after it settles; a single-workspace destination selects its only workspace and repairs the URL. The serving host's Settings › Hosts **Show** href carries an explicit empty host, so opening it in a new tab of a browser remembering a remote selects the serving host there, and an ordinary click agrees. State assertions import the same `/static/js/common.js` module as the shipped app (`host-switch-assertions.json`). |
-| `crates/orbit-web/src/tests/dashboard_doctor_browser.mjs` | `doctor-browser` | Health › Doctor rows, remediation, cached report age, the busy state of a first run and of a refresh while the fixture holds the response (Refresh disabled, progress shown, controls restored after success or failure), a cached read delayed past a newer refresh or a host switch never replacing the shown report or rail count, a newer cached report still shown, remote and too-old hosts (`doctor-assertions.json`). |
-| `crates/orbit-web/src/tests/dashboard_incidents_browser.mjs` | `incidents-browser` | Health › Incidents class tiles and filtering, lifespan bars for a recurring and a single-burst signature, the detail panel (full message, Copy, truncation note and its audit drill-down, related signatures, runs), last-hour and no-message filters, cause headers over signatures that share a cause, the By cause / By signature toggle and the same-cause list with its grouping basis, the local 6h window, the sticky panel and a 375px phone. Full-message cache isolation uses independent host stores with the same audit row ID, plus held successes and errors across host/workspace round trips. The full dashboard covers a shared concrete workspace; a browser module harness covers All workspaces with the shipped common.js routing because the dashboard currently gates Incidents behind a concrete workspace (`incidents-assertions.json`). |
-| `crates/orbit-web/src/tests/dashboard_provider_limits_browser.mjs` | `provider-limits-browser` | Crews Limit column, Drain provider-limit waits, contrast under both emulated colour schemes (`provider-limits-assertions.json`). |
-| `crates/orbit-web/tests/http_api/dashboard_task_block_browser.mjs` | `task-block-browser` | Blocked-task explanation in the dock and full page at 1440 and 375 px: reason, absolute timestamp, recorded next step, matching escalation comment and scoped run link. Checks explicit missing-reason/time fallback and absence on other statuses; captures each changed view (`results.json`, `task-block-{dock,page,unknown}-dark-<width>.png`). `--before` captures the same fixture without asserting the new callout. |
-| `crates/orbit-web/tests/http_api/dashboard_task_panel_browser.mjs` | `task-panel-browser` | No Rust runner: source the kit environment first (`. ~/.local/chromium-deps/env.sh`; without its `LD_LIBRARY_PATH` Chromium fails to launch, for example on missing `libatk-1.0.so.0`), then run it directly as `node crates/orbit-web/tests/http_api/dashboard_task_panel_browser.mjs "$PLAYWRIGHT_MODULE" .orbit/tmp/task-panel-browser`. Add `--save-refresh` to run only the saved-detail regression: promise barriers hold a serialized pre-save list response until status and crew PATCHes complete, then compare the open status, crew and governed transitions with a fresh detail GET at 1440 and 375 px; ordinary refreshes must still avoid a duplicate detail GET (`task-save-refresh-result.json`, `task-save-refresh-{status,crew}-dark-{1440,375}.png`). The existing metadata checks verify inline schedule editing and saves, the combined schedule/start row with no editor after start, absence of Branch/Worktree rows, the Risk pill tooltip on hover/focus/tap with an accessible description and Escape dismissal, matching lifecycle/delivery strip edges for eight and nine steps, and disclosures showing full one- and two-site regression symbols (`task-panel-result.json`, `task-pane-dark-{1440,375}-after.png`, `task-risk-tooltip-dark-{1440,375}.png`, `task-stage-{8,9}-dark-{1440,375}.png`, `task-detail-regression-{sites,single}-dark-{1440,375}.png`). The Tasks side pane on a 31-task fixture: a row click opens the pane to the right without moving the row, rebuilding the list or losing its scroll, and a refresh keeps both; `aria-expanded`/`aria-controls` and `open=`; the five tabs in order, Runs read from `/api/job-runs?task_id=` only once its tab opens, History, Comments, Artifacts and tab-list arrow keys; drag, keyboard (End clamp, Shift step) and double-click resizing, the width stored in `localStorage` and restored with the selection on reload, and refused storage falling back to the default without page errors. Keyboard: j/k and Up/Down move the selection, j inside the pane keeps focus on the new heading, Enter opens `#tasks/<id>` with the list hidden, Back to list restores the scroll, selection and row focus, Esc and the close control close the pane. Deep links: `open=` reveals its row, a direct `#tasks/<id>` returns to the list with the task selected. Row Approve and View run act without opening the pane. A long refusal (a refused done transition and a refused archive, with a 60-character unbroken token) wraps inside the pane in both the status pill's feedback and the action error at 1440 and 375 px (`task-refusal-wrap-result.json`, `task-refusal-wrap-dark-{1440,375}.png`). A done task outside the filter, pinned by `#tasks/<id>` or `open=`: the full page at 1440 and 375 px drops the outside-the-list box and shows the same visibly labeled Crew select in the lever row for listed and pinned tasks, with matching geometry and styles; crew changes save from both pages and the dock, which keeps its outside-the-list note. Side-by-side full-page comparisons are captured at both widths. At 375 px the pane is a full-screen modal sheet named by its heading over an inert page, and Back releases it and returns focus (`task-panel-result.json`, `tasks-panel-dark-1440.png`, `tasks-page-dark-1440.png`, `tasks-sheet-dark-375.png`, `tasks-page-pinned-dark-1440.png`, `tasks-page-pinned-dark-375.png`, `tasks-page-listed-dark-1440.png`, `tasks-page-listed-dark-375.png`, `tasks-page-comparison-dark-1440.png`, `tasks-page-comparison-dark-375.png`, `tasks-dock-pinned-dark-1440.png`, `tasks-dock-pinned-dark-375.png`). |
-| `crates/orbit-web/tests/http_api/dashboard_task_state_repairs_browser.mjs` | `task-state-repairs-browser` | No Rust runner: source the kit environment first (`. ~/.local/chromium-deps/env.sh`), then run `node crates/orbit-web/tests/http_api/dashboard_task_state_repairs_browser.mjs "$PLAYWRIGHT_MODULE" .orbit/tmp/task-state-repairs`. In-page `fetch` stub; each scenario records its result and the run fails if any failed (`task-state-repairs-result.json`). Covers pilot and triage run guards released by a workspace switch, a copied comment link (`#tasks?open=<id>&comment=<n>`, the legacy `#comment-<id>-<n>` and full-page `#tasks/<id>?comment=<n>`) reopening the task at that comment, a saved inline field leaving no "saving…" or disabled editor beside another open draft, related-task and regression links from a full page keeping the URL, Back and reload on the opened task, a task's run link naming its own workspace in the aggregate view, and a refused Clear hold, Approve anyway or Mark met showing its error and re-enabling its controls in listed and pinned details with and without a draft. |
-| `crates/orbit-web/tests/http_api/dashboard_mixed_host_readiness_browser.mjs` | `mixed-host-browser` | Source the browser kit, then generate the public API payload with `ORBIT_MIXED_HOST_READINESS_EVIDENCE="$PWD/.orbit/tmp/mixed-host-readiness.json" scripts/build-budget.py -- cargo test -p orbit-core --test runtime mixed_host_readiness_scenarios -- --nocapture`. Run `node <script> "$PLAYWRIGHT_MODULE" .orbit/tmp/mixed-host-browser .orbit/tmp/mixed-host-readiness.json`. Checks a Linux owner's macOS task, real fixture lock holders, selectors and run IDs, scoped host note, and row/detail transitions on lock and executor SSE notices without manual refresh. Captures dark 1440/375px detail and row views plus `results.json`; `--before` uses the original owner answer for a base-assets comparison. |
-| `crates/orbit-web/tests/http_api/dashboard_context_contention_browser.mjs` | `context-contention-browser` | No Rust runner: source the kit environment (`. ~/.local/chromium-deps/env.sh`, which sets `LD_LIBRARY_PATH`/`FONTCONFIG_FILE` for Chromium's shared libraries), then run it directly as `node crates/orbit-web/tests/http_api/dashboard_context_contention_browser.mjs "$PLAYWRIGHT_MODULE" .orbit/tmp/context-contention-browser`. Checks context contention on disposable API data: reservation holders, contended backlog (amber) and active (red) selector rows whose full selector identity stays in the link `title` and contended `aria-label` while the visible text is the basename or kind-prefixed name, scoped blocker links, contrast, refresh clearing and recovery, and readiness wording (`results.json`, `backlog.png`, `active.png`, `locks-*.png`, `drain-summary-*.png`, `readiness-*.png`). |
-| `crates/orbit-web/tests/http_api/dashboard_context_basename_color_browser.mjs` | `context-basename-browser` | Runs through `cargo test -p orbit-web --test http_api dashboard_assets::context_selector_basenames_keep_contention_colors_and_return_to_normal_on_refresh -- --ignored --exact --nocapture` with `ORBIT_PLAYWRIGHT_MODULE="$PLAYWRIGHT_MODULE"` and `ORBIT_CONTEXT_BASENAME_BROWSER_EVIDENCE_DIR="$PWD/.orbit/tmp/context-basename-browser"` after sourcing the kit environment; the same script also runs directly as `node <script> "$PLAYWRIGHT_MODULE" .orbit/tmp/context-basename-browser`. Checks that a contended selector's basename keeps the theme contention colour (`--warn-fg` backlog, `--danger-fg` active) for root-level and duplicate-basename files — duplicates are distinguished by their folder groups and full selector in the link `title`, with no duplicate marker — and returns to the normal colour after a refresh clears contention (`results.json`, `backlog-dark-1440.png`, `active-dark-1440.png`, `cleared-dark-375.png`). |
-| `crates/orbit-web/src/tests/dashboard_task_artifacts_browser.mjs` | `task-artifacts-browser` | Task detail artifact previews under the dashboard's real CSP (read from `DASHBOARD_CSP`): a mounted image renders, opens in a new tab and downloads, and a download saves its bytes, from a blob URL that closing, replacing or changing workspace away from the detail revokes; a response held before its headers or inside its body is cancelled when the detail retires, and one that settles afterwards anyway is released without being mounted; clicks during a read do not refetch (`task-artifacts-assertions.json`, `artifact-preview.png`). |
 
 ### Website changelog validation
 
@@ -1028,7 +1190,7 @@ Letting `cargo` or a rustup proxy auto-install into a workspace `RUSTUP_HOME` us
 
 ## Toolchain (MSRV)
 
-- **MSRV:** `rust-version` in `[workspace.package]` of the root `Cargo.toml`, checked with `cargo check --workspace --locked` by the `msrv` job in `.github/workflows/ci.yml` and by `make ci-fast`. Keep the Makefile's `MSRV` and the workflow's `MSRV` variable equal to it.
+- **MSRV:** `rust-version` in `[workspace.package]` of the root `Cargo.toml`, checked with `cargo check --workspace --locked` by the `msrv` job in `.github/workflows/msrv.yml` (push to `agent-main` only; it no longer runs on pull requests) and by `make ci-fast`. Keep the `MSRV` variables in `msrv.yml` and the Makefile equal to it.
 - **Pinned toolchain:** [`rust-toolchain.toml`](../rust-toolchain.toml); every non-MSRV CI step that installs Rust repeats its version.
 
 Bump the pinned toolchain in one PR: the toolchain file and those CI steps together, plus fixes for new compiler or Clippy diagnostics, with `make ci-fast` and `make ci-lint` passing on the new version. Leave the `msrv` job on the declared minimum. If a change needs a newer compiler or a dependency raises the MSRV, update `rust-version` and both `MSRV` variables in that same PR.
@@ -1042,7 +1204,7 @@ Orbit supports macOS and Linux. On Windows the supported route is the Linux buil
 
 ## Supply-chain (cargo-deny)
 
-[`cargo-deny`](https://embarkstudios.github.io/cargo-deny/) checks two independent Cargo workspaces using the shared [`deny.toml`](../deny.toml). The main PR job runs all checks on the root graph through `scripts/ci-guardrails.sh`: advisories, yanked versions, licenses and sources. That command does **not** cover `desktop/Cargo.lock`. The **Desktop advisories** job in [`desktop.yml`](../.github/workflows/desktop.yml) separately runs the advisory check against `desktop/Cargo.toml` with `--locked`, including native default dependencies and all target platforms. It fails if cargo-deny is missing. Both lanes pin cargo-deny 0.19.9; the desktop lane never adds a native build to the main Check job's 600-second budget. Run both commands from the repository root before landing a dependency change:
+[`cargo-deny`](https://embarkstudios.github.io/cargo-deny/) checks two independent Cargo workspaces using the shared [`deny.toml`](../deny.toml). The main PR job runs all checks on the root graph through `scripts/ci-guardrails.sh`: advisories, yanked versions, licenses and sources. That command does **not** cover `desktop/Cargo.lock`. The **Desktop advisories** job in [`desktop.yml`](../.github/workflows/desktop.yml) separately runs the advisory check against `desktop/Cargo.toml` with `--locked`, including native default dependencies and all target platforms. It fails if cargo-deny is missing. Both lanes pin cargo-deny 0.19.9; the desktop lane never adds a native build to the main Check job's 400-second budget. Run both commands from the repository root before landing a dependency change:
 
 ```bash
 cargo install cargo-deny --version 0.19.9 --locked   # once
@@ -1053,7 +1215,7 @@ python3 scripts/test-desktop-advisories.py           # requires PyYAML
 
 - **New license:** add its SPDX identifier to `[licenses].allow` only if it is permissive or public-domain-equivalent, with a comment naming the crate(s) and, for weak copyleft such as MPL-2.0, a justification. Copyleft that would bind Orbit's own sources is never added; replace the dependency.
 - **Advisory exception:** only when no patched release exists (otherwise bump the dependency), as an individually reviewed `[advisories].ignore` object with `id` (`RUSTSEC-YYYY-NNNN`) and a `reason` documenting Orbit's exposure, exact dependency chain, upstream constraint, re-review owner and a `Re-review YYYY-MM-DD` date, about six months out. Re-review by that date and remove the entry when a fix lands. Ignores apply by ID across both graphs, not by package version or workspace: review any new occurrence outside the documented chain. For `advisory-not-detected`, confirm the ID no longer matches **either** workspace before retiring the entry, then rerun both commands. Desktop-only exceptions naturally produce that warning on the root graph. A reintroduced advisory is reviewed afresh; do not allow all unmaintained crates or future unknown IDs.
-- **Read-only advisory database:** set `CARGO_DENY_DB_PATH` (or `ORBIT_CARGO_DENY_DB_PATH`) to a writable directory; `scripts/cargo-deny.sh` points `[advisories].db-path` there. The invoking runner cleans it up.
+- **Read-only advisory database:** set `CARGO_DENY_DB_PATH` (or `ORBIT_CARGO_DENY_DB_PATH`) to a writable directory; `scripts/cargo-deny.sh` points `[advisories].db-path` there. The invoking runner cleans it up. Sandboxed agent dispatches whose profile grants scratch writes get this automatically: dispatch creates a per-run directory under the run's scratch dir and injects `CARGO_DENY_DB_PATH` into the child environment, so no manual setting is needed there. Read-only profiles get no injection and still fail closed.
 - **Offline:** set `CARGO_DENY_DISABLE_FETCH=1` (or `ORBIT_CARGO_DENY_DISABLE_FETCH`, `CARGO_DENY_OFFLINE`, `ORBIT_CARGO_DENY_OFFLINE`) to check against a local clone of [`rustsec/advisory-db`](https://github.com/rustsec/advisory-db) (default directory `advisory-db-3157b0e258782691`) or the environment's fixture. Missing or stale data fails; it never passes by skipping.
 - **YAML parser:** the `serde_yaml` dependency key aliases [`yaml_serde`](https://github.com/yaml/yaml-serde) 0.10.7, the YAML organization's continuation of the archived `serde-yaml`, with the same codecs, `Value`/`Mapping` API and error types, so persisted formats are unchanged. Its backend, [`libyaml-rs`](https://github.com/yaml/libyaml-rs) 0.3.0, is still a C-to-unsafe-Rust translation of libyaml; review upstream activity on upgrades. (`serde_yaml_ng` and `serde_norway` were staler; `serde-saphyr` lacks the compatible `Value` API.) After changing the parser, run `cargo test --locked -p orbit-types --lib` and `cargo test --locked -p orbit-tools --tests`.
 

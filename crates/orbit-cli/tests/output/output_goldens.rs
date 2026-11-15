@@ -613,7 +613,7 @@ enum Placement {
 
 /// Every governed tool operation paired with its expected MCP advertisement placement.
 const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
-    ("orbit.agent.invoke", Placement::Advertised),
+    ("orbit.attention", Placement::Advertised),
     ("orbit.auto_task.delete", Placement::Unadvertised),
     ("orbit.auto_task.reset", Placement::Unadvertised),
     ("orbit.automation.clear_stall", Placement::Unadvertised),
@@ -621,28 +621,43 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.decision.digest", Placement::Advertised),
     ("orbit.decision.submit", Placement::Advertised),
     ("orbit.drain.claim.bind", Placement::Unadvertised),
+    ("orbit.drain.claim.effort", Placement::Unadvertised),
     ("orbit.drain.claim.settle", Placement::Unadvertised),
     ("orbit.drain.claims", Placement::Unadvertised),
     ("orbit.drain.probe", Placement::Unadvertised),
     ("orbit.drain.receipt.lookup", Placement::Unadvertised),
+    ("orbit.evolution.decline", Placement::Unadvertised),
     ("orbit.experiment.abandon", Placement::Advertised),
     ("orbit.experiment.assign", Placement::Advertised),
     ("orbit.experiment.clone", Placement::Advertised),
     ("orbit.experiment.conclude", Placement::Advertised),
     ("orbit.experiment.create", Placement::Advertised),
+    ("orbit.experiment.delete", Placement::Unadvertised),
     ("orbit.experiment.pause", Placement::Advertised),
     ("orbit.experiment.resume", Placement::Advertised),
     ("orbit.experiment.reweight", Placement::Advertised),
     ("orbit.experiment.start", Placement::Advertised),
     ("orbit.experiment.update", Placement::Advertised),
-    ("orbit.lease.check", Placement::Advertised),
-    ("orbit.lease.expand", Placement::Advertised),
-    ("orbit.lease.list", Placement::Advertised),
-    ("orbit.lease.release", Placement::Advertised),
-    ("orbit.lease.renew", Placement::Advertised),
-    ("orbit.lease.request", Placement::Advertised),
-    ("orbit.lease.show", Placement::Advertised),
+    // Crew memory copy, export and reset are operator CLI only (no MCP
+    // scope). Write and propose are listed by a server serving the
+    // `experiments` toolset, which a dreaming run's dispatch stamps.
+    ("orbit.memory.copy", Placement::Unadvertised),
+    ("orbit.memory.export", Placement::Unadvertised),
+    ("orbit.memory.proposal.accept", Placement::Unadvertised),
+    ("orbit.memory.proposal.reject", Placement::Unadvertised),
+    ("orbit.memory.proposals", Placement::Unadvertised),
+    ("orbit.memory.propose", Placement::Advertised),
+    ("orbit.memory.reset", Placement::Unadvertised),
+    ("orbit.memory.write", Placement::Advertised),
+    // Listed only by a server that enables the opt-in `notice` toolset.
+    ("orbit.notice.close", Placement::Advertised),
+    ("orbit.notice.post", Placement::Advertised),
     ("orbit.pipeline.invoke", Placement::Advertised),
+    // Listed only by a server that enables the opt-in `resident` toolset.
+    ("orbit.resident.checkpoint", Placement::Advertised),
+    ("orbit.resident.control", Placement::Advertised),
+    ("orbit.resident.grant", Placement::Advertised),
+    ("orbit.resident.relay", Placement::Advertised),
     ("orbit.routine.control", Placement::Advertised),
     // Script grants are reached via `orbit script grant|revoke`; phase 1
     // registers no MCP tool for them, so the governed rows exist to make
@@ -657,14 +672,16 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.task.pull", Placement::Unadvertised),
     ("orbit.task.reconcile_review", Placement::Advertised),
     ("orbit.task.reject", Placement::Unadvertised),
+    ("orbit.task.repilot", Placement::Advertised),
     ("orbit.task.requeue", Placement::Advertised),
     ("orbit.task.recover_claim", Placement::Advertised),
     ("orbit.task.retry_handoff", Placement::Advertised),
     ("orbit.task.revoke_handoff", Placement::Advertised),
     ("orbit.task.review_reset", Placement::Advertised),
-    ("orbit.visual.accept_dispute", Placement::Unadvertised),
     ("orbit.workflow.auto", Placement::Advertised),
+    ("orbit.workflow.land", Placement::Advertised),
     ("orbit.workflow.run.list", Placement::Advertised),
+    ("orbit.workflow.run.observe", Placement::Advertised),
     ("orbit.workflow.run.resume", Placement::Advertised),
     ("orbit.workflow.run.show", Placement::Advertised),
     ("orbit.workflow.ship", Placement::Advertised),
@@ -706,6 +723,12 @@ fn authorization_matrix_matches_live_registry() {
         .into_iter()
         .map(|definition| definition.schema.name)
         .collect::<BTreeSet<_>>();
+    // A family action's operation is advertised through its family.
+    let advertised_operation = |id: &str| {
+        advertised.contains(id)
+            || orbit_types::tool::tool_family_of_operation(id)
+                .is_some_and(|(family, _)| advertised.contains(family.name))
+    };
 
     let mut observed_placement: Vec<(&str, Placement)> = GOVERNED_OPERATIONS
         .iter()
@@ -716,7 +739,7 @@ fn authorization_matrix_matches_live_registry() {
                 && op.id != PLUGIN_TOOL_AGENT_CALLABLE.id
         })
         .map(|op| {
-            let placement = if advertised.contains(op.id) {
+            let placement = if advertised_operation(op.id) {
                 Placement::Advertised
             } else {
                 Placement::Unadvertised
@@ -740,12 +763,23 @@ fn authorization_matrix_matches_live_registry() {
 
     for operation in GOVERNED_OPERATIONS
         .iter()
-        .filter(|op| op.surface == OperationSurface::Tool && advertised.contains(op.id))
+        .filter(|op| op.surface == OperationSurface::Tool && advertised_operation(op.id))
     {
-        if operation.id.starts_with("orbit.lease.") {
-            // Interactive agents coordinate their own paths. Lease governance
-            // is an identity floor, while owner placement and lease policy
-            // constrain their requests.
+        if operation.id.starts_with("orbit.notice.")
+            || operation.id.starts_with("orbit.resident.")
+            || operation.id == "orbit.attention"
+            || operation.id == "orbit.memory.write"
+            || operation.id == "orbit.memory.propose"
+        {
+            // Interactive agents post their own notices and relay or narrow
+            // a resident's authority. That governance is an identity floor,
+            // while owner placement, the poster class and the operator-only
+            // widening rule core derives constrain their requests. Attention similarly uses
+            // Agent/Operator as an identity floor; its bound-session scope and
+            // source rights constrain the read. Crew memory write and propose
+            // are likewise a floor: core admits an agent only from a
+            // dreaming task's run, for that task's key (operations-as-data
+            // decisions).
             let unidentified = CallerCapabilities::resolve(&CallerEnvelope::default());
             assert!(
                 authorize(operation, &unidentified).is_err(),
@@ -1075,7 +1109,7 @@ fn assert_config_show_tiers(fixture: &Fixture, shown: &Value) {
     // workspace does not inherit. set/get continue admitting advanced keys.
     for (key, value, expected, global) in [
         (
-            "workflow.validation_env.cargo_incremental",
+            "workflow.resource_throttle.enabled",
             "false",
             json!(false),
             true,
@@ -1103,7 +1137,7 @@ fn assert_config_show_tiers(fixture: &Fixture, shown: &Value) {
     let configured = fixture.run(&["config", "show"], &[]);
     let configured = String::from_utf8(configured.stdout).expect("configured text");
     for label in [
-        "validation_env.cargo_incremental",
+        "resource_throttle.enabled",
         "provider_limit_budgets",
         "codex.approval_policy",
     ] {
@@ -1117,7 +1151,7 @@ fn assert_config_show_tiers(fixture: &Fixture, shown: &Value) {
         "configured show",
     );
     assert_eq!(
-        loaded["settings"]["workflow.validation_env.cargo_incremental"],
+        loaded["settings"]["workflow.resource_throttle.enabled"],
         false
     );
     assert_eq!(
@@ -1136,13 +1170,13 @@ fn assert_config_show_tiers(fixture: &Fixture, shown: &Value) {
     for scope in ["global", "workspace"] {
         let scoped = fixture.run(&["config", "show", "--scope", scope], &[]);
         let scoped = String::from_utf8(scoped.stdout).expect("scoped text");
-        assert!(!has_row(&scoped, "proc_spawn_max_timeout_minutes"));
+        assert!(!has_row(&scoped, "worktree.reclaim_below_free_mib"));
         assert_eq!(has_row(&scoped, "codex.approval_policy"), scope == "global");
         assert_default_show_omits_repeated_blocks(&scoped);
         assert_identity_rows(&scoped);
         let all = fixture.run(&["config", "show", "--scope", scope, "--advanced"], &[]);
         let all = String::from_utf8(all.stdout).expect("scoped all text");
-        assert!(has_row(&all, "proc_spawn_max_timeout_minutes"));
+        assert!(has_row(&all, "worktree.reclaim_below_free_mib"));
         assert!(
             all.lines().any(|line| line == "Paths"),
             "scoped --all keeps Paths"
@@ -1200,60 +1234,6 @@ fn config_reference_lists_every_registry_key() {
         "reference/config.md `Settable keys` table diverges from `orbit config keys`: \
          keys missing from the page {missing:?}; page rows with no registry key {stale:?}"
     );
-}
-
-/// The published answer-cap range must describe the values `orbit config set`
-/// accepts, including both inclusive endpoints and their adjacent rejections.
-#[test]
-fn config_reference_max_answer_bytes_matches_cli_bounds() {
-    const KEY: &str = "workflow.explore.max_answer_bytes";
-
-    let page = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../website/src/content/docs/reference/config.md");
-    let page = std::fs::read_to_string(&page)
-        .unwrap_or_else(|error| panic!("read {}: {error}", page.display()));
-    let row = page
-        .lines()
-        .find(|line| line.starts_with("| `workflow.explore.max_answer_bytes` |"))
-        .expect("config reference has a max_answer_bytes row");
-    let range = Regex::new(r"\(`(\d+)`(?:–|-|—)`(\d+)`\)").expect("range regex");
-    let captures = range
-        .captures(row)
-        .expect("max_answer_bytes row documents an inclusive numeric range");
-    let minimum: u64 = captures[1].parse().expect("numeric minimum");
-    let maximum: u64 = captures[2].parse().expect("numeric maximum");
-    assert!(minimum <= maximum, "documented minimum exceeds maximum");
-
-    let below_minimum = minimum
-        .checked_sub(1)
-        .expect("max_answer_bytes minimum must be positive");
-    let above_maximum = maximum
-        .checked_add(1)
-        .expect("max_answer_bytes maximum leaves room for an adjacent value");
-    let fixture = Fixture::new();
-    for (index, (value, accepted)) in [
-        (minimum, true),
-        (below_minimum, false),
-        (maximum, true),
-        (above_maximum, false),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let value = value.to_string();
-        let mut args = vec!["config", "set"];
-        if index == 0 {
-            args.push("--fresh");
-        }
-        args.extend([KEY, value.as_str()]);
-        let output = fixture.run_output(&args, &[]);
-        assert_eq!(
-            output.status.success(),
-            accepted,
-            "published bounds must match `orbit config set` for {KEY}={value}; stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
 }
 
 /// Inventory of record-output conversions in this change, and the remaining
@@ -1711,4 +1691,59 @@ fn retry_handoff_cli_selects_its_explicit_owner_and_refuses_missing_operator() {
         foreign_before.stdout,
     );
     assert!(!unregistered.join(".orbit").exists());
+}
+
+/// Retired explorer settings must not invalidate a workspace or restore a pool.
+#[test]
+fn legacy_explorer_configuration_is_ignored_with_a_warning() {
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.work.join(".orbit/config.toml"),
+        r#"
+[workflow.explore]
+enabled = true
+max_calls_per_run = 0
+max_concurrent_per_run = 0
+timeout_seconds = 0
+max_answer_bytes = 0
+[workflow.purpose_crews]
+explorer = ["deleted-crew"]
+"#,
+    )
+    .expect("write legacy configuration");
+    let output = fixture.run_output(
+        &["config", "show", "--all", "--json"],
+        &[("RUST_LOG", "warn")],
+    );
+    assert!(
+        output.status.success(),
+        "legacy configuration still loads: {output:?}"
+    );
+    let shown: Value = serde_json::from_slice(&output.stdout).expect("config projection");
+    let settings = shown["settings"].as_object().expect("settings");
+    assert!(
+        !settings
+            .keys()
+            .any(|key| key.starts_with("workflow.explore.")
+                || key == "workflow.purpose_crews.explorer"),
+        "retired settings must have no effective values"
+    );
+    let warnings = String::from_utf8_lossy(&output.stderr);
+    for key in [
+        "workflow.explore.enabled",
+        "workflow.explore.max_calls_per_run",
+        "workflow.explore.max_concurrent_per_run",
+        "workflow.explore.timeout_seconds",
+        "workflow.explore.max_answer_bytes",
+        "workflow.purpose_crews.explorer",
+    ] {
+        assert!(
+            warnings.contains(key),
+            "legacy key needs a deprecation warning: {key}: {warnings}"
+        );
+    }
+    assert!(
+        warnings.contains("deprecated") && warnings.contains("ignored"),
+        "{warnings}"
+    );
 }

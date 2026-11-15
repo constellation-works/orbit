@@ -136,7 +136,9 @@ export function initTaskCreate({ getWorkspaces }) {
     const visit = captureWorkspaceVisit();
     pending = true; feedback('Creating proposed task…'); paint();
     // Mark uncertainty durably BEFORE sending, so a reload during the request
-    // never treats an authorization refusal on retry as proof of no commit.
+    // keeps the frozen submission until a definitive answer clears it. An
+    // authorization refusal on a retry is never proof of no commit: the
+    // server checks authorization before the idempotent request_id lookup.
     const wasUncertain = submission.uncertain;
     try {
       persist({ ...submission, uncertain: true });
@@ -144,11 +146,30 @@ export function initTaskCreate({ getWorkspaces }) {
         method: 'POST', headers: { 'accept': 'application/json', 'content-type': 'application/json' },
         body: JSON.stringify(submission.body),
       });
-      const receipt = await response.json();
+      // Framework rejections (413, 415, …) are plain text, not JSON: read the
+      // body as text first so a definitive refusal is recognised — and its
+      // text shown — instead of dying as a JSON parse error that wedges the
+      // saved submission with no way to discard it.
+      const rawBody = await response.text();
+      let receipt = null;
+      try { receipt = rawBody ? JSON.parse(rawBody) : null; } catch { receipt = null; }
       if (!response.ok) {
-        if (!wasUncertain && [400, 401, 403, 404, 405, 413, 415, 422].includes(response.status)) persist(null);
-        throw new Error(receipt.error || `Request refused (HTTP ${response.status}).`);
+        // A body-definitive refusal is a pure function of the frozen bytes,
+        // so it proves this submission created nothing, on a first attempt
+        // and on a retry alike, and the frozen copy goes. An environmental
+        // refusal (401/403/404, or the typed workspace_unavailable refusal:
+        // the destination workspace is missing/inactive in the live registry,
+        // which can change between attempts and is checked before the
+        // idempotent request_id lookup) on a retry of an uncertain submission
+        // says nothing about the earlier attempt, so the frozen copy stays.
+        const workspaceUnavailable = receipt?.code === 'workspace_unavailable';
+        const clears = [400, 401, 403, 404, 405, 413, 415, 422].includes(response.status)
+          && !(wasUncertain && [401, 403, 404].includes(response.status))
+          && !(wasUncertain && workspaceUnavailable);
+        if (clears || (workspaceUnavailable && !wasUncertain)) persist(null);
+        throw new Error((receipt && receipt.error) || rawBody.trim() || `Request refused (HTTP ${response.status}).`);
       }
+      if (!receipt) throw new Error('The creation receipt is incomplete. Retry the saved submission.');
       if (!receipt.id || receipt.workspace_id !== submission.workspace || receipt.request_id !== submission.body.request_id) {
         throw new Error('The creation receipt is incomplete. Retry the saved submission.');
       }

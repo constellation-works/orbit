@@ -58,6 +58,7 @@ impl RuntimeKernel {
         read_only: bool,
         config_loader: RuntimeConfigLoader,
         application: &'static dyn ApplicationPort,
+        task_prefix: Option<&str>,
     ) -> Result<Self, OrbitError> {
         let access = if read_only {
             builder::StateAccess::ReadOnly
@@ -73,6 +74,7 @@ impl RuntimeKernel {
                 runtime_config,
                 host_lifetime,
                 access,
+                task_prefix,
             )?,
             binding,
             &roots.global_root,
@@ -100,6 +102,7 @@ impl RuntimeKernel {
                 runtime_config,
                 host_lifetime,
                 builder::StateAccess::WriteFree,
+                None,
             )?,
             binding,
             &roots.global_root,
@@ -159,6 +162,7 @@ impl RuntimeKernel {
             claim_known_red_budget: std::time::Duration::from_secs(600),
             ci_failure_time: None,
             workspace_catalog: None,
+            composition_snapshot: None,
             host_signals: default_host_signal_probe(),
             task_pr_forge: default_task_pr_forge(),
             event_log: event_bus::EventLog::default(),
@@ -169,6 +173,8 @@ impl RuntimeKernel {
             pr_repair_checks: Arc::default(),
             #[cfg(any(test, feature = "test-support"))]
             transition_read_hook: Arc::new(Mutex::new(None)),
+            #[cfg(any(test, feature = "test-support"))]
+            transition_run_hook: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -200,6 +206,7 @@ impl RuntimeKernel {
             runtime_config,
             HostLifetime::ShortLived,
             builder::StateAccess::Write,
+            None,
         )?;
         let host_resources = Arc::new(
             HostResourceMonitor::new(
@@ -234,6 +241,7 @@ impl RuntimeKernel {
             claim_known_red_budget: std::time::Duration::from_secs(600),
             ci_failure_time: None,
             workspace_catalog: None,
+            composition_snapshot: None,
             // An in-memory runtime is not bound to a host lifecycle.
             host_signals: Arc::new(FixedHostSignals::none()),
             // Nor is it bound to a repository whose PRs it could close.
@@ -246,6 +254,8 @@ impl RuntimeKernel {
             pr_repair_checks: Arc::default(),
             #[cfg(any(test, feature = "test-support"))]
             transition_read_hook: Arc::new(Mutex::new(None)),
+            #[cfg(any(test, feature = "test-support"))]
+            transition_run_hook: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -301,6 +311,26 @@ impl RuntimeKernel {
     #[cfg(any(test, feature = "test-support"))]
     pub fn transition_read_hook_status(&self) -> Option<(String, orbit_types::task::TaskStatus)> {
         self.transition_read_hook
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Arm the dashboard-archive race seam for `id` (`None` disarms it).
+    /// While armed, the archive path inserts a non-terminal local run owning
+    /// `id` after its outer ownership pre-check, so the under-lock recheck
+    /// observes the lost race. Production never arms it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_transition_run_hook_task(&self, id: Option<&str>) {
+        *self
+            .transition_run_hook
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = id.map(str::to_string);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn transition_run_hook_task(&self) -> Option<String> {
+        self.transition_run_hook
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()

@@ -65,13 +65,25 @@ impl WorkflowGate {
     }
 
     pub(crate) fn release(&self) {
+        self.answer(b'G');
+    }
+
+    /// Ends the entered step with a nonzero exit, so the run fails at once
+    /// instead of waiting out the step's `FIXTURE_STEP_DEADLINE`.
+    // Shared by several test binaries; only the `process` binary fails a gate.
+    #[allow(dead_code)]
+    pub(crate) fn fail(&self) {
+        self.answer(b'F');
+    }
+
+    fn answer(&self, signal: u8) {
         let mut stream = self
             .connection
             .lock()
             .unwrap()
             .take()
             .expect("gate entered");
-        stream.write_all(b"G").unwrap();
+        stream.write_all(&[signal]).unwrap();
         let mut done = Vec::new();
         stream.read_to_end(&mut done).unwrap();
         assert!(done.is_empty(), "waiter only signals readiness");
@@ -102,6 +114,10 @@ pub(crate) fn wait_if_requested() -> bool {
     stream.write_all(b"R").unwrap();
     let mut release = [0];
     stream.read_exact(&mut release).unwrap();
+    if release == *b"F" {
+        // `WorkflowGate::fail`: the step under test fails deterministically.
+        std::process::exit(1);
+    }
     assert_eq!(release, [b'G']);
     true
 }

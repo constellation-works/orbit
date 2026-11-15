@@ -527,6 +527,9 @@ fn to_itself(owner: &OrbitRuntime) -> Arc<Wire> {
         fingerprint: Mutex::default(),
         gateless: Mutex::default(),
         refuse_settle: Mutex::default(),
+        leaf_run_override: Mutex::default(),
+        predates_late_effort: Mutex::default(),
+        late_effort_rpc_refusal: Mutex::default(),
         observe_handoffs: Mutex::default(),
         accept_handoffs: Mutex::default(),
         local: Mutex::new(true),
@@ -582,7 +585,7 @@ impl OwnerLocal {
         let owner = OrbitRuntime::from_roots_with_binding(
             &unbound.global_root(),
             &repo.join(".orbit"),
-            orbit_core::WorkspaceRuntimeBinding {
+            orbit_core::runtime::WorkspaceRuntimeBinding {
                 logical_workspace_id: workspace_id.clone(),
                 task_partition_id: workspace_id.clone(),
                 owner_machine_id: None,
@@ -1138,3 +1141,7 @@ mod requeued;
 
 #[path = "owner_repair_fallback.rs"]
 mod owner_fallback;
+
+#[cfg(unix)]
+#[path = "landing_waiting.rs"]
+mod waiting;

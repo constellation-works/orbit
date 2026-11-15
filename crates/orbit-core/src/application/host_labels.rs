@@ -39,12 +39,16 @@ pub(crate) fn granted_tools_owner_hold(task: &Task) -> Option<String> {
 }
 
 /// This host's label gap, including the owner pin when the task has grants.
-fn required_labels_host_wait(task: &Task, labels: &BTreeSet<String>) -> Option<String> {
-    let missing = missing_host_labels(&task.requires_labels, labels);
+fn required_labels_host_wait(
+    task: &Task,
+    required: &[String],
+    labels: &BTreeSet<String>,
+) -> Option<String> {
+    let missing = missing_host_labels(required, labels);
     (!missing.is_empty()).then(|| {
         let wait = format!(
             "{}; this host lacks {}",
-            host_labels_wait(&task.requires_labels),
+            host_labels_wait(required),
             quoted_labels(&missing)
         );
         match granted_tools_owner_hold(task) {
@@ -91,6 +95,16 @@ impl FleetLabelHost {
 }
 
 impl OrbitRuntime {
+    /// Explicit task labels combined with every matching workspace tag rule.
+    pub(crate) fn effective_task_host_labels(
+        &self,
+        tags: &[String],
+        explicit: &[String],
+    ) -> Vec<String> {
+        self.tag_label_requirements()
+            .required_labels(tags, explicit)
+    }
+
     /// This host, then every other executor whose census row in this
     /// workspace was declared within the last seven days, each with its
     /// effective labels. A census that cannot be read leaves this host
@@ -152,6 +166,8 @@ impl OrbitRuntime {
         tags: &[String],
         requires_labels: &[String],
     ) -> Result<(), OrbitError> {
+        let required = self.effective_task_host_labels(tags, requires_labels);
+        let requires_labels = required.as_slice();
         if requires_labels.is_empty() {
             return Ok(());
         }
@@ -187,19 +203,21 @@ impl OrbitRuntime {
     /// carries every one. When a grant pins the task here, the wait names
     /// both the grant and the missing labels.
     pub fn task_host_labels_wait(&self, task: &Task) -> Option<String> {
-        if task.requires_labels.is_empty() {
+        let required = self.effective_task_host_labels(&task.tags, &task.requires_labels);
+        if required.is_empty() {
             return None;
         }
-        required_labels_host_wait(task, &self.host_labels())
+        required_labels_host_wait(task, &required, &self.host_labels())
     }
 
     /// The named wait for `task` while no live host can run it for its
     /// labels, reading the fleet once.
     pub fn task_placement_wait(&self, task: &Task) -> Option<String> {
-        if task.requires_labels.is_empty() {
+        let required = self.effective_task_host_labels(&task.tags, &task.requires_labels);
+        if required.is_empty() {
             return None;
         }
-        label_placement_wait(task, &self.fleet_label_hosts())
+        label_placement_wait(task, &required, &self.fleet_label_hosts())
     }
 
     /// The OS set of the known hosts that carry `requires_labels`, which a
@@ -228,25 +246,29 @@ impl OrbitRuntime {
 /// Grants restrict eligible hosts to the owner, even if followers carry the
 /// required labels. This also feeds the batched task show/list readout.
 #[must_use]
-pub(crate) fn label_placement_wait(task: &Task, hosts: &[FleetLabelHost]) -> Option<String> {
-    if task.requires_labels.is_empty() {
+pub(crate) fn label_placement_wait(
+    task: &Task,
+    required: &[String],
+    hosts: &[FleetLabelHost],
+) -> Option<String> {
+    if required.is_empty() {
         return None;
     }
     let carriers = hosts
         .iter()
         .filter(|host| task.granted_tools.is_empty() || host.local)
-        .filter(|host| host.runs(&task.tags, &task.requires_labels))
+        .filter(|host| host.runs(&task.tags, required))
         .collect::<Vec<_>>();
     if carriers.iter().any(|host| host.live) {
         return None;
     }
-    let wait = host_labels_wait(&task.requires_labels);
+    let wait = host_labels_wait(required);
     if let Some(grant) = granted_tools_owner_hold(task) {
         return Some(
             hosts
                 .iter()
                 .find(|host| host.local)
-                .and_then(|owner| required_labels_host_wait(task, &owner.labels))
+                .and_then(|owner| required_labels_host_wait(task, required, &owner.labels))
                 .unwrap_or_else(|| {
                     format!(
                         "{grant}; {wait}: the owner host cannot satisfy them together \

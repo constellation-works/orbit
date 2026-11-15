@@ -11,7 +11,7 @@
 //! success counts [ORB-15677] [ORB-15812]. A failed check is classified from
 //! its job log: one inherited from the base updates the branch, and one that
 //! still fails on a base tip where the same job passes earns one repair
-//! [ORB-16322]; a transient one is rerun once, and the candidate's own earns
+//! [ORB-16322]; a transient one uses the configured retry budget, and the candidate's own earns
 //! one repair [ORB-15956].
 //! Evidence that cannot be read decides none of those and spends nothing,
 //! and a branch update is verified against the base as the provider merged
@@ -27,6 +27,7 @@ use orbit_engine::{
     HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate, RuntimeHost,
     execute_deterministic_action, observe_candidate,
 };
+use orbit_types::workflow::DeliveryRefusal;
 use orbit_types::workflow::automation::DirectLandingRequest;
 use orbit_types::workflow::handoff::HandoffDelivery;
 use serde_json::{Value, json};
@@ -34,6 +35,8 @@ use tempfile::tempdir;
 
 const TASK_ID: &str = "T1";
 const RUN_ID: &str = "jrun-landing-test";
+
+mod log_read;
 
 struct LandingHost {
     repo: PathBuf,
@@ -107,11 +110,13 @@ fn owner_checkout(repo: &Path) -> LandingHost {
             handoff_id: "handoff-1".into(),
             task_id: TASK_ID.into(),
             claim_id: "claim-1".into(),
+            producing_run_id: "run-1".into(),
             candidate,
             unresolved_merge_intent: None,
             workspace_path: repo.to_path_buf(),
             owed_hosted_checks: Vec::new(),
             automatic_repair_spent: false,
+            owner_distributed_completion_done: false,
         },
         steps: Mutex::default(),
         intents: Mutex::default(),
@@ -230,6 +235,14 @@ fn assert_not_sent(forge: &FakeForge, ops: &[&str], label: &str) {
 
 fn assert_steps(steps: &[HandoffLandingStep], expected: &[HandoffLandingStep], label: &str) {
     assert_eq!(steps, expected, "{label}");
+}
+
+/// [model ranking §5.1] The current class of each recorded check failure.
+fn ledger_classes(forge: &FakeForge) -> Vec<orbit_types::workflow::CiFailureClass> {
+    orbit_types::workflow::ci_failure_ledger(&forge.history.lock().unwrap())
+        .into_iter()
+        .map(|entry| entry.class)
+        .collect()
 }
 
 fn assert_sent_len(forge: &FakeForge, op: &str, expected: usize, label: &str) {
@@ -460,8 +473,8 @@ fn a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts() {
 }
 
 /// A pull request the provider reports open with a fixed merge state and
-/// status rollup. It answers only status reads; any other operation is
-/// recorded and refused, so a test sees whether the landing tried to merge.
+/// status rollup. It answers status and required-check reads; any other
+/// operation is recorded and refused, so a test sees whether it tried to merge.
 struct OpenPullRequestHost {
     context: HandoffLandingContext,
     steps: Mutex<Vec<HandoffLandingStep>>,
@@ -512,6 +525,12 @@ impl orbit_engine::test_support::NullRuntimeHost for OpenPullRequestHost {
     ) -> Result<Value, OrbitError> {
         if operation == "ci.commit_jobs" {
             return Ok(json!({"jobs": []}));
+        }
+        if operation == "pr.required_checks" {
+            let head = &self.context.candidate.candidate.commit;
+            return Ok(
+                json!({"pull_request":{"headRefOid":head,"commits":{"nodes":[{"commit":{"oid":head,"statusCheckRollup":null}}]}}}),
+            );
         }
         if operation != "pr.status" {
             self.sent.lock().unwrap().push(operation.to_string());
@@ -705,8 +724,12 @@ struct ForgeState {
     base_push_provider: bool,
     /// Commits whose job query fails.
     unreadable: Vec<String>,
+    /// Deterministic log collector timeouts before the real log becomes readable.
+    log_timeouts: HashMap<u64, u64>,
     /// What a rerun of a failed job leaves on the head.
     after_rerun: Option<FakeJob>,
+    /// A read failure every retry-plan authentication returns.
+    rerun_plan_error: Option<&'static str>,
     /// Keep the failed rollup while replacement jobs have not registered.
     queued_rerun: bool,
     /// What the check reports on a head the branch update produced.
@@ -721,6 +744,10 @@ struct ForgeState {
     aggregate: Option<&'static str>,
     /// A required aggregate that fails only after recovery has been spent.
     after_recovery_aggregate: Option<&'static str>,
+    /// A failed rollup check no job answers and branch protection does not
+    /// require. It makes the rerun planner ineligible without outranking a
+    /// transient job.
+    extra_unanswered_check: bool,
 }
 
 /// A forge whose pull request #42 carries the claimed candidate, with one
@@ -737,6 +764,7 @@ struct FakeForge {
     ops: Mutex<Vec<(String, Value)>>,
     updates: Mutex<Vec<HandoffLandingUpdate>>,
     history: Mutex<Vec<orbit_types::task::TaskHistoryEntry>>,
+    ci_retry_policy: orbit_types::workflow::CiInfrastructureRetryPolicy,
 }
 
 impl FakeForge {
@@ -759,6 +787,7 @@ impl FakeForge {
             ops: Mutex::default(),
             updates: Mutex::default(),
             history: Mutex::default(),
+            ci_retry_policy: Default::default(),
         }
     }
 
@@ -821,6 +850,12 @@ impl FakeForge {
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
+    fn pr_config(&self) -> orbit_engine::PrConfig {
+        orbit_engine::PrConfig {
+            ci_infrastructure_retry: self.ci_retry_policy,
+            ..Default::default()
+        }
+    }
     fn apply_task_automation_update(
         &self,
         _task_id: &str,
@@ -835,12 +870,18 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
         _tasks: &[String],
         _handoff: Option<&str>,
         plan: &orbit_types::workflow::CiRerunPlan,
+        now_ms: u64,
     ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError> {
         let mut history = self.history.lock().unwrap();
-        let decision = orbit_types::workflow::decide_ci_rerun(&history, plan);
+        let decision = orbit_types::workflow::decide_ci_rerun_with_policy(
+            &history,
+            plan,
+            self.ci_retry_policy,
+            now_ms,
+        );
         if matches!(decision, orbit_types::workflow::CiRerunAdmission::Reserved) {
             history.push(orbit_types::task::TaskHistoryEntry {
-                at: chrono::Utc::now(),
+                at: chrono::DateTime::from_timestamp_millis(now_ms as i64).unwrap(),
                 by: "owner".into(),
                 event: orbit_types::workflow::CI_RERUN_RESERVED_EVENT.into(),
                 note: Some(serde_json::to_string(plan).unwrap()),
@@ -926,7 +967,15 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
         note: &str,
     ) -> Result<(), OrbitError> {
         if handoff_id != self.context.handoff_id
-            || !matches!(event, "ci_check_rerun" | "ci_base_suspect")
+            || !matches!(
+                event,
+                "ci_check_rerun"
+                    | "ci_base_suspect"
+                    | "ci_infrastructure_retry_backoff"
+                    | "ci_infrastructure_retry_exhausted"
+                    | orbit_types::workflow::CI_FAILURE_RECORDED_EVENT
+                    | orbit_types::workflow::CI_FAILURE_RECLASSIFIED_EVENT
+            )
         {
             return Err(OrbitError::InvalidInput(
                 "current handoff claim does not authorize this history event".into(),
@@ -961,6 +1010,9 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
         let candidate = &self.context.candidate;
         match operation {
             "ci.rerun_plan" => {
+                if let Some(error) = state.rerun_plan_error {
+                    return Err(OrbitError::Execution(error.into()));
+                }
                 let job = state.jobs.get(&state.head).unwrap();
                 if job.event != "pull_request" {
                     return Err(OrbitError::Execution("foreign retry event".into()));
@@ -994,6 +1046,9 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                 ];
                 if state.aggregate.is_some() {
                     rollup.push(json!({"__typename": "CheckRun", "name": "CodeQL", "workflowName": "", "status": "COMPLETED", "conclusion": "FAILURE"}));
+                }
+                if state.extra_unanswered_check {
+                    rollup.push(json!({"__typename": "CheckRun", "name": "optional", "workflowName": "Extra", "status": "COMPLETED", "conclusion": "FAILURE"}));
                 }
                 let pr = json!({"number": 42, "url": "https://github.com/owner/repository/pull/42", "state": if state.merged { "MERGED" } else { "OPEN" }, "headRefName": candidate.source_branch, "baseRefName": candidate.base_branch, "headRefOid": state.head, "mergeStateStatus": merge_state, "reviewDecision": state.review_decision.unwrap_or(""), "mergeCommit": state.merged.then(|| json!({"oid": state.merge_commit.as_deref().unwrap_or("provider-merge")})), "statusCheckRollup": rollup});
                 Ok(json!({"pull_request": pr}))
@@ -1066,6 +1121,13 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
             }
             "ci.job_log" => {
                 let job_id: u64 = input["job_id"].as_str().unwrap().parse().unwrap();
+                if let Some(remaining) = state.log_timeouts.get_mut(&job_id)
+                    && *remaining > 0
+                {
+                    *remaining -= 1;
+                    return Ok(json!({"log":"", "fallback_error":
+                        "process timed out after 15000ms: gh run view --log"}));
+                }
                 let log = state
                     .jobs
                     .values()
@@ -1260,6 +1322,7 @@ fn owner_landing_waits_for_exact_required_checks_before_one_verified_merge() {
     *host.policies.lock().unwrap() = vec![
         pending_policy(&head, "QUEUED", true),
         pending_policy(&head, "IN_PROGRESS", true),
+        pending_policy(&head, "COMPLETED", true),
     ]
     .into();
     let (result, waits) = counted_land(
@@ -1271,7 +1334,7 @@ fn owner_landing_waits_for_exact_required_checks_before_one_verified_merge() {
         "landed"
     );
     assert_eq!(waits, [5, 5]);
-    assert_sent_len(&host.forge, "pr.required_checks", 2, "exact");
+    assert_sent_len(&host.forge, "pr.required_checks", 3, "exact");
     assert_sent_len(&host.forge, "pr.status", 4, "exact");
     assert_sent_len(&host.forge, "pr.merge", 1, "exact");
     let ops = host.forge.ops.lock().unwrap();
@@ -1284,7 +1347,7 @@ fn owner_landing_waits_for_exact_required_checks_before_one_verified_merge() {
                 .expect("poll reads carry the original deadline")
         })
         .collect();
-    assert_eq!(deadlines.len(), 6);
+    assert_eq!(deadlines.len(), 7);
     let first_deadline = deadlines[0];
     let uniform = deadlines.iter().all(|d| *d == first_deadline);
     assert!(uniform, "deadline never resets: {deadlines:?}");
@@ -1306,6 +1369,79 @@ fn owner_landing_waits_for_exact_required_checks_before_one_verified_merge() {
         HandoffLandingStep::Complete,
     ];
     assert_steps(&host.forge.steps(), &expected_steps, "exact");
+}
+
+/// A BLOCKED head can report running checks before either required-check
+/// view identifies them. Waiting grants no merge authority: only CLEAN does.
+#[test]
+fn owner_landing_waits_out_pending_only_block_before_checks_pass() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "owner_landing_waits_out_pending_only_block_before_checks_pass",
+        || {
+            for passes in [true, false] {
+                let sandbox = tempdir().unwrap();
+                let pending = json!({"mergeStateStatus":"BLOCKED", "statusCheckRollup":[
+                    {"name":"clippy", "workflowName":"CI", "status":"IN_PROGRESS"}
+                ]});
+                let observations = if passes {
+                    vec![
+                        pending.clone(),
+                        pending,
+                        json!({"mergeStateStatus":"CLEAN"}),
+                    ]
+                } else {
+                    vec![pending]
+                };
+                let host = pending_forge(sandbox.path(), observations, vec![]);
+                let head = host.forge.context.candidate.candidate.commit.clone();
+                *host.policies.lock().unwrap() =
+                    vec![pending_policy(&head, "COMPLETED", false)].into();
+                let (result, waits) = counted_land(
+                    &host,
+                    json!({"max_wait_seconds":15,"poll_interval_seconds":5}),
+                );
+                if passes {
+                    assert_eq!(
+                        result.expect("pending-only BLOCKED must keep waiting")["phase"],
+                        "landed"
+                    );
+                    assert_eq!(waits, [5, 5]);
+                    assert_sent_len(&host.forge, "pr.merge", 1, "checks passed");
+                    assert_eq!(
+                        host.forge.steps().last(),
+                        Some(&HandoffLandingStep::Complete)
+                    );
+                } else {
+                    let error = result.unwrap_err().to_string();
+                    assert_eq!(
+                        serde_json::from_str::<Value>(&host.forge.last_evidence()).unwrap()["waiting_gate"],
+                        "required_checks_pending",
+                        "a check wait must remain distinguishable from review refusal after the job ends"
+                    );
+                    // [ORB-22485] The rollup-only wait names its running checks.
+                    assert!(
+                        error.contains("within 15s")
+                            && error.contains("CI / clippy")
+                            && error.contains("still running"),
+                        "deadline: {error}"
+                    );
+                    assert_eq!(waits, [5, 5, 5]);
+                    assert_not_sent(&host.forge, &["pr.merge"], "checks still pending");
+                    assert_steps(
+                        &host.forge.steps(),
+                        &[HandoffLandingStep::Stop { repairable: false }],
+                        "deadline",
+                    );
+                }
+                assert_not_sent(
+                    &host.forge,
+                    &["ci.rerun_failed", "pr.update_branch"],
+                    "pending only",
+                );
+            }
+        },
+    );
 }
 
 /// [ORB-16339] A freshly pushed head reads BLOCKED before the provider has
@@ -1452,9 +1588,12 @@ fn owner_landing_pending_evidence_never_extends_refusal_or_merge_authority() {
             }
             "bounded_redacted" => {
                 let secret = format!("ghp_{}", "a".repeat(36));
+                // NEUTRAL keeps this redaction case an immediate blocked
+                // refusal: it is not the all-explicit-success head whose
+                // lagging merge state landing re-polls [ORB-22350].
                 patch["statusCheckRollup"] = json!(
                     (0..40)
- .map(|_| json!({ "name":format!("{secret} {}", "界".repeat(800)), "status":"COMPLETED", "conclusion":"SUCCESS" }))
+ .map(|_| json!({ "name":format!("{secret} {}", "界".repeat(800)), "status":"COMPLETED", "conclusion":"NEUTRAL" }))
                         .collect::<Vec<_>>()
                 );
                 // Arbitrary raw payload must never enter persisted diagnostics.
@@ -1468,6 +1607,8 @@ fn owner_landing_pending_evidence_never_extends_refusal_or_merge_authority() {
             "optional" => {
                 policy = pending_policy(&head, "IN_PROGRESS", false);
                 patch["statusCheckRollup"] = json!([{"name":"optional","status":"QUEUED"}]);
+                expected_waits = 2;
+                reason = "within 10s";
             }
             "optional_failed_required_pending" => {
                 patch["statusCheckRollup"] = json!([ {"name":"clippy","workflowName":"CI","status":"IN_PROGRESS"}, {"name":"coverage","status":"COMPLETED","conclusion":"FAILURE"} ]);
@@ -1572,6 +1713,8 @@ fn owner_landing_pending_evidence_never_extends_refusal_or_merge_authority() {
                 if case == "owed_foreign" {
                     patch["statusCheckRollup"] =
                         json!([{"name":"clippy","workflowName":"Foreign","status":"QUEUED"}]);
+                    expected_waits = 2;
+                    reason = "within 10s";
                 }
                 if case == "owed" {
                     after = Some(json!({"mergeStateStatus":"CLEAN"}));
@@ -1626,6 +1769,18 @@ fn owner_landing_pending_evidence_never_extends_refusal_or_merge_authority() {
                 assert_eq!(evidence["repairable"], false);
                 let ev_reason = evidence["reason"]["value"].as_str().unwrap();
                 assert!(ev_reason.contains(reason), "{case}: {ev_reason}");
+                // [ORB-22485] A landing stopped only by running rollup checks
+                // names them in the durable stop reason the refusal surfaces.
+                if case == "optional" {
+                    assert!(
+                        error.contains("optional") && error.contains("still running"),
+                        "{case}: {error}"
+                    );
+                    assert!(
+                        ev_reason.contains("optional") && ev_reason.contains("still running"),
+                        "{case}: {ev_reason}"
+                    );
+                }
                 assert_eq!(evidence["accepted"]["candidate"]["value"], head);
                 assert_eq!(evidence["emission_proof"]["state"], "not_collected");
                 assert_eq!(evidence["workflow_prerequisites"]["state"], "not_collected");
@@ -1718,7 +1873,9 @@ fn owner_landing_pending_evidence_never_extends_refusal_or_merge_authority() {
                     | "unreadable_rollup"
                     | "contradiction"
                     | "bounded_reason" => 0,
-                    "timeout" | "changing_checks_timeout" => expected_waits,
+                    "timeout" | "changing_checks_timeout" | "optional" | "owed_foreign" => {
+                        expected_waits
+                    }
                     "head_changed" | "base_changed" => 1,
                     _ => expected_waits + 1,
                 };
@@ -1857,8 +2014,11 @@ fn untouched_failure_reruns_once_after_fresh_base_pass() {
                 "shared_budget",
                 "transient_after_flake",
             ] {
-                let (_sandbox, forge, head, base) =
+                let (_sandbox, mut forge, head, base) =
                     forge_fixture(true, matches!(case, "repair_spent" | "repeat_spent"));
+                if case == "transient_after_flake" {
+                    forge.ci_retry_policy.max_attempts = 1;
+                }
                 forge.job(
                     &head,
                     failed(
@@ -1911,7 +2071,7 @@ fn untouched_failure_reruns_once_after_fresh_base_pass() {
                     );
                 } else {
                     outcome.expect_err(case);
-                    let step = if case == "repeat_spent" {
+                    let step = if matches!(case, "repeat" | "repeat_spent") {
                         HandoffLandingStep::StopForRequeue
                     } else {
                         HandoffLandingStep::Stop {
@@ -1923,11 +2083,15 @@ fn untouched_failure_reruns_once_after_fresh_base_pass() {
                         &forge,
                         case,
                         if case == "transient_after_flake" {
-                            &["classified `transient`", "one rerun"]
+                            &[
+                                "ci_infrastructure_retry_exhausted",
+                                "classification=transient",
+                                "attempts=1",
+                            ]
                         } else if case == "shared_budget" {
                             &["CI retry was reserved", "observing without resending"]
                         } else {
-                            &["classified `candidate`", "automatic repair"]
+                            &["classified `candidate`", "returns the task to the backlog"]
                         },
                     );
                 }
@@ -2013,11 +2177,7 @@ fn suspicion_only_history_cannot_admit_repair_from_a_non_pr_run() {
                 assert_not_sent(&forge, &["pr.merge", "pr.update_branch"], case);
                 if case == "valid_pr_rerun" {
                     outcome.expect_err(case);
-                    assert_steps(
-                        &forge.steps(),
-                        &[HandoffLandingStep::Stop { repairable: true }],
-                        case,
-                    );
+                    assert_steps(&forge.steps(), &[HandoffLandingStep::StopForRequeue], case);
                     assert_reason(&forge, case, &["classified `candidate`"]);
                     assert_not_sent(&forge, &["ci.rerun_failed"], case);
                 } else {
@@ -2084,11 +2244,7 @@ fn untouched_failure_uses_a_fresh_pass_behind_the_moving_tip() {
                         "{error}"
                     );
                     assert_sent_len(&forge, "ci.rerun_failed", 1, case);
-                    assert_steps(
-                        &forge.steps(),
-                        &[HandoffLandingStep::Stop { repairable: true }],
-                        case,
-                    );
+                    assert_steps(&forge.steps(), &[HandoffLandingStep::StopForRequeue], case);
                 } else {
                     assert_eq!(outcome.expect(case)["phase"], "landed");
                     assert_sent_len(&forge, "ci.rerun_failed", 1, case);
@@ -2190,6 +2346,11 @@ fn a_check_failure_inherited_from_the_base_updates_the_branch_and_lands() {
     assert_eq!(landed["phase"], "landed", "{landed}");
     assert_sent_len(&forge, "pr.update_branch", 1, "inherited");
     assert_not_sent(&forge, &["ci.rerun_failed"], "inherited");
+    // The base fails the same check: infrastructure, never the head's.
+    assert_eq!(
+        ledger_classes(&forge),
+        [orbit_types::workflow::CiFailureClass::Infrastructure]
+    );
     let head = head_of(&forge);
     assert_eq!(
         git(
@@ -2388,6 +2549,18 @@ fn an_inherited_failure_that_survives_the_branch_update_gets_one_repair() {
         forge.state.lock().unwrap().after_update = Some(failed(4, 41, after));
 
         let error = land_now(&forge).expect_err("the surviving failure stops the landing");
+        if repair_spent && tip_passes {
+            // The spent repair requeues. The run is held and the refusal keeps
+            // the candidate for the backlog return.
+            assert_candidate_requeue_held(&error, &forge, &candidate, label);
+        } else if tip_passes {
+            // A green tip whose repair is still available is repaired, so it
+            // ends the run failed. A red tip keeps its review stop below.
+            assert!(
+                !matches!(&error, OrbitError::DeliveryRefused { .. }),
+                "{label}: a surviving inherited failure on a green tip with repair remaining ends the run failed: {error}"
+            );
+        }
 
         assert_sent_len(&forge, "pr.update_branch", 1, label);
         assert_not_sent(&forge, &["ci.rerun_failed", "pr.merge"], label);
@@ -2427,26 +2600,33 @@ fn an_inherited_failure_that_survives_the_branch_update_gets_one_repair() {
     }
 }
 
-/// [ORB-15956] A check the candidate itself fails stops the landing for the
-/// one automatic repair, whose evidence carries the failed step's signature
-/// and log excerpt. The repair's own landing failing again stops, classified,
-/// for a backlog requeue instead of asking for a second repair [ORB-16890].
+/// A check the candidate itself fails returns the candidate to the backlog
+/// with the failed step's signature and log excerpt, whether or not an
+/// automatic repair has already been spent.
+/// The stop goes through check recovery's requeue and `refuse_pr`
+/// with [`HandoffLandingStep::StopForRequeue`], and the landing run is held
+/// as `delivery_landing_repair_requeue` rather than failed [ORB-23953].
 /// A base whose job query succeeds with no jobs ran nothing to fail, which is
-/// not a failed read.
+/// not a failed read. [model ranking §5.1] A failure that cites no file the
+/// head changed is first rerun once on the unchanged head; failing again
+/// there records it as the head's own (`code`), upgraded from `unknown` with
+/// an audited reclassification.
 #[test]
-fn a_candidate_caused_check_failure_gets_one_repair_then_a_requeue() {
+fn a_candidate_caused_check_failure_requeues_the_candidate() {
     for (repair_spent, base_ran, step) in [
-        (false, true, HandoffLandingStep::Stop { repairable: true }),
+        (false, true, HandoffLandingStep::StopForRequeue),
         (true, true, HandoffLandingStep::StopForRequeue),
-        (false, false, HandoffLandingStep::Stop { repairable: true }),
+        (false, false, HandoffLandingStep::StopForRequeue),
     ] {
         let (_sandbox, forge, candidate, base) = forge_fixture(false, repair_spent);
         forge.job(&candidate, failed(1, 11, CANDIDATE_ERROR));
+        forge.state.lock().unwrap().after_rerun = Some(failed(1, 12, CANDIDATE_ERROR));
         if base_ran {
             forge.job(&base, passed(2, 21));
         }
 
         let error = land_now(&forge).expect_err("the candidate's failure stops the landing");
+        assert_candidate_requeue_held(&error, &forge, &candidate, "candidate-caused");
 
         assert_steps(&forge.steps(), &[step], "candidate-caused");
         assert_reason(
@@ -2464,9 +2644,28 @@ fn a_candidate_caused_check_failure_gets_one_repair_then_a_requeue() {
         );
         assert_not_sent(
             &forge,
-            &["pr.merge", "pr.update_branch", "ci.rerun_failed"],
+            &["pr.merge", "pr.update_branch"],
             "candidate failure",
         );
+        assert_sent_len(&forge, "ci.rerun_failed", 1, "candidate failure");
+        let ledger = orbit_types::workflow::ci_failure_ledger(&forge.history.lock().unwrap());
+        let [entry] = ledger.as_slice() else {
+            panic!("candidate failure: one recorded failure, got {ledger:?}");
+        };
+        assert_eq!(
+            (
+                entry.record.class,
+                entry.class,
+                entry.record.head_sha.as_str()
+            ),
+            (
+                orbit_types::workflow::CiFailureClass::Unknown,
+                orbit_types::workflow::CiFailureClass::Code,
+                candidate.as_str(),
+            ),
+            "candidate failure: {entry:?}"
+        );
+        assert_eq!(entry.changes.len(), 1, "candidate failure: {entry:?}");
     }
 }
 
@@ -2578,6 +2777,12 @@ fn untouched_failure_requires_the_same_signature_unchanged_head_rerun() {
                 "landed"
             );
             assert_sent_len(&forge, "ci.rerun_failed", 1, case);
+            // The same head passed the same check on its rerun: flaky.
+            assert_eq!(
+                ledger_classes(&forge),
+                [orbit_types::workflow::CiFailureClass::Flaky],
+                "{case}"
+            );
             continue;
         }
         let error = outcome.expect_err(case);
@@ -2592,11 +2797,12 @@ fn untouched_failure_requires_the_same_signature_unchanged_head_rerun() {
             case,
             "changed" | "fresh_green" | "github_changed" | "stale" | "github_stale"
         );
-        assert_steps(
-            &forge.steps(),
-            &[HandoffLandingStep::Stop { repairable }],
-            case,
-        );
+        let step = if repairable {
+            HandoffLandingStep::StopForRequeue
+        } else {
+            HandoffLandingStep::Stop { repairable: false }
+        };
+        assert_steps(&forge.steps(), &[step], case);
         assert_not_sent(&forge, &["pr.merge", "pr.update_branch"], case);
         assert_sent_len(
             &forge,
@@ -2652,8 +2858,10 @@ fn untouched_failure_requires_the_same_signature_unchanged_head_rerun() {
     }
 }
 
-/// A base-suspect hold with no decisive base result escalates at the configured
-/// observation-cycle limit and keeps the failed check and signature in its stop.
+/// A base-suspect hold with no decisive base result is held in review as
+/// `delivery_base_checks_pending` at the configured observation-cycle limit,
+/// and keeps the failed check and signature in its evidence. The run is held,
+/// not failed: the base's own result is still owed, so nothing is repaired.
 #[test]
 fn untouched_failure_escalates_after_configured_base_ci_cycles() {
     let (_sandbox, forge, candidate, base) = forge_fixture(false, false);
@@ -2672,13 +2880,18 @@ fn untouched_failure_escalates_after_configured_base_ci_cycles() {
             )
         },
     )
-    .expect_err("the unresolved base evidence is escalated");
+    .expect_err("the unresolved base evidence is held");
 
     assert!(
-        error
-            .to_string()
-            .contains("escalated after 2 base CI observation cycles"),
-        "{error}"
+        matches!(&error, OrbitError::DeliveryRefused { refusal, message }
+            if refusal.error_code() == "delivery_base_checks_pending"
+                && message.contains("escalated after 2 base CI observation cycles")),
+        "the exhausted base budget holds as delivery_base_checks_pending: {error}"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&forge.last_evidence()).unwrap()["waiting_gate"],
+        "base_checks_pending",
+        "a base wait must be eligible for the owner's stopped-landing retry loop"
     );
     assert_reason(
         &forge,
@@ -2759,11 +2972,7 @@ fn untouched_failure_on_a_moved_tip_follows_the_fresh_base_check() {
         assert_sent_len(&forge, "ci.rerun_failed", usize::from(tip_passes), case);
         if tip_passes {
             assert_not_sent(&forge, &["pr.update_branch"], case);
-            assert_steps(
-                &forge.steps(),
-                &[HandoffLandingStep::Stop { repairable: true }],
-                case,
-            );
+            assert_steps(&forge.steps(), &[HandoffLandingStep::StopForRequeue], case);
             assert_reason(&forge, case, &["classified `candidate`"]);
             assert_eq!(
                 forge
@@ -2796,13 +3005,276 @@ fn untouched_failure_on_a_moved_tip_follows_the_fresh_base_check() {
     }
 }
 
-/// [ORB-15956] A check that failed on the network is rerun once before it is
-/// judged: a passing rerun lands, and a second transient failure stops in
-/// review with the classification rather than rerunning again.
+/// The retry authentication read failures the ORB-21586 landing held on.
+const RETRY_UNREADABLE: &str = "workflow prerequisite evidence is unavailable \
+     (retry requires a completed failed attempt)";
+
+/// Land with a 60-second deadline and instant polls, counting the polls.
+fn land_counting_polls(forge: &FakeForge) -> (Result<Value, OrbitError>, usize) {
+    let polls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = polls.clone();
+    let outcome = orbit_engine::test_support::with_vcs_retry_wait(
+        move |_| {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        },
+        || {
+            land_with(
+                forge,
+                json!({"max_wait_seconds":60,"poll_interval_seconds":5}),
+            )
+        },
+    );
+    (outcome, polls.load(std::sync::atomic::Ordering::SeqCst))
+}
+
+/// ORB-21586: an untouched-file failure whose same check passes on the base
+/// is the candidate's own. When its unchanged-head retry stays unreadable,
+/// the landing hands it to the repair path (or the requeue once the repair
+/// is spent) after the configured observation cycles, instead of waiting
+/// out the landing deadline.
 #[test]
-fn a_transient_check_failure_is_rerun_once_before_it_is_judged() {
+fn untouched_failure_with_a_passing_base_repairs_when_its_retry_is_unreadable() {
+    for spent in [false, true] {
+        let case = if spent {
+            "repair spent"
+        } else {
+            "repair available"
+        };
+        let (_sandbox, forge, candidate, base) = forge_fixture(false, spent);
+        forge.job(&candidate, failed(1, 11, UNTOUCHED_TEST_FAILURE));
+        forge.job(&base, passed(2, 21));
+        {
+            let mut state = forge.state.lock().unwrap();
+            state.rerun_plan_error = Some(RETRY_UNREADABLE);
+            state
+                .job_times
+                .insert(11, ("2026-10-26T14:00:00Z", "2026-10-26T14:01:00Z"));
+            state
+                .job_times
+                .insert(21, ("2026-10-26T12:00:00Z", "2026-10-26T12:01:00Z"));
+        }
+
+        let (outcome, polls) = land_counting_polls(&forge);
+
+        let error = outcome.expect_err(case);
+        assert!(
+            !matches!(&error, OrbitError::DeliveryRefused { refusal, .. }
+                if refusal.error_code() == "delivery_base_checks_pending"),
+            "{case}: the landing must not wait out its deadline: {error}"
+        );
+        assert_eq!(polls, 2, "{case}: escalate on the third observation cycle");
+        assert_sent_len(&forge, "ci.rerun_plan", 3, case);
+        assert_not_sent(
+            &forge,
+            &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
+            case,
+        );
+        let step = if spent {
+            HandoffLandingStep::StopForRequeue
+        } else {
+            HandoffLandingStep::Stop { repairable: true }
+        };
+        assert_steps(&forge.steps(), &[step], case);
+        assert_reason(
+            &forge,
+            case,
+            &[
+                "classified `flaky`",
+                "the failure is the candidate's own",
+                "retry requires a completed failed attempt",
+            ],
+        );
+    }
+}
+
+/// ORB-21586: a failure whose retry evidence stays unreadable, and that no
+/// base pass attributes to the candidate, stops in review within the
+/// observation-cycle limit with the read failure as its reason, not a
+/// `waiting_for_base` hold until the landing deadline.
+#[test]
+fn unreadable_retry_evidence_stops_the_landing_naming_the_read_failure() {
+    let (_sandbox, forge, candidate, _base) = forge_fixture(false, false);
+    forge.job(&candidate, failed(1, 11, NETWORK_FLAKE));
+    forge.state.lock().unwrap().rerun_plan_error = Some(RETRY_UNREADABLE);
+
+    let (outcome, polls) = land_counting_polls(&forge);
+
+    let error = outcome.expect_err("unreadable retry evidence stops the landing");
+    assert!(
+        !matches!(&error, OrbitError::DeliveryRefused { refusal, .. }
+            if refusal.error_code() == "delivery_base_checks_pending"),
+        "the landing must not wait out its deadline: {error}"
+    );
+    assert_eq!(polls, 2, "stop on the third observation cycle");
+    assert_steps(
+        &forge.steps(),
+        &[HandoffLandingStep::Stop { repairable: false }],
+        "unreadable retry",
+    );
+    assert_reason(
+        &forge,
+        "unreadable retry",
+        &[
+            "could not be read after 3 observation cycles",
+            "retry requires a completed failed attempt",
+        ],
+    );
+    let reason = forge.stop_reason();
+    assert!(!reason.contains("waiting for"), "{reason}");
+    assert_not_sent(
+        &forge,
+        &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
+        "unreadable retry",
+    );
+}
+
+/// A candidate check's `StopForRequeue` holds the landing. The recorded refusal
+/// is what the owner applies as a backlog return, and it keeps the accepted
+/// candidate. Finalization persists `held` for this code, which is neither
+/// `failed` nor `interrupted`.
+fn assert_candidate_requeue_held(
+    error: &OrbitError,
+    forge: &FakeForge,
+    candidate: &str,
+    case: &str,
+) {
+    let OrbitError::DeliveryRefused { refusal, message } = error else {
+        panic!("{case}: a candidate requeue holds the landing instead of failing the run: {error}");
+    };
+    assert_eq!(
+        *refusal,
+        DeliveryRefusal::LandingRepairRequeue,
+        "{case}: {message}"
+    );
+    assert_eq!(refusal.error_code(), "delivery_landing_repair_requeue");
+    let held = orbit_types::workflow::HeldFailure::of(Some(refusal.error_code()), Some(message));
+    let recorded = match held {
+        Some(orbit_types::workflow::HeldFailure::DeliveryRefused(actual)) => {
+            assert_eq!(actual, DeliveryRefusal::LandingRepairRequeue, "{case}");
+            orbit_types::workflow::JobRunState::Held
+        }
+        other => panic!("{case}: the refusal must record a held outcome, got {other:?}"),
+    };
+    assert_eq!(recorded.to_string(), "held", "{case}");
+    assert_ne!(
+        recorded,
+        orbit_types::workflow::JobRunState::Failed,
+        "{case}"
+    );
+    assert_ne!(
+        recorded,
+        orbit_types::workflow::JobRunState::Interrupted,
+        "{case}"
+    );
+    let parsed = orbit_types::workflow::handoff::LandingStopEvidence::parse(&forge.last_evidence());
+    let orbit_types::workflow::handoff::LandingStopEvidence::OwnerRefusal(evidence) = parsed else {
+        panic!("{case}: requeue evidence is the owner landing refusal");
+    };
+    assert_eq!(evidence.requeue, Some(true), "{case}: {evidence:?}");
+    assert!(
+        evidence
+            .reason
+            .value
+            .contains("returns the task to the backlog"),
+        "{case}: {}",
+        evidence.reason.value
+    );
+    assert_eq!(
+        evidence.accepted["candidate"]["value"].as_str(),
+        Some(candidate),
+        "{case}: the backlog return keeps the candidate: {}",
+        evidence.accepted
+    );
+    assert!(
+        message.contains("handoff_land:")
+            && error
+                .to_string()
+                .contains("returns the task to the backlog"),
+        "{case}: {error}"
+    );
+}
+
+fn assert_held_in_review(error: OrbitError, case: &str, phrases: &[&str]) {
+    let message = error.to_string();
+    assert!(
+        matches!(
+            error,
+            OrbitError::DeliveryRefused {
+                refusal: DeliveryRefusal::CheckEvidenceInconclusive,
+                ..
+            }
+        ),
+        "{case}: the landing is held, not a failed run: {message}"
+    );
+    for phrase in phrases {
+        assert!(message.contains(phrase), "{case}: {message}");
+    }
+}
+
+/// An unreadable required-check log, and a transient failure the rerun
+/// planner will not run again, stay in review as a held run.
+#[test]
+fn an_unreadable_log_and_a_spent_transient_rerun_hold_the_landing() {
+    let (_sandbox, forge, candidate, _base) = forge_fixture(false, false);
+    forge.job(&candidate, failed_reading(1, 11, FakeLog::Unreadable));
+    let error = land_now(&forge).expect_err("an unreadable log stays resumable in review");
+    assert!(matches!(
+        error,
+        OrbitError::DeliveryRefused {
+            refusal: DeliveryRefusal::ForgeObservationUnavailable,
+            ..
+        }
+    ));
+    assert_contains(
+        &error.to_string(),
+        &[
+            "the failure was not classified",
+            "the log of 'CI / clippy' could not be read",
+        ],
+        "unreadable log",
+    );
+    assert_steps(
+        &forge.steps(),
+        &[HandoffLandingStep::Stop { repairable: false }],
+        "unreadable log",
+    );
+    assert_not_sent(
+        &forge,
+        &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
+        "unreadable log",
+    );
+
+    let (_sandbox, forge, candidate, _base) = forge_fixture(false, false);
+    forge.job(&candidate, failed(1, 11, NETWORK_FLAKE));
+    forge.state.lock().unwrap().extra_unanswered_check = true;
+    assert_held_in_review(
+        land_now(&forge).expect_err("a spent transient rerun stays in review"),
+        "spent transient",
+        &[
+            "classified `transient`",
+            "it failed again after its one rerun, so the candidate stays in review",
+        ],
+    );
+    assert_steps(
+        &forge.steps(),
+        &[HandoffLandingStep::Stop { repairable: false }],
+        "spent transient",
+    );
+    assert_not_sent(
+        &forge,
+        &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
+        "spent transient",
+    );
+}
+
+/// A one-attempt infrastructure budget retains the original rerun-once
+/// behavior: a passing rerun lands, and another transient failure records
+/// its exhausted classification and count without admitting source repair.
+#[test]
+fn a_transient_check_failure_respects_the_configured_retry_limit() {
     for (rerun, lands) in [(passed(1, 12), true), (failed(1, 12, NETWORK_FLAKE), false)] {
-        let (_sandbox, forge, candidate, _base) = forge_fixture(true, false);
+        let (_sandbox, mut forge, candidate, _base) = forge_fixture(true, false);
+        forge.ci_retry_policy.max_attempts = 1;
         forge.job(&candidate, failed(1, 11, NETWORK_FLAKE));
         forge.state.lock().unwrap().after_rerun = Some(rerun);
 
@@ -2814,10 +3286,19 @@ fn a_transient_check_failure_is_rerun_once_before_it_is_judged() {
         assert_eq!(sent[0]["plan"]["head_sha"], candidate);
         assert_eq!(sent[0]["plan"]["failed_jobs"][0]["id"], 11);
         assert_not_sent(&forge, &["pr.update_branch"], "transient");
+        // A network failure is infrastructure whether or not the rerun passes.
+        assert_eq!(
+            ledger_classes(&forge),
+            [orbit_types::workflow::CiFailureClass::Infrastructure]
+        );
         if lands {
             assert_eq!(outcome.expect("the rerun passes")["phase"], "landed");
         } else {
-            outcome.expect_err("a second transient failure stops");
+            let error = outcome.expect_err("a second transient failure stops");
+            assert!(
+                !matches!(&error, OrbitError::DeliveryRefused { .. }),
+                "transient: a second transient failure ends the run failed, never held: {error}"
+            );
             assert_steps(
                 &forge.steps(),
                 &[HandoffLandingStep::Stop { repairable: false }],
@@ -2826,8 +3307,22 @@ fn a_transient_check_failure_is_rerun_once_before_it_is_judged() {
             assert_reason(
                 &forge,
                 "transient",
-                &["classified `transient`", "one rerun"],
+                &[
+                    "ci_infrastructure_retry_exhausted",
+                    "classification=transient",
+                    "attempts=1",
+                    "limit=1",
+                ],
             );
+            let history = forge.history.lock().unwrap();
+            let holds = history
+                .iter()
+                .filter(|entry| entry.event == "ci_infrastructure_retry_exhausted")
+                .collect::<Vec<_>>();
+            assert_eq!(holds.len(), 1);
+            let hold: Value = serde_json::from_str(holds[0].note.as_deref().unwrap()).unwrap();
+            assert_eq!(hold["classification"], "transient");
+            assert_eq!(hold["attempts"], 1);
         }
     }
 }
@@ -2944,6 +3439,12 @@ fn a_check_failure_whose_evidence_cannot_be_read_spends_nothing() {
             &forge,
             &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
             case,
+        );
+        // Evidence that decides nothing establishes no cause either.
+        assert_eq!(
+            ledger_classes(&forge),
+            [orbit_types::workflow::CiFailureClass::Unknown],
+            "{case}"
         );
     }
 }
@@ -3089,8 +3590,7 @@ fn a_required_aggregate_failure_is_classified_from_its_source_annotations() {
         land_now(&forge).expect_err("a failed required aggregate stops the landing");
 
         let step = match case {
-            "candidate" => HandoffLandingStep::Stop { repairable: true },
-            "spent" => HandoffLandingStep::StopForRequeue,
+            "candidate" | "spent" => HandoffLandingStep::StopForRequeue,
             _ => HandoffLandingStep::Stop { repairable: false },
         };
         assert_steps(&forge.steps(), &[step], case);
@@ -3136,7 +3636,7 @@ fn required_aggregate_after_recovery(updated: bool) {
     assert_sent_len(&forge, "ci.check_annotations", 1, "recovery");
     assert_steps(
         &forge.steps(),
-        &[HandoffLandingStep::Stop { repairable: true }],
+        &[HandoffLandingStep::StopForRequeue],
         "recovery",
     );
     assert_reason(
@@ -3268,6 +3768,57 @@ fn handoff_landing_contracts_2() {
             ),
         ]);
     });
+}
+
+#[test]
+fn landing_poll_uses_the_completion_clock_for_elapsed_provider_time() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "landing_poll_uses_the_completion_clock_for_elapsed_provider_time",
+        || {
+            let sandbox = tempdir().unwrap();
+            let host = pending_forge(sandbox.path(), vec![blocked_aggregate()], vec![]);
+            let head = host.forge.context.candidate.candidate.commit.clone();
+            *host.policies.lock().unwrap() = vec![pending_policy(&head, "QUEUED", true)].into();
+            let clock = std::rc::Rc::new(std::cell::Cell::new(1_000_u64));
+            let now = clock.clone();
+            let waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let recorded = waits.clone();
+            let waited = clock.clone();
+            let result = orbit_engine::test_support::with_prerequisite_clock(
+                move || {
+                    let current = now.get();
+                    // Provider work takes six logical seconds after the budget starts.
+                    if current == 1_000 {
+                        now.set(7_000);
+                    }
+                    current
+                },
+                |_, _| {},
+                || {
+                    orbit_engine::test_support::with_vcs_retry_wait(
+                        move |duration| {
+                            recorded.borrow_mut().push(duration.as_secs());
+                            waited.set(waited.get() + duration.as_secs() * 1_000);
+                        },
+                        || {
+                            land_with(
+                                &host,
+                                json!({"max_wait_seconds":10,"poll_interval_seconds":5}),
+                            )
+                        },
+                    )
+                },
+            );
+            assert!(result.is_err(), "a pending check must stop at the deadline");
+            assert_eq!(
+                *waits.borrow(),
+                [4],
+                "provider time consumes the same budget as waits"
+            );
+            assert_sent_len(&host.forge, "pr.merge", 0, "pending check");
+        },
+    );
 }
 
 #[test]

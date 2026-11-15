@@ -334,7 +334,10 @@ fn sqlite_denial_diagnostics(
     // denials; a refused authorized settlement is a protocol outcome.
     if event.command != "authorization"
         && !is_capability_denial_evidence(event)
-        && event.tool_name.as_deref() == Some("orbit.drain.claim.settle")
+        && matches!(
+            event.tool_name.as_deref(),
+            Some("orbit.drain.claim.settle" | "orbit.drain.claim.effort")
+        )
     {
         return DenialDiagnostics {
             denial_kind: "claim_settlement_refusal".to_string(),

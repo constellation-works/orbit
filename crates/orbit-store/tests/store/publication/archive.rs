@@ -95,6 +95,175 @@ fn import_refuses_an_archive_entry_that_is_a_symlink() {
     assert!(target_registry.tasks_for_workspace(ws).unwrap().is_empty());
 }
 
+/// A GNU sparse entry declaring a logical size past the shipped unpacked
+/// bound (256 MiB) must be refused by name at import, even though its stored
+/// bytes are empty, and must land no task.
+#[test]
+fn import_refuses_sparse_archive_over_unpacked_bound() {
+    if !support::isolated("archive::import_refuses_sparse_archive_over_unpacked_bound") {
+        return;
+    }
+    let dst = TempDir::new().unwrap();
+    let archive_path = dst.path().join("sparse-bomb.tar.zst");
+    let mut header = tar::Header::new_gnu();
+    header.set_entry_type(tar::EntryType::GNUSparse);
+    header.set_path("bomb").unwrap();
+    header.set_size(0);
+    header
+        .as_gnu_mut()
+        .unwrap()
+        .set_real_size(256 * 1024 * 1024 + 1);
+    let gnu = header.as_gnu_mut().unwrap();
+    gnu.sparse[0].set_offset(256 * 1024 * 1024 + 1);
+    gnu.sparse[0].set_length(0);
+    header.set_mode(0o644);
+    header.set_cksum();
+    let mut builder = tar::Builder::new(Vec::new());
+    builder.append(&header, std::io::empty()).unwrap();
+    let tar_bytes = builder.into_inner().unwrap();
+    let encoder =
+        zstd::stream::write::Encoder::new(fs::File::create(&archive_path).unwrap(), 3).unwrap();
+    let mut encoder = encoder;
+    {
+        use std::io::Write as _;
+        encoder.write_all(&tar_bytes).unwrap();
+    }
+    encoder.finish().unwrap();
+
+    let target_registry = open_registry(dst.path());
+    let error = import_tasks(
+        &target_registry,
+        &archive_path,
+        None,
+        ImportConflictPolicy::Fail,
+    )
+    .expect_err("a sparse entry over the unpacked bound must be refused");
+    let error = error.to_string();
+    assert!(
+        error.contains("MAX_TASK_ARCHIVE_UNPACKED_BYTES"),
+        "the refusal must name the unpacked bound: {error}"
+    );
+}
+
+/// A regular entry declaring more than the shipped unpacked bound is
+/// refused by name before its (here absent) payload is written.
+#[test]
+fn import_refuses_archive_over_unpacked_bound() {
+    if !support::isolated("archive::import_refuses_archive_over_unpacked_bound") {
+        return;
+    }
+    let dst = TempDir::new().unwrap();
+    let archive_path = dst.path().join("bomb.tar.zst");
+    let mut header = tar::Header::new_gnu();
+    header.set_entry_type(tar::EntryType::Regular);
+    header.set_path("bomb").unwrap();
+    header.set_size(256 * 1024 * 1024 + 1);
+    header.set_mode(0o644);
+    header.set_cksum();
+    let encoder =
+        zstd::stream::write::Encoder::new(fs::File::create(&archive_path).unwrap(), 3).unwrap();
+    let mut encoder = encoder;
+    {
+        use std::io::Write as _;
+        encoder.write_all(header.as_bytes()).unwrap();
+    }
+    encoder.finish().unwrap();
+
+    let target_registry = open_registry(dst.path());
+    let error = import_tasks(
+        &target_registry,
+        &archive_path,
+        None,
+        ImportConflictPolicy::Fail,
+    )
+    .expect_err("an archive over the unpacked bound must be refused");
+    let error = error.to_string();
+    assert!(
+        error.contains("MAX_TASK_ARCHIVE_UNPACKED_BYTES"),
+        "the refusal must name the unpacked bound: {error}"
+    );
+}
+
+/// A member escaping the staging directory is refused explicitly, not
+/// silently skipped by `unpack_in`.
+#[test]
+fn import_refuses_member_escaping_destination() {
+    if !support::isolated("archive::import_refuses_member_escaping_destination") {
+        return;
+    }
+    let dst = TempDir::new().unwrap();
+    let archive_path = dst.path().join("escape.tar.zst");
+    let mut builder = tar::Builder::new(Vec::new());
+    let mut header = tar::Header::new_gnu();
+    header.set_size(5);
+    header.set_mode(0o644);
+    header.set_entry_type(tar::EntryType::Regular);
+    let raw = header.as_mut_bytes();
+    raw[..14].copy_from_slice(b"../escaped.txt");
+    header.set_cksum();
+    builder.append(&header, &b"owned"[..]).unwrap();
+    let tar_bytes = builder.into_inner().unwrap();
+    let encoder =
+        zstd::stream::write::Encoder::new(fs::File::create(&archive_path).unwrap(), 3).unwrap();
+    let mut encoder = encoder;
+    {
+        use std::io::Write as _;
+        encoder.write_all(&tar_bytes).unwrap();
+    }
+    encoder.finish().unwrap();
+
+    let target_registry = open_registry(dst.path());
+    let error = import_tasks(
+        &target_registry,
+        &archive_path,
+        None,
+        ImportConflictPolicy::Fail,
+    )
+    .expect_err("a traversing member must be refused explicitly");
+    let error = error.to_string();
+    assert!(
+        error.contains("escaped.txt") && error.contains(".."),
+        "the refusal must name the entry and why: {error}"
+    );
+}
+
+/// More entries than the shipped entry bound (20,000) is refused by name.
+#[test]
+fn import_refuses_archive_over_entry_bound() {
+    if !support::isolated("archive::import_refuses_archive_over_entry_bound") {
+        return;
+    }
+    let dst = TempDir::new().unwrap();
+    let archive_path = dst.path().join("many.tar.zst");
+    let encoder =
+        zstd::stream::write::Encoder::new(fs::File::create(&archive_path).unwrap(), 3).unwrap();
+    let mut builder = tar::Builder::new(encoder);
+    let mut header = tar::Header::new_gnu();
+    header.set_size(0);
+    header.set_mode(0o644);
+    header.set_entry_type(tar::EntryType::Regular);
+    header.set_path("a").unwrap();
+    header.set_cksum();
+    for _ in 0..20_001 {
+        builder.append(&header, std::io::empty()).unwrap();
+    }
+    builder.into_inner().unwrap().finish().unwrap();
+
+    let target_registry = open_registry(dst.path());
+    let error = import_tasks(
+        &target_registry,
+        &archive_path,
+        None,
+        ImportConflictPolicy::Fail,
+    )
+    .expect_err("an archive over the entry bound must be refused");
+    let error = error.to_string();
+    assert!(
+        error.contains("MAX_TASK_ARCHIVE_ENTRIES"),
+        "the refusal must name the entry bound: {error}"
+    );
+}
+
 fn open_registry(root: &std::path::Path) -> TaskRegistryStore {
     TaskRegistryStore::open(&task_registry_path(root)).unwrap()
 }

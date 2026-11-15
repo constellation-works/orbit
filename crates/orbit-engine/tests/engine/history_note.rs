@@ -110,6 +110,20 @@ fn an_interruption_note_names_its_resume_and_shares_the_cap() {
     );
 }
 
+/// [ORB-23048] A token-shaped secret in the step error is redacted before
+/// the note is persisted; ordinary error text is unchanged.
+fn a_failure_note_redacts_token_shaped_secrets() {
+    let secret = ["ghp", "_", "1234567890abcdefghijklmnopqrstuvwxyz"].concat();
+    let note = failure_note(&format!("git failed with token {secret} in stderr"));
+    assert!(!note.contains(&secret), "{note}");
+    assert!(note.contains("git failed with token"), "{note}");
+    let ordinary = failure_note("plain failure: file not found");
+    assert!(
+        ordinary.contains("plain failure: file not found"),
+        "{ordinary}"
+    );
+}
+
 /// Behavior-distinct rows share one bounded family process.
 #[test]
 fn history_note_contracts_1() {
@@ -122,6 +136,10 @@ fn history_note_contracts_1() {
             (
                 "an_interruption_note_names_its_resume_and_shares_the_cap",
                 an_interruption_note_names_its_resume_and_shares_the_cap,
+            ),
+            (
+                "a_failure_note_redacts_token_shaped_secrets",
+                a_failure_note_redacts_token_shaped_secrets,
             ),
         ]);
     });

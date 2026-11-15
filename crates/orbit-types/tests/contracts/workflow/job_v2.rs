@@ -115,6 +115,6 @@ fn the_declared_schema_version_survives_a_round_trip() {
     assert_eq!(round_trip.schema_version, 3);
     assert!(
         round_trip.is_auto_task_job(),
-        "3 keeps the job phase-1 only"
+        "3 keeps the job under the auto-task extension"
     );
 }

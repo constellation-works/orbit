@@ -409,6 +409,11 @@ render_index() {
     printf '| Guide | Purpose |\n'
     printf '| --- | --- |\n'
     render_guide_rows "$docs_dir"
+    printf '\n### Architecture\n\n'
+    printf 'Code map of the current tree: end-to-end data flow, store and federation, surfaces, and one page per crate. Design intent stays in `docs/design/`.\n\n'
+    printf '| Page | Purpose |\n'
+    printf '| --- | --- |\n'
+    render_guide_rows "$docs_dir/architecture"
     printf '\n### Design patterns\n\n'
     printf '| Pattern | Purpose |\n'
     printf '| --- | --- |\n'
@@ -499,4 +504,11 @@ render_index "$tmp_dir/INDEX.md"
 
 result=0
 write_or_check "$tmp_dir/INDEX.md" "$docs_dir/INDEX.md" || result=1
+corpus_args=()
+if [[ "$check_only" -eq 1 ]]; then
+  corpus_args+=(--check)
+fi
+if [[ -d "$repo_root/docs/agents/corpus" ]]; then
+  python3 "$repo_root/scripts/agent-corpus.py" --repo-root "$repo_root" ${corpus_args[@]+"${corpus_args[@]}"} || result=1
+fi
 exit "$result"

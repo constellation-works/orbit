@@ -2,7 +2,8 @@
 //! the load-time checker, the pure evaluation behind `orbit automation
 //! explain`, the edge rules, and the protocol that fires each edge once
 //! (`docs/design/condition-triggers/1_scope.md`); and the typed wait
-//! environment and load-time checks of a job's auto-task steps [ORB-20157].
+//! environment, load-time checks and pass evaluation of a job's auto-task
+//! steps [ORB-20157, ORB-20158].
 
 mod ast;
 mod check;
@@ -20,8 +21,8 @@ pub use check::{
     check_condition, check_guard,
 };
 pub use evaluate::{
-    BoardFacts, ClauseNode, ConditionEvaluator, ConditionFacts, OperandValue, OriginFacts,
-    SelfFacts, TaskFacts, TopLevelClause, Truth,
+    AcceptedHistoryFacts, BoardFacts, ClauseNode, ConditionEvaluator, ConditionFacts, JobWaitFacts,
+    OperandValue, OriginFacts, ResultFacts, SelfFacts, StepFacts, TaskFacts, TopLevelClause, Truth,
 };
 pub use firing::{
     ConditionObservation, PassOutcome, PassSettings, SubjectObservation, advance_pass,
@@ -30,7 +31,8 @@ pub use firing::{
 pub use guard::{GUARD_FALSE, GUARD_UNKNOWN, GuardVerdict};
 pub use job_wait::{
     CheckedAutoTaskStep, CheckedJobExpiry, CheckedJobWaits, MAX_AUTO_TASK_STEPS,
-    MAX_JOB_EXPIRY_HOURS, OuterBound, READINESS_RESULT_CONTRACT, RESULT_CONTRACTS, check_job_waits,
+    MAX_JOB_EXPIRY_HOURS, OuterBound, READINESS_RESULT_CONTRACT, RESULT_CONTRACTS,
+    auto_task_step_deadline, check_job_waits,
 };
 pub use protocol::{
     ConditionAction, ConditionDiagnostic, ConditionEvaluation, ConditionHost, evaluate_condition,

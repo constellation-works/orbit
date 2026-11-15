@@ -12,10 +12,15 @@ use orbit_engine::{
 };
 use orbit_tools::ToolContext;
 use orbit_types::workflow::activity_job::JobV2;
-use orbit_types::workflow::{FinalRecoveryDecision, JobRunState, PipelineState, ReviewManifest};
+use orbit_types::workflow::{
+    FinalRecoveryCheckpointOutcome, FinalRecoveryDecision, JobRunState, PipelineState,
+    ReviewManifest,
+};
 use serde_json::{Value, json};
 
 use super::super::review_gate_audit::Fixture;
+
+mod evidence;
 
 fn git(fixture: &Fixture, args: &[&str]) -> String {
     let mut command = crate::git_test_support::command();
@@ -203,10 +208,13 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                     }
                     _ => {}
                 }
+                if self.repair == "evidence" {
+                    return Ok(evidence::repair_evidence_output(self.fixture));
+                }
                 // Deliberately name settlement: the engine must rewind far
                 // enough to admit a fresh reviewer for this repair.
                 Ok(
-                    json!({"decision": "resume", "step_id": "review_gate_settle",
+                    json!({"decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "step_id": "review_gate_settle",
                     "rationale": "repaired the rejected candidate"}),
                 )
             }
@@ -230,6 +238,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
         step_id: &str,
         output: &Value,
         compound: &BTreeMap<String, Value>,
+        script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
     ) -> Result<(), DispatchError> {
         if step_id == "commit" {
             self.commits.lock().unwrap().push(output.clone());
@@ -240,9 +249,30 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                 git(self.fixture, &["status", "--porcelain"]),
             ));
         }
-        self.fixture
-            .runtime
-            .checkpoint_step(run_id, index, step_id, output, compound)
+        self.fixture.runtime.checkpoint_step(
+            run_id,
+            index,
+            step_id,
+            output,
+            compound,
+            script_outputs,
+        )
+    }
+
+    fn persist_final_recovery_evidence(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        workspace: &std::path::Path,
+        evidence: &Value,
+    ) -> Result<(), OrbitError> {
+        RuntimeHost::persist_final_recovery_evidence(
+            &self.fixture.runtime,
+            run_id,
+            task_id,
+            workspace,
+            evidence,
+        )
     }
 
     fn final_recovery_log_tail(&self, run: &str) -> Result<Option<String>, OrbitError> {
@@ -529,6 +559,30 @@ fn final_recovery_repair_commit_gets_a_fresh_before_pr_review() {
     );
 }
 
+fn final_recovery_persists_repair_evidence_without_task_write_tools() {
+    let fixture = fixture_with_command("test \"$(cat candidate.txt)\" != after");
+    let (_, outcome) = run_pipeline(&fixture, "evidence");
+    let outcome = outcome.unwrap();
+    assert!(
+        outcome.success,
+        "repair evidence must survive the final-recovery tool denial: {outcome:?}"
+    );
+    assert_eq!(
+        fixture
+            .runtime
+            .get_task(&fixture.task_id)
+            .unwrap()
+            .execution_summary,
+        "Outcome: success\nChanges: repaired candidate with evidence."
+    );
+    let artifact = fixture
+        .runtime
+        .get_task_artifact(&fixture.task_id, "recovery/repair.log")
+        .unwrap()
+        .expect("the host attaches recovery evidence without operator action");
+    assert_eq!(artifact.content, b"repair validation passed\n");
+}
+
 fn final_recovery_does_not_authorize_an_unrecorded_head_change() {
     for recorded in [false, true] {
         let fixture = fixture();
@@ -808,7 +862,11 @@ fn resumed_final_recovery_repair_keeps_the_original_checkpoint_owner() {
             "before" => repair.head_sha_before = "0".repeat(40),
             "workspace" => repair.workspace_path = fixture.repo.join(".orbit"),
             "key" => checkpoint.key.run_id = "jrun-foreign".into(),
-            "decision" => checkpoint.outcome = Some("escalated: refused".into()),
+            "decision" => {
+                checkpoint.outcome = Some(FinalRecoveryCheckpointOutcome::Escalated {
+                    detail: "refused".into(),
+                })
+            }
             _ => unreachable!(),
         }
         fixture.runtime.write_run_state(&resumed, &state).unwrap();
@@ -861,5 +919,6 @@ crate::scenario_table!(
     final_recovery_repair_commit_gets_a_fresh_before_pr_review_scenarios,
     final_recovery_repair_commit_gets_a_fresh_before_pr_review,
     final_recovery_does_not_authorize_an_unrecorded_head_change,
+    final_recovery_persists_repair_evidence_without_task_write_tools,
     resumed_final_recovery_repair_keeps_the_original_checkpoint_owner
 );

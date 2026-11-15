@@ -1,10 +1,9 @@
 //! Deterministic actions and executor helpers behind `RuntimeHost`.
 //!
 //! `dispatch` maps each `CoreDeterministicAction` the engine runs onto Core:
-//! sweep filing, task-pilot, finding verification, blocked-task recovery,
-//! backlog admission, workspace auto-drain, pull drain and pipeline actions
-//! call `application::sweep_filing`, `application::task::pilot`,
-//! `application::task::finding_verification_steps`,
+//! sweep filing, task-pilot, blocked-task recovery, backlog admission,
+//! workspace auto-drain, pull drain and pipeline actions call
+//! `application::sweep_filing`, `application::task::pilot`,
 //! `application::task::blocked_recovery::steps`, `application::admission`,
 //! `application::workspace_auto`, `application::pull_drain` and
 //! `application::job::pipeline_actions`. What stays here is engine transport:

@@ -10,17 +10,19 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use axum::extract::Query;
+use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_core::{LandedDiffStats, OrbitRuntime};
 use orbit_types::task::{UNSET_BUCKET, complexity_bucket, complexity_bucket_ord};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use std::sync::Arc;
 
 use super::super::{DiagnosticsQuery, map_runtime_error};
 use super::metrics::DiagnosticsRange;
 use super::trend::{TrendWindow, trend_range};
-use crate::state::Ws;
+use crate::runtime_memo::DASHBOARD_POLL_MEMO_TTL;
+use crate::state::{DashboardState, Ws};
 
 /// Complexities a request may name; `unassessed` is an alias of the unset
 /// bucket.
@@ -82,6 +84,7 @@ fn parse_complexities(raw: Option<&str>) -> Result<Option<BTreeSet<&'static str>
 }
 
 pub(in crate::api) async fn diagnostics_diff_stats(
+    State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Query(q): Query<DiffStatsQuery>,
 ) -> Response {
@@ -100,13 +103,24 @@ pub(in crate::api) async fn diagnostics_diff_stats(
         Ok(range) => range,
         Err(error) => return map_runtime_error(error),
     };
-    match super::super::blocking("diff stats trend", move || {
-        diff_stats_trend(&runtime, &range, complexities.as_ref())
-    })
-    .await
+    let complexity_key = complexities
+        .as_ref()
+        .map(|set| set.iter().copied().collect::<Vec<_>>().join(","))
+        .unwrap_or_default();
+    let key = (
+        "diff_stats".to_string(),
+        format!("range={}|complexity={}", range.key, complexity_key),
+    );
+    let compute_runtime = Arc::clone(&runtime);
+    match state
+        .metrics_trends_memo()
+        .get_or_compute(&runtime, key, DASHBOARD_POLL_MEMO_TTL, move || {
+            diff_stats_trend(&compute_runtime, &range, complexities.as_ref())
+        })
+        .await
     {
-        Ok(value) => Json(value).into_response(),
-        Err(response) => *response,
+        Ok(served) => (served.age_header(), Json((*served.body).clone())).into_response(),
+        Err(error) => map_runtime_error(error),
     }
 }
 

@@ -95,7 +95,7 @@ fn workspace_init_seeds_a_loadable_state_task_pilot_bound_to_this_host() {
             "json",
         ],
     );
-    assert_eq!(shown["enabled"], false, "{shown}");
+    assert_eq!(shown["enabled"], true, "{shown}");
     assert_eq!(shown["target"], "job:task_pilot_pipeline", "{shown}");
     let trigger = &shown["trigger"]["state"];
     assert_eq!(trigger["kind"], "preparation_eligible", "{shown}");
@@ -114,8 +114,9 @@ fn workspace_init_seeds_a_loadable_state_task_pilot_bound_to_this_host() {
         );
     }
 
-    // Disabled as seeded: the tick evaluates the state trigger and reports
-    // the definition's own switch, never a load or evaluation error.
+    // Opted out: the tick evaluates the state trigger and reports the
+    // definition's own switch, never a load or evaluation error.
+    fs::write(&path, seeded.replace("enabled: true", "enabled: false")).expect("opt out");
     let tick = run_json(
         &repo,
         &home,
@@ -131,8 +132,8 @@ fn workspace_init_seeds_a_loadable_state_task_pilot_bound_to_this_host() {
     );
     assert_eq!(state_report(&tick)["reason"], "disabled", "{tick}");
 
-    // Opted in, the same definition evaluates its (empty) backlog as fresh.
-    fs::write(&path, seeded.replace("enabled: false", "enabled: true")).expect("opt in");
+    // Enabled as seeded, the same definition evaluates its (empty) backlog as fresh.
+    fs::write(&path, &seeded).expect("restore the seeded definition");
     let tick = run_json(
         &repo,
         &home,

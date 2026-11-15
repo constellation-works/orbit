@@ -109,6 +109,9 @@ alloc_port() {
   # Hold the socket until release_port so no other process takes the port while
   # the caller reads it. Callers release it before starting any sccache daemon:
   # the daemon binds this same address, which the held socket blocks.
+  # The child closes the socket when the release marker appears. Nothing in
+  # this script signals HOLD_PID: bash can reap the job while a later command
+  # runs, and a numeric kill after that can reach a reused PID.
   HOLD_RELEASE="$WORKDIR/port-release.$$.${RANDOM:-0}"
   # One output file per allocation: a reused file still holds the previous
   # port until this python child truncates it, so polling it would return a
@@ -116,8 +119,28 @@ alloc_port() {
   local out="$HOLD_RELEASE.port"
   rm -f "$out"
   python3 - "$HOLD_RELEASE" >"$out" <<'PY' &
-import os, socket, sys, time
+import os
+import socket
+import sys
+import threading
+import time
+
 release = sys.argv[1]
+parent = os.getppid()
+
+
+def exit_when_released():
+    # One-second cap after the marker, or immediately if the shell is gone.
+    # Process exit closes the socket. No external signal is required.
+    while not os.path.exists(release):
+        if os.getppid() != parent:
+            os._exit(0)
+        time.sleep(0.02)
+    time.sleep(1.0)
+    os._exit(0)
+
+
+threading.Thread(target=exit_when_released, daemon=True).start()
 sock = socket.socket()
 sock.bind(("127.0.0.1", 0))
 print(sock.getsockname()[1], flush=True)
@@ -138,19 +161,21 @@ PY
   [[ "$ALLOC_PORT" =~ ^[0-9]+$ ]] || fail "allocated an invalid port: '$ALLOC_PORT'"
 }
 
-release_port() {
-  [[ -n "$HOLD_RELEASE" ]] || return 0
-  : >"$HOLD_RELEASE"
-  if [[ -n "$HOLD_PID" ]]; then
-    local attempts=0
-    while kill -0 "$HOLD_PID" 2>/dev/null && [[ "$attempts" -lt 200 ]]; do
-      attempts=$((attempts + 1))
-      sleep 0.05
-    done
-    kill -KILL "$HOLD_PID" >/dev/null 2>&1 || true
+# Reap the allocator this shell started. wait collects only a child of this
+# shell and does not signal, so a reused PID is not a kill target. The marker
+# is what makes the child exit; without it, waiting would block teardown.
+reap_port_allocator() {
+  [[ -n "${HOLD_PID:-}" ]] || return 0
+  if [[ -n "${HOLD_RELEASE:-}" && -e "$HOLD_RELEASE" ]]; then
     wait "$HOLD_PID" 2>/dev/null || true
   fi
   HOLD_PID=""
+}
+
+release_port() {
+  [[ -n "${HOLD_RELEASE:-}" ]] || return 0
+  : >"$HOLD_RELEASE"
+  reap_port_allocator
   HOLD_RELEASE=""
 }
 
@@ -163,6 +188,7 @@ STAGE="fixture-setup"
 PARTICIPANTS=()
 LOGFILES=()
 STATUSES=()
+SERVER_LOG=""
 
 # Failure-only I/O: at most 4096 payload bytes per stream (head and tail so
 # compiler startup and final statistics survive), plus labels/byte counts.
@@ -186,6 +212,13 @@ report_stream() {
   printf '\n' >&2
 }
 
+report_server_log() {
+  [[ -n "$SERVER_LOG" ]] || return 0
+  printf 'test-compiler-cache-namespaces: stage=%s sccache_server_log=%s\n' \
+    "$STAGE" "$SERVER_LOG" >&2
+  report_stream sccache-server-log "$SERVER_LOG"
+}
+
 report_participants() {
   local i
   for ((i=0; i<${#PARTICIPANTS[@]}; i++)); do
@@ -194,6 +227,7 @@ report_participants() {
     report_stream stdout "${LOGFILES[$i]}"
     report_stream stderr "${LOGFILES[$i]}.err"
   done
+  report_server_log
 }
 
 pid_running() {
@@ -205,7 +239,7 @@ pid_running() {
 }
 
 # The supervisor enforces the deadline and reaps its complete tree before this
-# wait can return, including when cleanup requests cancellation with SIGTERM.
+# wait can return, including when cleanup publishes its cancellation marker.
 bounded_wait() {
   BOUNDED_STATUS=0
   wait "$1" || BOUNDED_STATUS=$?
@@ -224,13 +258,17 @@ wait_participants() {
 }
 
 cleanup() {
-  local exit_status=$? pid i
-  if [[ -n "${HOLD_PID:-}" ]]; then
-    kill -KILL "$HOLD_PID" >/dev/null 2>&1 || true
-    wait "$HOLD_PID" 2>/dev/null || true
+  local exit_status=$? i
+  if [[ -n "${HOLD_RELEASE:-}" ]]; then
+    : >"$HOLD_RELEASE" 2>/dev/null || true
   fi
-  for pid in "${PIDS[@]:-}"; do
-    kill "$pid" >/dev/null 2>&1 || true
+  reap_port_allocator
+  HOLD_RELEASE=""
+  # Bash may already have reaped a completed job. Its saved number grants no
+  # signal authority: request cancellation through the participant's private
+  # marker, then use wait only to collect this shell's child status.
+  for ((i=0; i<${#PIDS[@]}; i++)); do
+    : >"${LOGFILES[$i]}.cancel" 2>/dev/null || true
   done
   for ((i=0; i<${#PIDS[@]}; i++)); do
     STATUSES[$i]=0
@@ -287,7 +325,8 @@ def descendants(pid):
 
 
 deadline = time.monotonic() + int(sys.argv[1])
-process = subprocess.Popen(sys.argv[2:], process_group=0)
+cancel_path = Path(sys.argv[2])
+process = subprocess.Popen(sys.argv[3:], process_group=0)
 anchor = None
 status = None
 try:
@@ -300,6 +339,9 @@ try:
         stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, process_group=process.pid,
         preexec_fn=lambda: signal.signal(signal.SIGTERM, signal.SIG_IGN))
     while status is None and not cancelled and time.monotonic() < deadline:
+        if cancel_path.exists():
+            cancelled = signal.SIGTERM
+            break
         status = process.poll()
         if status is None:
             time.sleep(0.02)
@@ -414,13 +456,14 @@ run_ns() {
   extra_binds+=(--bind "$target" "$target")
   extra_binds+=(--bind "$WORKDIR/cache" "$WORKDIR/cache")
   extra_binds+=(--bind "$WORKDIR/sync" "$WORKDIR/sync")
+  extra_binds+=(--bind "$WORKDIR/logs" "$WORKDIR/logs")
   extra_binds+=(--dir /tmp/orbit-workspace --bind "$tree" /tmp/orbit-workspace)
   extra_binds+=(--dir /tmp/orbit-build --bind "$target" /tmp/orbit-build)
   extra_binds+=(--ro-bind "$tree/bin/sccache" "$tree/bin/sccache")
   if [[ -n "${HOME:-}" && -d "$HOME" ]]; then
     extra_binds+=(--ro-bind "$HOME" "$HOME")
   fi
-  exec python3 "$WORKDIR/supervise.py" "$WAIT_TIMEOUT" bwrap \
+  exec python3 "$WORKDIR/supervise.py" "$WAIT_TIMEOUT" "$logfile.cancel" bwrap \
     --die-with-parent \
     --new-session \
     --unshare-all \
@@ -465,13 +508,14 @@ run_ns_hold() {
   extra_binds+=(--bind "$target" "$target")
   extra_binds+=(--bind "$WORKDIR/cache" "$WORKDIR/cache")
   extra_binds+=(--bind "$WORKDIR/sync" "$WORKDIR/sync")
+  extra_binds+=(--bind "$WORKDIR/logs" "$WORKDIR/logs")
   extra_binds+=(--dir /tmp/orbit-workspace --bind "$tree" /tmp/orbit-workspace)
   extra_binds+=(--dir /tmp/orbit-build --bind "$target" /tmp/orbit-build)
   extra_binds+=(--ro-bind "$tree/bin/sccache" "$tree/bin/sccache")
   if [[ -n "${HOME:-}" && -d "$HOME" ]]; then
     extra_binds+=(--ro-bind "$HOME" "$HOME")
   fi
-  exec python3 "$WORKDIR/supervise.py" "$WAIT_TIMEOUT" bwrap \
+  exec python3 "$WORKDIR/supervise.py" "$WAIT_TIMEOUT" "$logfile.cancel" bwrap \
     --die-with-parent \
     --new-session \
     --unshare-all \
@@ -580,17 +624,21 @@ STAGE=client-side-shared-tcp
 PARTICIPANTS=(C D)
 LOGFILES=("$WORKDIR/logs/cs-c" "$WORKDIR/logs/cs-d")
 STATUSES=(pending pending)
+SERVER_LOG="$WORKDIR/logs/sccache-server-client-side-shared-tcp.log"
+rm -f "$SERVER_LOG"
 alloc_port; cs_port="$ALLOC_PORT"
 release_port
 rm -rf "$WORKDIR/tgt-c" "$WORKDIR/tgt-d"
 mkdir -p "$WORKDIR/tgt-c" "$WORKDIR/tgt-d"
 run_ns "$WORKDIR/src-c" "$WORKDIR/tgt-c" "$WORKDIR/logs/cs-c" \
   --setenv SCCACHE_CLIENT_SIDE 1 \
-  --setenv SCCACHE_SERVER_PORT "$cs_port" &
+  --setenv SCCACHE_SERVER_PORT "$cs_port" \
+  --setenv SCCACHE_ERROR_LOG "$SERVER_LOG" &
 PIDS+=($!)
 run_ns "$WORKDIR/src-d" "$WORKDIR/tgt-d" "$WORKDIR/logs/cs-d" \
   --setenv SCCACHE_CLIENT_SIDE 1 \
-  --setenv SCCACHE_SERVER_PORT "$cs_port" &
+  --setenv SCCACHE_SERVER_PORT "$cs_port" \
+  --setenv SCCACHE_ERROR_LOG "$SERVER_LOG" &
 PIDS+=($!)
 wait_participants || fail "client-side shared TCP daemon concurrent namespaces failed"
 [[ "$(probe_out "$WORKDIR/logs/cs-c")" == "3" ]] || fail "client-side namespace C expected 3"
@@ -602,6 +650,8 @@ STAGE=server-side-shared-tcp
 PARTICIPANTS=(C D)
 LOGFILES=("$WORKDIR/logs/bad-c" "$WORKDIR/logs/bad-d")
 STATUSES=(pending pending)
+SERVER_LOG="$WORKDIR/logs/sccache-server-server-side-shared-tcp.log"
+rm -f "$SERVER_LOG"
 alloc_port; bad_port="$ALLOC_PORT"
 release_port
 rm -rf "$WORKDIR/tgt-c" "$WORKDIR/tgt-d" "$WORKDIR/cache" "$WORKDIR/sync"
@@ -610,7 +660,8 @@ ready="$WORKDIR/sync/c-ready"
 donef="$WORKDIR/sync/c-done"
 run_ns_hold "$WORKDIR/src-c" "$WORKDIR/tgt-c" "$WORKDIR/logs/bad-c" "$ready" "$donef" \
   --setenv SCCACHE_CLIENT_SIDE 0 \
-  --setenv SCCACHE_SERVER_PORT "$bad_port" &
+  --setenv SCCACHE_SERVER_PORT "$bad_port" \
+  --setenv SCCACHE_ERROR_LOG "$SERVER_LOG" &
 PIDS+=($!)
 pid_c=$!
 wait_for_file "$ready"
@@ -621,7 +672,8 @@ if ! grep -Eq 'Compile requests[[:space:]]+[1-9]' "$WORKDIR/logs/bad-c"; then
 fi
 run_ns "$WORKDIR/src-d" "$WORKDIR/tgt-d" "$WORKDIR/logs/bad-d" \
   --setenv SCCACHE_CLIENT_SIDE 0 \
-  --setenv SCCACHE_SERVER_PORT "$bad_port" &
+  --setenv SCCACHE_SERVER_PORT "$bad_port" \
+  --setenv SCCACHE_ERROR_LOG "$SERVER_LOG" &
 PIDS+=($!)
 pid_d=$!
 bounded_wait "$pid_d"; STATUSES[1]="$BOUNDED_STATUS"
@@ -634,8 +686,8 @@ PIDS=()
 if [[ "$d_status" -eq 0 ]]; then
   fail "shared TCP daemon should not succeed for a different-source namespace"
 fi
-if ! grep -E -q 'does not exist|extern location|/tmp/orbit-workspace' "$WORKDIR/logs/bad-d.err" \
-  && ! grep -E -q 'does not exist|extern location|/tmp/orbit-workspace' "$WORKDIR/logs/bad-d"; then
+if ! grep -E -q 'does not exist|extern location' "$WORKDIR/logs/bad-d.err" \
+  && ! grep -E -q 'does not exist|extern location' "$WORKDIR/logs/bad-d"; then
   fail "shared-daemon failure did not look like the missing-artifact mismatch"
 fi
 

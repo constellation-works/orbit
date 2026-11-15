@@ -165,6 +165,20 @@ pub(super) fn compile_plan_with_credentials(
                     "linux-bwrap cannot enforce {reason} denyModify `{denied}` for a direct invocation; use a managed worktree"
                 )));
             }
+            // A dangling match has nothing to `--ro-bind`, and its target
+            // may be created through it; only the post-run guard sees that.
+            if !managed_worktree
+                && let Some(dangling) = expanded.get(denied).and_then(|matches| {
+                    matches
+                        .iter()
+                        .find(|entry| entry.target.resolved().is_none())
+                })
+            {
+                return Err(OrbitError::PolicyDenied(format!(
+                    "linux-bwrap cannot enforce denyModify `{denied}` over dangling link `{}` for a direct invocation; use a managed worktree",
+                    dangling.entry.display()
+                )));
+            }
             for path in paths {
                 push_mount(&mut out, "--ro-bind", &path);
             }

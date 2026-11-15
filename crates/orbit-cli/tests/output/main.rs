@@ -19,8 +19,14 @@ mod task_workspace;
 mod output;
 
 mod browser_kit;
+mod config_show_width;
+#[cfg(unix)]
+mod detail_recovery;
+#[cfg(unix)]
+mod diagnostic_prose;
 mod doctor;
 mod error_output;
+mod experiment_readout;
 mod global_json;
 mod help_examples;
 mod help_goldens;

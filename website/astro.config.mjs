@@ -5,7 +5,6 @@ import { defineHastPlugin } from 'satteri';
 import { changelogLinks, changelogReleases } from './plugins/changelog.mjs';
 import { inlineCodeWrap } from './plugins/inline-code.mjs';
 import { pagefindIgnoreFrameChrome } from './plugins/expressive-code-pagefind.mjs';
-import { mermaidDiagrams } from './plugins/mermaid.mjs';
 
 function findFirstTh(node) {
   for (const child of node.children || []) {
@@ -100,6 +99,13 @@ const tablePlugin = defineHastPlugin({
           addClasses(node, ctx, 'orbit-config-keys');
           wrapTableCode(node, ctx, 'config');
         }
+        if (
+          headers.length === 2 &&
+          ctx.textContent(headers[0]).trim() === 'Path' &&
+          ctx.textContent(headers[1]).trim() === 'Scope'
+        ) {
+          addClasses(node, ctx, 'orbit-config-paths');
+        }
       }
     },
   },
@@ -109,7 +115,6 @@ export default defineConfig({
   site: 'https://orbit-cli.com',
   markdown: {
     processor: satteri({
-      mdastPlugins: [mermaidDiagrams],
       hastPlugins: [inlineCodeWrap, tablePlugin, changelogLinks, changelogReleases],
     }),
   },
@@ -134,7 +139,7 @@ export default defineConfig({
         },
       },
       description:
-        'Reference documentation for Orbit, a local-first runtime for coding agents.',
+        'Documentation for Orbit, a local-first task queue and delivery pipeline for coding agents.',
       logo: {
         dark: './src/assets/orbit-logo-dark.svg',
         light: './src/assets/orbit-logo-light.svg',
@@ -156,7 +161,10 @@ export default defineConfig({
       customCss: [
         '@fontsource-variable/geist',
         '@fontsource-variable/geist-mono',
-        './src/styles/custom.css',
+        './src/styles/tokens.css',
+        './src/styles/prose.css',
+        './src/styles/components.css',
+        './src/styles/home.css',
       ],
       components: {
         Header: './src/components/Header.astro',
@@ -171,11 +179,10 @@ export default defineConfig({
         {
           label: 'Get started',
           items: [
-            { slug: 'index', label: 'What Orbit Is' },
             { slug: 'getting-started', label: 'Quickstart' },
-            { slug: 'getting-started/install', label: 'Install Orbit' },
+            { slug: 'getting-started/install', label: 'Install' },
             { slug: 'how-to/mcp-integration', label: 'Connect your agent' },
-            { slug: 'getting-started/first-task', label: 'First task' },
+            { slug: 'getting-started/first-task', label: 'Ship a first task' },
             { slug: 'getting-started/workflows', label: 'Delivery workflows' },
           ],
         },
@@ -187,32 +194,67 @@ export default defineConfig({
             { slug: 'concepts/agents', label: 'Agents and crews' },
             { slug: 'concepts/activities-jobs', label: 'Activities and jobs' },
             { slug: 'concepts/scheduling', label: 'Routines and auto-tasks' },
-            { slug: 'concepts/policies', label: 'Policies' },
           ],
         },
         {
           label: 'Guides',
           items: [
             { slug: 'how-to', label: 'Overview' },
-            { slug: 'how-to/dashboard', label: 'Use the dashboard' },
-            { slug: 'how-to/claude-code', label: 'Use the Claude Code mod' },
-            { slug: 'how-to/desktop', label: 'Use the desktop app' },
-            { slug: 'how-to/mcp-apps', label: 'Open the MCP Apps control center' },
-            { slug: 'how-to/continuous-delivery', label: 'Run a delivery window' },
-            { slug: 'how-to/recurring-work', label: 'Schedule recurring work' },
-            { slug: 'how-to/experiments', label: 'Run an experiment' },
-            { slug: 'how-to/write-activity', label: 'Write an activity' },
-            { slug: 'how-to/scoping-rules', label: 'Choose scopes' },
-            { slug: 'how-to/multi-host', label: 'Run Orbit across hosts' },
-            { slug: 'how-to/task-publication', label: 'Publish and restore tasks' },
-            { slug: 'how-to/diagnostics', label: 'Investigate failures from the terminal' },
-            { slug: 'how-to/state-and-backup', label: 'Back up and move Orbit state' },
-            { slug: 'how-to/workspace-maintenance', label: 'Maintain and remove workspaces' },
-            { slug: 'how-to/distributed-drain', label: 'Set up a distributed drain' },
-            { slug: 'how-to/friction', label: 'Report and triage friction' },
-            { slug: 'how-to/plugins', label: 'Install and grant plugins' },
-            { slug: 'how-to/decision-channels', label: 'Decision channels' },
-            { slug: 'how-to/path-leases', label: 'Hold paths with leases' },
+            {
+              label: 'Deliver',
+              items: [
+                { slug: 'how-to/continuous-delivery', label: 'Run a delivery window' },
+                { slug: 'how-to/recurring-work', label: 'Schedule recurring work' },
+                { slug: 'how-to/attention', label: 'Find what needs attention' },
+                { slug: 'how-to/decision-channels', label: 'Decision channels' },
+                { slug: 'how-to/fleet-notices', label: 'Fleet notices' },
+              ],
+            },
+            {
+              label: 'Interfaces',
+              collapsed: true,
+              items: [
+                { slug: 'how-to/dashboard', label: 'Dashboard' },
+                { slug: 'how-to/claude-code', label: 'Claude Code mod' },
+                { slug: 'how-to/desktop', label: 'Desktop app' },
+                { slug: 'how-to/mcp-apps', label: 'MCP Apps control center' },
+              ],
+            },
+            {
+              label: 'Improve',
+              collapsed: true,
+              items: [
+                { slug: 'how-to/experiments', label: 'Run an experiment' },
+                { slug: 'how-to/crew-memory', label: 'Give models a memory' },
+                { slug: 'how-to/friction', label: 'Report and triage friction' },
+              ],
+            },
+            {
+              label: 'Multiple machines',
+              collapsed: true,
+              items: [
+                { slug: 'how-to/multi-host', label: 'Run Orbit across hosts' },
+                { slug: 'how-to/distributed-drain', label: 'Set up a distributed drain' },
+              ],
+            },
+            {
+              label: 'Maintain',
+              collapsed: true,
+              items: [
+                { slug: 'how-to/diagnostics', label: 'Investigate failures' },
+                { slug: 'how-to/state-and-backup', label: 'Back up and move state' },
+                { slug: 'how-to/task-publication', label: 'Publish and restore tasks' },
+                { slug: 'how-to/workspace-maintenance', label: 'Maintain workspaces' },
+              ],
+            },
+            {
+              label: 'Extend',
+              collapsed: true,
+              items: [
+                { slug: 'how-to/write-activity', label: 'Write an activity' },
+                { slug: 'how-to/plugins', label: 'Install and grant plugins' },
+              ],
+            },
           ],
         },
         {
@@ -223,27 +265,19 @@ export default defineConfig({
             { slug: 'reference/config', label: 'Configuration' },
             { slug: 'reference/activity-job-yaml', label: 'Activity and job YAML' },
             { slug: 'reference/scheduling-yaml', label: 'Scheduling YAML' },
-            { slug: 'reference/policy-format', label: 'Policy format' },
-            { slug: 'reference/plugin-manifest', label: 'Plugin manifest' },
+            { slug: 'reference/policy-format', label: 'Policies' },
             { slug: 'reference/executor-yaml', label: 'Executor YAML' },
-            { slug: 'reference/scoping', label: 'Scoping rules' },
+            { slug: 'reference/plugin-manifest', label: 'Plugin manifest' },
+            { slug: 'reference/scoping', label: 'Where state lives' },
+            { slug: 'reference/application-consent', label: 'Application consent' },
+            { slug: 'reference/resident-mandates', label: 'Resident mandates' },
           ],
         },
         {
           label: 'Project',
           items: [
-            { slug: 'project', label: 'Overview' },
             { label: 'Changelog', link: '/changelog/' },
-            {
-              label: 'Contributing',
-              collapsed: true,
-              items: [
-                { slug: 'contributing', label: 'Overview' },
-                { slug: 'contributing/local-dev', label: 'Local development' },
-                { slug: 'contributing/crate-layout', label: 'Crate layout' },
-                { slug: 'contributing/pr-workflow', label: 'PR workflow' },
-              ],
-            },
+            { slug: 'contributing', label: 'Contributing' },
             { slug: 'privacy', label: 'Privacy' },
           ],
         },

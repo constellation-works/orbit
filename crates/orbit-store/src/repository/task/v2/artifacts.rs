@@ -172,15 +172,18 @@ impl TaskV2Store {
     ) -> Result<Option<Vec<ArtifactManifestFileV2>>, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
         self.ensure_recovered()?;
-        let bundle = match self.bundle_store.read_bundle_lightweight(id) {
-            Ok(bundle) => bundle,
+        // Only the manifest is returned, so read it alone: assembling the
+        // whole bundle would parse the envelope, bodies, events and comments
+        // on every call, which grows with the task's history.
+        let manifest = match self.bundle_store.read_artifact_manifest(id) {
+            Ok(manifest) => manifest,
             Err(OrbitError::NotFound {
                 kind: NotFoundKind::Task,
                 ..
             }) => return Ok(None),
             Err(err) => return Err(err),
         };
-        let Some(manifest) = bundle.artifact_manifest else {
+        let Some(manifest) = manifest else {
             return Ok(Some(Vec::new()));
         };
         let mut files = manifest.files;
@@ -224,6 +227,29 @@ impl TaskV2Store {
             content,
             created_by: Some(file.created_by),
         }))
+    }
+
+    /// Read the blob `file` already describes, without a bundle read.
+    ///
+    /// Admission holds a listed row's manifest and only needs the one pilot
+    /// receipt. Hashing every artifact in the bundle would repeat that work
+    /// for each backlog task.
+    pub(crate) fn read_manifest_artifact(
+        &self,
+        id: &str,
+        file: &ArtifactManifestFileV2,
+    ) -> Result<TaskArtifact, OrbitError> {
+        orbit_types::task::validate_orb_task_id(id)?;
+        file.validate()
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+        self.ensure_recovered()?;
+        let content = self.bundle_store.read_manifest_blob(id, file)?;
+        Ok(TaskArtifact {
+            path: file.path.clone(),
+            media_type: file.media_type.clone(),
+            content,
+            created_by: Some(file.created_by.clone()),
+        })
     }
 
     pub(crate) fn upsert_task_artifacts(
@@ -372,14 +398,16 @@ impl TaskV2Store {
             };
             self.bundle_store.rewrite_artifact_manifest(id, &manifest)?;
             let context_files = bundle.envelope.context_files.clone();
+            let mut pending_events: Vec<TaskEventRowV2> = Vec::new();
             append_creation_grant(
-                &self.bundle_store,
                 &mut bundle,
                 &context_files,
                 &[],
                 &fields.actor,
                 now,
+                &mut pending_events,
             )?;
+            self.bundle_store.append_events(id, &pending_events)?;
             bundle.envelope.updated_at = now;
             self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
             self.publish_task_index_and_lease_notices(&bundle.envelope, "task artifact update")?;

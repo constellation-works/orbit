@@ -49,7 +49,7 @@ pub(crate) fn append_lease_overlaps(
         "SELECT reservation_id, files_json, base_branch, created_at FROM task_reservations
          WHERE {} AND {LEASE_ROWS} AND released_at IS NULL AND expires_at > ?3
          AND reservation_id != ?4 ORDER BY reservation_id",
-        reservation_scope_clause(TaskReservationScope::Files),
+        reservation_scope_clause(TaskReservationScope::Files, event.workspace_id),
     );
     let mut stmt = tx.tx.prepare(&sql).map_err(sqlite_store_error)?;
     let rows = stmt

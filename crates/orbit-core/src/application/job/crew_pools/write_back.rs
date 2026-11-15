@@ -15,15 +15,17 @@ use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::JobRunQuery;
-use orbit_types::task::TaskHistoryEntry;
+use orbit_types::task::{
+    CREW_ASSIGNED_EVENT, CrewAssignmentState, CrewSource, RecordedCrewAssignment, RedrawReason,
+    TaskDecision, TaskHistoryEntry,
+};
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::contracts::{
-    BACKFILL_CREW_SOURCE, REDRAW_SOURCE_PREFIX, experiment_crew_source,
-};
+
+use crate::application::job::JobDrainPort;
 use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams, TaskRecords};
 use crate::runtime::run_input::{non_empty, singular_task_id_from_input};
 
@@ -64,7 +66,7 @@ pub fn with_crew_backfill_checkpoint<T>(
 /// The provenance a crew written back to its task records, and the clause
 /// its history entry explains the change with.
 pub(crate) struct AdmittedCrewSource {
-    source: String,
+    source: CrewSource,
     cause: String,
 }
 
@@ -72,34 +74,19 @@ impl AdmittedCrewSource {
     /// An experiment arm's crew overlay chose the crew.
     pub(crate) fn experiment(experiment: &str, arm: &str) -> Self {
         Self {
-            source: experiment_crew_source(experiment, arm),
+            source: CrewSource::Experiment {
+                experiment: experiment.to_string(),
+                arm: arm.to_string(),
+            },
             cause: format!("by experiment {experiment} arm {arm}"),
         }
     }
 
-    /// Admission drew another crew than the recorded one; `selection` is the
-    /// draw's provenance as its `crew_selection` records it.
-    pub(crate) fn redraw(selection: &str, explicit_run_crew: bool) -> Self {
-        let reason = if explicit_run_crew {
-            "run_crew"
-        } else if selection.contains("provider hold excludes") {
-            "provider_hold"
-        } else if selection.contains("; provider limit:") {
-            "provider_limit"
-        } else if selection.contains("usage pressure") {
-            "usage_pressure"
-        } else if selection.contains("image-capable implementer") {
-            "image_capable"
-        } else {
-            "pool"
-        };
-        Self::redraw_reason(reason)
-    }
-
-    fn redraw_reason(reason: &str) -> Self {
+    /// Admission drew another crew than the recorded one.
+    pub(crate) fn redraw_reason(reason: RedrawReason) -> Self {
         Self {
-            source: format!("{REDRAW_SOURCE_PREFIX}{reason}"),
             cause: format!("at admission ({reason})"),
+            source: CrewSource::Redraw(reason),
         }
     }
 }
@@ -175,6 +162,7 @@ impl OrbitRuntime {
     pub(crate) fn write_back_claimed_leaf_crew(
         &self,
         task_id: &str,
+        claim_id: &str,
         crew: Option<&str>,
         committed: bool,
         recorded_crew: Option<&str>,
@@ -185,16 +173,28 @@ impl OrbitRuntime {
         let Some(crew) = crew.and_then(non_empty) else {
             return;
         };
-        let written = match self.experiment_crew_pool(task_id) {
-            Ok(Some(pool)) => AdmittedCrewSource::experiment(&pool.experiment, &pool.arm),
-            Ok(None) => AdmittedCrewSource::redraw_reason("claimed_leaf"),
-            Err(error) => {
-                tracing::warn!(
-                    task_id,
-                    "could not read the task's experiment crew pool: {error}"
-                );
-                AdmittedCrewSource::redraw_reason("claimed_leaf")
-            }
+        // Settlement attributes the contract this leaf actually received,
+        // even when the experiment ended while its worker was running.
+        let captured = self
+            .claim_admission_receipt(claim_id)
+            .ok()
+            .and_then(|receipt| receipt.experiments);
+        let treatment = captured
+            .iter()
+            .flat_map(|capture| &capture.assignments)
+            .filter(|entry| entry.live)
+            .find(|entry| {
+                serde_json::from_str::<serde_json::Value>(&entry.overlay_json)
+                    .ok()
+                    .and_then(|overlay| overlay["crew"]["pool"].as_array().cloned())
+                    .is_some_and(|pool| {
+                        pool.iter()
+                            .any(|member| member["crew"].as_str() == Some(crew))
+                    })
+            });
+        let written = match treatment {
+            Some(entry) => AdmittedCrewSource::experiment(&entry.experiment, &entry.arm),
+            None => AdmittedCrewSource::redraw_reason(RedrawReason::ClaimedLeaf),
         };
         match self.write_task_crew(
             task_id,
@@ -272,7 +272,7 @@ impl OrbitRuntime {
             ..TaskCrewBackfill::default()
         };
         let written = AdmittedCrewSource {
-            source: BACKFILL_CREW_SOURCE.to_string(),
+            source: CrewSource::Backfill,
             cause: "by backfill from its latest delivery's crew selection".to_string(),
         };
         let tasks: std::collections::BTreeSet<String> = latest_run
@@ -390,7 +390,7 @@ impl OrbitRuntime {
                     // than it [ORB-19602]. The history is read under the lock,
                     // so this check and the write see one task state [ORB-19623].
                     CrewWriteGuard::Backfill(copied_at) => {
-                        current.crew_source.as_deref() == Some("explicit")
+                        current.crew_source == Some(CrewSource::Explicit)
                             && self.crew_assigned_after(task_id, copied_at)?
                     }
                     CrewWriteGuard::Recorded(recorded) => {
@@ -411,9 +411,9 @@ impl OrbitRuntime {
                         append_history: vec![TaskHistoryEntry {
                             at: now,
                             by: SYSTEM_ACTOR_LABEL.to_string(),
-                            event: "crew_assigned".to_string(),
-                            // The new crew is the note's last backticked name,
-                            // which attempt attribution reads.
+                            event: CREW_ASSIGNED_EVENT.to_string(),
+                            // The new crew stays the note's last backticked
+                            // name for readers of entries without a decision.
                             note: Some(format!(
                                 "crew changed from `{}` to `{crew}` {}",
                                 current.crew.as_deref().unwrap_or("(none)"),
@@ -422,7 +422,18 @@ impl OrbitRuntime {
                             from_status: None,
                             to_status: None,
                             operation_id: None,
-                            decision: None,
+                            decision: Some(TaskDecision::CrewAssignment(
+                                RecordedCrewAssignment::new(
+                                    CrewAssignmentState::new(
+                                        current.crew.clone(),
+                                        current.crew_source.clone(),
+                                    ),
+                                    CrewAssignmentState::new(
+                                        Some(crew.to_string()),
+                                        Some(written.source.clone()),
+                                    ),
+                                ),
+                            )),
                         }],
                         ..Default::default()
                     },
@@ -442,7 +453,7 @@ impl OrbitRuntime {
         Ok(self
             .get_task_history(task_id)?
             .iter()
-            .any(|entry| entry.event == "crew_assigned" && entry.at > at))
+            .any(|entry| entry.event == CREW_ASSIGNED_EVENT && entry.at > at))
     }
 
     /// Whether the task's latest local `run` was cancelled before it

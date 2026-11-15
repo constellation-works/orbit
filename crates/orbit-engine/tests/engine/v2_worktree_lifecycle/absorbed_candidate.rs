@@ -951,8 +951,6 @@ fn execute(host: &LifecycleHost, prepared: &PreparedRebase, job: &JobV2) -> Abso
         store,
         "ws_absorbed",
         &prepared.run_id,
-        "test-agent",
-        None,
         audit_root.path(),
     ));
     let writer = Arc::new(

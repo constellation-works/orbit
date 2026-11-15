@@ -53,47 +53,12 @@ pub(crate) struct PreparedSandbox<'a> {
     pub(crate) metadata: SandboxDispatchMetadata,
 }
 
-impl PreparedSandbox<'_> {
-    /// The deliberate absence of a sandbox for an operator-admitted
-    /// trusted-host invocation [ORB-11354].
-    ///
-    /// Named distinctly from the `None` arm of
-    /// [`prepare_sandbox_for_dispatch`] — which means "this executor declares
-    /// no sandbox" — so a run trail distinguishes an executor that never had
-    /// one from an operator who explicitly removed it.
-    pub(crate) fn none_trusted_host() -> Self {
-        Self {
-            effective: None,
-            metadata: SandboxDispatchMetadata {
-                backend: Some("none-trusted-host".to_string()),
-                trusted_wrapper: None,
-                probe_outcome: None,
-                write_enforcement: "write_unrestricted_trusted_host".to_string(),
-                read_enforcement: "read_unrestricted_trusted_host".to_string(),
-            },
-        }
-    }
-}
-
-/// What dispatch does when the executor's wrapper cannot start on this host.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum UnavailableWrapper {
-    /// Refuse before spawn unless the executor declares `allow_fallback`, which
-    /// permits bare exec.
-    RefuseUnlessFallback,
-    /// Run unwrapped only under the provider's own enforced read-only mode;
-    /// the caller refuses any other provider before spawn. Used by read-only
-    /// explorers, which `allow_fallback` does not govern [ORB-16814].
-    ProviderReadOnly,
-}
-
 /// Resolve availability before provider argv construction. This ordering is
 /// security-sensitive: provider-native flags are neutralized only when the
 /// outer wrapper is actually usable, while an explicitly allowed bare
 /// fallback keeps those flags intact. Explicit off disables both layers.
 pub(crate) fn prepare_sandbox_for_dispatch(
     sandbox: Option<&ResolvedSandbox>,
-    on_unavailable: UnavailableWrapper,
 ) -> Result<PreparedSandbox<'_>, SpawnError> {
     match sandbox {
         Some(sandbox) if sandbox.kind == ExecutorSandboxKind::Off => Ok(PreparedSandbox {
@@ -108,23 +73,13 @@ pub(crate) fn prepare_sandbox_for_dispatch(
         }),
         Some(sandbox) if sandbox.kind == ExecutorSandboxKind::LinuxBwrap => {
             let probe = linux_bwrap_probe_for_dispatch();
-            prepare_linux_sandbox_for_dispatch_with_probe(sandbox, probe, on_unavailable)
+            prepare_linux_sandbox_for_dispatch_with_probe(sandbox, probe)
         }
         Some(sandbox)
             if sandbox.kind == ExecutorSandboxKind::MacosSandboxExec
                 && !sandbox_exec_available() =>
         {
             let unavailable = sandbox_exec_unavailable_message();
-            if on_unavailable == UnavailableWrapper::ProviderReadOnly {
-                tracing::warn!(
-                    target: "orbit.engine.cli_runner",
-                    "{unavailable}; explorer runs unwrapped under its provider's read-only mode"
-                );
-                return Ok(read_only_provider_unwrapped(
-                    orbit_exec::sandbox_exec_program_for_audit().to_string(),
-                    unavailable,
-                ));
-            }
             if !sandbox.allow_fallback {
                 return Err(SpawnError::permanent(format!(
                     "{unavailable}; declare allow_fallback: true to permit bare exec"
@@ -218,7 +173,6 @@ fn probe_forced_unavailable() -> Option<BwrapProbeOutcome> {
 fn prepare_linux_sandbox_for_dispatch_with_probe<'a>(
     sandbox: &'a ResolvedSandbox,
     probe: BwrapProbeOutcome,
-    on_unavailable: UnavailableWrapper,
 ) -> Result<PreparedSandbox<'a>, SpawnError> {
     if probe.available {
         Ok(PreparedSandbox {
@@ -231,16 +185,6 @@ fn prepare_linux_sandbox_for_dispatch_with_probe<'a>(
                 read_enforcement: "read_delegated".to_string(),
             },
         })
-    } else if on_unavailable == UnavailableWrapper::ProviderReadOnly {
-        tracing::warn!(
-            target: "orbit.engine.cli_runner",
-            reason = %probe.detail,
-            "linux-bwrap unavailable; explorer runs unwrapped under its provider's read-only mode"
-        );
-        Ok(read_only_provider_unwrapped(
-            probe.trusted_path,
-            probe.detail,
-        ))
     } else if sandbox.allow_fallback {
         tracing::warn!(
             target: "orbit.engine.cli_runner",
@@ -262,25 +206,6 @@ fn prepare_linux_sandbox_for_dispatch_with_probe<'a>(
             "{}; declare allow_fallback: true to permit bare exec",
             probe.detail
         )))
-    }
-}
-
-/// An explorer whose wrapper cannot start runs unwrapped. No Orbit profile
-/// enforces writes here, so the provider's read-only mode is the boundary, and
-/// the caller checks that mode before spawn [ORB-16814].
-fn read_only_provider_unwrapped<'a>(
-    trusted_wrapper: String,
-    probe_outcome: String,
-) -> PreparedSandbox<'a> {
-    PreparedSandbox {
-        effective: None,
-        metadata: SandboxDispatchMetadata {
-            backend: Some("read-only-provider".to_string()),
-            trusted_wrapper: Some(trusted_wrapper),
-            probe_outcome: Some(probe_outcome),
-            write_enforcement: "write_provider_read_only".to_string(),
-            read_enforcement: "read_delegated".to_string(),
-        },
     }
 }
 

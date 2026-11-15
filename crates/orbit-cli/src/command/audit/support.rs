@@ -18,6 +18,15 @@ pub(super) fn audit_event_to_json(event: &AuditEvent) -> Value {
     value
 }
 
+/// The stored tool name a `--tool` filter selects. Audit rows record the
+/// operation a family action runs, so `family:action` selects that operation.
+pub(super) fn audit_tool_filter(tool: Option<String>) -> Option<String> {
+    tool.map(|tool| match orbit_types::tool::tool_family_action(&tool) {
+        Some((_, action)) => action.operation.to_string(),
+        None => tool,
+    })
+}
+
 /// Which columns the caller filtered on, so a column the filter made
 /// informationally uniform still stays on screen.
 #[derive(Clone, Copy, Default)]

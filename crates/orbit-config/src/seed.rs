@@ -18,12 +18,12 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::write_text_with_parent;
-use orbit_types::identity::Crew;
+use orbit_types::identity::{Crew, crew_reference_base, resolve_crew};
 use orbit_types::workflow::ShipMode;
 
+use crate::crew_defaults::builtin_default_crews;
 use crate::layering::WORKSPACE_REPLACE_ONLY_KEYS;
 use crate::plugin_enablement::workspace_config_sets_policy;
-use crate::resolved::default_crews;
 use crate::{ConfigRoots, ConfigScope, ConfigStore, ResolvedConfig};
 
 pub(crate) const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("../assets/default-config.toml");
@@ -59,11 +59,15 @@ const BASE_POOLS: &[(bool, bool, [&[&str]; 4])] = &[
             &["haiku", "luna"],
             &["terra", "sonnet"],
             &["sol", "opus"],
-            &["opus", "astra"],
+            &["fable", "astra"],
         ],
     ),
     (true, false, [&["luna"], &["terra"], &["sol"], &["astra"]]),
-    (false, true, [&["haiku"], &["sonnet"], &["opus"], &["opus"]]),
+    (
+        false,
+        true,
+        [&["haiku"], &["sonnet"], &["opus"], &["fable"]],
+    ),
 ];
 
 /// The four `workflow.*_complexity_crews` keys, in pool order.
@@ -121,7 +125,7 @@ impl ConfigSeed {
     /// them, enabled exactly when its provider family is available.
     pub fn seeded_crews(&self) -> BTreeMap<String, Crew> {
         let available_families = self.available_families();
-        default_crews()
+        builtin_default_crews()
             .into_iter()
             .map(|(name, mut crew)| {
                 crew.enabled = available_families.contains(&crew.assignment.provider.as_str());
@@ -218,6 +222,34 @@ pub fn seed_default_config(
     Ok(true)
 }
 
+/// Machine-scope settings a newly created machine identity starts with, as
+/// `(key, TOML value, comment)`. They are written beside the identity, in the
+/// global `config.toml` that alone may hold `[machine]`, never into the
+/// config template: a template seeded under an explicit `--root` can later
+/// load as a workspace config, which refuses `[machine]`.
+const NEW_MACHINE_DEFAULTS: &[(&str, &str, &str)] = &[(
+    "machine.auto_concurrency.mode",
+    "\"enforce\"",
+    "Admit delivery work only while its forecast fits this host.",
+)];
+
+/// Seed the machine-scope defaults a new machine starts with
+/// (`machine.auto_concurrency.mode = "enforce"`) that `store`, the global
+/// config of a machine whose identity is being created, does not already set.
+/// The caller saves.
+pub fn seed_new_machine_defaults(store: &mut ConfigStore) -> Result<bool, OrbitError> {
+    if store.scope() != ConfigScope::Global {
+        return Err(OrbitError::InvalidInput(
+            "machine defaults are written only to the global config.toml".to_string(),
+        ));
+    }
+    let mut changed = false;
+    for (key, value, comment) in NEW_MACHINE_DEFAULTS {
+        changed |= store.seed_missing_value(key, value, comment)?;
+    }
+    Ok(changed)
+}
+
 /// Seed missing workspace review choices for its registered delivery route.
 ///
 /// Uses enabled crews from the effective config after global bootstrap, never
@@ -232,15 +264,16 @@ pub fn seed_workspace_review(roots: &ConfigRoots, ship_mode: ShipMode) -> Result
     ConfigStore::with_write_lock(&path, || {
         let mut store = ConfigStore::open(ConfigScope::Workspace, &path)?;
         let resolved = ResolvedConfig::load(roots)?;
-        let cheap: Vec<&str> = ["luna", "haiku"]
+        let cheap: Vec<&str> = ["luna", "haiku", "muse-spark"]
             .into_iter()
             .filter(|name| resolved.crews.get(*name).is_some_and(|crew| crew.enabled))
             .collect();
         let (timing, reason) = match ship_mode {
             ShipMode::Local => ("off", "Before-landing review needs the PR route."),
-            ShipMode::Pr if cheap.is_empty() => {
-                ("off", "No cheap reviewer enabled (luna or haiku).")
-            }
+            ShipMode::Pr if cheap.is_empty() => (
+                "off",
+                "No cheap reviewer enabled (luna, haiku or muse-spark).",
+            ),
             ShipMode::Pr => (
                 "before_landing",
                 "Review the PR before landing with enabled cheap crews.",
@@ -292,7 +325,7 @@ pub fn seed_workspace_review(roots: &ConfigRoots, ship_mode: ShipMode) -> Result
             changed |= store.seed_missing_value(
                 "workflow.purpose_crews.pre_landing_review",
                 &toml_array(&cheap).to_string(),
-                "Only enabled luna and haiku crews; no costlier fallback is seeded.",
+                "Only enabled luna, haiku and muse-spark crews; no costlier fallback is seeded.",
             )?;
         }
         if changed {
@@ -327,19 +360,33 @@ fn render_seeded_config(template: &str, seed: Option<&ConfigSeed>) -> Result<Str
     Ok(body)
 }
 
-/// Crews final recovery is seeded with, in order, when this host seeds them
-/// enabled. Without any of them it falls back to [`FINAL_RECOVERY_FALLBACK`].
-const FINAL_RECOVERY_PREFERENCE: &[&str] = &["sol", "grok", "muse-wonder"];
-
-/// Final recovery's seeded crew on a host with none of
-/// [`FINAL_RECOVERY_PREFERENCE`].
-const FINAL_RECOVERY_FALLBACK: &str = "opus";
+/// Seeded `workflow.purpose_crews` pools, in order. Each is filtered to the
+/// crews this host seeds enabled (a `crew@effort` member by its base crew),
+/// and a pool left empty is omitted, so it takes its built-in route. The one
+/// exception is `final_recovery`, whose built-in default names crews this host
+/// may not enable: an empty one is written as `[]`, which turns it off.
+const PURPOSE_POOLS: &[(&str, &[&str])] = &[
+    (
+        "review",
+        &["sol", "sonnet", "muse-wonder", "grok", "opus@medium"],
+    ),
+    (
+        "task_pilot",
+        &["luna@high", "haiku@high", "muse-spark@high"],
+    ),
+    ("failure_recovery", &["luna", "haiku", "muse-spark", "grok"]),
+    ("auto_fix", &["luna", "haiku", "muse-spark"]),
+    ("final_recovery", &["sol", "muse-wonder", "opus@medium"]),
+    (
+        "baseline_red_repair",
+        &["terra", "sonnet", "muse-wonder", "grok"],
+    ),
+    ("pre_landing_review", &["luna", "haiku", "muse-spark"]),
+];
 
 /// The `[workflow]` keys a seed owns, written explicitly so no crew route is
 /// an invisible default: the default crew, the four complexity pools seeded
-/// from the detected families, and every `purpose_crews` pool. A purpose whose
-/// route no fixed list can express (the task's own complexity pool, the
-/// review pool) is written as `[]` with a comment naming that route.
+/// from the detected families, and the [`PURPOSE_POOLS`] this host can run.
 pub(crate) fn render_workflow_crew_keys(
     seed: &ConfigSeed,
     crews: &BTreeMap<String, Crew>,
@@ -371,56 +418,45 @@ pub(crate) fn render_workflow_crew_keys(
         }
         rendered.push_str(&format!("{key} = {}\n", toml_array(pool)));
     }
-    rendered.push_str(&render_purpose_crews(&pools, crews));
+    rendered.push_str(&render_purpose_crews(crews)?);
     Ok(rendered)
 }
 
-/// Every `workflow.purpose_crews` key, each with the crews its route resolves
-/// to on this host.
-fn render_purpose_crews(pools: &[Vec<&'static str>; 4], crews: &BTreeMap<String, Crew>) -> String {
-    let [low, medium, ..] = pools;
-    let enabled = |name: &&str| crews.get(*name).is_some_and(|crew| crew.enabled);
-    let mut final_recovery: Vec<&str> = FINAL_RECOVERY_PREFERENCE
-        .iter()
-        .copied()
-        .filter(enabled)
-        .collect();
-    if final_recovery.is_empty() && enabled(&FINAL_RECOVERY_FALLBACK) {
-        final_recovery.push(FINAL_RECOVERY_FALLBACK);
-    }
-    let mut rendered =
-        String::from("# Crew pools by purpose of work, written like the pools above.\n");
-    let keys: [(&str, &[&str], &str); 10] = [
-        ("task_pilot", low, ""),
-        ("auto_fix", low, ""),
-        ("failure_recovery", medium, ""),
-        ("review", medium, ""),
-        ("pre_landing_review", &[], "  # [] uses the review pool"),
-        (
-            "final_recovery",
-            &final_recovery,
-            "  # [] turns final recovery off",
-        ),
-        (
-            "baseline_red_repair",
-            &[],
-            "  # [] uses the task's complexity pool",
-        ),
-        ("sweep_tasks", &[], "  # [] uses the task's complexity pool"),
-        ("explorer", &[], "  # [] offers no read-only explorers"),
-        (
-            "visual_review",
-            &[],
-            "  # [] uses the task's complexity pool, image-capable crews only",
-        ),
-    ];
-    for (key, pool, note) in keys {
+/// The [`PURPOSE_POOLS`] filtered to the crews this host seeds enabled.
+fn render_purpose_crews(crews: &BTreeMap<String, Crew>) -> Result<String, OrbitError> {
+    let mut rendered = String::from(
+        "# Crew pools by purpose of work, written like the pools above; `crew@effort`\n\
+         # runs a crew at that reasoning effort. An omitted purpose takes its built-in route.\n",
+    );
+    for (key, members) in PURPOSE_POOLS {
+        let mut pool = Vec::new();
+        for member in *members {
+            // A member this host's crews cannot run (an effort its model
+            // refuses) is a template defect, not a host to seed around.
+            resolve_crew(member, crews).map_err(|error| {
+                OrbitError::InvalidInput(format!("workflow.purpose_crews.{key}: {error}"))
+            })?;
+            if crews
+                .get(crew_reference_base(member))
+                .is_some_and(|base| base.enabled)
+            {
+                pool.push(*member);
+            }
+        }
+        if pool.is_empty() && *key != "final_recovery" {
+            continue;
+        }
+        let note = if pool.is_empty() {
+            "  # [] turns final recovery off"
+        } else {
+            ""
+        };
         rendered.push_str(&format!(
             "purpose_crews.{key} = {}{note}\n",
-            toml_array(pool)
+            toml_array(&pool)
         ));
     }
-    rendered
+    Ok(rendered)
 }
 
 fn toml_array(names: &[&str]) -> toml::Value {

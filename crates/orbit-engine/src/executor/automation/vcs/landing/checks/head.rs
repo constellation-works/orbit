@@ -3,18 +3,20 @@
 use std::path::Path;
 
 use orbit_common::{OrbitError, ProviderReadThrottle};
+use orbit_types::workflow::CiRerunRoot;
 use serde_json::Value;
 
 use crate::context::RuntimeHost;
 
 use super::super::super::super::ci::log_signature::error_signature;
+use super::super::super::operations::{CiCommitJobEvidence, CiJobConclusion};
 use super::super::super::pr::RequiredChecks;
 
 use super::annotations::source_annotations;
 use super::base_update::contains;
 use super::jobs::{
-    answers, commit_jobs, excerpt, failed_step, job_label, same_job, transient_evidence,
-    unsuccessful,
+    answers, commit_jobs, excerpt, exclusive_awaited_stop, failed_step, infrastructure_evidence,
+    job_label, same_job, unsuccessful,
 };
 use super::log::job_log;
 use super::recovery::{CheckFailureClass, FailedJob};
@@ -71,7 +73,7 @@ pub(super) fn prerequisite_log<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
     watched_head: &str,
-    job: &Value,
+    job: &CiCommitJobEvidence,
     run_id: u64,
     job_id: u64,
     deadline_ms: Option<u64>,
@@ -85,10 +87,10 @@ pub(super) fn prerequisite_log<H: RuntimeHost + ?Sized>(
             Some(throttle) => CheckReadGap::Deferred(Box::new(DeferredLogRead {
                 reason,
                 head: watched_head.to_string(),
-                repository: job["repository"].as_str().map(ToOwned::to_owned),
+                repository: job.repository.text().map(ToOwned::to_owned),
                 run_id,
                 job_id,
-                run_attempt: job["run_attempt"].as_u64(),
+                run_attempt: job.run_attempt.number(),
                 throttle,
             })),
             None => CheckReadGap::Unavailable(reason),
@@ -115,12 +117,15 @@ impl DeferredLogRead {
 /// any other check no workflow job answers (an external status, a policy
 /// gate) is not. An unreadable job or log proves nothing; a log that shows
 /// the runner or the network failing is not the candidate's. Each stops without a repair.
-/// An untouched-file failure also needs task history proving that this head
-/// repeated the same check and signature after the earlier failed attempt;
-/// a passing base job alone only authorizes that PR rerun. A log read the
+/// Independent job recovery requires repeated-failure evidence for an untouched
+/// file. Auto-fix sets `allow_suspect_repair`: suspicion does not gate its repair
+/// admission; its caller separately preserves the known-red-base hold. A log read the
 /// provider throttled is [`HeadCheckEvidence::ReadDeferred`]; `deadline_ms`,
 /// when set, bounds the log read by the completion's absolute deadline.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "head evidence reads jobs, failed checks and the suspect-repair flag as separate landing inputs"
+)]
 pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
@@ -130,8 +135,9 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
     base_branch: Option<&str>,
     failed: &[(Option<String>, String)],
     required: &RequiredChecks,
-    allow_candidate_sibling: bool,
+    allow_suspect_repair: bool,
     deadline_ms: Option<u64>,
+    dependency_context: Option<(&str, &str)>,
 ) -> HeadCheckEvidence {
     let jobs = match commit_jobs(host, workspace, head) {
         Ok(jobs) => jobs,
@@ -141,9 +147,30 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
             ));
         }
     };
+    // [ORB-23813] Every failed job stopped in a declared dependency-handoff
+    // step: CI could not hand a job its dependency's output. That is no
+    // failure a code repair clears, readable log or not.
+    if let Some((_, roots)) =
+        super::rerun::handoff_step_set(&host.pr_config().ci_handoff_steps, &jobs, failed)
+    {
+        let stopped = roots
+            .iter()
+            .map(|root| format!("'{}' ({})", root.check, root.signature))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return HeadCheckEvidence::Stop(format!(
+            "every failed job on head {head} stopped in a dependency-handoff step \
+             (workflow.ci_infrastructure_retry.handoff_steps): {stopped}; CI infrastructure, \
+             not the candidate, failed"
+        ));
+    }
     let mut details = Vec::new();
     let mut waits = Vec::new();
     let mut annotations = Vec::new();
+    // Cancelled and timed-out jobs are not candidate failures. They stop
+    // repair only when nothing else in the set is a source failure, so a
+    // mixed failure is still classified from its log.
+    let mut conclusion_stops = Vec::new();
     for check in failed {
         let label = match &check.0 {
             Some(workflow) => format!("{workflow} / {}", check.1),
@@ -168,11 +195,17 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
                 }
             }
         };
-        let (Some(run_id), Some(job_id)) = (job["run_id"].as_u64(), job["job_id"].as_u64()) else {
+        let (Some(run_id), Some(job_id)) = (job.run_id.number(), job.job_id.number()) else {
             return HeadCheckEvidence::Stop(format!(
                 "the failed job behind check '{label}' reported no identity"
             ));
         };
+        if let Some(conclusion) = super::jobs::concluded_stopped(job) {
+            conclusion_stops.push(format!(
+                "the job '{label}' concluded {conclusion}: the runner stopped the job, not the candidate"
+            ));
+            continue;
+        }
         let log = match job_log(host, workspace, run_id, job_id, job, deadline_ms) {
             Ok(log) => log,
             Err(error) => {
@@ -184,22 +217,30 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
                     Some(throttle) => HeadCheckEvidence::ReadDeferred(DeferredLogRead {
                         reason,
                         head: head.to_string(),
-                        repository: job["repository"].as_str().map(ToOwned::to_owned),
+                        repository: job.repository.text().map(ToOwned::to_owned),
                         run_id,
                         job_id,
-                        run_attempt: job["run_attempt"].as_u64(),
+                        run_attempt: job.run_attempt.number(),
                         throttle,
                     }),
                     None => HeadCheckEvidence::Inconclusive(reason),
                 };
             }
         };
-        if let Some(evidence) = transient_evidence(&log) {
+        if let Some(evidence) = infrastructure_evidence(host, &log) {
             return HeadCheckEvidence::Stop(format!(
                 "the log of '{}' shows `{evidence}`: the runner or the network failed, not \
                  the candidate",
                 job_label(job)
             ));
+        }
+        if exclusive_awaited_stop(&log).is_some() {
+            conclusion_stops.push(format!(
+                "the log of '{}' shows only that a job it awaited was cancelled or timed out, \
+                 not a candidate failure",
+                job_label(job)
+            ));
+            continue;
         }
         let signature = error_signature(&log, failed_step(job));
         if signature.step_fallback {
@@ -208,36 +249,56 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
                 job_label(job)
             ));
         }
-        match super::suspect::watcher_suspicion(
-            host,
-            workspace,
-            tasks,
-            head,
-            base_branch,
-            job,
-            &log,
-            &signature.text,
-            pr.parse::<u64>().ok(),
-        ) {
-            Ok(Some(reason)) => {
-                waits.push(reason);
-                continue;
+        if !allow_suspect_repair {
+            match super::suspect::watcher_suspicion(
+                host,
+                workspace,
+                tasks,
+                head,
+                base_branch,
+                job,
+                &log,
+                &signature.text,
+                pr.parse::<u64>().ok(),
+            ) {
+                Ok(Some(reason)) => {
+                    waits.push(reason);
+                    continue;
+                }
+                Err(reason) => return HeadCheckEvidence::Stop(reason),
+                Ok(None) => {}
             }
-            Err(reason) => return HeadCheckEvidence::Stop(reason),
-            Ok(None) => {}
         }
+        let dependency = dependency_context.and_then(|(branch, accepted)| {
+            dependency_repair_excerpt(
+                host,
+                workspace,
+                pr,
+                head,
+                branch,
+                base_branch?,
+                accepted,
+                &jobs,
+                job,
+                &log,
+                deadline_ms,
+            )
+        });
         details.push(format!(
             "'{}' failed in step `{}` on head {head} (run {run_id}, job {job_id}) with signature `{}`; log excerpt:\n{}",
             job_label(job),
             failed_step(job),
             signature.text,
-            excerpt(&log)
+            dependency.unwrap_or_else(|| excerpt(&log))
         ));
     }
-    if !waits.is_empty() && (details.is_empty() || !allow_candidate_sibling) {
+    if !waits.is_empty() {
         return HeadCheckEvidence::WaitForBase(waits.join("; "));
     }
     if details.is_empty() {
+        if !conclusion_stops.is_empty() {
+            return HeadCheckEvidence::Stop(conclusion_stops.join("; "));
+        }
         return HeadCheckEvidence::Stop(format!("the rollup names no failed check on head {head}"));
     }
     HeadCheckEvidence::Repair {
@@ -246,9 +307,116 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
     }
 }
 
+/// Authenticate a waiter's record using the same complete-set proof as reruns.
+/// This is a read-only proof: no rerun is reserved or dispatched.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "bind the read to the same PR, job and deadline"
+)]
+fn dependency_repair_excerpt<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &Path,
+    pr: &str,
+    head: &str,
+    branch: &str,
+    base: &str,
+    accepted: &str,
+    jobs: &[CiCommitJobEvidence],
+    waiter: &CiCommitJobEvidence,
+    log: &str,
+    deadline_ms: Option<u64>,
+) -> Option<String> {
+    if !log.contains("orbit-dependency-evidence:") {
+        return None;
+    }
+    let run = waiter.run_id.number()?;
+    let waiter_id = waiter.job_id.number()?;
+    let mut roots = Vec::new();
+    for job in jobs.iter().filter(|job| {
+        job.run_id.number() == Some(run)
+            && job.job_id.number() != Some(waiter_id)
+            && matches!(job.conclusion.value(), Some(CiJobConclusion::Failure))
+    }) {
+        let id = job.job_id.number()?;
+        let text = job_log(host, workspace, run, id, job, deadline_ms).ok()?;
+        let signature = error_signature(&text, failed_step(job));
+        if signature.step_fallback {
+            return None;
+        }
+        roots.push(CiRerunRoot {
+            job_id: id,
+            check: job_label(job),
+            classification: "flaky".into(),
+            signature: signature.text,
+        });
+    }
+    if roots.is_empty() {
+        return None;
+    }
+    let deadline = deadline_ms.or_else(|| {
+        super::super::super::completion_deadline::now_ms()
+            .ok()?
+            .checked_add(15_000)
+    })?;
+    let request = super::rerun::RerunPlanRequest {
+        workspace,
+        pr: pr.to_string(),
+        head,
+        head_branch: branch,
+        base_branch: base,
+        accepted_base: accepted,
+        run_id: run,
+        roots: &roots,
+        deadline_ms: deadline,
+    };
+    let answer = host
+        .run_private_vcs_operation(
+            super::super::super::operations::CI_RERUN_PLAN,
+            request.to_input(),
+        )
+        .ok()?;
+    let plan = &answer["plan"];
+    let records = plan["authentication"]["dependencies"].as_array()?;
+    let record = records
+        .iter()
+        .find(|record| record["job_id"].as_u64() == Some(waiter_id))?;
+    let ids = record["dependency_ids"].as_array()?;
+    if ids.is_empty() {
+        return None;
+    }
+    let logs = plan["authentication"]["logs"].as_array()?;
+    let failed = plan["failed_jobs"].as_array()?;
+    let mut result = String::new();
+    // Share the same 2 KiB budget as a single failed-job excerpt.
+    let per_job = 2048usize.checked_div(ids.len())?;
+    for id in ids {
+        let id = id.as_u64()?;
+        let job = failed.iter().find(|job| job["id"].as_u64() == Some(id))?;
+        let log = logs.iter().find(|log| log["job_id"].as_u64() == Some(id))?["log"].as_str()?;
+        let label = format!(
+            "{} / {} (run {run}, job {id}):\n",
+            waiter.workflow.text()?,
+            job["name"].as_str()?
+        );
+        if label.len() >= per_job {
+            return None;
+        }
+        let mut part = format!("{label}{}\n", excerpt(log));
+        if part.len() > per_job {
+            let mut end = per_job;
+            while !part.is_char_boundary(end) {
+                end -= 1;
+            }
+            part.truncate(end);
+        }
+        result.push_str(&part);
+    }
+    Some(result)
+}
+
 /// The jobs on one commit, or why they could not be read; read once per
 /// landing attempt.
-type CommitJobs = Option<Result<Vec<Value>, String>>;
+type CommitJobs = Option<Result<Vec<CiCommitJobEvidence>, String>>;
 
 /// An inherited failure, and whether the moved base tip passes the same job.
 struct Inheritance {
@@ -268,7 +436,7 @@ struct Inheritance {
 pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
-    job: &Value,
+    job: &CiCommitJobEvidence,
     log: &str,
     head: &str,
     base: &str,
@@ -279,7 +447,7 @@ pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
     deadline_ms: Option<u64>,
 ) -> Result<(CheckFailureClass, String, bool, String), Box<DeferredLogRead>> {
     let signature = error_signature(log, failed_step(job));
-    if let Some(evidence) = transient_evidence(log) {
+    if let Some(evidence) = infrastructure_evidence(host, log) {
         return Ok((
             CheckFailureClass::Transient,
             format!("the log shows `{evidence}`"),
@@ -353,9 +521,8 @@ pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
 /// fails the same way, and either `tip` has not moved past `base` or the
 /// moved tip cannot yet prove whether the base fixed it.
 ///
-/// A base-suspect failure (its log cites only files the candidate did not
-/// change, and no base run newer than it passes the same job) holds too,
-/// and is recorded once per watched task.
+/// Untouched-file suspicion and passing-base classifications do not hold
+/// auto-fix: only established inheritance can suppress its repair.
 ///
 /// `Ok(Some(reason))` is that hold: auto-fix waits and spends no repair. A
 /// moved tip holds while a same job on it has not concluded, while one of
@@ -371,7 +538,10 @@ pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
 /// this one. `Err` is evidence this read could not establish: a head job
 /// whose identity or log could not be read, or a classification left
 /// inconclusive, such as an unreadable base job or log.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the red-base decision compares head, base and tip commits against the failed jobs in one read"
+)]
 pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
@@ -379,9 +549,7 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
     base: &str,
     tip: &str,
     base_branch: &str,
-    tasks: &[String],
     failed: &[(Option<String>, String)],
-    pr_number: Option<u64>,
     deadline_ms: Option<u64>,
 ) -> Result<Option<String>, CheckReadGap> {
     let head_jobs = commit_jobs(host, workspace, head).map_err(|error| error.to_string())?;
@@ -390,7 +558,6 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
     let mut tip_jobs = None;
     let mut reasons = Vec::new();
     let mut inconclusive = None;
-    let mut suspect = false;
     let mut candidate_owned = false;
     for check in failed {
         let Some(job) = head_jobs
@@ -399,12 +566,12 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
         else {
             return Ok(None);
         };
-        let (Some(run_id), Some(job_id)) = (job["run_id"].as_u64(), job["job_id"].as_u64()) else {
+        let (Some(run_id), Some(job_id)) = (job.run_id.number(), job.job_id.number()) else {
             return Err("a failed job reported no identity".to_string().into());
         };
         let label = job_label(job);
         let log = prerequisite_log(host, workspace, head, job, run_id, job_id, deadline_ms)?;
-        let (class, why, _, signature) = classify_logged_job(
+        let (class, why, _, _) = classify_logged_job(
             host,
             workspace,
             job,
@@ -420,38 +587,7 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
         .map_err(CheckReadGap::Deferred)?;
         match class {
             CheckFailureClass::Inherited => reasons.push(why),
-            CheckFailureClass::BaseSuspect => {
-                let evidence = serde_json::json!({
-                    "base": tip, "head": head, "check": label, "signature": signature,
-                    "run_id":run_id, "job_id":job_id, "run_attempt":job["run_attempt"], "pr_number":pr_number, "event":job["event"],
-                    "started_at":job["started_at"], "completed_at":job["completed_at"], "reason": why,
-                });
-                super::suspect::record_base_suspect(host, tasks, &evidence, None)
-                    .map_err(|error| error.to_string())?;
-                suspect = true;
-                reasons.push(why);
-            }
-            CheckFailureClass::Flaky
-                if super::suspect::has_matching_candidate_rerun(
-                    host, tasks, head, job, &label, &signature, pr_number,
-                ) =>
-            {
-                candidate_owned = true;
-            }
-            CheckFailureClass::Flaky => {
-                let why = format!(
-                    "base-suspect: a successful same-check run on the accepted base ancestry is not enough by itself; waiting for the unchanged pull-request head to fail the same signature again ({signature})"
-                );
-                let evidence = serde_json::json!({
-                    "base": tip, "head": head, "check": label, "signature": signature,
-                    "run_id":run_id, "job_id":job_id, "run_attempt":job["run_attempt"], "pr_number":pr_number, "event":job["event"],
-                    "started_at":job["started_at"], "completed_at":job["completed_at"], "reason": why,
-                });
-                super::suspect::record_base_suspect(host, tasks, &evidence, None)
-                    .map_err(|error| error.to_string())?;
-                suspect = true;
-                reasons.push(why);
-            }
+            CheckFailureClass::BaseSuspect | CheckFailureClass::Flaky => return Ok(None),
             // Only an independently source-attributed candidate overrides
             // the hold. A diagnostic-only aggregate must not cancel its
             // leaf's suspicion while dependency evidence is unproven.
@@ -468,9 +604,6 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
     }
     if candidate_owned {
         return Ok(None);
-    }
-    if suspect {
-        return Ok(Some(reasons.join("; ")));
     }
     if let Some(gap) = inconclusive {
         return Err(gap.into());
@@ -505,7 +638,7 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
 /// checks, or `None` when each failed check's same job on it ran to success
 /// or failure.
 fn unproven_tip(
-    head_jobs: &[Value],
+    head_jobs: &[CiCommitJobEvidence],
     failed: &[(Option<String>, String)],
     tip_jobs: &CommitJobs,
 ) -> Option<&'static str> {
@@ -526,8 +659,8 @@ fn unproven_tip(
         }
         if !same.iter().any(|candidate| {
             matches!(
-                candidate["conclusion"].as_str(),
-                Some("success" | "failure")
+                candidate.conclusion.value(),
+                Some(CiJobConclusion::Success | CiJobConclusion::Failure)
             )
         }) {
             unproven = Some("whose same job did not run to a result there");
@@ -538,10 +671,10 @@ fn unproven_tip(
 
 /// A job GitHub has given a conclusion. An empty or absent conclusion is
 /// still running, queued, or waiting.
-fn job_concluded(job: &Value) -> bool {
-    job["conclusion"]
-        .as_str()
-        .is_some_and(|conclusion| !conclusion.is_empty())
+fn job_concluded(job: &CiCommitJobEvidence) -> bool {
+    job.conclusion
+        .value()
+        .is_some_and(CiJobConclusion::concluded)
 }
 
 /// Whether the failure of `job`, with genuine `signature`, is the base's:
@@ -552,7 +685,7 @@ fn job_concluded(job: &Value) -> bool {
 fn inherited<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
-    job: &Value,
+    job: &CiCommitJobEvidence,
     log: &str,
     signature: &str,
     head: &str,
@@ -570,8 +703,7 @@ fn inherited<H: RuntimeHost + ?Sized>(
         .iter()
         .filter(|candidate| same_job(candidate, job) && unsuccessful(candidate))
     {
-        let (Some(run_id), Some(job_id)) =
-            (candidate["run_id"].as_u64(), candidate["job_id"].as_u64())
+        let (Some(run_id), Some(job_id)) = (candidate.run_id.number(), candidate.job_id.number())
         else {
             return Err(format!("a failed job on base {base} reported no identity").into());
         };
@@ -617,7 +749,7 @@ fn inherited<H: RuntimeHost + ?Sized>(
     // failure remains inherited below.
     let untouched = super::suspect::is_untouched_failure(workspace, head, base, log)?;
     if tip_jobs.iter().any(|candidate| {
-        same_job(candidate, job) && candidate["conclusion"].as_str() == Some("success")
+        same_job(candidate, job) && candidate.conclusion.value() == Some(&CiJobConclusion::Success)
     }) {
         if untouched {
             return Ok(None);
@@ -638,7 +770,7 @@ fn inherited<H: RuntimeHost + ?Sized>(
                 continue;
             }
             let (Some(run_id), Some(job_id)) =
-                (candidate["run_id"].as_u64(), candidate["job_id"].as_u64())
+                (candidate.run_id.number(), candidate.job_id.number())
             else {
                 continue;
             };
@@ -685,7 +817,7 @@ pub(super) fn onto_passing_tip(jobs: &[FailedJob]) -> bool {
 fn same_job_passes<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
-    job: &Value,
+    job: &CiCommitJobEvidence,
     tip: &str,
     tip_jobs: &mut CommitJobs,
 ) -> bool {
@@ -694,7 +826,8 @@ fn same_job_passes<H: RuntimeHost + ?Sized>(
     });
     read.as_ref().is_ok_and(|jobs| {
         jobs.iter().any(|candidate| {
-            same_job(candidate, job) && candidate["conclusion"].as_str() == Some("success")
+            same_job(candidate, job)
+                && candidate.conclusion.value() == Some(&CiJobConclusion::Success)
         })
     })
 }

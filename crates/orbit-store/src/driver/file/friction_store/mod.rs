@@ -5,8 +5,9 @@
 //! layout itself: the reader the one-time import consumes and the tag taxonomy
 //! (a small configuration file that did not move).
 //!
-//! Nothing in this module is on a live read or write path. Legacy trees are
-//! read-only rollback evidence for one release; no code here deletes them.
+//! The tag taxonomy is still read and written by live friction workflows.
+//! Legacy record trees are read-only rollback evidence for one release; no
+//! code here deletes them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -53,8 +54,8 @@ fn merge_missing_default_tags(path: &Path) -> Result<(), OrbitError> {
     let mut value: serde_yaml::Value = parse_yaml_with(&raw, path, |_, error| {
         OrbitError::InvalidInput(format!("parse {}: {error}", path.display()))
     })?;
-    let mut tags = BTreeSet::new();
-    collect_tags_from_yaml(&value, &mut tags);
+    let mut tags = BTreeMap::new();
+    collect_tag_descriptions_from_yaml(&value, &mut tags);
     if tags.is_empty() {
         return Err(OrbitError::InvalidInput(format!(
             "{} must define at least one friction tag",
@@ -63,7 +64,7 @@ fn merge_missing_default_tags(path: &Path) -> Result<(), OrbitError> {
     }
     let mut missing = Vec::new();
     for &(tag, description) in DEFAULT_FRICTION_TAGS {
-        if !tags.contains(tag) {
+        if !tags.contains_key(tag) {
             missing.push((tag, description));
         }
     }
@@ -154,30 +155,6 @@ pub(crate) fn load_tag_taxonomy_with_descriptions(
         )));
     }
     Ok(tags)
-}
-
-fn collect_tags_from_yaml(value: &serde_yaml::Value, out: &mut BTreeSet<String>) {
-    match value {
-        serde_yaml::Value::Mapping(map) => {
-            if let Some(tags_value) = map.get(serde_yaml::Value::String("tags".to_string())) {
-                collect_tags_from_yaml(tags_value, out);
-                return;
-            }
-            for key in map.keys() {
-                if let Some(tag) = key.as_str().and_then(normalize_tag) {
-                    out.insert(tag);
-                }
-            }
-        }
-        serde_yaml::Value::Sequence(items) => {
-            for item in items {
-                if let Some(tag) = item.as_str().and_then(normalize_tag) {
-                    out.insert(tag);
-                }
-            }
-        }
-        _ => {}
-    }
 }
 
 fn collect_tag_descriptions_from_yaml(

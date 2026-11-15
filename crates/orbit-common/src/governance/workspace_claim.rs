@@ -3,9 +3,12 @@
 //! Names, descriptions, parameter order and registration retain the shipped
 //! tool contract. These operations have no derived CLI or dashboard surface.
 
+use orbit_types::tool::McpIdRouteDeclaration;
+
 use crate::governance::operation::{
-    CliHelp, Description, Effect, NounSpec, OperationSpec, ParamSpec, ParamType, Redaction,
-    ToolOnlyRegistration, UnknownFields, operation_registry,
+    CliHelp, Description, Effect, NounSpec, OperationSpec, ParamSpec, ParamType,
+    RETIRED_AGENT_FIELD, Redaction, ToolOnlyRegistration, UnknownFields, mcp_only,
+    operation_registry,
 };
 
 operation_registry! {
@@ -58,35 +61,22 @@ const ACQUIRE: OperationSpec<WorkspaceClaimVerb> = OperationSpec {
             )),
             cli: None,
         },
-        param(
+        mcp_only(
             "machine_id",
             ParamType::String,
-            false,
             "Optional machine identity, recorded for diagnostics only; the claim is keyed on the returned token.",
         ),
-        param(
+        mcp_only(
             "session_id",
             ParamType::String,
-            false,
             "Optional session identity, recorded for diagnostics only; never load-bearing, so a reconnecting client does not orphan the workspace.",
-        ),
-        param(
-            "agent",
-            ParamType::String,
-            false,
-            "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`).",
-        ),
-        param(
-            "model",
-            ParamType::String,
-            false,
-            "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized.",
         ),
     ]],
     at_least_one_of: &[],
-    retired_fields: &[],
+    retired_fields: &[RETIRED_AGENT_FIELD],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const RELEASE: OperationSpec<WorkspaceClaimVerb> = OperationSpec {
@@ -98,35 +88,22 @@ const RELEASE: OperationSpec<WorkspaceClaimVerb> = OperationSpec {
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[
-        param(
+        mcp_only(
             "claim_token",
             ParamType::String,
-            false,
             "The holder's claim token. Required unless `force` is set.",
         ),
-        param(
+        mcp_only(
             "force",
             ParamType::Boolean,
-            false,
             "Release the claim without its token, for a holder that has gone away. Audited with who forced it and whom they displaced.",
-        ),
-        param(
-            "agent",
-            ParamType::String,
-            false,
-            "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`).",
-        ),
-        param(
-            "model",
-            ParamType::String,
-            false,
-            "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized.",
         ),
     ]],
     at_least_one_of: &[],
-    retired_fields: &[],
+    retired_fields: &[RETIRED_AGENT_FIELD],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 // Preserve the old tool's conservative mutating execution kind for show.
@@ -143,24 +120,5 @@ const SHOW: OperationSpec<WorkspaceClaimVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
-
-/// A structural tool parameter, with no CLI binding or input rewriting.
-const fn param(
-    name: &'static str,
-    param_type: ParamType,
-    required: bool,
-    description: &'static str,
-) -> ParamSpec {
-    ParamSpec {
-        name,
-        aliases: &[],
-        param_type,
-        required,
-        preserve_empty: false,
-        default: None,
-        redact: Redaction::None,
-        mcp_description: Some(Description::Static(description)),
-        cli: None,
-    }
-}

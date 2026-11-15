@@ -8,8 +8,7 @@
 //! entry point, at the governed-operation chokepoint in
 //! `orbit_common::governance::authorization`) and the workspace claim (enforced in
 //! `OrbitRuntime::execute_remote_command`, the same chokepoint `orbit.workflow.ship`
-//! uses). `working_directory` is confined by the same helper `orbit.agent.invoke`
-//! uses for `cwd`: it must be absolute and inside the selected workspace's
+//! uses). `working_directory` is confined to the selected workspace for `cwd`: it must be absolute and inside the selected workspace's
 //! checkout or a linked worktree under `.orbit/state/worktrees/`.
 //!
 //! The self-dispatch guard below mirrors `orbit.workflow.ship`/`run.resume`: a
@@ -26,7 +25,7 @@ pub struct OrbitCommandExecTool;
 
 impl Tool for OrbitCommandExecTool {
     fn schema(&self) -> ToolSchema {
-        let mut parameters = vec![
+        let parameters = vec![
             ToolParam {
                 name: "argv".to_string(),
                 description: "The command as a JSON array of argv strings, program first (e.g. \
@@ -38,7 +37,7 @@ impl Tool for OrbitCommandExecTool {
             },
             ToolParam {
                 name: "working_directory".to_string(),
-                description: "Absolute working directory the command runs in. Must exist and \
+                description: "The command's absolute working directory. Must exist and \
                      be inside this workspace's checkout or a linked worktree under \
                      `.orbit/state/worktrees/`; it is never inferred from the caller."
                     .to_string(),
@@ -63,13 +62,14 @@ impl Tool for OrbitCommandExecTool {
                 required: false,
             },
         ];
-        parameters.extend(super::model_identity_params());
         ToolSchema {
             name: "orbit.command.exec".to_string(),
             description:
                 "Execute a command as an explicit argv array in an explicit working directory \
                  and return its stdout, stderr, and exit status, within a deadline. Requires operator capability \
-                 and the workspace claim; withheld from managed runs."
+                 and the workspace claim; withheld from managed runs. The child receives an \
+                 allowlisted environment: baseline process context, git author and committer \
+                 identity, and Orbit's execution envelope."
                     .to_string(),
             parameters,
             builtin: true,
@@ -77,11 +77,7 @@ impl Tool for OrbitCommandExecTool {
     }
 
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
-        if ctx
-            .orbit_host
-            .as_ref()
-            .is_some_and(|host| host.task_scope().run_id.is_some())
-        {
+        if ctx.is_managed_run() {
             return Err(OrbitError::CapabilityDenied(
                 "managed runs cannot execute remote commands; a leaf agent invoking the CLI \
                  from inside a run would bypass the self-dispatch guard"

@@ -12,6 +12,7 @@ mod census;
 mod claim;
 mod handoff;
 mod journal;
+mod leaf_evidence;
 mod settlement;
 
 pub use admission::*;
@@ -20,4 +21,5 @@ pub use census::*;
 pub use claim::*;
 pub use handoff::*;
 pub use journal::*;
+pub use leaf_evidence::*;
 pub use settlement::*;

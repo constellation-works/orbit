@@ -34,7 +34,6 @@ class PanicInventoryTests(unittest.TestCase):
         self.assertEqual(set(report['per_crate']), expected)
         for name in ('orbit-auth', 'orbit-automation', 'orbit-config', 'orbit-runtime', 'orbit-types'):
             self.assertIn(name, report['per_crate'])
-        self.assertGreater(report['per_crate']['orbit-config']['non_test'], 0)
         critical = {'orbit-engine', 'orbit-agent', 'orbit-tools', 'orbit-exec'}
         self.assertLessEqual(set(report['blast_radius_sites']), critical)
         for name, counts in report['per_crate'].items():

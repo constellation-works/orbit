@@ -7,13 +7,20 @@
 //! cutoffs such as `24h` still hit), audited plugin panel reads,
 //! `/api/diagnostics/errors` (keyed by its time range and row limit), and
 //! `/api/diagnostics/friction` (keyed by month and row limit), and
-//! `/api/cost` (keyed by the canonical window), and the codebase
-//! analytics scan behind `/api/codebase/analytics` and the agent scorecard
+//! `/api/cost` (keyed by the canonical window), the Analytics Metrics trend
+//! endpoints under `/api/diagnostics/` (`implement_one`, `completions`,
+//! `defects`, `task_tokens`, `turns_to_edit`, `diff_stats` and
+//! `delivery_friction`), and the codebase analytics scan behind
+//! `/api/codebase/analytics` and the agent scorecard
 //! scan behind `/api/agents/*` and the task riskiness model behind the task list
 //! and detail, which cache typed facts rather than a response body. The agent
 //! and codebase analytics scans and the riskiness model are served stale while
-//! one background refresh replaces them. `/api/routines` uses a host namespace keyed by
-//! definition, config and database stamps instead of a selected runtime. Every
+//! one background refresh replaces them. `/api/routines` uses a host namespace keyed
+//! by definition and config stamps plus a token over the routine fire, cursor,
+//! pause and automation rows instead of a selected runtime; a hit near expiry
+//! starts one background recompute. It also carries a churn stamp (job runs,
+//! task store) that never invalidates: a fresh entry whose stamp moved is still
+//! served while one background recompute replaces it. Every
 //! payload served from a memo reports its age in an `Age` header.
 
 use std::collections::HashMap;
@@ -32,7 +39,7 @@ use serde_json::Value;
 /// three poll intervals keep the second and third poll on the entry the first
 /// one computed. A miss scans up to 50k audit rows plus stderr blobs, so a new
 /// failure can stay hidden for up to this long; the `Age` header shows how old
-/// the served payload is.
+/// the served payload is. The Analytics Metrics trend endpoints share this bound.
 pub(crate) const DASHBOARD_POLL_MEMO_TTL: Duration = Duration::from_secs(90);
 
 /// Freshness bound for the codebase analytics scan. A scan rereads the
@@ -107,6 +114,9 @@ struct Cached<V> {
     ttl: Duration,
     /// How long past `ttl` the entry may still be served stale.
     stale_for: Duration,
+    /// Hash of the churn input the body was computed under, for host entries
+    /// that serve through its changes.
+    churn: Option<u64>,
     body: Arc<V>,
 }
 
@@ -135,16 +145,68 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
     }
 
     /// Host-wide projection, independent of the workspace selected by a tab.
-    pub(crate) async fn get_or_compute_for_host<F>(
+    /// Returns a payload computed for the same key within `ttl`, or runs
+    /// `compute` once while concurrent callers wait. A still-fresh hit aged
+    /// at least `refresh_after` also starts one background recompute; a
+    /// client polling steadily whose refresh completes before `ttl` ends
+    /// then meets a replacement instead of waiting out the compute.
+    /// Refresh-ahead is best-effort: a request past `ttl` runs `compute`
+    /// synchronously and waits, as does one whose refresh failed or had not
+    /// landed before the entry expired. The hit is still served within
+    /// `ttl`: the freshness bound does not move, and a failed refresh keeps
+    /// the entry until it expires.
+    ///
+    /// `churn` stamps inputs that change too often to key on: a fresh entry
+    /// computed under a different `churn` is served as it stands while one
+    /// background recompute replaces it, however young it is, so a request
+    /// never waits for a compute because that input moved. The entry is served
+    /// no longer than `ttl`, the same bound as any hit.
+    pub(crate) async fn get_or_compute_for_host_ahead<F>(
         &self,
         key: K,
+        churn: &impl Hash,
         ttl: Duration,
+        refresh_after: Duration,
         compute: F,
     ) -> Result<Served<V>, OrbitError>
     where
         F: FnOnce() -> Result<V, OrbitError> + Send + 'static,
     {
-        self.compute(None, key, ttl, compute).await
+        let churn = Some(churn_stamp(churn));
+        let slot = self.slot((0, key));
+        if let Some((hit, stamped)) = slot.hit_stamped() {
+            tracing::debug!(memo = self.label, "cache hit");
+            let churned = stamped != churn;
+            if (churned || hit.age >= refresh_after)
+                && !slot.refreshing.swap(true, Ordering::AcqRel)
+            {
+                tracing::debug!(
+                    memo = self.label,
+                    churned,
+                    "hit needs a replacement; refreshing in background"
+                );
+                let refresh = Arc::clone(&slot);
+                let label = self.label;
+                tokio::spawn(async move {
+                    let _gate = refresh.gate.lock().await;
+                    match tokio::task::spawn_blocking(compute).await {
+                        Ok(Ok(value)) => {
+                            refresh.store(None, ttl, Duration::ZERO, churn, Arc::new(value));
+                        }
+                        Ok(Err(error)) => {
+                            tracing::warn!(memo = label, %error, "background refresh failed");
+                        }
+                        Err(join_err) => {
+                            tracing::warn!(memo = label, %join_err, "background refresh panicked");
+                        }
+                    }
+                    refresh.refreshing.store(false, Ordering::Release);
+                });
+            }
+            return Ok(hit);
+        }
+        self.compute_in(&slot, None, ttl, Duration::ZERO, churn, compute)
+            .await
     }
 
     /// Like [`Self::get_or_compute`], but an entry past `ttl` and within
@@ -177,7 +239,7 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
                     let _gate = refresh.gate.lock().await;
                     match tokio::task::spawn_blocking(compute).await {
                         Ok(Ok(value)) => {
-                            refresh.store(Some(owner), ttl, stale_for, Arc::new(value));
+                            refresh.store(Some(owner), ttl, stale_for, None, Arc::new(value));
                         }
                         Ok(Err(error)) => {
                             tracing::warn!(memo = label, %error, "background refresh failed");
@@ -191,7 +253,7 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
             }
             return Ok(stale);
         }
-        self.compute_in(&slot, Some(runtime), ttl, stale_for, compute)
+        self.compute_in(&slot, Some(runtime), ttl, stale_for, None, compute)
             .await
     }
 
@@ -213,7 +275,7 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
             tracing::debug!(memo = self.label, "cache hit");
             return Ok(hit);
         }
-        self.compute_in(&slot, runtime, ttl, Duration::ZERO, compute)
+        self.compute_in(&slot, runtime, ttl, Duration::ZERO, None, compute)
             .await
     }
 
@@ -224,6 +286,7 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
         runtime: Option<&Arc<OrbitRuntime>>,
         ttl: Duration,
         stale_for: Duration,
+        churn: Option<u64>,
         compute: F,
     ) -> Result<Served<V>, OrbitError>
     where
@@ -250,6 +313,7 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
             runtime.map(Arc::downgrade),
             ttl,
             stale_for,
+            churn,
             Arc::clone(&computed),
         );
         Ok(Served {
@@ -276,6 +340,21 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
 impl<V> Slot<V> {
     fn hit(&self, runtime: Option<&Arc<OrbitRuntime>>) -> Option<Served<V>> {
         self.served(runtime, Cached::is_fresh)
+    }
+
+    /// A fresh host entry and the churn stamp it was computed under.
+    fn hit_stamped(&self) -> Option<(Served<V>, Option<u64>)> {
+        let guard = self.value.lock().unwrap_or_else(PoisonError::into_inner);
+        let cached = guard
+            .as_ref()
+            .filter(|cached| cached.is_fresh() && cached.runtime.is_none())?;
+        Some((
+            Served {
+                body: Arc::clone(&cached.body),
+                age: cached.computed_at.elapsed(),
+            },
+            cached.churn,
+        ))
     }
 
     /// An entry past its freshness bound that may still be served stale.
@@ -308,6 +387,7 @@ impl<V> Slot<V> {
         runtime: Option<Weak<OrbitRuntime>>,
         ttl: Duration,
         stale_for: Duration,
+        churn: Option<u64>,
         body: Arc<V>,
     ) {
         *self.value.lock().unwrap_or_else(PoisonError::into_inner) = Some(Cached {
@@ -315,6 +395,7 @@ impl<V> Slot<V> {
             computed_at: Instant::now(),
             ttl,
             stale_for,
+            churn,
             body,
         });
     }
@@ -333,6 +414,13 @@ impl<V> Slot<V> {
                     .is_none_or(|runtime| runtime.strong_count() > 0)
         })
     }
+}
+
+fn churn_stamp(churn: &impl Hash) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    churn.hash(&mut hasher);
+    hasher.finish()
 }
 
 impl<V> Cached<V> {

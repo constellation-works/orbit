@@ -19,8 +19,10 @@ pub struct ToolInfo {
     pub active: bool,
     pub builtin: bool,
     pub parameters: Vec<orbit_types::tool::ToolParam>,
-    /// The `orbit mcp serve` toolset that advertises this tool; `None` for a
-    /// tool MCP never advertises.
+    /// Full declared input schema; flat parameter metadata cannot express conditionals.
+    pub input_schema: Option<serde_json::Value>,
+    /// The `orbit mcp serve` toolset this tool belongs to (`local` for a
+    /// tool MCP never advertises); `None` only for an unclassified builtin.
     pub mcp_toolset: Option<orbit_types::tool::McpToolset>,
 }
 
@@ -81,6 +83,7 @@ impl OrbitRuntime {
                 let enabled = stored.is_none_or(|s| s.enabled);
                 let active = self.tool_registry().is_active(&schema.name);
                 ToolInfo {
+                    input_schema: self.tool_registry().get_input_schema(&schema.name),
                     mcp_toolset: self.tool_registry().mcp_toolset(&schema.name),
                     name: schema.name.clone(),
                     description: schema.description.clone(),
@@ -104,6 +107,7 @@ impl OrbitRuntime {
     }
 
     pub fn show_tool(&self, name: &str) -> Result<ToolInfo, OrbitError> {
+        self.tool_registry().refuse_family_operation_name(name)?;
         let Some(schema) = self.tool_registry().get_schema(name) else {
             // Disabled external tools are deliberately absent from the executable
             // registry. Their persisted catalog entry remains inspectable, using
@@ -123,6 +127,7 @@ impl OrbitRuntime {
         let active = self.tool_registry().is_active(&schema.name);
 
         Ok(ToolInfo {
+            input_schema: self.tool_registry().get_input_schema(&schema.name),
             mcp_toolset: self.tool_registry().mcp_toolset(&schema.name),
             name: schema.name,
             description: schema.description,
@@ -310,6 +315,7 @@ impl OrbitRuntime {
     }
 
     fn set_tool_enabled_state(&self, name: &str, enabled: bool) -> Result<(), OrbitError> {
+        self.tool_registry().refuse_family_operation_name(name)?;
         let existing = self.stores().tools().get_tool(name)?;
         let registered = self.tool_registry().has(name);
         let disabled_external = existing
@@ -399,6 +405,9 @@ fn agent_alternative(name: &str) -> Option<&'static str> {
         "orbit.friction.list" => {
             Some("Agents list friction with orbit.search (kind \"friction\", no query)")
         }
+        "orbit.friction.show" => Some(
+            "Agents read one friction record with orbit.search (kind \"friction\", query set to the friction ID)",
+        ),
         _ => None,
     }
 }
@@ -419,6 +428,8 @@ fn stored_external_tool_info(stored: &StoredTool) -> ToolInfo {
         active: true,
         builtin: false,
         parameters: schema.parameters,
-        mcp_toolset: None,
+        input_schema: None,
+        // A catalogued external tool is never advertised over MCP.
+        mcp_toolset: Some(orbit_types::tool::McpToolset::Local),
     }
 }

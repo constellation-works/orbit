@@ -38,7 +38,7 @@ fn pull_request_ids(pair: &Pair) -> Vec<String> {
 /// logical workspace, as `orbit run auto --pull` opens it.
 fn bound_follower(pair: &Pair) -> (OrbitRuntime, String) {
     let logical = "ws_replica".to_string();
-    let binding = orbit_core::WorkspaceRuntimeBinding {
+    let binding = orbit_core::runtime::WorkspaceRuntimeBinding {
         logical_workspace_id: logical.clone(),
         task_partition_id: pair.follower.workspace_id().unwrap(),
         owner_machine_id: None,
@@ -430,7 +430,13 @@ fn a_retried_or_resumed_single_pass_carries_its_claim_and_requests_nothing_new()
         .iter()
         .filter(|task| pair.owner_status(task) == "backlog")
         .count();
-    assert_eq!(backlog, 3, "the unlaunched claim returns to backlog");
+    assert_eq!(
+        backlog, 2,
+        "the launch prerequisite holds only the claimed task"
+    );
+    let claims = pair.owner_claims();
+    let task = claims[0]["claim"]["task_id"].as_str().unwrap();
+    assert_eq!(pair.owner_status(task), "blocked");
 }
 
 /// An old zero-window checkpoint has no `pull_single_pass` field. The public
@@ -563,7 +569,6 @@ fn a_legacy_zero_window_checkpoint_resumed_through_the_job_api_cannot_claim() {
         )
         .unwrap();
     let replayed = replay.run_id;
-    assert_eq!(replay.retry_source_run_id.as_deref(), Some(source.as_str()));
     assert_eq!(replay.retry_source_run_id.as_deref(), Some(source.as_str()));
     let replayed_pass = follower
         .run_deterministic(

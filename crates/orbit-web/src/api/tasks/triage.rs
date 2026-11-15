@@ -1,5 +1,6 @@
 //! `POST /tasks/:id/triage`: the details panel's "Triage" action.
 
+use crate::api::helpers;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
@@ -8,7 +9,7 @@ use orbit_core::application::job::EscalationTriageSubmitError;
 use serde_json::json;
 
 use crate::api::routines::{authorization_denied, authorized_caller};
-use crate::api::{bad_request, map_runtime_error, server_error, validate_id};
+use crate::api::{bad_request, map_runtime_error, validate_id};
 use crate::state::{DashboardState, Ws};
 
 /// Submit `escalation_triage_pipeline` in explicit mode for this one task,
@@ -37,7 +38,7 @@ pub(in crate::api) async fn triage_task_action(
         Err(message) => return bad_request(message),
     };
     let task_id = id.clone();
-    let submitted = tokio::task::spawn_blocking(move || {
+    let submitted = helpers::blocking_join("task triage submission", move || {
         runtime.submit_explicit_escalation_triage(
             &id,
             Some("dashboard"),
@@ -64,8 +65,6 @@ pub(in crate::api) async fn triage_task_action(
         )
             .into_response(),
         Ok(Err(EscalationTriageSubmitError::Runtime(error))) => map_runtime_error(error),
-        Err(join_err) => server_error(orbit_core::OrbitError::Execution(format!(
-            "task triage submission panicked: {join_err}"
-        ))),
+        Err(response) => *response,
     }
 }

@@ -1,37 +1,56 @@
 // Orbit dashboard Analytics › Forecast: how long the dispatchable backlog
 // takes to drain and what it costs, as p50 and p90 resampled from this
-// workspace's delivery history, beside the recent arrival rate the forecast
-// assumes away, and how earlier stored forecasts scored against what their
-// tasks actually did. Read from /api/diagnostics/backlog_forecast. The Tasks
-// drain card reuses this default read (30 days, no arrivals) as a compact summary.
-// Pure vanilla JS, split into ES modules with no build step.
+// workspace's delivery history. Read from /api/diagnostics/backlog_forecast.
+// The Tasks drain card reuses this default read (30 days, no arrivals) as a
+// compact summary. Pure vanilla JS, split into ES modules with no build step:
+// this file owns fetching, the tabs and the Forecast tab; forecast-accuracy.js
+// the Accuracy tab, forecast-gaps.js the Data gaps tab and forecast-summary.js
+// the formatting and drain-card summary.
+//
+// The view switches between this Backlog forecast and the Resource forecast
+// (resource-forecast.js). Each reads only when it is first shown and on its
+// own refresh, so switching never refetches the other.
 //
 // The forecast is per workspace; the aggregate view shows the usual
-// placeholder. The history and arrivals toggles refetch: only the default
-// view (30 days reaching back to at least the newest 50 completions, no
-// arrivals, the live drain ceiling) is the one stored and scored, and is read
-// from the newest stored snapshot when one is fresh; Refresh recomputes it
-// live and keeps that result until the workspace or forecast options change.
-// History is
-// counted in tasks, `Last 200` or `Last 500`, or in days; a month without
-// deliveries leaves the default and the counted views with history.
+// placeholder. The history select and the With new arrivals scenario refetch:
+// only the default view (30 days reaching back to at least the newest 50
+// completions, no arrivals, the live drain ceiling) is the one stored and
+// scored, and is read from the newest stored snapshot when one is fresh;
+// Refresh recomputes it live and keeps that result until the workspace or
+// forecast options change. The With N proposed scenario reads `if_approved`
+// from the same response. History is counted in tasks, `Last 200` or
+// `Last 500`, or in days; a month without deliveries leaves the default and
+// the counted views with history.
 
 import {
-  el as makeEl, syncNodes, fetchJson, requestPanel, panelCanRender, getWorkspaceRevision,
-  onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, infoHint,
-  scopedHashHref, bindTaskLink, relativeTime,
+  syncNodes, fetchJson, requestPanel, panelCanRender, getWorkspaceRevision,
+  onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDate, formatDateTime,
+  bindTaskLink, relativeTime, statusPill,
 } from './common.js';
+import {
+  el, forecastView as view, forecastCard, forecastTable, forecastMoreSection, pinnedInfoHint,
+  COMPLEXITY_LABELS, scheduleShowsReview,
+} from './forecast-shared.js';
+import {
+  UNREPORTED_FORECAST_REASON, forecastUnavailableInfo, forecastBaselineFigures, formatForecastHours,
+  formatForecastQuantileRange, formatForecastTokens, formatForecastUsd, fmtParallelism, fmtRank, fmtRate,
+  fmtShare, forecastCount, hasHorizonCensoringEvidence, num, quantilePair, recordedPoolsContainGaps,
+  regressionGapBecause, regressionHistoryIsAbsent, forecastDrainScope,
+} from './forecast-summary.js';
+import { dataGapsPanelNodes, openCoverageCount, otherChecksClearText } from './forecast-gaps.js';
+import { accuracyPanelNodes } from './forecast-accuracy.js';
+import * as forecastSummary from './forecast-summary.js';
+import {
+  fetchAndRenderResourceForecast, onResourceForecastTabPick, placeholdResourceForecastAggregate,
+  resourceForecastLoaded, resourceForecastRoute, setResourceForecastTab,
+} from './resource-forecast.js';
+
+export {
+  backlogForecastFailureSummary, backlogForecastSummary, drainBacklogForecastLink, forecastBaselineFigures,
+  forecastUnavailableInfo, formatForecastHours, formatForecastQuantileRange, formatForecastTokens, formatForecastUsd,
+} from './forecast-summary.js';
 
 const $ = (id) => document.getElementById(id);
-
-// `el` from common.js, also applying the table and focus attributes it leaves out.
-function el(tag, opts = {}, children = []) {
-  const node = makeEl(tag, opts, children);
-  for (const name of ["scope", "tabindex", "colspan"]) {
-    if (opts[name] != null) node.setAttribute(name, String(opts[name]));
-  }
-  return node;
-}
 
 const BODY = "forecast-body";
 const COUNT = "forecast-count";
@@ -44,28 +63,12 @@ const HISTORIES = [
   ["tasks:500", "Last 500", "The newest 500 completed tasks, whatever their age"],
   ["days:90", "90d", "The last 90 days, reaching back to at least the newest 50 completed tasks"],
 ];
-const ARRIVALS = [["off", "No arrivals"], ["on", "Recent arrivals"]];
-const COMPLEXITY_LABELS = {
-  low: "Low", medium: "Medium", hard: "Hard", xhard: "Xhard", unassessed: "Unassessed",
-};
-// An older forecast omits review-mode coverage. Its sampling table keeps these
-// labels. A response that reports the new fields uses REVIEW_BASIS_LABELS, so
-// a mode-preserving widening never reads the same as dropping the review mode.
-const LEGACY_BASIS_LABELS = { cell: "cell", complexity: "complexity", workspace: "workspace", none: "no history" };
-const REVIEW_BASIS_LABELS = {
-  cell: "same complexity, crew and review mode",
-  review_complexity: "review mode kept, crew dropped",
-  review_workspace: "review mode kept, complexity dropped",
-  mode_pooled_cell: "review mode dropped, same complexity and crew",
-  complexity: "review mode dropped, same complexity",
-  workspace: "review mode dropped, all deliveries",
-  none: "no history",
-};
+const FORECAST_TABS = [["forecast", "Forecast"], ["accuracy", "Accuracy"], ["data-gaps", "Data gaps"]];
+const DEFAULT_FORECAST_TAB = FORECAST_TABS[0][0];
 const REVIEW_MODE_LABELS = {
   none: "No review", before_pr: "Before PR", before_landing: "Before landing",
   mixed: "Mixed review", unknown: "Unknown assumption",
 };
-const REVIEW_COVERAGE_KEYS = ["review_mode_fallbacks", "review_mode_unknown", "history_review_mode_unknown"];
 // Why a task has no simulated start: its dependency is work the drain will
 // not start on its own, or sits behind such work or a cycle.
 const UNFORECASTABLE_LABELS = {
@@ -85,20 +88,18 @@ const WAITS = [
 ];
 // The schedule table lists this many tasks in dispatch order.
 const SCHEDULE_ROWS = 50;
-// Stored forecasts are newest first. Keep calibration history to one bounded
-// page so its column headings stay close to the rows being inspected.
-const CALIBRATION_HISTORY_PAGE_SIZE = 10;
 
-const view = { history: "default", arrivals: "off" };
-let lastPayload = null;
 let requestScope = null;
 let liveRefresh = null;
-let calibrationHistoryPage = 0;
+let tabPickListener = null;
+// The switch's label while a scenario with no payload yet loads; null until a
+// read succeeds in the workspace, so an unknown count never reads as zero.
+let proposedKnown = null;
 
 function clearForecast() {
-  lastPayload = null;
+  view.payload = null;
   liveRefresh = null;
-  calibrationHistoryPage = 0;
+  view.historyPage = 0;
   const count = $(COUNT);
   if (count) count.textContent = "—";
 }
@@ -116,8 +117,12 @@ export function backlogForecastPath({ history = "default", arrivals = "off", ref
   return query ? `${ENDPOINT}?${query}` : ENDPOINT;
 }
 
+function pathOptions() {
+  return { history: view.history, arrivals: view.scenario === "arrivals" ? "on" : "off" };
+}
+
 function endpoint() {
-  return backlogForecastPath({ history: view.history, arrivals: view.arrivals });
+  return backlogForecastPath(pathOptions());
 }
 
 export function fetchBacklogForecast(options) {
@@ -127,7 +132,69 @@ export function fetchBacklogForecast(options) {
 export function placeholdForecastAggregate() {
   clearForecast();
   renderPanelPlaceholder(BODY);
+  placeholdResourceForecastAggregate();
 }
+
+// ---- backlog / resource switch ----------------------------------------------
+
+const FORECAST_VIEWS = ["backlog", "resources"];
+let forecastViewShown = "backlog";
+
+/// Read the forecast view on screen: the Backlog or the Resource forecast.
+export function fetchForecastView() {
+  return forecastViewShown === "resources" ? fetchAndRenderResourceForecast() : fetchAndRenderForecast();
+}
+
+function applyForecastView() {
+  const resources = forecastViewShown === "resources";
+  const backlogPanel = $("forecast-panel");
+  const resourcePanel = $("resource-forecast-panel");
+  if (backlogPanel) backlogPanel.hidden = resources;
+  if (resourcePanel) resourcePanel.hidden = !resources;
+  for (const button of document.querySelectorAll("#forecast-switch [data-forecast-view]")) {
+    const on = button.dataset.forecastView === forecastViewShown;
+    button.classList.toggle("on", on);
+    button.setAttribute("aria-selected", on ? "true" : "false");
+    button.tabIndex = on ? 0 : -1;
+  }
+}
+
+// A pick shows the other view, reading it only if it has not been read in
+// this workspace, and keeps the address in step without routing.
+function pickForecastView(name) {
+  if (!FORECAST_VIEWS.includes(name) || name === forecastViewShown) return;
+  forecastViewShown = name;
+  applyForecastView();
+  tabPickListener?.();
+  if (isAggregateView()) return;
+  if (name === "resources" && !resourceForecastLoaded()) {
+    fetchAndRenderResourceForecast().catch((error) => console.error("Failed to fetch the resource forecast", error));
+  } else if (name === "backlog" && !view.payload) {
+    refetch();
+  }
+}
+
+function bindForecastSwitch() {
+  const strip = $("forecast-switch");
+  if (!strip || strip.dataset.bound) return;
+  strip.dataset.bound = "true";
+  for (const button of strip.querySelectorAll("[data-forecast-view]")) {
+    button.addEventListener("click", () => pickForecastView(button.dataset.forecastView));
+  }
+  strip.addEventListener("keydown", (event) => {
+    if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) return;
+    const index = FORECAST_VIEWS.indexOf(forecastViewShown);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? FORECAST_VIEWS.length - 1
+      : (index + (event.key === "ArrowRight" ? 1 : -1) + FORECAST_VIEWS.length) % FORECAST_VIEWS.length;
+    event.preventDefault();
+    pickForecastView(FORECAST_VIEWS[next]);
+    strip.querySelector(`[data-forecast-view="${FORECAST_VIEWS[next]}"]`)?.focus();
+  });
+  applyForecastView();
+}
+
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bindForecastSwitch);
+else bindForecastSwitch();
 
 // `refresh` recomputes live; the panel scope stays the view's path, so the
 // current forecast stays up while it runs. Default polls share an explicit
@@ -140,17 +207,29 @@ export function fetchAndRenderForecast({ refresh = false } = {}) {
   const revision = getWorkspaceRevision();
   const path = endpoint();
   const scope = `${revision}:${path}`;
-  if (requestScope !== scope) {
+  const viewChanged = requestScope !== scope;
+  if (viewChanged) {
     requestScope = scope;
     clearForecast();
   }
   if (!refresh && liveRefresh) return liveRefresh;
-  const request = refresh ? backlogForecastPath({ ...view, refresh: true }) : path;
+  const request = refresh ? backlogForecastPath({ ...pathOptions(), refresh: true }) : path;
   const pending = requestPanel(BODY, path, () => fetchJson(request), (payload) => {
     if (getWorkspaceRevision() !== revision) return;
-    lastPayload = payload;
+    view.payload = payload;
     renderForecast();
-  }, COUNT);
+  }, COUNT).catch((error) => {
+    // A route-missing 404 is a permanent capability message, so it should not
+    // leave controls for a forecast endpoint this host does not provide. A poll
+    // or Refresh after a good read keeps its figures: the note already says they
+    // are stale, and clearing them would leave that note over an empty panel.
+    if (error.routeMissing && !view.payload && getWorkspaceRevision() === revision && requestScope === scope) {
+      syncNodes($(BODY), []);
+    }
+    throw error;
+  });
+  // Any view can load slowly or fail, so keep its recovery controls available.
+  if (viewChanged) renderViewControls();
   if (!refresh) return pending;
   const retained = pending.catch((error) => {
     if (liveRefresh === retained) liveRefresh = null;
@@ -162,6 +241,7 @@ export function fetchAndRenderForecast({ refresh = false } = {}) {
 
 onWorkspaceChange(() => {
   requestScope = null;
+  proposedKnown = null;
   clearForecast();
 });
 
@@ -172,447 +252,437 @@ export function renderForecast() {
     placeholdForecastAggregate();
     return;
   }
-  if (!lastPayload || !panelCanRender(BODY)) return;
-  const forecast = lastPayload.forecast || {};
+  if (!view.payload || !panelCanRender(BODY)) return;
+  proposedKnown = forecastCount(view.payload.backlog?.proposed);
+  const scenario = selectedScenario();
   const count = $(COUNT);
-  if (count) count.textContent = `${forecast.tasks ?? 0} task${forecast.tasks === 1 ? "" : "s"} · ${lastPayload.inputs?.concurrency ?? "?"} slots`;
-  const nodes = [forecastCard(), waitsCard(), scheduleCard(), byComplexityCard(), coverageCard(), calibrationCard()];
-  const root = el("div", { class: "fc-view" }, nodes);
+  if (count) count.textContent = `${scenario.source?.tasks ?? 0} task${scenario.source?.tasks === 1 ? "" : "s"} · ${view.payload.inputs?.concurrency ?? "?"} slots`;
+  const root = el("div", { class: "fc-view" }, [
+    forecastHeader(),
+    accuracyHeader(),
+    dataGapsHeader(),
+    forecastTabStrip(),
+    forecastTabPanel("forecast", forecastPanelNodes(scenario)),
+    forecastTabPanel("accuracy", accuracyPanelNodes()),
+    forecastTabPanel("data-gaps", dataGapsPanelNodes()),
+  ]);
   root.dataset.key = "forecast-view";
-  root.dataset.hash = JSON.stringify([view, lastPayload, calibrationHistoryPage]);
+  root.dataset.hash = JSON.stringify([view.history, view.scenario, view.payload, view.historyPage, view.residualMetric]);
   syncNodes(body, [root]);
+  applyForecastTab();
 }
+view.render = renderForecast;
 
 function refetch() {
   fetchAndRenderForecast().catch((error) => console.error("Failed to fetch backlog forecast", error));
 }
 
-// ---- formatting -----------------------------------------------------------
+// ---- tabs -----------------------------------------------------------------
+//
+// All three tabs stay rendered and a switch only shows another, so it never
+// refetches and an open section or focused control survives it.
 
-function num(value) {
-  const n = Number(value);
-  return value == null || !Number.isFinite(n) ? null : n;
+/// The route of the tab on screen, without the leading `#`.
+export function forecastTabRoute() {
+  if (forecastViewShown === "resources") return resourceForecastRoute();
+  return view.tab === DEFAULT_FORECAST_TAB ? "analytics/forecast" : `analytics/forecast/${view.tab}`;
 }
 
-export function formatForecastHours(value) {
-  const n = num(value);
-  if (n == null) return "—";
-  if (n < 1) return `${Math.round(n * 60)}m`;
-  if (n < 48) return `${n >= 10 ? Math.round(n) : n.toFixed(1)}h`;
-  const days = n / 24;
-  return `${days >= 10 ? Math.round(days) : days.toFixed(1)}d`;
-}
-
-export function formatForecastTokens(value) {
-  const n = num(value);
-  if (n == null) return "—";
-  if (n >= 1e9) return `${(n / 1e9).toFixed(1)}B`;
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
-  if (n >= 1e3) return `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}k`;
-  return `${Math.round(n)}`;
-}
-
-export function formatForecastUsd(value) {
-  const n = num(value);
-  if (n == null) return "—";
-  return n >= 100 ? `$${Math.round(n).toLocaleString()}` : `$${n.toFixed(2)}`;
-}
-
-function fmtRate(value) {
-  const n = num(value);
-  return n == null ? "—" : `${n >= 10 ? Math.round(n) : n.toFixed(1)}/day`;
-}
-
-function fmtParallelism(value) {
-  const n = num(value);
-  return n == null ? "—" : `${n.toFixed(1)}×`;
-}
-
-function fmtRank(value) {
-  const n = num(value);
-  return n == null ? "—" : `#${Math.round(n)}`;
-}
-
-function fmtShare(value) {
-  const n = num(value);
-  return n == null ? "—" : `${Math.round(n * 100)}%`;
-}
-
-/// "p50 – p90" for one quantile pair; never a bare point estimate.
-export function formatForecastQuantileRange(quantiles, fmt) {
-  const p50 = quantiles?.p50;
-  const p90 = quantiles?.p90;
-  if (p50 == null && p90 == null) return "—";
-  return `${fmt(p50)} – ${fmt(p90)}`;
-}
-
-function quantilePair(quantiles) {
-  return num(quantiles?.p50) != null || num(quantiles?.p90) != null;
-}
-
-function forecastCount(value) {
-  const n = num(value);
-  return n == null || n < 0 ? 0 : Math.trunc(n);
-}
-
-function backlogForecastFreshness(payload) {
-  if (payload.served_from === "live") return "Live";
-  if (payload.served_from === "stored") {
-    const age = relativeTime(payload.generated_at);
-    return age ? `Stored ${age}` : "Stored time unavailable";
+/// Show `tab` (an unknown or missing one is the Forecast tab). `resources`
+/// shows the Resource forecast instead, on its tab `subtab`.
+export function setForecastTab(tab, subtab) {
+  if (tab === "resources") {
+    forecastViewShown = "resources";
+    setResourceForecastTab(subtab);
+  } else {
+    forecastViewShown = "backlog";
+    view.tab = FORECAST_TABS.some(([key]) => key === tab) ? tab : DEFAULT_FORECAST_TAB;
+    applyForecastTab();
   }
-  return "Forecast freshness unavailable";
+  applyForecastView();
 }
 
-function supportText(forecast, payload) {
-  const support = forecast?.regression_rework?.support;
-  const coverage = payload?.coverage || {};
-  const parts = [];
-  if (support && typeof support === "object") {
-    if (num(support.missing_fix_history) != null) parts.push(`${forecastCount(support.missing_fix_history)} with missing fix history`);
-    if (num(support.history_fixes) != null) parts.push(`${forecastCount(support.history_fixes)} recorded regression fixes`);
-    if (num(support.history_bundles) != null) parts.push(`${forecastCount(support.history_bundles)} regression bundles`);
-    if (support.history_thin) parts.push("regression history is thin");
+/// `listener` runs when the operator picks a tab or view, so the router can
+/// keep the address in step without routing, which would refetch.
+export function onForecastTabPick(listener) {
+  tabPickListener = listener;
+  onResourceForecastTabPick(listener);
+}
+
+function pickForecastTab(tab) {
+  setForecastTab(tab);
+  tabPickListener?.();
+}
+
+function applyForecastTab() {
+  const body = $(BODY);
+  if (!body) return;
+  for (const button of body.querySelectorAll(".fc-tab")) {
+    const on = button.dataset.fcTab === view.tab;
+    button.classList.toggle("active", on);
+    button.setAttribute("aria-selected", on ? "true" : "false");
+    button.tabIndex = on ? 0 : -1;
   }
-  if (num(coverage.regression_history_missing)) parts.push(`${forecastCount(coverage.regression_history_missing)} tasks missing regression history`);
-  if (num(coverage.risk_unestimated)) parts.push(`${forecastCount(coverage.risk_unestimated)} tasks with unestimated risk`);
-  if (num(coverage.regression_history_thin)) parts.push(`${forecastCount(coverage.regression_history_thin)} tasks with thin regression history`);
-  return parts.length ? `Available evidence: ${parts.join(" · ")}.` : "";
-}
-
-/// Reasons the adjusted forecast is unavailable, from `forecast.unavailable`.
-/// Null when no flag is set (older payloads omit the object entirely).
-export function forecastUnavailableInfo(forecast, payload = {}) {
-  const unavailable = forecast?.unavailable;
-  if (!unavailable || typeof unavailable !== "object") return null;
-  const reasons = [];
-  if (unavailable.regression_history_missing) reasons.push({ kind: "regression_history_missing", label: "Missing regression history", detail: "Regression follow-up work cannot be estimated for some tasks, so the regression-adjusted forecast is unavailable." });
-  if (unavailable.risk_unestimated) reasons.push({ kind: "risk_unestimated", label: "Risk not estimated", detail: "Regression risk is not estimated for some tasks, so the adjusted forecast is unavailable." });
-  if (unavailable.arrival_conflict_unknown) reasons.push({ kind: "arrival_conflict_unknown", label: "Arrival conflicts unknown", detail: "Whether arriving tasks would conflict with this backlog is unknown, so the adjusted forecast is unavailable." });
-  if (!reasons.length) return null;
-  const support = supportText(forecast, payload);
-  return { kind: reasons[0].kind, reasons, label: reasons.map((r) => r.label).join(" · "), detail: [reasons.map((r) => r.detail).join(" "), support].filter(Boolean).join(" "), support };
-}
-
-function quantileText(quantiles, fmt) {
-  const p50 = num(quantiles?.p50);
-  const p90 = num(quantiles?.p90);
-  if (p50 == null && p90 == null) return null;
-  return `p50 ${p50 == null ? "unknown" : fmt(p50)} · p90 ${p90 == null ? "unknown" : fmt(p90)}`;
-}
-
-/// Formatted pre-regression baseline figures; each missing percentile stays
-/// unknown and no metric is invented. Null when the baseline has no figures.
-export function forecastBaselineFigures(baseline) {
-  if (!baseline || typeof baseline !== "object") return null;
-  const figures = {
-    time: quantileText(baseline.time_to_drain_hours, formatForecastHours),
-    cost: quantileText(baseline.usd, formatForecastUsd),
-    tokens: quantileText(baseline.tokens, formatForecastTokens),
-  };
-  return figures.time || figures.cost || figures.tokens ? figures : null;
-}
-
-function baselineText(figures) {
-  if (!figures) return "";
-  const parts = [figures.time && `Time to drain ${figures.time}`, figures.cost && `Cost ${figures.cost}`, figures.tokens && `Tokens ${figures.tokens}`].filter(Boolean);
-  return parts.length ? `Pre-regression baseline (excludes unsupported regression follow-up work): ${parts.join(" · ")}.` : "";
-}
-
-export function backlogForecastFailureSummary() {
-  return { unavailable: true, reasonKind: "transport", reason: "Couldn't load the backlog forecast", detail: "The forecast could not be loaded. Check the connection and try again." };
-}
-
-/// Compact drain-card figures. When the adjusted forecast is unavailable this
-/// still returns a summary carrying the reason (and baseline, when present),
-/// so the drain card can explain itself instead of a generic line. Null only
-/// for a non-object payload.
-export function backlogForecastSummary(payload) {
-  if (!payload || typeof payload !== "object") return null;
-  const forecast = payload.forecast || {};
-  const backlog = payload.backlog || {};
-  const counts = `${forecastCount(backlog.backlog)} backlog · ${forecastCount(backlog.in_progress)} in progress`;
-  const freshness = backlogForecastFreshness(payload);
-  const info = forecastUnavailableInfo(forecast, payload);
-  if (info) {
-    const figures = forecastBaselineFigures(forecast.pre_regression_baseline);
-    return { unavailable: true, reasonKind: info.kind, reason: info.label, detail: info.detail, reasons: info.reasons, baseline: figures, baselineText: baselineText(figures), counts, freshness, drain: null, cost: null, exactCost: null, tokens: null };
+  for (const node of body.querySelectorAll(".fc-tabbed")) node.hidden = node.dataset.fcTab !== view.tab;
+  // A long residual series scrolls inside its plot; start at the newest
+  // forecast, which needs the plot on screen to measure.
+  for (const plot of body.querySelectorAll(".fc-res-plot")) {
+    if (plot.dataset.fcScrolled || !plot.scrollWidth) continue;
+    plot.scrollLeft = plot.scrollWidth;
+    plot.dataset.fcScrolled = "true";
   }
-  if (num(forecast.tasks) === 0) {
-    return { unavailable: true, reasonKind: "empty", reason: "No backlog to forecast", detail: "No backlog or in-progress tasks in this workspace.", baseline: null, baselineText: "", counts, freshness, drain: null, cost: null, exactCost: null, tokens: null };
-  }
-  const hours = forecast.time_to_drain_hours;
-  if (quantilePair(hours)) {
-    const costed = quantilePair(forecast.usd);
-    return {
-      drain: formatForecastQuantileRange(hours, formatForecastHours),
-      cost: costed ? formatForecastQuantileRange(forecast.usd, wholeUsd) : null,
-      exactCost: costed ? formatForecastQuantileRange(forecast.usd, formatForecastUsd) : null,
-      tokens: quantilePair(forecast.tokens) ? formatForecastQuantileRange(forecast.tokens, formatForecastTokens) : null,
-      counts, freshness,
-    };
-  }
-  // No adjusted quantiles and no unavailable flags: classify from evidence.
-  const tasks = num(forecast.tasks);
-  const history = num(payload.inputs?.history_deliveries);
-  const coverage = payload.coverage || {};
-  let reasonKind = "unknown";
-  let reason = "Backlog forecast unavailable";
-  let detail = "The forecast did not say why it is unavailable.";
-  if (tasks === 0) { reasonKind = "empty"; reason = "No backlog to forecast"; detail = "No backlog or in-progress tasks in this workspace."; }
-  else if (history === 0 || (tasks != null && tasks > 0 && num(coverage.no_history) != null && num(coverage.no_history) >= tasks)) { reasonKind = "no_history"; reason = "No delivery history to sample"; detail = "There is no delivery history to sample for this backlog."; }
-  else if (forecast.schedulable_subset) { reasonKind = "subset"; reason = "Not every task can be scheduled"; detail = "Some tasks depend on work the drain cannot start, so there is no full total."; }
-  else if (tasks != null && tasks > 0) { reasonKind = "horizon"; reason = "Beyond the 90-day horizon"; detail = "The simulated backlog did not drain within the 90-day horizon."; }
-  const figures = forecastBaselineFigures(forecast.pre_regression_baseline);
-  return { unavailable: true, reasonKind, reason, detail, baseline: figures, baselineText: baselineText(figures), counts, freshness, drain: null, cost: null, exactCost: null, tokens: null };
 }
 
-// Whole dollars, so the dock line fits; the tooltip keeps the cents.
-function wholeUsd(value) {
-  const n = num(value);
-  return n == null ? "—" : `$${Math.round(n).toLocaleString()}`;
-}
-
-/// Compact link to Analytics › Forecast: p50 – p90 time to drain and cost,
-/// with a freshness label for all the snapshot's figures. Counts, tokens and
-/// exact cost are in its tooltip and accessible text. A null summary is the
-/// muted unavailable line.
-export function drainBacklogForecastLink(summary) {
-  const unavailable = !summary || Boolean(summary.unavailable);
-  const link = el("a", { class: unavailable ? "drain-backlog-forecast unavailable" : "drain-backlog-forecast" });
-  link.href = scopedHashHref("#analytics/forecast");
-  if (unavailable) {
-    const reason = summary?.reason || "Backlog forecast unavailable";
-    const detail = [reason, summary?.detail, summary?.baselineText, summary?.counts].filter(Boolean).join(" ");
-    link.title = `${detail}\nAnalytics › Forecast`;
-    if (summary) link.dataset.forecastReason = summary.reasonKind || "unknown";
-    for (const child of [
-      el("span", { class: "drain-section-label", text: "Backlog" }),
-      el("span", { class: "drain-backlog-forecast-reason", text: reason }),
-      summary?.baselineText ? el("span", { class: "drain-backlog-forecast-baseline", text: summary.baselineText }) : null,
-      el("span", { class: "visually-hidden", text: ` ${detail}` }),
-      el("span", { class: "drain-backlog-forecast-go", text: "›", "aria-hidden": "true" }),
-    ]) if (child) link.append(child);
-    return link;
-  }
-  const figures = [summary.drain, summary.cost].filter(Boolean).join(" · ");
-  const detail = [
-    summary.freshness, summary.counts,
-    summary.drain && `Time to drain ${summary.drain}`, summary.cost && `Cost ${summary.cost}`,
-    summary.tokens && `Tokens ${summary.tokens}`, summary.exactCost && `Exact cost ${summary.exactCost}`,
-  ].filter(Boolean).join(" · ");
-  const accessibleDetail = [
-    summary.counts, summary.tokens && `Tokens ${summary.tokens}`, summary.exactCost && `Exact cost ${summary.exactCost}`,
-  ].filter(Boolean).join(" · ");
-  link.title = `p50 – p90 · ${detail}\nAnalytics › Forecast`;
-  link.append(
-    el("span", { class: "drain-section-label", text: "Backlog" }),
-    el("span", { class: "drain-forecast-meta drain-backlog-forecast-freshness", text: summary.freshness }),
-    el("span", { class: "drain-backlog-forecast-figures", text: figures }),
-    el("span", { class: "visually-hidden", text: ` p50 – p90, ${accessibleDetail}` }),
-    el("span", { class: "drain-backlog-forecast-go", text: "›", "aria-hidden": "true" }),
-  );
-  return link;
-}
-
-// ---- forecast -------------------------------------------------------------
-
-function seg(label, options, current, onPick) {
-  return el("div", { class: "mx-seg mx-seg-wrap", role: "group", "aria-label": label }, options.map(([key, text, title]) => {
-    const on = key === current;
-    const button = el("button", { class: on ? "mx-seg-btn on" : "mx-seg-btn", type: "button", text, title: title || null, "aria-pressed": on ? "true" : "false" });
-    button.addEventListener("click", () => {
-      if (on) return;
-      onPick(key);
-      refetch();
-    });
+function forecastTabStrip() {
+  const open = openCoverageCount();
+  const strip = el("div", { class: "band-tabs fc-tabs", role: "tablist", "aria-label": "Forecast sections" }, FORECAST_TABS.map(([key, text]) => {
+    const button = el("button", {
+      id: `fc-tab-${key}`, class: "band-tab fc-tab", type: "button", role: "tab", "aria-controls": `fc-panel-${key}`,
+    }, [text, key === "data-gaps" && open ? el("span", { class: "band-tab-count fc-tab-count", text: String(open) }) : null]);
+    button.dataset.fcTab = key;
+    button.addEventListener("click", () => pickForecastTab(key));
     return button;
   }));
+  strip.addEventListener("keydown", (event) => {
+    const keys = FORECAST_TABS.map(([key]) => key);
+    const index = keys.indexOf(event.target?.dataset?.fcTab);
+    if (index < 0) return;
+    let next = null;
+    if (event.key === "ArrowRight") next = (index + 1) % keys.length;
+    else if (event.key === "ArrowLeft") next = (index - 1 + keys.length) % keys.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = keys.length - 1;
+    if (next == null) return;
+    event.preventDefault();
+    pickForecastTab(keys[next]);
+    $(`fc-tab-${keys[next]}`)?.focus();
+  });
+  return strip;
 }
 
-function kpi(label, quantiles, fmt, foot) {
-  const value = (q) => (quantiles?.[q] == null ? "—" : fmt(quantiles[q]));
-  return el("div", { class: "mx-sc fc-kpi", role: "group", "aria-label": label }, [
-    el("span", { class: "mx-sc-label", text: label }),
-    el("span", { class: "fc-kpi-pair" }, [
-      el("span", { class: "fc-q" }, [el("span", { class: "mx-sc-tag", text: "p50" }), el("span", { class: "mx-sc-value", text: value("p50") })]),
-      el("span", { class: "fc-q" }, [el("span", { class: "mx-sc-tag", text: "p90" }), el("span", { class: "mx-sc-value fc-p90", text: value("p90") })]),
-    ]),
-    foot ? el("span", { class: "mx-sc-foot", text: foot }) : null,
-  ]);
+function forecastTabPanel(key, children) {
+  const panel = el("div", { id: `fc-panel-${key}`, class: "fc-panel fc-tabbed", role: "tabpanel", "aria-labelledby": `fc-tab-${key}` }, children);
+  panel.dataset.fcTab = key;
+  return panel;
 }
 
-// Unforecastable dependencies withhold every full total, whatever the history.
-const SUBSET_FOOT = "not every task can be scheduled";
+// ---- header ---------------------------------------------------------------
 
-function metricFoot(quantiles, metric) {
-  const info = forecastUnavailableInfo(lastPayload.forecast, lastPayload);
-  if (info) return info.label;
-  if (quantiles?.p90 != null) return metric === "tokens" ? "normalized" : null;
-  if (lastPayload.forecast?.schedulable_subset) return SUBSET_FOOT;
-  const coverage = lastPayload.coverage || {};
-  if (metric === "tokens" && num(coverage.uncovered_model)) return "some tasks have no priced history";
-  if (metric === "usd" && num(coverage.uncosted)) return "some tasks have no costed history";
-  const missing = lastPayload.arrivals?.coverage?.[`missing_${metric}`];
-  if (missing) return metric === "tokens" ? "some history is missing token telemetry" : "some history is missing cost telemetry";
-  if (lastPayload.inputs?.arrivals && missing) return "incomplete history or arrival telemetry";
-  return metric === "tokens" ? "not enough priced history" : "not enough costed history";
+function historyControl() {
+  const select = el("select", { class: "mx-select", "aria-label": "Delivery history" }, HISTORIES.map(([key, text, title]) => {
+    const option = el("option", { text, title });
+    option.value = key;
+    option.selected = key === view.history;
+    return option;
+  }));
+  select.addEventListener("change", () => {
+    if (select.value === view.history) return;
+    view.history = select.value;
+    refetch();
+  });
+  return el("label", { class: "fc-history" }, [el("span", { class: "fc-control-label", text: "History" }), select]);
 }
 
-function drainFoot(quantiles) {
-  const info = forecastUnavailableInfo(lastPayload.forecast, lastPayload);
-  if (info) return info.label;
-  if (quantiles?.p90 != null) return null;
-  if (lastPayload.forecast?.schedulable_subset) return SUBSET_FOOT;
-  if (quantiles?.p50 != null) return "p90 beyond the 90-day horizon";
-  return lastPayload.coverage?.no_history ? "some tasks have no history" : "beyond the 90-day horizon";
-}
-
-function unavailableBlock(forecast, payload) {
-  const info = forecastUnavailableInfo(forecast, payload);
-  if (!info) return null;
-  const children = [
-    el("span", { class: "fc-assume-head", text: `Forecast unavailable: ${info.label}` }),
-    el("span", { class: "fc-assume-rate", text: info.detail }),
-  ];
-  const block = el("div", { class: "fc-assume fc-unavailable", role: "note" }, children);
-  block.dataset.forecastReason = info.kind;
-  return block;
-}
-
-function baselineBlock(baseline) {
-  const figures = forecastBaselineFigures(baseline);
-  if (!figures) return null;
-  const parts = [figures.time && `Time to drain ${figures.time}`, figures.cost && `Cost ${figures.cost}`, figures.tokens && `Tokens ${figures.tokens}`].filter(Boolean).join(" · ");
-  const block = el("div", { class: "fc-assume fc-baseline", role: "note" }, [
-    el("span", { class: "fc-assume-head", text: "Pre-regression baseline" }),
-    el("span", { class: "fc-assume-rate", text: `${parts}. This baseline excludes unsupported regression follow-up work and is not the regression-adjusted forecast; a percentile shown as unknown was not estimated.` }),
-  ]);
-  block.dataset.forecastBaseline = "pre-regression";
-  return block;
-}
-
-function capacityText(inputs) {
-  const source = {
-    requested: "requested",
-    run_control: "the running drain's adjusted ceiling",
-    run_input: "the running drain's ceiling",
-    pull_run_control: "the pull drain's adjusted ceiling",
-    pull_run_input: "the pull drain's ceiling",
-    default: "the default ceiling; no drain is running",
-  }[inputs.concurrency_source] || inputs.concurrency_source;
-  return `${inputs.concurrency} leaf run${inputs.concurrency === 1 ? "" : "s"} at once (${source})`;
-}
-
-function arrivalsLine() {
-  const arrivals = lastPayload.arrivals || {};
-  const perDay = arrivals.per_day || {};
-  const parts = [["auto-tasks", perDay.auto_task], ["sweeps", perDay.sweep], ["filings", perDay.filing]]
-    .map(([label, rate]) => `${label} ${fmtRate(rate)}`).join(" · ");
-  const assumed = lastPayload.inputs?.arrivals
-    ? "Includes new tasks arriving at the recent rate."
-    : "Assumes no new tasks arrive.";
-  return el("div", { class: "fc-assume" }, [
-    el("span", { class: "fc-assume-head", text: assumed }),
-    el("span", { class: "fc-assume-rate" }, [
-      `Last ${arrivals.window_days ?? 7} days: ${fmtRate(perDay.total)} filed (${parts}), ${fmtRate(arrivals.done_per_day)} done.`,
-    ]),
-  ]);
-}
-
-// The sample the forecast drew from: n deliveries, and how far back they reach.
-function historyText(inputs) {
-  const n = `n=${inputs.history_deliveries ?? 0} deliveries`;
-  const since = inputs.lookback_start ? ` since ${formatDateTime(inputs.lookback_start)}` : "";
-  if (inputs.history_tasks != null) return `${n}${since} (the newest ${inputs.history_tasks} completions)`;
-  return `${n}${since} (${inputs.lookback_days ?? "?"} days, at least the newest ${inputs.min_history_tasks ?? 50} completions)`;
-}
-
-// Where this forecast came from and how old it is, beside a Refresh that
-// recomputes it live. The absolute stored time is in the Calibration card.
-function sourceTools() {
-  const stored = lastPayload.served_from === "stored";
-  const age = relativeTime(lastPayload.generated_at);
+// Where this forecast came from and how old it is. The absolute time is its
+// tooltip; Refresh recomputes it live.
+function sourceLabel() {
+  const stored = view.payload.served_from === "stored";
+  const age = relativeTime(view.payload.generated_at);
   const text = stored ? `Stored ${age ?? "earlier"}` : "Live";
-  const title = lastPayload.generated_at ? `Computed ${formatDateTime(lastPayload.generated_at)}` : null;
-  const button = el("button", { class: "mx-seg-btn", type: "button", text: "Refresh", title: "Recompute this forecast live now", "aria-label": "Refresh forecast" });
+  const title = view.payload.generated_at ? `Computed ${formatDateTime(view.payload.generated_at)}` : null;
+  return el("span", { class: "fc-source", text, title });
+}
+
+function refreshButton() {
+  const button = el("button", { class: "fc-refresh", type: "button", title: "Recompute this forecast live now", "aria-label": "Refresh forecast" }, [
+    el("span", { class: "visually-hidden", text: "Refresh" }),
+  ]);
   button.addEventListener("click", () => {
     button.disabled = true;
     fetchAndRenderForecast({ refresh: true })
       .catch((error) => console.error("Failed to refresh backlog forecast", error))
       .finally(() => { button.disabled = false; });
   });
-  return el("div", { class: "fc-source-tools" }, [
-    el("span", { class: "fc-source mx-muted", text, title }),
-    el("div", { class: "mx-seg", role: "group", "aria-label": "Forecast refresh" }, [button]),
+  return button;
+}
+
+function tabbedHeader(tab, children) {
+  const header = el("div", { class: "fc-header fc-tabbed" }, children);
+  header.dataset.fcTab = tab;
+  return header;
+}
+
+// The panel head already reads "N tasks · N slots"; this line continues it.
+function forecastHeader() {
+  return tabbedHeader("forecast", [
+    el("p", { class: "fc-meta" }, [
+      sourceLabel(),
+      view.payload.model_version != null ? ` · model v${view.payload.model_version}` : null,
+    ]),
+    el("div", { class: "fc-tools" }, [historyControl(), refreshButton()]),
   ]);
 }
 
-function forecastCard() {
-  const inputs = lastPayload.inputs || {};
-  const forecast = lastPayload.forecast || {};
-  const backlog = lastPayload.backlog || {};
-  const tools = el("div", { class: "mx-trend-tools" }, [
-    seg("Delivery history", HISTORIES, view.history, (key) => { view.history = key; }),
-    seg("Arrivals", ARRIVALS, view.arrivals, (key) => { view.arrivals = key; }),
-    sourceTools(),
+function accuracyHeader() {
+  const version = view.payload.calibration?.model_version ?? view.payload.model_version;
+  return tabbedHeader("accuracy", [el("p", { class: "fc-meta", text: version != null ? `Model v${version}` : "" })]);
+}
+
+function dataGapsHeader() {
+  return tabbedHeader("data-gaps", [el("p", { class: "fc-meta", text: otherChecksClearText() })]);
+}
+
+// While a picked view loads or fails only its controls can render: the status
+// note above them says which, and these are the way back.
+function renderViewControls() {
+  const body = $(BODY);
+  if (!body) return;
+  const root = el("div", { class: "fc-view" }, [
+    el("div", { class: "fc-header" }, [el("div", { class: "fc-tools" }, [historyControl(), refreshButton()])]),
+    el("div", { class: "fc-scenario-row" }, [scenarioSwitch()]),
   ]);
-  const meta = `${backlog.backlog ?? 0} backlog · ${backlog.in_progress ?? 0} in progress · ${backlog.blocked ?? 0} blocked · ${historyText(inputs)}`;
-  const children = [
-    el("div", { class: "mx-card-head" }, [
-      el("h2", { class: "mx-card-title", text: "Time to drain and cost" }),
-      tools,
-    ]),
-    el("p", { class: "mx-blurb" }, [
-      `${meta}. Simulated ${inputs.iterations ?? 0} times on ${capacityText(inputs)}. `,
-      infoHint(`${samplingExplanation(inputs)} Each simulated drain admits work as the drain does: in dispatch order, after its dependencies finish, never beside a task whose files overlap, an editing task without context files alone, and behind surfaces reserved by higher-priority work. Each attempt first draws a recorded attempt of the same pool: one that blocked, failed or was abandoned frees its slot when that attempt did, then requeues, waits for a return drawn from how long blocked work took to come back (or never does), or stops. Blocked tasks start out waiting for that return. Review and someday tasks are left out, and so is work that depends on them; in-progress tasks count only their remaining work. Review locks, static eligibility and arrivals' files are not modelled yet.`),
-      lastPayload.model_version != null ? el("span", { class: "fc-model mx-muted", text: ` Model v${lastPayload.model_version}.` }) : null,
-    ]),
+  root.dataset.key = "forecast-view";
+  // The scenario buttons close over their pressed state, so a pick or a newly
+  // learned count must replace the node rather than reuse the old one.
+  root.dataset.hash = JSON.stringify(["controls", view.history, view.scenario, proposedKnown]);
+  syncNodes(body, [root]);
+}
+
+// ---- scenario -------------------------------------------------------------
+
+function proposedScenarioReady(payload = view.payload) {
+  return Boolean(payload?.if_approved && forecastCount(payload.backlog?.proposed));
+}
+
+// The figures on screen. A selected proposed scenario the response cannot back
+// (the workspace changed, or nothing is proposed now) reads as the current one.
+function selectedScenario() {
+  const payload = view.payload;
+  if (view.scenario === "proposed" && proposedScenarioReady()) {
+    const coverage = forecastSummary.proposedForecastCoverage(payload);
+    return { key: "proposed", source: payload.if_approved, coverage, info: forecastUnavailableInfo(payload.if_approved, { coverage }) };
+  }
+  const source = payload.forecast || {};
+  return { key: view.scenario === "arrivals" ? "arrivals" : "current", source, coverage: payload.coverage || {}, info: forecastUnavailableInfo(source, payload) };
+}
+
+function pickScenario(key) {
+  const before = endpoint();
+  view.scenario = key;
+  if (endpoint() !== before) refetch();
+  // Same read: with no forecast loaded there is nothing for renderForecast to
+  // draw, so redraw the controls to show the pick.
+  else if (view.payload) renderForecast();
+  else renderViewControls();
+}
+
+function scenarioSwitch() {
+  const payload = view.payload;
+  const proposed = payload ? forecastCount(payload.backlog?.proposed) : proposedKnown;
+  const countKnown = proposed != null;
+  // The proposed scenario lives in the no-arrivals read, so any loaded response
+  // or a remembered count is enough to offer it.
+  const offerable = payload ? proposedScenarioReady() : countKnown && proposed > 0;
+  let proposedTitle = "The proposed-task count is unknown until a forecast loads";
+  if (countKnown) {
+    proposedTitle = offerable
+      ? `If the ${proposed} proposed task${proposed === 1 ? " is" : "s are"} approved`
+      : "No proposed-work forecast: nothing is proposed in this workspace";
+  }
+  const on = view.scenario === "proposed" && !offerable ? "current" : view.scenario;
+  const choices = [
+    ["current", "Current backlog", "The backlog and in-progress tasks, with no new tasks arriving"],
+    ["proposed", countKnown ? `With ${proposed} proposed` : "With proposed", proposedTitle],
+    ["arrivals", "With new arrivals", "New tasks keep arriving at the recent rate"],
   ];
-  if (!forecast.tasks) {
-    children.push(el("div", { class: "mx-empty" }, [
-      el("div", { class: "mx-empty-title", text: "Nothing to forecast" }),
-      el("div", { class: "mx-empty-detail", text: "No backlog or in-progress tasks in this workspace." }),
-    ]));
-  } else if (!inputs.history_deliveries) {
-    children.push(el("div", { class: "mx-empty" }, [
-      el("div", { class: "mx-empty-title", text: "No delivery history to sample" }),
-      el("div", { class: "mx-empty-detail", text: inputs.history_tasks != null
-        ? `None of the newest ${inputs.history_tasks} completed tasks has recorded agent runs.`
-        : `No task finished with recorded agent runs in the last ${inputs.lookback_days} days or among the newest ${inputs.min_history_tasks ?? 50} completions. Widen the history.` }),
-    ]));
-  } else if (forecastUnavailableInfo(forecast, lastPayload)) {
-    children.push(unavailableBlock(forecast, lastPayload), baselineBlock(forecast.pre_regression_baseline));
-    const subset = subsetNote(forecast);
-    if (subset) children.push(subset);
-  } else {
-    children.push(el("div", { class: "mx-series fc-kpis" }, [
-      kpi("Time to drain", forecast.time_to_drain_hours, formatForecastHours, drainFoot(forecast.time_to_drain_hours)),
-      kpi("Cost", forecast.usd, formatForecastUsd, metricFoot(forecast.usd, "usd")),
-      kpi("Tokens", forecast.tokens, formatForecastTokens, metricFoot(forecast.tokens, "tokens")),
-      kpi("Effective parallelism", forecast.effective_parallelism, fmtParallelism, `of ${inputs.concurrency ?? "?"} slots, averaged over the drain`),
-      kpi("Critical path", forecast.critical_path_hours, formatForecastHours, "longest dependency chain"),
-    ]));
-    const subset = subsetNote(forecast);
-    if (subset) children.push(subset);
-    children.push(el("p", { class: "fc-approved fc-odds" }, [drainOdds(forecast)]));
+  return el("div", { class: "mx-seg mx-seg-wrap fc-scenario", role: "group", "aria-label": "Scenario" }, choices.map(([key, text, title]) => {
+    const pressed = key === on;
+    const button = el("button", { class: pressed ? "mx-seg-btn on" : "mx-seg-btn", type: "button", text, title, "aria-pressed": pressed ? "true" : "false" });
+    if (key === "proposed" && !offerable) button.disabled = true;
+    button.addEventListener("click", () => {
+      if (!pressed) pickScenario(key);
+    });
+    return button;
+  }));
+}
+
+function arrivalsText() {
+  const arrivals = view.payload.arrivals || {};
+  const perDay = arrivals.per_day || {};
+  const parts = [["auto-tasks", perDay.auto_task], ["sweeps", perDay.sweep], ["filings", perDay.filing]]
+    .map(([label, rate]) => `${label} ${fmtRate(rate)}`).join(" · ");
+  const assumed = view.payload.inputs?.arrivals
+    ? "Includes new tasks arriving at the recent rate."
+    : "Assumes no new tasks arrive.";
+  return `${assumed} Last ${arrivals.window_days ?? 7} days: ${fmtRate(perDay.total)} filed (${parts}), ${fmtRate(arrivals.done_per_day)} done.`;
+}
+
+// ---- totals ---------------------------------------------------------------
+
+// Unforecastable dependencies withhold every full total, whatever the history.
+const SUBSET_REASON = "Not every task can be scheduled.";
+
+function metricReason(scenario, quantiles, metric) {
+  if (quantiles?.p90 != null) return metric === "tokens" ? "Normalized tokens." : null;
+  if (scenario.source?.schedulable_subset) return SUBSET_REASON;
+  const coverage = scenario.coverage;
+  if (metric === "tokens" && num(coverage.uncovered_model)) return "Some tasks have no priced history.";
+  if (metric === "usd" && num(coverage.uncosted)) return "Some tasks have no costed history.";
+  if (view.payload.arrivals?.coverage?.[`missing_${metric}`]) return metric === "tokens" ? "Some history is missing token telemetry." : "Some history is missing cost telemetry.";
+  return metric === "tokens" ? "Not enough priced history." : "Not enough costed history.";
+}
+
+function drainReason(scenario, quantiles) {
+  if (quantiles?.p90 != null) return null;
+  const { source } = scenario;
+  if (source?.schedulable_subset) return SUBSET_REASON;
+  if (quantiles?.p50 != null) return hasHorizonCensoringEvidence(source) ? "p90 beyond the 90-day horizon." : `${UNREPORTED_FORECAST_REASON}.`;
+  if (scenario.coverage.no_history) return "Some tasks have no history.";
+  return hasHorizonCensoringEvidence(source) ? "Beyond the 90-day horizon." : `${UNREPORTED_FORECAST_REASON}.`;
+}
+
+function costedLine(scenario) {
+  const { tasks, uncosted } = scenario.coverage;
+  if (![tasks, uncosted].every((count) => Number.isSafeInteger(count) && count >= 0)
+    || tasks !== scenario.source?.tasks || uncosted > tasks) return "Cost coverage unavailable.";
+  const costed = tasks - uncosted;
+  return `${costed} of ${tasks} task${tasks === 1 ? "" : "s"} costed.`;
+}
+
+// "+0.4h at p50" between two drain times on the same basis.
+function drainDelta(next, base) {
+  const after = num(next?.p50);
+  const before = num(base?.p50);
+  if (after == null || before == null) return null;
+  const diff = after - before;
+  if (Math.abs(diff) < 1 / 60) return "No change at p50 against the current backlog.";
+  return `${diff > 0 ? "+" : "−"}${formatForecastHours(Math.abs(diff))} at p50 against the current backlog.`;
+}
+
+function drainOdds(forecast) {
+  const horizon = formatForecastHours(forecast.horizon_hours ?? 2160);
+  const drainProbability = num(forecast.drain_probability);
+  const completionProbability = num(forecast.completion_probability);
+  const parts = [];
+  if (drainProbability != null) parts.push(`Drains within ${horizon} in ${fmtShare(drainProbability)} of runs`);
+  if (completionProbability != null) parts.push(`the initial tasks all finish in ${fmtShare(completionProbability)}`);
+  const unfinished = num(forecast.not_expected_to_drain);
+  if (unfinished) parts.push(`${unfinished.toFixed(2)} tasks unfinished on average`);
+  if (!parts.length) return null;
+  const text = `${parts.join("; ")}.`;
+  return forecast.simulation_truncated ? `${text} Some runs hit a simulation limit.` : text;
+}
+
+// The With new arrivals read still carries the if-approved scenario; the switch
+// shows one scenario at a time, so its figures stay here.
+function arrivalsApprovedLine(scenario) {
+  const approved = view.payload.if_approved;
+  if (scenario.key !== "arrivals" || !proposedScenarioReady()) return null;
+  const coverage = forecastSummary.proposedForecastCoverage(view.payload);
+  const figures = forecastUnavailableInfo(approved, { coverage }) ? approved.pre_regression_baseline : approved;
+  if (!quantilePair(figures?.time_to_drain_hours) && !quantilePair(figures?.usd) && !quantilePair(figures?.tokens)) return null;
+  const basis = figures === approved ? "" : " (pre-regression baseline)";
+  return `If proposed work is also approved${basis}: drain ${formatForecastQuantileRange(figures.time_to_drain_hours, formatForecastHours)}, cost ${formatForecastQuantileRange(figures.usd, formatForecastUsd)}, tokens ${formatForecastQuantileRange(figures.tokens, formatForecastTokens)}.`;
+}
+
+// One p50 – p90 range; a percentile the response left out reads "unknown".
+function rangeText(quantiles, fmt) {
+  const p50 = num(quantiles?.p50);
+  const p90 = num(quantiles?.p90);
+  if (p50 == null && p90 == null) return null;
+  return `${p50 == null ? "unknown" : fmt(p50)} – ${p90 == null ? "unknown" : fmt(p90)}`;
+}
+
+function totalTile(label, value, lines, className) {
+  return el("div", { class: `mx-sc fc-fig fc-total ${className}`, role: "group", "aria-label": label }, [
+    el("span", { class: "mx-sc-label" }, [label, pinnedInfoHint(lines.filter(Boolean).join("\n"))]),
+    el("span", { class: value.known ? "fc-total-value" : "fc-total-value fc-total-unknown", text: value.text }),
+  ]);
+}
+
+function tileValue(quantiles, fmt, missing) {
+  const text = rangeText(quantiles, fmt);
+  return { text: text ?? missing, known: text != null };
+}
+
+function adjustedTiles(scenario) {
+  const { source } = scenario;
+  const inputs = view.payload.inputs || {};
+  const parallelism = rangeText(source.effective_parallelism, fmtParallelism);
+  const criticalPath = rangeText(source.critical_path_hours, formatForecastHours);
+  return [
+    totalTile("Time to drain", tileValue(source.time_to_drain_hours, formatForecastHours, "Unknown"), [
+      drainReason(scenario, source.time_to_drain_hours),
+      scenario.key === "proposed" ? drainDelta(source.time_to_drain_hours, view.payload.forecast?.time_to_drain_hours) : null,
+      drainOdds(source),
+      parallelism ? `Effective parallelism ${parallelism} of ${inputs.concurrency ?? "?"} slots, averaged over the drain.` : null,
+      criticalPath ? `Critical path ${criticalPath}: the longest dependency chain.` : null,
+      arrivalsApprovedLine(scenario),
+    ], "fc-kpi"),
+    totalTile("Cost", tileValue(source.usd, formatForecastUsd, "Unknown"), [metricReason(scenario, source.usd, "usd"), costedLine(scenario)], "fc-kpi"),
+    totalTile("Tokens", tileValue(source.tokens, formatForecastTokens, "Unknown"), [metricReason(scenario, source.tokens, "tokens")], "fc-kpi"),
+  ];
+}
+
+// The regression-adjusted forecast is withheld. With a baseline each tile
+// shows it, labelled; a percentile it lacks stays unknown, never zero.
+function withheldTiles(scenario) {
+  const { source, info } = scenario;
+  const baseline = source.pre_regression_baseline;
+  if (!forecastBaselineFigures(baseline)) {
+    return ["Time to drain", "Cost", "Tokens"].map((label) => totalTile(label, { text: "No forecast", known: false }, [info.detail], "fc-none-fig"));
   }
-  children.push(arrivalsLine());
-  const approved = lastPayload.if_approved;
-  if (approved && backlog.proposed) {
-    const approvedInfo = forecastUnavailableInfo(approved, lastPayload);
-    if (approvedInfo) {
-      children.push(el("div", { class: "fc-approved fc-approved-unavailable" }, [
-        el("p", { class: "fc-approved", text: `If approved, the adjusted forecast is also unavailable: ${approvedInfo.label}. ${approvedInfo.detail}` }),
-        baselineBlock(approved.pre_regression_baseline),
-      ]));
-    } else {
-      children.push(el("p", { class: "fc-approved" }, [
-        `If the ${backlog.proposed} proposed task${backlog.proposed === 1 ? " is" : "s are"} approved: drain ${formatForecastQuantileRange(approved.time_to_drain_hours, formatForecastHours)}, cost ${formatForecastQuantileRange(approved.usd, formatForecastUsd)}, tokens ${formatForecastQuantileRange(approved.tokens, formatForecastTokens)} (p50 – p90).`,
-      ]));
-    }
+  const limit = "Pre-regression baseline: excludes unsupported regression follow-up work.";
+  const tile = (label, quantiles, fmt, extra) => {
+    const value = tileValue(quantiles, fmt, "Unknown");
+    return totalTile(label, value, [limit, value.known ? null : `Not estimated: ${info.label}.`, ...extra], "fc-baseline-fig");
+  };
+  return [
+    tile("Time to drain", baseline.time_to_drain_hours, formatForecastHours, [
+      scenario.key === "proposed" ? drainDelta(baseline.time_to_drain_hours, view.payload.forecast?.pre_regression_baseline?.time_to_drain_hours) : null,
+      arrivalsApprovedLine(scenario),
+    ]),
+    tile("Cost", baseline.usd, formatForecastUsd, [costedLine(scenario)]),
+    tile("Tokens", baseline.tokens, formatForecastTokens, []),
+  ];
+}
+
+// ---- status lines ---------------------------------------------------------
+
+function unavailableWarning(text, kind) {
+  const link = el("button", { class: "fc-link", type: "button", text: "Why", "aria-label": "Why: see Data gaps" });
+  link.addEventListener("click", () => pickForecastTab("data-gaps"));
+  const node = el("p", { class: "fc-warning fc-unavailable", role: "note" }, [text, " ", link]);
+  node.dataset.forecastReason = kind;
+  return node;
+}
+
+// The single status line when the current or with-arrivals forecast is
+// unavailable; the reasons and evidence are in Data gaps.
+function warningLine(scenario, hasBaseline) {
+  const { info, source, coverage } = scenario;
+  const missing = forecastCount(coverage.regression_history_missing);
+  const lead = hasBaseline ? "Baseline only — " : "No forecast — ";
+  const tasks = `${missing} task${missing === 1 ? "" : "s"}`;
+  let text = `${lead}the regression-adjusted forecast is unavailable: ${info.label}.`;
+  if (info.kind === "simulation_cut") {
+    text = `${lead}${info.reasons[0].detail} Choose Current backlog for that forecast.`;
+  } else if (info.kind === "regression_history_missing" && recordedPoolsContainGaps(source)) {
+    text = `${lead}regression follow-up cannot be estimated because ${regressionGapBecause(source)}.`;
+  } else if (info.kind === "regression_history_missing" && missing && regressionHistoryIsAbsent(source)) {
+    text = `${lead}regression follow-up work isn't included because ${tasks} ${missing === 1 ? "has" : "have"} no regression history.`;
+  } else if (info.kind === "regression_history_missing" && missing) {
+    text = `${lead}regression follow-up cannot be estimated for ${tasks}.`;
   }
-  return el("section", { class: "mx-card", "aria-label": "Backlog forecast" }, children);
+  return unavailableWarning(text, info.kind);
+}
+
+function proposedWarning(info, hasBaseline) {
+  const reason = `If approved, the adjusted forecast is unavailable: ${info.label}.`;
+  const limit = hasBaseline
+    ? " The baseline shown for proposed work excludes unsupported regression follow-up work and is not the regression-adjusted forecast."
+    : "";
+  return unavailableWarning(`${reason}${limit}`, info.kind);
 }
 
 // Unforecastable dependencies withhold the full totals; the schedulable
@@ -621,127 +691,69 @@ function subsetNote(forecast) {
   const subset = forecast.schedulable_subset;
   if (!subset) return null;
   const left = (subset.of ?? 0) - (subset.tasks ?? 0);
-  return el("div", { class: "fc-assume fc-subset", role: "note" }, [
-    el("span", { class: "fc-assume-head", text: `No full total: ${left} task${left === 1 ? "" : "s"} depend${left === 1 ? "s" : ""} on work the drain cannot start.` }),
-    el("span", { class: "fc-assume-rate", text: `The other ${subset.tasks} of ${subset.of}: drain ${formatForecastQuantileRange(subset.time_to_drain_hours, formatForecastHours)}, cost ${formatForecastQuantileRange(subset.usd, formatForecastUsd)}, tokens ${formatForecastQuantileRange(subset.tokens, formatForecastTokens)} (p50 – p90).` }),
+  return el("p", { class: "fc-line fc-subset", role: "note" }, [
+    el("strong", { text: `No full total: ${left} task${left === 1 ? "" : "s"} depend${left === 1 ? "s" : ""} on work the drain cannot start. ` }),
+    `The other ${subset.tasks} of ${subset.of}: drain ${formatForecastQuantileRange(subset.time_to_drain_hours, formatForecastHours)}, cost ${formatForecastQuantileRange(subset.usd, formatForecastUsd)}, tokens ${formatForecastQuantileRange(subset.tokens, formatForecastTokens)} (p50 – p90).`,
   ]);
 }
 
-function drainOdds(forecast) {
-  const horizon = formatForecastHours(forecast.horizon_hours ?? 2160);
-  const parts = [`Drains within ${horizon} in ${fmtShare(forecast.drain_probability)} of runs`, `the initial tasks all finish in ${fmtShare(forecast.completion_probability)}`];
-  const unfinished = num(forecast.not_expected_to_drain);
-  if (unfinished) parts.push(`${unfinished.toFixed(2)} tasks unfinished on average`);
-  const text = `${parts.join("; ")}.`;
-  return forecast.simulation_truncated ? `${text} Some runs hit the event limit.` : text;
-}
-
-function card(title, meta, children, className = "") {
-  return el("section", { class: `mx-card ${className}`.trim(), "aria-label": title }, [
-    el("div", { class: "mx-card-head" }, [
-      el("h2", { class: "mx-card-title", text: title }),
-      meta ? el("span", { class: "mx-card-meta", text: meta }) : null,
-    ]),
-    ...children,
+function emptyState(title, detail) {
+  return el("div", { class: "mx-empty" }, [
+    el("div", { class: "mx-empty-title", text: title }),
+    el("div", { class: "mx-empty-detail", text: detail }),
   ]);
 }
 
-function table(label, head, rows, caption) {
-  return el("div", { class: "mx-table-wrap", tabindex: "0", role: "region", "aria-label": label }, [
-    el("table", { class: "mx-table fc-table" }, [
-      caption ? el("caption", { text: caption }) : null,
-      el("thead", {}, [el("tr", {}, head.map(([text, numeric]) => el("th", { scope: "col", class: numeric ? "num" : null, text })))]),
-      el("tbody", {}, rows),
-    ]),
-  ]);
-}
-
-function waitsCard() {
-  const waits = lastPayload.forecast?.wait_hours;
-  if (!waits || !lastPayload.forecast?.tasks) return null;
-  const rows = WAITS.map(([key, label, hint]) => el("tr", {}, [
-    el("th", { scope: "row" }, [label, " ", infoHint(hint)]),
-    el("td", { class: "num", text: formatForecastQuantileRange(waits[key], formatForecastHours) }),
-  ]));
-  const caption = "Summed over every waiting task, so hours add up across tasks and exceed the time to drain. A task counts under the first gate it fails.";
-  const head = [["Held back by"], ["Waiting", true]];
-  return card("Why work waits", "task-hours, p50 – p90", [
-    el("div", { class: "fc-waits" }, [
-      el("p", { class: "mx-blurb fc-waits-caption", text: caption }),
-      el("div", { class: "fc-waits-grid" }, [
-        table("First four waiting reasons", head, rows.slice(0, 4)),
-        table("Last three waiting reasons", head, rows.slice(4)),
-      ]),
-    ]),
-  ], "fc-waits-card");
-}
-
-function taskCell(row) {
-  const link = el("a", { class: "fc-task", text: row.title || "Untitled task" });
-  bindTaskLink(link, row.id);
-  return el("th", { scope: "row" }, [link]);
-}
-
-function scheduleCard() {
-  const predictions = lastPayload.forecast?.task_predictions || [];
-  if (!predictions.length) return null;
-  const shown = predictions.slice(0, SCHEDULE_ROWS);
-  const review = scheduleShowsReview(shown);
-  const rows = shown.map((row) => el("tr", {}, [
-    taskCell(row),
-    el("td", { class: "fc-state", text: row.status }),
-    review ? el("td", { class: "fc-review", text: reviewAssumptionText(row) }) : null,
-    row.unforecastable
-      ? el("td", { class: "fc-unforecastable", colspan: "3", text: UNFORECASTABLE_LABELS[row.unforecastable] || row.unforecastable })
-      : el("td", { class: "num", text: row.status === "in-progress" ? "running" : formatForecastQuantileRange(row.predicted_start_hours, formatForecastHours) }),
-    row.unforecastable ? null : el("td", { class: "num", text: row.status === "in-progress" ? "—" : formatForecastQuantileRange(row.predicted_start_rank, fmtRank) }),
-    row.unforecastable ? null : el("td", { class: "num", text: fmtShare(row.completion_probability) }),
-  ]));
-  const meta = predictions.length > shown.length ? `first ${shown.length} of ${predictions.length}` : `${predictions.length} task${predictions.length === 1 ? "" : "s"}`;
-  const head = [["Task"], ["Status"], ["Starts in", true], ["Start order", true], ["Finishes", true]];
-  if (review) head.splice(2, 0, ["Review"]);
-  const caption = review
-    ? "In-progress tasks, then the backlog in dispatch order. Start time and order are p50 – p90 across simulated drains; finishes is the share of runs in which the task finishes within the horizon. Review is the assumed review mode: a thin pool either keeps that mode or drops it."
-    : "In-progress tasks, then the backlog in dispatch order. Start time and order are p50 – p90 across simulated drains; finishes is the share of runs in which the task finishes within the horizon.";
-  return card("Predicted schedule", meta, [
-    table("Predicted schedule", head, rows, caption),
-  ]);
-}
-
-// Review-mode coverage is present on current forecasts and absent on older
-// ones. Per-task `review_mode` is the same contract, so either is enough.
-function reportsReviewMode(payload = lastPayload) {
-  const coverage = payload?.coverage;
-  if (coverage && REVIEW_COVERAGE_KEYS.some((key) => Object.prototype.hasOwnProperty.call(coverage, key))) {
-    return true;
+function totalsNodes(scenario) {
+  const { source, info } = scenario;
+  const inputs = view.payload.inputs || {};
+  if (!(source.tasks ?? view.payload.forecast?.tasks)) return [emptyState("Nothing to forecast", "No backlog or in-progress tasks in this workspace.")];
+  if (inputs.history_deliveries === 0) {
+    return [emptyState("No delivery history to sample", inputs.history_tasks != null
+      ? `None of the newest ${inputs.history_tasks} completed tasks has recorded agent runs.`
+      : `No task finished with recorded agent runs in the last ${inputs.lookback_days} days or among the newest ${inputs.min_history_tasks ?? 50} completions. Widen the history.`)];
   }
-  return (payload?.forecast?.task_predictions || []).some((row) => row && (row.review_mode != null || row.review_mode_fallback != null));
-}
-
-function basisLabel(key) {
-  const labels = reportsReviewMode() ? REVIEW_BASIS_LABELS : LEGACY_BASIS_LABELS;
-  return labels[key] || key;
-}
-
-// Shipped order: keep the review mode while widening, and drop it only after
-// the mode-preserving pools are thin. Complexity and workspace after that do
-// not wait for another full cell.
-function samplingExplanation(inputs) {
-  if (!reportsReviewMode()) {
-    return "Each task draws a completed delivery's wall time, tokens and cost from tasks of the same complexity and crew pool, falling back to its complexity, then to all deliveries, when there are too few.";
+  if (!info) {
+    return [el("section", { class: "fc-figures", "aria-label": "Totals" }, adjustedTiles(scenario)), subsetNote(source)];
   }
-  const min = inputs?.min_cell_samples ?? 5;
-  return `Each task draws a completed delivery's wall time, tokens and cost from deliveries of the same complexity, crew pool and review mode. Below ${min} deliveries it keeps the review mode, first widening to that complexity at any crew, then to every delivery of that mode. Only after that does it drop the review mode: the same complexity and crew pool once that pool also has ${min} deliveries, then that complexity, then every delivery.`;
+  const hasBaseline = Boolean(forecastBaselineFigures(source.pre_regression_baseline));
+  const figures = el("section", { class: hasBaseline ? "fc-figures fc-baseline" : "fc-figures", "aria-label": "Totals" }, withheldTiles(scenario));
+  if (hasBaseline) figures.dataset.forecastBaseline = "pre-regression";
+  return [
+    figures,
+    scenario.key === "proposed" ? proposedWarning(info, hasBaseline) : warningLine(scenario, hasBaseline),
+    subsetNote(source),
+  ];
 }
 
-function basisText(basis) {
-  return Object.entries(basis || {})
-    .map(([key, count]) => `${basisLabel(key)} ${count}`)
-    .join(" · ");
+// ---- tasks ----------------------------------------------------------------
+
+/// Whether a task's cost or token range rests on too few measured deliveries.
+export function forecastMetricThin(row, metric) {
+  if (!row) return false;
+  const flag = metric === "tokens" ? row.thin_tokens : row.thin_cost;
+  if (typeof flag === "boolean") return flag;
+  const count = num(metric === "tokens" ? row.token_samples : row.cost_samples);
+  if (count == null || count === 0) return false;
+  const min = num(view.payload?.inputs?.min_metric_samples) ?? num(view.payload?.inputs?.min_cell_samples) ?? 5;
+  return count < min;
 }
 
-function scheduleShowsReview(predictions) {
-  return predictions.some((row) => row && (row.review_mode != null || row.review_mode_fallback != null));
+function metricSupportLine(row) {
+  const parts = [];
+  if (row.cost_samples != null) {
+    const count = forecastCount(row.cost_samples);
+    parts.push(`${count} cost sample${count === 1 ? "" : "s"}`);
+  }
+  if (row.token_samples != null) {
+    const count = forecastCount(row.token_samples);
+    parts.push(`${count} token sample${count === 1 ? "" : "s"}`);
+  }
+  if (!parts.length) return null;
+  const thin = [];
+  if (forecastMetricThin(row, "usd")) thin.push("cost");
+  if (forecastMetricThin(row, "tokens")) thin.push("tokens");
+  return thin.length ? `thin ${thin.join(" & ")} · ${parts.join(" · ")}` : parts.join(" · ");
 }
 
 function reviewAssumptionText(row) {
@@ -753,175 +765,96 @@ function reviewAssumptionText(row) {
   return mode;
 }
 
-function byComplexityCard() {
-  const rows = (lastPayload.forecast?.by_complexity || []).map((row) => el("tr", {}, [
-    el("th", { scope: "row", text: COMPLEXITY_LABELS[row.complexity] || row.complexity }),
-    el("td", { class: "num", text: String(row.tasks) }),
-    el("td", { class: "fc-basis", text: basisText(row.basis) }),
+// What each one-line row keeps behind its info icon.
+function taskEvidenceLines(row, review) {
+  const reviewText = review ? reviewAssumptionText(row) : null;
+  const sub = [row.complexity ? COMPLEXITY_LABELS[row.complexity] || row.complexity : null, reviewText && reviewText !== "—" ? reviewText : null].filter(Boolean).join(" · ");
+  const order = !row.unforecastable && row.status !== "in-progress" && quantilePair(row.predicted_start_rank)
+    ? `Start order ${formatForecastQuantileRange(row.predicted_start_rank, fmtRank)}`
+    : null;
+  return [
+    sub,
+    order,
+    row.drain_hold?.detail,
+    quantilePair(row.tokens) ? `${formatForecastQuantileRange(row.tokens, formatForecastTokens)} tokens` : null,
+    metricSupportLine(row),
+  ].filter(Boolean);
+}
+
+function taskCell(row, review) {
+  const link = el("a", { class: "fc-task", text: row.title || "Untitled task", title: row.title || null });
+  bindTaskLink(link, row.id);
+  const lines = taskEvidenceLines(row, review);
+  return el("th", { scope: "row" }, [
+    el("span", { class: "fc-task-line" }, [link, lines.length ? pinnedInfoHint(lines.join("\n")) : null]),
+  ]);
+}
+
+function startsCell(row) {
+  const hold = row.drain_hold;
+  // The start date on the dashboard clock, not the UTC calendar day of the string.
+  if (hold) return el("td", { class: "fc-unforecastable", title: hold.detail, text: hold.kind === "scheduled" ? `starts ${hold.starts_at ? formatDate(hold.starts_at) : "later"}` : `Excluded · ${hold.reason === "no_drain_tag" ? "no-drain" : hold.reason || "drain policy"}` });
+  if (row.unforecastable) return el("td", { class: "fc-unforecastable", text: UNFORECASTABLE_LABELS[row.unforecastable] || row.unforecastable });
+  if (row.status === "in-progress") return el("td", { class: "num", text: "running" });
+  return el("td", { class: "num", text: formatForecastQuantileRange(row.predicted_start_hours, formatForecastHours) });
+}
+
+function costCell(row) {
+  const thin = forecastMetricThin(row, "usd") || forecastMetricThin(row, "tokens");
+  return el("td", { class: "num" }, [
+    formatForecastQuantileRange(row.usd, formatForecastUsd),
+    thin ? el("span", { class: "fc-thin", text: "thin" }) : null,
+  ]);
+}
+
+function finishesCell(row) {
+  if (row.unforecastable || row.drain_hold) return el("td", { class: "num", text: "—" });
+  const share = num(row.completion_probability);
+  return el("td", { class: share != null && share < 1 ? "num fc-finish-short" : "num", text: fmtShare(share) });
+}
+
+function tasksCard(scenario) {
+  const predictions = Array.isArray(scenario.source?.task_predictions) ? scenario.source.task_predictions : [];
+  if (!predictions.length) return null;
+  const shown = predictions.slice(0, SCHEDULE_ROWS);
+  const review = scheduleShowsReview(shown);
+  const rows = shown.map((row) => el("tr", {}, [
+    taskCell(row, review),
+    el("td", { class: "fc-state" }, [statusPill(row.status)]),
+    startsCell(row),
     el("td", { class: "num", text: formatForecastQuantileRange(row.work_hours, formatForecastHours) }),
-    el("td", { class: "num", text: formatForecastQuantileRange(row.usd, formatForecastUsd) }),
-    el("td", { class: "num", text: formatForecastQuantileRange(row.tokens, formatForecastTokens) }),
+    costCell(row),
+    finishesCell(row),
   ]));
-  const content = rows.length
-    ? table("Forecast by complexity", [["Complexity"], ["Tasks", true], ["Sampled from"], ["Work hours", true], ["Cost", true], ["Tokens", true]], rows, "p50 – p90 per complexity. Work hours sum every task's slot time, so they exceed the time to drain when runs overlap.")
-    : el("div", { class: "mx-empty-note", text: "No backlog tasks." });
-  return card("By complexity", null, [content]);
+  const count = predictions.length > shown.length ? `First ${shown.length} of ${predictions.length}` : `${predictions.length} task${predictions.length === 1 ? "" : "s"}`;
+  const head = [["Task"], ["Status"], ["Starts in", true], ["Work hours", true], ["Cost", true], ["Finishes", true]];
+  return forecastCard("Tasks", `${count} in dispatch order. Ranges are p50 – p90.`, [forecastTable("Forecast tasks", head, rows)], "fc-tasks");
 }
 
-function coverageCard() {
-  const coverage = lastPayload.coverage || {};
-  const backlog = lastPayload.backlog || {};
-  const arrivals = lastPayload.arrivals?.coverage || {};
-  const min = lastPayload.inputs?.min_cell_samples ?? 5;
-  const thinHint = reportsReviewMode()
-    ? `Fewer than ${min} deliveries of the same complexity, crew pool and review mode. The wider pool may keep the review mode (any crew of that complexity, then any delivery of that mode) or drop it. Review mode dropped counts only the tasks that lost review conditioning.`
-    : `Fewer than ${min} deliveries of the same complexity and crew pool: sampled from a wider pool.`;
-  // Without a complexity the first pool that keeps the review mode is every
-  // delivery of that mode; an older response predates review conditioning.
-  const unassessedHint = reportsReviewMode()
-    ? `No complexity yet: sampled from every delivery of the task's review mode when there are at least ${min}, otherwise from every delivery, dropping the review mode.`
-    : "No complexity yet: sampled from every delivery.";
-  const reviewItems = reportsReviewMode() ? [
-    ["Review mode dropped", coverage.review_mode_fallbacks, `The sample no longer conditions on the task's review mode. The mode-preserving pools had fewer than ${min} deliveries, including when the lookback has no history. A wider pool that still keeps the review mode is counted under thin-cell fallbacks instead.`],
-    ["Unknown review assumption", coverage.review_mode_unknown, "The task's review mode could not be resolved, so it is not treated as a measured review policy. An unknown assumption uses the mode-pooled fallback."],
-    ["History with unknown review", coverage.history_review_mode_unknown, "Deliveries in the lookback whose review evidence is missing or contradictory. They are not a measured review mode."],
-  ] : [];
-  const regressionItems = ["regression_history_missing", "risk_unestimated", "regression_history_thin"].some((key) => Object.prototype.hasOwnProperty.call(coverage, key)) ? [
-    ["Missing regression history", coverage.regression_history_missing, "Tasks whose regression follow-up cannot be estimated from recorded fix history. This is why the adjusted forecast may be unavailable; the pre-regression baseline excludes that follow-up work."],
-    ["Risk not estimated", coverage.risk_unestimated, "Tasks whose regression risk has no estimate."],
-    ["Thin regression history", coverage.regression_history_thin, "Tasks with some regression history, but fewer bundles than the minimum sample."],
-  ] : [];
-  const items = [
-    ...regressionItems,
-    ["Unassessed", coverage.unassessed, unassessedHint],
-    ["Thin-cell fallbacks", coverage.thin_cell_fallbacks, thinHint],
-    ...reviewItems,
-    ["Uncovered model", coverage.uncovered_model, "No sampled delivery has every run priced, so tokens are not forecast for these tasks."],
-    ["Uncosted", coverage.uncosted, "No sampled delivery has every run's provider cost, so cost is not forecast for these tasks."],
-    ["No history", coverage.no_history, "Nothing to sample at all."],
-    ["Unforecastable dependency", coverage.dependency_unforecastable, "Depends on work the drain will not start (in review, blocked, someday, unapproved, elsewhere or missing), sits behind such work, or is on a dependency cycle. Left out of the full totals."],
-    ["Unverifiable dependencies", coverage.unverifiable_dependencies, "Dependencies this workspace cannot verify. The drain treats them as satisfied, and so does the forecast."],
-    ["Review lock overlaps", coverage.review_lock_overlaps, "Overlaps files a task in review still locks. The forecast does not model when review releases them."],
-    ["Blocked", coverage.blocked, "Blocked now: each waits for a return drawn from how long blocked work took to come back, given how long it has waited."],
-    ["Attempt-outcome fallbacks", coverage.outcome_fallbacks, `Fewer than ${lastPayload.inputs?.min_cell_samples ?? 5} recorded attempts of the same complexity, crew pool and review mode: outcomes sampled from a wider pool.`],
-    ["No attempt history", coverage.outcome_no_history, "No recorded attempt to sample: every first attempt is assumed to deliver."],
-    ["No return history", coverage.return_unsupported, "Blocked, with no recorded wait to draw a return from. Left out of the full totals."],
-    ["Unknown return tail", coverage.return_tail_unsupported, "Recorded waits run out before 90 days: a draw past the last one counts as no return."],
-    ["Unknown elapsed time", coverage.phase_age_unknown, "Running or blocked, but the history does not say since when: treated as just started."],
-    ["Arrival history: missing tokens", arrivals.missing_tokens, "Deliveries missing normalized tokens in the pool used by recent arrivals."],
-    ["Arrival history: missing cost", arrivals.missing_usd, "Deliveries missing provider cost in the pool used by recent arrivals."],
+// ---- waits ----------------------------------------------------------------
+
+function waitsSection(scenario) {
+  const waits = scenario.source?.wait_hours;
+  if (!waits || !scenario.source?.tasks) return null;
+  const items = WAITS.map(([key, label, hint]) => el("div", { class: "fc-wait" }, [
+    el("dt", {}, [label, pinnedInfoHint(hint)]),
+    el("dd", { class: "fc-wait-value", text: formatForecastQuantileRange(waits[key], formatForecastHours) }),
+  ]));
+  return forecastMoreSection("waits", "Wait breakdown", "task-hours, p50 – p90", [
+    el("p", { class: "mx-blurb", text: "Summed over every waiting task, so hours add up across tasks and exceed the time to drain. A task counts under the first gate it fails." }),
+    el("dl", { class: "fc-waits" }, items),
+  ]);
+}
+
+// ---- forecast tab ---------------------------------------------------------
+
+function forecastPanelNodes(scenario) {
+  const scope = forecastDrainScope(scenario.source);
+  return [
+    el("div", { class: "fc-scenario-row" }, [scenarioSwitch(), pinnedInfoHint(arrivalsText())]),
+    ...totalsNodes(scenario),
+    scope.lines.length ? forecastCard("Outside this drain", pinnedInfoHint("Time to drain covers startable work. These tasks retain their own work, token and cost estimates; their regression follow-up is outside this drain."), scope.lines.map((line) => el("p", { class: "mx-blurb", text: line }))) : null,
+    tasksCard(scenario),
+    el("div", { class: "fc-more-list" }, [waitsSection(scenario)]),
   ];
-  const list = el("dl", { class: "fc-coverage" }, items.map(([label, value, hint]) => el("div", { class: "fc-cov" }, [
-    el("dt", {}, [label, " ", infoHint(hint)]),
-    el("dd", { class: value ? "fc-warn" : null, text: String(value ?? 0) }),
-  ])));
-  const left = `${backlog.review ?? 0} in review are not forecast.`;
-  const arrivalNote = `Recent arrivals sample all ${arrivals.deliveries ?? 0} history deliveries for both the backlog and if-approved totals. A sampled arrival missing tokens or cost makes that iteration's total unavailable for that metric; duration remains independent. Missing totals sort last, so p50 or p90 can show —. These gaps do not affect the no-arrivals forecast.`;
-  return card("Coverage", `${coverage.tasks ?? 0} initial tasks forecast`, [list, el("p", { class: "mx-blurb", text: arrivalNote }), el("p", { class: "mx-blurb", text: left })]);
-}
-
-// ---- calibration -----------------------------------------------------------
-
-function hitRow(label, hits, target) {
-  return el("tr", {}, [
-    el("th", { scope: "row", text: label }),
-    el("td", { class: "num", text: String(hits?.n ?? 0) }),
-    el("td", { class: "num", text: fmtShare(hits?.under_p50) }),
-    el("td", { class: "num", text: fmtShare(hits?.under_p90) }),
-    el("td", { class: "fc-target mx-muted", text: target }),
-  ]);
-}
-
-function excludedText(excluded) {
-  const parts = [["rejected", excluded?.rejected], ["re-scoped", excluded?.rescoped], ["removed", excluded?.missing], ["no runs", excluded?.no_delivery]]
-    .filter(([, count]) => count)
-    .map(([label, count]) => `${count} ${label}`);
-  return parts.length ? parts.join(" · ") : "—";
-}
-
-function versionHits(hits) {
-  return hits?.n ? `${fmtShare(hits.under_p50)} · ${fmtShare(hits.under_p90)} (${hits.n})` : "—";
-}
-
-function versus(forecast, actual, fmt) {
-  return `${formatForecastQuantileRange(forecast, fmt)} → ${actual == null ? "—" : fmt(actual)}`;
-}
-
-function calibrationCard() {
-  const calibration = lastPayload.calibration || {};
-  const stored = lastPayload.stored || {};
-  const forecasts = calibration.forecasts || [];
-  const served = lastPayload.served_from === "stored";
-  const latest = stored.latest_at ? `latest stored ${formatDateTime(stored.latest_at)}` : "none stored yet";
-  const meta = served ? `${latest} · scored when stored` : latest;
-  const blurb = el("p", { class: "mx-blurb" }, [
-    `The default forecast is stored at most once every ${stored.min_interval_minutes ?? 60} minutes. Per-task calibration can score as tasks finish; whole-forecast totals follow each model's settlement rule. The default view shows that stored forecast with the calibration scored when it was stored; Refresh scores it now. A well-calibrated forecast has about 50% of actuals under p50 and 90% under p90. `,
-    infoHint("Removed or re-scoped tasks, and done tasks with no agent runs after the forecast, are left out and counted. Rejected and archived tasks are also excluded under model versions before 5; from version 5 they count as abandoned, with their post-forecast cost and token usage retained in actual totals. Before model version 9, a forecast is scored as a whole once no tasks are pending, at least one task is done or abandoned, and none was left out. From model version 9 onward, whole-forecast scoring stays provisional until 90 days after the forecast, even if its initial tasks finish earlier, so regression follow-ups observed during that window can be counted. At the cutoff, the cohort settles regardless of pending tasks and its whole actual is scored if no tasks were left out; unfinished work has no time-to-drain actual. Per-task hits can accrue before then. A settled cohort with an abandoned task is scored as not drained and has no time-to-drain actual."),
-  ]);
-  if (!forecasts.length) {
-    return card("Calibration", meta, [blurb, el("div", { class: "mx-empty" }, [
-      el("div", { class: "mx-empty-title", text: "No stored forecasts to score yet" }),
-      el("div", { class: "mx-empty-detail", text: "Calibration appears once a stored forecast's tasks start finishing." }),
-    ])]);
-  }
-  const versions = calibration.by_model_version || [];
-  const current = calibration.model_version;
-  const taskLevel = calibration.task_level || {};
-  const forecastLevel = calibration.forecast_level || {};
-  const summary = table("Calibration summary", [["Measure"], ["Scored", true], ["Under p50", true], ["Under p90", true], ["Target"]], [
-    hitRow("Task hours", taskLevel.hours, "50% · 90%"),
-    hitRow("Task cost", taskLevel.usd, "50% · 90%"),
-    hitRow("Task tokens", taskLevel.tokens, "50% · 90%"),
-    hitRow("Time to drain", forecastLevel.time_to_drain_hours, "50% · 90%"),
-    hitRow("Backlog cost", forecastLevel.usd, "50% · 90%"),
-    hitRow("Backlog tokens", forecastLevel.tokens, "50% · 90%"),
-  ], current != null ? `Model v${current}, the current model. Each version is scored on its own forecasts.` : null);
-  const older = versions.filter((row) => row.model_version !== current);
-  const byVersion = older.length ? table("Calibration by model version", [["Model"], ["Forecasts", true], ["Task hours", true], ["Time to drain", true]], older.map((row) => el("tr", {}, [
-    el("th", { scope: "row", text: `v${row.model_version}` }),
-    el("td", { class: "num", text: String(row.forecasts ?? 0) }),
-    el("td", { class: "num", text: versionHits(row.task_level?.hours) }),
-    el("td", { class: "num", text: versionHits(row.forecast_level?.time_to_drain_hours) }),
-  ])), "Earlier models, under p50 · under p90 (scored).") : null;
-  const pageCount = Math.ceil(forecasts.length / CALIBRATION_HISTORY_PAGE_SIZE);
-  calibrationHistoryPage = Math.min(calibrationHistoryPage, pageCount - 1);
-  const firstRow = calibrationHistoryPage * CALIBRATION_HISTORY_PAGE_SIZE;
-  const lastRow = Math.min(firstRow + CALIBRATION_HISTORY_PAGE_SIZE, forecasts.length);
-  const rows = forecasts.slice(firstRow, lastRow).map((row) => el("tr", {}, [
-    el("th", { scope: "row", text: formatDateTime(row.forecast_at) }),
-    el("td", { class: "num", text: row.model_version != null ? `v${row.model_version}` : "—" }),
-    el("td", { class: "num", text: `${row.done}/${row.tasks}` }),
-    el("td", { text: excludedText(row.excluded) }),
-    el("td", { class: "num", text: versus(row.forecast?.time_to_drain_hours, row.actual?.time_to_drain_hours, formatForecastHours) }),
-    el("td", { class: "num", text: versus(row.forecast?.usd, row.actual?.usd, formatForecastUsd) }),
-    el("td", { class: "num", text: versus(row.forecast?.tokens, row.actual?.tokens, formatForecastTokens) }),
-    el("td", { class: "fc-state", text: row.scored_whole ? "scored" : row.settled ? "settled, not scored" : `${row.pending} pending` }),
-  ]));
-  const excluded = calibration.excluded || {};
-  const history = table("Stored forecasts", [["Recorded"], ["Model", true], ["Done", true], ["Left out"], ["Drain p50 – p90 → actual", true], ["Cost", true], ["Tokens", true], ["State"]], rows, "Stored forecasts, newest first");
-  history.classList.add("fc-history-table-wrap");
-  const newer = el("button", { class: "mx-seg-btn", type: "button", text: "Newer forecasts" });
-  newer.disabled = calibrationHistoryPage === 0;
-  newer.addEventListener("click", () => {
-    calibrationHistoryPage = Math.max(0, calibrationHistoryPage - 1);
-    renderForecast();
-  });
-  const olderButton = el("button", { class: "mx-seg-btn", type: "button", text: "Older forecasts" });
-  olderButton.disabled = calibrationHistoryPage >= pageCount - 1;
-  olderButton.addEventListener("click", () => {
-    calibrationHistoryPage = Math.min(pageCount - 1, calibrationHistoryPage + 1);
-    renderForecast();
-  });
-  const pagination = pageCount > 1 ? el("nav", { class: "fc-history-pagination", "aria-label": "Stored forecast history pages" }, [
-    el("span", { class: "fc-history-page-status", role: "status", "aria-live": "polite", text: `Showing ${firstRow + 1}–${lastRow} of ${forecasts.length} stored forecasts · Page ${calibrationHistoryPage + 1} of ${pageCount} · newest first` }),
-    el("div", { class: "mx-seg", role: "group", "aria-label": "Stored forecast history" }, [newer, olderButton]),
-  ]) : null;
-  return card("Calibration", meta, [
-    blurb,
-    summary,
-    byVersion,
-    el("p", { class: "mx-blurb", text: `Left out across stored forecasts: ${excludedText(excluded)}.` }),
-    history,
-    pagination,
-  ]);
 }

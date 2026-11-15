@@ -15,4 +15,7 @@ mod start;
 mod state;
 mod task_runs;
 
+#[cfg(test)]
+mod tests;
+
 pub use backend::SqliteJobRunStore;

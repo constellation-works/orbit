@@ -68,6 +68,7 @@ fn registered_fixture() -> Fixture {
 }
 
 fn fixture_with_config(config: &str) -> Fixture {
+    crate::scenarios::require_isolated_mutable_fixture("decision_channel::fixture");
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let repo = root.path().join("repo");
@@ -140,9 +141,11 @@ fn rogue_plugin() -> DecisionSubmitCaller {
 
 fn decision_answer(id: &str, label: &str, consequence: &str) -> DecisionAnswer {
     DecisionAnswer {
+        risk_tier: Default::default(),
         id: id.into(),
         label: label.into(),
         consequence: consequence.into(),
+        option: None,
     }
 }
 
@@ -353,7 +356,7 @@ impl Fixture {
             .submit_decision_via_channel(plugin_submission(request, answer, token))
     }
 
-    /// Submits answer `1` for `b` with the token minted for it.
+    /// Submits `answer` for `b` with the token minted for it.
     fn submit_blocked(&self, b: &Blocked, answer: &str) -> Result<DecisionRequest, OrbitError> {
         self.submit(&b.request, answer, &b.token)
     }
@@ -575,7 +578,6 @@ impl<S: tracing::Subscriber> Layer<S> for ParkTaskBoundaryReport {
     }
 }
 
-#[test]
 fn a_slow_decision_task_report_does_not_hold_the_channel_store_lock() {
     let fx = registered_fixture();
     let b = fx.blocked();
@@ -622,7 +624,6 @@ fn a_slow_decision_task_report_does_not_hold_the_channel_store_lock() {
     assert_eq!(fx.status(&b.task), TaskStatus::Backlog);
 }
 
-#[test]
 fn a_registered_channel_applies_an_answer_as_the_human_with_provenance() {
     let fx = registered_fixture();
     let channels = fx.runtime.list_decision_channels().unwrap();
@@ -632,9 +633,15 @@ fn a_registered_channel_applies_an_answer_as_the_human_with_provenance() {
     assert_eq!(channels[0].human, HUMAN);
     assert_eq!(channels[0].plugin, PLUGIN);
     // The key is mirrored to the bound plugin's secret store at
-    // registration, without the store file ever naming it in listings.
+    // registration; the channel listing carries only the key's fingerprint.
     let secrets = fx.plugin_secrets();
     assert!(secrets.to_string().contains("channel_key"), "{secrets}");
+    let key_hex = secrets["secrets"]["channel_key"]["value"].as_str().unwrap();
+    let listing = serde_json::to_string(&channels).unwrap();
+    assert!(
+        !listing.contains(key_hex),
+        "the channel listing leaked the channel key: {listing}"
+    );
 
     let b = fx.blocked();
     assert_eq!(b.request.state, DecisionRequestState::Open);
@@ -675,7 +682,6 @@ fn a_registered_channel_applies_an_answer_as_the_human_with_provenance() {
     );
 }
 
-#[test]
 fn every_refusal_applies_nothing() {
     use DecisionSubmitCaller::{Agent, Operator, Unknown};
 
@@ -818,7 +824,6 @@ fn plugin_minted_token(
     token.chars().take(26).collect()
 }
 
-#[test]
 fn a_plugin_minted_token_from_the_mirrored_secret_verifies() {
     // Pinned against an independent implementation (Python
     // hmac/hashlib/base64) for key bytes 0x00..=0x1f and message
@@ -857,7 +862,6 @@ fn a_plugin_minted_token_from_the_mirrored_secret_verifies() {
     assert_eq!(fx.status(&b.task), TaskStatus::Backlog);
 }
 
-#[test]
 fn an_operator_caller_may_test_a_channel() {
     let fx = registered_fixture();
     let b = fx.blocked();
@@ -872,7 +876,6 @@ fn an_operator_caller_may_test_a_channel() {
     assert_eq!(fx.status(&b.task), TaskStatus::Blocked);
 }
 
-#[test]
 fn an_empty_plugin_sender_is_refused_with_or_without_an_allowlist() {
     for allowed_senders in [vec![], vec![SENDER.to_string()]] {
         let fx = fixture();
@@ -890,7 +893,6 @@ fn an_empty_plugin_sender_is_refused_with_or_without_an_allowlist() {
     }
 }
 
-#[test]
 fn registration_refuses_an_automation_human_and_a_duplicate() {
     let fx = fixture();
     refusal(
@@ -909,7 +911,6 @@ fn registration_refuses_an_automation_human_and_a_duplicate() {
     assert_eq!(fx.runtime.list_decision_channels().unwrap()[0].epoch, 1);
 }
 
-#[test]
 fn submission_is_refused_while_the_decision_channel_is_disabled() {
     let fx = fixture_with_config("");
     fx.register();
@@ -919,7 +920,6 @@ fn submission_is_refused_while_the_decision_channel_is_disabled() {
     });
 }
 
-#[test]
 fn the_digest_raises_one_proposed_approval_per_proposed_task_idempotently() {
     let fx = registered_fixture();
     let one = fx.proposed_task("First proposal");
@@ -938,6 +938,14 @@ fn the_digest_raises_one_proposed_approval_per_proposed_task_idempotently() {
     assert_eq!(raised, both);
     for request in &digest.raised {
         assert_eq!(request.gate, DecisionGate::ProposedApproval);
+        assert_eq!(
+            request.risk_tier,
+            orbit_types::task::DecisionRiskTier::Authority
+        );
+        assert_eq!(
+            request.category.as_deref(),
+            Some(format!("{}/proposed_approval", fx.runtime.workspace_id().unwrap()).as_str())
+        );
         assert_eq!(request.raised_by, "digest");
         assert_eq!(request.state, DecisionRequestState::Open);
         let answers: Vec<&str> = request.answers.iter().map(|a| a.id.as_str()).collect();
@@ -1079,7 +1087,6 @@ fn dangling_artifacts_do_not_abort_workspace_decision_and_task_listings() {
     }
 }
 
-#[test]
 fn a_changed_proposal_supersedes_its_request_and_the_digest_raises_a_fresh_one() {
     let fx = registered_fixture();
     let task = fx.proposed_task("Mutable proposal");
@@ -1112,7 +1119,6 @@ fn a_changed_proposal_supersedes_its_request_and_the_digest_raises_a_fresh_one()
 
 /// A superseded request stays superseded: restoring the text it was raised
 /// against, or returning to its status, never reopens it.
-#[test]
 fn a_superseded_proposal_request_stays_superseded_after_the_task_is_restored() {
     let fx = registered_fixture();
     let task = fx.proposed_task("Round-trip proposal");
@@ -1159,7 +1165,6 @@ fn a_superseded_proposal_request_stays_superseded_after_the_task_is_restored() {
     fx.assert_state(&task, &third.id, DecisionRequestState::Open);
 }
 
-#[test]
 fn a_review_approval_binds_to_the_candidate_and_supersedes_on_replacement() {
     let fx = registered_fixture();
     let task = fx.task();
@@ -1172,6 +1177,14 @@ fn a_review_approval_binds_to_the_candidate_and_supersedes_on_replacement() {
     let digest = fx.digest(Fixture::plugin_caller()).unwrap();
     let first = request_for(&digest.raised, &task);
     assert_eq!(first.gate, DecisionGate::ReviewApproval);
+    assert_eq!(
+        first.risk_tier,
+        orbit_types::task::DecisionRiskTier::Irreversible
+    );
+    assert_eq!(
+        first.category.as_deref(),
+        Some(format!("{}/review_approval", fx.runtime.workspace_id().unwrap()).as_str())
+    );
     assert_eq!(first.state, DecisionRequestState::Open);
     let (candidate, status) = revision(&first);
     assert_eq!(status, &TaskStatus::Review);
@@ -1205,7 +1218,6 @@ fn a_review_approval_binds_to_the_candidate_and_supersedes_on_replacement() {
 /// still carries that candidate in its history. Its proposal approval is
 /// raised without a candidate, so the historical candidate must not supersede
 /// it: repeated digests keep answering the one open request.
-#[test]
 fn a_reproposed_task_with_a_historical_candidate_keeps_one_open_proposal() {
     let fx = registered_fixture();
     let task = fx.task();
@@ -1248,7 +1260,6 @@ fn a_reproposed_task_with_a_historical_candidate_keeps_one_open_proposal() {
     assert_eq!(fx.requested_entries(&task), 1);
 }
 
-#[test]
 fn the_digest_writes_nothing_while_the_decision_channel_is_disabled() {
     let fx = fixture_with_config("");
     fx.register();
@@ -1267,7 +1278,6 @@ fn the_digest_writes_nothing_while_the_decision_channel_is_disabled() {
     );
 }
 
-#[test]
 fn the_digest_refuses_agents_and_plugins_the_channel_is_not_bound_to() {
     let fx = registered_fixture();
     let task = fx.proposed_task("Guarded proposal");
@@ -1288,7 +1298,6 @@ fn the_digest_refuses_agents_and_plugins_the_channel_is_not_bound_to() {
     assert_eq!(operator.requests.len(), 1);
 }
 
-#[test]
 fn an_approve_through_the_channel_lands_like_a_screened_approval() {
     let fx = registered_fixture();
     let decided = fx.proposed_task("Decided by channel");
@@ -1316,7 +1325,75 @@ fn an_approve_through_the_channel_lands_like_a_screened_approval() {
     assert_eq!(fx.status(&rejected), TaskStatus::Rejected);
 }
 
-#[test]
+/// A task edit that lands after an answer looked its request up, but before
+/// the answer applies, supersedes the request: the answer is refused with
+/// nothing applied, and an answer to the current request applies once.
+fn an_edit_between_an_answers_lookup_and_its_apply_supersedes_the_answer() {
+    let fx = registered_fixture();
+    let task = fx.proposed_task("Edited while answered");
+    fx.prepare_footprint(&task);
+    let stale = request_for(&fx.digest(Fixture::plugin_caller()).unwrap().raised, &task);
+    let comments = fx.comments(&task);
+
+    let editor = OrbitRuntime::from_roots(&fx.global, &fx.repo.join(".orbit")).unwrap();
+    let edited = task.clone();
+    let refused = orbit_core::test_support::with_decision_answer_checkpoint(
+        move || {
+            editor
+                .run_tool(
+                    "orbit.task.update",
+                    json!({
+                        "id": edited,
+                        "description": "A proposal rewritten while the answer was in flight.",
+                        "model": "codex",
+                    }),
+                )
+                .unwrap();
+        },
+        || fx.submit_minted(&stale, "approve"),
+    );
+    refusal(refused, "request_superseded");
+    let stored = fx.runtime.get_task(&task).unwrap();
+    assert_eq!(stored.status, TaskStatus::Proposed, "no approval applied");
+    assert_eq!(
+        stored.description, "A proposal rewritten while the answer was in flight.",
+        "only the competing edit landed"
+    );
+    assert_eq!(fx.comments(&task), comments, "no answer comment");
+    let history = fx.runtime.get_task_history(&task).unwrap();
+    assert!(
+        !history
+            .iter()
+            .any(|entry| entry.event == DECISION_ANSWERED_EVENT
+                || entry.event == "proposal_approved"),
+        "no answer or approval was recorded: {history:?}"
+    );
+    fx.assert_state(&task, &stale.id, DecisionRequestState::Superseded);
+
+    // The request for the current text applies exactly once, as the human.
+    let current = request_for(&fx.digest(Fixture::plugin_caller()).unwrap().raised, &task);
+    assert_ne!(current.id, stale.id);
+    let answered = fx.submit_minted(&current, "approve").unwrap();
+    assert_eq!(answered.state, DecisionRequestState::Answered);
+    let resolution = answered.resolution.unwrap();
+    assert_eq!(resolution.answered_by, HUMAN);
+    assert!(
+        resolution
+            .provenance
+            .as_deref()
+            .is_some_and(|provenance| provenance.starts_with("decision-channel email")),
+        "{resolution:?}"
+    );
+    assert_eq!(fx.status(&task), TaskStatus::Backlog);
+    let history = fx.runtime.get_task_history(&task).unwrap();
+    let answers = history
+        .iter()
+        .filter(|entry| entry.event == DECISION_ANSWERED_EVENT)
+        .collect::<Vec<_>>();
+    assert_eq!(answers.len(), 1, "{history:?}");
+    assert_eq!(answers[0].by, HUMAN);
+}
+
 fn a_digest_approve_is_refused_while_the_pilot_holds_or_no_footprint_is_prepared() {
     let fx = registered_fixture();
     // Held by the pilot (duplicate) and without a footprint.
@@ -1517,7 +1594,6 @@ fn dkim_required() -> (Fixture, Blocked) {
     (fx, b)
 }
 
-#[test]
 fn core_dkim_verification_applies_a_signed_message_and_refuses_forgeries() {
     let fx = fixture();
     fx.register_dkim(false);
@@ -1556,7 +1632,6 @@ fn core_dkim_verification_applies_a_signed_message_and_refuses_forgeries() {
     fx.assert_dkim_applies(&b, signed, "the signed message");
 }
 
-#[test]
 fn core_dkim_accepts_legal_folding_around_a_b_value_with_a_following_tag() {
     // RFC 6376 §3.7: emptying `b=` deletes the value and all surrounding
     // whitespace. Each case signs the emptied form independently, then
@@ -1606,7 +1681,6 @@ crate::scenario_table!(
 fn simple_body_signature_survives_governed_submit() {
     use orbit_core::test_support::with_decision_dkim_resolver;
     use orbit_tools::ToolContext;
-    use orbit_types::policy::Role;
     use orbit_types::tool::{McpCapability, ToolSessionContext};
 
     let fixture: Value =
@@ -1623,7 +1697,7 @@ fn simple_body_signature_survives_governed_submit() {
         let submit = |raw_message: &str| {
             if through_tool {
                 with_decision_dkim_resolver(FixtureResolver, || {
-                    fx.runtime.run_tool_with_context_and_role(
+                    fx.runtime.run_tool_with_context(
                         "orbit.decision.submit",
                         json!({
                             "id": b.request.id,
@@ -1634,7 +1708,6 @@ fn simple_body_signature_survives_governed_submit() {
                             "auth_results": AUTH_PASS,
                             "raw_message": raw_message,
                         }),
-                        Role::Admin,
                         ToolContext {
                             session_context: ToolSessionContext {
                                 effective_capabilities: [McpCapability::Operator].into(),
@@ -1668,7 +1741,6 @@ fn simple_body_signature_survives_governed_submit() {
     }
 }
 
-#[test]
 fn core_dkim_verifies_a_body_ending_in_non_wsp_unicode_whitespace() {
     // RFC 6376 §3.4.4 trims only SP and HTAB from body lines, so U+00A0 is
     // signed content: a signature computed over it must still verify.
@@ -1677,7 +1749,6 @@ fn core_dkim_verifies_a_body_ending_in_non_wsp_unicode_whitespace() {
     fx.assert_dkim_applies(&b, signed, "a U+00A0 body");
 }
 
-#[test]
 fn core_dkim_refuses_non_wsp_bytes_added_to_a_signed_body() {
     let (fx, b) = dkim_required();
     let signed = dkim_signed_message("approve");
@@ -1704,7 +1775,6 @@ fn core_dkim_refuses_non_wsp_bytes_added_to_a_signed_body() {
     fx.assert_dkim_applies(&b, trailing_wsp, "trailing WSP");
 }
 
-#[test]
 fn core_dkim_refuses_non_wsp_bytes_added_to_a_signed_header() {
     // Subject is in h=, so U+00A0 added to its name or its value changes
     // bytes the signer hashed. Relaxed canonicalisation trims only SP and
@@ -1727,7 +1797,6 @@ fn core_dkim_refuses_non_wsp_bytes_added_to_a_signed_header() {
     fx.assert_dkim_applies(&b, signed, "the signed header");
 }
 
-#[test]
 fn a_channel_requiring_dkim_refuses_a_submission_without_a_raw_message() {
     let fx = fixture();
     let info = fx
@@ -1757,7 +1826,6 @@ fn a_channel_requiring_dkim_refuses_a_submission_without_a_raw_message() {
 /// masks it; on Linux a sentinel stands in for the directory. A nested
 /// `orbit` must refuse every channel read and write there, not read the
 /// sentinel as "no channel registered" or register into it [ORB-19338].
-#[test]
 fn a_masked_decision_channel_store_refuses_instead_of_reading_as_empty() {
     const MASKED: &str = "decision channel store is not visible from an agent sandbox";
 
@@ -1792,3 +1860,32 @@ fn a_masked_decision_channel_store_refuses_instead_of_reading_as_empty() {
     std::fs::remove_file(&sentinel).unwrap();
     assert_eq!(fx.runtime.list_decision_channels().unwrap().len(), 1);
 }
+
+crate::scenario_table!(
+    mutable_scenarios,
+    a_slow_decision_task_report_does_not_hold_the_channel_store_lock,
+    a_registered_channel_applies_an_answer_as_the_human_with_provenance,
+    every_refusal_applies_nothing,
+    a_plugin_minted_token_from_the_mirrored_secret_verifies,
+    an_operator_caller_may_test_a_channel,
+    an_empty_plugin_sender_is_refused_with_or_without_an_allowlist,
+    registration_refuses_an_automation_human_and_a_duplicate,
+    submission_is_refused_while_the_decision_channel_is_disabled,
+    the_digest_raises_one_proposed_approval_per_proposed_task_idempotently,
+    a_changed_proposal_supersedes_its_request_and_the_digest_raises_a_fresh_one,
+    a_superseded_proposal_request_stays_superseded_after_the_task_is_restored,
+    a_review_approval_binds_to_the_candidate_and_supersedes_on_replacement,
+    a_reproposed_task_with_a_historical_candidate_keeps_one_open_proposal,
+    the_digest_writes_nothing_while_the_decision_channel_is_disabled,
+    the_digest_refuses_agents_and_plugins_the_channel_is_not_bound_to,
+    an_approve_through_the_channel_lands_like_a_screened_approval,
+    an_edit_between_an_answers_lookup_and_its_apply_supersedes_the_answer,
+    a_digest_approve_is_refused_while_the_pilot_holds_or_no_footprint_is_prepared,
+    core_dkim_verification_applies_a_signed_message_and_refuses_forgeries,
+    core_dkim_accepts_legal_folding_around_a_b_value_with_a_following_tag,
+    core_dkim_verifies_a_body_ending_in_non_wsp_unicode_whitespace,
+    core_dkim_refuses_non_wsp_bytes_added_to_a_signed_body,
+    core_dkim_refuses_non_wsp_bytes_added_to_a_signed_header,
+    a_channel_requiring_dkim_refuses_a_submission_without_a_raw_message,
+    a_masked_decision_channel_store_refuses_instead_of_reading_as_empty,
+);

@@ -1,4 +1,4 @@
-//! Auto-task inspection, toggle, and manual mint for the dashboard [ORB-10876].
+//! Auto-task inspection, toggle, manual mint, and delete for the dashboard [ORB-10876].
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -9,23 +9,25 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_common::governance::authorization::{
-    DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_SCHEDULE, DASHBOARD_AUTO_TASK_TOGGLE,
+    DASHBOARD_AUTO_TASK_DELETE, DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_SCHEDULE,
+    DASHBOARD_AUTO_TASK_TOGGLE,
 };
-use orbit_core::application::auto_tasks::scheduler::open_auto_task_instances_from_tasks;
+use orbit_core::application::auto_tasks::delete::{self, AutoTaskDeleteProfile};
+use orbit_core::application::auto_tasks::projection::AutoTaskListingProfile;
 use orbit_core::application::auto_tasks::{
-    AutoTaskListingRow, AutoTaskToggleError, AutoTaskToggleOutcome, AutoTaskToggleProfile,
+    AutoTaskDeleteError, AutoTaskDeleteParams, AutoTaskDeleteRefusal, AutoTaskToggleError,
+    AutoTaskToggleOutcome, AutoTaskToggleProfile,
 };
 use orbit_core::{OrbitRuntime, Task};
-use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, auto_task_tag};
+use orbit_types::workflow::auto_task_tag;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::blocking;
 use super::map_runtime_error;
 use super::routines::{
-    OperationsQuery, action_capability, authorization_denied, authorized_caller,
-    explicit_workspace, host_cron_zone, named_entity_not_found, record_operation_audit,
-    selection_conflict,
+    OperationAudit, OperationsQuery, action_capability, authorization_denied, authorized_caller,
+    explicit_workspace, host_cron_zone, named_entity_not_found, selection_conflict,
 };
 use crate::state::DashboardState;
 
@@ -44,6 +46,15 @@ pub(super) struct AutoTaskMintRequest {
     name: String,
     #[serde(default)]
     acknowledge_unconditional: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct AutoTaskDeleteRequest {
+    name: String,
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    force: bool,
 }
 
 /// `GET /api/auto-tasks` — workspace-scoped definition state.
@@ -79,7 +90,7 @@ pub(super) async fn list_auto_tasks(
                     generated_at,
                     state.operator_session(),
                     include_inactive_plugins,
-                ),
+                )?,
                 Err(reason) => read_only_envelope(generated_at, Some(&workspace), &reason),
             })
         }
@@ -108,22 +119,17 @@ pub(super) async fn toggle_auto_task(
         Ok(runtime) => runtime,
         Err(response) => return *response,
     };
+    let audit = OperationAudit::new(
+        &runtime,
+        &workspace,
+        "auto_task.toggle",
+        body.name.as_str(),
+        json!({"expected_enabled": body.expected_enabled, "enabled": body.enabled}),
+    );
     let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_TOGGLE, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                "auto_task.toggle",
-                &body.name,
-                "",
-                &json!({"expected_enabled": body.expected_enabled, "enabled": body.enabled}),
-                None,
-                Some(&denial),
-                None,
-                Instant::now(),
-            )
-            .await;
+            audit.denied(&denial, Instant::now()).await;
             return authorization_denied(denial);
         }
     };
@@ -173,35 +179,11 @@ pub(super) async fn toggle_auto_task(
         Err(AutoTaskToggleError::Read(error)) => return map_runtime_error(error),
         Err(AutoTaskToggleError::Write(error)) => {
             let error_message = error.to_string();
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                "auto_task.toggle",
-                &body.name,
-                "",
-                &json!({"expected_enabled": body.expected_enabled, "enabled": body.enabled}),
-                Some(&caller),
-                None,
-                Some(&error_message),
-                started,
-            )
-            .await;
+            audit.failed(&caller, &error_message, started).await;
             return auto_task_control_error(error);
         }
     };
-    record_operation_audit(
-        &runtime,
-        &workspace,
-        "auto_task.toggle",
-        &body.name,
-        "",
-        &json!({"expected_enabled": body.expected_enabled, "enabled": body.enabled}),
-        Some(&caller),
-        None,
-        None,
-        started,
-    )
-    .await;
+    audit.succeeded(&caller, started).await;
     Json(json!({
         "name": updated.name,
         "enabled": updated.enabled,
@@ -235,22 +217,17 @@ pub(super) async fn mint_auto_task(
         )
             .into_response();
     }
+    let audit = OperationAudit::new(
+        &runtime,
+        &workspace,
+        "auto_task.mint",
+        body.name.as_str(),
+        json!({"acknowledge_unconditional": body.acknowledge_unconditional}),
+    );
     let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_MINT, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                "auto_task.mint",
-                &body.name,
-                "",
-                &json!({"acknowledge_unconditional": body.acknowledge_unconditional}),
-                None,
-                Some(&denial),
-                None,
-                Instant::now(),
-            )
-            .await;
+            audit.denied(&denial, Instant::now()).await;
             return authorization_denied(denial);
         }
     };
@@ -265,39 +242,21 @@ pub(super) async fn mint_auto_task(
         Ok(Ok(task)) => task,
         Ok(Err(error)) => {
             let error_message = error.to_string();
-            record_operation_audit(
-                &runtime,
-                &workspace,
-                "auto_task.mint",
-                &body.name,
-                "",
-                &json!({"acknowledge_unconditional": true}),
-                Some(&caller),
-                None,
-                Some(&error_message),
-                started,
-            )
-            .await;
+            audit
+                .with_arguments(json!({"acknowledge_unconditional": true}))
+                .failed(&caller, &error_message, started)
+                .await;
             return auto_task_control_error(error);
         }
         Err(response) => return *response,
     };
-    record_operation_audit(
-        &runtime,
-        &workspace,
-        "auto_task.mint",
-        &body.name,
-        "",
-        &json!({
+    audit
+        .with_arguments(json!({
             "acknowledge_unconditional": true,
             "task_id": minted.id.to_string(),
-        }),
-        Some(&caller),
-        None,
-        None,
-        started,
-    )
-    .await;
+        }))
+        .succeeded(&caller, started)
+        .await;
     Json(json!({
         "name": body.name,
         "task_id": minted.id.to_string(),
@@ -305,6 +264,106 @@ pub(super) async fn mint_auto_task(
         "message": format!("Minted {} ({})", minted.id, minted.status),
     }))
     .into_response()
+}
+
+/// `POST /api/auto-tasks/delete` — remove one definition, its scheduler cursor
+/// and its delivery-consumer state.
+///
+/// An open minted task is a conflict the caller resolves with `force`. The
+/// response names those tasks. A caller without operator authority is refused
+/// and the denial is audited, as are a successful delete and a core refusal.
+pub(super) async fn delete_auto_task(
+    State(state): State<DashboardState>,
+    Query(query): Query<OperationsQuery>,
+    Json(body): Json<AutoTaskDeleteRequest>,
+) -> Response {
+    let workspace = match explicit_workspace(&query) {
+        Ok(workspace) => workspace.to_string(),
+        Err(rejection) => return rejection.into_response(),
+    };
+    let runtime = match resolve_workspace_blocking(&state, &workspace).await {
+        Ok(runtime) => runtime,
+        Err(response) => return *response,
+    };
+    let reason = trimmed_delete_reason(body.reason.as_deref());
+    let arguments = json!({"reason": reason, "force": body.force});
+    let audit = OperationAudit::new(
+        &runtime,
+        &workspace,
+        "auto_task.delete",
+        body.name.as_str(),
+        arguments.clone(),
+    );
+    let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_DELETE, state.operator_session()) {
+        Ok(caller) => caller,
+        Err(denial) => {
+            audit.denied(&denial, Instant::now()).await;
+            return authorization_denied(denial);
+        }
+    };
+    let started = Instant::now();
+    let report = match blocking("auto-task delete", {
+        let runtime = runtime.clone();
+        let name = body.name.clone();
+        let reason = reason.clone();
+        let force = body.force;
+        move || {
+            Ok(runtime.auto_task_delete_command(AutoTaskDeleteParams {
+                name,
+                reason,
+                force,
+            }))
+        }
+    })
+    .await
+    {
+        Ok(Ok(report)) => report,
+        Ok(Err(error)) => {
+            let error_message = error.to_string();
+            audit.failed(&caller, &error_message, started).await;
+            return delete_refusal(&body.name, error);
+        }
+        Err(response) => return *response,
+    };
+    audit
+        .with_target(report.name.clone())
+        .succeeded(&caller, started)
+        .await;
+    match delete::project_auto_task_delete_receipt(&report, AutoTaskDeleteProfile::Http) {
+        Ok(receipt) => Json(receipt).into_response(),
+        Err(error) => map_runtime_error(error),
+    }
+}
+
+fn trimmed_delete_reason(reason: Option<&str>) -> Option<String> {
+    reason
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn delete_refusal(name: &str, error: AutoTaskDeleteError) -> Response {
+    match error {
+        AutoTaskDeleteError::Refusal(refusal) => {
+            let message = refusal.message();
+            match refusal {
+                AutoTaskDeleteRefusal::OpenMintedTasks { open_tasks, .. } => (
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "error": message,
+                        "code": "open_minted_tasks",
+                        "open_tasks": open_tasks,
+                    })),
+                )
+                    .into_response(),
+                AutoTaskDeleteRefusal::NotFound { .. } => named_entity_not_found(
+                    "auto_task_not_found",
+                    format!("auto-task '{name}' was not found"),
+                ),
+            }
+        }
+        AutoTaskDeleteError::Other(error) => auto_task_control_error(error),
+    }
 }
 
 pub(super) fn auto_task_control_error(error: orbit_core::OrbitError) -> Response {
@@ -372,6 +431,7 @@ fn read_only_envelope(generated_at: DateTime<Utc>, workspace: Option<&str>, reas
             "auto_task_toggle": {"authorized": false, "reason": reason},
             "auto_task_mint": {"authorized": false, "reason": reason},
             "auto_task_schedule": {"authorized": false, "reason": reason},
+            "auto_task_delete": {"authorized": false, "reason": reason},
         },
         "read_only_reason": reason,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,
@@ -392,11 +452,13 @@ fn list_json(
     generated_at: DateTime<Utc>,
     operator_session: bool,
     include_inactive_plugins: bool,
-) -> Value {
+) -> Result<Value, orbit_core::OrbitError> {
     let now = Utc::now();
     let listing = runtime.auto_task_listing_state_lenient(include_inactive_plugins, now);
-    // One freshness pass for the request, with no task-body hydration. The
-    // metadata listing is newest first, exactly as the per-tag listing was.
+    // One freshness pass for the request, with no task-body hydration, that
+    // reads only the tasks carrying a listed definition's tag: the rest of
+    // the workspace never leaves the index [ORB-21824]. The metadata listing
+    // is newest first, exactly as the per-tag listing was.
     let tags = listing
         .rows
         .iter()
@@ -405,7 +467,7 @@ fn list_json(
     let tasks = if tags.is_empty() {
         Ok(Vec::new())
     } else {
-        runtime.list_task_metadata()
+        runtime.list_task_metadata_with_any_tag(&tags.keys().cloned().collect())
     };
     let mut instances = tags;
     for task in tasks.as_ref().map_or(&[][..], Vec::as_slice) {
@@ -419,18 +481,19 @@ fn list_json(
         .rows
         .iter()
         .map(|row| {
-            definition_json(
-                runtime,
+            runtime.project_auto_task_listing_row(
                 row,
-                tasks.as_ref().map(|_| {
-                    instances
-                        .get(&auto_task_tag(&row.listed.definition.name))
-                        .map_or(&[][..], Vec::as_slice)
-                }),
-                now,
+                AutoTaskListingProfile::Http {
+                    minted: tasks.as_ref().map(|_| {
+                        instances
+                            .get(&auto_task_tag(&row.listed.definition.name))
+                            .map_or(&[][..], Vec::as_slice)
+                    }),
+                    now,
+                },
             )
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
     let role_refusal = runtime
         .coordination_task_write_refusal()
         .map(|error| error.to_string());
@@ -446,11 +509,15 @@ fn list_json(
         || action_capability(&DASHBOARD_AUTO_TASK_SCHEDULE, operator_session),
         |reason| json!({"authorized": false, "reason": reason}),
     );
+    let delete_capability = role_refusal.as_deref().map_or_else(
+        || action_capability(&DASHBOARD_AUTO_TASK_DELETE, operator_session),
+        |reason| json!({"authorized": false, "reason": reason}),
+    );
     let controls_authorized = authorized_caller(&DASHBOARD_AUTO_TASK_TOGGLE, operator_session)
         .is_ok()
         && authorized_caller(&DASHBOARD_AUTO_TASK_MINT, operator_session).is_ok()
         && role_refusal.is_none();
-    json!({
+    Ok(json!({
         "generated_at": generated_at.to_rfc3339(),
         "workspace": workspace,
         "workspace_name": workspace_name,
@@ -459,6 +526,7 @@ fn list_json(
             "auto_task_toggle": toggle_capability,
             "auto_task_mint": mint_capability,
             "auto_task_schedule": schedule_capability,
+            "auto_task_delete": delete_capability,
         },
         "read_only_reason": null,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,
@@ -470,166 +538,5 @@ fn list_json(
             "path": error.path.as_ref().map(|path| path.display().to_string()),
             "message": error.message,
         })).collect::<Vec<_>>(),
-    })
-}
-
-fn definition_json(
-    runtime: &OrbitRuntime,
-    row: &AutoTaskListingRow,
-    minted: Result<&[&Task], &orbit_core::OrbitError>,
-    now: DateTime<Utc>,
-) -> Value {
-    let listed = &row.listed;
-    let definition = &listed.definition;
-    let cursor = row.cursor.as_ref();
-    let open_duplicate = minted.as_ref().is_ok_and(|tasks| {
-        open_auto_task_instances_from_tasks(tasks.iter().copied())
-            .next()
-            .is_some()
-    });
-    let automation = match &definition.schedule {
-        AutoTaskSchedule::Deliveries { .. } => Some(
-            if let Err(error) = minted
-                && definition.dedupe == DedupePolicy::SkipIfOpen
-            {
-                json!({"reason":"state_unavailable","error":error.to_string()})
-            } else {
-                match orbit_core::application::automation::inspect_auto_task_with_open_instance(
-                    runtime,
-                    definition,
-                    now,
-                    open_duplicate,
-                ) {
-                    Ok(diagnostic) => super::automation::summary(&json!(diagnostic)),
-                    Err(error) => json!({"reason":"state_unavailable","error":error.to_string()}),
-                }
-            },
-        ),
-        _ => None,
-    };
-    let last_minted = minted.ok().and_then(|tasks| tasks.first());
-    let last_minted_task_id = last_minted
-        .map(|task| task.id.to_string())
-        .or_else(|| cursor.and_then(|cursor| cursor.last_task_id.clone()));
-    let last_minted_task_status = last_minted.map(|task| task.status);
-    json!({
-        "name": definition.name,
-        "description": definition.description,
-        "enabled": definition.enabled,
-        "effective_enabled": row.effective_enabled,
-        "schedule": definition.schedule,
-        "schedule_summary": schedule_summary(&definition.schedule),
-        "automation": automation,
-        // A condition definition's ownership, arm counts, stall and last
-        // fire and skip.
-        "condition": match runtime.auto_task_condition_listing(definition) {
-            Ok(listing) => json!(listing),
-            Err(error) => json!({"unavailable": error.to_string()}),
-        },
-        "template_summary": template_summary(&definition.template),
-        "template": {
-            "title": definition.template.title,
-            "crew": definition.template.crew,
-            "status": definition.template.status,
-            "priority": definition.template.priority,
-            "complexity": definition.template.complexity,
-            "required_tools": definition.template.required_tools,
-        },
-        "dedupe": match definition.dedupe {
-            DedupePolicy::SkipIfOpen => "skip_if_open",
-            DedupePolicy::Always => "always",
-        },
-        "last_evaluation": cursor.map(|cursor| json!({
-            "kind": if cursor.last_fired_at.is_some() { "fired" } else { "baselined" },
-            "baseline_at": cursor.baseline_at,
-            "last_slot": cursor.last_slot,
-            "last_fired_at": cursor.last_fired_at,
-            "last_task_id": cursor.last_task_id,
-            "pending": cursor.pending.as_ref().map(|pending| json!({
-                "slot": pending.slot,
-                "task_id": pending.task_id,
-            })),
-            // Why a due definition minted nothing, so a quiet panel is
-            // explained rather than merely empty [ORB-12698].
-            "last_skip": cursor.last_skip.as_ref().map(|skip| json!({
-                "at": skip.at,
-                "slot": skip.slot,
-                "reason": skip.reason,
-                "ref": skip.reference,
-                "cursor_sha": skip.cursor_sha,
-                "tip_sha": skip.tip_sha,
-                "cursor_task_id": skip.cursor_task_id,
-                "detail": skip.detail,
-            })),
-        })),
-        "last_minted_task_id": last_minted_task_id,
-        "last_minted_task_status": last_minted_task_status,
-        "next_evaluation": next_evaluation_projection(row, automation.as_ref()),
-        "open_duplicate": open_duplicate,
-        "may_create_open_duplicate": open_duplicate,
-        "plugin_inactive": listed.inactive_plugin.is_some(),
-        "inactive_plugin": listed.inactive_plugin,
-        "skipped_reason": row.skipped_reason,
-    })
-}
-
-fn schedule_summary(schedule: &AutoTaskSchedule) -> String {
-    let base = match schedule {
-        AutoTaskSchedule::Deliveries {
-            deliveries_landed: t,
-            ..
-        } => format!(
-            "{} deliveries on {} ({})",
-            t.threshold, t.branch, t.coverage
-        ),
-        AutoTaskSchedule::Cron { cron, .. } => format!("cron {cron}"),
-        AutoTaskSchedule::Interval { every_minutes, .. } if *every_minutes == 1 => {
-            "every 1 minute".to_string()
-        }
-        AutoTaskSchedule::Interval { every_minutes, .. } => {
-            format!("every {every_minutes} minutes")
-        }
-        AutoTaskSchedule::Condition { condition } => {
-            format!("{} condition: {}", condition.scope.as_str(), condition.when)
-        }
-    };
-    match schedule.guard().and_then(|guard| guard.when.as_deref()) {
-        Some(when) => format!("{base}, when {when}"),
-        None => base,
-    }
-}
-
-fn template_summary(template: &AutoTaskTemplate) -> String {
-    let title = if template.title.starts_with("[auto-task] ") {
-        template.title.clone()
-    } else {
-        format!("[auto-task] {}", template.title)
-    };
-    let mut parts = vec![title];
-    if let Some(crew) = template.crew.as_deref() {
-        parts.push(format!("crew {crew}"));
-    }
-    parts.push(format!("status {}", template.status));
-    parts.push(format!("priority {}", template.priority));
-    parts.push(format!(
-        "complexity {}",
-        template
-            .complexity
-            .map_or("unassessed", |value| value.as_str())
-    ));
-    parts.join(" · ")
-}
-
-/// The shared schedule state, with a delivery trigger whose state the panel's
-/// inspection could not read labelled unavailable.
-fn next_evaluation_projection(row: &AutoTaskListingRow, automation: Option<&Value>) -> Value {
-    let (state, at) = row.schedule_with_trigger(!automation_unavailable(automation));
-    state.next_evaluation(at.map(|slot| slot.to_rfc3339()))
-}
-
-fn automation_unavailable(automation: Option<&Value>) -> bool {
-    automation
-        .and_then(|value| value.get("reason"))
-        .and_then(Value::as_str)
-        .is_some_and(|reason| reason == "source_unavailable" || reason == "state_unavailable")
+    }))
 }

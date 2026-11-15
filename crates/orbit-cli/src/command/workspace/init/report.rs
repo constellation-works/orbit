@@ -166,7 +166,6 @@ fn registered_owner(global_root: &Path, owner_machine_id: &str) -> Option<String
     let registry = orbit_registry::hosts::load_host_registry(global_root).ok()?;
     match registry.resolve(owner_machine_id).ok()? {
         orbit_registry::hosts::ResolvedHost::Entry(entry) => Some(entry.name.clone()),
-        orbit_registry::hosts::ResolvedHost::Legacy(row) => Some(row.ssh.clone()),
         orbit_registry::hosts::ResolvedHost::Local(_) => None,
     }
 }
@@ -340,7 +339,7 @@ pub(super) fn format_workspace_init(report: &WorkspaceInitReport) -> String {
             lines.push("  mcp:       no providers auto-detected".to_string());
         }
         McpOutcome::Configured(providers) => lines.push(format!(
-            "  mcp:       {} (operator-authorized: orbit.workflow.ship, run observe/resume, orbit.command.exec)",
+            "  mcp:       {} (operator-authorized: orbit.workflow ship, orbit.run observe/resume, orbit.command.exec)",
             providers.join(", ")
         )),
     }

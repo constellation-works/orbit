@@ -3,11 +3,11 @@
 
 use std::path::Path;
 
-use orbit_core::application::task::TaskAddParams;
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{ActorIdentity, OrbitRuntime};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::{
-    DecisionAnswer, DecisionBinding, DecisionGate, DecisionRequest, TaskStatus,
+    DecisionAnswer, DecisionBinding, DecisionGate, DecisionRequest, TaskArtifact, TaskStatus,
 };
 
 use crate::isolated_cli_fixture::Fixture;
@@ -153,14 +153,18 @@ fn decision_cli_lists_shows_and_answers_a_raised_request() {
             DecisionGate::BlockTriage,
             vec![
                 DecisionAnswer {
+                    risk_tier: Default::default(),
                     id: "1".to_string(),
                     label: "Drop criterion 2".to_string(),
                     consequence: "the old API stays retired".to_string(),
+                    option: None,
                 },
                 DecisionAnswer {
+                    risk_tier: Default::default(),
                     id: "dismiss".to_string(),
                     label: "Dismiss".to_string(),
                     consequence: "Leave blocked, stop asking for this episode.".to_string(),
+                    option: None,
                 },
             ],
             DecisionBinding::BlockEpisode {
@@ -170,11 +174,20 @@ fn decision_cli_lists_shows_and_answers_a_raised_request() {
             chrono::Utc::now(),
         );
         let request_id = request.id.clone();
+        let mut entry = request.history_entry("system");
+        let mut legacy: serde_json::Value =
+            serde_json::from_str(entry.note.as_ref().unwrap()).unwrap();
+        legacy.as_object_mut().unwrap().remove("risk_tier");
+        legacy.as_object_mut().unwrap().remove("category");
+        for answer in legacy["answers"].as_array_mut().unwrap() {
+            answer.as_object_mut().unwrap().remove("risk_tier");
+        }
+        entry.note = Some(legacy.to_string());
         runtime
             .apply_task_automation_update(
                 &task.id,
                 TaskAutomationUpdate {
-                    append_history: vec![request.history_entry("system")],
+                    append_history: vec![entry],
                     ..Default::default()
                 },
             )
@@ -204,12 +217,16 @@ fn decision_cli_lists_shows_and_answers_a_raised_request() {
     assert_eq!(listed["requests"][0]["id"], request_id);
     assert_eq!(listed["requests"][0]["state"], "open");
 
-    let tool_input = serde_json::json!({"model": "codex", "task_id": task_id}).to_string();
-    let tool = fixture.json(&["tool", "run", "orbit.decision.list", "--input", &tool_input]);
+    let tool_input =
+        serde_json::json!({"action": "list", "model": "codex", "task_id": task_id}).to_string();
+    let tool = fixture.json(&["tool", "run", "orbit.decision", "--input", &tool_input]);
     assert_eq!(tool["requests"][0]["id"], request_id, "{tool}");
 
     let shown = fixture.json(&["decision", "show", &request_id, "--json"]);
     assert_eq!(shown["gate"], "block_triage", "{shown}");
+    assert_eq!(shown["risk_tier"], "unknown");
+    assert_eq!(shown["answers"][0]["risk_tier"], "unknown");
+    assert!(shown["category"].is_null());
     assert_eq!(shown["answers"][0]["label"], "Drop criterion 2");
 
     // A process that declares an agent identity is refused before any
@@ -284,6 +301,99 @@ fn decision_cli_lists_shows_and_answers_a_raised_request() {
         .failure();
 }
 
+/// An agent raises a multiple-choice request on a human-crew task through
+/// the tool, the CLI lists it by topic, an agent identity cannot answer it,
+/// and the operator's answer completes the task.
+#[test]
+fn decision_raise_cli_raises_lists_and_completes_on_answer() {
+    if crate::isolated_test::run_in_child(
+        "decision_cli::decision_raise_cli_raises_lists_and_completes_on_answer",
+    ) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    let config_path = workspace_root.join("config.toml");
+    let mut config = std::fs::read_to_string(&config_path).unwrap_or_default();
+    config.push_str("\n[crews.dk]\nkind = \"human\"\n");
+    std::fs::write(&config_path, config).unwrap();
+
+    let task_id = {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("decision-fixture"));
+        runtime
+            .add_task(TaskAddParams {
+                title: "Sign off the price".into(),
+                crew: Some("dk".into()),
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            })
+            .unwrap()
+            .id
+            .to_string()
+    };
+
+    let input = serde_json::json!({
+        "action": "raise",
+        "model": "codex",
+        "task_id": task_id,
+        "question": "Which price do we ship?",
+        "topic": "pricing/sign-off",
+        "options": [
+            {"label": "Keep it", "consequence": "No change.", "risk_tier": "routine"},
+            {"label": "Raise 10%", "consequence": "Edit the price table.", "recommended": true, "risk_tier": "reversible"},
+        ],
+    })
+    .to_string();
+    let raised = fixture.json(&["tool", "run", "orbit.decision", "--input", &input]);
+    assert_eq!(raised["gate"], "agent_request", "{raised}");
+    assert_eq!(raised["answers"][0]["label"], "Raise 10%", "{raised}");
+    assert_eq!(raised["recommended"], "1", "{raised}");
+    assert_eq!(raised["risk_tier"], "reversible", "{raised}");
+    assert!(
+        raised["category"]
+            .as_str()
+            .unwrap()
+            .ends_with("/agent_request/pricing")
+    );
+    let request_id = raised["id"].as_str().unwrap().to_string();
+
+    let listed = fixture.json(&["decision", "list", "--topic", "pricing/sign-off", "--json"]);
+    assert_eq!(listed["count"], 1, "{listed}");
+    assert_eq!(listed["requests"][0]["risk_tier"], "reversible");
+    let other = fixture.json(&["decision", "list", "--topic", "pricing", "--json"]);
+    assert_eq!(other["count"], 0, "{other}");
+
+    fixture
+        .command(&["decision", "answer", &request_id, "1", "--json"])
+        .env("ORBIT_AGENT_NAME", "codex")
+        .env("ORBIT_AGENT_MODEL", "gpt-6.1-sol")
+        .assert()
+        .failure();
+    let still_open = fixture.json(&["decision", "show", &request_id, "--json"]);
+    assert_eq!(still_open["state"], "open", "{still_open}");
+    assert_eq!(still_open["risk_tier"], "reversible");
+    let open = fixture.json(&["task", "show", &task_id, "--json"]);
+    assert_eq!(open["open_decisions"][0]["risk_tier"], "reversible");
+    assert_eq!(open["open_decisions"][0]["category"], raised["category"]);
+
+    fixture
+        .command(&["decision", "answer", &request_id, "1", "--json"])
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .success();
+    let task = fixture.json(&["task", "show", &task_id, "--json"]);
+    assert_eq!(task["status"], "done", "{task}");
+}
+
 /// The delegated-human channel over the real CLI: the operator registers
 /// a channel, submits an answer with its per-request token through the
 /// governed tool (the path a channel plugin uses), and revocation then
@@ -304,7 +414,7 @@ fn decision_channel_cli_registers_submits_and_revokes() {
     config.push_str("\n[decision_channel]\nenabled = true\n");
     std::fs::write(&config_path, config).unwrap();
 
-    let (request_id, token) = {
+    let (request_id, token, fresh_request_id, fresh_token, fresh_task_id) = {
         let _authority = orbit_common::test_env::unset(
             orbit_common::test_env::INHERITED_AUTHORITY_ENV
                 .iter()
@@ -332,14 +442,18 @@ fn decision_channel_cli_registers_submits_and_revokes() {
             DecisionGate::BlockTriage,
             vec![
                 DecisionAnswer {
+                    risk_tier: Default::default(),
                     id: "1".to_string(),
                     label: "Drop criterion 2".to_string(),
                     consequence: "the old API stays retired".to_string(),
+                    option: None,
                 },
                 DecisionAnswer {
+                    risk_tier: Default::default(),
                     id: "dismiss".to_string(),
                     label: "Dismiss".to_string(),
                     consequence: "Leave blocked, stop asking for this episode.".to_string(),
+                    option: None,
                 },
             ],
             DecisionBinding::BlockEpisode {
@@ -378,7 +492,70 @@ fn decision_channel_cli_registers_submits_and_revokes() {
             .register_decision_channel("email", "human:operator", "decision-mail", vec![])
             .unwrap();
         let token = runtime.mint_decision_token("email", &request_id).unwrap();
-        (request_id, token)
+
+        // A second, still-outstanding request on its own blocked task:
+        // the revoke check below submits its fresh token, so only a
+        // working revocation (not the first token's consumption) can
+        // refuse it.
+        let fresh_task = runtime
+            .add_task(TaskAddParams {
+                title: "Blocked awaiting a revoked channel".into(),
+                description: "decision channel revoke fixture".into(),
+                status: Some(TaskStatus::Blocked),
+                ..Default::default()
+            })
+            .unwrap();
+        let fresh_history = runtime.get_task_history(&fresh_task.id).unwrap();
+        let fresh_blocked_at = fresh_history
+            .iter()
+            .rfind(|entry| entry.to_status == Some(TaskStatus::Blocked))
+            .expect("seeded blocked task records its block")
+            .at;
+        let fresh_request = DecisionRequest::new(
+            fresh_task.id.to_string(),
+            DecisionGate::BlockTriage,
+            vec![
+                DecisionAnswer {
+                    risk_tier: Default::default(),
+                    id: "1".to_string(),
+                    label: "Drop criterion 2".to_string(),
+                    consequence: "the old API stays retired".to_string(),
+                    option: None,
+                },
+                DecisionAnswer {
+                    risk_tier: Default::default(),
+                    id: "dismiss".to_string(),
+                    label: "Dismiss".to_string(),
+                    consequence: "Leave blocked, stop asking for this episode.".to_string(),
+                    option: None,
+                },
+            ],
+            DecisionBinding::BlockEpisode {
+                episode: fresh_blocked_at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+            },
+            "block_triage".to_string(),
+            chrono::Utc::now(),
+        );
+        let fresh_request_id = fresh_request.id.clone();
+        runtime
+            .apply_task_automation_update(
+                &fresh_task.id,
+                TaskAutomationUpdate {
+                    append_history: vec![fresh_request.history_entry("system")],
+                    ..Default::default()
+                },
+            )
+            .expect("record the fresh decision request");
+        let fresh_token = runtime
+            .mint_decision_token("email", &fresh_request_id)
+            .unwrap();
+        (
+            request_id,
+            token,
+            fresh_request_id,
+            fresh_token,
+            fresh_task.id.to_string(),
+        )
     };
 
     let channels = fixture.json(&["decision", "channel", "list", "--json"]);
@@ -515,22 +692,39 @@ fn decision_channel_cli_registers_submits_and_revokes() {
     let replay: serde_json::Value = serde_json::from_slice(&replay.stderr).unwrap();
     assert_eq!(replay["code"], "token_consumed", "{replay}");
 
-    // Revocation refuses the next submission through the channel.
+    // Revocation refuses the next submission through the channel. Use
+    // the fresh outstanding request: its token was never consumed, so
+    // only a working CLI revoke can refuse it, as `channel_revoked`,
+    // leaving its task and request untouched.
+    let before_task = fixture.json(&["task", "show", &fresh_task_id, "--json"]);
+    assert_eq!(before_task["status"], "blocked", "{before_task}");
     fixture.json(&["decision", "channel", "revoke", "email", "--json"]);
-    fixture
+    let revoked = fixture
         .command(&[
             "decision",
             "submit",
-            &request_id,
+            &fresh_request_id,
             "dismiss",
             "--channel",
             "email",
             "--token",
-            &token,
+            &fresh_token,
+            "--json",
         ])
         .env("ORBIT_OPERATOR", "1")
         .assert()
-        .failure();
+        .failure()
+        .get_output()
+        .clone();
+    let revoked: serde_json::Value = serde_json::from_slice(&revoked.stderr).unwrap();
+    assert_eq!(revoked["code"], "channel_revoked", "{revoked}");
+    assert_eq!(
+        fixture.json(&["task", "show", &fresh_task_id, "--json"])["status"],
+        "blocked",
+        "a revoked submission leaves its task unchanged"
+    );
+    let fresh_shown = fixture.json(&["decision", "show", &fresh_request_id, "--json"]);
+    assert_eq!(fresh_shown["state"], "open", "{fresh_shown}");
 }
 
 /// `orbit decision digest` over the real CLI: the operator's call raises
@@ -716,4 +910,268 @@ fn governed_denial_and_override_stay_off_stderr() {
     );
     let digest: serde_json::Value = serde_json::from_slice(&allowed.stdout).unwrap();
     assert_eq!(digest["count"], 0, "{digest}");
+}
+
+/// `orbit decision show` on a `script_grant` request prints what an answer
+/// consents to (script, digests, refusal, capabilities and the diff), and
+/// `orbit decision answer <id> grant` writes the grant bound to that digest.
+#[test]
+fn decision_cli_shows_and_answers_a_script_grant_request() {
+    if crate::isolated_test::run_in_child(
+        "decision_cli::decision_cli_shows_and_answers_a_script_grant_request",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    // Run the script job hermetically: `orbit init` seeds `default_crew`
+    // from the host's detected CLIs (opus here), which CI runners leave
+    // disabled, so `run_job_v2` would refuse before reaching the grant gate.
+    crate::fixture_crew::configure_sol(&fixture.root);
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap()).to_path_buf();
+    let repo = fixture.repo.clone();
+    std::fs::create_dir_all(repo.join("tools")).unwrap();
+    std::fs::write(repo.join("tools/report.sh"), "#!/bin/sh\necho '{}'\n").unwrap();
+    // This fixture's orbit root sits outside the repo: the catalog reads the
+    // root's manifests and a step snapshot the checkout's, so write both.
+    for scripts in [
+        workspace_root.join("resources/scripts"),
+        repo.join(".orbit/resources/scripts"),
+    ] {
+        std::fs::create_dir_all(&scripts).unwrap();
+        std::fs::write(
+            scripts.join("report.yaml"),
+            "schemaVersion: 1\nkind: Script\nmetadata:\n  name: report\nspec:\n  description: Fixture report.\n  entry: tools/report.sh\n",
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        repo.join("sweep.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: sweep\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: run\n      target: script:report\n",
+    )
+    .unwrap();
+    let runtime = || {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        OrbitRuntime::from_roots(&fixture.root, &workspace_root).unwrap()
+    };
+    let refused = format!(
+        "{:?}",
+        runtime().run_job_v2_from_yaml(&repo.join("sweep.yaml"), serde_json::json!({}))
+    );
+    assert!(refused.contains("grant_missing"), "{refused}");
+
+    let listed = fixture.json(&["decision", "list", "--json"]);
+    let request = &listed["requests"][0];
+    assert_eq!(request["gate"], "script_grant", "{listed}");
+    let request_id = request["id"].as_str().unwrap().to_string();
+    let digest = request["script_grant"]["digest"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let output = fixture
+        .command(&["decision", "show", &request_id])
+        .assert()
+        .success();
+    let plain = String::from_utf8_lossy(&output.get_output().stdout).to_string();
+    for expected in [
+        "script: report (entry tools/report.sh)".to_string(),
+        format!("digest: {digest} (granted: none)"),
+        "refusal: grant_missing".to_string(),
+        "+echo '{}'".to_string(),
+    ] {
+        assert!(plain.contains(&expected), "want {expected:?}: {plain}");
+    }
+
+    fixture
+        .command(&["decision", "answer", &request_id, "grant", "--json"])
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .success();
+    let grant = runtime()
+        .verified_script_grant("report")
+        .unwrap()
+        .expect("the answer wrote the grant");
+    assert_eq!(grant.digest, digest);
+    assert_eq!(grant.provenance, "cli");
+}
+
+/// An envelope has no description/criteria. Checking a review request against
+/// that envelope incorrectly supersedes its full-spec revision binding.
+#[test]
+fn attention_preserves_review_decisions_bound_to_nonempty_requirements() {
+    if crate::isolated_test::run_in_child(
+        "decision_cli::attention_preserves_review_decisions_bound_to_nonempty_requirements",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    let (task_id, request_id) = {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("decision-fixture"));
+        let task = runtime
+            .add_task(TaskAddParams {
+                title: "Review with requirements".into(),
+                description: "The completed candidate still needs a human decision.".into(),
+                acceptance_criteria: vec!["Keep the recorded requirements in the binding".into()],
+                status: Some(TaskStatus::Review),
+                ..Default::default()
+            })
+            .unwrap();
+        let request = DecisionRequest::new(
+            task.id.clone(),
+            DecisionGate::ReviewApproval,
+            DecisionGate::ReviewApproval.approval_answers(),
+            DecisionBinding::for_task(&task, None),
+            "digest".into(),
+            chrono::Utc::now(),
+        );
+        runtime
+            .apply_task_automation_update(
+                &task.id,
+                TaskAutomationUpdate {
+                    append_history: vec![request.history_entry("system")],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        (task.id, request.id)
+    };
+    let listed = fixture.json(&["decision", "list", "--json"]);
+    assert!(
+        listed["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|request| request["id"] == request_id)
+    );
+    let output = fixture
+        .command(&[
+            "attention",
+            "--kind",
+            "decision_open",
+            "--task",
+            &task_id,
+            "--json",
+        ])
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let attention: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        attention["counts"]["returned"], 1,
+        "attention must check effective review decisions against the full requirements, as decision list does: {attention}"
+    );
+    assert_eq!(attention["items"][0]["refs"]["decision_id"], request_id);
+    assert_eq!(attention["items"][0]["next"]["tool"], "orbit.decision");
+    assert_eq!(attention["items"][0]["next"]["input"]["action"], "show");
+}
+
+/// An unidentified CLI caller (no TTY, no agent declaration, no override) is
+/// not refused on `orbit resident grant`: its widening raises the
+/// `resident_authority` request the reference documents and changes no
+/// authority, and the operator override still applies a widening at once.
+#[test]
+fn resident_grant_from_an_unidentified_cli_caller_raises_a_request() {
+    if crate::isolated_test::run_in_child(
+        "decision_cli::resident_grant_from_an_unidentified_cli_caller_raises_a_request",
+    ) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    let task_id = {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("decision-fixture"));
+        let id = runtime
+            .add_task(TaskAddParams {
+                title: "[orchestration]: resident grant fixture".into(),
+                tags: vec!["resident".into()],
+                ..Default::default()
+            })
+            .unwrap()
+            .id
+            .to_string();
+        let mandate = serde_json::json!({
+            "schema": "resident.mandate/v1",
+            "goal": "Exercise the grant request path",
+            "exit_criteria": ["The request is answered"],
+            "deadline": "2099-01-01T00:00:00Z",
+            "workspaces": [runtime.workspace_id().unwrap()],
+            "crew": "sol",
+            "cadence": {"floor_minutes": 10, "heartbeat_minutes": 120}
+        });
+        runtime
+            .update_task_as_human(
+                &id,
+                TaskUpdateParams {
+                    upsert_artifacts: vec![TaskArtifact::from_text(
+                        "resident/mandate.json",
+                        mandate.to_string(),
+                    )],
+                    ..Default::default()
+                },
+                "human:decision-fixture".into(),
+            )
+            .unwrap();
+        id
+    };
+
+    let requested = fixture.json(&[
+        "resident",
+        "grant",
+        &task_id,
+        "--add",
+        "merge",
+        "--quote",
+        "Merge reviewed release pull requests.",
+        "--json",
+    ]);
+    assert_eq!(requested["outcome"], "requested", "{requested}");
+    let held = |value: &serde_json::Value| value["authority"]["rights"].clone();
+    assert_eq!(
+        held(&requested),
+        serde_json::json!([]),
+        "a request grants nothing: {requested}"
+    );
+    let listed = fixture.json(&["decision", "list", "--gate", "resident_authority", "--json"]);
+    assert!(
+        listed.to_string().contains(&task_id),
+        "the request is open for the human: {listed}"
+    );
+
+    // The operator override still widens at once.
+    let granted = fixture
+        .command(&["resident", "grant", &task_id, "--add", "merge", "--json"])
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let granted: serde_json::Value = serde_json::from_slice(&granted).unwrap();
+    assert_eq!(granted["outcome"], "granted", "{granted}");
 }

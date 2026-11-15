@@ -4,7 +4,7 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 
 use super::super::TaskCommitBoundary;
-use super::codec::{FRICTION, RELEASE_BUDGET_WINDOW_HOURS, STATE};
+use super::codec::{FRICTION, RELEASE_BUDGET_WINDOW_HOURS};
 use super::{decode, decode_state};
 use crate::contracts::*;
 
@@ -23,7 +23,7 @@ impl TaskCommitBoundary {
         run_id: &str,
     ) -> Result<DrainReleases, OrbitError> {
         let mut released = DrainReleases::default();
-        for row in self.coordination_rows_mentioning(STATE, run_id)? {
+        for row in self.lifecycle_rows_for_claim_run(run_id)? {
             let state = decode_state(&row.payload_json)?;
             if state.claim.executed_on.machine_id != machine_id
                 || state.claim.run_context.run_id != run_id
@@ -139,16 +139,14 @@ impl TaskCommitBoundary {
             "; the task's next run continues it unless the task's spec changes or an operator \
              discards it",
         );
-        Some(orbit_types::task::TaskHistoryEntry {
-            at: Utc::now(),
-            by: machine.clone(),
-            event: orbit_types::task::CLAIM_CANDIDATE_KEPT_EVENT.into(),
-            note: Some(note),
-            from_status: None,
-            to_status: None,
-            operation_id: None,
-            decision: None,
-        })
+        Some(
+            orbit_types::task::TaskHistoryEntry::new(
+                Utc::now(),
+                machine.clone(),
+                orbit_types::task::CLAIM_CANDIDATE_KEPT_EVENT,
+            )
+            .with_note(Some(note)),
+        )
     }
 
     /// [ORB-15314] Copy the verdict and findings of the interrupted attempt's
@@ -204,7 +202,7 @@ impl TaskCommitBoundary {
             PreservedClaimCandidate,
             ExecutionClaim,
         )> = None;
-        for row in self.coordination_rows_mentioning(STATE, &task.id)? {
+        for row in self.lifecycle_rows_for_claim_task(&task.id)? {
             let state = decode_state(&row.payload_json)?;
             if state.claim.task_id != task.id {
                 continue;
@@ -299,11 +297,9 @@ impl TaskCommitBoundary {
         &self,
         task_id: &str,
     ) -> Result<orbit_types::task::Task, OrbitError> {
-        crate::repository::task::v2::TaskV2Store::new(
-            self.registry.clone(),
-            self.workspace_id.clone(),
-        )
-        .task_from_bundle(self.bundle_store.read_bundle(task_id)?)
+        Ok(crate::repository::task::v2::task_from_bundle(
+            self.bundle_store.read_bundle(task_id)?,
+        ))
     }
 
     /// The typed failure releases of `task_id` that count against its
@@ -344,7 +340,7 @@ impl TaskCommitBoundary {
                 .map_err(|e| OrbitError::Store(e.to_string()))
         };
         let mut releases = Vec::new();
-        for row in self.coordination_rows_mentioning(STATE, task_id)? {
+        for row in self.lifecycle_rows_for_claim_task(task_id)? {
             let state = decode_state(&row.payload_json)?;
             if state.claim.task_id != task_id {
                 continue;
@@ -482,11 +478,13 @@ pub(in super::super) fn fresh_offer_history(
 ) -> Option<orbit_types::task::TaskHistoryEntry> {
     let (reason, detail) = offer.fresh.as_ref()?;
     let candidate = &offer.candidate;
-    Some(orbit_types::task::TaskHistoryEntry {
-        at: Utc::now(),
-        by: machine_id.to_string(),
-        event: orbit_types::task::CANDIDATE_RESUME_EVENT.into(),
-        note: Some(format!(
+    Some(
+        orbit_types::task::TaskHistoryEntry::new(
+            Utc::now(),
+            machine_id,
+            orbit_types::task::CANDIDATE_RESUME_EVENT,
+        )
+        .with_note(Some(format!(
             "fresh: claim={claim_id}, machine={machine_id}, source_run={}, source_branch={}, \
              source_sha={}; reason={}: candidate {} {detail}",
             candidate.source_run_id.as_deref().unwrap_or("unknown"),
@@ -494,12 +492,8 @@ pub(in super::super) fn fresh_offer_history(
             candidate.head_sha,
             reason.as_str(),
             candidate.head_sha,
-        )),
-        from_status: None,
-        to_status: None,
-        operation_id: None,
-        decision: None,
-    })
+        ))),
+    )
 }
 
 /// The one comment a task blocked by its release budget carries: every

@@ -23,8 +23,8 @@ use std::path::Path;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_types::task::{Task, TaskStatus};
-use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery};
+use orbit_types::task::{ReservationOwnerMetadata, Task, TaskStatus};
+use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery, LandingStopEvidence};
 
 use super::TaskCommitBoundary;
 use super::admission::{ADMISSION_RESERVATION_TTL_SECONDS, RECEIPT_KIND, StoredReceipt, digest};
@@ -74,13 +74,12 @@ impl TaskCommitBoundary {
             tasks,
             receipt,
             screen.executor_host_os,
+            screen.tag_label_requirements,
         )?;
         receipt.queue_depth += candidates.len();
         for candidate in candidates {
             let guidance = guidance_capture(candidate.task)?;
             receipt.experiments = Some(guidance.experiments);
-            receipt.explore_brief = guidance.explore_brief;
-            receipt.visual_review = guidance.visual_review;
             if self.commit_repair_claim(
                 screen,
                 receipt_key,
@@ -104,7 +103,7 @@ impl TaskCommitBoundary {
     ) -> Result<Vec<PendingRepair>, OrbitError> {
         self.enter_ordinary(|| {
             Ok(self
-                .claim_states_locked()?
+                .live_claim_states_locked()?
                 .into_iter()
                 .filter(|state| state.claim.phase == ExecutionClaimPhase::RepairPending)
                 .map(|state| PendingRepair {
@@ -124,9 +123,10 @@ impl TaskCommitBoundary {
         tasks: &'a [Task],
         receipt: &mut AdmissionReceipt,
         executor_host_os: &std::collections::BTreeMap<String, orbit_types::task::ExecutorOsLimit>,
+        tag_label_requirements: &orbit_types::task::TagLabelRequirements,
     ) -> Result<Vec<RepairCandidate<'a>>, OrbitError> {
         let mut candidates = Vec::new();
-        for state in self.claim_states_locked()? {
+        for state in self.live_claim_states_locked()? {
             if state.claim.phase != ExecutionClaimPhase::RepairPending {
                 continue;
             }
@@ -165,7 +165,12 @@ impl TaskCommitBoundary {
                 receipt.os_unavailable.push(diagnose(reason));
                 continue;
             }
-            if let Some(reason) = labels_unavailable(request.os, &request.labels, task) {
+            if let Some(reason) = labels_unavailable_with_tag_requirements(
+                request.os,
+                &request.labels,
+                task,
+                tag_label_requirements,
+            ) {
                 receipt.labels_unavailable.push(diagnose(reason));
                 continue;
             }
@@ -192,7 +197,11 @@ impl TaskCommitBoundary {
             let stop_evidence = self
                 .landing_attempt(&accepted.handoff_id)?
                 .and_then(|attempt| attempt.evidence)
-                .map(|evidence| super::landing::operator_stop_reason(&evidence))
+                .map(|evidence| {
+                    LandingStopEvidence::parse(&evidence)
+                        .operator_reason()
+                        .to_string()
+                })
                 .unwrap_or_default();
             candidates.push(RepairCandidate {
                 repair: ClaimRepair {
@@ -278,7 +287,10 @@ impl TaskCommitBoundary {
                 actor: machine_id.clone(),
                 ttl_seconds: ADMISSION_RESERVATION_TTL_SECONDS,
                 owner_run_id: None,
-                owner_metadata_json: Some(encode(&serde_json::json!({"claim_id": claim_id}))?),
+                owner_metadata: Some(ReservationOwnerMetadata {
+                    claim_id: Some(claim_id.clone()),
+                    ..Default::default()
+                }),
             }),
             rows: vec![
                 row(RECEIPT_KIND, receipt_key, &())?,

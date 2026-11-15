@@ -83,6 +83,7 @@ pub(super) fn parse_commit_output(
         Some("already_committed") => CommitObservationStatus::AlreadyCommitted,
         Some("verified_no_diff") => CommitObservationStatus::VerifiedNoDiff,
         Some("verified_already_landed") => CommitObservationStatus::VerifiedAlreadyLanded,
+        Some("verified_already_resolved") => CommitObservationStatus::VerifiedAlreadyResolved,
         Some("skipped_no_diff_expected") => CommitObservationStatus::SkippedNoDiffExpected,
         _ => return Err(DeliveryEvidenceGap::OutputMalformed),
     };

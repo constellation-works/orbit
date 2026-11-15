@@ -8,12 +8,6 @@ impl RuntimeKernel {
         self.context.settings().resource_throttle()
     }
 
-    /// Minutes a deferred delivery-automation reason may persist before the
-    /// evaluator escalates it to a warning and one friction record.
-    pub fn automation_stall_window_minutes(&self) -> u32 {
-        self.context.settings().automation_stall_window_minutes()
-    }
-
     pub fn pr_config(&self) -> &orbit_engine::PrConfig {
         self.context.settings().pr_config()
     }
@@ -157,12 +151,6 @@ impl RuntimeKernel {
         self.context.settings().workflow_distributed_completion()
     }
 
-    /// `[workflow] admission_affinity`: how far admission lets work only
-    /// the requesting executor can run lead.
-    pub fn admission_affinity(&self) -> orbit_types::task::AdmissionAffinityReach {
-        self.context.settings().admission_affinity()
-    }
-
     /// `[workflow.task_pilot_freshness]`, before any routine override.
     pub fn task_pilot_freshness(
         &self,
@@ -191,10 +179,16 @@ impl RuntimeKernel {
         self.context.settings().unlocked_context_paths()
     }
 
-    /// `lease.*` as admitted: whether path leases are accepted and the
-    /// per-class guards a request is held to.
+    /// The lease policy this runtime opened with: whether path leases are
+    /// accepted and the per-class guards a request is held to.
     pub(crate) fn lease_policy(&self) -> &crate::task::locks::LeasePolicy {
         self.context.settings().lease_policy()
+    }
+
+    /// Whether this runtime accepts path lease operations at all; `false`
+    /// outside lease machinery tests [ORB-22808].
+    pub fn leases_enabled(&self) -> bool {
+        self.lease_policy().enabled()
     }
 
     /// `workflow.lock_modes` as admitted: the paths where a footprint
@@ -209,6 +203,12 @@ impl RuntimeKernel {
         self.context.settings().light_delivery_paths()
     }
 
+    /// `completion.hold`: the admitted rules that keep a
+    /// completion-authorized run's task in `review`, in configured order.
+    pub fn completion_hold_rules(&self) -> &[orbit_types::workflow::CompletionHoldRule] {
+        self.context.settings().completion_hold()
+    }
+
     /// `workflow.test_paths` as a compiled filter: the landed-diff paths
     /// counted as tests.
     pub fn diff_test_paths(&self) -> &orbit_common::fs::path_filter::PathFilter {
@@ -221,23 +221,11 @@ impl RuntimeKernel {
         self.context.settings().diff_non_code_paths()
     }
 
-    /// `[workflow.regression_risk]` as admitted: whether implement and
-    /// review prompts mark regression-prone context files.
-    pub fn regression_risk_settings(&self) -> orbit_config::RegressionRiskSettings {
-        self.context.settings().regression_risk()
-    }
-
-    /// `[workflow.explore]` as admitted: whether implement and review-repair
-    /// runs may delegate read-only exploration, and its per-run budgets.
-    pub fn explore_settings(&self) -> orbit_config::ExploreSettings {
-        self.context.settings().explore()
-    }
-
-    /// `[workflow.explore_brief]` as admitted: whether the task pilot is
-    /// asked for explore briefs, for which tasks, and whether they reach the
-    /// implementer.
-    pub fn explore_brief_settings(&self) -> &orbit_config::ExploreBriefSettings {
-        self.context.settings().explore_brief()
+    /// `workflow.non_reviewable_paths` as a compiled filter: paths left out
+    /// of the reviewable-lines denominator. Docs and config stay reviewable
+    /// until a workspace lists them.
+    pub fn diff_non_reviewable_paths(&self) -> &orbit_common::fs::path_filter::PathFilter {
+        self.context.settings().diff_non_reviewable_paths()
     }
 
     /// `[workflow.tag_instructions]` as admitted.
@@ -245,9 +233,9 @@ impl RuntimeKernel {
         self.context.settings().tag_instructions()
     }
 
-    /// `[visual_review]` as admitted.
-    pub fn visual_review_settings(&self) -> &orbit_config::VisualReviewSettings {
-        self.context.settings().visual_review()
+    /// Additional host capability requirements keyed by normalized task tag.
+    pub fn tag_label_requirements(&self) -> &orbit_types::task::TagLabelRequirements {
+        self.context.settings().tag_label_requirements()
     }
 
     /// `[workflow.review_skip_tags]` as admitted.
@@ -263,20 +251,16 @@ impl RuntimeKernel {
         self.context.settings().review_skip_tags().as_map()
     }
 
-    /// `workflow.crew_performance_types` as admitted: the implementer
-    /// scorecard's task-type lens.
-    pub fn crew_performance_types(&self) -> &[orbit_config::CrewPerformanceType] {
-        self.context.settings().crew_performance_types()
+    /// `workflow.task_types` as admitted: the ordered task types type pools
+    /// route by and the implementer scorecard's by-type lens.
+    pub fn task_types(&self) -> &[orbit_config::TaskTypeDefinition] {
+        self.context.settings().task_types()
     }
 
-    /// `workflow.crew_performance` as admitted.
-    pub fn crew_performance(&self) -> orbit_config::CrewPerformanceMode {
-        self.context.settings().crew_performance()
-    }
-
-    /// `workflow.crew_performance_window_days` as admitted.
-    pub fn crew_performance_window_days(&self) -> u32 {
-        self.context.settings().crew_performance_window_days()
+    /// `workflow.regression_layers` as admitted: the ordered path layers
+    /// codebase regression analytics classify a fix by.
+    pub fn regression_layers(&self) -> &[orbit_config::RegressionLayerDefinition] {
+        self.context.settings().regression_layers()
     }
 
     /// The resolved `[operation]` review preferences (layered over the

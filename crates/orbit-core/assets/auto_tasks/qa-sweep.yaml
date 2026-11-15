@@ -57,7 +57,7 @@ template:
     finding without context selectors. Skip duplicates. Add `ui` to the tags
     of a finding in something a user sees (dashboard, web pages, docs site,
     desktop app UI), and attach its screenshot to the filed task with
-    `orbit.task.artifact.put` at a stable path such as
+    `orbit.task.artifact` action `put` at a stable path such as
     `screenshots/<view>-<theme>-<width>.png`, under the 1 MiB artifact limit:
     `.orbit/tmp/` is cleared with the worktree.
 
@@ -82,34 +82,10 @@ template:
     `severity` is how much the defect matters, on the one scale findings and
     regression links share; a new link without it is refused. Rate the worst
     real impact the evidence shows, not the size of the fix, and take the lower
-    level when torn:
-    - `critical`: data loss or corruption, a security hole, every drain halted, or silently wrong results (a migration drops task history).
-    - `high`: a core workflow broken with no workaround (every `ui` delivery fails at handoff).
-    - `medium`: a feature broken or wrong in a real path, with a workaround (`--json` drops a field the plain output shows).
-    - `low`: an edge case, a misleading message or a minor UX defect (an error names the wrong flag).
-    - `nit`: wording or doc drift, cosmetic, no behavior impact (a stale sentence in a reference doc).
-    Choose `unclassified` rather than guess. `nature` is what kind of regression
-    the link records:
-    - `broke_existing`: the culprit broke behavior that worked before it landed.
-    - `defect_in_new`: the defect is in code the culprit itself introduced.
-    - `incomplete`: the culprit shipped without part of what its task required.
-    - `merge_reintroduced`: a merge restored code or assets an earlier change had removed.
-    - `contract_drift`: docs, schemas or a contract drifted from the behavior the culprit shipped.
-    - `unclassified`: the evidence does not settle the nature.
-    `escape` is why the delivery gates missed it. Inspect the tests and gate
-    selection at the culprit commit: use `no_test` when no test exercises the
-    broken behavior there, and `test_not_selected` when a covering test exists
-    but the culprit's gates did not run it. Use `unclassified` only when the
-    evidence does not settle the escape, and state the unresolved evidence in
-    the finding's description. Mere visibility in the diff is not evidence
-    for `review_missed` when no test exercises the broken behavior.
-    - `no_test`: no test exercised the broken behavior at the culprit commit.
-    - `test_not_selected`: a covering test existed at the culprit commit but its gates did not run it.
-    - `platform_only`: it shows only on a platform or host the gates did not exercise.
-    - `review_missed`: it was visible in the diff and review did not flag it.
-    - `spec_ambiguous`: the task or spec left the expected behavior open to the shipped reading.
-    - `nondeterministic`: it depends on timing, ordering or environment and passed when gated.
-    - `unclassified`: the evidence does not settle the escape; state why in the finding.
+    level when torn. Choose `unclassified` rather than guess. The scale and the
+    `nature` and `escape` values are the Severity rubric and `regression_from`
+    fields in the installed `orbit` skill's `references/task-fields.md`; use only
+    those values and its guidance for choosing the escape.
 
     A non-duplicate failing test that blocks the repository's
     standard validation command must be filed as a durable issue even when
@@ -128,7 +104,7 @@ template:
     whether the next tick has anything left to validate. Its exact content is
     `{"schema_version":1,"ref":"<integration branch>","cursor":"<full 40-character commit SHA>"}`;
     write it to `.orbit/tmp/sweep-cursor.json` and attach it with
-    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/sweep-cursor.json","path":"sweep-cursor.json","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.artifact --input '{"action":"put","id":"<this task ID>","source_path":".orbit/tmp/sweep-cursor.json","path":"sweep-cursor.json","model":"<agent-family>"}'`.
     `orbit tool show <tool.name>` prints the tool's schema. Write it on every
     completed sweep, including one that found nothing to fix — a sweep without
     it leaves the next tick no cursor to compare the branch tip against.
@@ -160,7 +136,7 @@ template:
   - no-diff-expected
   required_tools:
   - orbit.task.add
-  - orbit.task.artifact.put
+  - orbit.task.artifact:put
   - orbit.task.show
   priority: medium
   complexity: medium

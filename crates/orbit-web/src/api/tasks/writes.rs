@@ -3,6 +3,7 @@
 use super::request::{
     CommentBody, CreateTaskBody, UpdateTaskBody, reject_unsupported_task_body_fields,
 };
+use crate::api::helpers;
 use crate::api::{bad_request, map_runtime_error, non_empty_string, server_error, validate_id};
 use crate::state::Ws;
 use axum::extract::Path;
@@ -49,23 +50,27 @@ pub(super) async fn task_mutation_response<F>(
 where
     F: FnOnce(&OrbitRuntime) -> Result<ScreenedTaskWrite, orbit_core::OrbitError> + Send + 'static,
 {
-    let rendered = tokio::task::spawn_blocking(move || {
+    let rendered = helpers::blocking_join(label, move || {
         let written = mutate(&runtime).map_err(TaskMutationFailure::Mutation)?;
-        screened_task_write_response_json(
+        let mut value = screened_task_write_response_json(
             &runtime,
             &written,
             &TaskWriteResponsePolicy::DashboardFullRecord,
         )
-        .map_err(TaskMutationFailure::Render)
+        .map_err(TaskMutationFailure::Render)?;
+        // The client reads human-crew identity off the task itself, so a
+        // write response keeps it as the list and detail reads do.
+        if let Some(object) = value.as_object_mut() {
+            crate::projections::stamp_human_crew_from_runtime(&runtime, object);
+        }
+        Ok(value)
     })
     .await;
     match rendered {
         Ok(Ok(value)) => Json(value).into_response(),
         Ok(Err(TaskMutationFailure::Mutation(e))) => map_runtime_error(e),
         Ok(Err(TaskMutationFailure::Render(e))) => server_error(e),
-        Err(join_err) => server_error(orbit_core::OrbitError::Execution(format!(
-            "{label} panicked: {join_err}"
-        ))),
+        Err(response) => *response,
     }
 }
 
@@ -229,6 +234,7 @@ pub(in crate::api) async fn update_task_action(
         plan: body.plan,
         execution_summary: body.execution_summary,
         comment: body.comment,
+        review_settlement: None,
         status: body.status,
         priority: body.priority,
         complexity,

@@ -95,8 +95,12 @@ fn apply(workspace: &Workspace, task: &Task, utility_warnings: &[&str]) -> (Valu
     let lane = &prepared["implementation_lane"];
     assert_eq!(lane["activity"], "agent_implement", "{lane}");
     let tools = lane["tools"].as_array().expect("lane tools");
+    let names = tools
+        .iter()
+        .filter_map(|tool| tool.as_str().map(str::to_string))
+        .collect::<Vec<_>>();
     assert!(
-        tools.iter().any(|tool| tool == "orbit.task.artifact.put"),
+        orbit_types::workflow::tool_allowed("orbit.task.artifact:put", &names),
         "owner attachment must be callable: {lane}"
     );
     assert!(
@@ -105,7 +109,7 @@ fn apply(workspace: &Workspace, task: &Task, utility_warnings: &[&str]) -> (Valu
     );
     assert_eq!(
         lane["artifact_attachment"]["owner"],
-        "orbit.task.artifact.put"
+        "orbit.task.artifact:put"
     );
     assert_eq!(lane["artifact_attachment"]["owner_granted"], true);
     assert_eq!(
@@ -163,7 +167,7 @@ fn apply(workspace: &Workspace, task: &Task, utility_warnings: &[&str]) -> (Valu
         .unwrap_or_else(|| panic!("no drain approval decision for {}: {applied}", task.id))
         .clone();
     let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
-    let audit = serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
+    let audit = super::pilot_audit(&workspace.runtime, &task.id, comments.last().unwrap());
     (audit, decision)
 }
 
@@ -276,8 +280,66 @@ fn a_capture_or_render_gap_stays_and_holds_approval_while_an_allowlist_claim_doe
     assert_ne!(decision["classification"], "warnings", "{decision}");
 }
 
+/// A criterion that describes the corrected behaviour or documentation of
+/// a registered tool — the ORB-23555 and ORB-23556 shapes — names that tool
+/// as the change's subject, not as a call the implementer must make. It
+/// yields no allowlist finding and holds no promotion.
+fn a_tool_described_as_the_change_subject_produces_no_allowlist_finding_or_hold() {
+    for criteria in [
+        vec![
+            "A bound MCP tools/call of orbit.workflow with action ship, at least one task id, and mode local or pr, and no workspace selector, is not refused for a missing workspace selector. It reaches the same next gate as the identical call that omits mode.".to_string(),
+            "An orbit.workflow action auto call that carries mode still requires an explicit workspace selector.".to_string(),
+        ],
+        vec![
+            "The canonical shipped skill, its synced plugin copy, and the S-workers sentence in the MCP tool evidence note name mode resize on orbit.workflow action auto, and none of them tell the caller to pass action resize.".to_string(),
+        ],
+    ] {
+        let workspace = Workspace::new();
+        install_real_implement_activity(&workspace);
+        let task = ui_task(&workspace, criteria);
+        let (audit, decision) = apply(&workspace, &task, &[]);
+        let validation = strings(&audit["assessment"]["validation_tool_warnings"]);
+        assert!(
+            validation.is_empty(),
+            "a tool described as the change subject must produce no allowlist finding: {validation:?}"
+        );
+        assert_ne!(
+            decision["classification"], "warnings",
+            "a subject-only tool mention must hold no promotion: {decision}"
+        );
+    }
+}
+
+/// A passive that asks the implementer to call a backticked tool, such as
+/// `` `tool` must be invoked to … `` or `` `tool` is invoked to … ``, is still
+/// an invocation request. The `be` between a modal and the participle, and
+/// the closing backtick before the verb, must not hide an ungranted tool from
+/// the allowlist check.
+fn a_passive_invocation_request_still_warns_for_an_ungranted_tool() {
+    for criterion in [
+        "`orbit.pipeline.invoke` must be invoked to submit the catalog job.",
+        "`orbit.pipeline.invoke` shall be invoked to submit the catalog job.",
+        "`orbit.pipeline.invoke` should be invoked to submit the catalog job.",
+        "`orbit.pipeline.invoke` is invoked to submit the catalog job.",
+    ] {
+        let workspace = Workspace::new();
+        install_real_implement_activity(&workspace);
+        let task = ui_task(&workspace, vec![criterion.into()]);
+        let (audit, _) = apply(&workspace, &task, &[]);
+        let validation = strings(&audit["assessment"]["validation_tool_warnings"]);
+        assert!(
+            validation.iter().any(|warning| warning.starts_with(
+                "acceptance criterion requires `orbit.pipeline.invoke`, which the `agent_implement` allowlist does not grant"
+            )),
+            "`{criterion}` requires an ungranted tool and must produce the allowlist finding: {validation:?}"
+        );
+    }
+}
+
 crate::scenario_table!(
     screenshot_attachment_is_feasible_and_an_ungranted_tool_still_warns_scenarios,
     screenshot_attachment_is_feasible_and_an_ungranted_tool_still_warns,
     a_capture_or_render_gap_stays_and_holds_approval_while_an_allowlist_claim_does_not,
+    a_tool_described_as_the_change_subject_produces_no_allowlist_finding_or_hold,
+    a_passive_invocation_request_still_warns_for_an_ungranted_tool,
 );

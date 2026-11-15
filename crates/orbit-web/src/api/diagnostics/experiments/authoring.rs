@@ -1,8 +1,9 @@
 //! Operator authoring on Analytics › Experiments: `POST /diagnostics/experiments`
 //! defines a draft, `PATCH /diagnostics/experiments/{id}` edits one and
-//! `POST /diagnostics/experiments/{id}/start` starts it. Each authorizes its
-//! dashboard operation before reading the body, then calls the same core
-//! lifecycle function as `orbit.experiment.create`, `update` and `start`, so
+//! `POST /diagnostics/experiments/{id}/start` starts it, and `.../pause` and
+//! `.../resume` pause and resume it. Each authorizes its dashboard operation
+//! before reading the body, then calls the same core lifecycle function as
+//! `orbit.experiment.create`, `update`, `start`, `pause` and `resume`, so
 //! core's validation, refusals and the event it records (actor `dashboard`,
 //! with the submitted reason) are the CLI's.
 
@@ -13,13 +14,13 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{
-    DASHBOARD_EXPERIMENT_CREATE, DASHBOARD_EXPERIMENT_START, DASHBOARD_EXPERIMENT_UPDATE,
-    GovernedOperation,
+    DASHBOARD_EXPERIMENT_CREATE, DASHBOARD_EXPERIMENT_PAUSE, DASHBOARD_EXPERIMENT_RESUME,
+    DASHBOARD_EXPERIMENT_START, DASHBOARD_EXPERIMENT_UPDATE, GovernedOperation,
 };
 use orbit_core::OrbitRuntime;
 use orbit_core::application::experiment::{
-    EXPERIMENT_COMPLEXITIES, EXPERIMENT_METRICS, ExperimentActor, ExperimentChange,
-    ExperimentDefinitionInput, ExperimentView,
+    EXPERIMENT_COMPLEXITIES, ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
+    ExperimentView, experiment_metric_names, step_local_metric_names,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -49,10 +50,13 @@ pub(super) fn experiment_authoring(runtime: &OrbitRuntime, operator_session: boo
         "create": capability(&DASHBOARD_EXPERIMENT_CREATE),
         "update": capability(&DASHBOARD_EXPERIMENT_UPDATE),
         "start": capability(&DASHBOARD_EXPERIMENT_START),
+        "pause": capability(&DASHBOARD_EXPERIMENT_PAUSE),
+        "resume": capability(&DASHBOARD_EXPERIMENT_RESUME),
         "enabled": settings.enabled,
-        "max_running": settings.max_running,
+        "max_running": orbit_core::application::experiment::EXPERIMENTS_MAX_RUNNING,
         "config_keys": settings.config_keys,
-        "metrics": EXPERIMENT_METRICS,
+        "metrics": experiment_metric_names().collect::<Vec<_>>(),
+        "step_local_metrics": step_local_metric_names().collect::<Vec<_>>(),
         "complexities": EXPERIMENT_COMPLEXITIES,
         "crews": crews,
     })
@@ -103,9 +107,11 @@ impl ExperimentDefinitionBody {
     }
 }
 
+/// The optional body of a lifecycle change (start, pause, resume): the reason
+/// the event records. An empty body is a change with no reason.
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-pub(in crate::api) struct ExperimentStartBody {
+pub(in crate::api) struct ExperimentReasonBody {
     #[serde(default)]
     reason: Option<String>,
 }
@@ -166,14 +172,78 @@ pub(in crate::api) async fn diagnostics_experiment_update(
 }
 
 /// `POST /diagnostics/experiments/{id}/start` — start a draft through
-/// `change_experiment`. The body, `{reason}`, may be empty.
+/// `change_experiment`.
 pub(in crate::api) async fn diagnostics_experiment_start(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Path(id): Path<String>,
-    body: Result<OptionalJson<ExperimentStartBody>, Response>,
+    body: Result<OptionalJson<ExperimentReasonBody>, Response>,
 ) -> Response {
-    if let Some(denied) = refuse_unauthorized(&DASHBOARD_EXPERIMENT_START, &state) {
+    experiment_lifecycle(
+        &state,
+        runtime,
+        id,
+        body,
+        &DASHBOARD_EXPERIMENT_START,
+        "experiment start",
+        ExperimentChange::Start,
+    )
+    .await
+}
+
+/// `POST /diagnostics/experiments/{id}/pause` — pause a running experiment
+/// through `change_experiment`, as `orbit experiment pause` does.
+pub(in crate::api) async fn diagnostics_experiment_pause(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    Path(id): Path<String>,
+    body: Result<OptionalJson<ExperimentReasonBody>, Response>,
+) -> Response {
+    experiment_lifecycle(
+        &state,
+        runtime,
+        id,
+        body,
+        &DASHBOARD_EXPERIMENT_PAUSE,
+        "experiment pause",
+        ExperimentChange::Pause,
+    )
+    .await
+}
+
+/// `POST /diagnostics/experiments/{id}/resume` — resume a paused experiment
+/// through `change_experiment`, as `orbit experiment resume` does.
+pub(in crate::api) async fn diagnostics_experiment_resume(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    Path(id): Path<String>,
+    body: Result<OptionalJson<ExperimentReasonBody>, Response>,
+) -> Response {
+    experiment_lifecycle(
+        &state,
+        runtime,
+        id,
+        body,
+        &DASHBOARD_EXPERIMENT_RESUME,
+        "experiment resume",
+        ExperimentChange::Resume,
+    )
+    .await
+}
+
+/// One lifecycle change: authorize the operation before the body is read,
+/// then run `change_experiment` with the dashboard actor and the body's
+/// reason. The body may be empty.
+async fn experiment_lifecycle(
+    state: &DashboardState,
+    runtime: Arc<OrbitRuntime>,
+    id: String,
+    body: Result<OptionalJson<ExperimentReasonBody>, Response>,
+    operation: &'static GovernedOperation,
+    label: &'static str,
+    change: ExperimentChange,
+) -> Response {
+    if let Some(denied) = refuse_unauthorized(operation, state) {
         return denied;
     }
     let OptionalJson(body) = match body {
@@ -181,8 +251,8 @@ pub(in crate::api) async fn diagnostics_experiment_start(
         Err(rejection) => return rejection,
     };
     let by = dashboard_actor(body.reason);
-    experiment_write(runtime, "experiment start", move |runtime| {
-        runtime.change_experiment(&id, ExperimentChange::Start, by)
+    experiment_write(runtime, label, move |runtime| {
+        runtime.change_experiment(&id, change, by)
     })
     .await
 }
@@ -197,7 +267,7 @@ fn refuse_unauthorized(
 }
 
 /// Run one core write and answer its view. A workspace policy refusal
-/// (`experiments.enabled` false, `experiments.max_running` reached) is a 409
+/// (`experiments.enabled` false, three experiments already running) is a 409
 /// carrying core's message; every other refusal maps as elsewhere, keeping
 /// core's text.
 async fn experiment_write<F>(runtime: Arc<OrbitRuntime>, label: &'static str, write: F) -> Response

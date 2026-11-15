@@ -501,6 +501,198 @@ fn routine_pause_rejects_unknown_names_and_reports_json_for_known_ones() {
     assert_home_empty(&fixture.home);
 }
 
+/// `routine enable`/`disable` select a routine host-wide but audit under the
+/// workspace the command runs in, so a routine of another workspace is refused
+/// without a write and a routine of the invoking workspace is audited there.
+#[test]
+fn routine_toggle_edits_and_audits_only_the_invoking_workspace() {
+    if crate::isolated_test::run_in_child(
+        "routine_root::routine_toggle_edits_and_audits_only_the_invoking_workspace",
+    ) {
+        return;
+    }
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home).expect("create isolated home");
+    let mut repos = Vec::new();
+    for (index, workspace) in ["toggle-a", "toggle-b"].into_iter().enumerate() {
+        let repo = temp.path().join(workspace);
+        fs::create_dir_all(&repo).expect("create repo");
+        crate::git_repo::SeededRepo::new(&repo)
+            .readme("# routine toggle test\n")
+            .build();
+        if index == 0 {
+            run_success(
+                &repo,
+                &home,
+                &[
+                    "init",
+                    "--non-interactive",
+                    "--machine-name",
+                    "routine-toggle-host",
+                    "--task-prefix",
+                    "RT",
+                ],
+                None,
+            );
+        }
+        run_success(
+            &repo,
+            &home,
+            &["workspace", "init", "--name", workspace],
+            None,
+        );
+        let routine = format!("resident-cycle-{}", &workspace[7..]);
+        fs::write(
+            repo.join(format!(".orbit/routines/{routine}.yaml")),
+            format!(
+                "schemaVersion: 1\nname: {routine}\nenabled: false\ntrigger:\n  \
+                 cron: \"17 5 * * 1\"\n  missed_run: skip\ntarget: job:store_gc_pipeline\n"
+            ),
+        )
+        .expect("write the workspace's own routine");
+        repos.push((workspace, repo, routine));
+    }
+    let (name_a, repo_a, routine_a) = &repos[0];
+    let (name_b, repo_b, routine_b) = &repos[1];
+    let definition = |repo: &Path, routine: &str| {
+        fs::read_to_string(repo.join(format!(".orbit/routines/{routine}.yaml")))
+            .expect("read routine definition")
+    };
+    let applied_toggles = |workspace_repo: &Path| -> Vec<String> {
+        let id = workspace_id(workspace_repo);
+        run_json(
+            workspace_repo,
+            &home,
+            &["audit", "list", "--workspace-id", &id, "--json"],
+            None,
+        )
+        .as_array()
+        .expect("audit rows")
+        .iter()
+        // A refused attempt is audited as a failure under the invoking workspace.
+        .filter(|row| row["command"] == "routine" && row["status"] == "success")
+        .map(|row| {
+            format!(
+                "{}:{}",
+                row["subcommand"].as_str().unwrap_or_default(),
+                row["target_id"].as_str().unwrap_or_default()
+            )
+        })
+        .collect()
+    };
+    // The toggle verbs are operator-only; the override is recorded in the audit.
+    let operator = |cwd: &Path, args: &[&str]| {
+        let mut command = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(cwd)
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .env("ORBIT_OPERATOR", "1")
+            .args(args)
+            .assert()
+    };
+    let refuse = |cwd: &Path, args: &[&str]| {
+        let output = operator(cwd, args).failure().get_output().clone();
+        String::from_utf8_lossy(&output.stderr).into_owned()
+    };
+    let (before_a, before_b) = (definition(repo_a, routine_a), definition(repo_b, routine_b));
+
+    // An explicit selector for A cannot reach B's routine, in either direction.
+    let stderr = refuse(
+        repo_a,
+        &["--workspace", name_a, "routine", "enable", routine_b],
+    );
+    assert!(
+        stderr.contains("workspace_mismatch:")
+            && stderr.contains(name_b)
+            && stderr.contains("--workspace"),
+        "mismatch carries the shared code and names the routine's workspace: {stderr}"
+    );
+    // An unlisted name is the shared `routine_not_found` refusal.
+    let stderr = refuse(repo_a, &["routine", "enable", "no-such-routine"]);
+    assert!(
+        stderr.contains("routine_not_found: routine 'no-such-routine' was not found"),
+        "unlisted routine reports the shared refusal: {stderr}"
+    );
+    // Neither does the cwd: running from A cannot enable B's routine.
+    refuse(repo_a, &["routine", "enable", routine_b]);
+    refuse(
+        repo_b,
+        &["--workspace", name_b, "routine", "disable", routine_a],
+    );
+    assert_eq!(
+        (definition(repo_a, routine_a), definition(repo_b, routine_b)),
+        (before_a.clone(), before_b.clone()),
+        "a refused toggle changes neither definition"
+    );
+
+    // Selecting the routine's own workspace works from any cwd, and the audit
+    // row lands under that workspace rather than the cwd's.
+    for (verb, enabled) in [("enable", true), ("disable", false)] {
+        let stdout = operator(
+            repo_a,
+            &["--workspace", name_b, "routine", verb, routine_b, "--json"],
+        )
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+        let out: Value = serde_json::from_slice(&stdout).expect("toggle JSON");
+        assert_eq!(out["enabled"], enabled, "{out}");
+        assert_eq!(out["changed"], true, "{out}");
+        assert_eq!(
+            definition(repo_b, routine_b).contains("enabled: true"),
+            enabled,
+            "B's definition follows `{verb}`"
+        );
+        assert_eq!(definition(repo_a, routine_a), before_a, "A is untouched");
+    }
+    operator(repo_a, &["routine", "enable", routine_a]).success();
+    assert!(definition(repo_a, routine_a).contains("enabled: true"));
+    // Re-enabling reports the shared outcome's `changed: false`.
+    let stdout = operator(repo_a, &["routine", "enable", routine_a, "--json"])
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let out: Value = serde_json::from_slice(&stdout).expect("toggle JSON");
+    assert_eq!(out["changed"], false, "{out}");
+    assert_eq!(
+        definition(repo_b, routine_b),
+        before_b,
+        "B is back to its disabled definition"
+    );
+
+    assert_eq!(
+        applied_toggles(repo_b),
+        [
+            format!("disable:{routine_b}"),
+            format!("enable:{routine_b}")
+        ],
+        "B's audit holds exactly the toggles applied to B, newest first"
+    );
+    assert_eq!(
+        applied_toggles(repo_a),
+        [format!("enable:{routine_a}"), format!("enable:{routine_a}")],
+        "A's audit holds only the toggles applied to A (the second unchanged), not the ones aimed at B"
+    );
+}
+
+fn workspace_id(repo: &Path) -> String {
+    let config: serde_yaml::Value = serde_yaml::from_slice(
+        &fs::read(repo.join(".orbit/config.yaml")).expect("read workspace config"),
+    )
+    .expect("parse workspace config");
+    config["workspace_id"]
+        .as_str()
+        .expect("workspace_id")
+        .to_owned()
+}
+
 fn run_success(cwd: &Path, home: &Path, args: &[&str], orbit_root: Option<&Path>) {
     let mut command = cargo_bin_cmd!("orbit");
     test_env::clear_inherited_authority(|name| {
@@ -600,13 +792,12 @@ fn managed_registry_root(args: &[&str], orbit_root: Option<&Path>) -> Option<Pat
 }
 
 fn assert_home_empty(home: &Path) {
+    let entries = crate::isolated_home::isolated_home_entries(home);
     assert!(
-        fs::read_dir(home)
-            .expect("read isolated home")
-            .next()
-            .is_none(),
-        "routine command touched isolated HOME at {}",
-        home.display()
+        entries.is_empty(),
+        "routine command touched isolated HOME at {}; found:\n{}",
+        home.display(),
+        entries.join("\n")
     );
 }
 
@@ -741,6 +932,139 @@ fn plugin_seeded_definitions_whose_plugin_is_off_are_hidden_but_still_shown_by_n
         text(&["routine", "show", "ghost-refresh"]).contains("Inactive: seeded by plugin:ghost")
     );
     assert_home_empty(&fixture.home);
+}
+
+/// STD-01 R31: a read-only routine command must not create the scheduler
+/// database on a host whose store is absent. It fails with the setup remedy
+/// and leaves the root tree unchanged, including when the root is unwritable.
+#[test]
+fn routine_status_reads_fail_without_creating_missing_scheduler_database() {
+    if crate::isolated_test::run_in_child(
+        "routine_root::routine_status_reads_fail_without_creating_missing_scheduler_database",
+    ) {
+        return;
+    }
+    let fixture = Fixture::initialized();
+    let root = fixture.root.to_str().expect("root path");
+    let database = fixture.root.join("orbit.db");
+    assert!(
+        database.exists(),
+        "init must create the scheduler database this regression removes"
+    );
+    fs::remove_file(&database).expect("remove scheduler database to model a missing store");
+    let before = tree_entries(&fixture.root);
+
+    for args in [
+        vec!["--root", root, "routine", "list", "--format", "json"],
+        vec![
+            "--root",
+            root,
+            "routine",
+            "show",
+            fixture.routine_name.as_str(),
+        ],
+    ] {
+        let stderr = run_failure(&fixture.repo, &fixture.home, &args, None);
+        assert!(
+            stderr.contains("orbit init"),
+            "`orbit {}` must name the setup remedy for a missing store: {stderr}",
+            args.join(" ")
+        );
+        assert!(
+            !database.exists(),
+            "`orbit {}` created the scheduler database during observation",
+            args.join(" ")
+        );
+        assert_eq!(
+            tree_entries(&fixture.root),
+            before,
+            "`orbit {}` changed the root tree",
+            args.join(" ")
+        );
+        assert_home_empty(&fixture.home);
+    }
+
+    #[cfg(unix)]
+    assert_unwritable_root_read_fails_without_writes(&fixture, &database, &before);
+}
+
+/// Unwritable storage must fail the same way: the read reports the setup
+/// requirement instead of attempting a write.
+#[cfg(unix)]
+fn assert_unwritable_root_read_fails_without_writes(
+    fixture: &Fixture,
+    database: &Path,
+    before: &[String],
+) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = fixture.root.to_str().expect("root path");
+    let mut permissions = fs::metadata(&fixture.root)
+        .expect("root metadata")
+        .permissions();
+    let writable = permissions.clone();
+    permissions.set_mode(0o555);
+    fs::set_permissions(&fixture.root, permissions).expect("make root unwritable");
+    let stderr = run_failure(
+        &fixture.repo,
+        &fixture.home,
+        &["--root", root, "routine", "list", "--format", "json"],
+        None,
+    );
+    fs::set_permissions(&fixture.root, writable).expect("restore root permissions");
+    assert!(
+        stderr.contains("orbit init"),
+        "unwritable missing-store list must name the setup remedy: {stderr}"
+    );
+    assert!(
+        !database.exists(),
+        "unwritable list created the scheduler database"
+    );
+    assert_eq!(tree_entries(&fixture.root), before);
+}
+
+/// The durable entries under `root`. `.generation-participants/` is excluded:
+/// every CLI process records a process-admission entry there, and one that
+/// exits through an error path leaves it behind. It holds no routine state.
+fn tree_entries(root: &Path) -> Vec<String> {
+    let mut entries = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).expect("read directory") {
+            let entry = entry.expect("directory entry");
+            let path = entry.path();
+            if path
+                .file_name()
+                .is_some_and(|name| name == ".generation-participants")
+            {
+                continue;
+            }
+            let is_dir = entry.file_type().expect("entry type").is_dir();
+            let relative = path.strip_prefix(root).expect("relative path");
+            entries.push(format!("{} dir={is_dir}", relative.display()));
+            if is_dir {
+                pending.push(path);
+            }
+        }
+    }
+    entries.sort();
+    entries
+}
+
+fn run_failure(cwd: &Path, home: &Path, args: &[&str], orbit_root: Option<&Path>) -> String {
+    let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .current_dir(cwd)
+        .env("HOME", home)
+        .env("USERPROFILE", home);
+    if let Some(root) = orbit_root {
+        command.env("ORBIT_ROOT", root);
+    }
+    let output = command.args(args).assert().failure().get_output().clone();
+    String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
 #[test]

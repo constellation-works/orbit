@@ -151,7 +151,8 @@ async function watchPilotRun(task, key, runId, visit, context) {
 }
 
 // The detail's escalation triage readout, or null when no Triage action is
-// shown: the task is neither held by pilot warnings nor blocked. The server
+// shown: the task is not held by pilot warnings (a blocked task is decided
+// by final recovery and shows its decision card instead). The server
 // derives it from the pipeline's own candidacy, so the panel enables the
 // action exactly when the endpoint would submit.
 export function escalationTriage(task) {
@@ -172,18 +173,15 @@ function triageDisabledReason(task, mutable, running) {
   return `Triage unavailable — ${detail}`;
 }
 
-// Triage on a held proposed task or a blocked task: one explicit
-// escalation triage run for this task. It only proposes a decision or names
-// the human action (a blocked task may be requeued by the pipeline's own
-// bounded rule); it never approves, promotes or edits the task itself.
+// Triage on a task held by pilot warnings: one explicit escalation triage
+// run for this task. It only opens a decision card or names the human
+// action; it never approves, promotes or edits the task itself.
 export function appendTriageControls(actions, task, detail, context, mutable) {
   const triage = escalationTriage(task);
   const running = triageRunsByTask.get(taskShared.taskDispatchIdentity(task))
     || (triage && triage.run_id ? { runId: String(triage.run_id) } : null);
   const reason = triageDisabledReason(task, mutable, running);
-  const subjectWords = triage && triage.subject === "block"
-    ? "Triage this blocked task: a hard-tier triager requeues it within the final-recovery bound, proposes a decision, or names the human action. Nothing else on the task changes"
-    : "Triage this held pilot assessment: a hard-tier triager proposes a decision or names the human action that settles the hold. It never approves, promotes or edits the task";
+  const subjectWords = "Triage this held pilot assessment: a hard-tier triager opens a decision card or names the human action that settles the hold. It never approves, promotes or edits the task";
   const btn = el("button", {
     class: "action triage",
     text: running ? "triaging…" : "triage",
@@ -349,6 +347,11 @@ async function runRecovery(task, detail, btnNode, context, kind) {
       const message = "[requeue_reason_required] requeue needs a reason; it is recorded with the decision";
       recoveryRefusals.set(key, message);
       rerender(context);
+      setTimeout(() => {
+        if (recoveryRefusals.get(key) !== message) return;
+        recoveryRefusals.delete(key);
+        rerender(context);
+      }, RECOVERY_REFUSAL_MS);
       return;
     }
     suffix = "/requeue";
@@ -401,7 +404,9 @@ const FIX_PR_REASONS = {
   pull_request_not_open: "the pull request is no longer open",
   not_orbit_pull_request: "the pull request was not opened by an Orbit delivery on this task's branch",
   no_delivery_leaf: "the task has no delivery run of its own to hand the pull request back to",
-  leaf_not_stopped: "the task's newest delivery did not stop with its pull request unfinished",
+  leaf_not_stopped: "the task's newest delivery neither stopped nor ended in review with its pull request unfinished",
+  leaf_held: "the task's newest delivery is held on a decision a fresh pull request read does not clear",
+  completion_held: "a completion.hold rule keeps the task in review for a person",
   operator_hold: "an operator holds the task",
   opted_out: "the task is tagged no-auto-approve; a person decides its delivery",
   authority: "its delivery was started with completion authority this session lacks",
@@ -456,17 +461,68 @@ function fixPrDisabledReason(task, mutable, entry) {
   return `Fix PR unavailable — ${fixPrReasonText(data.reason, data.detail)}`;
 }
 
+// The newest check state the review watch recorded for the task's pull
+// request (`landing_checks_observed`), or null when none was recorded.
+export function observedPrChecks(task) {
+  const history = Array.isArray(task.history) ? task.history : [];
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const entry = history[index];
+    if (!entry || entry.event !== "landing_checks_observed" || typeof entry.note !== "string") continue;
+    try {
+      const data = JSON.parse(entry.note);
+      if (data && typeof data === "object" && !Array.isArray(data)) return { ...data, at: entry.at };
+    } catch (_) {
+      // A note that is not the watch's JSON says nothing about the checks.
+    }
+  }
+  return null;
+}
+
+const OBSERVED_CHECK_WORDS = {
+  passed: "checks passed",
+  failed: "required checks failed",
+  conflicting: "conflicts with its base",
+  blocked: "blocked",
+  pending: "checks still running",
+};
+
+// One line naming the pull request's recorded check state, so a red pull
+// request in review shows why before anyone opens GitHub.
+function observedPrChecksNode(task) {
+  const observed = observedPrChecks(task);
+  if (!observed || !observed.state) return null;
+  const number = observed.pr_number || taskPullRequestNumber(task);
+  const parts = [`PR #${number}: ${OBSERVED_CHECK_WORDS[observed.state] || observed.state}`];
+  if (observed.classification) parts.push(`classified ${observed.classification}`);
+  if (Array.isArray(observed.failed_checks) && observed.failed_checks.length) parts.push(observed.failed_checks.join(", "));
+  else if (observed.reason) parts.push(observed.reason);
+  const failing = observed.state === "failed" || observed.state === "conflicting" || observed.state === "blocked";
+  const node = el("div", {
+    class: `fix-pr-checks${failing ? " fix-pr-checks-failed" : ""}`,
+    text: parts.join(" — "),
+    title: [observed.detail, observed.head_sha ? `head ${observed.head_sha}` : "", observed.at ? `recorded ${observed.at}` : ""].filter(Boolean).join("\n"),
+    role: "status",
+  });
+  node.style.flexBasis = "100%";
+  return node;
+}
+
 // Fix PR on a review task: hand its conflicting or red pull request back to
 // its own delivery for an auto-fix, as an --auto-fix drain would, without one.
 export function appendFixPrControls(actions, task, detail, context, mutable) {
+  const checks = observedPrChecksNode(task);
+  if (checks) actions.appendChild(checks);
   const entry = fixPrState(task, context);
   const reason = fixPrDisabledReason(task, mutable, entry);
   const data = entry && entry.data ? entry.data : {};
   const blocker = data.blocker === "conflict" ? "its merge conflict" : "its failed required checks";
+  // A held delivery with no blocker is handed back to read the pull request
+  // again and continue completion.
+  const purpose = !data.blocker && data.hold_code ? `continue completion held as ${data.hold_code}` : `repair ${blocker}`;
   const btn = el("button", {
     class: "action fix-pr",
     text: "fix PR",
-    title: reason || `Hand pull request #${data.pr_number || taskPullRequestNumber(task)} back to its delivery to repair ${blocker}. The repair pushes to the same branch and never merges a pull request its delivery was not allowed to merge`,
+    title: reason || `Hand pull request #${data.pr_number || taskPullRequestNumber(task)} back to its delivery to ${purpose}. The repair pushes to the same branch and never merges a pull request its delivery was not allowed to merge`,
   });
   btn.disabled = Boolean(reason);
   btn.dataset.fixPrSignature = fixPrSignature(task);
@@ -496,7 +552,7 @@ export function refreshFixPrControls(wrap, task, context) {
   const detail = button.closest(".task-detail");
   if (!detail) return;
   const actions = button.parentNode;
-  for (const note of actions.querySelectorAll(".fix-pr-feedback")) note.remove();
+  for (const note of actions.querySelectorAll(".fix-pr-feedback, .fix-pr-checks")) note.remove();
   const replacement = document.createDocumentFragment();
   appendFixPrControls(replacement, task, detail, context, canMutateTask(task));
   button.replaceWith(replacement);

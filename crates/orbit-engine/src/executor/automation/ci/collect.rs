@@ -38,7 +38,8 @@ use super::partition::{
     supersede_older_when_cancelled_run_is_actionable, superseded_cancellation_entry,
 };
 use super::pending::{Supersession, hold_for_in_flight_descendants};
-use super::query::{CiQueries, RemoteBranchHeads};
+use super::query::{AuthStatus, CiQueries, RemoteBranchHeads};
+use super::rate_limit::{ThrottleWatch, rate_limit_record, rate_limited_snapshot};
 use super::refs::{RefKind, ScannedRef, derive_refs, head_json, probe_branches};
 use super::{
     OUTCOME_CAPABILITY_UNAVAILABLE, OUTCOME_CURRENT_FAILURES, OUTCOME_NO_CURRENT_FAILURE,
@@ -184,7 +185,9 @@ pub(super) fn collect_for_sweep<Q: CiQueries + ?Sized>(
 }
 
 /// [`collect_for_sweep`] as of `now`, the clock the `pending_supersession`
-/// window is measured against.
+/// window is measured against. When GitHub rate-limits any read, the sweep
+/// is [rate limited](super::rate_limit): its partial snapshot is dropped and
+/// `history` is left as it was, since the sweep did not observe anything.
 pub(super) fn collect_at<Q: CiQueries + ?Sized>(
     queries: &Q,
     input: &Value,
@@ -192,8 +195,32 @@ pub(super) fn collect_at<Q: CiQueries + ?Sized>(
     sweep_id: &str,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Value, OrbitError> {
-    let bounds = bounds_from_input(input)?;
     let auth = queries.auth_status();
+    let watch = ThrottleWatch::new(queries);
+    let before = history.clone();
+    let snapshot = collect_observed(&watch, &auth, input, history, sweep_id, now);
+    let Some((throttle, reason)) = watch.throttled() else {
+        return snapshot;
+    };
+    *history = before;
+    let now_ms = u64::try_from(now.timestamp_millis()).unwrap_or_default();
+    Ok(rate_limited_snapshot(
+        CI_EVIDENCE_SCHEMA_VERSION,
+        auth.to_json(),
+        rate_limit_record(&throttle, &reason, now_ms),
+        &now.to_rfc3339(),
+    ))
+}
+
+fn collect_observed<Q: CiQueries + ?Sized>(
+    queries: &Q,
+    auth: &AuthStatus,
+    input: &Value,
+    history: &mut RetryableHistory,
+    sweep_id: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Value, OrbitError> {
+    let bounds = bounds_from_input(input)?;
     if !auth.usable() {
         // Stop here on purpose. Every later field would be an empty list that
         // reads exactly like "nothing is failing", and that conclusion

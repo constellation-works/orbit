@@ -64,11 +64,27 @@ impl Execute for ConfigSetArgs {
             ConfigWriteInit::RequireExisting
         };
         let outcome = set_key_literal(runtime, &self.key, &self.value, scope, init)?;
+        let warnings = orbit_cmd::service_environment::crew_env_config_write_warnings(
+            runtime,
+            &self.key,
+            &outcome.new_value,
+        );
+        let warning = (!warnings.is_empty()).then(|| warnings.join("; "));
         let scope = outcome.scope;
         let path = outcome.path.to_string_lossy().into_owned();
+        let mut document = json!({ "key": self.key, "scope": scope, "path": path });
+        if let Some(warning) = &warning {
+            document["warning"] = json!(warning);
+        }
         Ok(Payload::detail(
-            json!({ "key": self.key, "scope": scope, "path": path }),
-            format!("set {} ({scope} config: {path})", self.key),
+            document,
+            format!(
+                "set {} ({scope} config: {path}){}",
+                self.key,
+                warning
+                    .map(|warning| format!("\nWarning: {warning}"))
+                    .unwrap_or_default()
+            ),
         )
         .into())
     }

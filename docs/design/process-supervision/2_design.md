@@ -1,8 +1,8 @@
 ---
 title: Process Supervision — Design
 owner: claude
-last_updated: 2026-10-12
-last_validated: 2026-10-21
+last_updated: 2026-10-31
+last_validated: 2026-10-31
 status: Draft
 feature: process-supervision
 doc_role: design
@@ -19,7 +19,7 @@ related_artifacts: [ORB-15722]
 This doc covers every place Orbit waits on a child process it spawned:
 the bounded runner, the shared supervisor and its exec, engine, build and
 source adapters, plus long-lived MCP session ownership, verified
-at `99f2b2e55`, with the changes of steps 1–7 reflected below. §1–§3
+at the current integration HEAD, with the changes of steps 1–7 reflected below [ORB-15917]. §1–§3
 describe the current code. §4 specifies the
 supervisor that survives, §5 orders the migration, and §6 lists what the
 design leaves open. Two things are out of scope. One is how a child is
@@ -45,10 +45,10 @@ the supervisor's fixed timeout, and the post-exit drain is capped at it. At
 the deadline it sends SIGTERM to the group, waits 200 ms, then SIGKILL. When
 the leader exits it kills the group and drains for up to 500 ms more. Group
 signals go through `OwnedChild::signal_group`, which skips the caller's own
-group and a pid that no longer leads its group. Termination waits for both
+group and a pid that no longer leads its group [ORB-15721]. Termination waits for both
 the direct child and its original group to exit. If the child joins another
 group while alive, it is killed directly and reaped after the grace period;
-its new group is never signalled. The `complete` mode also needs both pipes
+its new group is never signalled [ORB-15885]. The `complete` mode also needs both pipes
 at EOF before the deadline. The `_typed` variants return a spawn failure as
 its `io::Error`. The child is spawned before the supervisor's signal guard,
 so the OS error kind survives and the process-identity probe neither
@@ -76,11 +76,11 @@ the supervision notes to stderr.
   unless cleanup was completed. Its wrapper releases the signal slot after
   cleanup and before dropping the signal guard. `SupervisedChild::spawn_guarded`
   installs the signal guard before the spawn closure runs, so post-spawn work such as a
-  plugin's callback `bind_pid` is covered.
+  plugin's callback `bind_pid` is covered [ORB-15698].
 - **Signals.** `SignalHandlerGuard` (`signal_guard.rs`) is a refcounted
   process-wide SIGINT/SIGTERM handler. It fans the signal out with `killpg`
   to a lock-free table of live child groups. The last guard restores the
-  previous disposition and re-raises the signal.
+  previous disposition and re-raises the signal [ORB-11692].
 - **Pipes.** One thread drains each stream, and a stdin writer thread
   delivers a payload when requested. `Stream::Sink` uses a pipe worker;
   `Stream::Redirected` attaches no sink or reader because the caller has
@@ -125,7 +125,7 @@ the supervision notes to stderr.
 Every failure path reaps and joins its pipe workers before returning:
 fault-injection seams (`SupervisionFailure`) prove it for signal install and
 wait. After the child exits, the group is killed and given up to 1 s to
-drain before the workers settle.
+drain before the workers settle. Capture setup and read failures use this cleanup path [ORB-15996].
 
 Tests in other crates reach two thread-scoped seams through
 `orbit_common::test_env::with_supervisor_seam`: a `try_wait`-style hook that
@@ -221,8 +221,8 @@ Tests that call a supervisor directly are left out.
 | `orbit-core/src/application/task/final_recovery/verify.rs` (`git fetch`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-core/src/application/task/retained_candidate.rs` (`git status`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-core/src/application/job/catalog/loading.rs` (`git check-ref-format`) | `run_bounded_capped` | Deadline, prefix cap |
-| `orbit-core/src/application/routines/clock/manager.rs` (launchd/systemd) | `run_bounded_capped` | Deadline, prefix cap, timeout mapped to its own error |
-| `orbit-core/src/application/routines/clock/inspect.rs` (version probe) | `run_bounded_capped` | Deadline, prefix cap |
+| `orbit-clock/src/manager.rs` (launchd/systemd) | `run_bounded_capped` | Deadline, prefix cap, timeout mapped to its own error |
+| `orbit-clock/src/inspect.rs` (version probe) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-cmd/src/update/converge.rs` (install steps; probes) | `run_bounded_capped_typed`; `run_bounded_capped_complete_typed` | Spawn error kind (`ETXTBSY` retry); probes need both pipes at EOF |
 | `orbit-cmd/src/update/channel.rs` (`brew list`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-cmd/src/doctor/workspace.rs` (`git ls-files`) | `run_bounded_capped` | Deadline, prefix cap |
@@ -241,7 +241,7 @@ Tests that call a supervisor directly are left out.
 | `orbit-tools/src/plugin/source.rs` | `run_process`; `run_process_streaming_stdout` | Deadline, stdout relay |
 | `orbit-tools/src/plugin/tool.rs` (exec backend) | `spawn_owned_supervised_cancellable` | Owned transfer, signal guard over spawn and `bind_pid`, stdin payload, cancellation flag |
 | `orbit-engine/src/executor/automation/{dependabot,ci}/query.rs` | `run_process` | Deadline, capture |
-| `orbit-engine/src/executor/automation/vcs/{git,host_evidence}.rs`, `vcs/commit/git_ops.rs`, `vcs/worktree/cleanup.rs`, `vcs/operations/process.rs` | `run_process`; `run_process_streaming_stdout` (`vcs/git.rs`) | Deadline, capture or stdout relay |
+| `orbit-engine/src/executor/automation/vcs/git/command.rs`, `vcs/host_evidence.rs`, `vcs/commit/git_ops.rs`, `vcs/worktree/cleanup.rs`, `vcs/operations/process.rs` | `run_process`; `run_process_streaming_stdout` (`vcs/git/command.rs`) | Deadline, capture or stdout relay |
 | `orbit-engine/src/executor/automation/vcs/required/command.rs` | `run_process_supervised` | Deadline, typed stop cause for inconclusive runs |
 | `orbit-engine/src/executor/automation/shell.rs`, `vcs/deferral_probe.rs` | `spawn_owned_supervised_cancellable` (sandbox-spawned child) | Adopt an owned child, empty stdin, deadline, `timed_out` |
 | `orbit-exec/src/validation_env.rs` | `run_probe_process` | Kill at once on deadline (an interactive shell ignores SIGTERM) |
@@ -398,7 +398,7 @@ provider- or plugin-specific policy.
   still leads its own group and that group is not Orbit's.
 - Every worker thread is joined before `supervise` returns. A holder outside
   the group can delay return by at most `drain_budget` plus one poll.
-- A stop cause comes from the supervisor, never from child output.
+- A stop cause comes from the supervisor, never from child output [ORB-15507].
 - The stopped-descendant watch is opt-in. It reads the process table through
   `identity`, which itself spawns `ps` through the bounded wrappers, so that
   path runs with the watch off.
@@ -470,6 +470,13 @@ it moves the most callers with the least new API.
 
 ## Task References
 
+- [ORB-15721] — centralized process-group liveness checks and signal-safe helpers.
+- [ORB-15885] — bounded cleanup when a child leaves its original process group.
+- [ORB-11692] — made signal-handler registration refcounted with a lock-free live-group table.
+- [ORB-15698] — reaped the process group when plugin worker registration fails.
+- [ORB-15996] — propagated capture setup and read failures through shared supervision.
+- [ORB-15507] — kept child output from selecting the typed stop cause.
+- [ORB-15917] — refreshed the caller inventory after source commands moved to the supervisor.
 - [ORB-15722] — authored this design and filed the migration tasks.
 - [ORB-15826] — step 1: adds the owned process-group child handle.
 - [ORB-15827] — step 2: holds every ad-hoc spawned child through that handle.

@@ -276,6 +276,61 @@ fn a_missing_task_and_a_missing_friction_are_both_not_found_and_exit_1() {
 }
 
 #[test]
+fn missing_values_name_their_listing_commands() {
+    let fixture = Fixture::workspace();
+    for (args, listing) in [
+        (vec!["task", "show", MISSING_TASK], "orbit task list"),
+        (vec!["run", "show", "missing-run"], "orbit run history"),
+        (vec!["run", "logs", "missing-run"], "orbit run history"),
+        (vec!["run", "job", "missing-job"], "orbit job list"),
+        (vec!["tool", "show", "missing-tool"], "orbit tool list"),
+        (
+            vec!["decision", "show", "missing-request"],
+            "orbit decision list",
+        ),
+        (
+            vec!["--workspace", "missing-workspace", "task", "list"],
+            "orbit workspace list",
+        ),
+    ] {
+        let output = fixture.run(&args, &[]);
+        plain_failure(&args, &output, 1);
+        let message = String::from_utf8_lossy(&output.stderr);
+        assert!(message.contains(listing), "{}", describe(&args, &output));
+        assert!(
+            !message.starts_with("error: request_not_found:"),
+            "{message}"
+        );
+    }
+    let args = ["decision", "show", "missing-request", "--json"];
+    let error = json_failure(&args, &fixture.run(&args, &[]), 1);
+    assert_eq!(error["code"], "request_not_found", "{error}");
+    assert!(
+        error["error"]
+            .as_str()
+            .unwrap()
+            .contains("orbit decision list")
+    );
+}
+
+#[test]
+fn implicit_run_on_an_empty_store_explains_that_no_runs_exist() {
+    let fixture = Fixture::workspace();
+    for args in [vec!["run", "show"], vec!["run", "logs"]] {
+        let output = fixture.run(&args, &[]);
+        plain_failure(&args, &output, 1);
+        let message = String::from_utf8_lossy(&output.stderr);
+        assert!(message.contains("no job runs exist"), "{message}");
+        assert!(!message.contains("latest"), "{message}");
+        assert!(message.contains("orbit run history"), "{message}");
+        let mut json_args = args.clone();
+        json_args.push("--json");
+        let error = json_failure(&json_args, &fixture.run(&json_args, &[]), 1);
+        assert_eq!(error["code"], "job_run_not_found", "{error}");
+    }
+}
+
+#[test]
 fn friction_mutations_on_a_missing_record_are_not_found_and_exit_1() {
     let fixture = Fixture::two_workspaces();
 
@@ -462,4 +517,23 @@ fn non_epipe_stdout_write_failure_in_ndjson_mode_remains_a_failure() {
         message.contains("File too large") || message.contains("os error 27"),
         "error message should report the underlying write failure: {message}"
     );
+}
+
+/// Native EACCES at the layout marker is an access denial, not a failed
+/// migration. Restore permissions before the disposable fixture is removed.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_layout_marker_reports_storage_access_denied() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::workspace();
+    let marker = fixture.work.join(".orbit/state/layout.version");
+    std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+    std::fs::write(&marker, "0\n").unwrap();
+    let original = std::fs::metadata(&marker).unwrap().permissions();
+    std::fs::set_permissions(&marker, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let args = ["tool", "run", "orbit.task.list", "--input", "{}"];
+    let output = fixture.run(&args, &[]);
+    std::fs::set_permissions(&marker, original).unwrap();
+    let error = json_failure(&args, &output, 1);
+    assert_eq!(error["code"], "storage_access_denied", "{error}");
 }

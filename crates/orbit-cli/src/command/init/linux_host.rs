@@ -100,7 +100,9 @@ fn os_release_value(release: &str, key: &str) -> Option<String> {
 }
 
 /// The small host boundary lets decision tests run without touching the CI host.
-trait Host {
+// `pub(super)` widened for the sibling tests/ layout: the fixture in
+// `tests/linux_host.rs` implements this trait. Production callers use [`prepare`].
+pub(super) trait Host {
     fn os_release(&self) -> Result<String, OrbitError>;
     fn probe(&mut self) -> BwrapProbeOutcome;
     fn root_file(&self, path: &str) -> Result<Option<Vec<u8>>, OrbitError>;
@@ -668,6 +670,36 @@ pub(super) fn prepare(non_interactive: bool) -> Result<String, OrbitError> {
     prepare_with(&mut host, non_interactive)
 }
 
+// Test-only seams for the sibling tests/ directory. Production builds never
+// compile these, so the helpers above stay private.
 #[cfg(test)]
-#[path = "tests/linux_host.rs"]
-mod tests;
+pub(super) fn probe_profile_source() -> &'static str {
+    PROFILE_SOURCE
+}
+
+#[cfg(test)]
+pub(super) fn probe_profile_target() -> &'static str {
+    PROFILE_TARGET
+}
+
+#[cfg(test)]
+pub(super) fn probe_prepare_with(
+    host: &mut impl Host,
+    non_interactive: bool,
+) -> Result<String, OrbitError> {
+    prepare_with(host, non_interactive)
+}
+
+#[cfg(test)]
+pub(super) fn probe_intended_probe_user(
+    euid: u32,
+    sudo_uid: Option<&str>,
+    sudo_gid: Option<&str>,
+) -> Result<Option<(u32, u32)>, OrbitError> {
+    intended_probe_user(euid, sudo_uid, sudo_gid)
+}
+
+#[cfg(test)]
+pub(super) fn probe_profile_is_loaded(profiles: &str) -> bool {
+    profile_is_loaded(profiles)
+}

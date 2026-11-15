@@ -504,6 +504,60 @@ fn persistent_client_hands_over_to_a_local_candidate_update() {
     );
     assert_eq!(after["title"], "After the update");
     assert_eq!(audit_count(&workspace, "orbit.task.add"), 2);
+
+    // Re-running the same update renames nothing [ORB-20980]. The session
+    // already runs the installed bytes, so it is asked to hand over to them in
+    // place: the update re-pins only once it holds the generation exclusively,
+    // and the session keeps serving.
+    let rerun = local_candidate_update(&workspace, &candidate, &manifest, &old);
+    assert!(rerun.status.success(), "{rerun:?}");
+    let report: Value = serde_json::from_slice(&rerun.stdout).expect("re-run report");
+    assert_eq!(report["outcome"], "already_current", "{report}");
+    assert_eq!(report["replaced"], false, "{report}");
+    let current = report["same_generation"]
+        .as_array()
+        .expect("same-generation list");
+    assert_eq!(current.len(), 1, "{report}");
+    assert_eq!(current[0]["pid"], pid, "{report}");
+    server_stderr.wait_until(
+        &mut client.child,
+        "the refreshed MCP server to join the re-pinned generation",
+        || running_digest(&workspace, pid).as_deref() == Some(new_digest.as_str()),
+    );
+    let refreshed = client.call_tool_ok(
+        "orbit_task_add",
+        json!({"title":"After the re-run", "description":"Same session, same image", "complexity":"low", "model":"codex"}),
+    );
+    assert_eq!(refreshed["title"], "After the re-run");
+    assert_eq!(audit_count(&workspace, "orbit.task.add"), 3);
+
+    // A holder that never registered, on the same authority as that session,
+    // cannot hide behind it: the re-run still refuses it, and the session
+    // continues once the refusal releases admission.
+    let record = std::fs::read(authority_root(&workspace).join(".generation.lock"))
+        .expect("generation record");
+    let unregistered = GenerationGuard::acquire(&authority_root(&workspace), &new_digest)
+        .expect("an unregistered holder joins beside the session");
+    let refused = local_candidate_update(&workspace, &candidate, &manifest, &old);
+    assert!(!refused.status.success(), "{refused:?}");
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("did not register"),
+        "{refused:?}"
+    );
+    assert_eq!(
+        std::fs::read(authority_root(&workspace).join(".generation.lock"))
+            .expect("generation record"),
+        record,
+        "a refused re-run rewrote the generation record"
+    );
+    assert!(orbit_common::fs::generation::pending_switch(&authority_root(&workspace)).is_none());
+    drop(unregistered);
+    let resumed = client.call_tool_ok(
+        "orbit_task_add",
+        json!({"title":"After the refusal", "description":"Same session", "complexity":"low", "model":"codex"}),
+    );
+    assert_eq!(resumed["title"], "After the refusal");
+    assert_eq!(audit_count(&workspace, "orbit.task.add"), 4);
     drop(client);
     let ready = preflight(&workspace);
     assert!(ready.status.success(), "{ready:?}");
@@ -837,13 +891,39 @@ fn a_replaced_drain_hands_its_run_to_the_installed_executable() {
     drain.armed = false;
 }
 
-/// `distinct_candidate` already staged and assessed this disposable image.
-/// Rename that same inode over the installation, leaving the running old inode
-/// intact. Copying and assessing it a second time adds no handover coverage.
-/// The local-candidate update row still exercises the production installer.
+/// Direct inode replacement. `distinct_candidate` already staged this
+/// disposable image; renaming it over the installation leaves the running old
+/// inode intact. This does not run update admission or convergence. The
+/// public installer is [`local_candidate_update`].
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn install_prepared_candidate(candidate: &Path, installed: &Path) {
     std::fs::rename(candidate, installed).expect("install prepared candidate");
+}
+
+#[cfg(unix)]
+#[test]
+fn oversized_unterminated_stdio_line_closes_session() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+    assert_eq!(client.request("ping", Value::Null)["result"], json!({}));
+
+    // Exceed the 16 MiB line limit without a newline. The pump must close
+    // before an attacker can continue growing its partial-line buffer.
+    let chunk = vec![b'x'; 64 * 1024];
+    for _ in 0..256 {
+        client
+            .writer
+            .write_all(&chunk)
+            .expect("write bounded input");
+    }
+    let _ = client.writer.write_all(b"x");
+    assert!(
+        matches!(
+            client.lines.recv_timeout(RESPONSE_TIMEOUT),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+        ),
+        "oversized unterminated line must close the session"
+    );
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -965,6 +1045,295 @@ fn a_replaced_mcp_server_defers_handover_until_a_large_partial_request_completes
     );
 }
 
+/// Partition id the running checkout reports as `runtime.workspace_id()`.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn checkout_partition_id(workspace: &McpWorkspace) -> String {
+    let raw = std::fs::read_to_string(workspace.work.join(".orbit/config.yaml"))
+        .expect("workspace config");
+    raw.lines()
+        .find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            (key.trim() == "workspace_id").then(|| value.trim().trim_matches('"').to_string())
+        })
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| panic!("workspace_id missing from {raw}"))
+}
+
+/// Successful `orbit.task.list` audit rows, oldest first, while the server is live.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn successful_task_list_audits(workspace: &McpWorkspace) -> Vec<Value> {
+    let connection = Connection::open(workspace.home.join(".orbit/orbit.db")).expect("audit db");
+    connection
+        .busy_timeout(std::time::Duration::from_secs(5))
+        .expect("audit busy timeout");
+    let mut statement = connection
+        .prepare(
+            "SELECT self_reported_actor, capabilities_json, transport, \
+             caller_machine_id, workspace_id \
+             FROM audit_events \
+             WHERE tool_name = 'orbit.task.list' AND status = 'success' \
+             ORDER BY rowid",
+        )
+        .expect("audit query");
+    statement
+        .query_map([], |row| {
+            Ok(json!({
+                "self_reported_actor": row.get::<_, Option<String>>(0)?,
+                "capabilities_json": row.get::<_, Option<String>>(1)?,
+                "transport": row.get::<_, Option<String>>(2)?,
+                "caller_machine_id": row.get::<_, Option<String>>(3)?,
+                "workspace_id": row.get::<_, Option<String>>(4)?,
+            }))
+        })
+        .expect("audit rows")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("read audit rows")
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn assert_negotiated_session(
+    client: &mut McpClient,
+    workspace: &McpWorkspace,
+    task_id: &str,
+    partition: &str,
+    prior_audits: usize,
+) {
+    let ping = client.request("ping", Value::Null);
+    assert_eq!(ping["result"], json!({}), "{ping}");
+
+    let tasks = client.call_tool_ok("orbit_task_list", json!({}));
+    assert_eq!(tasks["total"], 1, "{tasks}");
+    assert_eq!(tasks["tasks"][0]["id"], task_id, "{tasks}");
+    assert_eq!(
+        tasks["tasks"][0]["title"], "Negotiated handover seed",
+        "{tasks}"
+    );
+    let shown = client.show_task(task_id);
+    assert_eq!(shown["id"], task_id, "{shown}");
+    assert_eq!(shown["title"], "Negotiated handover seed", "{shown}");
+
+    // MCP does not advertise task deletion, so a guessed name cannot show the
+    // capability strip. The audit row can: `--operator` without this binding
+    // would record operator beside agent.
+    let audits = successful_task_list_audits(workspace);
+    assert_eq!(
+        audits.len(),
+        prior_audits + 1,
+        "one new list audit: {audits:?}"
+    );
+    let row = audits.last().expect("list audit");
+    assert_eq!(row["self_reported_actor"], "negotiated-handover", "{row}");
+    assert_eq!(row["transport"], "ssh-mcp", "{row}");
+    assert_eq!(row["caller_machine_id"], "hm_worker", "{row}");
+    assert_eq!(row["workspace_id"], partition, "{row}");
+    let capabilities: Value = serde_json::from_str(
+        row["capabilities_json"]
+            .as_str()
+            .expect("capabilities json"),
+    )
+    .expect("capabilities");
+    assert_eq!(capabilities, json!(["agent"]), "{row}");
+}
+
+/// A live stdio server that already accepted 2026-07-28 down to 2025-11-25.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct NegotiatedHandover {
+    workspace: McpWorkspace,
+    task_id: String,
+    partition: String,
+    server_stderr: ServerStderr,
+    client: McpClient,
+    pid: u32,
+    installed: PathBuf,
+    old_digest: String,
+}
+
+/// Start `orbit mcp serve` from a private installation, initialize at
+/// 2026-07-28, and require the agreed 2025-11-25 session to ping and audit
+/// once before anything replaces the image. No resume payload is injected.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn open_negotiated_handover(stderr_name: &str) -> NegotiatedHandover {
+    let workspace = McpWorkspace::init();
+    let task_id = super::add_task_cli(
+        &workspace,
+        "Negotiated handover seed",
+        "Visible before and after the executable handover",
+    );
+    let partition = checkout_partition_id(&workspace);
+    let (machine_id, _) = super::machine_identity(&workspace.home);
+    let binding = orbit_types::tool::WorkerInvocation {
+        owner_machine_id: machine_id.clone(),
+        owner_workspace_id: partition.clone(),
+        owner_destination: format!("{machine_id}/{partition}"),
+        task_id: "ORB-HANDOVER".into(),
+        claim_id: "claim-negotiated-handover".into(),
+        execution: orbit_types::task::ExecutionLocation {
+            machine_id: "hm_worker".into(),
+            machine_name: None,
+        },
+        bound_run_id: "run-negotiated-handover".into(),
+    };
+    let params = json!({
+        "protocolVersion": "2026-07-28",
+        "capabilities": {},
+        "clientInfo": { "name": "negotiated-handover", "version": "0" },
+        "_meta": {
+            "orbit": {
+                "workspace": super::utf8(&workspace.work),
+                "worker_invocation": binding,
+            }
+        }
+    });
+
+    let install = workspace.home.join("installation");
+    std::fs::create_dir_all(&install).expect("installation");
+    let installed = install.join("orbit");
+    std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &installed).expect("install old executable");
+    let old_digest = executable_generation(&installed).expect("old digest");
+    let (server_stderr, stderr) = ServerStderr::create(&workspace, stderr_name);
+    let mut command =
+        McpWorkspace::orbit_program_command(&installed, &workspace.work, &workspace.home);
+    command
+        .args([
+            "mcp",
+            "serve",
+            "--operator",
+            "--remote-caller-machine-id",
+            "hm_worker",
+            "--workspace",
+            "ws_mcp-roundtrip",
+        ])
+        .env(orbit_mcp::LIFECYCLE_INTERVAL_ENV, "50")
+        .env("RUST_LOG", ServerStderr::RUST_LOG)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(stderr);
+    let child = spawn_copied_orbit(&mut command).expect("old server");
+    let pid = child.id();
+    let mut client = McpClient::new(child);
+    let response = client.initialize(params);
+    assert!(
+        response.get("error").is_none(),
+        "initialize refused: {response}; {}",
+        server_stderr.tail()
+    );
+    assert_eq!(
+        response["result"]["protocolVersion"], "2025-11-25",
+        "{response}"
+    );
+    assert_eq!(
+        running_digest(&workspace, pid).as_deref(),
+        Some(old_digest.as_str())
+    );
+    assert_negotiated_session(&mut client, &workspace, &task_id, &partition, 0);
+    NegotiatedHandover {
+        workspace,
+        task_id,
+        partition,
+        server_stderr,
+        client,
+        pid,
+        installed,
+        old_digest,
+    }
+}
+
+/// Same pid and pipes after the installed image is already the candidate.
+/// The client does not initialize again.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn assert_resumed_negotiated_session(
+    session: &mut NegotiatedHandover,
+    new_digest: &str,
+    what: &str,
+) {
+    let NegotiatedHandover {
+        workspace,
+        task_id,
+        partition,
+        server_stderr,
+        client,
+        pid,
+        ..
+    } = session;
+    server_stderr.wait_until(&mut client.child, what, || {
+        running_digest(workspace, *pid).as_deref() == Some(new_digest)
+    });
+    assert_eq!(client.child.id(), *pid);
+    assert_negotiated_session(client, workspace, task_id, partition, 1);
+    assert_eq!(running_digest(workspace, *pid).as_deref(), Some(new_digest));
+}
+
+/// Direct inode replacement, not the updater.
+///
+/// The client asked for 2026-07-28, accepted 2025-11-25, and keeps that
+/// agreement, its metadata and its worker binding when
+/// [`install_prepared_candidate`] renames a distinct copy over the
+/// installation. Same pid and pipes, and the client does not initialize
+/// again. This does not exercise update admission or convergence; that public
+/// path is [`a_negotiated_protocol_survives_a_local_candidate_update`].
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn a_negotiated_protocol_answers_ping_after_stdio_handover() {
+    let mut session = open_negotiated_handover("negotiated-direct-handover");
+    let candidate = distinct_candidate(&session.workspace);
+    let new_digest = executable_generation(&candidate).expect("candidate digest");
+    assert_ne!(
+        new_digest, session.old_digest,
+        "the fixture must replace the image"
+    );
+    install_prepared_candidate(&candidate, &session.installed);
+    assert_resumed_negotiated_session(
+        &mut session,
+        &new_digest,
+        "the idle server to hand the negotiated session to the directly replaced executable",
+    );
+}
+
+/// The same negotiated fallback, through `orbit update --local-candidate`.
+///
+/// [`write_candidate_manifest`] and [`local_candidate_update`] are the public
+/// installer. After that update reports success, the original client pings
+/// and repeats the audited list on the same pid without a second initialize.
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn a_negotiated_protocol_survives_a_local_candidate_update() {
+    let mut session = open_negotiated_handover("negotiated-local-candidate");
+    let candidate = distinct_candidate(&session.workspace);
+    let new_digest = executable_generation(&candidate).expect("candidate digest");
+    assert_ne!(
+        new_digest, session.old_digest,
+        "the fixture must replace the image"
+    );
+    let manifest = write_candidate_manifest(&session.workspace, &candidate);
+    let output = local_candidate_update(
+        &session.workspace,
+        &candidate,
+        &manifest,
+        &session.installed,
+    );
+    assert!(
+        output.status.success(),
+        "local candidate update failed: {output:?}; {}",
+        session.server_stderr.tail()
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("update report");
+    assert_eq!(report["outcome"], "updated", "{report}");
+    let handover = report["handover"].as_array().expect("handover list");
+    assert_eq!(handover.len(), 1, "{report}");
+    assert_eq!(handover[0]["pid"], session.pid, "{report}");
+    assert_eq!(handover[0]["role"], "mcp_serve", "{report}");
+    assert_eq!(handover[0]["resume"], "mcp-stdio-v1", "{report}");
+    assert_eq!(
+        executable_generation(&session.installed).expect("installed digest"),
+        new_digest
+    );
+    assert_resumed_negotiated_session(
+        &mut session,
+        &new_digest,
+        "the idle server to hand the negotiated session to the local-candidate update",
+    );
+}
+
 #[test]
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn a_replaced_mcp_server_hands_its_session_over_after_invalid_requests() {
@@ -1002,24 +1371,30 @@ fn a_replaced_mcp_server_hands_its_session_over_after_invalid_requests() {
         Some(old_digest.as_str())
     );
 
-    // Well-formed JSON that rmcp cannot decode receives an id-less error.
-    // None of these ids may pin the session forever, including batch input
-    // (the stdio transport accepts individual messages only).
+    // Well-formed JSON that the transport cannot decode receives an id-less
+    // error. None of these ids may pin the session forever, including batch
+    // input (the stdio transport accepts individual messages only).
     for invalid in [
         json!({"jsonrpc":"2.0", "id":1001, "method":"tools/call", "params":"x"}),
         json!({"jsonrpc":"1.0", "id":1002, "method":"ping"}),
         json!([{"jsonrpc":"2.0", "id":1003, "method":"ping"}]),
     ] {
         client.send(&invalid);
-        let reply: Value = serde_json::from_str(
-            &client
-                .lines
-                .recv_timeout(RESPONSE_TIMEOUT)
-                .expect("rejection"),
-        )
-        .expect("JSON rejection");
-        assert!(reply.get("id").is_none(), "{reply}");
-        assert_eq!(reply["error"]["code"], -32600, "{reply}");
+        let received = match client.lines.recv_timeout(RESPONSE_TIMEOUT) {
+            Ok(received) => received,
+            Err(error) => {
+                panic!("rejection of {invalid} ({error}); {}", server_stderr.tail())
+            }
+        };
+        let reply: Value = match serde_json::from_str(&received) {
+            Ok(reply) => reply,
+            Err(error) => panic!(
+                "JSON rejection of {invalid}: {error}; raw {received}; {}",
+                server_stderr.tail()
+            ),
+        };
+        assert!(reply.get("id").is_none(), "{invalid} -> {reply}");
+        assert_eq!(reply["error"]["code"], -32600, "{invalid} -> {reply}");
     }
     // The compatibility path silently drops an undecodable non-standard
     // notification even when the sender included an id. A subsequent ping
@@ -1053,6 +1428,353 @@ fn a_replaced_mcp_server_hands_its_session_over_after_invalid_requests() {
         running_digest(&workspace, pid).as_deref(),
         Some(new_digest.as_str())
     );
+}
+
+/// A regular file as stdin cannot be polled, so the session takes the plain
+/// path. Its invalid line must still be answered with the id-less `-32600`
+/// before rmcp reads it, and the following request must not wait out the
+/// client response timeout. Broken JSON and a non-standard notification
+/// still get no answer and must not steal the next read.
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn a_non_pollable_mcp_session_answers_invalid_requests_before_rmcp_reads_them() {
+    let workspace = McpWorkspace::init();
+    let (server_stderr, stderr) = ServerStderr::create(&workspace, "non-pollable-invalid");
+    let messages = [
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": McpClient::initialize_params("non-pollable", Some("ws_mcp-roundtrip")),
+        }),
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        json!({"jsonrpc": "2.0", "id": 1001, "method": "tools/call", "params": "x"}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "ping"}),
+    ];
+    let mut input_lines: Vec<String> = messages
+        .iter()
+        .map(|message| serde_json::to_string(message).expect("serialize stdin line"))
+        .collect();
+    input_lines.push("{not json".to_string());
+    for message in [
+        json!({"jsonrpc": "2.0", "id": 1004, "method": "notifications/custom", "params": "x"}),
+        json!({"jsonrpc": "2.0", "id": 3, "method": "ping"}),
+    ] {
+        input_lines.push(serde_json::to_string(&message).expect("serialize stdin line"));
+    }
+    let input_path = workspace.home.join("non-pollable-stdin.jsonl");
+    std::fs::write(&input_path, format!("{}\n", input_lines.join("\n"))).expect("stdin file");
+    let input = std::fs::File::open(&input_path).expect("open stdin file");
+
+    let mut command = McpWorkspace::orbit_command(&workspace.work, &workspace.home);
+    command
+        .args([
+            "mcp",
+            "serve",
+            "--operator",
+            "--workspace",
+            "ws_mcp-roundtrip",
+        ])
+        .stdin(Stdio::from(input))
+        .stdout(Stdio::piped())
+        .stderr(stderr);
+    let mut child = spawn_copied_orbit(&mut command).expect("non-pollable server");
+    let stdout = child.stdout.take().expect("server stdout");
+    let mut client = McpClient::over_streams(child, Box::new(std::io::sink()), Box::new(stdout));
+    let next = |client: &mut McpClient, what: &str| -> Value {
+        let line = client
+            .lines
+            .recv_timeout(Duration::from_secs(15))
+            .unwrap_or_else(|error| {
+                panic!("{what} within 15s ({error}); {}", server_stderr.tail())
+            });
+        serde_json::from_str(&line)
+            .unwrap_or_else(|error| panic!("{what}: invalid JSON ({error}): {line}"))
+    };
+
+    // The whole input is already in the file, so the pump can answer the
+    // invalid line before the service answers `initialize`. Collect the
+    // four expected frames rather than assuming an order between them.
+    let mut received = Vec::new();
+    for _ in 0..4 {
+        received.push(next(
+            &mut client,
+            "initialize, rejection and ping responses",
+        ));
+    }
+    let initialized = received
+        .iter()
+        .find(|message| message["id"] == 1)
+        .unwrap_or_else(|| panic!("no initialize response in {received:?}"));
+    assert!(
+        initialized.get("error").is_none(),
+        "initialize refused: {initialized}; {}",
+        server_stderr.tail()
+    );
+    let rejection = received
+        .iter()
+        .find(|message| message.get("id").is_none())
+        .unwrap_or_else(|| panic!("no id-less rejection in {received:?}"));
+    assert_eq!(rejection["error"]["code"], -32600, "{rejection}");
+    // Both pings answer, so the broken and compatibility lines got no
+    // `-32600` of their own and did not steal the next read.
+    for id in [2, 3] {
+        let ping = received
+            .iter()
+            .find(|message| message["id"] == id)
+            .unwrap_or_else(|| panic!("no ping {id} response in {received:?}"));
+        assert_eq!(ping["result"], json!({}), "{ping}");
+    }
+}
+
+/// A permitted image read is larger than Tokio's 2 MiB stdout chunk because
+/// the base64 is sent twice. The invalid request is written only after that
+/// many bytes of the image frame have already arrived, while its newline is
+/// still outstanding, and the two records must stay separate JSON values.
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn a_pipelined_invalid_request_stays_outside_a_large_image_response() {
+    // `tokio::io::blocking::DEFAULT_MAX_BUF_SIZE` for Stdout. A frame above
+    // this is where a second stdout writer can splice.
+    const STDOUT_CHUNK: usize = 2 * 1024 * 1024;
+    const READ_SIZE: usize = 64 * 1024;
+
+    fn write_message(stdin: &mut std::process::ChildStdin, message: &Value) {
+        let mut line = serde_json::to_string(message).expect("serialize message");
+        line.push('\n');
+        std::io::Write::write_all(stdin, line.as_bytes()).expect("write stdin");
+        std::io::Write::flush(stdin).expect("flush stdin");
+    }
+
+    fn pull_stdio(
+        pending: &mut Vec<u8>,
+        ask: &std::sync::mpsc::Sender<usize>,
+        data: &std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
+        deadline: Instant,
+    ) {
+        let wait = deadline.saturating_duration_since(Instant::now());
+        assert!(!wait.is_zero(), "timed out reading stdio");
+        ask.send(READ_SIZE).expect("stdout reader");
+        let read = data
+            .recv_timeout(wait)
+            .unwrap_or_else(|error| panic!("stdio read ({error})"));
+        let bytes = read.unwrap_or_else(|error| panic!("stdio read ({error})"));
+        assert!(!bytes.is_empty(), "mcp serve closed stdout");
+        pending.extend_from_slice(&bytes);
+    }
+
+    fn take_line(
+        pending: &mut Vec<u8>,
+        ask: &std::sync::mpsc::Sender<usize>,
+        data: &std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
+        deadline: Instant,
+    ) -> String {
+        loop {
+            if let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
+                let line: Vec<u8> = pending.drain(..=end).collect();
+                let line = String::from_utf8(line).expect("stdio line is utf-8");
+                let line = line.trim_end_matches(['\r', '\n']).to_string();
+                if line.is_empty() {
+                    continue;
+                }
+                return line;
+            }
+            pull_stdio(pending, ask, data, deadline);
+        }
+    }
+
+    fn exchange(
+        stdin: &mut std::process::ChildStdin,
+        pending: &mut Vec<u8>,
+        ask: &std::sync::mpsc::Sender<usize>,
+        data: &std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
+        next_id: &mut i64,
+        method: &str,
+        params: Value,
+    ) -> Value {
+        *next_id += 1;
+        let id = *next_id;
+        let mut message = json!({ "jsonrpc": "2.0", "id": id, "method": method });
+        if !params.is_null() {
+            message["params"] = params;
+        }
+        write_message(stdin, &message);
+        let deadline = Instant::now() + RESPONSE_TIMEOUT;
+        loop {
+            let line = take_line(pending, ask, data, deadline);
+            let parsed: Value = serde_json::from_str(&line)
+                .unwrap_or_else(|error| panic!("stdio frame is not one JSON value ({error})"));
+            if parsed.get("id").and_then(Value::as_i64) == Some(id) {
+                return parsed;
+            }
+        }
+    }
+
+    let workspace = McpWorkspace::init();
+    let mut command = McpWorkspace::orbit_command(&workspace.work, &workspace.home);
+    command
+        .args(["mcp", "serve"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = spawn_copied_orbit(&mut command).expect("mcp serve");
+    let mut stdin = child.stdin.take().expect("server stdin");
+    let stdout = child.stdout.take().expect("server stdout");
+    let (ask_tx, ask_rx) = std::sync::mpsc::channel::<usize>();
+    let (data_tx, data_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut stdout = stdout;
+        let mut buf = vec![0u8; READ_SIZE];
+        while let Ok(want) = ask_rx.recv() {
+            let n = want.min(buf.len());
+            let read = match std::io::Read::read(&mut stdout, &mut buf[..n]) {
+                Ok(0) => Ok(Vec::new()),
+                Ok(n) => Ok(buf[..n].to_vec()),
+                Err(error) => Err(error),
+            };
+            if data_tx.send(read).is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut pending = Vec::<u8>::new();
+    let mut next_id = 0i64;
+
+    let workspace_path = workspace.work.display().to_string();
+    let initialized = exchange(
+        &mut stdin,
+        &mut pending,
+        &ask_tx,
+        &data_rx,
+        &mut next_id,
+        "initialize",
+        McpClient::initialize_params("orbit-mcp-roundtrip-test", Some(&workspace_path)),
+    );
+    assert_eq!(initialized["result"]["protocolVersion"], "2025-06-18");
+    write_message(
+        &mut stdin,
+        &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+    );
+
+    let task = exchange(
+        &mut stdin,
+        &mut pending,
+        &ask_tx,
+        &data_rx,
+        &mut next_id,
+        "tools/call",
+        json!({
+            "name": "orbit_task_add",
+            "arguments": {
+                "title": "Wide image frame",
+                "description": "A permitted image artifact whose MCP read exceeds one stdout chunk",
+                "complexity": "low",
+                "model": "codex",
+            },
+        }),
+    );
+    assert_eq!(task["result"]["isError"], false, "{task}");
+    let task_id = task["result"]["structuredContent"]["id"]
+        .as_str()
+        .expect("task id")
+        .to_string();
+
+    let source = workspace.work.join(".orbit/tmp/shots/wide.png");
+    std::fs::create_dir_all(source.parent().expect("shot directory parent"))
+        .expect("shot directory");
+    let mut image = std::fs::File::create(&source).expect("image file");
+    std::io::Write::write_all(&mut image, b"\x89PNG\r\n\x1a\n").expect("png signature");
+    image
+        .set_len(orbit_types::task::MAX_TASK_ARTIFACT_CONTENT_BYTES)
+        .expect("image length");
+    drop(image);
+    let stored = exchange(
+        &mut stdin,
+        &mut pending,
+        &ask_tx,
+        &data_rx,
+        &mut next_id,
+        "tools/call",
+        json!({
+            "name": "orbit_task_artifact",
+            "arguments": {
+                "action": "put",
+                "id": task_id,
+                "source_path": source.display().to_string(),
+                "path": "shots/wide.png",
+                "model": "codex",
+            },
+        }),
+    );
+    assert_eq!(stored["result"]["isError"], false, "{stored}");
+
+    next_id += 1;
+    let call_id = next_id;
+    write_message(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": call_id,
+            "method": "tools/call",
+            "params": {
+                "name": "orbit_task_artifact",
+                "arguments": { "action": "get", "id": task_id, "path": "shots/wide.png" },
+            },
+        }),
+    );
+
+    let deadline = Instant::now() + RESPONSE_TIMEOUT;
+    let mut sent_during_frame = false;
+    let image_line = loop {
+        if !sent_during_frame && pending.len() > STDOUT_CHUNK && !pending.contains(&b'\n') {
+            write_message(
+                &mut stdin,
+                &json!({"jsonrpc": "2.0", "id": 1001, "method": "tools/call", "params": "x"}),
+            );
+            sent_during_frame = true;
+        }
+        if let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
+            assert!(
+                sent_during_frame,
+                "the image frame ended before it crossed one stdout chunk, so the invalid request never overlapped it"
+            );
+            let line: Vec<u8> = pending.drain(..=end).collect();
+            break String::from_utf8(line).expect("image frame is utf-8");
+        }
+        pull_stdio(&mut pending, &ask_tx, &data_rx, deadline);
+    };
+    let image_len = image_line.len();
+    let image: Value = serde_json::from_str(image_line.trim_end()).unwrap_or_else(|error| {
+        panic!("image frame is not one JSON value ({error}), {image_len} bytes")
+    });
+    assert!(
+        image_len > STDOUT_CHUNK,
+        "the image read must exceed one stdout chunk so framing is checked past the split, got {image_len} bytes"
+    );
+    assert_eq!(image.get("id").and_then(Value::as_i64), Some(call_id));
+    assert_eq!(image["result"]["isError"], false);
+    assert_eq!(
+        image["result"]["structuredContent"]["presentation"],
+        "image"
+    );
+
+    let rejection_line = take_line(&mut pending, &ask_tx, &data_rx, deadline);
+    let rejection: Value = serde_json::from_str(&rejection_line)
+        .unwrap_or_else(|error| panic!("rejection frame is not one JSON value ({error})"));
+    assert!(rejection.get("id").is_none(), "{rejection}");
+    assert_eq!(rejection["error"]["code"], -32600, "{rejection}");
+
+    let ping = exchange(
+        &mut stdin,
+        &mut pending,
+        &ask_tx,
+        &data_rx,
+        &mut next_id,
+        "ping",
+        Value::Null,
+    );
+    assert_eq!(ping["result"], json!({}), "{ping}");
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

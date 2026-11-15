@@ -163,14 +163,20 @@ fn operator_record_routes_gate_refusals_and_success() {
                 400,
                 "pilot_admission_evidence_required",
             );
+            assert_eq!(
+                fixture.runtime.get_task_history(&held).unwrap().len(),
+                held_history
+            );
+            let owed_history = fixture.runtime.get_task_history(&owed).unwrap().len();
             error_code(
                 operator.send("POST", &deploy(&owed), json!({"criterion":2})),
                 400,
                 "post_deploy_evidence_required",
             );
             assert_eq!(
-                fixture.runtime.get_task_history(&held).unwrap().len(),
-                held_history
+                fixture.runtime.get_task_history(&owed).unwrap().len(),
+                owed_history,
+                "the empty-evidence post-deploy refusal wrote no history"
             );
 
             // No matching hold / criterion that does not exist: 409, no write.
@@ -184,7 +190,6 @@ fn operator_record_routes_gate_refusals_and_success() {
                 409,
                 "pilot_admission_no_matching_hold",
             );
-            let owed_history = fixture.runtime.get_task_history(&owed).unwrap().len();
             for criterion in [0, 1] {
                 error_code(
                     operator.send(

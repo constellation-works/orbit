@@ -40,9 +40,8 @@ use serde_json::{Value, json};
 
 use super::super::TaskUpdateParams;
 use crate::OrbitRuntime;
-use crate::application::search::task_selectors_contain_path;
 use crate::application::task::{
-    PILOT_WARNING_TRIAGED_EVENT, SourceGit, TaskAutomationPort, TaskJobPort,
+    self, PILOT_WARNING_TRIAGED_EVENT, SourceGit, TaskAutomationPort, TaskJobPort,
 };
 
 /// The hold reason, and the admission classification, for a proposed task
@@ -294,7 +293,7 @@ impl OrbitRuntime {
         else {
             return Ok(None);
         };
-        let comments = self.get_task_comments(task_id)?;
+        let comments = self.get_task_pilot_comments(task_id)?;
         // Newest receipt for this operation. An unreadable audit is not
         // evidence; the task keeps its other hold reasons. A bad operation
         // id is not rejected here: the history receipt already named it.
@@ -491,7 +490,7 @@ fn touches_paths(source: &dyn SourceGit, commit: &str, selectors: &[String]) -> 
         changed
             .split('\0')
             .filter(|path| !path.is_empty())
-            .any(|path| task_selectors_contain_path(selectors, path))
+            .any(|path| task::task_selectors_contain_path(selectors, path))
     })
 }
 

@@ -39,9 +39,11 @@ use orbit_engine::{
     BaselineHoldStatus, DispatchError, baseline_hold_status, recorded_baseline_hold_status,
 };
 use orbit_store::contracts::JobRunQuery;
-use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
-use orbit_types::workflow::{BASELINE_RED_HOLD_EVENT, BaselineRedHold, JobRunState, JobRunTrigger};
-use serde::{Deserialize, Serialize};
+use orbit_types::task::{Task, TaskDecision, TaskHistoryEntry, TaskStatus};
+use orbit_types::workflow::{
+    BASELINE_RED_HOLD_VERDICT_EVENT, BaselineHoldVerdict, BaselineRedHold, JobRunState,
+    JobRunTrigger,
+};
 use serde_json::{Value, json};
 
 use super::baseline_repair::{RepairIndex, RepairLink};
@@ -58,17 +60,13 @@ const TRIGGER_CONSUMER: &str = "clock-sweep";
 /// Recent refresh runs scanned for a live one.
 const RUN_SCAN_LIMIT: usize = 20;
 
-/// History event recording the latest check of a standing hold.
-const BASELINE_RED_HOLD_VERDICT_EVENT: &str = "baseline_red_hold_verdict";
-
-/// A check of a standing [`BaselineRedHold`], persisted as the
-/// note of a [`BASELINE_RED_HOLD_VERDICT_EVENT`] entry.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct BaselineHoldVerdict {
-    /// The command passed on a new base tip, so admission may hand the task out.
-    lifted: bool,
-    /// Why, naming the base tip checked and the command.
-    reason: String,
+// One task id whose history read the next baseline-hold pass treats as
+// unreadable. A corrupt bundle fails the backlog listing itself, so the
+// per-task isolation this pass owes cannot be reached by damaging a document.
+#[cfg(test)]
+thread_local! {
+    pub(super) static FAIL_BASELINE_HOLD_HISTORY: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// What one check of the standing baseline-red holds did.
@@ -92,6 +90,35 @@ pub struct BaselineHoldRefresh {
     pub skipped: Option<String>,
 }
 
+/// Why `task` is withheld for a red base, from history the caller already
+/// read. A task that is not `backlog` has none. The verdict is the clock
+/// tick's or its refresh run's, never computed here.
+pub(crate) fn standing_baseline_hold_from_history(
+    task: &Task,
+    history: &[TaskHistoryEntry],
+) -> Option<String> {
+    if task.status != TaskStatus::Backlog {
+        return None;
+    }
+    let standing = StandingHold::latest(history)?;
+    match standing.verdict {
+        Some(verdict) if verdict.lifted => None,
+        Some(verdict) => Some(verdict.reason),
+        None => Some(format!(
+            "required validation `{}` fails on `{}` at {}{}; the hold stands until the \
+             owner's clock checks a new base tip and the command passes there",
+            standing.hold.command,
+            if standing.hold.base_ref.is_empty() {
+                "the base"
+            } else {
+                standing.hold.base_ref.as_str()
+            },
+            standing.hold.base_sha,
+            standing.hold.failures_clause()
+        )),
+    }
+}
+
 impl OrbitRuntime {
     /// Why `task` is withheld from admission for a red base, or `None` when
     /// no hold stands. Reads only the task's history: the verdict is the
@@ -101,25 +128,7 @@ impl OrbitRuntime {
             return Ok(None);
         }
         let history = self.get_task_history(&task.id)?;
-        let Some(standing) = StandingHold::latest(&history) else {
-            return Ok(None);
-        };
-        Ok(match standing.verdict {
-            Some(verdict) if verdict.lifted => None,
-            Some(verdict) => Some(verdict.reason),
-            None => Some(format!(
-                "required validation `{}` fails on `{}` at {}{}; the hold stands until the \
-                 owner's clock checks a new base tip and the command passes there",
-                standing.hold.command,
-                if standing.hold.base_ref.is_empty() {
-                    "the base"
-                } else {
-                    standing.hold.base_ref.as_str()
-                },
-                standing.hold.base_sha,
-                standing.hold.failures_clause()
-            )),
-        })
+        Ok(standing_baseline_hold_from_history(task, &history))
     }
 
     /// One clock tick's check of the standing baseline-red holds
@@ -204,7 +213,17 @@ impl OrbitRuntime {
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 break;
             }
-            let Some(standing) = StandingHold::latest(&self.get_task_history(&task.id)?) else {
+            let history = match self.baseline_hold_task_history(&task.id) {
+                Ok(history) => history,
+                Err(error) => {
+                    tracing::warn!(
+                        task_id = %task.id,
+                        "could not read a baseline-held task's history: {error}"
+                    );
+                    continue;
+                }
+            };
+            let Some(standing) = StandingHold::latest(&history) else {
                 continue;
             };
             if standing
@@ -263,6 +282,21 @@ impl OrbitRuntime {
         Ok(refresh)
     }
 
+    /// History of one backlog task. A failure here is one task's document,
+    /// not a reason to abandon every later hold in the workspace.
+    fn baseline_hold_task_history(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
+        #[cfg(test)]
+        if FAIL_BASELINE_HOLD_HISTORY.with(|fail| fail.borrow().as_deref() == Some(task_id)) {
+            return Err(OrbitError::Store(format!(
+                "task {task_id} history is unreadable"
+            )));
+        }
+        self.get_task_history(task_id)
+    }
+
     /// Whether a [`BASELINE_HOLD_REFRESH_JOB`] run is still live here.
     fn baseline_hold_refresh_live(&self) -> Result<bool, OrbitError> {
         Ok(self
@@ -288,8 +322,7 @@ impl OrbitRuntime {
         hold: &BaselineRedHold,
         verdict: &BaselineHoldVerdict,
     ) -> Result<bool, OrbitError> {
-        let note = serde_json::to_string(verdict)
-            .map_err(|error| OrbitError::Execution(format!("encode hold verdict: {error}")))?;
+        let note = verdict.text();
         let mut recorded = false;
         self.stores()
             .tasks()
@@ -313,7 +346,7 @@ impl OrbitRuntime {
                             from_status: None,
                             to_status: None,
                             operation_id: None,
-                            decision: None,
+                            decision: Some(TaskDecision::BaselineHoldVerdict(verdict.clone())),
                         }],
                         ..Default::default()
                     },
@@ -338,15 +371,14 @@ impl StandingHold {
             .iter()
             .rposition(|entry| entry.to_status.is_some())?;
         let entry = &history[at];
-        if entry.event != BASELINE_RED_HOLD_EVENT || entry.to_status != Some(TaskStatus::Backlog) {
+        if entry.to_status != Some(TaskStatus::Backlog) {
             return None;
         }
-        let hold = BaselineRedHold::from_text(entry.note.as_deref()?)?;
+        let hold = BaselineRedHold::from_entry(entry)?;
         let verdict = history[at + 1..]
             .iter()
             .rev()
-            .filter(|entry| entry.event == BASELINE_RED_HOLD_VERDICT_EVENT)
-            .find_map(|entry| serde_json::from_str(entry.note.as_deref()?).ok());
+            .find_map(BaselineHoldVerdict::from_entry);
         Some(Self { hold, verdict })
     }
 }

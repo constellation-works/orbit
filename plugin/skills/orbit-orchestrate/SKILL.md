@@ -30,6 +30,16 @@ Inspect → deduplicate → author → prepare → promote → dispatch → veri
 - Verify persisted preparation, actual diffs, required checks and merge state.
   Post-merge review/QA findings become repairs under continuous delivery; do not
   invent an extra pre-merge approval gate. Repository protections still apply.
+- Start every supervision pass (each wake of a long-running session) with
+  `orbit.attention` (`orbit attention`) on the owning host for the workspaces
+  you supervise. Clear each `pilot_warning` and `pilot_hold`: repair the task
+  (criteria, context, dependencies; `required_tools` is set only at filing, so
+  re-file to change it) and re-pilot, or record on the task why it stays.
+  Treat an empty result as clear only when `degraded` is empty and the read
+  reached the owner: a federated read that misses the owner can return
+  nothing. A caller holding neither the agent nor the operator capability
+  is refused with `capability_denied` and does not receive an empty
+  attention envelope.
 - Diagnose blocked work before retrying. Preserve user interventions and active
   work. A stopped admission loop does not mean its children were cancelled.
 - Record `orchestrator` separately from execution `crew`. Neither attribution
@@ -101,11 +111,18 @@ implementation with the old candidate discarded. See
 |---|---|
 | Correct course while a task is running | [Mid-run steering](#mid-run-steering) |
 | Prepare/promote work and supervise progress | [Operating loop](references/loop.md) |
+| Compare implementer models when selecting a crew | [Model ranking](references/model-ranking.md) |
 | Scope completion authority and dispatch windows | [Authorization](references/authorization.md) |
 | Ship/auto command examples, locks and capacity | [Dispatch mechanics](references/orchestration.md) |
 | Understand the drain card's backlog forecast | [Backlog forecast](references/orchestration.md#backlog-forecast) |
+| See admission's CPU/memory forecast, its accuracy and decisions | [Resource forecast view](references/orchestration.md#resource-forecast-view) |
 | Jobs, activities, run commands and CI sweep | [Workflows](references/workflows.md) |
-| Diagnose a specific failed or stuck run | [Run debugging](references/run-debugging.md) |
+| Author or diagnose version 3 auto-task jobs, waits and accepted results | [Auto-task workflows](references/workflows.md#version-3-auto-task-workflows) |
+| Diagnose task-pilot start prerequisites and unreachable evidence | [Task-pilot readiness holds](references/workflows.md#task-pilot-readiness-holds) |
+| Diagnose a specific failed, held, or stuck run | [Run debugging](references/run-debugging.md) |
+| Choose checkpoint resume or a whole-run replay from step zero | [Whole-run replay](references/run-debugging.md#whole-run-replay-from-step-zero) |
+| Tell a corrected agent reply from a clean one | [Response-correction rounds](references/run-debugging.md#bounded-response-correction-rounds) |
+| Tell what a held delivery-refusal code means | [Delivery-refusal holds](references/run-debugging.md#delivery-refusal-holds) |
 | Tell an inherited red base from candidate damage in hosted CI | [Hosted-check diagnosis](references/run-debugging.md#hosted-check-failures-and-inherited-red-bases) |
 | Diagnose a failed local required-validation command and its replay evidence | [Local validation replay](references/run-debugging.md#local-required-validation-replay) |
 | Find or answer a human decision request on held work | [Decision requests](references/run-debugging.md#decision-requests-on-held-work) |

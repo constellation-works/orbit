@@ -91,8 +91,7 @@ fn seed_registered_workspace(base: &std::path::Path, id: &str) -> std::path::Pat
     let orbit_dir = repo_root.join(".orbit");
     std::fs::create_dir_all(orbit_dir.join("local")).expect("create workspace directories");
     std::fs::create_dir_all(repo_root.join("src")).expect("create source directory");
-    std::fs::write(orbit_dir.join("config.toml"), "[lease]\nenabled = true\n")
-        .expect("write lease config");
+    super::enable_leases(&orbit_dir);
     std::fs::write(
         orbit_dir.join("config.yaml"),
         format!("schema_version: 1\nworkspace_id: {id}\n"),
@@ -1191,8 +1190,15 @@ fn token_renewal_obeys_current_scope_and_workspace_policy() {
     // tightened policy and exercise the actual intake socket again.
     let root = fixture._tmp.path();
     let workspace = root.join("ws_frame_limit/.orbit");
-    std::fs::write(workspace.join("config.toml"),
-        "[lease]\nenabled = true\n[lease.hard]\nhuman = \"never\"\n[lease.max_priority]\nhuman = \"low\"\n").unwrap();
+    lease::install_test_lease_policy(
+        &workspace,
+        lease::LeasePolicy {
+            enabled: true,
+            hard_allowed_human: false,
+            max_priority_human: lease::LeasePriority::Low,
+            ..lease::LeasePolicy::FIXED
+        },
+    );
     let restricted = Arc::new(OrbitRuntime::from_roots(&root.join("global"), &workspace).unwrap());
     let path = root.join("restricted.sock");
     let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
@@ -1278,11 +1284,7 @@ fn token_renews_and_releases_only_its_own_principals_leases() {
     std::fs::create_dir_all(repo_root.join("src")).unwrap();
     std::fs::create_dir_all(&workspace_root).unwrap();
     std::fs::write(repo_root.join("src/x.rs"), "pub fn x() {}\n").unwrap();
-    std::fs::write(
-        workspace_root.join("config.toml"),
-        "[lease]\nenabled = true\n",
-    )
-    .unwrap();
+    super::enable_leases(&workspace_root);
     let runtime =
         Arc::new(OrbitRuntime::from_roots(&global_root, &workspace_root).expect("runtime"));
     let state = DashboardState::single(runtime);

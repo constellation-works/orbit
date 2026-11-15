@@ -117,9 +117,6 @@ const ORDINARY_WRITES: &[(&str, &str)] = &[
     ("POST", "/workflows/ship"),
     ("POST", "/runs/{id}/cancel"),
     ("POST", "/metrics/invocations"),
-    // The one-time browser ticket authenticates the exchange; the session it
-    // yields grants no operator capability.
-    ("POST", "/session"),
 ];
 
 /// Discover paths from registrations, then ask the real HTTP router for methods.
@@ -163,6 +160,7 @@ fn body(path: &str) -> Value {
             "trigger":{"cron":"0 * * * *","missed_run":"skip"},
         }),
         "/auto-tasks/toggle" => json!({"name":"missing","expected_enabled":true,"enabled":false}),
+        "/auto-tasks/delete" => json!({"name":"missing"}),
         "/auto-tasks/schedule" => json!({
             "name":"missing",
             "expected_schedule":{"cron":"0 * * * *"},

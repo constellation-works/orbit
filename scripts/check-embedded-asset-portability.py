@@ -53,6 +53,9 @@ def violations(content: str) -> list[str]:
 
 
 def failures_under(label: str, root: Path) -> tuple[list[str], list[str]]:
+    # A missing directory yields no files from rglob and would otherwise pass.
+    if not root.is_dir():
+        return [f"{label}: required directory is missing"], []
     failures: list[str] = []
     skipped: list[str] = []
     for path in sorted(candidate for candidate in root.rglob("*") if candidate.is_file()):
@@ -99,6 +102,20 @@ def verify_fixture_reporting() -> None:
                 "temporary binary fixture was not visibly skipped: "
                 f"expected {expected_skip!r}, got {skipped!r}"
             )
+
+    for missing in ("skills", "activities"):
+        with tempfile.TemporaryDirectory(prefix="orbit-portability-missing-") as temporary:
+            assets = Path(temporary)
+            (assets / "skills").mkdir()
+            (assets / "activities").mkdir()
+            (assets / missing).rmdir()
+            missing_failures, missing_skipped = check_assets(assets)
+            expected_missing = f"{missing}: required directory is missing"
+            if expected_missing not in missing_failures or missing_skipped:
+                raise RuntimeError(
+                    f"missing {missing} directory was not reported: "
+                    f"failures={missing_failures!r} skipped={missing_skipped!r}"
+                )
 
 
 def main() -> int:

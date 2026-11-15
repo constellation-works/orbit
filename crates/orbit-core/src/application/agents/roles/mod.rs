@@ -4,23 +4,22 @@
 //! terms, so adding it later changes only its own file.
 
 mod implementers;
-mod orchestrators;
 pub(super) mod pilot_warnings;
 pub(super) mod pilots;
 mod reviewers;
 
-use chrono::{DateTime, Utc};
-
 use super::score::{RowInput, Term};
-use super::{AgentFacts, AgentRole};
+use super::{AgentFacts, AgentRole, ExecutionScope, WindowBounds};
 
-/// Builds a role's rows for the window and requested minimum support.
-pub(super) type Rows = for<'a> fn(&'a AgentFacts, DateTime<Utc>, usize) -> Vec<RowInput<'a>>;
+/// Builds a role's rows for the window, requested minimum support and
+/// execution scope. Only implementers read the scope: the other roles score
+/// review, authorship and assessment, not how a task was executed.
+pub(super) type Rows =
+    for<'a> fn(&'a AgentFacts, WindowBounds, usize, ExecutionScope) -> Vec<RowInput<'a>>;
 
-/// Role-level fields a role adds to every response header for the window
-/// starting at `since`.
+/// Role-level fields a role adds to every response header for the window.
 pub(super) type Header =
-    fn(&AgentFacts, DateTime<Utc>) -> serde_json::Map<String, serde_json::Value>;
+    fn(&AgentFacts, WindowBounds) -> serde_json::Map<String, serde_json::Value>;
 
 /// One role's scorecard definition.
 pub(super) struct RoleSpec {
@@ -40,23 +39,44 @@ pub(super) struct RoleSpec {
 /// One row per implemented task, for the offline type-discovery report.
 pub(super) fn implementer_per_task_rows(
     facts: &AgentFacts,
-    since: DateTime<Utc>,
-    types: &[orbit_config::CrewPerformanceType],
+    window: WindowBounds,
+    types: &[orbit_config::TaskTypeDefinition],
+    execution: ExecutionScope,
 ) -> Vec<serde_json::Value> {
-    implementers::per_task_rows(facts, since, types)
+    implementers::per_task_rows(facts, window, types, execution)
 }
 
 pub(super) fn implementer_by_type_cells(
     facts: &AgentFacts,
-    since: DateTime<Utc>,
-    types: &[orbit_config::CrewPerformanceType],
+    window: WindowBounds,
+    types: &[orbit_config::TaskTypeDefinition],
+    execution: ExecutionScope,
 ) -> Vec<serde_json::Value> {
-    implementers::by_type_cells(facts, since, types)
+    implementers::by_type_cells(facts, window, types, execution)
 }
+
+/// The implementer regression rate by landed change size, per crew
+/// reference, optionally narrowed to one tier.
+pub(super) fn implementer_size_curves(
+    facts: &AgentFacts,
+    window: WindowBounds,
+    complexity: Option<&str>,
+    execution: ExecutionScope,
+) -> serde_json::Map<String, serde_json::Value> {
+    implementers::size_curves(facts, window, complexity, execution)
+}
+
+/// Each implementer row's tasks with the scorecard's per-task counts and
+/// expectations, for the model ranking.
+pub(super) use implementers::{
+    LedgerRow, LedgerTask, crew_label_run_identities, implementer_ledger,
+};
+
+/// The tiers [`implementer_size_curves`] can narrow to.
+pub(super) const SIZE_CURVE_TIERS: &[&str] = implementers::SIZE_CURVE_TIERS;
 
 pub(super) fn spec(role: AgentRole) -> &'static RoleSpec {
     match role {
-        AgentRole::Orchestrators => &orchestrators::ROLE,
         AgentRole::Implementers => &implementers::ROLE,
         AgentRole::Reviewers => &reviewers::ROLE,
         AgentRole::Pilots => &pilots::ROLE,

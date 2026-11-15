@@ -6,6 +6,7 @@
 //! Notice polling and the SSE event stream share their handlers too
 //! ([`super::lease_notices`]), so both servers frame the same pages the same way.
 
+use crate::api::helpers;
 use std::sync::Arc;
 
 use axum::Router;
@@ -16,15 +17,15 @@ use axum::routing::{get, post};
 use orbit_auth::scope::LeaseTokenScope;
 use orbit_common::governance::authorization::DASHBOARD_LEASE_WRITE;
 use orbit_common::protocol::tool_input::optional_string_alias;
+use orbit_core::OrbitRuntime;
 use orbit_core::runtime::task::locks::lease;
-use orbit_core::{OrbitError, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
 
 use super::lease_notices;
 use super::routines::{authorization_denied, authorized_caller};
-use super::{OptionalJson, bad_request, map_runtime_error, server_error};
+use super::{OptionalJson, bad_request, map_runtime_error};
 use crate::state::DashboardState;
 
 /// Caller attribution and workspace selection for a lease operation.
@@ -268,12 +269,14 @@ pub(super) async fn lease_backend_call(
         Ok(caller) => caller,
         Err(error) => return *error,
     };
-    match tokio::task::spawn_blocking(move || operation(backend.as_ref(), &caller, input)).await {
+    match helpers::blocking_join("lease operation", move || {
+        operation(backend.as_ref(), &caller, input)
+    })
+    .await
+    {
         Ok(Ok(value)) => Json(value).into_response(),
         Ok(Err(error)) => *error,
-        Err(error) => server_error(OrbitError::Execution(format!(
-            "lease operation panicked: {error}"
-        ))),
+        Err(response) => *response,
     }
 }
 

@@ -22,8 +22,44 @@ mod unix_tests {
         }
     }
 
+    const CHILD_MARKER: &str = "ORBIT_TEST_EXTERNAL_TOOL_LOCKDOWN_CHILD";
+    const SYNTHETIC_GH_TOKEN: &str = "orbit-test-synthetic-gh-token";
+    const TEST_NAME: &str = "external_tool_lockdown::unix_tests::external_tool_drops_ambient_credentials_and_keeps_runtime_context";
+
     #[test]
     fn external_tool_drops_ambient_credentials_and_keeps_runtime_context() {
+        if std::env::var_os(CHILD_MARKER).is_none() {
+            // Seed the ambient credential only in the re-executed child, so
+            // the parallel test runner's own environment is never mutated.
+            // The child asserts the token is present before execution; if
+            // ExternalTool ever inherited the ambient environment, the tool
+            // script below would observe it and the child would fail.
+            let directory = tempdir().expect("temporary directory");
+            let mut command = std::process::Command::new(
+                std::env::current_exe().expect("current test executable"),
+            );
+            orbit_common::test_env::clear_inherited_authority(|key| {
+                command.env_remove(key);
+            });
+            command
+                .args(["--exact", TEST_NAME, "--nocapture", "--test-threads=1"])
+                .env(CHILD_MARKER, "1")
+                .env("GH_TOKEN", SYNTHETIC_GH_TOKEN);
+            let output =
+                orbit_common::test_env::run_child_test(&mut command, TEST_NAME, directory.path());
+            orbit_common::test_env::assert_child_test_passed(
+                TEST_NAME,
+                output.status,
+                output.stdout,
+                output.stderr,
+            );
+            return;
+        }
+        assert_eq!(
+            std::env::var("GH_TOKEN").expect("synthetic GH_TOKEN seeded in child"),
+            SYNTHETIC_GH_TOKEN,
+            "the child must hold the ambient credential before execution"
+        );
         let directory = tempdir().expect("temporary directory");
         let script_path = directory.path().join("print-environment.sh");
         fs::write(

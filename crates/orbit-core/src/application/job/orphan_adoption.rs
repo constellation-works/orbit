@@ -11,6 +11,13 @@
 //! blocked-task recovery backstop decides, and a claimed leaf's release keeps
 //! its candidate and pull request for the task's next claim.
 //!
+//! A completion that exhausts its bounded base chase also yields here as a
+//! typed `BaseChaseExhausted` hold [ORB-21441]. Unlike a repeatedly dead
+//! worker, a resumed completion may yield again; every run retains its own
+//! chase bound and inherited certified recovery. A host-manager stop is
+//! `held` with `operator_stopped` and is scanned the same way as an
+//! interrupted leaf. Other holds are excluded.
+//!
 //! Each owner drain pass resumes such a run through the ordinary checkpoint
 //! resume (`orbit job resume`): the resumed run skips every step that
 //! succeeded, so landing review, completion and auto-fix continue on the same
@@ -21,12 +28,12 @@
 //! - it ended within [`ADOPTION_WINDOW`] of its last recorded activity (older
 //!   ones are left to `orbit job resume`), not at an upgrade boundary (the
 //!   clock resumes those), and is not a claimed execution;
-//! - it is an original attempt, not itself a resume, its worker is dead, no
-//!   retry resumed it yet and no earlier pass decided it. Both lineage tests
-//!   read the run records, not the audit, so a lineage is adopted at most
-//!   once even when the adoption's audit is lost: a resumed attempt that dies
-//!   again, whether a drain or an operator resumed it, is left to an
-//!   operator;
+//! - its worker is dead, no retry resumed it yet and no earlier pass decided
+//!   it. An interrupted run must be an original attempt; a base-chase hold
+//!   may itself be a resume. Both lineage tests read the run records, not
+//!   the audit, so each run is adopted at most once even when the adoption's
+//!   audit is lost. A resumed attempt that dies again, whether a drain or an
+//!   operator resumed it, is left to an operator;
 //! - its `pr_open` succeeded and that pull request is still open on the same
 //!   head branch;
 //! - every task it carries is still in `review`, checked again just before
@@ -53,7 +60,7 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::{AuditEventFilter, JobRunOrder, JobRunQuery};
 use orbit_types::task::TaskStatus;
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::workflow::{JobRun, JobRunState};
+use orbit_types::workflow::{self, DeliveryRefusal, JobRun, JobRunState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -62,9 +69,6 @@ use crate::runtime::run_input::carried_task_ids;
 
 /// Audit tool name of every adoption decision about an interrupted leaf.
 pub(crate) const ORPHAN_ADOPTION_AUDIT: &str = "pipeline.run.orphan_adoption";
-
-/// The delivery leaf that opens and watches a pull request.
-const DELIVERY_LEAF_JOB: &str = "task_pr_pipeline";
 
 /// How long after its last recorded activity an interrupted leaf is still
 /// adopted.
@@ -126,8 +130,14 @@ struct PassReads {
 
 /// What one pass does with one interrupted run.
 enum Verdict {
-    /// Resume it; its pull request number.
+    /// Resume it; its pull request number, before the resume is submitted.
     Adopt(u64),
+    /// The resume was submitted. `resumed_run_id` is the invoke id just
+    /// audited, so a later retry read cannot drop it from the report.
+    Submitted {
+        pull_request: u64,
+        resumed_run_id: String,
+    },
     /// Not this pass's to consider or report: it has a retry, an earlier pass
     /// decided it, or its worker still runs.
     Ignore,
@@ -135,7 +145,7 @@ enum Verdict {
 }
 
 impl OrbitRuntime {
-    /// Resume each interrupted owner-local delivery leaf that still owns an
+    /// Resume each interrupted or base-chase-held owner-local delivery leaf with an
     /// open pull request, within `authority`. Returns the adopted and skipped
     /// runs, and the pass's own error when it could not read its candidates.
     /// Never fails: the drain step that calls it must not end the drain.
@@ -151,7 +161,7 @@ impl OrbitRuntime {
             return json!({ "adopted": [], "skipped": [], "resource_throttle": throttle });
         }
         // A worker that died since the last pass still reads as running.
-        if let Err(error) = self.reconcile_stale_job_runs(Some(DELIVERY_LEAF_JOB)) {
+        if let Err(error) = self.reconcile_stale_job_runs(Some(workflow::TASK_PR_PIPELINE_JOB)) {
             tracing::warn!(
                 target: "orbit.core.drain",
                 error = %error,
@@ -159,8 +169,8 @@ impl OrbitRuntime {
             );
         }
         let interrupted = match self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
-            job_id: Some(DELIVERY_LEAF_JOB.to_string()),
-            state: Some(JobRunState::Interrupted),
+            job_id: Some(workflow::TASK_PR_PIPELINE_JOB.to_string()),
+            states: vec![JobRunState::Interrupted, JobRunState::Held],
             order_by: JobRunOrder::Recency,
             limit: Some(ADOPTION_SCAN_LIMIT),
             include_steps: true,
@@ -185,13 +195,44 @@ impl OrbitRuntime {
         let mut missing_authority = Vec::new();
         let mut reads = PassReads::default();
         for run in interrupted {
+            // A moving-base hold and a host-manager stop continue
+            // automatically. Other holds retain their own release/approval
+            // contracts.
+            if run.state == JobRunState::Held
+                && !base_chase_held(&run)
+                && !orbit_types::workflow::is_operator_stopped(
+                    run.state,
+                    run.steps.last().and_then(|step| step.error_code.as_deref()),
+                )
+            {
+                continue;
+            }
             if adopted.len() >= authority.budget {
                 break;
             }
             // Outside the window and upgrade interruptions are not this
             // pass's to consider at all.
+            // Orphan timing may now be the detection-time upper bound. Keep
+            // adoption's activity window independent of when a reader happened
+            // to discover a dead worker, and never extend an older terminal row.
+            let activity_at = if run.state == JobRunState::Interrupted {
+                match self.latest_run_audit_timestamp(&run.run_id) {
+                    Ok(activity) => activity,
+                    Err(error) => {
+                        tracing::warn!(
+                            run_id = %run.run_id,
+                            %error,
+                            "orphan adoption deferred: recent activity unreadable",
+                        );
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
             if run
                 .finished_at
+                .map(|finished| activity_at.map_or(finished, |activity| finished.min(activity)))
                 .is_none_or(|at| now.signed_duration_since(at) > ADOPTION_WINDOW)
                 || super::upgrade_resume::upgrade_interrupted(&run)
             {
@@ -203,14 +244,24 @@ impl OrbitRuntime {
             };
             match verdict {
                 Verdict::Ignore => {}
-                Verdict::Adopt(pull_request) => {
-                    let (resumed, task_ids) = self.adopted_retry(&run);
+                Verdict::Submitted {
+                    pull_request,
+                    resumed_run_id,
+                } => {
+                    let task_ids = run.input.as_ref().map(carried_task_ids).unwrap_or_default();
                     adopted.push(json!({
                         "source_run_id": run.run_id,
-                        "resumed_run_id": resumed,
+                        "resumed_run_id": resumed_run_id,
                         "pr_number": pull_request,
                         "task_ids": task_ids,
                     }));
+                }
+                Verdict::Adopt(_) => {
+                    tracing::warn!(
+                        target: "orbit.core.drain",
+                        run_id = %run.run_id,
+                        "adoption stopped before the resume was submitted",
+                    );
                 }
                 Verdict::Skip(skip) => {
                     if skip.reason == "authority" {
@@ -278,7 +329,9 @@ impl OrbitRuntime {
         if run_owner_liveness(run) == RunOwnerLiveness::Alive {
             return Verdict::Ignore;
         }
-        if let Some(source) = run.retry_source_run_id.as_deref() {
+        if let Some(source) = run.retry_source_run_id.as_deref()
+            && !base_chase_held(run)
+        {
             return skip(Skip::decided(
                 "resumed_attempt",
                 format!(
@@ -381,7 +434,7 @@ impl OrbitRuntime {
             // Validation is the planner's answer about this run; anything
             // else (a store read, an unsettled claim journal) may answer
             // differently on a later pass.
-            Err(error @ OrbitError::JobValidation(_)) => {
+            Err(error) if error.job_validation_message().is_some() => {
                 skip(Skip::decided("not_resumable", error.to_string()))
             }
             Err(error) => skip(Skip::deferred("resume_unplannable", error.to_string())),
@@ -418,24 +471,14 @@ impl OrbitRuntime {
                         "pr_number": pull_request,
                     }),
                 );
-                Verdict::Adopt(pull_request)
+                Verdict::Submitted {
+                    pull_request,
+                    resumed_run_id: invoke.run_id,
+                }
             }
             // Not a decision: the next pass tries again.
             Err(error) => Verdict::Skip(Skip::deferred("resume_failed", error.to_string())),
         }
-    }
-
-    /// The retry an adoption just submitted for `run`, and its tasks.
-    fn adopted_retry(&self, run: &JobRun) -> (Value, BTreeSet<String>) {
-        let resumed = self
-            .stores()
-            .jobs()
-            .job_run_retries(&run.run_id, 1)
-            .ok()
-            .and_then(|retries| retries.into_iter().next())
-            .map_or(Value::Null, |retry| Value::String(retry.run_id));
-        let task_ids = run.input.as_ref().map(carried_task_ids).unwrap_or_default();
-        (resumed, task_ids)
     }
 
     /// `Err` with the skip when one of `task_ids` no longer waits on its
@@ -504,4 +547,12 @@ impl OrbitRuntime {
             ),
         );
     }
+}
+
+/// Typed exhaustion can yield again in a retry; a repeatedly dead worker
+/// remains subject to the one-adoption rule.
+fn base_chase_held(run: &JobRun) -> bool {
+    run.state == JobRunState::Held
+        && run.steps.last().and_then(|step| step.error_code.as_deref())
+            == Some(DeliveryRefusal::BaseChaseExhausted.error_code())
 }

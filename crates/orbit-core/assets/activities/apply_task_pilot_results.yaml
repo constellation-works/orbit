@@ -29,8 +29,10 @@ spec:
     (`drain_approval`). That approval decides under the task lock: a task
     tagged `no-auto-approve`, or whose pilot-assessed material changed, after
     the pilot write stays proposed with that classification
-    (`changed_since_pilot` for a material change) and an edited task is
-    piloted again on the next pass. A held task's pilot history entry records
+    (`changed_since_pilot` for a material change). A task edited under that
+    drain child's own assessment is piloted again on the next pass. A fresh
+    explicit or routine assessment is approved without another pilot; a stale
+    one stays proposed until a new explicit assessment. A held task's pilot history entry records
     the hold classification so the drain does not pilot it again until it
     changes. Under either authority a `verified_no_diff` assessment of a task
     not tagged `no-diff-expected` is never promoted: it is classified

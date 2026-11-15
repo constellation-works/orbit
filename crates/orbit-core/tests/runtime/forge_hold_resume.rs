@@ -122,6 +122,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_job("test_pipeline", json!([]))
+    }
+
+    fn with_job(job_id: &str, steps: serde_json::Value) -> Self {
         let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         // Submitted runs execute in-process. The substitute child test
         // stays alive while the fixture does, so the supervisor never sees a
@@ -134,8 +138,12 @@ impl Fixture {
         std::fs::create_dir_all(&jobs_dir).unwrap();
         std::fs::create_dir_all(repo.join(".orbit")).unwrap();
         std::fs::write(
-            jobs_dir.join("test_pipeline.yaml"),
-            "schemaVersion: 2\nkind: Job\nmetadata:\n  name: test_pipeline\nspec:\n  state: enabled\n  steps: []\n",
+            jobs_dir.join(format!("{job_id}.yaml")),
+            json!({
+                "schemaVersion": 2, "kind": "Job", "metadata": {"name": job_id},
+                "spec": {"state": "enabled", "steps": steps},
+            })
+            .to_string(),
         )
         .unwrap();
         let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
@@ -154,6 +162,14 @@ impl Fixture {
     /// An in-progress task whose delivery run ended held: with a forge hold
     /// first held at `held_since`, or, without one, for another reason.
     fn held_delivery(&self, held_since: Option<DateTime<Utc>>) -> (String, String) {
+        self.held_delivery_for_job("test_pipeline", held_since)
+    }
+
+    fn held_delivery_for_job(
+        &self,
+        job_id: &str,
+        held_since: Option<DateTime<Utc>>,
+    ) -> (String, String) {
         let task = self
             .runtime
             .add_task(TaskAddParams {
@@ -168,10 +184,12 @@ impl Fixture {
             })
             .unwrap()
             .id;
-        let input = json!({ "task_ids": [task] });
+        let input = json!({
+            "task_ids": [task], "workspace_path": self._root.path().join("repo"),
+        });
         let run = self
             .jobs
-            .insert_job_run("test_pipeline", 1, Utc::now(), Some(input.clone()), None)
+            .insert_job_run(job_id, 1, Utc::now(), Some(input.clone()), None)
             .unwrap();
         self.runtime
             .apply_task_automation_update(
@@ -563,4 +581,125 @@ fn expiry_leaves_a_task_admitted_under_an_unrelated_run_alone() {
             .is_some()
     );
     assert_eq!(fx.retries(&held_run), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn completion_with_inconclusive_check_evidence_can_be_resumed() {
+    if run_isolated_test(
+        "forge_hold_resume::completion_with_inconclusive_check_evidence_can_be_resumed",
+    ) {
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+
+    let fx = Fixture::with_job(
+        "task_pr_pipeline",
+        json!([
+            {"id": "pr_open", "spec": {"type": "deterministic", "action": "pr_open", "config": {}}},
+            {"id": "complete_pr", "spec": {"type": "deterministic", "action": "pr_complete", "config": {}},
+             "default_input": {
+                 "job_run_id": "{{ steps.pr_open.output.job_run_id }}",
+                 "workspace_path": "{{ input.workspace_path }}",
+                 "completed_task_ids": "{{ input.task_ids }}",
+                 "pr_number": "{{ steps.pr_open.output.pr_number }}",
+                 "published_head_sha": "published-head", "completion": "review",
+                 "auto_fix": true, "max_wait_seconds": 0,
+             }},
+        ]),
+    );
+    let (task, run) = fx.held_delivery_for_job("task_pr_pipeline", None);
+    fx.runtime
+        .apply_task_automation_update(
+            &task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Review),
+                execution_summary: Some(
+                    "Delivered the candidate and opened its pull request; completion awaits readable check evidence."
+                        .into(),
+                ),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    fx.jobs
+        .update_run_state(&run, &mut |_, state| {
+            let published = json!({"pr_number": "17", "job_run_id": run});
+            state.record_step(
+                0,
+                JobRunState::Success,
+                Some(published.clone()),
+                Some(json!({"pr_open": published})),
+            );
+            Ok(())
+        })
+        .unwrap();
+    let bin = fx._root.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let calls = fx._root.path().join("forge-calls");
+    let gh = bin.join("gh");
+    let observation = json!({
+        "state": "OPEN", "mergeStateStatus": "CLEAN", "headRefOid": "published-head",
+        "reviewDecision": "APPROVED", "statusCheckRollup": [],
+    });
+    let required_checks = json!({"data":{"repository":{"pullRequest":{
+        "headRefOid":"published-head", "commits":{"nodes":[{"commit":{
+            "oid":"published-head", "statusCheckRollup":null,
+        }}]},
+    }}}});
+    std::fs::write(
+        &gh,
+        format!(
+            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$1 $2\" in\n'pr view') echo '{observation}' ;;\n'api graphql') echo '{required_checks}' ;;\n*) exit 1 ;;\nesac\n",
+            calls.display(),
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap();
+    // This complete fixture runs in its own exact-test child.
+    unsafe { std::env::set_var("PATH", path) };
+    let now = Utc::now();
+    fx.jobs
+        .complete_job_run_step(
+            &run,
+            &JobRunStepParams {
+                lock_wait_ms: None,
+                step_index: 2,
+                // Finalization appends a diagnostic for the job, after the
+                // activity audit row; the refusal belongs to this last row.
+                target_type: JobTargetType::Job,
+                target_id: "task_pr_pipeline".into(),
+                started_at: now,
+                finished_at: now,
+                duration_ms: Some(1),
+                exit_code: None,
+                agent_response_json: None,
+                state: JobRunState::Held,
+                error_code: Some(
+                    orbit_types::workflow::DeliveryRefusal::CheckEvidenceInconclusive
+                        .error_code()
+                        .into(),
+                ),
+                error_message: Some("failed-job log was throttled after bounded waits".into()),
+            },
+        )
+        .unwrap();
+    let resumed = fx
+        .runtime
+        .submit_resume_run(&run, Some("operator"), None)
+        .expect("completion can re-observe the existing pull request");
+    assert_eq!(fx.retries(&run), 1);
+    fx.runtime
+        .execute_pipeline_run_worker(&resumed.run_id)
+        .unwrap();
+    assert_eq!(
+        fx.jobs.get_job_run(&resumed.run_id).unwrap().unwrap().state,
+        JobRunState::Success,
+    );
+    let observed = std::fs::read_to_string(calls).unwrap();
+    assert!(observed.starts_with("pr view 17 "), "{observed}");
 }

@@ -1,0 +1,24 @@
+Explicitly request one new pilot assessment
+
+Usage: orbit task repilot [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+          Task to assess again
+
+Options:
+      --host <HOST>
+          Host that `--workspace` names (`orbit host list` name or `machine_id`); without it a task id routes by its prefix
+
+      --full
+          Run a full assessment instead of re-checking the held one
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

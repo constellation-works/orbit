@@ -35,6 +35,8 @@ impl Serialize for PipelineState {
             pipeline: &self.pipeline => false,
             step_outputs: &self.step_outputs => false,
             compound_outputs: &self.compound_outputs => self.compound_outputs.is_empty(),
+            script_output_sets: &self.script_output_sets => self.script_output_sets.is_empty(),
+            skipped_steps: &self.skipped_steps => self.skipped_steps.is_empty(),
             pipeline_patches: &self.pipeline_patches => false,
             step_output_pointers: &self.step_output_pointers => self.step_output_pointers.is_empty(),
             step_states: &self.step_states => false,
@@ -55,6 +57,7 @@ impl Serialize for PipelineState {
             pull_window_close: &self.pull_drain.pull_window_close => self.pull_drain.pull_window_close.is_none(),
             pull_breaker: &self.pull_drain.pull_breaker => self.pull_drain.pull_breaker.is_none(),
             pull_admission_fit: &self.pull_drain.pull_admission_fit => self.pull_drain.pull_admission_fit.is_none(),
+            crew_pool_exclusions: &self.pull_drain.crew_pool_exclusions => self.pull_drain.crew_pool_exclusions.is_empty(),
             drain_last_pass: &self.pull_drain.drain_last_pass => self.pull_drain.drain_last_pass.is_none(),
             drain_last_forecast: &self.pull_drain.drain_last_forecast => self.pull_drain.drain_last_forecast.is_none(),
             drain_pass_counters: &self.pull_drain.drain_pass_counters => self.pull_drain.drain_pass_counters.is_none(),
@@ -72,6 +75,7 @@ impl Serialize for PipelineState {
             root_cause: &self.root_cause => self.root_cause.is_none(),
             steering_watermarks: &self.steering_watermarks => self.steering_watermarks.is_empty(),
             steering_rounds: &self.steering_rounds => self.steering_rounds.is_empty(),
+            auto_task: &self.auto_task => self.auto_task.is_none(),
             updated_at: &self.updated_at => false,
         }
     }

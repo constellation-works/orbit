@@ -191,17 +191,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-trait"
-version = "0.1.89"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -502,6 +491,7 @@ dependencies = [
  "anstyle",
  "clap_lex",
  "strsim",
+ "terminal_size",
 ]
 
 [[package]]
@@ -546,9 +536,9 @@ dependencies = [
 
 [[package]]
 name = "comfy-table"
-version = "7.2.2"
+version = "8.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "958c5d6ecf1f214b4c2bbbbf6ab9523a864bd136dcf71a7e8904799acfe1ad47"
+checksum = "b96a46ad395a5e00676eddaca4a45ed78b29c08be5a878d35e4b071c625637dd"
 dependencies = [
  "crossterm",
  "unicode-segmentation",
@@ -917,7 +907,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1149,8 +1139,19 @@ checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if",
  "libc",
- "r-efi",
+ "r-efi 5.3.0",
  "wasip2",
+]
+
+[[package]]
+name = "getrandom"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "r-efi 6.0.0",
 ]
 
 [[package]]
@@ -1281,9 +1282,9 @@ dependencies = [
 
 [[package]]
 name = "hyper"
-version = "1.8.1"
+version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ab2d4f250c3d7b1c9fcdff1cece94ea4e2dfbec68614f7b87cb205f24ca9d11"
+checksum = "2c3e324da4c95177d6291d4c8730197c0d1822f8a9766814a4a44fa5ab797c9c"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -1296,7 +1297,6 @@ dependencies = [
  "httpdate",
  "itoa",
  "pin-project-lite",
- "pin-utils",
  "smallvec",
  "tokio",
  "want",
@@ -1499,6 +1499,8 @@ checksum = "7714e70437a7dc3ac8eb7e6f8df75fd8eb422675fc7678aff7364301092b1017"
 dependencies = [
  "equivalent",
  "hashbrown 0.16.1",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -1951,13 +1953,13 @@ dependencies = [
 
 [[package]]
 name = "orbit-agent"
-version = "0.40.0"
+version = "0.50.0"
 dependencies = [
  "chrono",
  "chrono-tz",
+ "jsonschema",
  "orbit-common",
  "orbit-types",
- "serde",
  "serde_json",
  "tempfile",
  "tracing",
@@ -1965,10 +1967,9 @@ dependencies = [
 
 [[package]]
 name = "orbit-auth"
-version = "0.40.0"
+version = "0.50.0"
 dependencies = [
  "chrono",
- "getrandom 0.3.4",
  "libc",
  "orbit-common",
  "orbit-types",
@@ -1980,12 +1981,13 @@ dependencies = [
 
 [[package]]
 name = "orbit-automation"
-version = "0.40.0"
+version = "0.50.0"
 dependencies = [
  "cel",
  "chrono",
  "chrono-tz",
  "croner",
+ "orbit-clock",
  "orbit-common",
  "orbit-store",
  "orbit-types",
@@ -2000,7 +2002,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-cli"
-version = "0.40.0"
+version = "0.50.0"
 dependencies = [
  "assert_cmd",
  "chrono",
@@ -2010,7 +2012,6 @@ dependencies = [
  "csv",
  "flate2",
  "libc",
- "orbit-auth",
  "orbit-cmd",
  "orbit-common",
  "orbit-config",
@@ -2041,8 +2042,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbit-clock"
+version = "0.50.0"
+dependencies = [
+ "libc",
+ "orbit-common",
+ "serde",
+ "tempfile",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "orbit-cmd"
-version = "0.40.0"
+version = "0.50.0"
 dependencies = [
  "chrono",
  "flate2",
@@ -2069,8 +2082,9 @@ dependencies = [
 
 [[package]]
 name = "orbit-common"
-version = "0.40.0"
+version = "0.50.0"
 dependencies = [
+ "base64 0.23.1",
  "chrono",
  "fs2",
  "getrandom 0.3.4",
@@ -2084,7 +2098,6 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror",
- "toml",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -2095,7 +2108,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-config"
-version = "0.40.0"
+version = "0.50.0"
 dependencies = [
  "jsonschema",
  "orbit-common",
@@ -2111,9 +2124,9 @@ dependencies = [
 
 [[package]]
 name = "orbit-core"
-version = "0.40.0"
+version = "0.50.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "blake3",
  "chrono",
  "fs2",
@@ -2121,6 +2134,7 @@ dependencies = [
  "git2",
  "libc",
  "orbit-automation",
+ "orbit-clock",
  "orbit-common",
  "orbit-config",
  "orbit-core",
@@ -2134,7 +2148,6 @@ dependencies = [
  "orbit-tools",
  "orbit-types",
  "regex",
- "reqwest",
  "rsa",
  "rusqlite",
  "serde",
@@ -2149,10 +2162,9 @@ dependencies = [
 
 [[package]]
 name = "orbit-engine"
-version = "0.40.0"
+version = "0.50.0"
 dependencies = [
  "chrono",
- "chrono-tz",
  "getrandom 0.3.4",
  "jsonschema",
  "libc",
@@ -2176,7 +2188,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-exec"
-version = "0.40.0"
+version = "0.50.0"
 dependencies = [
  "libc",
  "orbit-common",
@@ -2190,9 +2202,10 @@ dependencies = [
 
 [[package]]
 name = "orbit-mcp"
-version = "0.40.0"
+version = "0.50.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
+ "bytes",
  "chrono",
  "libc",
  "orbit-common",
@@ -2206,6 +2219,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-util",
  "toml",
  "tracing",
  "tracing-subscriber",
@@ -2213,7 +2227,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-policy"
-version = "0.40.0"
+version = "0.50.0"
 dependencies = [
  "chrono",
  "orbit-common",
@@ -2223,7 +2237,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-registry"
-version = "0.40.0"
+version = "0.50.0"
 dependencies = [
  "chrono",
  "hostname",
@@ -2234,17 +2248,15 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml",
- "tracing",
 ]
 
 [[package]]
 name = "orbit-runtime"
-version = "0.40.0"
+version = "0.50.0"
 dependencies = [
  "blake3",
  "chrono",
  "fs2",
- "getrandom 0.3.4",
  "libc",
  "orbit-common",
  "orbit-config",
@@ -2268,7 +2280,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-search"
-version = "0.40.0"
+version = "0.50.0"
 dependencies = [
  "orbit-common",
  "orbit-types",
@@ -2280,7 +2292,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-store"
-version = "0.40.0"
+version = "0.50.0"
 dependencies = [
  "blake3",
  "chrono",
@@ -2304,11 +2316,10 @@ dependencies = [
 
 [[package]]
 name = "orbit-tools"
-version = "0.40.0"
+version = "0.50.0"
 dependencies = [
  "chrono",
  "flate2",
- "getrandom 0.3.4",
  "jsonschema",
  "libc",
  "orbit-common",
@@ -2330,7 +2341,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-types"
-version = "0.40.0"
+version = "0.50.0"
 dependencies = [
  "chrono",
  "clap",
@@ -2341,23 +2352,21 @@ dependencies = [
  "serde_path_to_error",
  "sha2",
  "thiserror",
- "toml",
  "url",
  "yaml_serde",
 ]
 
 [[package]]
 name = "orbit-web"
-version = "0.40.0"
+version = "0.50.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "blake3",
  "chrono",
  "clap",
  "flate2",
  "futures-core",
- "getrandom 0.3.4",
  "hyper",
  "hyper-util",
  "libc",
@@ -2370,6 +2379,7 @@ dependencies = [
  "orbit-registry",
  "orbit-store",
  "orbit-types",
+ "orbit-web",
  "rcgen",
  "reqwest",
  "rusqlite",
@@ -2464,12 +2474,6 @@ name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
-
-[[package]]
-name = "pin-utils"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
 name = "pkcs1"
@@ -2574,6 +2578,12 @@ name = "r-efi"
 version = "5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
+
+[[package]]
+name = "r-efi"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rand_core"
@@ -2711,23 +2721,26 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "2.2.0"
+version = "3.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14db48ee17a9ba61810ab1a9c1beb7d06d8136ae39ac25a1137f10d357af01af"
+checksum = "d24a7e92f4bcaa36b97fa93c4fa7ca8f3e669eced949345b3462dba333c7f909"
 dependencies = [
- "async-trait",
  "chrono",
  "futures",
+ "indexmap",
+ "libc",
  "pastey",
  "pin-project-lite",
  "schemars",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tokio",
  "tokio-stream",
  "tokio-util",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -2793,7 +2806,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3229,8 +3242,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0136791f7c95b1f6dd99f9cc786b91bb81c3800b639b3478e561ddb7be95e5f1"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
+ "rustix",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "terminal_size"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
+dependencies = [
  "rustix",
  "windows-sys 0.61.2",
 ]
@@ -3651,6 +3674,7 @@ version = "1.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a0e2d11620c50695fe12bbbfde96b3477fe606e7284c22d505c12ce51214514"
 dependencies = [
+ "getrandom 0.4.3",
  "js-sys",
  "wasm-bindgen",
 ]
@@ -3684,9 +3708,9 @@ dependencies = [
 
 [[package]]
 name = "want"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfa7760aed19e106de2c7c0b581b509f2f25d3dacaf737cb82ac61bc6d760b0e"
+checksum = "ec4cdd0dd910afe868b7ef477227d8d538b46b3075031afee8a9f2acb0a2ed0b"
 dependencies = [
  "try-lock",
 ]

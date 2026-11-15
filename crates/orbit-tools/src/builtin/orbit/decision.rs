@@ -17,9 +17,18 @@ use serde_json::Value;
 impl GuardedModes for DecisionVerb {
     fn preempt(self, _ctx: &ToolContext, _input: &Value) -> Option<Result<Value, OrbitError>> {
         match self {
-            Self::List | Self::Show | Self::Submit | Self::Digest => None,
+            Self::List | Self::Show | Self::Raise | Self::Submit | Self::Digest => None,
             Self::Answer => Some(Err(OrbitError::PolicyDenied(
                 "answering a decision request is the operator's: use `orbit decision answer` or the dashboard".into(),
+            ))),
+            Self::Reverse => Some(Err(OrbitError::PolicyDenied(
+                "reversing a precedent answer is the operator's: use `orbit decision reverse`".into(),
+            ))),
+            Self::RuleAuto => Some(Err(OrbitError::PolicyDenied(
+                "setting auto on a decision rule is the operator's: use `orbit decision rule-auto`".into(),
+            ))),
+            Self::Consolidate => Some(Err(OrbitError::PolicyDenied(
+                "a consolidation proposal is a CLI read: use `orbit decision consolidate`".into(),
             ))),
             Self::ChannelRegister
             | Self::ChannelList
@@ -38,7 +47,11 @@ impl GuardedModes for DecisionVerb {
         match self {
             Self::List
             | Self::Show
+            | Self::Raise
             | Self::Answer
+            | Self::Reverse
+            | Self::RuleAuto
+            | Self::Consolidate
             | Self::Submit
             | Self::Digest
             | Self::ChannelRegister
@@ -52,7 +65,11 @@ impl GuardedModes for DecisionVerb {
         match self {
             Self::List
             | Self::Show
+            | Self::Raise
             | Self::Answer
+            | Self::Reverse
+            | Self::RuleAuto
+            | Self::Consolidate
             | Self::Submit
             | Self::Digest
             | Self::ChannelRegister
@@ -66,7 +83,11 @@ impl GuardedModes for DecisionVerb {
         match self {
             Self::List
             | Self::Show
+            | Self::Raise
             | Self::Answer
+            | Self::Reverse
+            | Self::RuleAuto
+            | Self::Consolidate
             | Self::Submit
             | Self::Digest
             | Self::ChannelRegister

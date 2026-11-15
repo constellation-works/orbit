@@ -140,20 +140,12 @@ pub(super) fn resolve_executor_sandbox_on(
                 // the Codex side roots and runtime grants from every cwd; a
                 // worktree anchor keeps the carve-outs on its own `.orbit`.
                 deny_registered_checkout_host_stores(runtime, &mut resolved);
-                append_recovery_authority_deny(runtime, &mut resolved)?;
-                // Host Git state is never a provider convenience grant. Append
-                // these last so even a side root inside metadata stays denied.
-                crate::runtime::git_sandbox::append_git_denies(
-                    &runtime.paths().repo_root,
+                append_terminal_denies(
+                    runtime,
+                    subprocess_cwd,
+                    recovery_checkout.as_deref(),
                     &mut resolved,
-                )
-                .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
-                if let Some(cwd) = subprocess_cwd {
-                    crate::runtime::git_sandbox::append_git_denies(cwd, &mut resolved).map_err(
-                        |error| DispatchError::CliInvocationPermanent(error.to_string()),
-                    )?;
-                }
-                deny_recovery_checkout_orbit(recovery_checkout.as_deref(), &mut resolved);
+                )?;
                 Ok(Some(ResolvedSandbox {
                     kind,
                     fs_profile: resolved,
@@ -213,20 +205,12 @@ pub(super) fn resolve_executor_sandbox_on(
                 if anchored_at_registered_checkout(runtime, subprocess_cwd) {
                     deny_registered_checkout_host_stores(runtime, &mut resolved);
                 }
-                append_recovery_authority_deny(runtime, &mut resolved)?;
-                // Host Git state is never a provider convenience grant. Append
-                // these last so even a side root inside metadata stays denied.
-                crate::runtime::git_sandbox::append_git_denies(
-                    &runtime.paths().repo_root,
+                append_terminal_denies(
+                    runtime,
+                    subprocess_cwd,
+                    recovery_checkout.as_deref(),
                     &mut resolved,
-                )
-                .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
-                if let Some(cwd) = subprocess_cwd {
-                    crate::runtime::git_sandbox::append_git_denies(cwd, &mut resolved).map_err(
-                        |error| DispatchError::CliInvocationPermanent(error.to_string()),
-                    )?;
-                }
-                deny_recovery_checkout_orbit(recovery_checkout.as_deref(), &mut resolved);
+                )?;
                 // Recovery is host-prepared too. Its policy includes future
                 // filename denies that need the same post-run guard as a task
                 // worktree, even after the .orbit mount anchor exists.
@@ -245,6 +229,28 @@ pub(super) fn resolve_executor_sandbox_on(
             }
         }
     }
+}
+
+/// Append recovery and Git denies after every OS-specific convenience grant.
+/// Preserve their order and first-error behavior on both supported platforms.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn append_terminal_denies(
+    runtime: &OrbitRuntime,
+    subprocess_cwd: Option<&Path>,
+    recovery_checkout: Option<&Path>,
+    resolved: &mut ResolvedFsProfile,
+) -> Result<(), DispatchError> {
+    append_recovery_authority_deny(runtime, resolved)?;
+    // Host Git state is never a provider convenience grant. Append
+    // these last so even a side root inside metadata stays denied.
+    crate::runtime::git_sandbox::append_git_denies(&runtime.paths().repo_root, resolved)
+        .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
+    if let Some(cwd) = subprocess_cwd {
+        crate::runtime::git_sandbox::append_git_denies(cwd, resolved)
+            .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
+    }
+    deny_recovery_checkout_orbit(recovery_checkout, resolved);
+    Ok(())
 }
 
 /// Recovery has no writable Orbit stores. Preserve only its existing scratch
@@ -489,7 +495,12 @@ pub(super) fn append_codex_side_write_roots(
 /// Global runtime stores are granted when they resolve inside the global root.
 /// The host cache and workspace stores also require `grants_workspace_modify`,
 /// so a read-only activity profile never becomes a primary-workspace writer.
-/// Every store must stay inside its runtime root after symlink resolution.
+/// The one exception is the workspace lexical index (`state/semantic.db*`):
+/// it rides with the global task store, because a read-only profile lane that
+/// writes tasks through nested Orbit tools (the resident cycle) indexes each
+/// task it saves, and the grant names only the database and its sidecars,
+/// never `state/**` [ORB-24077]. Every store must stay inside its runtime root
+/// after symlink resolution.
 #[cfg(any(target_os = "macos", all(target_os = "linux", test)))]
 pub(super) fn append_orbit_child_runtime_write_roots(
     runtime: &OrbitRuntime,
@@ -514,6 +525,7 @@ pub(super) fn append_orbit_child_runtime_write_roots(
     ] {
         append_contained_runtime_modify_root(&global_root, relative, suffix, resolved);
     }
+    append_contained_runtime_modify_root(&workspace_orbit, "state/semantic.db", "*", resolved);
 
     if !grants_workspace_modify {
         return;
@@ -528,7 +540,6 @@ pub(super) fn append_orbit_child_runtime_write_roots(
         ("frictions", "/**"),
         ("state/audit", "/**"),
         ("state/logs", "/**"),
-        ("state/semantic.db", "*"),
     ] {
         append_contained_runtime_modify_root(&workspace_orbit, relative, suffix, resolved);
     }

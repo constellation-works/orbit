@@ -5,16 +5,15 @@ use orbit_automation::AutomationError;
 use orbit_automation::members::{MemberHost, MemberPage};
 use orbit_common::OrbitError;
 use orbit_store::contracts::TaskListFilter;
-use orbit_types::task::{TaskEnvelopeV2, TaskStatus, TaskType};
+use orbit_types::task::{TaskEnvelopeV2, TaskStatus};
 use orbit_types::workflow::automation::members::{StateMember, StateTriggerKind, bundle_crew};
 use serde_json::json;
 
 use super::super::super::preparation;
 use super::super::Host;
-use super::host::{already_preparing, already_triaging, already_verifying, incident_crew};
+use super::host::{already_preparing, incident_crew};
 use crate::application::automation::SourceCache;
-use crate::application::task::escalation_triage_steps::PilotWarningCandidacy;
-use crate::application::task::{TriageCandidacy, finding_fingerprint, needs_verification};
+use crate::application::task::pilot;
 
 /// Statuses the shared per-request snapshot carries: every status any state
 /// trigger observes (`Host::observed_statuses`), including `review` for
@@ -33,6 +32,9 @@ impl Host<'_> {
         after: Option<&str>,
         now: DateTime<Utc>,
     ) -> Result<MemberPage, AutomationError> {
+        if self.trigger.kind == StateTriggerKind::ResidentDue {
+            return self.observe_resident_page(now);
+        }
         let scan_before = after
             .map(serde_json::from_str)
             .transpose()
@@ -41,8 +43,6 @@ impl Host<'_> {
         let filter = TaskListFilter {
             scan_before,
             statuses: Some(self.observed_statuses()),
-            task_type: (self.trigger.kind == StateTriggerKind::FindingUnverified)
-                .then_some(TaskType::Bug),
             ..Default::default()
         };
         // With a shared cache, one snapshot of the workspace's observed
@@ -62,38 +62,7 @@ impl Host<'_> {
                 let snapshot = cache.task_snapshot(&workspace_key, || {
                     self.snapshot_envelopes(cache, &workspace_key)
                 })?;
-                // One pass over the shared snapshot: count every match and
-                // clone only the first page past the cursor, instead of
-                // materializing every matching envelope per routine.
-                let mut items = Vec::new();
-                let mut total = 0usize;
-                let mut total_without_cursor = 0usize;
-                for task in snapshot.iter() {
-                    let matches = filter
-                        .statuses
-                        .as_ref()
-                        .is_none_or(|values| values.contains(&task.status))
-                        && filter.task_type.is_none_or(|value| task.task_type == value);
-                    if !matches {
-                        continue;
-                    }
-                    total_without_cursor += 1;
-                    let past_cursor = filter.scan_before.as_ref().is_none_or(|(at, id)| {
-                        task.created_at < *at || (task.created_at == *at && task.id > *id)
-                    });
-                    if !past_cursor {
-                        continue;
-                    }
-                    total += 1;
-                    if items.len() < 50 {
-                        items.push(task.clone());
-                    }
-                }
-                orbit_store::contracts::TaskCandidates {
-                    items,
-                    total,
-                    total_without_cursor,
-                }
+                filter.select_ordered_snapshot(&snapshot, 50)
             }
             _ => self.runtime.task_candidates(&filter, 50)?,
         };
@@ -124,33 +93,23 @@ impl Host<'_> {
                 }
                 _ => preparation::active_task_pilot_preparations(self.runtime)?,
             },
-            StateTriggerKind::FindingUnverified => match self.inspection_cache {
-                Some(cache) if self.dry_run => {
-                    cache.preparations(&workspace_key, "finding_verification", || {
-                        preparation::active_finding_verifications(self.runtime)
-                    })?
-                }
-                _ => preparation::active_finding_verifications(self.runtime)?,
-            },
-            StateTriggerKind::PilotWarningsHeld | StateTriggerKind::BlockEscalated => {
-                match self.inspection_cache {
-                    Some(cache) if self.dry_run => {
-                        cache.preparations(&workspace_key, "escalation_triage", || {
-                            preparation::active_escalation_triages(self.runtime)
-                        })?
-                    }
-                    _ => preparation::active_escalation_triages(self.runtime)?,
-                }
-            }
-            StateTriggerKind::ExecutionFailed | StateTriggerKind::DecisionRequested => {
-                BTreeMap::new()
-            }
+            StateTriggerKind::ExecutionFailed
+            | StateTriggerKind::FindingUnverified
+            | StateTriggerKind::PilotWarningsHeld
+            | StateTriggerKind::BlockEscalated
+            | StateTriggerKind::DecisionRequested
+            | StateTriggerKind::ResidentDue => BTreeMap::new(),
         };
         // One scan for the page. Admission of a member retained from an
         // earlier page reads this cache instead of scanning again.
         let provider_hold = (self.trigger.kind == StateTriggerKind::PreparationEligible)
             .then(|| self.pilot_provider_withhold(now))
             .flatten();
+        let execution_claims = if self.trigger.kind == StateTriggerKind::PreparationEligible {
+            pilot::live_execution_claim_tasks(self.runtime)?
+        } else {
+            BTreeSet::new()
+        };
 
         for envelope in tasks.items {
             let task = match self.inspection_cache {
@@ -162,13 +121,33 @@ impl Host<'_> {
 
             match self.trigger.kind {
                 StateTriggerKind::PreparationEligible => {
+                    // Operator work: the pilot never assesses a human crew's task.
+                    if self.runtime.is_human_crew(task.crew.as_deref()) {
+                        withheld.insert(task.id, "human_crew".into());
+                        continue;
+                    }
                     if !orbit_automation::members::preparation::eligible(&task, self.eligibility())
                     {
-                        withheld.insert(task.id, "task_ineligible".into());
+                        let reason = self
+                            .eligibility()
+                            .exclude_tags
+                            .iter()
+                            .find(|tag| task.tags.contains(tag))
+                            .map_or_else(
+                                || "task_ineligible".to_string(),
+                                |tag| format!("excluded_tag: {tag}"),
+                            );
+                        withheld.insert(task.id, reason);
                         continue;
                     }
                     if let Some(run_ids) = active_preparations.get(&task.id) {
                         withheld.insert(task.id, already_preparing(run_ids));
+                        continue;
+                    }
+                    // Withhold instead of reusing an accepted receipt: receipt
+                    // reuse retires failed inputs, which execution must preserve.
+                    if execution_claims.contains(&task.id) {
+                        withheld.insert(task.id, "execution_claim_active".into());
                         continue;
                     }
                     if let Some(reason) = &provider_hold {
@@ -193,81 +172,12 @@ impl Host<'_> {
                         crew: bundle_crew(task.crew.as_deref()),
                     });
                 }
-                StateTriggerKind::FindingUnverified => {
-                    // Only a finding still owed a verdict is a member; a
-                    // confirmed one, or another bug, is not withheld either.
-                    let history = self.runtime.get_task_history(&task.id)?;
-                    if !needs_verification(&task, &history) {
-                        continue;
-                    }
-                    if let Some(run_ids) = active_preparations.get(&task.id) {
-                        withheld.insert(task.id, already_verifying(run_ids));
-                        continue;
-                    }
-                    candidates.push(StateMember {
-                        key: task.id.clone(),
-                        task_ids: vec![task.id.clone()],
-                        fingerprint: finding_fingerprint(&task),
-                        source: source.clone(),
-                        evidence: json!({"task_id":task.id}),
-                        first_seen: now,
-                        changed_at: now,
-                        crew: bundle_crew(task.crew.as_deref()),
-                    });
-                }
-                StateTriggerKind::PilotWarningsHeld => {
-                    // Only an assessment that still holds on warnings and
-                    // awaits triage is a member, keyed by its receipt so
-                    // each assessment is read once.
-                    let PilotWarningCandidacy::Qualifies(held) =
-                        self.runtime.pilot_warning_candidacy_of(&task)?
-                    else {
-                        continue;
-                    };
-                    if let Some(run_ids) = active_preparations.get(&task.id) {
-                        withheld.insert(task.id, already_triaging(run_ids));
-                        continue;
-                    }
-                    candidates.push(StateMember {
-                        key: task.id.clone(),
-                        task_ids: vec![task.id.clone()],
-                        evidence: json!({"task_id":task.id, "operation_id":held.operation_id}),
-                        fingerprint: held.operation_id,
-                        source: source.clone(),
-                        first_seen: now,
-                        changed_at: now,
-                        crew: bundle_crew(task.crew.as_deref()),
-                    });
-                }
-                StateTriggerKind::BlockEscalated => {
-                    // Only an episode the shared triage rule qualifies is a
-                    // member, keyed by the task and fingerprinted by the
-                    // episode, so each episode is read once and a fresh
-                    // block is a new member.
-                    let TriageCandidacy::Qualifies(episode) =
-                        self.runtime.block_triage_candidacy_of(&task, now)?
-                    else {
-                        continue;
-                    };
-                    if let Some(run_ids) = active_preparations.get(&task.id) {
-                        withheld.insert(task.id, already_triaging(run_ids));
-                        continue;
-                    }
-                    candidates.push(StateMember {
-                        key: task.id.clone(),
-                        task_ids: vec![task.id.clone()],
-                        evidence: json!({
-                            "task_id": task.id,
-                            "episode": episode.key(),
-                            "basis": episode.basis,
-                        }),
-                        fingerprint: episode.key(),
-                        source: source.clone(),
-                        first_seen: now,
-                        changed_at: now,
-                        crew: bundle_crew(task.crew.as_deref()),
-                    });
-                }
+                // Retired triggers: observe nothing.
+                StateTriggerKind::BlockEscalated
+                | StateTriggerKind::FindingUnverified
+                | StateTriggerKind::PilotWarningsHeld => continue,
+                // Observed by `observe_resident_page`, never per task here.
+                StateTriggerKind::ResidentDue => continue,
                 StateTriggerKind::DecisionRequested => {
                     // One member per open request, keyed by the task and
                     // fingerprinted by the request id: the id is raised
@@ -437,11 +347,7 @@ impl Host<'_> {
         {
             return Ok(None);
         }
-        envelopes.sort_by(|a, b| {
-            b.created_at
-                .cmp(&a.created_at)
-                .then_with(|| a.id.cmp(&b.id))
-        });
+        TaskListFilter::default().sort_snapshot(&mut envelopes);
         Ok(Some(envelopes))
     }
 }

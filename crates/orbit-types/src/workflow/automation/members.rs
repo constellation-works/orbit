@@ -19,20 +19,32 @@ pub enum StateTriggerKind {
     /// deserialize; its target job is retired, so no new work dispatches
     /// through it.
     ExecutionFailed,
-    /// A review-filed bug finding that carries no verification verdict yet.
+    /// Retired with finding verification [ORB-22844]: a review-filed bug
+    /// finding that carried no verification verdict. Retained so persisted
+    /// member state and existing definitions still deserialize; its target
+    /// job is retired (`RETIRED_ROUTINE_JOBS`) and it observes no members.
     FindingUnverified,
-    /// A `proposed` task whose latest applied task-pilot assessment holds
-    /// promotion on warning findings, not yet triaged for that assessment.
+    /// Retired with scheduled pilot-warning triage [ORB-22844]: a `proposed`
+    /// task whose applied task-pilot assessment held promotion on warnings.
+    /// Retained so persisted member state and existing definitions still
+    /// deserialize; the routine loader skips a definition on it as retired
+    /// and it observes no members. Manual triage still runs its job.
     PilotWarningsHeld,
-    /// A `blocked` task whose current block episode awaits triage: final
-    /// recovery escalated it, or it has no decision past the backstop's age
-    /// limit, and nobody outside Orbit's automation touched it since.
+    /// Retired: blocked-task triage no longer exists, because final recovery
+    /// is the single decider for a blocked task. Retained so persisted member
+    /// state and existing definitions still deserialize; the routine loader
+    /// skips a definition on it as retired and it observes no members.
     BlockEscalated,
     /// A task with an open decision request that has not yet been notified:
     /// one member per open request, fingerprinted by that request, so each
     /// request (and the binding it was raised against) is notified once
     /// and the member settles when the request leaves `open`.
     DecisionRequested,
+    /// A resident mandate whose wake digest changed since its last
+    /// checkpoint, or whose heartbeat elapsed, once its cadence floor allows
+    /// a cycle and no cycle is live: one member per mandate, admitted one at
+    /// a time.
+    ResidentDue,
 }
 
 impl StateTriggerKind {
@@ -54,6 +66,7 @@ impl StateTriggerKind {
             // ships in a later slice; a state routine on this kind targets
             // that job by this canonical name.
             StateTriggerKind::DecisionRequested => "decision_request_pipeline",
+            StateTriggerKind::ResidentDue => "resident_cycle_pipeline",
         }
     }
 }
@@ -89,7 +102,7 @@ pub struct StateTrigger {
 
 /// The task predicate a `preparation_eligible` consumer evaluates. Every
 /// field defaults to the previously hard-coded rule: unstarted work
-/// (`proposed` or `backlog`) that an explicit no-diff tag has not opted out.
+/// (`proposed` or `backlog`) that an excluded tag has not opted out.
 ///
 /// The same resolved value gates observation, admission, promotion and the
 /// material fingerprint, so a changed predicate invalidates stale
@@ -112,7 +125,11 @@ impl Default for PreparationEligibility {
     fn default() -> Self {
         Self {
             statuses: vec![TaskStatus::Proposed, TaskStatus::Backlog],
-            exclude_tags: vec!["no-diff-expected".into(), "no-diff-needed".into()],
+            exclude_tags: vec![
+                "no-diff-expected".into(),
+                "no-diff-needed".into(),
+                "no-pilot".into(),
+            ],
             require_tags: Vec::new(),
             task_types: Vec::new(),
         }
@@ -229,6 +246,24 @@ pub enum MaterialField {
 }
 
 impl MaterialField {
+    /// Every field's serialized name, as `workflow.task_pilot_freshness.
+    /// material_fields` takes it [ORB-22809].
+    pub const NAMES: [&'static str; 13] = [
+        "title",
+        "description",
+        "criteria",
+        "plan",
+        "selectors",
+        "tags",
+        "crew",
+        "tools",
+        "type",
+        "complexity",
+        "relations",
+        "dependencies",
+        "instructions",
+    ];
+
     /// What an assessment is about: editing any of these re-admits the task.
     pub const DEFAULT: [Self; 5] = [
         Self::Title,
@@ -253,6 +288,11 @@ pub enum SourceSensitivity {
     ContextFiles,
     /// Every head move invalidates every assessment.
     Any,
+}
+
+impl SourceSensitivity {
+    /// Every value's serialized name [ORB-22809].
+    pub const NAMES: [&'static str; 3] = ["ignore", "context_files", "any"];
 }
 
 /// A partial freshness block: an absent key falls through to the next layer
@@ -358,6 +398,14 @@ impl StateTrigger {
                 "state trigger freshness applies to kind preparation_eligible only".into(),
             ));
         }
+        if self.kind == StateTriggerKind::ResidentDue
+            && self.batch_size.is_some_and(|size| size != 1)
+        {
+            return Err(super::super::error::WorkflowError::Invalid(
+                "state trigger kind resident_due runs one mandate per cycle: batch_size must be 1"
+                    .into(),
+            ));
+        }
         if self
             .batch_size
             .is_some_and(|size| !(1..=MAX_BATCH_SIZE.min(self.max_items)).contains(&size))
@@ -389,6 +437,9 @@ impl StateTrigger {
     /// Members one admission batches into a single attempt: the configured
     /// size, or the default, never above `max_items`.
     pub fn effective_batch_size(&self) -> usize {
+        if self.kind == StateTriggerKind::ResidentDue {
+            return 1;
+        }
         self.batch_size
             .unwrap_or(DEFAULT_BATCH_SIZE)
             .min(self.max_items)

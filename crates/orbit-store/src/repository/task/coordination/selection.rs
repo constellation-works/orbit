@@ -84,6 +84,7 @@ pub(super) struct Screen<'a> {
     /// The requester's census row, upserted with whatever receipt this
     /// admission commits [ORB-17304]; absent for the owner's own identity.
     pub(super) census: Option<&'a ExecutorCensusEntry>,
+    pub(super) tag_label_requirements: &'a orbit_types::task::TagLabelRequirements,
 }
 
 impl Screen<'_> {
@@ -167,7 +168,12 @@ impl Screen<'_> {
         }
         // Nor one requiring a capability label the executor lacks. Read at
         // each admission, so a relabelled host or task applies to the next.
-        if let Some(reason) = labels_unavailable(request.os, &request.labels, task) {
+        if let Some(reason) = labels_unavailable_with_tag_requirements(
+            request.os,
+            &request.labels,
+            task,
+            self.tag_label_requirements,
+        ) {
             receipt
                 .labels_unavailable
                 .push(diagnostic(reason, Vec::new()));
@@ -435,12 +441,11 @@ impl TaskCommitBoundary {
         } else {
             self.bundle_store.list_bundles()?
         };
-        let translator = TaskV2Store::new(self.registry.clone(), self.workspace_id.clone());
         let tasks = bundles
             .into_iter()
             .filter(|bundle| is_in_flight(bundle.envelope.status))
-            .map(|bundle| translator.task_from_bundle(bundle))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(crate::repository::task::v2::task_from_bundle)
+            .collect::<Vec<_>>();
         let footprints = tasks
             .iter()
             .map(|task| {

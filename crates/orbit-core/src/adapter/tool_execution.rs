@@ -2,10 +2,10 @@
 
 use orbit_common::OrbitError;
 use orbit_tools::ToolContext;
-use orbit_types::policy::Role;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::contracts::ToolInvocationPort;
 use crate::runtime::tool_exec::{CapabilityEnforcement, resolve_task_id_from_context};
 
 impl OrbitRuntime {
@@ -31,9 +31,12 @@ impl OrbitRuntime {
         session
             .effective_capabilities
             .remove(&orbit_types::tool::McpCapability::Operator);
+        // The worker routes the operation it resolved; the owner's dispatch
+        // takes the family call a caller makes.
+        let (name, input) = orbit_types::tool::tool_family_call(name, input);
         owner
             .execute_tool_command_dispatch_with_session_context(
-                name,
+                &name,
                 input,
                 None,
                 None,
@@ -63,17 +66,16 @@ impl OrbitRuntime {
     }
 
     pub fn run_tool(&self, name: &str, input: Value) -> Result<Value, OrbitError> {
-        self.run_tool_with_role(name, input, Role::Admin)
+        self.run_tool_with_context(name, input, ToolContext::default())
     }
 
     /// Run a registered tool for a human-operated in-process adapter.
     /// The trusted label lives in `ToolContext`, never in agent-controlled
     /// input, so the ordinary public tool path remains family-validated.
     pub fn run_tool_as_human(&self, name: &str, input: Value) -> Result<Value, OrbitError> {
-        self.run_tool_with_context_and_role(
+        self.run_tool_with_context(
             name,
             input,
-            Role::Admin,
             ToolContext {
                 trusted_actor_label: Some("human".to_string()),
                 ..Default::default()
@@ -81,40 +83,65 @@ impl OrbitRuntime {
         )
     }
 
-    pub(crate) fn run_tool_with_role(
+    /// Run a registered tool for an in-process adapter that speaks for its
+    /// own caller, such as the dashboard server. `session` is the whole
+    /// authority envelope: the tool chokepoint and the use case read its
+    /// capabilities and bindings, never the hosting process's terminal or
+    /// environment, so a server launched from a shell does not become that
+    /// shell's operator.
+    pub fn run_tool_with_session(
         &self,
         name: &str,
         input: Value,
-        role: Role,
+        session: orbit_types::tool::ToolSessionContext,
     ) -> Result<Value, OrbitError> {
-        self.run_tool_with_context_and_role(name, input, role, ToolContext::default())
-    }
-
-    pub(crate) fn run_tool_with_context_and_role(
-        &self,
-        name: &str,
-        input: Value,
-        role: Role,
-        tool_context: ToolContext,
-    ) -> Result<Value, OrbitError> {
-        self.run_tool_with_context_and_role_and_capability(
+        self.run_tool_with_context(
             name,
             input,
-            role,
+            ToolContext {
+                session_context: session,
+                ..Default::default()
+            },
+        )
+    }
+
+    pub(crate) fn run_tool_with_context(
+        &self,
+        name: &str,
+        input: Value,
+        tool_context: ToolContext,
+    ) -> Result<Value, OrbitError> {
+        self.run_tool_with_context_and_capability(
+            name,
+            input,
             tool_context,
             CapabilityEnforcement::Enforce,
         )
     }
 
-    pub(crate) fn run_tool_with_context_and_role_and_capability(
+    pub(crate) fn run_tool_with_context_and_capability(
         &self,
         name: &str,
         input: Value,
-        _role: Role,
         mut tool_context: ToolContext,
         capability_enforcement: CapabilityEnforcement,
     ) -> Result<Value, OrbitError> {
         self.bind_worker_session(&mut tool_context.session_context)?;
+        let application = self.admit_application_call(
+            name,
+            &input,
+            &mut tool_context.session_context,
+            capability_enforcement,
+        )?;
+        if application {
+            let session = &tool_context.session_context;
+            if let Some(output) = self.execute_application_builtin(name, &input, session)? {
+                return Ok(output);
+            }
+            if let Some(output) = self.execute_application_read(name, &input, session)? {
+                return Ok(output);
+            }
+        }
         if !self.tool_registry().has(name) {
             self.ensure_tool_agent_facing_with_context(name, &tool_context)?;
         }
@@ -128,5 +155,46 @@ impl OrbitRuntime {
             ));
         }
         self.execute_registered_tool(name, input, tool_context, capability_enforcement)
+    }
+}
+
+/// Application use cases reach tool execution through this port [ORB-22004].
+/// Each method delegates to the inherent entry point of the same behaviour, so
+/// audit rows and capability checks are unchanged.
+impl ToolInvocationPort for OrbitRuntime {
+    fn run_tool_command_with_session(
+        &self,
+        name: &str,
+        input: Value,
+        agent_override: Option<String>,
+        model_override: Option<String>,
+        session_context: orbit_types::tool::ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        self.execute_tool_command_with_session_context(
+            name,
+            input,
+            agent_override,
+            model_override,
+            session_context,
+        )
+    }
+
+    fn run_tool_with_context(
+        &self,
+        name: &str,
+        input: Value,
+        tool_context: ToolContext,
+    ) -> Result<Value, OrbitError> {
+        self.run_tool_with_context(name, input, tool_context)
+    }
+
+    fn run_tool_with_enforcement(
+        &self,
+        name: &str,
+        input: Value,
+        tool_context: ToolContext,
+        enforcement: CapabilityEnforcement,
+    ) -> Result<Value, OrbitError> {
+        self.run_tool_with_context_and_capability(name, input, tool_context, enforcement)
     }
 }

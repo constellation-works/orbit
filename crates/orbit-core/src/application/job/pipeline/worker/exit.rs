@@ -1,24 +1,21 @@
-//! What is durably known about how a pipeline worker process ended
+//! How a pipeline worker process's exit is observed, written and amended
 //! [ORB-17179].
 //!
-//! Only the worker's parent, the supervisor that launched it, can reap its
-//! exit status. On Linux an unreaped worker keeps its start identity, so
-//! liveness reconciliation cannot condemn a worker until that supervisor has
-//! reaped it. Once it has, the two race to settle the run. When the
-//! supervisor is gone, init or the user manager reaps the worker and its
-//! status is lost. So:
+//! The persisted exit-record format and its readers live with the run
+//! (`job/run/worker_exit.rs`), which reconciliation reads. This module is the
+//! writing side. Only the worker's parent, the supervisor that launched it,
+//! can reap its exit status. When the supervisor is gone, init or the user
+//! manager reaps the worker and its status is lost. So:
 //!
 //! - The supervisor records a `pipeline.worker.exited` audit row the moment
 //!   it reaps, before it settles the run: exit code or terminating signal,
 //!   and the worker scope's OOM-kill and refused-fork counters while the
-//!   scope's cgroup still exists.
-//! - Reconciliation that interrupts a run as `process_not_found` (or
-//!   `token_mismatch`) names that row in its diagnostic. With no row it says
-//!   no exit status was observed, and reads what the worker's scope, recorded
-//!   when the worker claimed the run, still reports: its systemd unit result
-//!   and counters, or that the scope is gone.
+//!   scope's cgroup still exists ([`WorkerExit::observe`]).
 //! - A supervisor that reaps after reconciliation already wrote "no exit
-//!   status was observed" appends what it observed to that diagnostic.
+//!   status was observed" appends what it observed to that diagnostic
+//!   ([`note_exit_after_reconciliation`]). Reconciliation that settles before
+//!   the row exists still writes `interrupted`; the amendment names the sender
+//!   and does not change that terminal state.
 //! - Waiting reveals no sender. So on Linux the worker catches its own
 //!   terminating signals for its lifetime, writes the sender another process
 //!   gave the kernel to its log, and dies from the same signal. The
@@ -29,64 +26,22 @@ use std::process::ExitStatus;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_store::contracts::{
-    AuditEventFilter, AuditEventStoreBackend, JobRunStepParams, JobRunStoreBackend,
-};
-use orbit_types::workflow::{JobRun, JobRunState};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use orbit_store::contracts::{JobRunStepParams, JobRunStoreBackend};
+use orbit_types::workflow::JobRunState;
 
-use super::scope::WorkerScopeCgroup;
 use crate::application::job::run::WORKER_TERMINATED_ERROR_CODE;
+use crate::application::job::run::worker_exit::{
+    NO_EXIT_OBSERVED, ScopeEvidence, SignalSender, WorkerExit,
+};
+use crate::application::job::run::worker_scope::WorkerScopeCgroup;
 
-/// The audit row a supervisor writes when it reaps its worker.
-pub(crate) const WORKER_EXIT_AUDIT: &str = "pipeline.worker.exited";
-/// The audit row a supervisor writes when its worker claims the run; it
-/// carries the worker's scope.
-pub(crate) const WORKER_CLAIM_AUDIT: &str = "pipeline.worker.claimed";
-
-/// Reconciliation's clause for a worker nobody was seen reaping.
-const NO_EXIT_OBSERVED: &str = "no supervisor observed or recorded its exit status";
 /// Marks a diagnostic a supervisor that reaped after reconciliation amended.
 const OBSERVED_AFTERWARDS: &str = "afterwards its supervisor reaped";
 /// How long a supervisor that lost the race waits for reconciliation's
 /// diagnostic step, which is written just after the interrupted state.
 const RECONCILED_STEP_WAIT: Duration = Duration::from_secs(5);
-
-/// One reaped worker exit, as its supervisor observed it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct WorkerExit {
-    pub(crate) worker_pid: u32,
-    /// `ExitStatus` as the platform prints it.
-    pub(crate) exit_status: String,
-    #[serde(default)]
-    pub(crate) exit_code: Option<i32>,
-    #[serde(default)]
-    pub(crate) signal: Option<i32>,
-    #[serde(default)]
-    pub(crate) signal_name: Option<String>,
-    #[serde(default)]
-    pub(crate) core_dumped: bool,
-    #[serde(default)]
-    pub(crate) scope: Option<ScopeEvidence>,
-    /// Who sent the terminating `signal`, when the worker captured it.
-    #[serde(default)]
-    pub(crate) signal_sender: Option<SignalSender>,
-    pub(crate) observed_at: DateTime<Utc>,
-}
-
-/// The process another process's terminating signal came from, as the
-/// worker's handler read it from the kernel's `siginfo`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct SignalSender {
-    pub(crate) pid: u32,
-    pub(crate) uid: u32,
-    /// `/proc/<pid>/comm` while the handler ran; `None` once it was gone.
-    #[serde(default)]
-    pub(crate) command: Option<String>,
-}
 
 impl SignalSender {
     /// The sender the worker `worker_pid` wrote to its log, if its last such
@@ -120,54 +75,6 @@ impl SignalSender {
     }
 }
 
-/// What a worker scope reported when it was read.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct ScopeEvidence {
-    pub(crate) unit: String,
-    #[serde(default)]
-    pub(crate) unit_result: Option<String>,
-    #[serde(default)]
-    pub(crate) oom_kills: Option<u64>,
-    #[serde(default)]
-    pub(crate) tasks_refused: Option<u64>,
-}
-
-impl ScopeEvidence {
-    /// Read `scope` now. The systemd unit result is asked only when
-    /// `with_unit_result`: a supervisor reaping its worker would only see a
-    /// unit that has not stopped yet.
-    pub(crate) fn read(scope: &WorkerScopeCgroup, with_unit_result: bool) -> Self {
-        let counters = scope.counters();
-        Self {
-            unit: scope.unit().to_string(),
-            unit_result: with_unit_result.then(|| scope.unit_result()).flatten(),
-            oom_kills: counters.and_then(|counters| counters.oom_kills),
-            tasks_refused: counters.and_then(|counters| counters.tasks_refused),
-        }
-    }
-
-    pub(crate) fn describe(&self) -> String {
-        let mut facts = Vec::new();
-        if let Some(result) = &self.unit_result {
-            facts.push(format!("unit {result}"));
-        }
-        if let Some(count) = self.oom_kills {
-            facts.push(format!("memory.events oom_kill={count}"));
-        }
-        if let Some(count) = self.tasks_refused {
-            facts.push(format!("pids.events max={count}"));
-        }
-        if facts.is_empty() {
-            return format!(
-                "worker scope '{}' was already gone: no unit result or counters remain (see \
-                 `journalctl --user -u {}`)",
-                self.unit, self.unit
-            );
-        }
-        format!("worker scope '{}': {}", self.unit, facts.join(", "))
-    }
-}
-
 impl WorkerExit {
     /// The exit `status` of `worker_pid`, with what its scope reports now
     /// and the signal sender its log names.
@@ -198,124 +105,6 @@ impl WorkerExit {
             observed_at: Utc::now(),
         }
     }
-
-    /// Who sent a terminating signal, or that nobody is known to have:
-    /// `None` for an exit no signal ended.
-    pub(crate) fn sender_clause(&self) -> Option<String> {
-        self.signal?;
-        Some(match &self.signal_sender {
-            Some(sender) => format!(
-                "sent by pid {} (uid {}, command {})",
-                sender.pid,
-                sender.uid,
-                sender.command.as_deref().map_or_else(
-                    || "unreadable".to_string(),
-                    |command| format!("'{command}'")
-                ),
-            ),
-            None => "sender unknown: the worker captured none".to_string(),
-        })
-    }
-
-    /// The operator-facing account of this exit.
-    pub(crate) fn describe(&self) -> String {
-        let how = match (self.signal, self.exit_code) {
-            (Some(signal), _) => format!(
-                "killed by signal {signal} ({}){}, {}",
-                self.signal_name.as_deref().unwrap_or("unknown"),
-                if self.core_dumped {
-                    ", core dumped"
-                } else {
-                    ""
-                },
-                self.sender_clause().unwrap_or_default(),
-            ),
-            (None, Some(code)) => format!("exited with code {code}"),
-            (None, None) => format!("exited with {}", self.exit_status),
-        };
-        let mut text = format!(
-            "its supervisor reaped pid {} at {}: {how}",
-            self.worker_pid,
-            self.observed_at.to_rfc3339(),
-        );
-        if let Some(scope) = &self.scope {
-            text.push_str("; ");
-            text.push_str(&scope.describe());
-        }
-        text
-    }
-}
-
-/// The newest exit a supervisor recorded for `worker_pid` running `run_id`.
-pub(crate) fn recorded_worker_exit(
-    audit_events: &dyn AuditEventStoreBackend,
-    run_id: &str,
-    worker_pid: u32,
-) -> Result<Option<WorkerExit>, OrbitError> {
-    Ok(audit_arguments(audit_events, run_id, WORKER_EXIT_AUDIT)?
-        .into_iter()
-        .filter_map(|arguments| serde_json::from_value::<WorkerExit>(arguments).ok())
-        .find(|exit| exit.worker_pid == worker_pid))
-}
-
-/// The scope recorded when `worker_pid` claimed `run_id`, if it ran in one.
-fn recorded_worker_scope(
-    audit_events: &dyn AuditEventStoreBackend,
-    run_id: &str,
-    worker_pid: u32,
-) -> Result<Option<WorkerScopeCgroup>, OrbitError> {
-    Ok(audit_arguments(audit_events, run_id, WORKER_CLAIM_AUDIT)?
-        .into_iter()
-        .find(|arguments| {
-            arguments.get("worker_pid").and_then(Value::as_u64) == Some(u64::from(worker_pid))
-        })
-        .and_then(|arguments| {
-            let unit = arguments.get("scope_unit")?.as_str()?;
-            let directory = arguments.get("scope_cgroup")?.as_str()?;
-            WorkerScopeCgroup::from_recorded(unit, directory)
-        }))
-}
-
-/// Arguments of `run_id`'s `tool_name` audit rows, newest first.
-fn audit_arguments(
-    audit_events: &dyn AuditEventStoreBackend,
-    run_id: &str,
-    tool_name: &str,
-) -> Result<Vec<Value>, OrbitError> {
-    Ok(audit_events
-        .list_audit_events(&AuditEventFilter {
-            tool_name: Some(tool_name.to_string()),
-            job_run_id: Some(run_id.to_string()),
-            limit: 20,
-            ..AuditEventFilter::default()
-        })?
-        .into_iter()
-        .filter_map(|row| serde_json::from_str(row.arguments_json.as_deref()?).ok())
-        .collect())
-}
-
-/// The clause reconciliation appends when it interrupts `run` because its
-/// recorded worker is gone: the exit its supervisor recorded, or that none
-/// was observed and what the worker's scope still reports. `None` for a run
-/// that never recorded a worker.
-pub(crate) fn reconciled_worker_exit_clause(
-    audit_events: &dyn AuditEventStoreBackend,
-    run: &JobRun,
-) -> Option<String> {
-    let pid = run.pid?;
-    let clause = match recorded_worker_exit(audit_events, &run.run_id, pid) {
-        Ok(Some(exit)) => exit.describe(),
-        Ok(None) => {
-            let scope = match recorded_worker_scope(audit_events, &run.run_id, pid) {
-                Ok(Some(scope)) => ScopeEvidence::read(&scope, true).describe(),
-                Ok(None) => "no worker scope evidence is available".to_string(),
-                Err(error) => format!("worker scope evidence unreadable: {error}"),
-            };
-            format!("{NO_EXIT_OBSERVED}; {scope}")
-        }
-        Err(error) => format!("{NO_EXIT_OBSERVED}: exit records unreadable: {error}"),
-    };
-    Some(format!("worker exit: {clause}"))
 }
 
 /// Append `exit` to the diagnostic reconciliation wrote when it interrupted

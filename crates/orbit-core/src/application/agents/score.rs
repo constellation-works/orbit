@@ -14,6 +14,8 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
+use crate::application::statistics::{SplitMix64, percentile};
+
 use super::AgentRole;
 use super::facts::TaskFacts;
 
@@ -23,6 +25,19 @@ use super::facts::TaskFacts;
 /// toward it, and one below keeps its raw score, so a small row cannot rise
 /// on the fleet's evidence or outrank a larger row with the same raw score.
 pub(super) const SMOOTHING: f64 = 30.0;
+
+/// Reviewed deliveries an implementer row, by-type cell or ranked model needs
+/// before its review terms score. Below it the terms are provisional: rated
+/// and shown, but left out of the raw score (or, on the model ranking, the
+/// review-outcome measure is unmeasured and leaves the weight denominator).
+/// Zero reviewed deliveries stays unmeasured. Matches [`SMOOTHING`]; one named
+/// value for every surface, returned as `review_min_support`.
+pub(super) const REVIEW_MIN_SUPPORT: usize = 30;
+
+/// Resamples per ranked row's interval, and the seed every row's resample
+/// starts from, so the same facts give the same interval on every request.
+const INTERVAL_DRAWS: usize = 1000;
+const INTERVAL_SEED: u64 = 0x7363_6f72_6563_6976;
 
 /// One weighted term of a role's score.
 pub(super) struct Term {
@@ -54,6 +69,7 @@ pub(super) struct TaskTally<'a> {
 pub(super) struct Tally<'a> {
     count: f64,
     tasks: BTreeMap<&'a str, TaskTally<'a>>,
+    units: BTreeMap<String, f64>,
 }
 
 impl<'a> Tally<'a> {
@@ -67,8 +83,29 @@ impl<'a> Tally<'a> {
         self.tasks.values().map(|tally| (tally.task, tally.count))
     }
 
-    pub(super) fn add(&mut self, task: &'a TaskFacts, count: f64, occurrence: Option<Occurrence>) {
+    /// The term's count on each scored row unit, for score resampling.
+    pub(super) fn unit_counts(&self) -> impl Iterator<Item = (&str, f64)> {
+        self.units
+            .iter()
+            .map(|(unit, count)| (unit.as_str(), *count))
+    }
+
+    /// Each task behind the count with its count and the records behind it.
+    pub(super) fn task_records(&self) -> impl Iterator<Item = (&TaskFacts, f64, &[Occurrence])> {
+        self.tasks
+            .values()
+            .map(|tally| (tally.task, tally.count, tally.occurrences.as_slice()))
+    }
+
+    pub(super) fn add(
+        &mut self,
+        task: &'a TaskFacts,
+        unit: &str,
+        count: f64,
+        occurrence: Option<Occurrence>,
+    ) {
         self.count += count;
+        *self.units.entry(unit.to_string()).or_default() += count;
         let entry = self
             .tasks
             .entry(task.id.as_str())
@@ -103,30 +140,93 @@ impl Denominator {
     }
 }
 
-/// One crew and model's work and term tallies in the window.
+/// One model-and-recorded-effort row's work and term tallies in the
+/// window. `crew` is the first contributing crew, kept so a detail
+/// selection by crew still resolves; `crews` lists every crew whose units
+/// the row groups.
 pub(super) struct RowInput<'a> {
     pub(super) crew: String,
+    pub(super) crews: Vec<String>,
     pub(super) model: String,
+    /// The row's recorded effort in the shared encoding (`None` is the
+    /// provider default, `Some("unknown")` is unrecorded historical work).
+    pub(super) effort: super::effort::RecordedEffort,
     /// The role's units of work in the window.
     pub(super) units: usize,
+    /// The row's units by the source that decided their effort
+    /// ([`super::effort::EffortSource`] wire names), so a crew-label effort
+    /// is told apart from a recorded one.
+    pub(super) effort_sources: BTreeMap<&'static str, usize>,
     pub(super) runs_without_model: usize,
     /// Reviews younger than the miss lookback; reviewers only.
     pub(super) provisional: Option<usize>,
     pub(super) tallies: BTreeMap<&'static str, Tally<'a>>,
     pub(super) stats: Vec<Stat>,
+    /// Whether an implementer escape expectation used a broader reference.
+    pub(super) escaped_regressions_fallback: Option<bool>,
     /// Implementer reference counts for the row's tier mix; other roles
     /// retain their uncentred score when absent.
     pub(super) expected: Option<BTreeMap<&'static str, f64>>,
     /// Terms rated per 100 of their own units; every other term is rated
     /// per 100 of `units`.
     pub(super) denominators: BTreeMap<&'static str, Denominator>,
+    /// Each row unit's observed counts, expectations and term-specific
+    /// denominator exposure. These are resampled for the interval; the row's
+    /// score still uses the aggregate fields above.
+    pub(super) sample_units: Vec<SampleUnit>,
+    /// Units outside the row's population that still carry counts or
+    /// denominator exposure for a term with its own denominator (settled
+    /// warnings on tasks the row did not assess). They are resampled as a
+    /// second stratum, so the interval describes the same evidence as the
+    /// score; they never change `units`.
+    pub(super) exposure_units: Vec<SampleUnit>,
     /// Tasks with a settled review behind them (implementers only):
-    /// a display-only denominator for review-derived rates, never a
-    /// scoring denominator, so it never makes a term provisional.
+    /// the population of the review terms' rates and expectations.
+    /// Zero means unmeasured, with null rates and neutral contributions.
     pub(super) reviewed_units: Option<usize>,
     /// No unit of the row has been judged yet (reviewers only): it gets no
     /// score or rank, is listed last, and stays out of the fleet average.
     pub(super) unjudged: bool,
+}
+
+/// One row unit's contribution to the bootstrap sample.
+#[derive(Default)]
+pub(super) struct SampleUnit {
+    pub(super) id: String,
+    counts: BTreeMap<&'static str, f64>,
+    pub(super) expected: BTreeMap<&'static str, f64>,
+    pub(super) denominator_terms: BTreeMap<&'static str, usize>,
+}
+
+/// Build one sample unit for each unit in the row and attach its observed
+/// term counts from the tallies.
+pub(super) fn sample_units<'a>(
+    unit_ids: impl IntoIterator<Item = String>,
+    terms: &[Term],
+    tallies: &BTreeMap<&'static str, Tally<'a>>,
+) -> Vec<SampleUnit> {
+    let mut units: BTreeMap<String, SampleUnit> = unit_ids
+        .into_iter()
+        .map(|id| {
+            (
+                id.clone(),
+                SampleUnit {
+                    id,
+                    ..SampleUnit::default()
+                },
+            )
+        })
+        .collect();
+    for term in terms {
+        if let Some(tally) = tallies.get(term.key) {
+            for (id, count) in tally.unit_counts() {
+                if let Some(unit) = units.get_mut(id) {
+                    unit.counts.insert(term.key, count);
+                }
+            }
+        }
+    }
+    units.into_values().collect()
 }
 
 impl RowInput<'_> {
@@ -153,6 +253,9 @@ pub(super) struct Scored<'a> {
     score: f64,
     below_support: bool,
     rank: Option<usize>,
+    /// The 10th and 90th percentiles of the row's resampled score; set only
+    /// on ranked rows.
+    interval: Option<(f64, f64)>,
 }
 
 /// Score and order `rows`: rows meeting `min_support` first, best score
@@ -189,6 +292,7 @@ pub(super) fn score<'a>(
                 raw,
                 score: raw,
                 rank: None,
+                interval: None,
             }
         })
         .collect();
@@ -219,8 +323,12 @@ pub(super) fn score<'a>(
                     .unwrap_or(Ordering::Equal),
             )
             .then(right.input.units.cmp(&left.input.units))
-            .then(left.input.crew.cmp(&right.input.crew))
             .then(left.input.model.cmp(&right.input.model))
+            .then(
+                super::effort::effort_label(&left.input.effort)
+                    .cmp(&super::effort::effort_label(&right.input.effort)),
+            )
+            .then(left.input.crew.cmp(&right.input.crew))
     });
     for (index, row) in scored
         .iter_mut()
@@ -229,13 +337,108 @@ pub(super) fn score<'a>(
     {
         row.rank = Some(index + 1);
     }
+    if let Some(average) = fleet_average {
+        for row in scored.iter_mut().filter(|row| row.rank.is_some()) {
+            row.interval = resampled_interval(terms, &row.input, average);
+        }
+    }
     (fleet_average, scored)
 }
 
+/// A ranked row's interval: its own units are resampled with replacement,
+/// rescoring observed counts and expectations for those units against the
+/// fixed fleet references. Term-specific denominators are resampled with
+/// their units; smoothing and the fleet average stay fixed. The 10th and
+/// 90th percentiles of the draws bound it.
+fn resampled_interval(
+    terms: &[Term],
+    input: &RowInput<'_>,
+    fleet_average: f64,
+) -> Option<(f64, f64)> {
+    if input.units == 0 || input.sample_units.len() != input.units {
+        return None;
+    }
+    struct DrawUnit {
+        counts: Vec<f64>,
+        expected: Vec<f64>,
+        denominator_units: Vec<usize>,
+    }
+    let draw_unit = |unit: &SampleUnit| DrawUnit {
+        counts: terms
+            .iter()
+            .map(|term| unit.counts.get(term.key).copied().unwrap_or(0.0))
+            .collect(),
+        expected: terms
+            .iter()
+            .map(|term| unit.expected.get(term.key).copied().unwrap_or(0.0))
+            .collect(),
+        denominator_units: terms
+            .iter()
+            .map(|term| {
+                if input.denominators.contains_key(term.key) {
+                    unit.denominator_terms.get(term.key).copied().unwrap_or(0)
+                } else {
+                    1
+                }
+            })
+            .collect(),
+    };
+    let pool: Vec<_> = input.sample_units.iter().map(draw_unit).collect();
+    let exposure_pool: Vec<_> = input.exposure_units.iter().map(draw_unit).collect();
+    let units = input.units as f64;
+    let mut rng = SplitMix64::seeded(INTERVAL_SEED);
+    let mut sums = vec![0.0; terms.len()];
+    let mut expected_sums = vec![0.0; terms.len()];
+    let mut sampled_denominators = vec![0usize; terms.len()];
+    let mut scores = Vec::with_capacity(INTERVAL_DRAWS);
+    for _ in 0..INTERVAL_DRAWS {
+        sums.iter_mut().for_each(|sum| *sum = 0.0);
+        expected_sums.iter_mut().for_each(|sum| *sum = 0.0);
+        sampled_denominators.iter_mut().for_each(|count| *count = 0);
+        for step in 0..input.units + exposure_pool.len() {
+            let unit = if step < input.units {
+                &pool[rng.index(pool.len())]
+            } else {
+                &exposure_pool[rng.index(exposure_pool.len())]
+            };
+            for index in 0..terms.len() {
+                sums[index] += unit.counts[index];
+                expected_sums[index] += unit.expected[index];
+                sampled_denominators[index] += unit.denominator_units[index];
+            }
+        }
+        let mut raw = if input.expected.is_some() { 100.0 } else { 0.0 };
+        for (index, term) in terms.iter().enumerate() {
+            let denominator = if input.denominators.contains_key(term.key) {
+                sampled_denominators[index]
+            } else {
+                input.units
+            };
+            if denominator == 0
+                || input
+                    .denominators
+                    .get(term.key)
+                    .is_some_and(|meta| denominator < meta.min_support)
+            {
+                continue;
+            }
+            let denominator = denominator as f64;
+            raw += term.weight
+                * (sums[index] * 100.0 / denominator - expected_sums[index] * 100.0 / denominator);
+        }
+        let blended = (units * raw + SMOOTHING * fleet_average) / (units + SMOOTHING);
+        scores.push(raw.min(blended));
+    }
+    Some((
+        percentile(&mut scores, 10.0)?,
+        percentile(&mut scores, 90.0)?,
+    ))
+}
+
 /// A term's part of the raw score: weight × (rate − expected rate), or 0
-/// while the term is below its own minimum support.
+/// while the term has no units or is below its own minimum support.
 fn contribution(input: &RowInput<'_>, per_100: &BTreeMap<&'static str, f64>, term: &Term) -> f64 {
-    if input.provisional_term(term.key) {
+    if input.provisional_term(term.key) || input.units_of(term.key) == 0 {
         return 0.0;
     }
     let expected = input
@@ -248,8 +451,14 @@ fn contribution(input: &RowInput<'_>, per_100: &BTreeMap<&'static str, f64>, ter
 }
 
 impl Scored<'_> {
-    pub(super) fn is(&self, crew: &str, model: &str) -> bool {
-        self.input.crew == crew && self.input.model == model
+    /// Whether `crew` contributed units to this row.
+    pub(super) fn has_crew(&self, crew: &str) -> bool {
+        self.input.crew == crew || self.input.crews.iter().any(|name| name == crew)
+    }
+
+    /// The row's `model @ effort` label.
+    pub(super) fn label(&self) -> String {
+        super::effort::row_label(&self.input.model, &self.input.effort)
     }
 
     /// The ranking row. An unjudged row's `raw` and `score` are null.
@@ -261,12 +470,17 @@ impl Scored<'_> {
         let per_100: serde_json::Map<String, Value> = self
             .per_100
             .iter()
-            .map(|(key, rate)| ((*key).to_string(), number(*rate)))
+            .map(|(key, rate)| ((*key).to_string(), self.measured_rate(key, *rate)))
             .collect();
         let mut payload = json!({
             "crew": self.input.crew,
+            "crews": self.input.crews,
             "model": self.input.model,
+            "reasoning_effort": self.input.effort,
+            "effort_label": super::effort::effort_label(&self.input.effort),
+            "label": self.label(),
             "units": self.input.units,
+            "effort_sources": self.input.effort_sources,
             "below_support": self.below_support,
             "unjudged": self.input.unjudged,
             "rank": self.rank,
@@ -274,6 +488,10 @@ impl Scored<'_> {
             "per_100": per_100,
             "raw": (!self.input.unjudged).then(|| number(self.raw)),
             "score": (!self.input.unjudged).then(|| number(self.score)),
+            "interval": self.interval.map(|(low, high)| json!({
+                "p10": number(low),
+                "p90": number(high),
+            })),
             "runs_without_model": self.input.runs_without_model,
             "provisional": self.input.provisional,
             "stats": self.input.stats.iter().map(|stat| json!({
@@ -282,6 +500,9 @@ impl Scored<'_> {
                 "value": stat.value,
             })).collect::<Vec<_>>(),
         });
+        if let Some(fallback) = self.input.escaped_regressions_fallback {
+            payload["escaped_regressions_fallback"] = json!(fallback);
+        }
         if !self.input.denominators.is_empty() {
             payload["term_units"] = json!(
                 self.input
@@ -344,7 +565,7 @@ impl Scored<'_> {
                     "weight": term.weight,
                     "group": term.group,
                     "count": number(self.count(term.key)),
-                    "per_100": number(self.per_100[term.key]),
+                    "per_100": self.measured_rate(term.key, self.per_100[term.key]),
                     "contribution": number(self.contribution(term)),
                     "tasks": tasks.iter().map(|tally| json!({
                         "task_id": tally.task.id,
@@ -365,6 +586,14 @@ impl Scored<'_> {
                 payload
             })
             .collect()
+    }
+
+    fn measured_rate(&self, key: &str, rate: f64) -> Value {
+        if self.input.reviewed_units == Some(0) && self.input.denominators.contains_key(key) {
+            Value::Null
+        } else {
+            number(rate)
+        }
     }
 
     fn count(&self, key: &str) -> f64 {

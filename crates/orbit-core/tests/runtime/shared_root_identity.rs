@@ -6,12 +6,12 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use orbit_core::adapter::HubCoordinationExecutor;
-use orbit_core::{OrbitRuntime, ShipMode, WorkspaceRuntimeBinding};
+use orbit_core::runtime::WorkspaceRuntimeBinding;
+use orbit_core::{OrbitRuntime, ShipMode};
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::{V2AuditEventFilter, V2AuditEventInsertParams};
 use orbit_store::maintenance::task_registry::{WorkspaceConfig, write_workspace_config};
 use orbit_tools::ToolContext;
-use orbit_types::policy::Role;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -33,10 +33,9 @@ fn tool(runtime: &OrbitRuntime, name: &str, input: Value) -> Value {
 }
 
 fn call(runtime: &OrbitRuntime, name: &str, input: Value) -> Result<Value, orbit_core::OrbitError> {
-    runtime.run_tool_with_context_and_role(
+    runtime.run_tool_with_context(
         name,
         input,
-        Role::Admin,
         ToolContext {
             model_name: Some("codex".into()),
             session_context: ToolSessionContext {

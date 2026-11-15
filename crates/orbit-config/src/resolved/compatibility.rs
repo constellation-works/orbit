@@ -10,7 +10,7 @@ use orbit_types::workflow::activity_job::{
     retired_provider_id,
 };
 
-use crate::layering::value_at_path;
+use crate::config_document;
 use crate::raw::RawTaskSection;
 use crate::registry;
 
@@ -31,7 +31,7 @@ pub(super) fn reject_retired_backend_overrides(
             OrbitError::InvalidInput(format!("{RETIRED_BACKEND_ENV} is retired: {error}"))
         })?;
     }
-    let Some(value) = value_at_path(document, "runtime.backend") else {
+    let Some(value) = config_document::config_value_at_path(document, "runtime.backend") else {
         return Ok(());
     };
     let raw = value.as_str().ok_or_else(|| {
@@ -96,19 +96,8 @@ pub(super) fn validate_task_artifact_store_from_raw(
     )))
 }
 
-fn warn_deprecated_task_id_pattern(config_path: &Path) {
-    let path = redact_home_dir(&config_path.display().to_string());
-    tracing::warn!(
-        config = %path,
-        "knowledge.task_id_pattern is deprecated and ignored",
-    );
-}
-
 pub(super) struct CompatibilityKeys {
-    pub(super) deprecated_task_id_pattern: bool,
-    pub(super) retired_duel: bool,
     pub(super) retired_routines: bool,
-    pub(super) retired_docs: bool,
     /// Fixed keys from [`registry::REMOVED_CONFIG_KEYS`] the document still
     /// sets, with their migration notes.
     pub(super) removed_keys: Vec<(&'static str, &'static str)>,
@@ -119,17 +108,8 @@ pub(super) struct CompatibilityKeys {
 
 impl CompatibilityKeys {
     pub(super) fn warn(&self, config_path: &Path) {
-        if self.deprecated_task_id_pattern {
-            warn_deprecated_task_id_pattern(config_path);
-        }
-        if self.retired_duel {
-            warn_retired_duel_config(config_path);
-        }
         if self.retired_routines {
             warn_retired_routines_config(config_path);
-        }
-        if self.retired_docs {
-            warn_retired_docs_config(config_path);
         }
         for (key, note) in &self.removed_keys {
             warn_removed_key(config_path, key, note);
@@ -143,10 +123,7 @@ impl CompatibilityKeys {
 pub(crate) fn warn_compatibility_keys(document: &toml::Value, config_path: &Path) {
     crate::unknown::warn_unknown_keys(document, config_path);
     CompatibilityKeys {
-        deprecated_task_id_pattern: value_at_path(document, "knowledge.task_id_pattern").is_some(),
-        retired_duel: value_at_path(document, "duel").is_some(),
-        retired_routines: value_at_path(document, "routines").is_some(),
-        retired_docs: value_at_path(document, "docs").is_some(),
+        retired_routines: config_document::config_value_at_path(document, "routines").is_some(),
         removed_keys: removed_keys_present(document),
         deprecated_keys: deprecated_keys_present(document),
     }
@@ -162,8 +139,9 @@ pub(crate) fn warn_compatibility_keys(document: &toml::Value, config_path: &Path
 /// with an explicit `orbit config set review.timing before_landing`.
 /// Invalid values fail load elsewhere, so they never warn here.
 fn warn_deprecated_review_timing_value(document: &toml::Value, config_path: &Path) {
-    let Some(raw) = value_at_path(document, crate::operation::REVIEW_TIMING_KEY)
-        .and_then(|value| value.as_str())
+    let Some(raw) =
+        config_document::config_value_at_path(document, crate::operation::REVIEW_TIMING_KEY)
+            .and_then(|value| value.as_str())
     else {
         return;
     };
@@ -218,7 +196,7 @@ pub enum CompatibilityConfigKeyDisposition {
 /// One retired or deprecated registry key still set in a config document.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompatibilityConfigKey {
-    /// Dotted registry key, or a table name such as `semantic`.
+    /// Dotted registry key, or a table name such as `assistance`.
     pub key: &'static str,
     /// Migration note shown when the key is warned about or refused.
     pub note: &'static str,
@@ -258,23 +236,14 @@ pub fn compatibility_config_keys_present(document: &toml::Value) -> Vec<Compatib
 
 /// Retired and deprecated registry keys set in the config file at `path`.
 ///
-/// A missing file has none. The read uses the same no-follow path check as
-/// other config loads, so a symlink is refused rather than followed.
+/// A missing or empty file has none. The read uses the same no-follow path
+/// check as other config loads, so a symlink is refused rather than followed.
 pub fn compatibility_config_keys_at(
     path: &Path,
 ) -> Result<Vec<CompatibilityConfigKey>, OrbitError> {
-    let Some(raw) = crate::store::read_config_file(path)? else {
+    let Some(document) = crate::config_toml::read_config_toml(path)? else {
         return Ok(Vec::new());
     };
-    if raw.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    let document = toml::from_str(&raw).map_err(|error| {
-        OrbitError::InvalidInput(format!(
-            "invalid runtime config '{}': {error}",
-            redact_home_dir(&path.display().to_string())
-        ))
-    })?;
     Ok(compatibility_config_keys_present(&document))
 }
 
@@ -284,7 +253,7 @@ fn keys_present(
 ) -> Vec<(&'static str, &'static str)> {
     keys.iter()
         .copied()
-        .filter(|(key, _)| value_at_path(document, key).is_some())
+        .filter(|(key, _)| config_document::config_value_at_path(document, key).is_some())
         .collect()
 }
 
@@ -322,28 +291,6 @@ fn warn_deprecated_key(config_path: &Path, key: &str, note: &str) {
         key,
         note,
         DEPRECATED_CONFIG_KEY_WARNING,
-    );
-}
-
-pub(crate) const RETIRED_DOCS_CONFIG_WARNING: &str =
-    "[docs] is removed and ignored; delete the table from config.toml";
-
-fn warn_retired_docs_config(config_path: &Path) {
-    let path = redact_home_dir(&config_path.display().to_string());
-    tracing::warn!(
-        config = %path,
-        RETIRED_DOCS_CONFIG_WARNING,
-    );
-}
-
-pub(crate) const RETIRED_DUEL_CONFIG_WARNING: &str =
-    "[duel] and [duel.models] are retired and ignored; remove both keys from config.toml";
-
-fn warn_retired_duel_config(config_path: &Path) {
-    let path = redact_home_dir(&config_path.display().to_string());
-    tracing::warn!(
-        config = %path,
-        RETIRED_DUEL_CONFIG_WARNING,
     );
 }
 

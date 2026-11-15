@@ -1,0 +1,149 @@
+---
+title: Finding Verification — Decisions
+owner: claude
+last_updated: 2026-11-07
+last_validated: 2026-11-05
+status: Deprecated
+feature: finding-verification
+doc_role: decisions
+type: design
+summary: Why finding verification is its own job rather than a task-pilot phase, why the verdict lives in task history, and why verifier crews come from the complexity pools.
+tags: [finding-verification, review, automation]
+related_features: [automation-triggers, review-gate]
+related_artifacts: [ORB-15662]
+---
+
+# Finding Verification — Decisions
+
+Retired in [ORB-22844] (2026-11-07): the `finding_verification` routine was removed with
+its `finding_verification_pipeline` job and the `prepare_finding_verification`,
+`verify_finding` and `apply_finding_verification` activities. No verifier crew judges review
+findings any more, and the `unverified_review_finding` hold on approval, promotion and drain
+admission is gone. `finding_unverified` loads as a retired trigger kind that observes nothing,
+and `review.verify_findings` loads with a deprecation warning and is ignored until 2026-12-07.
+The default rejection routes stay: the task pilot's `finding_invalid` result and an
+implementer's `finding-invalid.json` still reject an invalid review finding with a REJECTED
+verdict, recorded as `finding_rejected` history and shown by `orbit task show`. Verdicts the
+removed job wrote still load. The text below is the record of the design as it stood.
+
+Record non-obvious decisions here by title. Task references carry provenance; superseded decisions remain in place so their original reasoning stays legible. See [CONVENTIONS.md §4](../../CONVENTIONS.md#4-decisions) for the admission rule and required `Cost:` line.
+
+## A separate job, not a task-pilot phase
+
+**Recorded:** 2026-10 · [ORB-15662]
+**Code anchors:** `crates/orbit-core/assets/jobs/finding_verification_pipeline.yaml`, `crates/orbit-types/src/workflow/automation/members.rs::StateTriggerKind::FindingUnverified`
+
+### Context
+
+Task-pilot already prepares proposed tasks: it pins a revision, runs one
+read-only agent per partition and applies the result. A verification phase
+inside it would reuse that machinery. But task-pilot asks a different
+question ("is this task ready to implement, and what is its footprint?") with
+a single `system` crew. Verification asks "is the claimed defect real?" and
+must use a crew independent of the filer, escalating doubtful verdicts to a
+stronger tier. Task-pilot's member fingerprint and settlement also belong
+to preparation, not to the finding as filed.
+
+### Decision
+
+Verification is `finding_verification_pipeline`, with its own deterministic
+prepare and apply actions, its own verifier activity, and its own state
+trigger kind, `finding_unverified`. It reuses task-pilot's source snapshot,
+input helpers and the shared member host. The gate sits on the shared
+admission seam, `pilot_admission_hold_in`, not inside task-pilot. So a
+finding is held whether or not task-pilot ever prepares it.
+
+### Consequences
+
+- A finding can be verified, and rejected, before anyone spends a pilot
+  assessment on it; task-pilot and verification run independently.
+- The verifier step names its crew per partition, so the pool draw and
+  escalation are visible in the run and in the record.
+- Cost: a second state routine and job to enable and monitor, and a finding
+  may be both piloted and verified when both routines are on.
+
+## The verdict is a history entry, mirrored as a comment
+
+**Recorded:** 2026-10 · [ORB-15662]
+**Code anchors:** `crates/orbit-core/src/application/task/finding_verification.rs::latest_verification`
+
+### Context
+
+The gate must not trust anything an agent or operator can write by hand. A
+comment can be written by anyone, and a separate artifact would be a new
+persisted format that `orbit task show` does not display.
+
+### Decision
+
+The trusted record is the `finding_verified` history entry attributed to the
+`finding-verification` actor, written in the same task update as its comment
+and, for REJECTED, the move to `rejected`. The comment carries the same
+record for people and is never read by the gate.
+
+### Consequences
+
+- `orbit task show` displays the verdict with no new surface, and the gate
+  reads one history scan.
+- Cost: the record's schema lives inside a history note, so a schema change
+  needs a version bump (`schema_version`) rather than a store migration.
+
+## Verifier crews come from the complexity pools
+
+**Recorded:** 2026-10 · [ORB-15662]
+**Code anchors:** `crates/orbit-core/src/application/task/finding_verification.rs::draw_finding_verifier`
+
+### Context
+
+A dedicated review-crew setting would be one more key operators must keep in
+step with the crews they already rank by capability in
+`workflow.{low,medium,hard,xhard}_complexity_crews`.
+
+### Decision
+
+The verifier is drawn from the pool of the task's complexity tier, passing
+over the filer's crew when the pool offers another. Escalation draws from
+the next tier's pool. No new configuration key exists.
+
+### Consequences
+
+- Operators tune verification cost through the same pools that route
+  implementation.
+- Cost: a single-member pool cannot avoid the filer's crew, and a workspace
+  without pools verifies every finding with the default crew.
+
+## Reject findings in the pilot and the implementer by default
+
+**Recorded:** 2026-10 · [ORB-19635]
+**Code anchors:** `crates/orbit-core/src/application/task/finding_verification.rs::reject_invalid_finding`, `crates/orbit-engine/src/executor/automation/vcs/commit/finding_invalid.rs`
+
+### Context
+
+The verification job is off by default [ORB-15760]: findings are almost
+always true, so a dedicated verifier run costs more than it saves. Without
+it, nothing recorded a wrong finding, and an implementer could only leave
+one through the no-op exit, which requires a full gate run.
+
+### Decision
+
+The task pilot, which already reads the code at a pinned revision, may
+return `finding_invalid` for a review finding, and apply rejects the task.
+An implementer that finds the defect absent at pickup hands off a
+`finding-invalid.json` report with no gates, and the commit step rejects the
+task. Both reuse the verdict record and its write
+(`record_finding_verification`), marked by a `source` field, rather than a
+parallel store. The job remains the opt-in route with escalation.
+
+### Consequences
+
+- A wrong finding is rejected with evidence at no extra agent run, and the
+  REJECTED record exists for scorecards to read whichever route wrote it.
+- Cost: one agent's judgement decides, without the job's escalation tier,
+  and a claimed implementer can only block, not reject.
+
+## Task References
+
+- ORB-15662 — the separate verification job, the history-entry verdict record, and verifier crews from the complexity pools.
+- ORB-15760 — the opt-in verification gate that the default rejection routes avoid.
+- ORB-19635 — rejecting findings by default in the task pilot and the implementer.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

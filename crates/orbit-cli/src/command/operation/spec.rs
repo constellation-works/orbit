@@ -343,6 +343,7 @@ pub(super) fn task_operation(
         | TaskVerb::Eligible
         | TaskVerb::Show
         | TaskVerb::ReviewReset
+        | TaskVerb::Repilot
         | TaskVerb::Requeue
         | TaskVerb::BlockTriage
         | TaskVerb::ReconcileReview
@@ -370,7 +371,7 @@ pub(super) fn dispatch_workspace(command: Commands, context: DispatchContext<'_>
         }) => args.execute_without_runtime(context.root_override),
         Commands::Workspace(WorkspaceCommand {
             command: WorkspaceSubcommand::Sync(args),
-        }) => args.execute_without_runtime(context.root_override),
+        }) => args.execute_without_runtime(context.root_override, context.workspace_selector),
         Commands::Workspace(command) => command.execute(context.runtime()?),
         _ => dispatch_mismatch("Workspace"),
     }
@@ -403,21 +404,16 @@ pub(super) fn dispatch_host(command: Commands, context: DispatchContext<'_>) -> 
 }
 
 pub(super) fn dispatch_browser_kit(command: Commands, _context: DispatchContext<'_>) -> CommandOut {
+    use super::super::config::{ConfigCommand, ConfigSubcommand};
     match command {
-        Commands::BrowserKit(command) => command.execute_without_runtime(),
-        _ => dispatch_mismatch("BrowserKit"),
-    }
-}
-
-pub(super) fn dispatch_lease_listener_user(
-    command: Commands,
-    context: DispatchContext<'_>,
-) -> CommandOut {
-    match command {
-        Commands::Lease(command) => {
-            command.execute_without_runtime(context.workspace_selector, context.root_override)
+        Commands::Config(ConfigCommand {
+            command: ConfigSubcommand::BrowserKit(command),
+        }) => command.execute_without_runtime(),
+        Commands::BrowserKit(command) => {
+            eprintln!("warning: `orbit browser-kit` is deprecated; use `orbit config browser-kit`");
+            command.execute_without_runtime()
         }
-        _ => dispatch_mismatch("Lease"),
+        _ => dispatch_mismatch("BrowserKit"),
     }
 }
 
@@ -465,9 +461,11 @@ pub(super) fn dispatch_clock(command: Commands, context: DispatchContext<'_>) ->
 
 pub(super) fn dispatch_routine(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
-        Commands::Routine(command) => {
-            command.execute_without_runtime(context.root_override, context.workspace_selector)
-        }
+        Commands::Routine(command) => command.execute_without_runtime(
+            context.root_override,
+            context.workspace_selector,
+            context.runtime,
+        ),
         _ => dispatch_mismatch("Routine"),
     }
 }
@@ -487,14 +485,35 @@ pub(super) fn dispatch_web(command: Commands, context: DispatchContext<'_>) -> C
             orbit_web::connect(args, context.root_override)?;
             Ok(CommandOutput::Silent)
         }
-        Commands::Web(WebCommand {
-            command: WebSubcommand::Open(args),
-        }) => {
-            orbit_web::open_dashboard(args)?;
-            Ok(CommandOutput::Silent)
-        }
         _ => dispatch_mismatch("Web"),
     }
+}
+
+/// The one operation behind `orbit config browser-kit` and its deprecated
+/// `orbit browser-kit` path. Audit rows keep the `browser-kit` command name, so
+/// history reads the same across the move.
+pub(super) fn browser_kit_operation(
+    command: &super::super::browser_kit::BrowserKitCommand,
+) -> CommandOperation {
+    use super::super::browser_kit::BrowserKitSubcommand;
+    let subcommand = match &command.command {
+        BrowserKitSubcommand::Status(_) => "status",
+        BrowserKitSubcommand::Install(_) => "install",
+        BrowserKitSubcommand::Verify(_) => "verify",
+        BrowserKitSubcommand::Remove(_) => "remove",
+    };
+    CommandOperation::new(
+        // The kit belongs to the host user; no workspace is opened.
+        RuntimeNeed::Forbidden,
+        Some(admin_meta(
+            "browser-kit",
+            Some(subcommand),
+            Some("installation"),
+            None,
+        )),
+        None,
+        dispatch_browser_kit,
+    )
 }
 
 pub(super) fn tool_operation(command: &super::super::tool::ToolCommand) -> CommandOperation {
@@ -526,14 +545,6 @@ pub(super) fn tool_operation(command: &super::super::tool::ToolCommand) -> Comma
             "admin".to_string(),
             None,
         ),
-        ToolSubcommand::Scaffold(args) => (
-            "scaffold",
-            args.name.clone(),
-            Some("tool".to_string()),
-            args.name.clone().or_else(|| Some(args.path.clone())),
-            "admin".to_string(),
-            None,
-        ),
         ToolSubcommand::Remove(args) => (
             "remove",
             Some(args.name.clone()),
@@ -558,7 +569,14 @@ pub(super) fn tool_operation(command: &super::super::tool::ToolCommand) -> Comma
             "admin".to_string(),
             None,
         ),
-        ToolSubcommand::Doctor => ("doctor", None, None, None, "admin".to_string(), None),
+        ToolSubcommand::Doctor(args) => (
+            "doctor",
+            args.name.clone(),
+            Some("tool".to_string()),
+            args.name.clone(),
+            "admin".to_string(),
+            None,
+        ),
     };
     let runtime_need = match &command.command {
         ToolSubcommand::Run(args) => match args.bootstrap_route() {
@@ -567,6 +585,11 @@ pub(super) fn tool_operation(command: &super::super::tool::ToolCommand) -> Comma
             }
             Ok(super::super::tool::ToolRunBootstrap::TaskOwner(task_id)) => {
                 RuntimeNeed::TaskOwner { task_id }
+            }
+            Ok(super::super::tool::ToolRunBootstrap::CwdWorkspace)
+                if args.name == "orbit.attention" =>
+            {
+                RuntimeNeed::HostReadOnly
             }
             Ok(super::super::tool::ToolRunBootstrap::CwdWorkspace) => RuntimeNeed::Required,
             Err(error) => RuntimeNeed::UnusableToolInput {
@@ -636,11 +659,7 @@ fn tool_run_input_identity(
         return (None, None);
     };
     (
-        map.get("agent")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned),
+        None,
         map.get("model")
             .and_then(Value::as_str)
             .map(str::trim)

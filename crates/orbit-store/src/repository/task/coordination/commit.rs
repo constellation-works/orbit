@@ -19,7 +19,8 @@ use orbit_common::OrbitError;
 use orbit_common::fs::io::{FileLockProbe, hold_step, probe_file_lock};
 use orbit_types::task::{
     CONTEXT_CREATION_AUTHORIZED_EVENT, ContextCreationState, TASK_ARTIFACT_SCHEMA_VERSION,
-    TASK_EVENTS_FILE_NAME, TaskEventRowV2,
+    TASK_EVENTS_FILE_NAME, TaskEventRowV2, TaskStatus, named_friction_targets,
+    pending_resolves_entries,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -79,8 +80,10 @@ impl TaskCommitBoundary {
     }
 
     /// Whether nothing in this partition awaits recovery: no commit lease
-    /// outlived its committer and no older version's commit marker is
-    /// present. The check [`Self::recover_if_pending`] makes first, taking no
+    /// outlived its committer, no older version's commit marker is
+    /// present, and no unsettled journal row's lease nobody holds (a host
+    /// crash can lose that lease's unsynced name while its decision
+    /// survives). The check [`Self::recover_if_pending`] makes first, taking no
     /// lock and creating nothing, for a read that may then skip the
     /// partition's sections. A commit that dies after this answer leaves its
     /// own bundle's lease dead, which that bundle's readers check under its
@@ -95,8 +98,10 @@ impl TaskCommitBoundary {
             // unsettled on purpose.
             return Ok(());
         }
-        // A lease outlives its committer's lock only if that committer died.
-        if self.dead_commit_lease()? {
+        // A lease outlives its committer's lock only if that committer died,
+        // and a host crash can lose the lease's name while its unsettled
+        // journal row survives: either one is recovery owed before exposure.
+        if self.dead_commit_lease()? || self.has_unowned_unsettled_commit()? {
             return self.recover_in(section);
         }
         if !self.pending_marker_path().try_exists()? {
@@ -276,7 +281,13 @@ impl TaskCommitBoundary {
                 &journal_id,
                 params.reservation.as_ref(),
                 &params.rows,
-                make_rows,
+                &mut |reservation| {
+                    let mut rows = make_rows(reservation)?;
+                    if params.status_event.as_deref() == Some("claim_failed") {
+                        self.stamp_failure_revision(&mut rows, &bundle, &intent)?;
+                    }
+                    Ok(rows)
+                },
                 effects,
                 lease_notice
                     .as_ref()
@@ -349,7 +360,21 @@ impl TaskCommitBoundary {
 
         let mut next_event = next_sequence(&bundle.events, "EV-");
         let mut events = Vec::new();
-        for entry in &params.append_history {
+        // A landing's retry work commits with its transition into done, so
+        // the journal replays both or neither.
+        let pending_resolves = if transition.is_some_and(|(_, to)| to == TaskStatus::Done) {
+            pending_resolves_entries(
+                &named_friction_targets(
+                    &bundle.envelope.relations,
+                    [bundle.description.as_str(), bundle.acceptance.as_str()],
+                ),
+                &params.actor,
+                now,
+            )
+        } else {
+            Vec::new()
+        };
+        for entry in params.append_history.iter().chain(&pending_resolves) {
             events.push(TaskEventRowV2 {
                 schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
                 event_id: format!("EV-{next_event:04}"),
@@ -379,7 +404,7 @@ impl TaskCommitBoundary {
                 from_status: transition.map(|(from, _)| from),
                 to_status: transition.map(|(_, to)| to),
                 operation_id: None,
-                decision: None,
+                decision: params.status_decision.clone(),
             });
         }
         for event in &events {

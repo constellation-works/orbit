@@ -1,0 +1,105 @@
+// Content wider than its container where clipping cuts it or it hits a sibling.
+//
+// Bounded scroll wrappers (`overflow-x: auto/scroll`, or content inside one)
+// are exempt: sideways scrolling is their contract, matching
+// `ui.no-horizontal-overflow`. An ellipsis (`text-overflow: ellipsis`) is an
+// intentional cut with its own indicator, not a defect. Everything else whose
+// `scrollWidth` exceeds its `clientWidth` is flagged only when a clipping
+// ancestor (`hidden`/`clip`) cuts it or its overflow box runs into a visible
+// sibling.
+import { measureInPage, verdict } from "../lib/ui-context.mjs";
+
+export const rule = {
+  id: "ui.text-overflow",
+  title: "Content wider than its container is not cut or run into a sibling",
+  severity: "medium",
+  surface: "ui",
+  targets: { views: "*", widths: [1440, 1166, 375] },
+};
+
+export async function check(ctx) {
+  const found = await measureInPage(ctx, (H) => {
+    const scrollableX = (style) => style.overflowX === "auto" || style.overflowX === "scroll";
+    const clippedX = (style) => style.overflowX === "hidden" || style.overflowX === "clip";
+    const inScrollable = (el) => {
+      let node = el.parentElement;
+      while (node && node !== document.body) {
+        if (scrollableX(getComputedStyle(node))) return true;
+        node = node.parentElement;
+      }
+      return false;
+    };
+    const clippedByBox = (el, overflowRight) => {
+      let node = el;
+      while (node && node !== document.body) {
+        if (clippedX(getComputedStyle(node))) {
+          const box = H.rect(node);
+          // clientWidth excludes borders and any scrollbar; scale it into the
+          // same coordinate space as getBoundingClientRect.
+          const scale = node.offsetWidth ? box.width / node.offsetWidth : 1;
+          const clipRight = box.left + (node.clientLeft + node.clientWidth) * scale;
+          if (overflowRight > clipRight + 1) return true;
+        }
+        node = node.parentElement;
+      }
+      return false;
+    };
+    const SKIP_TAGS = new Set(["HTML", "BODY", "INPUT", "TEXTAREA", "SELECT", "svg"]);
+    const candidates = []; const rows = [];
+    for (const el of H.all("*")) {
+      if (SKIP_TAGS.has(el.tagName) || el.closest("svg")) continue;
+      if (el.closest("details:not([open]), [hidden]")) continue;
+      const box = H.rect(el);
+      // Screen-reader-only text (1px clipped boxes) and collapsed boxes are
+      // not visible overflow.
+      if (box.width < 2 || box.height < 2 || el.clientWidth < 2) continue;
+      if (scrollableX(getComputedStyle(el))) continue;
+      if (!(el.textContent ?? "").trim()) continue;
+      rows.push({ ...H.elementFacts(el), text: (el.textContent ?? "").trim().slice(0, 80) });
+      if (el.scrollWidth > el.clientWidth + 1) candidates.push(el);
+      if (rows.length >= 400) break;
+    }
+    const failures = [];
+    for (const el of candidates) {
+      if (inScrollable(el)) continue;
+      const style = getComputedStyle(el);
+      if (style.textOverflow === "ellipsis" && style.whiteSpace === "nowrap") continue;
+      if (style.whiteSpace === "nowrap" && style.overflowX === "visible") {
+        // A nowrap run with no clipping still counts only when it reaches a
+        // sibling; otherwise it hangs into empty padding.
+      }
+      const r = H.rect(el);
+      const scale = el.offsetWidth ? r.width / el.offsetWidth : 1;
+      const overflowRight = r.left + (el.clientLeft + el.scrollWidth) * scale;
+      const clipped = clippedByBox(el, overflowRight);
+      let hitsSibling = false;
+      let siblingSelector = "";
+      const parent = el.parentElement;
+      if (parent) {
+        for (const sibling of [...parent.children]) {
+          if (sibling === el || !H.visible(sibling)) continue;
+          const s = H.rect(sibling);
+          const vertical = Math.min(r.bottom, s.bottom) - Math.max(r.top, s.top);
+          if (vertical > 2 && s.left < overflowRight - 1 && s.left >= r.left) {
+            hitsSibling = true;
+            siblingSelector = H.selectorOf(sibling);
+            break;
+          }
+        }
+      }
+      if (!clipped && !hitsSibling) continue;
+      failures.push({
+        ...H.elementFacts(el),
+        tag: el.tagName.toLowerCase(),
+        scroll_width_px: el.scrollWidth,
+        client_width_px: el.clientWidth,
+        excess_px: el.scrollWidth - el.clientWidth,
+        clipped,
+        sibling: siblingSelector,
+        text: (el.textContent ?? "").trim().slice(0, 80),
+      });
+    }
+    return { matched: candidates.length, rows, failures };
+  });
+  return verdict(ctx, rule, found.matched, found.failures, {}, found.rows);
+}

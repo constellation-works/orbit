@@ -469,7 +469,7 @@ fn machine_auto_concurrency_global_values_are_admitted() {
     review_layers_write_config(
         global.path(),
         "[workflow.resource_throttle]\ncpu_high_percent = 2\ncpu_resume_percent = 1\nmemory_high_percent = 80\nmemory_resume_percent = 70\n\
-         [machine.auto_concurrency]\nmode = \"shadow\"\nadmit_cpu_percent = 100\nadmit_memory_percent = 79\nprofile_window = 20\nmin_profile_deliveries = 10\nhorizon_cap_minutes = 90\nhead_max_wait_minutes = 5\nhead_stuck_passes = 7\n",
+         [machine.auto_concurrency]\nmode = \"shadow\"\nadmit_cpu_percent = 100\nmin_profile_deliveries = 10\n",
     );
     let configured = ResolvedConfig::load(&roots)
         .expect("global settings load with CPU utilization independent of load-based throttle");
@@ -478,12 +478,7 @@ fn machine_auto_concurrency_global_values_are_admitted() {
         AutoConcurrencySettings {
             mode: "shadow".to_string(),
             admit_cpu_percent: 100,
-            admit_memory_percent: 79,
-            profile_window: 20,
             min_profile_deliveries: 10,
-            horizon_cap_minutes: 90,
-            head_max_wait_minutes: 5,
-            head_stuck_passes: 7,
         }
     );
 }
@@ -500,17 +495,12 @@ fn machine_auto_concurrency_rejects_invalid_values_with_the_key_named() {
             "machine.auto_concurrency.admit_cpu_percent",
         ),
         (
-            "[machine.auto_concurrency]\nadmit_memory_percent = 101\n",
-            "machine.auto_concurrency.admit_memory_percent",
+            "[workflow.resource_throttle]\nmemory_high_percent = 75\nmemory_resume_percent = 70\n",
+            "workflow.resource_throttle.memory_high_percent",
         ),
         (
-            "[workflow.resource_throttle]\nmemory_high_percent = 80\nmemory_resume_percent = 70\n\
-             [machine.auto_concurrency]\nadmit_memory_percent = 80\n",
-            "machine.auto_concurrency.admit_memory_percent",
-        ),
-        (
-            "[machine.auto_concurrency]\nprofile_window = 9\nmin_profile_deliveries = 10\n",
-            "machine.auto_concurrency.profile_window",
+            "[machine.auto_concurrency]\nmin_profile_deliveries = 51\n",
+            "machine.auto_concurrency.min_profile_deliveries",
         ),
         (
             "[machine.auto_concurrency]\nmode = \"automatic\"\n",
@@ -533,8 +523,7 @@ fn machine_auto_concurrency_compares_memory_with_global_throttle_threshold() {
 
     review_layers_write_config(
         global.path(),
-        "[workflow.resource_throttle]\nmemory_high_percent = 80\nmemory_resume_percent = 70\n\
-         [machine.auto_concurrency]\nadmit_memory_percent = 75\n",
+        "[workflow.resource_throttle]\nmemory_high_percent = 80\nmemory_resume_percent = 70\n",
     );
     review_layers_write_config(
         workspace.path(),
@@ -545,8 +534,7 @@ fn machine_auto_concurrency_compares_memory_with_global_throttle_threshold() {
 
     review_layers_write_config(
         global.path(),
-        "[workflow.resource_throttle]\nmemory_high_percent = 70\nmemory_resume_percent = 60\n\
-         [machine.auto_concurrency]\nadmit_memory_percent = 75\n",
+        "[workflow.resource_throttle]\nmemory_high_percent = 70\nmemory_resume_percent = 60\n",
     );
     review_layers_write_config(
         workspace.path(),
@@ -556,7 +544,7 @@ fn machine_auto_concurrency_compares_memory_with_global_throttle_threshold() {
         .expect_err("a workspace cannot raise the global memory admission ceiling")
         .to_string();
     assert!(
-        error.contains("machine.auto_concurrency.admit_memory_percent"),
+        error.contains("workflow.resource_throttle.memory_high_percent"),
         "{error}"
     );
 }
@@ -616,32 +604,4 @@ fn build_output_bindings_default_empty_and_workspace_replaces_global() {
             "invalid locator {name}"
         );
     }
-}
-
-#[test]
-fn cargo_incremental_defaults_off_and_a_workspace_can_opt_in() {
-    let global = tempfile::tempdir().expect("global");
-    let workspace = tempfile::tempdir().expect("workspace");
-    let roots = ConfigRoots::new(global.path(), workspace.path());
-    let load = || {
-        ResolvedConfig::load(&roots)
-            .expect("config loads")
-            .snapshot
-            .workflow_validation_env_cargo_incremental
-    };
-    assert!(!load());
-    review_layers_write_config(
-        global.path(),
-        "[workflow.validation_env]\ncargo_incremental = true\n",
-    );
-    assert!(load());
-    review_layers_write_config(
-        workspace.path(),
-        "[workflow.validation_env]\ncargo_incremental = false\n",
-    );
-    assert!(
-        !load(),
-        "an explicit workspace false replaces a global opt-in"
-    );
-    admit_settable_config_key("workflow.validation_env.cargo_incremental").expect("live key");
 }

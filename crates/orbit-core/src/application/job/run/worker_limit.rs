@@ -18,15 +18,17 @@
 //! it never signals, cancels, or reassigns a child, because a running leaf is
 //! held by its own detached run, not by this ceiling.
 
+use chrono::{DateTime, Utc};
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::workflow::{DrainWorkerLimit, JobRun, JobRunState, PipelineState, RunStateUpdate};
+use orbit_types::workflow::{
+    DRAIN_JOBS, DrainWorkerLimit, JobRun, JobRunState, PipelineState, RunStateUpdate, is_drain_job,
+};
 use serde_json::{Value, json};
 
+use super::state_write::terminal_run_error;
 use crate::OrbitRuntime;
-use crate::application::contracts::PULL_DRAIN_JOB;
-use crate::application::workflow::{AUTO_WORKFLOW_ALIAS, find_workflow};
 
 const WORKER_LIMIT_REQUEST_AUDIT: &str = "pipeline.run.workers.requested";
 const WORKER_LIMIT_COMPLETION_AUDIT: &str = "pipeline.run.workers.completed";
@@ -96,6 +98,35 @@ pub struct DrainWorkerLimitChange {
     pub revision: u32,
 }
 
+/// Compatibility profile for a worker-ceiling change's JSON response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrainWorkerLimitChangeProfile {
+    /// The CLI concurrency and MCP resize record, including run and job IDs.
+    Standalone,
+    /// The concurrency record nested in a window extension, without IDs.
+    Nested,
+}
+
+impl DrainWorkerLimitChange {
+    /// Project the shared response fields in their existing wire order.
+    /// Surface-specific envelopes, such as MCP's action, stay with the caller.
+    #[must_use]
+    pub fn to_json(&self, profile: DrainWorkerLimitChangeProfile) -> Value {
+        let mut value = match profile {
+            DrainWorkerLimitChangeProfile::Standalone => json!({
+                "run_id": self.run_id,
+                "job_id": self.job_id,
+            }),
+            DrainWorkerLimitChangeProfile::Nested => json!({}),
+        };
+        value["outcome"] = json!(self.outcome);
+        value["previous_concurrency"] = json!(self.previous_max_active_leaf_runs);
+        value["concurrency"] = json!(self.max_active_leaf_runs);
+        value["revision"] = json!(self.revision);
+        value
+    }
+}
+
 impl OrbitRuntime {
     /// Set the live worker ceiling of an auto or pull drain that is still
     /// running.
@@ -136,6 +167,62 @@ impl OrbitRuntime {
         outcome
     }
 
+    /// Record the paired resize audit for a ceiling retuned inside a window
+    /// extension's transaction, which cannot reuse [`Self::set_drain_worker_limit`]
+    /// without reopening a second, separately authorized transaction.
+    ///
+    /// Both records carry the extension's `request_id` (also named as
+    /// `parent_request_id`/`initiating_request_id`) and its `requested_at`, so a
+    /// client joining by request id finds the initiating extension and its
+    /// actor/source/reason alongside the resize request and completion.
+    pub(super) fn record_combined_drain_worker_limit_audit(
+        &self,
+        change: &DrainWorkerLimitChange,
+        request_id: &str,
+        actor: &str,
+        source: &str,
+        reason: Option<&str>,
+        requested_at: DateTime<Utc>,
+    ) -> Result<(), OrbitError> {
+        self.record_pipeline_audit(
+            WORKER_LIMIT_REQUEST_AUDIT,
+            Some(&change.run_id),
+            Some(actor),
+            AuditEventStatus::Success,
+            json!({
+                "request_id": request_id,
+                "parent_request_id": request_id,
+                "initiating_request_id": request_id,
+                "run_id": change.run_id,
+                "job_id": change.job_id,
+                "requested_max_active_leaf_runs": change.max_active_leaf_runs,
+                "previous_max_active_leaf_runs": change.previous_max_active_leaf_runs,
+                "reason": reason,
+                "actor": actor,
+                "source": source,
+                "requested_at": requested_at.to_rfc3339(),
+            }),
+            None,
+        )?;
+        self.record_drain_control_completion(
+            WORKER_LIMIT_COMPLETION_AUDIT,
+            Some(&change.run_id),
+            request_id,
+            change.outcome.as_str(),
+            json!({
+                "previous_max_active_leaf_runs": change.previous_max_active_leaf_runs,
+                "max_active_leaf_runs": change.max_active_leaf_runs,
+                "revision": change.revision,
+                "parent_request_id": request_id,
+                "initiating_request_id": request_id,
+                "actor": actor,
+                "source": source,
+                "reason": reason,
+            }),
+            None,
+        )
+    }
+
     fn apply_drain_worker_limit(
         &self,
         request: DrainWorkerLimitRequest<'_>,
@@ -146,11 +233,10 @@ impl OrbitRuntime {
         let run = self
             .get_job_run_backend(run_id)?
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))?;
-        let drain_jobs = drain_job_ids()?;
-        if !drain_jobs.contains(&run.job_id.as_str()) {
+        if !is_drain_job(&run.job_id) {
             return Err(OrbitError::InvalidInput(format!(
                 "job run '{run_id}' is a `{}` run; the worker ceiling is a `{}` or `{}` control",
-                run.job_id, drain_jobs[0], drain_jobs[1]
+                run.job_id, DRAIN_JOBS[0], DRAIN_JOBS[1]
             )));
         }
         validate_drain_worker_ceiling(requested)?;
@@ -242,7 +328,7 @@ impl OrbitRuntime {
     /// than one, is refused rather than guessed, so the caller names the run.
     pub fn active_drain_run_id(&self) -> Result<String, OrbitError> {
         let mut active = Vec::new();
-        for job_id in drain_job_ids()? {
+        for job_id in DRAIN_JOBS.iter().copied() {
             active.extend(
                 self.stores()
                     .jobs()
@@ -308,17 +394,6 @@ impl OrbitRuntime {
     }
 }
 
-/// The drain jobs that carry a worker ceiling: the owner's auto drain and a
-/// replica's pull drain.
-fn drain_job_ids() -> Result<[&'static str; 2], OrbitError> {
-    let auto = find_workflow(AUTO_WORKFLOW_ALIAS)
-        .map(|workflow| workflow.job_id)
-        .ok_or_else(|| {
-            OrbitError::InvalidInput(format!("unknown workflow '{AUTO_WORKFLOW_ALIAS}'"))
-        })?;
-    Ok([auto, PULL_DRAIN_JOB])
-}
-
 /// A run input value that went through the template engine may arrive as a
 /// string; accept both, exactly as the admission path does.
 fn job_input_u32(value: &Value) -> Option<u32> {
@@ -327,12 +402,6 @@ fn job_input_u32(value: &Value) -> Option<u32> {
         Value::String(text) => text.trim().parse::<u32>().ok(),
         _ => None,
     }
-}
-
-fn terminal_run_error(run_id: &str, state: JobRunState) -> OrbitError {
-    OrbitError::JobValidation(format!(
-        "job run '{run_id}' is {state}; a terminal run admits no further work"
-    ))
 }
 
 fn revision_conflict(run_id: &str, expected: Option<u32>, actual: u32) -> OrbitError {

@@ -1,19 +1,21 @@
 // Observe › Agents › Reviewers: the role panel, how each reviewer's settled
 // reviews turned out, plus the provisional banner and the `accepts often`
 // row tag. The outcomes are the rows' shown-not-scored `outcome_*` stats; the
-// tag reads the `accepts_often` stat, an accept rate 10 or more points above
-// the other reviewers on the same tiers. Neither enters the score. `how` adds
+// tag reads the `accepts_often` stat, the tier-compared accept rate
+// (`compared_accept_rate`) 10 or more points above the other reviewers on
+// tiers they also judged. The tooltip quotes that rate, not the all-reviews
+// `accept_rate`. Neither enters the score. `how` adds
 // how a review job's filed findings are judged and what an unjudged row is
 // to "How the score works". Every node is built with `el()`.
 
-import { el } from './common.js';
+import { el, pinnedInfoHint } from './common.js';
 
 const OUTCOMES = [
   { key: "outcome_held_up", label: "Accepted and held up" },
   { key: "outcome_caught", label: "Caught a real problem" },
   { key: "outcome_false_alarm", label: "False alarm" },
   { key: "outcome_missed", label: "Missed a regression" },
-  { key: "outcome_unresolved", label: "Unresolved", note: "not judged yet, incomplete, failed fixes or findings dropped unverified" },
+  { key: "outcome_unresolved", label: "Unresolved" },
 ];
 // Reviews younger than this can still be charged a `review_missed`
 // regression (`roles/reviewers.rs`).
@@ -39,7 +41,6 @@ function render({ rows }) {
   const legend = el("ul", { class: "agents-cause-legend" }, OUTCOMES.map((outcome) => el("li", {}, [
     el("span", { class: `agents-swatch agents-outcome-${outcome.key}`, "aria-hidden": "true" }),
     el("span", { text: outcome.label }),
-    ...(outcome.note ? [el("span", { class: "agents-cause-note", text: outcome.note })] : []),
   ])));
   const list = el("ul", { class: "agents-cause-rows" });
   rows.forEach((row, index) => {
@@ -58,15 +59,14 @@ function render({ rows }) {
       bar.append(segment);
     }
     const item = el("li", { class: row.below_support || row.unjudged ? "agents-cause-row agents-row-below" : "agents-cause-row" }, [
-      el("span", { class: "agents-cause-name", text: row.crew, title: `${row.crew} · ${row.model}` }),
+      el("span", { class: "agents-cause-name", text: row.label || row.model, title: `${row.label || row.model} · crews ${(row.crews || [row.crew]).join(", ")}` }),
       bar,
       el("span", { class: "agents-cause-total", text: plural(total, "review") }),
     ]);
-    item.dataset.row = `${row.crew}\0${row.model}`;
+    item.dataset.row = `${row.model}\0${row.reasoning_effort ?? "provider_default"}\0${row.crew || ""}`;
     list.append(item);
   });
   return [
-    el("p", { class: "agents-muted", text: "Each settled review by how its verdict turned out. Accepting or rejecting more never moves a score; only verdicts that turned out right earn credit." }),
     legend,
     list,
   ];
@@ -79,22 +79,20 @@ function banner({ scorecard }) {
   if (typeof provisional !== "number" || provisional <= 0) return null;
   const units = (Array.isArray(scorecard.rows) ? scorecard.rows : []).reduce((sum, row) => sum + (row.units || 0), 0);
   return el("p", {}, [
-    el("strong", { text: "Provisional. " }),
-    el("span", {
-      text: `${provisional} of ${plural(units, "review")} in this window ${provisional === 1 ? "is" : "are"} younger than the ${MISS_LOOKBACK_DAYS}-day miss lookback.`
-        + " A review_missed regression filed later still lowers the reviewer who accepted, so these scores can fall.",
-    }),
+    el("strong", { text: "Provisional" }),
+    el("span", { text: ` · ${provisional} of ${plural(units, "review")}` }),
+    pinnedInfoHint(`${provisional === 1 ? "This review is" : "These reviews are"} younger than the ${MISS_LOOKBACK_DAYS}-day miss lookback. A review_missed regression filed later still lowers the reviewer who accepted, so these scores can fall.`),
   ]);
 }
 
 function rowTags(row) {
   if (statValue(row, "accepts_often") !== true) return [];
-  const rate = statValue(row, "accept_rate");
+  const rate = statValue(row, "compared_accept_rate");
   const peers = statValue(row, "peer_accept_rate");
   const tag = el("span", {
     class: "agents-tag agents-tag-accepts-often",
     text: "accepts often",
-    title: `Accepts ${rate}% of reviews; the other reviewers accept ${peers}% on the same tiers. Shown, not scored.`,
+    title: `Accepts ${rate}% of reviews on tiers other reviewers also judged; the other reviewers accept ${peers}% on the same tiers. Shown, not scored.`,
   });
   tag.dataset.tag = "accepts_often";
   return [tag];
@@ -105,4 +103,6 @@ const how = [
   "A row none of whose units is judged yet (no review gate settlement, and no filed finding with a verdict or a landed or dropped task) is unjudged: it has no score or rank, is tagged unjudged, is listed after every other row, and stays out of the fleet average.",
 ];
 
-export const reviewersPanel = { title: "How verdicts turned out", render, banner, rowTags, how };
+const hint = () => "Each settled review by how its verdict turned out. Accepting or rejecting more never moves a score; only verdicts that turned out right earn credit. Unresolved: not judged yet, incomplete, failed fixes or findings dropped unverified.";
+
+export const reviewersPanel = { title: "How verdicts turned out", hint, render, banner, rowTags, how };

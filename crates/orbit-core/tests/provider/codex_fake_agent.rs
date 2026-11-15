@@ -27,7 +27,7 @@ use orbit_core::OrbitRuntime;
 use orbit_engine::{DispatchOutcome, V2AuditWriter, V2DispatchInput, dispatch_v2_activity};
 use orbit_types::resource::ExecutorResource;
 use orbit_types::workflow::ExecutorDef;
-use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, OnDenial, Provider};
+use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, Provider};
 
 const VALIDATION_PYTHON: &str = "Python 3.99.0 (validation_env)";
 const PROFILE_PYTHON: &str = "Python 3.9.6 (login profile)";
@@ -173,29 +173,12 @@ fn dispatch_as(harness: &Harness, activity_name: &str) -> DispatchOutcome {
     )
     .expect("build audit writer");
     let spec = ActivityV2Spec::AgentLoop(AgentLoopSpec {
-        crew_name: None,
-        tool_disallow_list: None,
-        instruction: "Return the requested Orbit response envelope.".to_string(),
-        steering_instruction: None,
-        regression_risk_instruction: None,
-        explore_instruction: None,
-        explore_brief_instruction: None,
-        tools: Vec::new(),
-        on_denial: OnDenial::Terminate,
-        model: None,
-        reasoning_effort: None,
-        max_iterations: 1,
-        backend: None,
-        provider: Provider::Codex,
-        wall_clock_timeout_seconds: 60,
         require_response_envelope: true,
-        require_completion_envelope: true,
-        proc_allowed_programs: None,
-        proc_disallowed_programs: None,
-        trusted_host_execution: false,
-        crew_env: Vec::new(),
-        crew_account: None,
-        crew_vision_disabled: false,
+        ..AgentLoopSpec::for_provider(
+            "Return the requested Orbit response envelope.".to_string(),
+            Provider::Codex,
+            60,
+        )
     });
     let outcome = dispatch_v2_activity(V2DispatchInput {
         activity_name,
@@ -215,9 +198,7 @@ fn dispatch_as(harness: &Harness, activity_name: &str) -> DispatchOutcome {
 /// configured interpreter even though a login profile would put another first.
 #[test]
 fn codex_tool_commands_resolve_python3_through_the_validation_env_prefix() {
-    let harness = Harness::new(
-        "[workflow.validation_env]\nlogin_shell = false\npath = [\"{DIR}/validation-bin\"]\n",
-    );
+    let harness = Harness::new("[workflow.validation_env]\npath = [\"{DIR}/validation-bin\"]\n");
     dispatch(&harness);
 
     assert!(
@@ -239,7 +220,7 @@ fn codex_tool_commands_resolve_python3_through_the_validation_env_prefix() {
 /// toolchains that only a login profile adds stay available to the agent.
 #[test]
 fn codex_keeps_its_login_shell_when_no_validation_path_is_configured() {
-    let harness = Harness::new("[workflow.validation_env]\nlogin_shell = false\n");
+    let harness = Harness::new("");
     dispatch(&harness);
 
     assert!(

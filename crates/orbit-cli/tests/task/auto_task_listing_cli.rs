@@ -1,5 +1,5 @@
 //! Every auto-task listing reports one decision: the CLI table and records,
-//! MCP `orbit.auto_task.list` and its bounded view agree on whether a
+//! MCP `orbit.auto_task` action `list` and its bounded view agree on whether a
 //! definition fires here and why not.
 
 use std::fs;
@@ -31,9 +31,10 @@ fn named<'a>(rows: &'a Value, name: &str) -> &'a Value {
 
 /// The bounded view is an operator surface.
 fn bounded(fixture: &Fixture) -> Value {
-    let input = json!({"view":"bounded","workspace":"audit-qa","limit":50}).to_string();
+    let input =
+        json!({"action": "list", "view":"bounded","workspace":"audit-qa","limit":50}).to_string();
     let output = fixture
-        .command(&["tool", "run", "orbit.auto_task.list", "--input", &input])
+        .command(&["tool", "run", "orbit.auto_task", "--input", &input])
         .env("ORBIT_OPERATOR", "1")
         .assert()
         .success()
@@ -110,7 +111,7 @@ fn listing_reports_last_fire_outcomes_from_scheduler_cursors() {
     .unwrap();
 
     let rows = runtime
-        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .run_tool_as_human("orbit.auto_task", json!({"action": "list"}))
         .unwrap();
     let fired = named(&rows, "fired");
     assert_eq!(
@@ -201,7 +202,7 @@ fn listing_reports_last_fire_from_a_delivery_admission() {
     .unwrap();
 
     let rows = runtime
-        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .run_tool_as_human("orbit.auto_task", json!({"action": "list"}))
         .unwrap();
     assert!(
         named(&rows, CONSUMER)["last_fire"].is_null(),
@@ -264,7 +265,7 @@ fn listing_reports_last_fire_from_a_delivery_admission() {
     let minted = runtime.get_task(&minted_id).unwrap();
 
     let rows = runtime
-        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .run_tool_as_human("orbit.auto_task", json!({"action": "list"}))
         .unwrap();
     let consumer = named(&rows, CONSUMER);
     assert_eq!(
@@ -295,7 +296,7 @@ fn listing_reports_last_fire_from_a_delivery_admission() {
     assert!(retry_at > now);
     let closed = runtime.get_task(&minted_id).unwrap();
     let rows = runtime
-        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .run_tool_as_human("orbit.auto_task", json!({"action": "list"}))
         .unwrap();
     assert_eq!(
         named(&rows, CONSUMER)["last_fire"],
@@ -323,7 +324,7 @@ fn listing_reports_last_fire_from_a_delivery_admission() {
     assert_ne!(retry_id, minted_id);
     let retry = runtime.get_task(&retry_id).unwrap();
     let rows = runtime
-        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .run_tool_as_human("orbit.auto_task", json!({"action": "list"}))
         .unwrap();
     assert_eq!(
         named(&rows, CONSUMER)["last_fire"],
@@ -387,7 +388,7 @@ fn every_listing_reports_a_delivery_definition_owned_elsewhere_as_skipped() {
 
     let runtime = open_runtime(&fixture);
     let plain = runtime
-        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .run_tool_as_human("orbit.auto_task", json!({"action": "list"}))
         .unwrap();
     let listed = named(&plain, CONSUMER);
     assert_eq!(listed["skipped_reason"], reason, "{listed}");
@@ -476,7 +477,7 @@ fn bounded_listing_marks_unprojectable_rows_unavailable_without_failing() {
     assert!(delivery["skip_reason"].is_null(), "{delivery}");
     // Plain MCP and CLI records read the same effective state and skip decision.
     let plain = runtime
-        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .run_tool_as_human("orbit.auto_task", json!({"action": "list"}))
         .unwrap();
     let records = fixture.json(&["auto-task", "list", "--format", "json"]);
     for rows in [&plain, &records] {
@@ -537,7 +538,7 @@ fn bounded_listing_reports_malformed_definition() {
     assert_eq!(page["load_errors_truncated"], false);
     assert!(
         runtime
-            .run_tool_as_human("orbit.auto_task.list", json!({}))
+            .run_tool_as_human("orbit.auto_task", json!({"action": "list"}))
             .unwrap()
             .is_array()
     );
@@ -555,9 +556,11 @@ fn bounded_listing_reports_malformed_definition() {
     let cursor = orbit_core::application::auto_tasks::cursor_state_path(&runtime.paths().state_dir);
     fs::create_dir_all(cursor.parent().unwrap()).unwrap();
     fs::write(cursor, "{broken").unwrap();
-    let input = json!({"view":"bounded","workspace":"audit-qa","offset":1,"limit":1}).to_string();
+    let input =
+        json!({"action": "list", "view":"bounded","workspace":"audit-qa","offset":1,"limit":1})
+            .to_string();
     let output = fixture
-        .command(&["tool", "run", "orbit.auto_task.list", "--input", &input])
+        .command(&["tool", "run", "orbit.auto_task", "--input", &input])
         .env("ORBIT_OPERATOR", "1")
         .assert()
         .success()
@@ -599,8 +602,142 @@ fn bounded_listing_reports_malformed_definition() {
         }
     }
     fixture
-        .command(&["tool", "run", "orbit.auto_task.list", "--input", &input])
+        .command(&["tool", "run", "orbit.auto_task", "--input", &input])
         .env("ORBIT_OPERATOR", "1")
         .assert()
         .failure();
+}
+
+/// ORB-21174 explicitly requires all profile differences to remain covered at
+/// the surface boundary while the four existing projections are consolidated.
+#[test]
+fn listing_profiles_preserve_documents_and_bounded_text() {
+    const TEST: &str =
+        "auto_task_listing_cli::listing_profiles_preserve_documents_and_bounded_text";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let runtime = open_runtime(&fixture);
+    let secret = format!("ghp_{}", "a".repeat(36));
+    let long = format!("  {secret} {}", "π".repeat(2200));
+    let mut definitions = Vec::new();
+    for (name, text, schedule) in [
+        (
+            "profile-long",
+            long.as_str(),
+            AutoTaskSchedule::every_minutes(60),
+        ),
+        (
+            "profile-short",
+            "  unchanged  ",
+            AutoTaskSchedule::cron("0 * * * *"),
+        ),
+        (
+            "profile-condition",
+            "Condition profile",
+            serde_json::from_value(
+                json!({"condition":{"scope":"task","when":"'profile-fixture' in task.tags"}}),
+            )
+            .unwrap(),
+        ),
+    ] {
+        definitions.push(
+            runtime
+                .auto_task_add(AutoTaskAddParams {
+                    name: name.into(),
+                    description: text.into(),
+                    schedule,
+                    template: AutoTaskTemplate {
+                        title: text.into(),
+                        description: "Full template body".into(),
+                        acceptance_criteria: vec!["Profile preserved".into()],
+                        task_type: TaskType::Chore,
+                        tags: vec!["profile".into()],
+                        required_tools: vec![],
+                        context_files: vec![],
+                        priority: TaskPriority::High,
+                        complexity: Some(orbit_types::task::TaskComplexity::Low),
+                        crew: None,
+                        status: TaskStatus::Proposed,
+                    },
+                    dedupe: DedupePolicy::Always,
+                })
+                .unwrap(),
+        );
+    }
+    let plain = runtime
+        .run_tool_as_human("orbit.auto_task", json!({"action": "list"}))
+        .unwrap();
+    let cli = fixture.json(&["auto-task", "list", "--format", "json"]);
+    let bounded = bounded(&fixture);
+    for definition in definitions {
+        let ordinary = named(&plain, &definition.name);
+        let mut stored = serde_json::to_value(&definition).unwrap();
+        stored["effective_enabled"] = json!(definition.enabled);
+        stored["last_fire"] = Value::Null;
+        if definition.name == "profile-condition" {
+            assert!(ordinary["condition"].is_object(), "{ordinary}");
+            stored["condition"] = ordinary["condition"].clone();
+        } else {
+            assert!(ordinary.get("condition").is_none());
+        }
+        assert_eq!(ordinary, &stored);
+        stored["plugin_inactive"] = json!(false);
+        stored["skipped_reason"] = Value::Null;
+        assert_eq!(named(&cli, &definition.name), &stored);
+        let row = named(&bounded["items"], &definition.name);
+        let mut keys = row
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
+                "control_reason",
+                "dedupe",
+                "description",
+                "effective_enabled",
+                "enabled",
+                "mint_available",
+                "name",
+                "next_due",
+                "schedule",
+                "skip_reason",
+                "state",
+                "target",
+                "toggle_available",
+                "updated_at"
+            ]
+        );
+        assert_eq!(row["schedule"], json!(definition.schedule));
+        assert_eq!(row["dedupe"], json!(definition.dedupe));
+        assert_eq!(row["updated_at"], json!(definition.updated_at));
+        assert_eq!(row["enabled"], definition.enabled);
+        assert_eq!(row["effective_enabled"], definition.enabled);
+        assert_eq!(row["toggle_available"], true);
+        assert_eq!(row["mint_available"], true);
+        assert!(row["control_reason"].is_null());
+        assert!(row["skip_reason"].is_null());
+        assert!(row["next_due"].is_null());
+        for field in ["description", "target"] {
+            if definition.name == "profile-long" {
+                let text = row[field].as_str().unwrap();
+                assert!(text.starts_with("  [REDACTED_SECRET] "));
+                assert!(!text.contains(&secret));
+                let prefix = text.strip_suffix(" [display truncated]").unwrap();
+                assert!(
+                    (4095..=4096).contains(&prefix.len()),
+                    "UTF-8 cap: {}",
+                    prefix.len()
+                );
+                assert!(prefix.ends_with('π'));
+            } else {
+                assert_eq!(row[field], definition.description);
+            }
+        }
+    }
 }

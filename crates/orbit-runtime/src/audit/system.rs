@@ -12,6 +12,7 @@ use orbit_types::telemetry::AuditEventStatus;
 
 use crate::RuntimeKernel;
 use orbit_store::AuditEventInsertParams;
+use orbit_store::contracts::AuditInvocationFields;
 
 /// Where a system audit row takes its run attribution from.
 pub enum AuditRunAttribution {
@@ -70,44 +71,47 @@ pub fn record_system_audit_event(
                 .and_then(|s| s.parse().ok()),
         ),
     };
-    runtime.record_audit_event(&AuditEventInsertParams {
-        execution_id: audit_execution_id(execution_id_prefix),
-        command: command.to_string(),
-        subcommand: subcommand.map(ToOwned::to_owned),
-        tool_name: tool_name.map(ToOwned::to_owned),
-        target_type: Some(target_type.to_string()),
-        target_id: target_id.map(ToOwned::to_owned),
-        role: role.to_string(),
-        status,
-        exit_code: if status == AuditEventStatus::Denied {
-            1
-        } else {
-            0
+    runtime.record_audit_event_with_invocation(
+        &AuditEventInsertParams {
+            execution_id: audit_execution_id(execution_id_prefix),
+            command: command.to_string(),
+            subcommand: subcommand.map(ToOwned::to_owned),
+            tool_name: tool_name.map(ToOwned::to_owned),
+            target_type: Some(target_type.to_string()),
+            target_id: target_id.map(ToOwned::to_owned),
+            role: role.to_string(),
+            status,
+            exit_code: if status == AuditEventStatus::Denied {
+                1
+            } else {
+                0
+            },
+            duration_ms: 0,
+            working_directory: runtime.paths().repo_root.to_string_lossy().into_owned(),
+            arguments_json: Some(arguments_json),
+            stdout_truncated: None,
+            stderr_truncated: None,
+            error_message: None,
+            host: std::env::var("HOSTNAME").ok(),
+            pid: std::process::id(),
+            session_id: None,
+            workspace_id: workspace_id.map(ToOwned::to_owned),
+            caller_machine_id: None,
+            caller_machine_name: None,
+            process_machine_id: None,
+            process_machine_name: None,
+            transport: None,
+            effective_capabilities: Default::default(),
+            origin_session_id: None,
+            mcp_call_id: None,
+            lease_id: None,
+            task_id: task_id.map(ToOwned::to_owned),
+            job_run_id,
+            activity_id,
+            step_index,
         },
-        duration_ms: 0,
-        working_directory: runtime.paths().repo_root.to_string_lossy().into_owned(),
-        arguments_json: Some(arguments_json),
-        stdout_truncated: None,
-        stderr_truncated: None,
-        error_message: None,
-        host: std::env::var("HOSTNAME").ok(),
-        pid: std::process::id(),
-        session_id: None,
-        workspace_id: workspace_id.map(ToOwned::to_owned),
-        caller_machine_id: None,
-        caller_machine_name: None,
-        process_machine_id: None,
-        process_machine_name: None,
-        transport: None,
-        effective_capabilities: Default::default(),
-        origin_session_id: None,
-        mcp_call_id: None,
-        lease_id: None,
-        task_id: task_id.map(ToOwned::to_owned),
-        job_run_id,
-        activity_id,
-        step_index,
-    })
+        AuditInvocationFields::default(),
+    )
 }
 
 fn non_empty_env(name: &str) -> Option<String> {

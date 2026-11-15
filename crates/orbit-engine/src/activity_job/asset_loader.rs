@@ -8,7 +8,8 @@ use orbit_types::workflow::SchemaHeader;
 use orbit_types::workflow::activity_job::job_v2::AUTO_TASK_WAIT_KEYS;
 use orbit_types::workflow::activity_job::{
     ASSET_SCHEMA_VERSION, AUTO_TASK_JOB_SCHEMA_VERSION, AUTO_TASK_REF_PREFIX, ActivityV2,
-    ActivityV2Spec, TrustedHostActivityError, validate_trusted_host_activity,
+    ActivityV2Spec, ResponseCorrectionActivityError, TrustedHostActivityError,
+    validate_response_correction_activity, validate_trusted_host_activity,
 };
 
 fn parse_schema_header(yaml: &str) -> Result<SchemaHeader, serde_yaml::Error> {
@@ -75,6 +76,38 @@ pub enum AssetLoadError {
     },
     #[error(transparent)]
     TrustedHostActivity(#[from] TrustedHostActivityError),
+    #[error("activity `{activity}` response_correction invalid: {source}")]
+    ResponseCorrection {
+        activity: String,
+        source: ResponseCorrectionActivityError,
+    },
+}
+
+impl AssetLoadError {
+    /// The declared `metadata.name` this refusal already knows, when it
+    /// carries one. `"<unnamed>"` is the sentinel for a missing name, not
+    /// a recoverable identity.
+    pub(crate) fn declared_activity_name(&self) -> Option<&str> {
+        let name = match self {
+            Self::ToolAllowlist { activity, .. } => activity.as_str(),
+            Self::TrustedHostActivity(error) => error.activity.as_str(),
+            Self::ResponseCorrection { activity, .. } => activity.as_str(),
+            Self::RetiredRole { asset, .. } => asset.as_str(),
+            _ => return None,
+        };
+        (!name.is_empty() && name != "<unnamed>").then_some(name)
+    }
+}
+
+/// The `metadata.name` declared in `yaml`, when the document parses far
+/// enough to recover it. Returns `None` for unreadable documents or a
+/// missing/empty/non-string name.
+pub(crate) fn declared_activity_name_in_yaml(yaml: &str) -> Option<String> {
+    let document: serde_yaml::Value = serde_yaml::from_str(yaml).ok()?;
+    let name = field(&document, "metadata")
+        .and_then(|metadata| field(metadata, "name"))
+        .and_then(serde_yaml::Value::as_str)?;
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 /// Activity-asset loader for schemaVersion 2 assets.
@@ -98,6 +131,14 @@ pub fn load_activity_asset(yaml: &str) -> Result<ActivityAsset, AssetLoadError> 
         &res.metadata.name,
         matches!(&res.spec.spec, ActivityV2Spec::AgentLoop(spec) if spec.trusted_host_execution),
     )?;
+    // A correction is a repeated invocation, so it is legal only where
+    // repeating one cannot repeat a mutation. [ORB-22426]
+    validate_response_correction_activity(&res.spec).map_err(|source| {
+        AssetLoadError::ResponseCorrection {
+            activity: res.metadata.name.clone(),
+            source,
+        }
+    })?;
     Ok(ActivityAsset {
         name: res.metadata.name,
         spec: res.spec,

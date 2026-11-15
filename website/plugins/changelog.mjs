@@ -3,6 +3,17 @@ import releaseDates from '../src/data/release-dates.json' with { type: 'json' };
 
 const changelogURL = new URL('../../CHANGELOG.md', import.meta.url).href;
 const isChangelog = (ctx) => ctx.fileURL?.href === changelogURL;
+const TASK_ID = /\[([A-Z][A-Z0-9]{1,15}-\d{1,8})\]/g;
+
+// The bold lead-in names an entry; an entry without one is named by its own text.
+function entrySubject(entry, ctx) {
+  const lead = entry.children.find((child) => child.tagName === 'strong');
+  return lead ? ctx.textContent(lead) : ctx.textContent(entry).replace(TASK_ID, '').replace(/\s+/g, ' ').trim();
+}
+
+// The name starts with the visible "Pull request" and never shows the ID.
+const pullRequestName = (subject, index, count) =>
+  count > 1 ? `Pull request ${index + 1} of ${count} for ${subject}` : `Pull request for ${subject}`;
 
 // Only transform the imported release notes, leaving documentation examples
 // and existing links alone. Public labels follow AGENTS.md's ID policy.
@@ -10,24 +21,29 @@ export const changelogLinks = defineHastPlugin({
   name: 'changelog-pull-requests',
   text(node, ctx) {
     if (!isChangelog(ctx)) return;
+    let entry;
     for (let parent = ctx.parent(node); parent; parent = ctx.parent(parent)) {
       if (['a', 'code', 'pre'].includes(parent.tagName)) return;
+      if (!entry && ['li', 'p'].includes(parent.tagName)) entry = parent;
     }
+    const matches = [...node.value.matchAll(TASK_ID)];
+    if (!matches.length) return;
+    const subject = entry ? entrySubject(entry, ctx) : '';
     const children = [];
     let end = 0;
-    for (const match of node.value.matchAll(/\[([A-Z][A-Z0-9]{1,15}-\d{1,8})\]/g)) {
+    for (const [index, match] of matches.entries()) {
       children.push({ type: 'text', value: node.value.slice(end, match.index) });
       children.push({
         type: 'element',
         tagName: 'a',
         properties: {
           href: `https://github.com/constellation-works/orbit/pulls?q=${encodeURIComponent(`is:pr is:merged "${match[1]}"`)}`,
+          ...(subject ? { ariaLabel: pullRequestName(subject, index, matches.length) } : {}),
         },
         children: [{ type: 'text', value: 'Pull request' }],
       });
       end = match.index + match[0].length;
     }
-    if (!end) return;
     children.push({ type: 'text', value: node.value.slice(end) });
     return { type: 'element', tagName: 'span', properties: {}, children };
   },

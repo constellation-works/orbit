@@ -1,3 +1,4 @@
+use orbit_common::security::token;
 use orbit_common::{DecisionRefusalCode, OrbitError};
 use orbit_types::task::DecisionRequest;
 use sha2::{Digest, Sha256};
@@ -7,10 +8,7 @@ use crate::OrbitRuntime;
 const TOKEN_LEN: usize = 26;
 
 pub(super) fn fresh_key_hex() -> Result<String, OrbitError> {
-    let mut bytes = [0u8; 32];
-    getrandom::fill(&mut bytes)
-        .map_err(|error| OrbitError::Execution(format!("draw decision channel key: {error}")))?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    token::random_hex(32)
 }
 
 fn key_bytes(key_hex: &str) -> Result<Vec<u8>, OrbitError> {
@@ -51,28 +49,14 @@ pub(super) fn token_matches(
     request: &DecisionRequest,
 ) -> Result<bool, OrbitError> {
     let expected = mint_token(key_hex, epoch, request)?;
-    Ok(constant_time_eq(presented.as_bytes(), expected.as_bytes()))
+    Ok(token::constant_time_eq(
+        presented.as_bytes(),
+        expected.as_bytes(),
+    ))
 }
 
 pub(super) fn token_well_formed(token: &str) -> bool {
     token.len() == TOKEN_LEN && token.chars().all(|ch| matches!(ch, 'A'..='Z' | '2'..='7'))
-}
-
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter()
-        .zip(b.iter())
-        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-        == 0
-}
-
-pub(super) fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 /// HMAC-SHA256 (RFC 2104) over the workspace's `sha2`, so the token

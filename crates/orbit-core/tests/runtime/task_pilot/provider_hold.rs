@@ -78,6 +78,7 @@ fn save_step(
         agent_response_json: None,
         state: JobRunState::Failed,
         error_code: Some(class.as_str().to_string()),
+        failure_code: None,
         error_message: Some(provider_failure_text(class, provider, "fixture failure")),
     };
     workspace
@@ -102,6 +103,7 @@ fn finished_run(
     host: ExecutionLocation,
 ) -> JobRun {
     JobRun {
+        build: None,
         run_id: run_id.into(),
         job_id: "fixture-provider".into(),
         attempt: 1,
@@ -218,6 +220,7 @@ fn save_pilot_run(
             crew: drawn.into(),
             source: LOW.into(),
             eligible_pool: Vec::new(),
+            auto_effort: None,
         },
     );
     save_run(workspace, &run, Some(&pipeline));
@@ -453,6 +456,7 @@ fn an_old_pipeline_repair_failure_holds_until_its_finish_backoff() {
             duration_ms: None,
             exit_code: Some(1),
             error_code: Some(class.as_str().into()),
+            failure_code: None,
             error_message: Some(provider_failure_text(class, "codex", "repair failure")),
             agent_response_json: None,
             lock_wait_ms: None,
@@ -624,8 +628,8 @@ model = "fixture-b"
     );
     let (_model, draw) = low_draw(&workspace);
     assert!(
-        draw.source.contains("provider hold, none skipped")
-            && draw.source.contains("provider_unavailable claude"),
+        draw.source.as_str().contains("provider hold, none skipped")
+            && draw.source.as_str().contains("provider_unavailable claude"),
         "{}",
         draw.source
     );
@@ -675,9 +679,9 @@ model = "fixture-free"
         ["free_claude"]
     );
     assert!(
-        draw.source.contains("provider hold")
-            && draw.source.contains("provider_unavailable codex")
-            && draw.source.contains("held_codex"),
+        draw.source.as_str().contains("provider hold")
+            && draw.source.as_str().contains("provider_unavailable codex")
+            && draw.source.as_str().contains("held_codex"),
         "{}",
         draw.source
     );
@@ -835,7 +839,8 @@ model = "fixture-b"
         ["claude_b"]
     );
     assert!(
-        draw.source.contains("provider hold") && draw.source.contains("provider_capacity claude_a"),
+        draw.source.as_str().contains("provider hold")
+            && draw.source.as_str().contains("provider_capacity claude_a"),
         "{}",
         draw.source
     );
@@ -989,7 +994,7 @@ model = "fixture-c"
     assert_eq!(draw.crew, "codex_a", "{}", draw.source);
     assert_eq!(model, "fixture-a");
     assert!(
-        draw.source.contains("provider_capacity codex_b"),
+        draw.source.as_str().contains("provider_capacity codex_b"),
         "the hold lands on the crew the pilot drew: {}",
         draw.source
     );
@@ -1044,6 +1049,7 @@ model = "fixture-c"
                     crew: "claude_c".into(),
                     source: "fixture".into(),
                     eligible_pool: Vec::new(),
+                    auto_effort: None,
                 },
             );
         } else {
@@ -1102,7 +1108,7 @@ model = "fixture-c"
             draw.source
         );
         assert!(
-            draw.source.contains("provider_capacity codex_b"),
+            draw.source.as_str().contains("provider_capacity codex_b"),
             "{}",
             draw.source
         );

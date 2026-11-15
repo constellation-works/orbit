@@ -1,0 +1,24 @@
+# Independent handwritten, nonseeded example. See the activity-job spec section 6
+# for the matching job, adapter and owner installation/activation prerequisites.
+schemaVersion: 1
+name: release-readiness
+enabled: false
+trigger:
+  condition:
+    scope: workspace
+    # The three buckets are the condition-language spelling of board.empty.
+    # Proposed, blocked and someday are excluded. Unknown history fails closed:
+    # !has() means never accepted only for a readable declared completion history.
+    when: >-
+      board.backlog.empty && board.in_progress.empty && board.review.empty
+      && (!has(auto_tasks['release-prep'].last_succeeded_at)
+          || now - auto_tasks['release-prep'].last_succeeded_at >= duration('24h'))
+    for_minutes: 30
+    # An already-empty board must still pass the initial continuity hold.
+    on_enable: fire_existing
+target: job:release-readiness
+policy:
+  overlap: forbid
+  # Match the job's durable expiry; this is not a replacement for job expiry.
+  timeout_minutes: 1440
+  retries: { max: 0 }

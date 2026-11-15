@@ -88,6 +88,15 @@ impl TaskRegistryStore {
         if records.is_empty() {
             return Ok(true);
         }
+        self.with_registry_cache_write(|conn| write_envelope_stamps(conn, &partition_id, records))
+    }
+
+    /// No-wait, non-durable writes for derived registry caches. Restore the
+    /// writer's settings before releasing its mutex, including on failure.
+    pub(super) fn with_registry_cache_write(
+        &self,
+        write: impl FnOnce(&mut Connection) -> Result<bool, OrbitError>,
+    ) -> Result<bool, OrbitError> {
         let mut conn = match self.conn.try_lock() {
             Ok(conn) => conn,
             Err(TryLockError::WouldBlock) => return Ok(false),
@@ -96,7 +105,7 @@ impl TaskRegistryStore {
             }
         };
         let settings = CacheWriteSettings::apply(&conn)?;
-        let recorded = write_envelope_stamps(&mut conn, &partition_id, records);
+        let recorded = write(&mut conn);
         let restored = settings.restore(&conn);
         let recorded = recorded?;
         restored?;

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand, ValueEnum};
 use orbit_core::OrbitRuntime;
-use orbit_core::bootstrap::task_publication::{
+use orbit_core::application::task_bundle::publication::{
     AttachmentPolicy, AttachmentPolicyKind, PublicationFreshness, PublicationInspectRequest,
     PublicationInspection, PublicationPublishOutcome, PublicationPublishStatus,
     PublicationRecoveryCompleteness, PublicationRenderAuthority, PublicationRestoreMode,

@@ -1,14 +1,14 @@
 //! Auto-task job steps [ORB-20157]: the load-time checks of a job's
 //! `auto-task:` steps and their CEL fields
-//! (`docs/design/activity-job/specs/auto-task-step.md` §2-§4). Phase 1
-//! defines and explains these steps; nothing here evaluates a wait, and no
-//! binary runs such a job yet.
+//! (`docs/design/activity-job/specs/auto-task-step.md` §2-§4). The runtime
+//! [ORB-20158] evaluates the checked expressions each pass through
+//! `ConditionEvaluator::for_job_wait`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use cel::common::ast::Expr;
 use chrono::{DateTime, Duration, Utc};
-use orbit_types::workflow::{JobScheduleState, JobV2, JobV2Step, JobV2StepBody};
+use orbit_types::workflow::{JobV2, JobV2Step, JobV2StepBody};
 
 use super::ast::{path_of, string_literal};
 use super::check::{CheckedExpression, ConditionCheckError, ConditionReads, check_expression};
@@ -91,15 +91,6 @@ pub fn check_job_waits(
         return Err(refusal(
             JOB_EXPIRY_CLAUSE,
             "is admitted only on a job with a `target: auto-task:<name>` step",
-        ));
-    }
-    // A schemaVersion 3 job stays disabled even when none of the extension's
-    // fields remain [ORB-20237].
-    if job.is_auto_task_job() && job.state == JobScheduleState::Enabled {
-        return Err(refusal(
-            "spec.state",
-            "a schemaVersion 3 job must stay `disabled`: this Orbit defines and explains \
-             auto-task steps but cannot run them yet",
         ));
     }
     if auto_task_steps.is_empty() {
@@ -313,6 +304,58 @@ fn outer_bound(expression: &CheckedExpression) -> Option<OuterBound> {
                 _ => None,
             }
         }
+        _ => None,
+    }
+}
+
+/// Recover a step deadline only from simple, stable clock expressions.
+/// Other expressions may depend on changing facts and cannot be backdated.
+pub fn auto_task_step_deadline(
+    expression: &CheckedExpression,
+    job_started_at: DateTime<Utc>,
+    wait_started_at: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    if let Some(bound) = outer_bound(expression) {
+        return match bound {
+            OuterBound::At(at) => Some(at),
+            OuterBound::AfterStart(duration) => job_started_at.checked_add_signed(duration),
+        };
+    }
+    let Expr::Call(comparison) = &expression.ast.expr else {
+        return None;
+    };
+    let [now, deadline] = comparison.args.as_slice() else {
+        return None;
+    };
+    if comparison.target.is_some()
+        || comparison.func_name != "_>=_"
+        || path_of(now).as_deref() != Some("now")
+    {
+        return None;
+    }
+    let Expr::Call(add) = &deadline.expr else {
+        return None;
+    };
+    let [start, duration] = add.args.as_slice() else {
+        return None;
+    };
+    if add.target.is_some()
+        || add.func_name != "_+_"
+        || path_of(start).as_deref() != Some("self.wait_started_at")
+    {
+        return None;
+    }
+    let Expr::Call(call) = &duration.expr else {
+        return None;
+    };
+    let [literal] = call.args.as_slice() else {
+        return None;
+    };
+    if call.target.is_some() || call.func_name != "duration" || string_literal(literal).is_none() {
+        return None;
+    }
+    match cel::Value::resolve(duration, &cel::Context::default()).ok()? {
+        cel::Value::Duration(duration) => wait_started_at.checked_add_signed(duration),
         _ => None,
     }
 }

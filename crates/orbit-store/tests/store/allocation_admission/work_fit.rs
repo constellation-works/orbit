@@ -146,4 +146,51 @@ fn a_pull_is_granted_only_work_its_host_has_room_for() {
     let receipt = owner.pull(&owner_request("no-list"));
     assert_eq!(claimed(&receipt), Some(change));
     assert!(receipt.capacity_unavailable.is_empty());
+
+    // An empty `auto-task:` tag beside a valid one names the valid template in
+    // either order, so both tasks are judged as `audit` and not as `change`
+    // low [ORB-23059]. Judged as `change` low, they would fit the first request.
+    let empty_first = task(
+        &owner,
+        "empty-first",
+        &["auto-task:", "auto-task:audit"],
+        TaskComplexity::Low,
+    );
+    let empty_last = task(
+        &owner,
+        "empty-last",
+        &["auto-task:audit", "auto-task:"],
+        TaskComplexity::Low,
+    );
+    let both = HashSet::from([empty_first.clone(), empty_last.clone()]);
+
+    let receipt = owner.pull(&with_fit(
+        "empty-tag-unfit",
+        AdmissionWorkFit {
+            keys: vec![AdmissionWorkKey {
+                work_class: "change".into(),
+                complexity: Some("low".into()),
+            }],
+            unfit_templates: names(&["audit"]),
+            ..Default::default()
+        },
+    ));
+    assert_eq!(claimed(&receipt), None, "the template has no room");
+    assert_eq!(unfit(&receipt), both);
+
+    let first = claimed(&owner.pull(&fitting(
+        "empty-tag-room",
+        &[("change", "hard")],
+        &["audit"],
+    )));
+    let second = claimed(&owner.pull(&fitting(
+        "empty-tag-room-again",
+        &[("change", "hard")],
+        &["audit"],
+    )));
+    assert_eq!(
+        HashSet::from([first, second]),
+        HashSet::from([Some(empty_first), Some(empty_last)]),
+        "both tasks fit by their template"
+    );
 }

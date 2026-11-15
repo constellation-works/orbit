@@ -1,6 +1,7 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_types::task::{ExternalRef, TaskComment, TaskStatus};
+use orbit_types::task::{ExternalRef, TaskComment, TaskDecision, TaskStatus};
+use orbit_types::workflow::FailureHandoffDecision;
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -13,7 +14,9 @@ use super::super::freshness::{commit_sha, original_base_sha};
 use super::super::git::{
     base_sync_mode_from_input, git_command_success, git_output, resolve_worktree_start_point,
 };
-use super::super::handoff::rebase_in_progress;
+use super::super::handoff::{
+    comment_already_recorded, rebase_in_progress, review_repair_comment_key,
+};
 use super::super::interrupted_review::review_in_flight;
 use super::super::pr::{close_earlier_task_pull_requests, open_or_reuse_unchecked};
 use super::super::push::push_batch_changes_inner;
@@ -27,7 +30,8 @@ use super::ownership::{
 use super::preserve::{
     hold_baseline_red_candidate, hold_child_timeout_candidate, hold_provider_failure_candidate,
     hold_upgrade_pending_candidate, preserve_agent_blocked_candidate,
-    preserve_validation_environment_candidate, recorded_spec_digest,
+    preserve_owner_signoff_candidate, preserve_validation_environment_candidate,
+    recorded_spec_digest,
 };
 use super::review_gate::preserve_review_gate_candidate;
 use super::{COMPLETION_STEPS, CONFLICT_BLOCKED_EVENT, FAILURE_HANDOFF_EVENT, REVIEW_GATE_STEPS};
@@ -47,10 +51,19 @@ fn review_repair_after_merge_handoff<H: RuntimeHost + ?Sized>(
         return Ok(None);
     };
     let recipe = &error_message[start..];
-    let already = host
-        .get_task_comments(&task.id)?
-        .iter()
-        .any(|comment| comment.message.contains("review_repair_after_merge:"));
+    // Keyed by the merged pull request, falling back to the marker prefix
+    // when the recipe carries no number.
+    let (operation_id, legacy_prefix) = review_repair_comment_key(recipe).unwrap_or_else(|| {
+        (
+            "review-repair-after-merge:".to_string(),
+            "review_repair_after_merge:".to_string(),
+        )
+    });
+    let already = comment_already_recorded(
+        &host.get_task_comments(&task.id)?,
+        &operation_id,
+        &legacy_prefix,
+    );
     let blocked = task.status == TaskStatus::Blocked;
     if !already || !blocked {
         let mut append_comments = Vec::new();
@@ -59,7 +72,7 @@ fn review_repair_after_merge_handoff<H: RuntimeHost + ?Sized>(
                 at: Utc::now(),
                 by: "system".to_string(),
                 message: recipe.to_string(),
-                operation_id: None,
+                operation_id: Some(operation_id),
             });
         }
         host.apply_task_automation_update(
@@ -78,7 +91,7 @@ fn review_repair_after_merge_handoff<H: RuntimeHost + ?Sized>(
     }
     Ok(Some(json!({
         "phase": "failure_handoff",
-        "decision": "review_repair_after_merge",
+        "decision": FailureHandoffDecision::ReviewRepairAfterMerge.as_str(),
         "failed_step_id": failed_step_id,
         "task_status": "blocked",
         "candidate_preserved": true,
@@ -111,7 +124,7 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
     if failed_step_id == "worktree" && pipeline_step(input, "worktree").is_err() {
         return Ok(json!({
             "phase": "failure_handoff",
-            "decision": "no_candidate",
+            "decision": FailureHandoffDecision::NoCandidate.as_str(),
             "failed_step_id": failed_step_id,
         }));
     }
@@ -214,6 +227,24 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
     // or open a `[BLOCKED]` PR. Checked before those mutations.
     if orbit_types::workflow::is_task_blocked_by_agent(Some(error_code), Some(error_message)) {
         return preserve_agent_blocked_candidate(
+            host,
+            &task,
+            run_id,
+            failed_step_id,
+            error_message,
+            &workspace_path,
+        );
+    }
+
+    // [ORB-23956] The implementer stopped because owner approval is not
+    // recorded yet. That is a wait, not a candidate failure: do not abort a
+    // rebase, push a branch, or open a PR. [ORB-23966] The handoff commits
+    // and carries the candidate instead of stranding it in the worktree,
+    // and records it for the task's next run. Run finalization holds the
+    // run and blocks the task with the declared message, so this handoff
+    // does not write task status.
+    if orbit_types::workflow::is_owner_signoff_required(Some(error_code), Some(error_message)) {
+        return preserve_owner_signoff_candidate(
             host,
             &task,
             run_id,
@@ -365,7 +396,7 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
     if committed_files.is_empty() && head_sha == original_base_sha {
         return Ok(json!({
             "phase": "failure_handoff",
-            "decision": "no_candidate",
+            "decision": FailureHandoffDecision::NoCandidate.as_str(),
             "failed_step_id": failed_step_id,
             "workspace_path": workspace_path,
         }));
@@ -416,6 +447,9 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
             status: Some(TaskStatus::Blocked),
             status_event: Some(event.to_string()),
             status_note: Some(note.clone()),
+            status_decision: Some(TaskDecision::RunTransition {
+                run_id: run_id.to_string(),
+            }),
             external_refs: vec![ExternalRef::github_pr_with_url(
                 pr_number.clone(),
                 pr_url.as_deref(),
@@ -447,7 +481,7 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
 
     Ok(json!({
         "phase": "failure_handoff",
-        "decision": if conflict_blocked { "blocked_conflict_pr" } else { "blocked_failure_pr" },
+        "decision": if conflict_blocked { FailureHandoffDecision::BlockedConflictPr.as_str() } else { FailureHandoffDecision::BlockedFailurePr.as_str() },
         "task_id": task.id,
         "handoff_run_id": run_id,
         "checkpoint_owner": checkpoint_owner,

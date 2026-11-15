@@ -90,12 +90,3 @@ pub fn friction_tags_literal() -> String {
         .collect::<Vec<_>>()
         .join(" | ")
 }
-
-/// Return the accepted friction-tag aliases in schema-friendly literal form.
-pub fn friction_tag_aliases_literal() -> String {
-    FRICTION_TAG_ALIASES
-        .iter()
-        .map(|(alias, canonical)| format!("{alias} → {canonical}"))
-        .collect::<Vec<_>>()
-        .join(", ")
-}

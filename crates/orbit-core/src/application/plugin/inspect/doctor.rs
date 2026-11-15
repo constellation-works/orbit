@@ -54,6 +54,7 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
     let builds = build_rows(runtime, &summaries)?;
     let scoped_out = scoped_out_fs_root_rows(runtime)?;
     let ungranted_programs = ungranted_program_rows(&summaries);
+    let drifted_programs = drifted_program_rows(&summaries);
     let host_api_deprecated = host_api_deprecation_rows(runtime);
     // Inside an agent sandbox the secret store is masked: one row says so,
     // rather than one unreadable-store row per plugin or a false "not set".
@@ -157,6 +158,7 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
     }
     rows.extend(scoped_out);
     rows.extend(ungranted_programs);
+    rows.extend(drifted_programs);
     rows.extend(host_api_deprecated);
     rows.extend(unset_secrets);
     if let Some(finding) = invalid_pin_file {
@@ -188,6 +190,38 @@ fn ungranted_program_rows(summaries: &[PluginSummary]) -> Vec<PluginDoctorResult
                          declare its absolute path), then re-run `orbit plugin enable {}` to \
                          record it",
                         summary.name, program.name, summary.name,
+                    ),
+                })
+            })
+        })
+        .collect()
+}
+
+/// Findings for an active plugin whose declared program name now resolves on
+/// this operator's `PATH` to a different file than the one recorded at enable
+/// time (an auto-updated CLI, say). The plugin still runs the recorded file:
+/// the change is only reported, and the fix is an explicit re-grant.
+fn drifted_program_rows(summaries: &[PluginSummary]) -> Vec<PluginDoctorResult> {
+    summaries
+        .iter()
+        .filter(|summary| summary.status == PluginStatus::Active)
+        .flat_map(|summary| {
+            summary.programs.iter().filter_map(|program| {
+                let current = program.resolves_to.as_ref()?;
+                let recorded = program.path.as_ref()?;
+                Some(PluginDoctorResult {
+                    intentional: false,
+                    plugin: summary.name.clone(),
+                    status: summary.status,
+                    message: format!(
+                        "plugin '{}' declares program `{}`, which now resolves on PATH to {}, but \
+                         the grant records {}; the plugin keeps running the recorded file. Re-run \
+                         `orbit plugin enable {}` to grant the current one",
+                        summary.name,
+                        program.name,
+                        current.display(),
+                        recorded.display(),
+                        summary.name,
                     ),
                 })
             })

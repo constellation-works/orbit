@@ -20,4 +20,4 @@ pub use pull::{
     PullAuthRecovery, PullBreaker, PullCrewPreflight, PullSinglePass, PullUnfitWork,
     PullWindowClose,
 };
-pub use snapshot::PullDrainState;
+pub use snapshot::{CrewPoolExclusion, PullDrainState};

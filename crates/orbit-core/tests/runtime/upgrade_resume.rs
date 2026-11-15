@@ -25,6 +25,7 @@ use orbit_core::application::routines::loader::{DiscoveredWorkspaces, RoutineWor
 use orbit_core::application::routines::{
     RoutineMachineIdentity, SweepOptions, run_sweep_at_with_providers,
 };
+use orbit_core::metrics::reliability::ReliabilityWindow;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_store::contracts::{
     AdmissionRequest, AdmissionRunContext, AdmissionShipContract, AuditEventFilter,
@@ -34,13 +35,11 @@ use orbit_store::contracts::{
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
     JobRunState, JobRunTrigger, JobTargetType, PipelineState, REVIEW_CONTRACT_VERSION,
-    ReviewAdmission, ReviewTiming,
+    ReviewAdmission, ReviewTiming, RunRootCause,
 };
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use serde_json::json;
 use tempfile::TempDir;
-
-use crate::risk_history;
 
 struct SingleWorkspace(OrbitRuntime);
 
@@ -249,6 +248,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
             caller_before_pr: false,
             review_gate: false,
             selective_review: false,
+            visual_resolution: 0,
             run_context: AdmissionRunContext {
                 run_id: "parent-run".into(),
                 job_name: "workspace_auto_pipeline".into(),
@@ -275,6 +275,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
         settlement: None,
         refusal: None,
         settlement_refusal: None,
+        build_output_reclaim_complete: false,
     };
     ctx.runtime
         .sqlite_store()
@@ -337,6 +338,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
         },
         requested_at: Utc::now(),
         deadline: Utc::now() + chrono::Duration::seconds(60),
+        refresh: false,
     };
     serde_json::to_writer(&pending_file, &switch).unwrap();
     orbit_common::fs::io::sync_file(&pending_file).unwrap();
@@ -834,103 +836,114 @@ fn clock_sweep_resumes_a_drain_captured_under_the_deprecated_review_switches() {
     assert_skipped(&ctx, &other_layer, "review_admission_changed");
 }
 
-/// [ORB-20235] An admission that froze a risk-threshold selective policy
-/// carries the owner's risk-model identity, which embeds the fit window's
-/// timestamps and the history it was fitted on. Resolving today's policy
-/// builds a different identity, so only the operator's predicates may decide
-/// whether the policy changed.
+/// The real interruption path leaves a run the failure rate does not count, and
+/// a failed wrapper echoing it counts as neither a failure nor a second pause.
+/// A lost worker, and a wrapper echoing one, still count. The paused run stays
+/// `interrupted` and the clock still resumes it.
 #[test]
-fn clock_sweep_resumes_a_run_captured_under_a_risk_threshold_policy_until_it_changes() {
-    let test_name = "upgrade_resume::clock_sweep_resumes_a_run_captured_under_a_risk_threshold_policy_until_it_changes";
+fn upgrade_quiesced_runs_stay_resumable_outside_the_failure_count() {
+    let test_name =
+        "upgrade_resume::upgrade_quiesced_runs_stay_resumable_outside_the_failure_count";
     if run_isolated_test(test_name) {
         return;
     }
+    // This test binary cannot be re-executed as a worker.
     orbit_core::test_support::install_substitute_pipeline_worker(["true".to_string()]);
-    let mut ctx = setup_context();
-    let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
-    for (kind, name) in [
-        ("jobs", "workspace_pull_pipeline"),
-        ("activities", "drain_window"),
-        ("activities", "pull_refill"),
-        ("activities", "sleep"),
-    ] {
-        let dir = ctx.global.join("resources").join(kind);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::copy(
-            assets.join(kind).join(format!("{name}.yaml")),
-            dir.join(format!("{name}.yaml")),
-        )
-        .unwrap();
-    }
-    let configure = |ctx: &mut TestContext, selective: &str| {
-        std::fs::write(
-            ctx.workspace.join("config.toml"),
-            format!("[review]\n{selective}"),
-        )
-        .unwrap();
-        ctx.runtime = OrbitRuntime::from_roots(&ctx.global, &ctx.workspace).unwrap();
+    let ctx = setup_context();
+    let insert = || {
+        ctx.jobs
+            .insert_job_run("test_pipeline", 1, Utc::now(), Some(json!({})), None)
+            .unwrap()
+            .run_id
     };
-    const CAPTURED: &str = "selective_before_landing.mode = \"observe\"\n\
-                            selective_before_landing.risk_threshold = 0.4\n";
-    configure(&mut ctx, CAPTURED);
-    risk_history::seed_fitted_history(&ctx.runtime);
-    let mut admission = review_admission(&ctx.runtime);
-    admission.selective_before_landing = Some(risk_history::frozen_selective_policy(&ctx.runtime));
-    // Later landed history refits the model, as time passing would.
-    risk_history::land_one_more_clean_task(&ctx.runtime);
+    let echo = |leaf: &str, code: &str| {
+        let run_id = insert();
+        let mut state = PipelineState::new(run_id.clone(), "test_pipeline".into(), json!({}));
+        state.root_cause = Some(RunRootCause {
+            leaf_run_id: leaf.into(),
+            task_id: None,
+            step: None,
+            code: Some(code.into()),
+        });
+        ctx.jobs.write_run_state(&run_id, &state).unwrap();
+        ctx.jobs
+            .mark_job_run_running(&run_id, Utc::now(), std::process::id())
+            .unwrap();
+        ctx.jobs
+            .finalize_job_run(&run_id, JobRunState::Failed, Utc::now(), None)
+            .unwrap();
+        run_id
+    };
 
+    let paused = insert();
+    ctx.jobs
+        .write_run_state(
+            &paused,
+            &PipelineState::new(paused.clone(), "test_pipeline".into(), json!({})),
+        )
+        .unwrap();
+    ctx.runtime
+        .record_upgrade_interruption_for_test(&paused, 4242, ParticipantRole::Drain);
+    let stored = ctx.jobs.get_job_run(&paused).unwrap().unwrap();
+    assert_eq!(stored.state, JobRunState::Interrupted);
+    echo(&paused, "upgrade_quiesce");
+    // A second pause whose leaf settled on another host: only its echo is here.
+    echo("jrun-elsewhere", "upgrade_quiesce");
+    let lost = insert();
     let now = Utc::now();
-    let deadline = (now + Duration::hours(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
-    let interrupted_drain = |ctx: &TestContext| {
-        upgrade_interrupted_run_admitted(
-            ctx,
-            "workspace_pull_pipeline",
-            now,
-            Some(admission.clone()),
-            |state| state.record_pipeline_output("open_window", json!({"deadline": deadline})),
-        )
-    };
-    let tick = |ctx: &TestContext| {
-        let sweep = run_sweep_at_with_providers(
-            &ctx.global,
-            SweepOptions::default(),
-            RoutineMachineIdentity {
-                machine_id: "test-mach".into(),
-                machine_name: "test-host".into(),
+    ctx.jobs
+        .complete_job_run_step(
+            &lost,
+            &JobRunStepParams {
+                lock_wait_ms: None,
+                step_index: 1,
+                target_type: JobTargetType::Job,
+                target_id: "test_pipeline".to_string(),
+                started_at: now,
+                finished_at: now,
+                duration_ms: None,
+                exit_code: None,
+                agent_response_json: None,
+                state: JobRunState::Interrupted,
+                error_code: Some("process_not_found".to_string()),
+                error_message: Some("worker process is gone".to_string()),
             },
-            &SingleWorkspace(ctx.runtime.clone()),
         )
-        .expect("sweep runs");
-        assert!(!sweep.lock_busy);
+        .unwrap();
+    ctx.jobs
+        .finalize_job_run(&lost, JobRunState::Interrupted, now, None)
+        .unwrap();
+    echo(&lost, "process_not_found");
+
+    let window =
+        ReliabilityWindow::ending_at("1h", Utc::now() + Duration::minutes(1), Duration::hours(1));
+    let reliability = ctx.runtime.pipeline_reliability(&window).unwrap();
+    let overall = serde_json::to_value(&reliability.job_runs.overall).unwrap();
+    assert_eq!(overall["failed"], 1, "only the lost worker: {overall}");
+    assert_eq!(overall["upgrade_paused"], 2, "{overall}");
+    assert_eq!(overall["cascaded"], 2, "{overall}");
+    assert_eq!(overall["total"], 5, "{overall}");
+    assert_eq!(
+        serde_json::to_value(&reliability.job_runs.by_job[0].counts).unwrap()["upgrade_paused"],
+        2,
+    );
+
+    let provider = SingleWorkspace(ctx.runtime.clone());
+    let machine = RoutineMachineIdentity {
+        machine_id: "test-mach".into(),
+        machine_name: "test-host".into(),
     };
-
-    let unchanged = interrupted_drain(&ctx);
-    tick(&ctx);
-    let resumed = decisions(&ctx, &unchanged);
-    assert_eq!(resumed.len(), 1, "{resumed:?}");
-    assert_eq!(resumed[0]["decision"], "resumed", "{resumed:?}");
-
-    // Each change to a predicate after capture is still a policy change.
-    for selective in [
-        // risk_threshold
-        "selective_before_landing.mode = \"observe\"\n\
-             selective_before_landing.risk_threshold = 0.6\n",
-        // mode
-        "selective_before_landing.mode = \"off\"\n",
-        // paths
-        "selective_before_landing.mode = \"observe\"\n\
-             selective_before_landing.risk_threshold = 0.4\n\
-             selective_before_landing.paths = [\"src/**\"]\n",
-        // unknown_risk
-        "selective_before_landing.mode = \"observe\"\n\
-             selective_before_landing.risk_threshold = 0.4\n\
-             selective_before_landing.unknown_risk = \"skip\"\n",
-    ] {
-        configure(&mut ctx, selective);
-        let changed = interrupted_drain(&ctx);
-        tick(&ctx);
-        assert_skipped(&ctx, &changed, "review_admission_changed");
-    }
+    run_sweep_at_with_providers(&ctx.global, SweepOptions::default(), machine, &provider)
+        .expect("sweep runs");
+    assert_eq!(
+        ctx.jobs.job_run_retries(&paused, 1).unwrap().len(),
+        1,
+        "the clock still resumes the paused run"
+    );
+    assert!(
+        ctx.jobs.job_run_retries(&lost, 1).unwrap().is_empty(),
+        "a lost worker is not an upgrade's to resume"
+    );
 }
 
 #[test]
@@ -1014,7 +1027,8 @@ fn clock_sweep_defers_an_upgrade_interrupted_run_while_its_claim_is_unreadable()
     };
 
     // An undecodable claim row makes claim resolution fail, so whether this
-    // run is a claimed execution cannot be known.
+    // run is a claimed execution cannot be known. The payload is JSON that is
+    // not a claim: the claim expression indexes (ORB-24411) refuse non-JSON.
     let coordination_row = |sql: &str| {
         ctx.runtime
             .sqlite_store()
@@ -1027,7 +1041,7 @@ fn clock_sweep_defers_an_upgrade_interrupted_run_while_its_claim_is_unreadable()
     };
     coordination_row(
         "INSERT INTO task_coordination_rows (workspace_id, kind, row_id, payload_json, journal_id, created_at)
-         VALUES (?1, 'distributed-execution-claim-v1', 'corrupt-claim', 'not-json', 'sql-only', '2026-10-08T00:00:00Z')",
+         VALUES (?1, 'distributed-execution-claim-v1', 'corrupt-claim', '[]', 'sql-only', '2026-10-08T00:00:00Z')",
     );
 
     tick();
@@ -1050,4 +1064,65 @@ fn clock_sweep_defers_an_upgrade_interrupted_run_while_its_claim_is_unreadable()
     assert_eq!(decided.len(), 1, "{decided:?}");
     assert_eq!(decided[0]["decision"], "resumed", "{decided:?}");
     assert_eq!(ctx.jobs.job_run_retries(&run_id, 10).unwrap().len(), 1);
+}
+
+#[test]
+fn clock_sweep_defers_one_unreadable_upgrade_run_and_resumes_the_later_page() {
+    let test_name =
+        "upgrade_resume::clock_sweep_defers_one_unreadable_upgrade_run_and_resumes_the_later_page";
+    if run_isolated_test(test_name) {
+        return;
+    }
+    // This test binary cannot be re-executed as a worker; a resumed run's
+    // substitute exits at once, so submission itself succeeds.
+    orbit_core::test_support::install_substitute_pipeline_worker(["true".to_string()]);
+    let ctx = setup_context();
+    let now = Utc::now();
+    // Recency scans the newer interruption first. Its pipeline state cannot
+    // be parsed, which used to abort the tick before the older run.
+    let older = upgrade_interrupted_run(&ctx, "test_pipeline", now - Duration::minutes(1), |_| {});
+    let newer = upgrade_interrupted_run(&ctx, "test_pipeline", now, |_| {});
+    let workspace = ctx.runtime.workspace_id().unwrap();
+    let changed = ctx
+        .runtime
+        .sqlite_store()
+        .unwrap()
+        .connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE job_run_states SET pipeline_state_json = '{' \
+             WHERE workspace_id = ?1 AND run_id = ?2",
+            rusqlite::params![workspace, newer],
+        )
+        .unwrap();
+    assert_eq!(changed, 1);
+
+    let provider = SingleWorkspace(ctx.runtime.clone());
+    let machine = RoutineMachineIdentity {
+        machine_id: "test-mach".into(),
+        machine_name: "test-host".into(),
+    };
+    let sweep =
+        run_sweep_at_with_providers(&ctx.global, SweepOptions::default(), machine, &provider)
+            .expect("one unreadable run does not fail the sweep");
+    assert!(!sweep.lock_busy);
+
+    assert!(
+        ctx.jobs.job_run_retries(&newer, 1).unwrap().is_empty(),
+        "an unreadable run is not resumed"
+    );
+    assert!(
+        decisions(&ctx, &newer).is_empty(),
+        "a store error is not a skip decision: {:?}",
+        decisions(&ctx, &newer)
+    );
+    assert_eq!(
+        ctx.jobs.job_run_retries(&older, 1).unwrap().len(),
+        1,
+        "a later run in the page is still resumed"
+    );
+    let decided = decisions(&ctx, &older);
+    assert_eq!(decided.len(), 1, "{decided:?}");
+    assert_eq!(decided[0]["decision"], "resumed", "{decided:?}");
 }

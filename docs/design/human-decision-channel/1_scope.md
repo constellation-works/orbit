@@ -1,11 +1,11 @@
 ---
 title: "Scope: human decision channel"
 owner: claude
-last_updated: 2026-10-25
-last_validated: 2026-10-28
+last_updated: 2026-11-07
+last_validated: 2026-11-07
 status: Draft
-stage: building
-next: "Mail transport in the orbit-decision-mail plugin (a stub today); polish ORB-18446"
+stage: shipped
+next: "Review the plugin-raised decision design (ORB-22824), then file its slices"
 feature: human-decision-channel
 doc_role: scope
 type: design
@@ -15,24 +15,24 @@ tags: [human-decision-channel, plugins, routines, blocked-recovery, task-pilot]
 
 # Scope: human decision channel
 
-Status: proposed. This folder is the design deliverable of [ORB-17979]; no code in this
-change. The folder pairs this scope doc with [2_design.md](./2_design.md), which carries
-the mechanisms. That pairing deviates from the two tracks in
+Status: the committed slices have landed and stay off until an operator enables the
+channel. [ORB-17979] authored this design. The folder pairs this scope doc with
+[2_design.md](./2_design.md), which carries the mechanisms. That pairing deviates from the two tracks in
 [CONVENTIONS.md](../CONVENTIONS.md) §1 (scope track is `1_scope.md` alone; full track
 starts at `1_overview.md`); the deviation is the task's own acceptance shape and is
 recorded here per CONVENTIONS.md §11. If the folder grows specs or a glossary it
 graduates to the full track in that change (Problem and Goal become `1_overview.md`).
 Bearing: block triage
 (`crates/orbit-core/src/application/task/blocked_recovery/triage.rs`), task-pilot
-admission holds (`crates/orbit-core/src/application/task/pilot/admission.rs`), the
+admission holds (`crates/orbit-core/src/application/task/pilot/admission/backlog.rs`), the
 human update path (`update_task_as_human`,
 `crates/orbit-core/src/application/task/update/entry.rs`), the authorization catalog
 (`crates/orbit-common/src/governance/authorization/`), state and cron triggers
 (`crates/orbit-types/src/workflow/automation/members.rs`,
 [automation-triggers](../automation-triggers/3_vision.md)), and the plugin standard
-([plugins](../plugins/1_scope.md)). Anchors verified at `1985068c2`
-(2026-10-25), except the two `authorization/` line anchors in Shape, re-checked at
-`323daecd6` (2026-10-30); [2_design.md](./2_design.md) cites them per mechanism.
+([plugins](../plugins/1_scope.md)). Anchors re-checked at `b32997c50` (2026-11-01). The two `authorization/` symbols in
+Shape are still `CallerProvenance` and `GOVERNED_OPERATIONS`; [2_design.md](./2_design.md)
+cites the other mechanisms. Line numbers that no longer sit on the symbol were dropped.
 
 ## Problem
 
@@ -87,7 +87,7 @@ unchanged.
 Core gains one record, `DecisionRequest`: the task, the gate kind
 (`block_triage`, `pilot_admission`, `proposed_approval`, `review_approval`), the
 allowed answers as stable ids taken from the source of truth that raised the hold
-(triage option ids, `PilotAdmissionVerdict` spellings, `approve`/`reject`), a
+(decision option ids, `PilotAdmissionVerdict` spellings, `approve`/`reject`), a
 stale-guard binding (block episode key, pilot `operation_id`, or task revision), an
 expiry, and a state (`open`, `answered`, `superseded`, `expired`). Requests are
 stored beside the task's own history rather than in a new store, listed through new
@@ -107,7 +107,7 @@ fingerprint). The plugin never writes the task; it submits a *decision submissio
 to one governed core tool, and core either applies it as the human or refuses it.
 [2_design.md](./2_design.md) §3 shows the fit with `CallerProvenance`
 (`crates/orbit-common/src/governance/authorization/caller.rs:18`) and
-`GOVERNED_OPERATIONS` (`crates/orbit-common/src/governance/authorization/catalog.rs:434`).
+`GOVERNED_OPERATIONS` (`crates/orbit-common/src/governance/authorization/catalog/operations.rs`).
 
 ### Email transport (plugin)
 
@@ -144,7 +144,7 @@ confirmation mail, transport-down behaviour).
 
 - **CLI/MCP (core):** `orbit decision list|show`, `orbit decision answer` (the local
   equivalent of replying), `orbit decision channel register|revoke`; tools
-  `orbit.decision.list`, `orbit.decision.show`, and the governed
+  `orbit.decision` action `list`, `orbit.decision` action `show`, and the governed
   `orbit.decision.submit` the plugin calls. `orbit.task.show` gains the task's open
   requests.
 - **Dashboard:** an open-requests list with the same answer buttons the email offers,
@@ -193,19 +193,47 @@ confirmation mail, transport-down behaviour).
 
 ## Phasing
 
-Phases mirror the slice list in [2_design.md](./2_design.md) §10; each phase is
-independently deliverable and useful before email exists.
+Phases mirror the slice list in [2_design.md](./2_design.md) §10. Each phase below
+is done; the channel stays default-off.
 
-1. **Decision requests in core.** Record, raising from block triage and pilot holds,
-   CLI/MCP/dashboard listing and local answering. No channel yet.
-2. **Delegated-human channel.** Registration, the governed submission tool, and the
-   core apply step with provenance — exercisable from the CLI with a test channel.
-3. **Trigger and digest plumbing.** The new state-trigger kind and the digest
-   routine definitions (no transport wired).
-4. **Email plugin.** SMTP out, IMAP poll in, token authentication, reply grammar,
-   confirmation and refusal mail.
-5. **Approvals by email.** Proposed-task digest answers (pilot-gated) and review
-   approve join the allowed scope.
+1. **Decision requests in core — done** ([ORB-18175], [ORB-18176]). Record, raising
+   from block triage and pilot holds, CLI/MCP/dashboard listing and local answering.
+2. **Delegated-human channel — done** ([ORB-18177]). Registration, the governed
+   submission tool, and the core apply step with provenance — exercisable from the
+   CLI with a test channel.
+3. **Trigger and digest plumbing — done** ([ORB-18178], core digest [ORB-18305]).
+   The `DecisionRequested` state-trigger kind and the digest query.
+4. **Email plugin — done** ([ORB-18304]). SMTP out, IMAP poll in, token
+   authentication, reply grammar, confirmation and refusal mail, in the
+   `orbit-decision-mail` plugin.
+5. **Approvals by email — done** ([ORB-18305], [ORB-18307]). Proposed-task digest
+   answers (pilot-gated) and review approve join the allowed scope; the plugin
+   sends the digest and accepts batched replies.
+
+Slice 7 hardening is done in core ([ORB-18308]) and in the plugin ([ORB-18309]).
+Later extensions of the same record, also done: final-recovery `decide`
+([ORB-20629]) and agent-raised questions on human-crew tasks ([ORB-20736]).
+
+Retired: model-answered decisions ([ORB-21089]) were removed with decision assistance in
+[ORB-22808]. Requests keep the per-answer risk tier and stored category that work
+added; nothing records `answered_by: model` or consults a model before notifying any more,
+and model answers already in task history still read. [2_design.md](./2_design.md) §11
+holds the channel changes; the archived
+[consumer spec](../_archived/decision-assistance/specs/precedent-decisions.md) holds the
+rest.
+
+Designed, not implemented: plugin-raised decision requests ([ORB-22824]), with scribe's
+consistency proposals as the first consumer. A plugin raises a closed question on a task and names an apply tool from its own manifest; a
+human answers and core runs that tool once with the answer, never through precedent or
+the model, and only on the host that owns the task. [2_design.md](./2_design.md) §12
+holds the contract, slices and compatibility notes;
+[4_decisions.md](./4_decisions.md) records the standing rules.
+
+Resident orchestrators use this channel as their human path
+([resident-orchestrator](../resident-orchestrator/2_design.md#3-authority)). A new
+`resident_authority` gate carries a manager-relayed authority grant, quoted verbatim, and the
+grant applies only when the human answers it. Resident escalations compose the existing
+agent-raised requests on human-crew tasks. Slice [ORB-21242] is done.
 
 ## Open questions
 
@@ -223,7 +251,7 @@ independently deliverable and useful before email exists.
 
 ## Acceptance (feature level)
 
-- Given a blocked task triaged `propose` with the channel enabled, exactly one email
+- Given a blocked task whose final recovery `decide`d with the channel enabled, exactly one email
   per block episode offers the triage's options; replying `2` records option 2 as the
   human, with channel provenance, and a confirmation mail follows.
 - Given a pilot admission hold, replying `approve-anyway` (or its digest number)
@@ -241,6 +269,23 @@ independently deliverable and useful before email exists.
 
 ## Task References
 
-- [ORB-17979] — designed the email channel for human decisions on held Orbit work (this folder)
+- [ORB-22824] — designs plugin-raised decision requests with an apply callback (2_design.md §12)
+- [ORB-21242] — resident-orchestrator slice 1: implements the `resident_authority` decision gate
+- [ORB-21097] — implements category enablement, self-answer and the notification wait for precedent decisions.
+- [ORB-21092] — implements model-answer provenance, the `model_answer_review` gate and veto.
+- [ORB-21091] — implements per-answer risk tier and a stored category on decision requests.
+- [ORB-21089] — designs precedent-answered decisions (2_design.md §11).
+- [ORB-20736] — adds agent-raised multiple-choice questions on human-crew tasks.
+- [ORB-20629] — makes final recovery the one decider for a blocked task, with a self-contained `decide` request.
+- [ORB-18309] — shows decision-mail drops and refusals and writes the channel runbook.
+- [ORB-18308] — verifies DKIM in core for email submissions.
+- [ORB-18307] — sends the daily digest and accepts batched email answers.
+- [ORB-18305] — raises proposed and review approval requests for the digest.
+- [ORB-18304] — mails decision requests and applies authenticated email replies.
+- [ORB-18178] — adds the `DecisionRequested` state trigger.
+- [ORB-18177] — registers delegated-human channels and governs `orbit.decision.submit`.
+- [ORB-18176] — lists and answers decision requests from CLI, MCP and the dashboard.
+- [ORB-18175] — records decision requests and raises them from holds.
+- [ORB-17979] — designed the email channel for human decisions on held Orbit work (this folder).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

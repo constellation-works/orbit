@@ -128,8 +128,7 @@ pub enum HostWorkspaceRoute {
 ///
 /// The host resolves like `orbit host show`. A remote host's live list is
 /// read and the matching descriptor's `selector` copied; it is never built by
-/// concatenation. A legacy row has no name or prefix and is refused: register
-/// it with `orbit host add` first.
+/// concatenation.
 pub fn resolve_host_workspace(
     global_root: &Path,
     host: &str,
@@ -142,16 +141,6 @@ pub fn resolve_host_workspace(
             return local_workspace(global_root, &local.name, workspace);
         }
         ResolvedHost::Entry(entry) => entry.clone(),
-        ResolvedHost::Legacy(row) => {
-            return Err(OrbitError::host_registry(
-                HostRegistryCode::UnknownHost,
-                format!(
-                    "'{}' is a legacy destination row with no host name; run `orbit host add {}` \
-                     to register it before naming it with --host",
-                    row.ssh, row.ssh
-                ),
-            ));
-        }
     };
     // Discovery only: the probe that reads the list asks for no authority.
     let client = routed_client(global_root, &local.id, McpSessionAuthority::Agent)?;
@@ -240,7 +229,6 @@ pub fn host_ssh_target(global_root: &Path, host: &str) -> Result<Option<String>,
     Ok(match registry.resolve(host)? {
         ResolvedHost::Local(_) => None,
         ResolvedHost::Entry(entry) => Some(entry.ssh.clone()),
-        ResolvedHost::Legacy(row) => Some(row.ssh.clone()),
     })
 }
 

@@ -1,8 +1,8 @@
 ---
 title: Symbol Risk Index — Design
 owner: claude
-last_updated: 2026-10-30
-last_validated: 2026-10-30
+last_updated: 2026-11-06
+last_validated: 2026-11-06
 status: Draft
 feature: symbol-risk-index
 doc_role: design
@@ -100,9 +100,10 @@ manifest-declared filesystem and network permissions, after operator consent
 removed fail-closed ([ORB-00374]).
 [Script steps](../script-steps/1_scope.md), designed by [ORB-19294], now have manifests and
 grants ([ORB-19983]) and granted Linux execution under `linux-bwrap-script-v1`
-([ORB-19985]); declared file inputs and macOS execution remain later phases. A granted script
-still needs the declared file handoff before it can replace the plugin tool under the
-indexer's proposed file contract.
+([ORB-19985]), declared file inputs on Linux ([ORB-21297]) and the macOS script sandbox
+profile `macos-sandbox-script-v1` ([ORB-21298]). A granted script can now receive declared
+files on Linux and macOS, but it still has to meet the indexer's proposed file contract before
+it can replace the plugin tool.
 
 **Invocation.** The routine's job calls the tool through the existing deterministic
 `plugin.tool_call` action, the one orbit-graph's own sync jobs use. Input:
@@ -398,8 +399,8 @@ For symbol `s` over the trailing `site_window_days` (default 180):
   count once.
 - **Base rate.** With `N` the total of (task, symbol) exposures and `R` the number of those that
   were named sites, `p0 = (R + 1) / (N + 2)`.
-- **Shrunk rate.** `p_s = (r_s + m·p0) / (n_s + m)`, with `m = workflow.regression_risk.min_support`
-  (default 5), the same shrinkage the per-file estimator uses.
+- **Shrunk rate.** `p_s = (r_s + m·p0) / (n_s + m)`, with `m = 5`, the task riskiness model's fixed minimum support
+  (`RISKINESS_MIN_SUPPORT`), the same shrinkage the per-file estimator uses.
 
 The read tool reports `n_s`, `r_s`, `p_s`, counts of `r_s` by `RegressionEscape` (`no_test`,
 `test_not_selected` and the rest), `orphaned_sites` and `unresolved_sites`. A symbol with
@@ -545,5 +546,7 @@ same protocol and margin; the rerun has to clear it again from scratch.
 - [ORB-19294] — designed script steps, a granted execution path for workspace scripts
 - [ORB-19983] — added script manifests, parsing and digest-bound grants
 - [ORB-19985] — executed granted script steps on Linux under the script sandbox profile
+- [ORB-21297] — admitted declared script file inputs on Linux, bound read-only at `in/<as>`
+- [ORB-21298] — added the macOS script sandbox profile, so granted script steps run on macOS
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

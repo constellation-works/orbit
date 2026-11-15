@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use super::support::{Fixture, isolated, json_ok};
 
 const GIB: i64 = 1024 * 1024 * 1024;
+const WINDOW: u32 = orbit_config::AUTO_CONCURRENCY_PROFILE_WINDOW;
 
 #[test]
 fn resource_profiles_disclose_the_all_selection_limit_with_more_retained_deliveries() {
@@ -16,10 +17,6 @@ fn resource_profiles_disclose_the_all_selection_limit_with_more_retained_deliver
         "resource_profiles::resource_profiles_disclose_the_all_selection_limit_with_more_retained_deliveries",
         || {
             let fixture = Fixture::new();
-            let config = fixture.global.join("config.toml");
-            let mut text = std::fs::read_to_string(&config).unwrap();
-            text.push_str("\n[machine.auto_concurrency]\nprofile_window = 1500\n");
-            std::fs::write(&config, text).unwrap();
             let runtime = admitting_runtime(&fixture);
             let ws = runtime.workspace_id().unwrap();
             let admitted = Utc::now() - chrono::Duration::days(1);
@@ -53,7 +50,7 @@ fn resource_profiles_disclose_the_all_selection_limit_with_more_retained_deliver
 
             let server = fixture.server(false);
             let default = json_ok(server.get("/api/resource-profiles?workspace=ws_http_fixture"));
-            assert_eq!(default["profiles"][0]["delivery_count"], json!(1500));
+            assert_eq!(default["profiles"][0]["delivery_count"], json!(WINDOW));
 
             let all =
                 json_ok(server.get("/api/resource-profiles?workspace=ws_http_fixture&last=all"));
@@ -74,7 +71,7 @@ fn resource_profiles_disclose_the_all_selection_limit_with_more_retained_deliver
                 "a union reports each crew model's share of its window and own profile"
             );
             assert_eq!(all["last"], json!("all"));
-            assert_eq!(all["profile_window"], json!(1500));
+            assert_eq!(all["profile_window"], json!(WINDOW));
             assert_eq!(
                 all["delivery_limit"],
                 json!(1000),
@@ -82,7 +79,7 @@ fn resource_profiles_disclose_the_all_selection_limit_with_more_retained_deliver
             );
             assert_eq!(all["max_last"], json!(1000));
             assert_eq!(default["last"], Value::Null);
-            assert_eq!(default["delivery_limit"], json!(1500));
+            assert_eq!(default["delivery_limit"], json!(WINDOW));
 
             for count in [200, 1000] {
                 let body = json_ok(server.get(&format!(
@@ -101,7 +98,7 @@ fn resource_profiles_disclose_the_all_selection_limit_with_more_retained_deliver
             let after = json_ok(server.get("/api/resource-profiles?workspace=ws_http_fixture"));
             assert_eq!(
                 after["profiles"], default["profiles"],
-                "history selection must leave admission's larger window intact"
+                "history selection must leave admission's window intact"
             );
         },
     );
@@ -162,6 +159,19 @@ fn delivery(
         .unwrap();
 }
 
+/// Merge `values` into the fixture's global config, which already holds the
+/// machine identity and the `[machine.auto_concurrency]` table it seeds, so a
+/// raw appended table header would be a duplicate.
+fn set_global_config(fixture: &Fixture, values: &[(&str, &str)]) {
+    let path = fixture.global.join("config.toml");
+    let mut store =
+        orbit_config::ConfigStore::open(orbit_config::ConfigScope::Global, &path).unwrap();
+    for (key, value) in values {
+        store.set_value(key, value).unwrap();
+    }
+    store.save().unwrap();
+}
+
 /// The fixture workspace reopened, so it reads the config written after the
 /// fixture opened its runtime: an admitting drain's view of the host.
 fn admitting_runtime(fixture: &Fixture) -> OrbitRuntime {
@@ -183,14 +193,13 @@ fn resource_profiles_serve_admissions_profiles_for_the_selected_workspace_with_h
         "resource_profiles::resource_profiles_serve_admissions_profiles_for_the_selected_workspace_with_host_capacity",
         || {
             let fixture = Fixture::new();
-            // The machine identity lives in this file too: append, do not replace.
-            let config = fixture.global.join("config.toml");
-            let mut text = std::fs::read_to_string(&config).unwrap_or_default();
-            text.push_str(
-                "\n[machine.auto_concurrency]\nadmit_cpu_percent = 80\nadmit_memory_percent = 60\n\
-                 min_profile_deliveries = 2\nprofile_window = 5\n",
+            set_global_config(
+                &fixture,
+                &[
+                    ("machine.auto_concurrency.admit_cpu_percent", "80"),
+                    ("machine.auto_concurrency.min_profile_deliveries", "2"),
+                ],
             );
-            std::fs::write(&config, text).unwrap();
             let runtime = admitting_runtime(&fixture);
             let ws = runtime.workspace_id().unwrap();
             delivery(
@@ -255,9 +264,12 @@ fn resource_profiles_serve_admissions_profiles_for_the_selected_workspace_with_h
 
             assert_eq!(body["workspace_id"], json!(ws));
             assert_eq!(body["admit_cpu_percent"], json!(80));
-            assert_eq!(body["admit_memory_percent"], json!(60));
+            assert_eq!(
+                body["admit_memory_percent"],
+                json!(orbit_config::AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT)
+            );
             assert_eq!(body["min_profile_deliveries"], json!(2));
-            assert_eq!(body["profile_window"], json!(5));
+            assert_eq!(body["profile_window"], json!(WINDOW));
             let host = &body["host"];
             assert!(host["cpu_count"].as_u64().unwrap() > 0, "{host}");
             assert!(host["memory_total_bytes"].as_u64().unwrap() > 0, "{host}");

@@ -510,6 +510,50 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0078".to_string(),
                 "agent_execution_identity".to_string()
             ),
+            (
+                "migration.v0079".to_string(),
+                "experiment_delete".to_string()
+            ),
+            (
+                "migration.v0080".to_string(),
+                "application_consent".to_string()
+            ),
+            (
+                "migration.v0081".to_string(),
+                "invocation_reliability_window_index".to_string()
+            ),
+            ("migration.v0082".to_string(), "job_run_build".to_string()),
+            (
+                "migration.v0083".to_string(),
+                "invocation_tool_calls_incomplete".to_string()
+            ),
+            (
+                "migration.v0084".to_string(),
+                "landed_diff_reviewable_lines".to_string()
+            ),
+            ("migration.v0085".to_string(), "notices".to_string()),
+            ("migration.v0086".to_string(), "evolution".to_string()),
+            ("migration.v0087".to_string(), "crew_memory".to_string()),
+            (
+                "migration.v0088".to_string(),
+                "audit_session_model".to_string()
+            ),
+            (
+                "migration.v0089".to_string(),
+                "task_reservation_unreleased_expires".to_string()
+            ),
+            (
+                "migration.v0090".to_string(),
+                "task_coordination_claim_indexes".to_string()
+            ),
+            (
+                "migration.v0091".to_string(),
+                "agent_task_facts".to_string()
+            ),
+            (
+                "migration.v0092".to_string(),
+                "job_run_host_id_indexes".to_string()
+            ),
         ]
     );
 }

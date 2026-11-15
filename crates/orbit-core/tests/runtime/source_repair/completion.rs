@@ -130,6 +130,7 @@ fn tail_forge(f: &Fixture, mode: &str) -> PathBuf {
     let once = f._root.path().join("lost-read");
     let merged = f._root.path().join("merged");
     let gh = f._root.path().join("bin/gh");
+    let head = &f.head;
     std::fs::write(&gh, format!(r#"#!/bin/sh
 printf '%s\n' "$*" >> '{}'
 case "$1 $2" in
@@ -137,7 +138,11 @@ case "$1 $2" in
     if [ ! -f '{}' ]; then touch '{}'; echo 'TLS handshake timeout' >&2; exit 1; fi
     if [ -f '{}' ]; then cat '{}'; else cat '{}'; fi;;
  'repo view') echo '{{"nameWithOwner":"owner/repository"}}';;
- 'api graphql') echo '{{"data":{{"repository":{{"autoMergeAllowed":false,"mergeCommitAllowed":true,"rebaseMergeAllowed":false,"squashMergeAllowed":false,"pullRequest":{{"baseRefName":"main","baseRef":{{"branchProtectionRule":null}}}}}}}}}}';;
+ 'api graphql')
+    case "$*" in
+     *isRequired*) echo '{{"data":{{"repository":{{"pullRequest":{{"headRefOid":"{head}","commits":{{"nodes":[{{"commit":{{"oid":"{head}","statusCheckRollup":null}}}}]}}}}}}}}}}';;
+     *) echo '{{"data":{{"repository":{{"autoMergeAllowed":false,"mergeCommitAllowed":true,"rebaseMergeAllowed":false,"squashMergeAllowed":false,"pullRequest":{{"baseRefName":"main","baseRef":{{"branchProtectionRule":null}}}}}}}}}}';;
+    esac;;
  'api repos/'*) touch '{}'; printf '{{"merged":true,"sha":"{}"}}';;
  *) exit 99;;
 esac
@@ -256,6 +261,113 @@ fn run_tail(
         );
     }
     (outcome, started)
+}
+
+fn insert_refreshed_preparation(f: &Fixture) {
+    let mut state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    let initial = state.rebase_recovery_checkpoints["prepare_branch"].clone();
+    state.rebase_recovery_checkpoints.insert(
+        "sync_base_preparation".into(),
+        json!({
+            "kind": "delivery_preparation_refresh",
+            "step_id": "sync_base_preparation",
+            "run_id": f.source.run_id,
+            "task_ids": initial["task_ids"],
+            "workspace_path": initial["workspace_path"],
+            "head": initial["head"],
+            "head_sha": initial["head_sha"],
+            "head_sha_before": initial["head_sha"],
+            "base_ref": initial["base_ref"],
+            "base_sha": initial["base_sha"],
+            "previous_base_sha": initial["base_sha"],
+            "source_preparation": initial,
+            "recovery_attempt": 1,
+        }),
+    );
+    f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+}
+
+/// A published candidate whose only preparation history is the host's
+/// refreshed preparation, and whose `pr_complete` then loses its VCS read
+/// (TLS/SIGPIPE), is re-admitted by final recovery on the unchanged
+/// candidate, policy and validation receipts. A changed candidate or a
+/// changed policy is still refused.
+pub(super) fn refreshed_preparation_retry_admits_unchanged_and_refuses_drift() {
+    // Re-admission: the tail runs only `complete_pr`, twice, and completes.
+    let (f, checkout) = fixture_with_auto_fix(true);
+    insert_refreshed_preparation(&f);
+    tail_forge(&f, "lost_read");
+    let (outcome, _) = run_tail(&f);
+    let outcome = outcome.unwrap_or_else(|error| {
+        panic!(
+            "{error}; recovery: {:?}",
+            f.runtime
+                .read_run_state(&f.source.run_id)
+                .unwrap()
+                .unwrap()
+                .final_recovery
+        )
+    });
+    assert!(outcome.success, "{outcome:?}");
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        TaskStatus::Done
+    );
+    assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), f.head);
+    drop(f);
+
+    // Changed candidate: a dirty checkout refuses completion reuse.
+    let (f, checkout) = fixture_with_auto_fix(true);
+    insert_refreshed_preparation(&f);
+    admit(&f);
+    assert!(
+        f.runtime
+            .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
+            .unwrap(),
+        "control: refreshed preparation alone does not refuse reuse"
+    );
+    std::fs::write(checkout.join("source.txt"), "changed").unwrap();
+    assert!(
+        f.runtime
+            .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
+            .is_err(),
+        "a changed candidate is still refused"
+    );
+    drop(f);
+
+    // Changed policy: different required validation commands refuse reuse.
+    let (mut f, _) = fixture_with_auto_fix(true);
+    insert_refreshed_preparation(&f);
+    admit(&f);
+    assert!(
+        f.runtime
+            .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
+            .unwrap(),
+        "control"
+    );
+    let path = f.repo.join(".orbit/config.toml");
+    let config = std::fs::read_to_string(&path).unwrap().replace(
+        "required_validation_commands = [\"true\"]",
+        "required_validation_commands = [\"false\"]",
+    );
+    std::fs::write(path, config).unwrap();
+    f.runtime = orbit_core::OrbitRuntime::from_roots(
+        &f._root.path().join("global"),
+        &f.repo.join(".orbit"),
+    )
+    .unwrap()
+    .with_automation_execution_location(Some(orbit_types::task::ExecutionLocation {
+        machine_id: "hm_fixture".into(),
+        machine_name: None,
+    }));
+    let refusal = f
+        .runtime
+        .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
+        .unwrap_err();
+    assert!(
+        refusal.to_string().contains("effective policy changed"),
+        "{refusal}"
+    );
 }
 
 pub(super) fn unchanged_publication_retries_only_completion() {
@@ -797,6 +909,7 @@ pub(super) fn concurrent_and_lost_admission_keep_one_completion_budget() {
             .unwrap()
     );
     let application = orbit_engine::FinalRecoveryApplication {
+        fault: Default::default(),
         task_id: f.task.clone(),
         failed_step_id: "complete_pr".into(),
         decision: orbit_types::workflow::FinalRecoveryDecision::Resume {

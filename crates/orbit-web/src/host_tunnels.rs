@@ -110,7 +110,7 @@ impl Default for TunnelConfig {
 /// A registered remote host as the serving host's host file names it.
 #[derive(Debug, Clone)]
 pub(crate) struct HostTarget {
-    /// The operator's name for the host (a legacy row's SSH target).
+    /// The operator's name for the host.
     pub(crate) name: String,
     /// The `machine_id` the entry records; the remote must report it.
     pub(crate) machine_id: String,

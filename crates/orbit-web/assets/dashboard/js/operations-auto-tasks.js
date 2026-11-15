@@ -1,6 +1,6 @@
 // Auto-task operations [ORB-10876].
 
-import { el, fetchJson, getWorkspace, postJson, requestPanel, statusPill, relativeTime } from './common.js';
+import { el, fetchJson, getHost, getWorkspace, postJson, requestPanel, statusPill, relativeTime } from './common.js';
 import { conditionStateLabel, renderAutomation, renderCondition } from './automation.js';
 import { autoTaskDraft, autoTaskScheduleEditor, closeEditors, editingIn, editorObserved, isOpen, openEditor, scheduleEditButton } from './schedule-editor.js';
 
@@ -8,6 +8,7 @@ import {
   $,
   actionReason,
   clockHm,
+  cronDraftText,
   cronText,
   explainUnavailable,
   feedback,
@@ -50,10 +51,14 @@ const UNCONDITIONAL_MINT_WARNING = "Manual mint ignores this definition's schedu
 const AUTO_TASK_GROUP_LIMIT = 8;
 let autoTaskFilterQuery = "";
 const autoTaskRevealedGroups = new Set();
+const autoTaskDeleteOpen = new Set();
+const autoTaskDeleteReason = new Map();
 registerOperationsReset(() => {
   closeEditors("auto-task");
   autoTaskFilterQuery = "";
   autoTaskRevealedGroups.clear();
+  autoTaskDeleteOpen.clear();
+  autoTaskDeleteReason.clear();
 });
 
 function autoTaskMatchesFilter(definition, query) {
@@ -67,6 +72,10 @@ function autoTaskMatchesFilter(definition, query) {
   return haystack.includes(query);
 }
 
+function autoTaskDraftOpen() {
+  return editingIn("auto-task") || autoTaskDeleteOpen.size > 0;
+}
+
 function autoTaskFilterBar(payload, total, matched, visible) {
   const query = autoTaskFilterQuery.trim();
   const input = el("input", {
@@ -75,6 +84,7 @@ function autoTaskFilterBar(payload, total, matched, visible) {
     "aria-label": "Filter auto-task definitions by name",
   });
   input.id = "auto-tasks-filter-input";
+  if (autoTaskDraftOpen()) { input.disabled = true; input.title = "Close the open editor or confirmation to filter"; }
   input.value = autoTaskFilterQuery;
   input.placeholder = "Filter definitions by name…";
   input.addEventListener("input", () => {
@@ -93,6 +103,7 @@ function autoTaskFilterBar(payload, total, matched, visible) {
   if (query) {
     const clear = el("button", { class: "operation-button secondary", text: "Clear filter" });
     clear.type = "button";
+    if (autoTaskDraftOpen()) clear.disabled = true;
     clear.addEventListener("click", () => {
       autoTaskFilterQuery = "";
       renderAutoTasks(payload);
@@ -118,6 +129,7 @@ function autoTaskGroupReveal(payload, title, matchedCount, visibleCount) {
       : `Show all ${matchedCount} ${title} definitions (${matchedCount - visibleCount} more)`,
   });
   button.type = "button";
+  if (autoTaskDraftOpen()) button.disabled = true;
   button.setAttribute("aria-expanded", revealed ? "true" : "false");
   button.addEventListener("click", () => {
     if (revealed) autoTaskRevealedGroups.delete(title);
@@ -140,14 +152,8 @@ function lastEvaluationText(definition) {
   return `Baselined ${time(evaluation.baseline_at)}; no fire yet`;
 }
 
-function lastOutcomeText(definition) {
-  if (definition.last_minted_task_id) return lastMintedText(definition);
-  return lastEvaluationText(definition);
-}
-
 // Grouping, counts, row state and the switch follow the effective switch.
-// The raw `enabled` flag stays the compare-and-set token the toggle posts:
-// a legacy after-landing consumer can be on while that flag is still false.
+// The raw `enabled` flag stays the compare-and-set token the toggle posts.
 function autoTaskOn(definition) {
   return definition.effective_enabled ?? Boolean(definition.enabled);
 }
@@ -271,7 +277,7 @@ function autoTaskEditor(definition) {
   return autoTaskScheduleEditor({
     key,
     definition,
-    cronPreview: cronText,
+    cronPreview: (cron) => cronDraftText(cron, definition.schedule?.cron, definition.next_evaluation?.at),
     save: (schedule) => {
       const observed = editorObserved(key);
       return postJson("/api/auto-tasks/schedule", {
@@ -286,6 +292,157 @@ function autoTaskEditor(definition) {
       else if (operationsState.lastAutoTasks) renderAutoTasks(operationsState.lastAutoTasks, { force: true });
     },
   });
+}
+
+function autoTaskDeleteKey(definition) {
+  return `auto-task-delete:${getWorkspace()}:${definition.name}`;
+}
+
+function autoTaskDeleteButton(payload, definition) {
+  const selection = selectionSnapshot();
+  const key = autoTaskDeleteKey(definition);
+  const reason = actionReason(payload, "auto_task_delete");
+  const pending = pendingOperations.has(key);
+  const button = el("button", {
+    class: "operation-button danger",
+    text: pending ? "Pending…" : "Delete",
+    title: reason || `Delete ${definition.name}`,
+    "aria-label": `Delete auto-task ${definition.name}`,
+  });
+  button.type = "button";
+  button.disabled = Boolean(reason) || pending;
+  button.addEventListener("click", () => {
+    if (reason || !selection.current() || pendingOperations.has(key)) return;
+    autoTaskDeleteOpen.clear();
+    autoTaskDeleteOpen.add(key);
+    renderAutoTasks(operationsState.lastAutoTasks || payload, { force: true });
+  });
+  return explainUnavailable(button, reason);
+}
+
+function autoTaskDeletePlace() {
+  const workspace = selectedWorkspace();
+  const workspaceLabel = workspace?.name || workspace?.id || getWorkspace();
+  const host = getHost();
+  const parts = [workspaceLabel, host ? `on ${host}` : ""].filter(Boolean);
+  return parts.length ? ` in ${parts.join(" ")}` : "";
+}
+
+function autoTaskDeleteConfirm(definition) {
+  const key = autoTaskDeleteKey(definition);
+  if (!autoTaskDeleteOpen.has(key)) return null;
+  const selection = selectionSnapshot();
+  const panel = el("div", {
+    class: "auto-task-delete-confirm",
+    role: "group",
+    "aria-label": `Delete ${definition.name}`,
+  });
+  const reasonInput = el("textarea", { class: "schedule-input", "aria-label": "Reason (optional)" });
+  reasonInput.rows = 2;
+  reasonInput.placeholder = "Why this definition is being deleted";
+  reasonInput.value = autoTaskDeleteReason.get(key) || "";
+  reasonInput.addEventListener("input", () => {
+    autoTaskDeleteReason.set(key, reasonInput.value);
+  });
+  const error = el("p", { class: "schedule-error", role: "alert" });
+  error.hidden = true;
+  const refusal = el("div", { class: "auto-task-delete-refusal" });
+  refusal.hidden = true;
+  const confirm = el("button", { class: "operation-button danger", text: "Delete" });
+  confirm.type = "button";
+  const cancel = el("button", { class: "operation-button secondary", text: "Cancel" });
+  cancel.type = "button";
+
+  const setBusy = (busy) => {
+    for (const control of panel.querySelectorAll("button")) control.disabled = busy;
+  };
+  const showError = (message) => {
+    refusal.hidden = true;
+    error.hidden = false;
+    error.textContent = message || "Delete failed";
+    feedback("auto-task-operation-feedback", "error", error.textContent);
+  };
+  const submit = async (force) => {
+    if (!selection.current() || pendingOperations.has(key)) return;
+    const reason = reasonInput.value.trim();
+    pendingOperations.add(key);
+    setBusy(true);
+    error.hidden = true;
+    refusal.hidden = true;
+    refusal.textContent = "";
+    feedback("auto-task-operation-feedback", "pending", `Deleting ${definition.name}…`);
+    try {
+      const result = await postJson("/api/auto-tasks/delete", {
+        name: definition.name,
+        reason: reason || null,
+        force,
+      });
+      if (!selection.current()) return;
+      autoTaskDeleteOpen.delete(key);
+      autoTaskDeleteReason.delete(key);
+      pendingOperations.delete(key);
+      feedback("auto-task-operation-feedback", "success", result.message || `Deleted ${definition.name}.`);
+      try {
+        await fetchAndRenderAutoTasks();
+      } catch (refreshError) {
+        feedback("auto-task-operation-feedback", "error", `${result.message || "Deleted."} Refresh failed: ${refreshError.message}`);
+        if (operationsState.lastAutoTasks) renderAutoTasks(operationsState.lastAutoTasks, { force: true });
+      }
+    } catch (failure) {
+      pendingOperations.delete(key);
+      setBusy(false);
+      if (!selection.current()) return;
+      const openTasks = failure.code === "open_minted_tasks" && Array.isArray(failure.body?.open_tasks)
+        ? failure.body.open_tasks.filter(Boolean)
+        : null;
+      if (openTasks && openTasks.length) {
+        error.hidden = true;
+        refusal.hidden = false;
+        refusal.textContent = "";
+        refusal.setAttribute("role", "alert");
+        refusal.append(el("p", {
+          text: `${definition.name} still has open minted tasks. Delete removes the definition while those tasks stay open.`,
+        }));
+        const list = el("ul", { class: "auto-task-delete-open-tasks" });
+        for (const id of openTasks) list.append(el("li", {}, [taskLink(String(id), selection.workspace)]));
+        refusal.append(list);
+        const anyway = el("button", { class: "operation-button danger", text: "Delete anyway" });
+        anyway.type = "button";
+        anyway.addEventListener("click", () => submit(true));
+        refusal.append(anyway);
+        feedback("auto-task-operation-feedback", "error", failure.message || "Delete refused while a minted task is open");
+        return;
+      }
+      showError(failure.message);
+    } finally {
+      pendingOperations.delete(key);
+    }
+  };
+  confirm.addEventListener("click", () => submit(false));
+  cancel.addEventListener("click", () => {
+    autoTaskDeleteOpen.delete(key);
+    autoTaskDeleteReason.delete(key);
+    if (operationsState.lastAutoTasks) renderAutoTasks(operationsState.lastAutoTasks, { force: true });
+  });
+  panel.append(
+    el("p", { class: "schedule-editor-head" }, [
+      el("span", { text: "Delete " }),
+      el("strong", { text: definition.name }),
+      el("span", { text: `${autoTaskDeletePlace()}?` }),
+    ]),
+    el("p", {
+      class: "schedule-note",
+      text: "Deletion removes this definition and its schedule state. A shipped default will not be reseeded.",
+    }),
+    el("label", { class: "schedule-field" }, [
+      el("span", { class: "schedule-field-label", text: "Reason (optional)" }),
+      reasonInput,
+    ]),
+    error,
+    refusal,
+    el("div", { class: "schedule-editor-controls" }, [confirm, cancel]),
+  );
+  return panel;
 }
 
 function autoTaskRow(payload, definition, workspaceId) {
@@ -307,10 +464,21 @@ function autoTaskRow(payload, definition, workspaceId) {
       ].filter(Boolean)),
       el("span", { class: `operation-cell-sub${held ? " warn" : ""}`, text: definition.open_duplicate
         ? (held ? "still open · scheduler will skip" : on ? "still open · next due slot mints another" : "still open · paused, no scheduled mint")
-        : [mintSource, relativeTime(definition.last_evaluation?.last_fired_at)].filter(Boolean).join(" · "),
-      title: definition.last_evaluation?.last_fired_at ? time(definition.last_evaluation.last_fired_at) : "" }),
+        : mintSource === "manual mint" ? mintSource : [mintSource, relativeTime(definition.last_evaluation?.last_fired_at)].filter(Boolean).join(" · "),
+      title: mintSource === "manual mint" ? "" : definition.last_evaluation?.last_fired_at ? time(definition.last_evaluation.last_fired_at) : "" }),
     ]
     : [el("span", { class: "operation-cell-main muted", text: lastEvaluationText(definition) })];
+  const schedule = definition.schedule || {};
+  const cronLabel = schedule.cron ? cronText(schedule.cron, definition.next_evaluation?.at) : null;
+  const minutes = schedule.every_minutes;
+  let scheduleLabel = definition.schedule_summary || "—";
+  if (Number.isInteger(minutes) && minutes > 0) {
+    const unit = minutes % 1440 === 0 ? [1440, "day"] : minutes % 60 === 0 ? [60, "hour"] : null;
+    if (unit) {
+      const count = minutes / unit[0];
+      scheduleLabel = scheduleLabel.replace(/^every \d+ minutes?\b/, `every ${count} ${unit[1]}${count === 1 ? "" : "s"}`);
+    }
+  }
   const next = definition.next_evaluation;
   const nextCell = next?.state === "scheduled" && next.at
     ? whenCell("Next mint", next.at)
@@ -330,18 +498,23 @@ function autoTaskRow(payload, definition, workspaceId) {
         ].filter(Boolean)),
       ], "operation-cell-identity"),
       operationCell("Trigger", [
-        el("span", { class: "operation-cell-main", text: definition.schedule?.cron ? cronText(definition.schedule.cron) : (definition.schedule_summary || "—") }),
-        el("span", { class: "operation-cell-sub", text: [definition.schedule?.cron, definition.condition ? conditionStateLabel(definition.condition) : null, definition.dedupe === "always" ? "always fire" : "skip if open"].filter(Boolean).join(" · ") }),
+        el("span", { class: "operation-cell-main", text: cronLabel || scheduleLabel }),
+        el("span", { class: "operation-cell-sub", text: [schedule.cron && cronLabel !== schedule.cron ? schedule.cron : null, definition.condition ? conditionStateLabel(definition.condition) : null, definition.dedupe === "always" ? "always fire" : "skip if open"].filter(Boolean).join(" · ") }),
         autoTaskEditButton(payload, definition),
       ]),
       nextCell,
       operationCell("Last minted", lastMinted),
-      operationCell("", [autoTaskMintButton(payload, definition)], "operation-cell-action"),
+      operationCell("", [
+        el("div", { class: "auto-task-actions" }, [
+          autoTaskMintButton(payload, definition),
+          autoTaskDeleteButton(payload, definition),
+        ]),
+      ], "operation-cell-action"),
     ]),
     operationDetails(detailsKey, [
       el("div", { class: "operation-target mono", text: definition.template_summary || template.title || "" }),
       el("div", { class: "operation-grid" }, [
-        field("Schedule", definition.schedule_summary || "—"),
+        field("Schedule", scheduleLabel),
         field("Dedupe", definition.dedupe === "always" ? "always fire" : "skip if open"),
         field("Last scheduler evaluation", lastEvaluationText(definition)),
         field("Last minted task", lastMintedText(definition)),
@@ -360,6 +533,12 @@ function autoTaskRow(payload, definition, workspaceId) {
   );
   const editor = autoTaskEditor(definition);
   if (editor) card.insertBefore(editor, card.lastChild);
+  const confirm = autoTaskDeleteConfirm(definition);
+  if (confirm) {
+    card.insertBefore(confirm, card.lastChild);
+    const field = confirm.querySelector("textarea");
+    if (field) requestAnimationFrame(() => { if (field.isConnected && document.activeElement !== field) field.focus({ preventScroll: true }); });
+  }
   return card;
 }
 
@@ -389,7 +568,7 @@ export function syncAutoTaskSchedulerNote() {
     return;
   }
   note.appendChild(el("span", { text: "Scheduled tasks are created by " }));
-  note.append(link, el("span", { text: ` (${cronText(scheduler.cron)}).` }));
+  note.append(link, el("span", { text: ` (${cronText(scheduler.cron, scheduler.next_evaluation?.at || scheduler.next_due)}).` }));
 }
 
 // The stats strip counts every open duplicate; only enabled skip-if-open ones
@@ -405,8 +584,12 @@ export function renderAutoTasks(payload, { force = false } = {}) {
   operationsState.lastAutoTasks = payload;
   const body = $("auto-tasks-body");
   if (!body) return;
-  // An open schedule editor holds a draft: leave the rows alone until it closes.
-  if (!force && editingIn("auto-task") && body.querySelector(".schedule-editor")) return;
+  // An open schedule editor or delete confirmation holds a draft: leave the
+  // rows alone until it closes. Success clears the confirmation first, so the
+  // refresh that follows still repaints.
+  const scheduleDraft = editingIn("auto-task") && body.querySelector(".schedule-editor");
+  const deleteDraft = autoTaskDeleteOpen.size > 0 && body.querySelector(".auto-task-delete-confirm");
+  if (!force && (scheduleDraft || deleteDraft)) return;
   const currentFilter = $("auto-tasks-filter-input");
   const preserveFilterFocus = currentFilter && document.activeElement === currentFilter;
   let filterSelection = null;
@@ -456,7 +639,7 @@ export function renderAutoTasks(payload, { force = false } = {}) {
     body.appendChild(schedulerNote);
     const query = autoTaskFilterQuery.trim().toLowerCase();
     const groups = [
-      ["active", "On a schedule", "minted by the scheduler when due; a skip-if-open slot is skipped while an instance is open", enabled.filter((definition) => autoTaskTrigger(definition) === "schedule")],
+      ["active", "On a schedule", "", enabled.filter((definition) => autoTaskTrigger(definition) === "schedule")],
       ["accent", "On delivery", "minted after landed deliveries, not on a clock", enabled.filter((definition) => autoTaskTrigger(definition) === "delivery")],
       ["paused", "Disabled", "kept in the repo, never evaluated", definitions.filter((definition) => !autoTaskOn(definition))],
     ];
@@ -484,9 +667,9 @@ export function renderAutoTasks(payload, { force = false } = {}) {
       if (query && !matched.length) continue;
       const count = query ? matched.length : members.length;
       const detail = query
-        ? `${hint} · ${matched.length} of ${members.length} match the filter`
+        ? [hint, `${matched.length} of ${members.length} match the filter`].filter(Boolean).join(" · ")
         : matched.length > visible.length
-          ? `${hint} · showing ${visible.length} of ${members.length}`
+          ? [hint, `showing ${visible.length} of ${members.length}`].filter(Boolean).join(" · ")
           : hint;
       const group = operationGroup(tone, title, count, detail);
       if (visible.length) group.appendChild(operationColumns(columns));

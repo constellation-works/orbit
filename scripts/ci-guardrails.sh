@@ -22,19 +22,28 @@ done
 # Modes: the default full run (`make ci`); --fast (`make ci-fast`); the offline
 # file/metadata-only --static (`make ci-guards`); and the two
 # parts of the split hosted workflow (.github/workflows/ci.yml). --checks runs
-# everything except the workspace test build, doctests and nextest. --test-archive PATH
+# formatting, production Clippy, documentation, an Apple-target type-check
+# and the supply-chain gate.
+# --guards runs the repository guards and self-tests (the guard pool and the
+# exclusive lane) in the CI guardrails job, beside the test build; with
+# CI_SELF_TESTS=changed (pull requests) it selects self-tests by their inputs,
+# as --fast does. Hosted CI splits that work with --guards-core (everything
+# except the QA sweep) and --guards-qa (the QA inventory and selected fixture
+# self-test). Both jobs are awaited by Check; local --guards keeps both.
+# --test-archive PATH
 # runs only the workspace test build and archives its test binaries for the
 # parallel nextest shards. --test-partitions PATH proves the shards' count
-# partitions of that archive cover every test. --test-doctests runs doctests
-# on the test-build runner, reusing its libraries after the archive upload.
+# partitions of that archive cover every test.
 fast=false
 static=false
 checks=false
+guards=false
+separate_qa=false
+qa_only=false
 archive=""
 partitions=false
-test_doctests=false
 usage() {
-  echo "usage: ci-guardrails.sh [--fast | --static | --checks | --test-archive PATH | --test-partitions PATH | --test-doctests]" >&2
+  echo "usage: ci-guardrails.sh [--fast | --static | --checks | --guards | --guards-core | --guards-qa | --test-archive PATH | --test-partitions PATH]" >&2
   exit 2
 }
 case "${1:-}" in
@@ -42,7 +51,9 @@ case "${1:-}" in
   --fast) fast=true ;;
   --static) fast=true; static=true ;;
   --checks) checks=true ;;
-  --test-doctests) test_doctests=true ;;
+  --guards) guards=true ;;
+  --guards-core) guards=true; separate_qa=true ;;
+  --guards-qa) guards=true; qa_only=true ;;
   --test-archive | --test-partitions)
     [[ -n "${2:-}" ]] || usage
     [[ "$1" == --test-partitions ]] && partitions=true
@@ -56,7 +67,7 @@ esac
 # Several guardrail scripts shell out to ripgrep; a missing `rg` degrades
 # them silently (empty search results read as "clean" or, worse, as false
 # violations). Fail fast instead. [ORB-10021]
-if [[ -z "$archive" && "$test_doctests" == false ]] && ! command -v rg >/dev/null 2>&1; then
+if [[ -z "$archive" && "$checks" == false && "$qa_only" == false ]] && ! command -v rg >/dev/null 2>&1; then
   echo "ci-guardrails: ripgrep (rg) is required; install it before running" >&2
   exit 1
 fi
@@ -111,7 +122,7 @@ join_exclusive_lane() {
   if [[ "$failed" -eq 0 ]]; then failed="$status"; fi
 }
 
-# Joins the background production clippy, doctest and documentation chain:
+# Joins the background production clippy and documentation chain:
 # prints its output, adopts its phase records and folds its status into the
 # first failure.
 join_check_chain() {
@@ -154,12 +165,6 @@ run_phase() {
 
 export GIT_OPTIONAL_LOCKS=0
 
-if [[ "$test_doctests" == true ]]; then
-  run_phase doctests "$repo_root/scripts/with-test-build-lint.sh" \
-    cargo test --no-fail-fast --workspace --doc
-  exit 0
-fi
-
 # The hosted test-build job: the folded workspace test build, then an archive
 # of its test binaries and the `orbit` binary the CLI fixtures execute. The
 # shard jobs run nextest from that archive, one count partition each, and the
@@ -168,7 +173,8 @@ fi
 # the archive, --test-partitions runs the partition guard over the archive
 # itself, so the guard proves what the shards receive while they already run.
 # NEXTEST_PARTITIONS (ci.yml) is the count-partition count: the shard jobs
-# run all but one partition and the test-build job runs the remaining one.
+# and the additional partition jobs run every partition; the test-build
+# job runs the proof after the upload.
 # A caller that sets only the older NEXTEST_SHARDS gets that many partitions.
 #
 # CI_TEST_SCOPE is the Change scope job's mode. For `affected:<crate>,...` (a
@@ -176,22 +182,45 @@ fi
 # plus the members `ci-test-affected.py --test-build-packages` adds to keep
 # the workspace's dependency features, and record that package list beside
 # the archive (PATH.packages). The partition guard then admits empty shards.
-# A selection the checkout cannot build falls back to the workspace.
+# A selection the checkout cannot build falls back to the workspace. The
+# shards run only the affected crates' tests (the build set adds feature
+# anchors whose tests the change cannot affect), so the guard lists the same
+# package filter they pass.
 if [[ "$partitions" == true ]]; then
   allow_empty=()
+  affected_filter=()
   if [[ -f "$archive.packages" ]]; then
     allow_empty=(--allow-empty)
   fi
-  # nextest extracts the archive for each listing; keep it in the checkout.
-  TMPDIR="$guard_logs" run_phase workspace-test-partitions \
+  if [[ "${CI_TEST_SCOPE:-}" == affected:* ]]; then
+    allow_empty=(--allow-empty)
+    crates="${CI_TEST_SCOPE#affected:}"
+    affected_filter=(-E "package(${crates//,/) | package(})")
+  fi
+  # Extract the archive once, inside the checkout, and list every selection
+  # from that extraction's metadata, as the shard-1 sandbox gate does. Listing
+  # the archive file itself extracted all of it again for each of the
+  # NEXTEST_PARTITIONS + 1 listings (5.5 s each hosted). The listings still
+  # execute the archive's own test binaries.
+  extracted="$guard_logs/nextest-archive"
+  mkdir "$extracted"
+  run_phase workspace-test-archive-extract cargo nextest list --archive-file "$archive" \
+    --workspace-remap "$repo_root" --extract-to "$extracted" >/dev/null
+  run_phase workspace-test-partitions \
     "$repo_root/scripts/check-nextest-partitions.py" --shards "${NEXTEST_PARTITIONS:-${NEXTEST_SHARDS:?set NEXTEST_PARTITIONS or NEXTEST_SHARDS}}" \
-    ${allow_empty[@]+"${allow_empty[@]}"} -- cargo nextest list --archive-file "$archive" --workspace-remap "$repo_root"
+    ${allow_empty[@]+"${allow_empty[@]}"} -- cargo nextest list \
+    --binaries-metadata "$extracted/target/nextest/binaries-metadata.json" \
+    --cargo-metadata "$extracted/target/nextest/cargo-metadata.json" \
+    --workspace-remap "$repo_root" --target-dir-remap "$extracted/target" \
+    ${affected_filter[@]+"${affected_filter[@]}"}
   exit 0
 fi
 if [[ -n "$archive" ]]; then
   lint="$repo_root/scripts/with-test-build-lint.sh"
   macos_selection=()
-  read -r -a targets <<<"--workspace --lib --bins --tests"
+  # No --lib: it overrides [lib] test=false and builds empty harnesses.
+  # --tests selects library unit tests whose test flag is true.
+  read -r -a targets <<<"--workspace --bins --tests"
   rm -f "$archive.packages"
   if [[ "${CI_TEST_SCOPE:-}" == affected:* ]]; then
     build=$(python3 "$repo_root/scripts/ci-test-affected.py" --test-build-packages "${CI_TEST_SCOPE#affected:}") ||
@@ -207,7 +236,11 @@ if [[ -n "$archive" ]]; then
     fi
   fi
   run_phase workflow-test-list-build "$repo_root/scripts/check-ci-macos.sh" --workspace-build ${macos_selection[@]+"${macos_selection[@]}"}
-  run_phase workspace-test-archive "$lint" cargo nextest archive --locked \
+  # The archive reuses the list build's artifacts. Cargo's fingerprint log
+  # prints nothing for a fresh unit and the dirty reason for each rebuilt one,
+  # so a lost reuse names its cause in the step log (ORB-20805).
+  run_phase workspace-test-archive env CARGO_LOG=cargo::core::compiler::fingerprint=info \
+    "$lint" cargo nextest archive --locked \
     "${targets[@]}" --archive-file "$archive"
   exit 0
 fi
@@ -220,7 +253,7 @@ fi
 run_self_tests=true
 if [[ "$static" == true ]]; then
   run_self_tests=false
-elif [[ "$fast" == true ]]; then
+elif [[ "$fast" == true || ("$guards" == true && "${CI_SELF_TESTS:-all}" == changed) ]]; then
   # Match ci-test-affected's delivery-base override and merge-base fallback.
   base=""
   if [[ -n "${CI_TEST_BASE:-}" ]]; then
@@ -242,7 +275,9 @@ elif [[ "$fast" == true ]]; then
     while IFS= read -r -d '' path; do
       case "$path" in
         scripts/* | .github/* | Makefile | .cargo/* | Cargo.toml | Cargo.lock | \
-          install.sh | RELEASING.md | plugin/* | npm/* | .agents/* | .claude-plugin/*)
+          install.sh | RELEASING.md | docs/dev/qa/path-leases-listener-sudo.md | \
+          docs/standards/* | AGENTS.md | CLAUDE.md | \
+          plugin/* | npm/* | .agents/* | .claude-plugin/*)
           run_self_tests=true
           break
           ;;
@@ -255,36 +290,68 @@ fi
 
 # Selection must precede Cargo and repository guards: these mandatory fixtures
 # import yaml even though the standalone local workflow linter can warn/skip.
-if [[ "$run_self_tests" == true || "$static" == true ]]; then
+if [[ "$run_self_tests" == true || "$static" == true || "$qa_only" == true ]]; then
   "$repo_root/scripts/require-python.sh" --yaml
+fi
+
+# The same input selection governs both hosted jobs. The QA fixture gets its
+# own runner instead of competing with the dependency-direction suite and the
+# repository scans. Inventory validation always runs, including on crate-only
+# PRs; only its existing fixture self-test is conditional.
+if [[ "$qa_only" == true ]]; then
+  qa_arguments=(--check)
+  if [[ "$run_self_tests" == false ]]; then
+    qa_arguments+=(--static)
+    echo "ci-guardrails: QA fixture self-test SKIPPED (self-test inputs unchanged)"
+  else
+    echo "ci-guardrails: running QA inventory and fixture self-test"
+  fi
+  run_phase qa-guards "$repo_root/scripts/test-qa-full-sweep.py" "${qa_arguments[@]}"
+  exit 0
 fi
 
 # --fast runs formatting and script guardrails, never the Rust test suite.
 # `make ci-test-affected` supplies the separate pre-handoff test gate.
-if [[ "$static" == false ]]; then
+if [[ "$static" == false && "$guards" == false ]]; then
   run_phase fmt cargo fmt --all -- --check
 fi
 
-# Repository guards and self-tests share one sliding-window pool. Its width is
-# the build budget's cargo job count, the same number Cargo receives, so guard
-# fan-out stays inside the host-wide budget. The pool runs in a background
-# subshell, so in full mode the workflow test build below overlaps it;
-# nothing in the pool depends on that build, and no pool member
-# takes the Cargo build lock. Each guard writes its own output files, and the
-# pool prints them in launch order as it reaps each guard.
+# Repository guards and self-tests share one pool. Its width is the build
+# budget's cargo job count, the same number Cargo receives, so guard fan-out
+# stays inside the host-wide budget. A free slot admits the next guard as soon
+# as any running member finishes: a slow early guard must not keep the slots of
+# members that have already exited. The pool runs in a background subshell, so
+# in full mode the workflow test build below overlaps it; nothing in the pool
+# depends on that build, and no pool member takes the Cargo build lock. Each
+# guard writes its own output files. The pool still prints those files in
+# launch order, and the first failure in that order stays the pool's status.
+# bash 3.2 has no `wait -n`, so each member writes its launch index to a fifo
+# the lane holds open, and the parent waits only on that exited pid.
 pool_width="$("$repo_root/scripts/build-budget.py" --cargo-jobs)"
 pids=()
 names=()
 slots=()
+statuses=()
+finished=()
 # The exclusive lane is a second subshell with copies of these counters, so it
 # names its output slots apart from the pool's.
 slot_prefix=""
 launched=0
-reaped=0
+collected=0
+printed=0
 next_slot=0
 
+# One completion fifo per lane. Read-write so the open does not block and a
+# writer is not required to be the last closer. macOS bash 3.2 included.
+open_done_fifo() {
+  local fifo="$guard_logs/${slot_prefix}done.fifo"
+  mkfifo "$fifo"
+  exec 3<>"$fifo"
+}
+
 # Waits for one guard, prints its output and folds its status into the first
-# failure. Arguments: pid, output slot, name.
+# failure. Arguments: pid, output slot, name. Used for the waiting guard,
+# which is not a pool member.
 reap_guard() {
   local status=0
   wait "$1" || status=$?
@@ -297,35 +364,72 @@ reap_guard() {
   fi
 }
 
-# Reaps the oldest launched guard.
-reap_oldest() {
-  reap_guard "${pids[$reaped]}" "${slots[$reaped]}" "${names[$reaped]}"
-  reaped=$((reaped + 1))
+# Blocks until one pool member reports that it has finished, then reaps that
+# pid. The signal is the member's launch index, written just before it exits.
+collect_finished_guard() {
+  local index="" status=0
+  if ! IFS= read -r index <&3; then
+    echo "ci-guardrails: guard pool lost a completion signal" >&2
+    exit 1
+  fi
+  if [[ ! "$index" =~ ^[0-9]+$ ]] || ((index >= launched)) || [[ -n "${finished[$index]}" ]]; then
+    echo "ci-guardrails: guard pool completion signal is invalid: $index" >&2
+    exit 1
+  fi
+  wait "${pids[$index]}" || status=$?
+  statuses[$index]=$status
+  finished[$index]=1
+  collected=$((collected + 1))
 }
 
-drain_pool() {
-  while ((reaped < launched)); do
-    reap_oldest
+# Prints finished guards in launch order and records the first failure in
+# that order. Later guards that finished sooner stay buffered.
+flush_finished_prefix() {
+  local status
+  while ((printed < launched)) && [[ -n "${finished[$printed]}" ]]; do
+    cat "$guard_logs/${slots[$printed]}.out"
+    cat "$guard_logs/${slots[$printed]}.err" >&2
+    status="${statuses[$printed]}"
+    if [[ "$status" -ne 0 ]]; then
+      echo "ci-guardrails: FAILED ${names[$printed]} (exit $status)" >&2
+      if [[ "$failed" -eq 0 ]]; then failed="$status"; fi
+    fi
+    printed=$((printed + 1))
   done
 }
 
+drain_pool() {
+  while ((collected < launched)); do
+    collect_finished_guard
+  done
+  flush_finished_prefix
+}
+
 # Forks one guard into output slot $1 and leaves its pid in started_pid.
+# $2 is the launch index, $3 is "true" when the guard must signal the fifo.
 # bash's time keyword supplies fractional wall time on Linux and bash 3.2.
 start_guard() {
-  local slot="$1" name="${2##*/}"
-  shift
+  local slot="$1" index="$2" notify="$3" name="${4##*/}"
+  shift 3
   (
     # bash 3.2 drops TIMEFORMAT when errexit aborts a failing timed command,
     # so a guard that exits non-zero would publish no duration line. Suspend
     # errexit only around `time` and return the command status unchanged.
-    TIMEFORMAT="ci-guardrails: $name %3R s"
+    # The command does not inherit the completion fifo.
     set +e
-    if [[ "$slot_prefix" == exclusive- ]]; then
-      time { "$@"; }
-    else
-      time { run_lowered "$@"; }
-    fi
+    (
+      exec 3>&-
+      TIMEFORMAT="ci-guardrails: $name %3R s"
+      if [[ "$slot_prefix" == exclusive- ]]; then
+        time { "$@"; }
+      else
+        time { run_lowered "$@"; }
+      fi
+    )
     status=$?
+    if [[ "$notify" == true ]]; then
+      printf '%s\n' "$index" >&3
+    fi
     exit "$status"
   ) >"$guard_logs/$slot.out" 2>"$guard_logs/$slot.err" &
   started_pid=$!
@@ -333,25 +437,28 @@ start_guard() {
 
 # Starts one pool member in the next output slot.
 launch_guard() {
+  local index=$launched
   local slot="$slot_prefix$next_slot"
   next_slot=$((next_slot + 1))
-  start_guard "$slot" "$@"
+  start_guard "$slot" "$index" true "$@"
   pids+=("$started_pid")
   names+=("${1##*/}")
   slots+=("$slot")
+  statuses+=("")
+  finished+=("")
   launched=$((launched + 1))
 }
 
 # A self-test that spends nearly all of its wall time in fixed waits starts
 # beside the pool, outside its window, and is reaped after the pool drains.
-# Inside the window it would hold a slot for its whole duration, and because
-# the window reaps in launch order, the guards behind it would wait on it.
+# Inside the window it would occupy one of the width slots for that whole wait.
 waiting_pid=""
 waiting_name=""
 start_waiting_guard() {
   if skipped "$1"; then return 0; fi
   waiting_name="${1##*/}"
-  start_guard waiting "$@"
+  # Not a pool member: it does not take a slot or write a completion signal.
+  start_guard waiting 0 false "$@"
   waiting_pid="$started_pid"
 }
 
@@ -384,13 +491,14 @@ skipped() {
   return 1
 }
 
-# Pool member: waits for the oldest running guard whenever the pool is full.
+# Pool member: when every slot is busy, waits until any running member finishes.
 run_guard() {
   if skipped "$1"; then return 0; fi
-  while ((launched - reaped >= pool_width)); do
-    reap_oldest
+  while ((launched - collected >= pool_width)); do
+    collect_finished_guard
   done
   launch_guard "$@"
+  flush_finished_prefix
 }
 
 # Exclusive self-test: runs in the exclusive lane at normal priority, and is
@@ -402,37 +510,50 @@ run_exclusive_guard() {
   drain_pool
 }
 
-# Production Clippy's lint environment: what `cargo clippy --workspace --lib
-# --bins -- -D warnings -D clippy::disallowed_methods` sets for its `cargo
-# check`, spelled out the way with-test-build-lint.sh spells out the folded
-# build's. Documentation runs under it too. Cargo fingerprints it, so
-# documentation reuses Clippy's check of every workspace library instead of
-# checking the workspace again with plain rustc before rustdoc can start.
+# The one lint environment: what `cargo clippy --workspace --lib --bins --
+# -D warnings -A clippy::disallowed_methods` sets for its `cargo check`,
+# spelled out the way with-test-build-lint.sh spells out the folded build's
+# (the same string). Production code denies clippy::disallowed_methods
+# through the crate-root `deny` attributes, which override this `-A`;
+# test and test-feature code stays exempt. Documentation runs under it
+# too. Cargo fingerprints it, so documentation reuses Clippy's check of
+# every workspace library instead of checking the workspace again with
+# plain rustc before rustdoc can start.
 with_production_lint() {
   RUSTC_WORKSPACE_WRAPPER=clippy-driver \
-    CLIPPY_ARGS='-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__-D__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__' \
+    CLIPPY_ARGS='-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__-A__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__' \
     "$@"
 }
 
-# Production clippy, local doctests, then documentation. Each takes the Cargo build
+# Production clippy, then documentation. Each takes the Cargo build
 # lock, so they run in sequence; a failure still reports the later phases, and
-# the first failure is the chain's status. Production clippy is the only pass
-# that denies clippy::disallowed_methods, so test-only channels stay exempt on
-# the folded build; it checks lib and bin targets and writes no test binary.
-# Doctests use the folded build's lint environment and so reuse its library
-# artifacts. Hosted doctests run on the test-build runner instead: --checks
-# has only checked metadata, so building doctest libraries there would repeat
-# the test-build runner's code generation and dependency compilation.
+# the first failure is the chain's status. The crate-root attributes deny
+# clippy::disallowed_methods in production code, so test-only channels stay
+# exempt on the folded build; it checks lib and bin targets and writes no
+# test binary.
+# Doctests are disabled workspace-wide (`[lib] doctest = false`), so there is
+# no doctest phase here or on the test-build runner: rustdoc has no runnable
+# fence to find (see scripts/check-doctest-fences.sh).
+# --checks then type-checks aarch64-apple-darwin. Host checks never compile
+# cfg(target_os = "macos") tests, so a rename of a shared item stays green
+# on Linux and fails only the informational macOS job. Plain rustc keeps
+# that job's Clippy lints from becoming a required gate. The C compiler is
+# a stub (scripts/ci-apple-target-cc.sh): build scripts run, C is not
+# compiled, and cargo check does not link. One target: hosted macOS is ARM,
+# and no cfg pairs target_os = "macos" with a single target_arch.
 run_check_chain() {
   local status=0 next=0
   run_phase clippy-production with_production_lint run_lowered cargo check --workspace --lib --bins || status=$?
-  if [[ "$checks" == false ]]; then
-    run_phase doctests run_lowered "$lint" cargo test --no-fail-fast --workspace --doc || next=$?
-  fi
-  if [[ "$status" -eq 0 ]]; then status="$next"; fi
   next=0
   RUSTDOCFLAGS="-D warnings" run_phase documentation with_production_lint run_lowered cargo doc --no-deps --workspace || next=$?
   if [[ "$status" -eq 0 ]]; then status="$next"; fi
+  if [[ "$checks" == true ]]; then
+    next=0
+    CC_aarch64_apple_darwin="$repo_root/scripts/ci-apple-target-cc.sh" \
+      run_phase apple-target-check run_lowered env -u RUSTC_WORKSPACE_WRAPPER -u CLIPPY_ARGS \
+      cargo check --workspace --lib --bins --tests --target aarch64-apple-darwin || next=$?
+    if [[ "$status" -eq 0 ]]; then status="$next"; fi
+  fi
   return "$status"
 }
 
@@ -452,7 +573,7 @@ run_lowered() {
   "${lowered_command[@]}" "$@"
 }
 
-# Runs the clippy/doctest/documentation chain in the background while nextest
+# Runs the clippy/documentation chain in the background while nextest
 # runs. At idle priority it takes only the CPU nextest leaves unused, so the
 # workspace suites' elapsed-time and timeout assertions keep the host to
 # themselves. None of its commands writes the test binaries nextest executes.
@@ -478,14 +599,16 @@ start_check_chain() {
 # before the workspace tests start. Each suite is mostly one process, so the
 # lane leaves most of the host to that lowered work.
 guard_phase_started=$SECONDS
-if [[ "$static" == false ]]; then
+if [[ "$static" == false && "$checks" == false ]]; then
   exclusive_started=$SECONDS
   (
     # The report trap belongs to the parent shell, not to the lane.
     trap - EXIT
     slot_prefix=exclusive-
+    open_done_fifo
     run_exclusive_guard "$repo_root/scripts/test-build-budget.sh"
     run_exclusive_guard "$repo_root/scripts/test-ci-fast-guards.py"
+    run_exclusive_guard "$repo_root/scripts/test-ci-workspace-cache.py"
     run_exclusive_guard "$repo_root/scripts/test-ci-test-affected.py"
     run_exclusive_guard "$repo_root/scripts/test-codeql-rust-local.py"
     run_exclusive_guard "$repo_root/scripts/test-compiler-cache.sh"
@@ -495,9 +618,11 @@ if [[ "$static" == false ]]; then
   exclusive_lane_pid=$!
 fi
 
+if [[ "$checks" == false ]]; then
 (
   # The report trap belongs to the parent shell, not to the pool.
   trap - EXIT
+  open_done_fifo
   # Beside the exclusive lane, each pool command starts at lowered priority.
   # About 6 s of CPU time across about 63 s of wall time, nearly all of it
   # fixed slow-child and hang delays. The helper's deadlines run on an
@@ -506,19 +631,36 @@ fi
   # build instead of extending the exclusive suites.
   start_waiting_guard "$repo_root/scripts/test-ci-download-verified.py"
   # Start the longer repository scans first; the pool keeps pool_width running.
+  # The dependency-direction self-test set the pool wall on hosted runs
+  # (335-505 s, 2026-11-09 cohort) until it ran its cases four at a time; it,
+  # the pr-state workflow self-test and the QA sweep remain the longest
+  # members, so all launch in the first slots: started late, any tail alone
+  # extends the wall past every other awaited job
+  # (longest-processing-time-first makespan scheduling). The pr-state
+  # self-test launched near the end until the 2026-11-14 profile replayed
+  # its start at about 75 s of a 278 s pool wall it alone set.
+  run_guard "$repo_root/scripts/test-check-dependency-direction.py"
+  run_guard "$repo_root/scripts/test-pr-state-workflows.py"
   run_guard "$repo_root/scripts/check-orphan-modules.sh"
   run_guard "$repo_root/scripts/check-workflow-action-pins.sh"
-  if [[ "$static" == true ]]; then
-    run_guard "$repo_root/scripts/test-qa-full-sweep.py" --check --static
-  else
-    run_guard "$repo_root/scripts/test-qa-full-sweep.py" --check
+  # Its inventory check always runs; its fixture self-test (the non-static
+  # --check) only when self-test inputs changed.
+  if [[ "$separate_qa" == false ]]; then
+    if [[ "$static" == true || "$run_self_tests" == false ]]; then
+      run_guard "$repo_root/scripts/test-qa-full-sweep.py" --check --static
+    else
+      run_guard "$repo_root/scripts/test-qa-full-sweep.py" --check
+    fi
   fi
   run_guard "$repo_root/scripts/check-error-translation.sh"
   run_guard "$repo_root/scripts/check-unused-dependencies.py"
+  run_guard "$repo_root/docs/standards/check.sh"
   run_guard "$repo_root/scripts/check-doc-links.py"
   run_guard "$repo_root/scripts/check-cli-imports.sh"
   run_guard "$repo_root/scripts/unit-test-inventory.py" --check "$repo_root/scripts/unit-test-baseline.json"
+  run_guard "$repo_root/scripts/check-doctest-fences.sh"
   run_guard "$repo_root/scripts/generate-doc-indexes.sh" --check
+  run_guard "$repo_root/scripts/test-agent-corpus.py"
   run_guard "$repo_root/scripts/check-installer-pubkey.sh"
   run_guard "$repo_root/scripts/check-dependency-direction.sh"
   run_guard "$repo_root/scripts/check-workflow-yaml.py"
@@ -528,8 +670,8 @@ fi
   run_guard "$repo_root/scripts/check-terminal-state-guard.sh"
   run_guard "$repo_root/scripts/check-durability-syncs.py"
   run_guard "$repo_root/scripts/check-windows-portability.py"
+  run_guard "$repo_root/scripts/check-openpty-portability.py"
   run_guard "$repo_root/scripts/check-linux-gated-test-items.py"
-  run_guard "$repo_root/scripts/check-dashboard-browser-fixtures.py"
   run_guard "$repo_root/scripts/check-history-note-size.sh"
   run_guard "$repo_root/scripts/check-stability.sh"
   run_guard "$repo_root/scripts/check-artifact-redaction-guardrail.sh"
@@ -550,15 +692,14 @@ fi
   run_guard "$repo_root/scripts/test-installer-security.sh"
   run_guard "$repo_root/scripts/test-mcp-registry-publish-workflow.sh"
   run_guard "$repo_root/scripts/test-check-unused-dependencies.py"
-  run_guard "$repo_root/scripts/test-check-dependency-direction.py"
   run_guard "$repo_root/scripts/test-release-workflow.py"
   run_guard "$repo_root/scripts/test-release-promotion.py"
+  run_guard "$repo_root/scripts/test-release-readiness-adapter.py"
   run_guard "$repo_root/scripts/test-release-breaking-changes.py"
-  run_guard "$repo_root/scripts/test-pr-state-workflows.py"
   run_guard "$repo_root/scripts/test-website-workflow.py"
   run_guard "$repo_root/scripts/test-windows-portability.py"
+  run_guard "$repo_root/scripts/test-openpty-portability.py"
   run_guard "$repo_root/scripts/test-linux-gated-test-items.py"
-  run_guard "$repo_root/scripts/test-dashboard-browser-fixtures.py"
   run_guard "$repo_root/scripts/test-refresh-dashboard-vendor.py"
   run_guard "$repo_root/scripts/test-unit-test-inventory.py"
   run_guard "$repo_root/scripts/test-codeql-extension-schema.py"
@@ -570,38 +711,40 @@ fi
   run_guard "$repo_root/scripts/test-cross-revision-check.sh"
   run_guard "$repo_root/scripts/test-check-nextest-partitions.py"
   run_guard "$repo_root/scripts/test-ci-await-jobs.py"
-  run_guard "$repo_root/scripts/test-evaluate-decision-assistance.py"
+  run_guard "$repo_root/scripts/test-ci-p90.py"
   run_guard "$repo_root/scripts/test-audit-panics.py"
   run_guard "$repo_root/scripts/test-smoke-claude-mcp.py"
+  run_guard "$repo_root/scripts/test-wsl2-smoke.py"
   run_guard "$repo_root/scripts/test-ci-repack-nextest.py"
   run_guard "$repo_root/scripts/test-cpu-utilisation.py"
   run_guard "$repo_root/scripts/test-path-leases-listener-sudo.py"
   run_guard "$repo_root/scripts/test-bench-build-budget.py"
+  run_guard "$repo_root/scripts/test-web-memory-soak.py"
   drain_pool
   reap_waiting_guard
   exit "$failed"
 ) >"$guard_logs/pool.out" 2>"$guard_logs/pool.err" &
 guard_pool_pid=$!
+fi
 
 # Every Cargo command that compiles workspace members after the folded build
 # runs under its lint environment. Cargo fingerprints it, so without it the
-# nextest pass and doctests would recompile the whole workspace.
+# nextest pass would recompile the whole workspace.
 lint="$repo_root/scripts/with-test-build-lint.sh"
 
 if [[ "$checks" == true ]]; then
   # The hosted Check job builds no test binaries: the test-build job does, and
-  # the shard jobs run nextest. The check chain starts beside the pool and the
-  # exclusive lane, in the idle class like the build it replaces there, so the
-  # exclusive suites keep normal-priority CPU to themselves. Doctests reuse
-  # the test-build job's libraries there, after the archive upload.
+  # the shard jobs run nextest. The CI guardrails job runs the guard pool and
+  # the exclusive lane on their own runner.
   start_check_chain
+  join_check_chain
+elif [[ "$guards" == true ]]; then
   join_guard_pool
   join_exclusive_lane
   guards_joined=$SECONDS
-  join_check_chain
 elif [[ "$fast" == false ]]; then
   # Enumerating workflow tests compiles their targets; keep it out of ci-fast.
-  # --workspace-build lists them from the same `--workspace --lib --bins
+  # --workspace-build lists them from the same `--workspace --bins
   # --tests` artifacts the nextest pass below runs, instead of a per-crate
   # `cargo test -p` build that resolves features differently and recompiles
   # the workspace chain a second time. [DANI-10428]
@@ -624,7 +767,7 @@ elif [[ "$fast" == false ]]; then
     # run nextest from that listing. The run invokes no Cargo build and holds
     # no build lock, so the check chain can use Cargo meanwhile.
     run_phase workspace-test-listing "$lint" cargo nextest list --list-type binaries-only \
-      --message-format json --workspace --lib --bins --tests >"$guard_logs/binaries.json"
+      --message-format json --workspace --bins --tests >"$guard_logs/binaries.json"
     cargo metadata --format-version 1 --all-features --no-deps >"$guard_logs/cargo-metadata.json"
     start_check_chain
     # Profile ci raises test-threads above the 4-vCPU runner default.
@@ -637,14 +780,14 @@ elif [[ "$fast" == false ]]; then
     join_check_chain
   else
     echo "cargo-nextest not found; falling back to cargo test" >&2
-    run_phase workspace-tests "$lint" cargo test --no-fail-fast --workspace --lib --bins --tests
+    run_phase workspace-tests "$lint" cargo test --no-fail-fast --workspace --bins --tests
     checks_status=0
     run_check_chain || checks_status=$?
     if [[ "$failed" -eq 0 ]]; then failed="$checks_status"; fi
   fi
 fi
 
-if [[ "$fast" == false ]]; then
+if [[ "$fast" == false && "$guards" == false ]]; then
   # Supply-chain gate: dependency advisories + license allow-list (deny.toml).
   # [ORB-00416] [ORB-11983] Soft-presence like nextest above — CI installs a pinned version;
   # local runs without the tool warn instead of hard-failing. It may fetch the
@@ -665,5 +808,7 @@ fi
 
 # From the start of the pool and the exclusive lane to the later of their
 # joins. In full mode that includes the workflow test build they overlap.
-phase_records+=("repository-guards wall_seconds=$((guards_joined - guard_phase_started)) exit=$failed")
+if [[ "$checks" == false ]]; then
+  phase_records+=("repository-guards wall_seconds=$((guards_joined - guard_phase_started)) exit=$failed")
+fi
 exit "$failed"

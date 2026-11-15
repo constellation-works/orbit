@@ -13,10 +13,9 @@
 // window comes from the shared selector; chart drawing and tooltips stay in
 // metrics.js, which passes its helpers in.
 
-import { el, fetchJson, getWorkspaceRevision } from './common.js';
-import { runningModel } from './metrics-running.js';
+import { el } from './common.js';
+import { COMPLEXITIES, axisScale, option, runningModel, trendSource } from './metrics-running.js';
 
-const COMPLEXITIES = [["", "All complexities"], ["low", "Low"], ["medium", "Medium"], ["hard", "Hard"], ["xhard", "Xhard"], ["unassessed", "Unassessed"]];
 const GROUPS = [["lines", "Line kind"], ["crew", "Crew"]];
 const STATS = [["sum", "Totals"], ["mean", "Mean"], ["median", "Median"]];
 const KINDS = [
@@ -31,44 +30,24 @@ const STAT_WORDS = { sum: "total", mean: "mean per task", median: "median per ta
 const filters = { complexity: "" };
 /// Local view state; metrics.js keys series visibility by `group`.
 export const diffView = { group: "lines", stat: "sum", measure: "code_added" };
-let sequence = 0;
+
+const source = trendSource({
+  path: "/api/diagnostics/diff_stats",
+  params(windowKey) {
+    const query = new URLSearchParams({ since: windowKey });
+    if (filters.complexity) query.set("complexity", filters.complexity);
+    return query;
+  },
+  accepts: (payload) => payload && payload.window && payload.overall,
+  missingText: "This host answered without a lines-changed trend.",
+  notYetText: "This host's Orbit does not record lines changed yet. Upgrade it to see this trend.",
+});
 
 /// The endpoint query for `windowKey` under the current complexity filter.
-export function diffQuery(windowKey) {
-  const query = new URLSearchParams({ since: windowKey });
-  if (filters.complexity) query.set("complexity", filters.complexity);
-  return `/api/diagnostics/diff_stats?${query}`;
-}
-
-/// Fetch the trend for `windowKey`. A failed read, or a host whose Orbit
-/// predates the endpoint, answers `{ unavailable }` so the other trends still
-/// render. Every result carries a fence (generation, visit revision, window
-/// and query) captured at request time, as the tokens trend does.
-export function fetchDiff(windowKey) {
-  const fence = { generation: ++sequence, revision: getWorkspaceRevision(), windowKey, query: diffQuery(windowKey) };
-  const query = fence.query;
-  return fetchJson(query).then(
-    (payload) => (payload && payload.window && payload.overall
-      ? { ...payload, query, diffFence: fence }
-      : { query, unavailable: "This host answered without a lines-changed trend.", diffFence: fence }),
-    (error) => ({
-      query,
-      unavailable: error.status === 404 ? "This host's Orbit does not record lines changed yet. Upgrade it to see this trend." : error.message,
-      diffFence: fence,
-    }),
-  );
-}
-
-/// True only when `payload` is the newest diff request and its visit, window
-/// and query still match current state.
-export function isCurrentDiffPayload(payload, windowKey) {
-  const fence = payload && payload.diffFence;
-  if (!fence) return false;
-  return fence.generation === sequence
-    && fence.revision === getWorkspaceRevision()
-    && fence.windowKey === windowKey
-    && fence.query === diffQuery(windowKey);
-}
+export const diffQuery = source.query;
+/// Fetch the trend for `windowKey`, fenced by metrics-running.js `trendSource`.
+export const fetchDiff = source.fetch;
+export const isCurrentDiffPayload = source.isCurrent;
 
 /// "12.4k", "860", "−1.2k".
 export function fmtLines(value) {
@@ -86,16 +65,6 @@ function deliveries(n) {
   return `${n} ${n === 1 ? "delivery" : "deliveries"}`;
 }
 
-/// A 1–2–5 axis covering `[min, max]` and zero, in about four steps.
-function linesScale(min, max) {
-  const low = Math.min(0, min);
-  const high = Math.max(1, max);
-  const raw = (high - low) * 1.08 / 4;
-  const magnitude = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 5, 10].map((m) => m * magnitude).find((candidate) => candidate >= raw);
-  return { step, min: low < 0 ? Math.floor(low * 1.08 / step) * step : 0, max: Math.ceil(high * 1.08 / step) * step };
-}
-
 /// The filter row: complexity (refetches), grouping, statistic and, for the
 /// crew view, the measure.
 export function diffTools({ segGroup, windowKey, rerender, onChange, countView }) {
@@ -105,9 +74,7 @@ export function diffTools({ segGroup, windowKey, rerender, onChange, countView }
     filters.complexity = complexity.value;
     // Clear to loading at once so the chart never shows the previous filter.
     onChange(null);
-    fetchDiff(windowKey).then((payload) => {
-      if (isCurrentDiffPayload(payload, windowKey)) onChange(payload);
-    });
+    source.refetch(windowKey, onChange);
   });
   const local = (update) => {
     Object.assign(diffView, update);
@@ -122,13 +89,6 @@ export function diffTools({ segGroup, windowKey, rerender, onChange, countView }
     countView === "bucket" ? segGroup("Statistic", STATS, diffView.stat, (key) => key !== diffView.stat && local({ stat: key })) : null,
     diffView.group === "crew" ? measure : null,
   ];
-}
-
-function option(value, text, selected) {
-  const node = el("option", { text });
-  node.value = value;
-  node.selected = selected;
-  return node;
 }
 
 /// The series one grouping draws: `{ key, swatch, label, dashed, measure, data }`.
@@ -207,7 +167,7 @@ export function diffModel(payload, { windowKey, shown, countView, bucketTitle, b
       max = Math.max(max, value);
     }
   }
-  const scale = linesScale(min, max);
+  const scale = axisScale(min, max);
   const span = scale.max - scale.min;
   const y = (value) => 100 - (Math.min(Math.max(value, scale.min), scale.max) - scale.min) / span * 100;
   const yTicks = [];

@@ -80,8 +80,7 @@ mod platform {
         let euid = unsafe { libc::geteuid() };
         if euid == 0 {
             return Err(refusal(
-                "running as root; run it as the listener user, for example \
-                 `sudo -H -u orbit-lease orbit lease token …`"
+                "running as root; run it as the listener user (`orbit-lease` by convention)"
                     .to_string(),
             ));
         }

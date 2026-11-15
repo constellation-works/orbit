@@ -238,6 +238,23 @@ pub(super) fn emit_job_tracing(job_run_id: &str, task_id: Option<&str>, kind: &V
                 );
             }
         }
+        V2AuditEventKind::StepContractCorrection {
+            step_id,
+            field,
+            refusal,
+            outcome,
+        } => {
+            tracing::warn!(
+                target: "orbit.job.step_contract_correction",
+                job_run_id = job_run_id,
+                task_id = task_id,
+                step_id = step_id.as_str(),
+                field = field.as_str(),
+                outcome = outcome.as_str(),
+                refusal = refusal.as_str(),
+                "step output contract correction",
+            );
+        }
         V2AuditEventKind::FinalRecoveryAttempted {
             step_id,
             final_recovery_activity,

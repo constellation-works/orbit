@@ -1,6 +1,6 @@
 // Orbit dashboard task history timeline.
 
-import { el, statusPill, isHttpUrl, copyWithFeedback, formatClock, formatDate, formatDayHeading, makeDisclosure, onClockZoneChange } from './common.js';
+import { el, statusPill, isHttpUrl, copyWithFeedback, formatClock, formatDate, formatDateTime, formatDayHeading, makeDisclosure, onClockZoneChange } from './common.js';
 import * as taskShared from './task-shared.js';
 
 // ORB-17931: the History tab as a timeline. Entries are grouped under a day
@@ -34,6 +34,8 @@ const HISTORY_EVENT_CATEGORY = {
   run_finished: "run",
   pull_request: "run",
   landing_completed: "run",
+  landing_checks_observed: "run",
+  completion_held: "lifecycle",
   transient_infra_requeued: "warning",
   escalated: "warning",
 };
@@ -94,6 +96,14 @@ function historyPullRequestParts(text) {
   }
   const rest = text.replace(url ? url[0] : number[0], "").replace(/[\s.#\d]/g, "");
   return { parts: ["opened pull request ", target], note: rest ? text : "" };
+}
+
+// ORB-23322: "held for review: paths .github/workflows/** matched
+// .github/workflows/ci.yml (rule ci)", from a `completion.hold` record.
+export function completionHoldSummary(hold) {
+  if (!hold || typeof hold !== "object") return "held for review";
+  const task = hold.matched_task_id ? ` (bundled task ${hold.matched_task_id})` : "";
+  return `held for review: ${hold.field || "?"} ${hold.pattern || "?"} matched ${hold.matched || "?"}${task} (rule ${hold.rule || "?"})`;
 }
 
 function historyCountLabel(count, noun) {
@@ -165,6 +175,8 @@ function describeHistoryEntry(entry, parsed, data) {
       return historyPullRequestParts(text);
     case "landing_completed":
       return { parts: ["completed landing"] };
+    case "completion_held":
+      return { parts: [el("strong", { text: completionHoldSummary(data) })], summarized: true };
     case "operator_requeued":
       return { parts: ["requeued the task"] };
     case "transient_infra_requeued":
@@ -206,7 +218,7 @@ function historyValueNode(value) {
   return el("span", { text: value == null ? "null" : String(value) });
 }
 
-function buildHistoryDetails(group, data, context, id) {
+function buildHistoryDetails(group, data, id) {
   const first = group.items[0];
   const list = el("dl", { class: "history-kv" });
   const add = (key, valueNode) => {
@@ -222,7 +234,7 @@ function buildHistoryDetails(group, data, context, id) {
     group.items.map((item) => el("div", { class: "history-kv-item" }, [
       el("strong", { text: item.entry.by || "?" }),
       historyText(" · "),
-      taskShared.absTimeNode(context, item.entry.at),
+      taskShared.absTimeNode(item.entry.at),
     ]))));
   const details = el("div", { class: "history-details", id }, [list]);
   if (data) {
@@ -238,7 +250,7 @@ function buildHistoryDetails(group, data, context, id) {
   return details;
 }
 
-function buildHistoryRow(task, context, group, expandedKeys) {
+function buildHistoryRow(task, group, expandedKeys) {
   const first = group.items[0];
   const entry = first.entry;
   const data = historyStructured(entry, first.parsed);
@@ -272,7 +284,7 @@ function buildHistoryRow(task, context, group, expandedKeys) {
   ]);
   const row = el("div", { class: "history-line" });
   row.dataset.category = group.category;
-  const time = el("span", { class: "history-time", text: formatClock(entry.at, { zone: false }), title: taskShared.fmtAbsTimeValue(context, entry.at) });
+  const time = el("span", { class: "history-time", text: formatClock(entry.at, { zone: false }), title: formatDateTime(entry.at) });
   const node = el("span", { class: "history-node", title: category ? category.label : "" }, [el("span", { class: "history-dot" })]);
   node.setAttribute("aria-hidden", "true");
   row.append(time, node);
@@ -284,7 +296,7 @@ function buildHistoryRow(task, context, group, expandedKeys) {
   if (expandable) {
     const key = `${task.id}:${first.index}`;
     const id = `history-${task.id}-${first.index}`.replace(/[^\w-]/g, "-");
-    const details = buildHistoryDetails(group, data, context, id);
+    const details = buildHistoryDetails(group, data, id);
     const toggle = el("button", { class: "history-toggle", text: "Details" });
     const setOpen = (open) => {
       details.hidden = !open;
@@ -310,7 +322,7 @@ function buildHistoryRow(task, context, group, expandedKeys) {
 }
 
 // Every meaningful history entry as a timeline, newest first by default.
-export function buildTaskHistory(task, context) {
+export function buildTaskHistory(task) {
   // ORB-10311: legacy bare `commented` stubs are comment noise; the thread has
   // its own tab.
   const meaningful = Array.isArray(task.history) ? task.history.filter((h) => h && h.event !== "commented") : [];
@@ -353,7 +365,7 @@ export function buildTaskHistory(task, context) {
     }
     timeline.replaceChildren(...days.map((section) => el("div", { class: "history-day" }, [
       el("div", { class: "history-day-head", text: section.heading }),
-      ...section.rows.map((group) => buildHistoryRow(task, context, group, expandedKeys)),
+      ...section.rows.map((group) => buildHistoryRow(task, group, expandedKeys)),
     ])));
   };
 

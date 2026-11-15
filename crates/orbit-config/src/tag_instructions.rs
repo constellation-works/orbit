@@ -20,6 +20,9 @@ use orbit_types::workflow::{
 /// The dotted config path of the tag table.
 pub const TAG_INSTRUCTIONS_KEY: &str = "workflow.tag_instructions";
 
+/// The dotted config path of the activity-to-corpus-index table.
+pub const AGENT_CORPUS_KEY: &str = "workflow.agent_corpus";
+
 /// What one tag maps for one role.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TagInstructionSetting {
@@ -32,10 +35,16 @@ pub enum TagInstructionSetting {
 /// The admitted tag table, keyed by normalized tag.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TagInstructionSettings {
+    agent_corpus: BTreeMap<String, String>,
     tags: BTreeMap<String, BTreeMap<TagInstructionRole, TagInstructionSetting>>,
 }
 
 impl TagInstructionSettings {
+    /// Activity-to-index mapping from `[workflow.agent_corpus]`.
+    pub fn agent_corpus(&self) -> &BTreeMap<String, String> {
+        &self.agent_corpus
+    }
+
     /// What `tag` (already normalized) maps for `role`, if anything.
     pub fn setting(&self, tag: &str, role: TagInstructionRole) -> Option<&TagInstructionSetting> {
         self.tags.get(tag)?.get(&role)
@@ -60,6 +69,59 @@ impl TagInstructionSettings {
 
 /// Admit `workflow.tag_instructions` from one (possibly merged) document.
 pub(crate) fn tag_instructions_from_document(
+    document: &toml::Value,
+    config_path: &Path,
+) -> Result<TagInstructionSettings, OrbitError> {
+    let mut settings = tag_table_from_document(document, config_path)?;
+    if let Some(value) = document.get("workflow").and_then(|w| w.get("agent_corpus")) {
+        let table = value.as_table().ok_or_else(|| OrbitError::InvalidInput(
+            "workflow.agent_corpus must map activity names to repository-relative INDEX.md paths".into()
+        ))?;
+        if table.len() > 32 {
+            return Err(OrbitError::InvalidInput(
+                "workflow.agent_corpus maps more than 32 activities".into(),
+            ));
+        }
+        for (activity, value) in table {
+            if activity.is_empty()
+                || !activity
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            {
+                return Err(OrbitError::InvalidInput(format!(
+                    "invalid corpus activity: {activity}"
+                )));
+            }
+            let raw = value.as_str().ok_or_else(|| {
+                OrbitError::InvalidInput(format!(
+                    "workflow.agent_corpus.{activity} must be a repository-relative INDEX.md path"
+                ))
+            })?;
+            let path = repository_path(raw).map_err(OrbitError::InvalidInput)?;
+            if path.len() > 512 {
+                return Err(OrbitError::InvalidInput(
+                    "agent corpus index path exceeds 512 bytes".into(),
+                ));
+            }
+            if !path.ends_with("/INDEX.md") {
+                return Err(OrbitError::InvalidInput(
+                    "agent corpus path must end in /INDEX.md".into(),
+                ));
+            }
+            if settings
+                .agent_corpus
+                .values()
+                .any(|existing| existing != &path)
+            {
+                return Err(OrbitError::InvalidInput("workflow.agent_corpus must map every activity to the same workspace corpus index".into()));
+            }
+            settings.agent_corpus.insert(activity.clone(), path);
+        }
+    }
+    Ok(settings)
+}
+
+fn tag_table_from_document(
     document: &toml::Value,
     config_path: &Path,
 ) -> Result<TagInstructionSettings, OrbitError> {
@@ -133,7 +195,10 @@ pub(crate) fn tag_instructions_from_document(
             )));
         }
     }
-    Ok(TagInstructionSettings { tags })
+    Ok(TagInstructionSettings {
+        tags,
+        ..Default::default()
+    })
 }
 
 /// A path inside the repository: relative, `/`-separated, without `.` or

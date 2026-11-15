@@ -15,8 +15,8 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_config::{
-    ConfigRoots, RETIRED_DEFAULT_AUTO_TASKS, RETIRED_DEFAULT_ROUTINES, SHIPPED_DEFAULT_AUTO_TASKS,
-    SHIPPED_DEFAULT_ROUTINES, SeedingPolicy, WorkspaceSeedingPolicies,
+    ConfigRoots, DEMOTED_DEFAULT_AUTO_TASKS, RETIRED_DEFAULT_AUTO_TASKS, RETIRED_DEFAULT_ROUTINES,
+    SHIPPED_DEFAULT_AUTO_TASKS, SHIPPED_DEFAULT_ROUTINES, SeedingPolicy, WorkspaceSeedingPolicies,
     load_workspace_seeding_policies,
 };
 use serde::Serialize;
@@ -25,10 +25,6 @@ use crate::OrbitRuntime;
 use crate::application::auto_tasks::DEFAULT_AUTO_TASK_FILES;
 use crate::application::auto_tasks::retired::{RETIRED_AUTO_TASK_FILES, RetiredAutoTask};
 use crate::application::routines::seed::{DEFAULT_ROUTINE_FILES, RETIRED_ROUTINE_FILES};
-
-/// The routine whose seeded-enabled default records the hourly
-/// crew-performance snapshot.
-pub const CREW_PERFORMANCE_REFRESH_ROUTINE: &str = "crew_performance_refresh";
 
 // `orbit-config` admits policy names against its own lists; these keep them
 // equal to the embedded asset tables, so a default added or retired here
@@ -48,6 +44,16 @@ const _: () = assert!(
 const _: () = assert!(
     retired_auto_task_names_match(RETIRED_AUTO_TASK_FILES, RETIRED_DEFAULT_AUTO_TASKS),
     "orbit_config::RETIRED_DEFAULT_AUTO_TASKS must list RETIRED_AUTO_TASK_FILES"
+);
+// A demoted default keeps its existing copies, a retired one removes them, and
+// a shipped one is still seeded: one name can hold only one of those fates.
+const _: () = assert!(
+    demoted_names_are_unshipped(
+        DEMOTED_DEFAULT_AUTO_TASKS,
+        DEFAULT_AUTO_TASK_FILES,
+        RETIRED_DEFAULT_AUTO_TASKS
+    ),
+    "orbit_config::DEMOTED_DEFAULT_AUTO_TASKS must not name a shipped or retired auto-task"
 );
 
 const fn same_str(left: &str, right: &str) -> bool {
@@ -87,6 +93,32 @@ const fn retired_auto_task_names_match(files: &[RetiredAutoTask], names: &[&str]
     while index < files.len() {
         if !same_str(files[index].name, names[index]) {
             return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+const fn demoted_names_are_unshipped(
+    demoted: &[&str],
+    shipped: &[(&str, &str)],
+    retired: &[&str],
+) -> bool {
+    let mut index = 0;
+    while index < demoted.len() {
+        let mut other = 0;
+        while other < shipped.len() {
+            if same_str(demoted[index], shipped[other].0) {
+                return false;
+            }
+            other += 1;
+        }
+        other = 0;
+        while other < retired.len() {
+            if same_str(demoted[index], retired[other]) {
+                return false;
+            }
+            other += 1;
         }
         index += 1;
     }

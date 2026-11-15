@@ -2,7 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use orbit_core::application::job::job_run_to_json;
+use orbit_core::application::job::{
+    JobRunProjectionEvidence, JobRunProjectionProfile, project_job_run,
+};
 use orbit_core::{JobRun, OrbitRuntime};
 use serde_json::Value;
 
@@ -32,7 +34,11 @@ pub(in crate::api) fn run_list_rows(
         .map(|run| {
             let mut value = match &states {
                 Some(states) => states.row(run),
-                None => job_run_to_json(run, None),
+                None => project_job_run(
+                    run,
+                    JobRunProjectionProfile::ListRow,
+                    JobRunProjectionEvidence::default(),
+                ),
             };
             add_tasks(&mut value, run, titles);
             value

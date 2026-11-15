@@ -20,11 +20,19 @@
 //!   triage's candidate rule (`application::task::triage_candidacy`).
 //! - `retired` — shipped defaults a routine replaced, kept as provenance so
 //!   `orbit workspace sync` retires their seeded copies.
+//! - `demoted` — shipped defaults dropped for unproven yield, whose existing
+//!   copies `orbit workspace sync` keeps as workspace-local definitions.
 //! - [`crud`] — the shared add/list/show/update/mint domain surface.
+//! - `job_step` — `auto-task:` job steps: freeze, observe, keyed admission,
+//!   checkpoints, parking and the step-bound start guard (ORB-20158).
 //! - [`toggle`] — the one toggle command; the tool, the checked operator
 //!   control and the dashboard are its profiles.
+//! - [`schedule_edit`] — the one schedule edit command; the ordinary update
+//!   and the dashboard schedule editor are its profiles.
 //! - [`listing`] — whether each listed definition fires here, and when: the
 //!   one decision every list surface renders.
+//! - [`projection`] — list-row documents for the ordinary tool, CLI markers,
+//!   bounded MCP and HTTP, preserving each surface's field and text contract.
 //! - [`delete`] — audited delete, and restore of a deleted shipped default.
 //! - [`settings`] — operator settings layered over bundled bodies, and the
 //!   sync migration of settings-only forks.
@@ -33,26 +41,36 @@ use std::borrow::Cow;
 
 mod body_history;
 mod change_probe;
+mod completion;
+#[cfg(feature = "test-support")]
+pub(crate) use completion::test_support as completion_test_support;
 pub mod crud;
 pub mod delete;
+pub(crate) mod demoted;
+pub(crate) mod job_step;
 pub mod listing;
+pub mod projection;
 mod read;
 pub(crate) mod retired;
 pub use orbit_automation::auto_tasks::loader;
 pub use orbit_automation::auto_tasks::schedule;
+pub mod schedule_edit;
 pub mod scheduler;
 pub mod settings;
 pub mod state;
 pub mod toggle;
 
 pub use crud::{AutoTaskAddParams, AutoTaskTemplatePatch, AutoTaskUpdateParams};
-pub use delete::{AutoTaskDeleteParams, AutoTaskDeleteReport};
+pub use delete::{
+    AutoTaskDeleteError, AutoTaskDeleteParams, AutoTaskDeleteRefusal, AutoTaskDeleteReport,
+};
 pub use listing::{AutoTaskListing, AutoTaskListingRow, AutoTaskSkip};
 pub use loader::{
     AutoTaskCollection, AutoTaskLoadError, LoadedAutoTask, auto_tasks_dir, collect_auto_tasks,
     definition_path,
 };
 pub use schedule::{AutoTaskDueDecision, decide_due, validate_schedule};
+pub use schedule_edit::{AutoTaskScheduleError, AutoTaskScheduleOutcome, AutoTaskScheduleProfile};
 pub use scheduler::{
     AutoTaskFireReport, AutoTaskSchedulerOutcome, ListedAutoTask, SchedulerOptions,
     open_auto_task_instance, run_auto_task_scheduler_at,
@@ -61,11 +79,21 @@ pub use settings::{AutoTaskBody, AutoTaskLayering};
 pub use state::{AutoTaskCursor, AutoTaskCursorState, cursor_state_path, load_cursor_state};
 pub use toggle::{AutoTaskToggleError, AutoTaskToggleOutcome, AutoTaskToggleProfile};
 
+/// Shipped defaults whose bundled body is `enabled: true`. Every other default
+/// ships disabled, and workspace sync refuses a bundled body that breaks this.
+/// An operator's `orbit auto-task toggle` (the settings table) or a forked body
+/// still decides for a workspace.
+pub(crate) const ENABLED_BY_DEFAULT_AUTO_TASKS: &[&str] = &["host-health"];
+
 /// Default definitions embedded in the Orbit binary and materialized into a
 /// workspace on initialization. Defaults are deliberately inert: users must
 /// explicitly mint one or enable it through the existing auto-task surface.
+/// The one exception ships enabled: [`ENABLED_BY_DEFAULT_AUTO_TASKS`].
 /// A default a later release dropped moves to
-/// [`retired::RETIRED_AUTO_TASK_FILES`].
+/// [`retired::RETIRED_AUTO_TASK_FILES`] when something replaced it, or to
+/// `orbit_config::DEMOTED_DEFAULT_AUTO_TASKS` when it had not proven its
+/// yield. A definition joins this list only after it has proven its yield as
+/// a workspace-local definition (`docs/design/auto-tasks/1_overview.md`).
 pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
     (
         "agent-guidance-audit",
@@ -80,20 +108,8 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/auto_tasks/architecture-audit.yaml"),
     ),
     (
-        "backlog-hygiene",
-        include_str!("../../../assets/auto_tasks/backlog-hygiene.yaml"),
-    ),
-    (
-        "ci-budget-watch",
-        include_str!("../../../assets/auto_tasks/ci-budget-watch.yaml"),
-    ),
-    (
         "code-health-sweep",
         include_str!("../../../assets/auto_tasks/code-health-sweep.yaml"),
-    ),
-    (
-        "crew-ladder-review",
-        include_str!("../../../assets/auto_tasks/crew-ladder-review.yaml"),
     ),
     (
         "delivery-code-review",
@@ -112,20 +128,12 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/auto_tasks/comment-hygiene.yaml"),
     ),
     (
-        "design-sync",
-        include_str!("../../../assets/auto_tasks/design-sync.yaml"),
-    ),
-    (
         "doc-duties",
         include_str!("../../../assets/auto_tasks/doc-duties.yaml"),
     ),
     (
         "escape-to-guard",
         include_str!("../../../assets/auto_tasks/escape-to-guard.yaml"),
-    ),
-    (
-        "flaky-test-hunt",
-        include_str!("../../../assets/auto_tasks/flaky-test-hunt.yaml"),
     ),
     (
         "friction-curation",
@@ -136,8 +144,16 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/auto_tasks/full-code-review.yaml"),
     ),
     (
+        "host-health",
+        include_str!("../../../assets/auto_tasks/host-health.yaml"),
+    ),
+    (
         "path-risk-review",
         include_str!("../../../assets/auto_tasks/path-risk-review.yaml"),
+    ),
+    (
+        "pilot-block-patterns",
+        include_str!("../../../assets/auto_tasks/pilot-block-patterns.yaml"),
     ),
     (
         "qa-full-sweep",
@@ -148,24 +164,20 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/auto_tasks/qa-sweep.yaml"),
     ),
     (
+        "recovery-fault-audit",
+        include_str!("../../../assets/auto_tasks/recovery-fault-audit.yaml"),
+    ),
+    (
+        "regression-label-audit",
+        include_str!("../../../assets/auto_tasks/regression-label-audit.yaml"),
+    ),
+    (
         "run-failure-patterns",
         include_str!("../../../assets/auto_tasks/run-failure-patterns.yaml"),
     ),
     (
         "security-review",
         include_str!("../../../assets/auto_tasks/security-review.yaml"),
-    ),
-    (
-        "structure-sweep",
-        include_str!("../../../assets/auto_tasks/structure-sweep.yaml"),
-    ),
-    (
-        "suppression-ratchet",
-        include_str!("../../../assets/auto_tasks/suppression-ratchet.yaml"),
-    ),
-    (
-        "workflow-health-audit",
-        include_str!("../../../assets/auto_tasks/workflow-health-audit.yaml"),
     ),
 ];
 
@@ -187,3 +199,5 @@ pub(crate) fn render_default_auto_task<'a>(content: &'a str, base_branch: &str) 
 
 #[cfg(test)]
 mod tests;
+
+mod step_observation;

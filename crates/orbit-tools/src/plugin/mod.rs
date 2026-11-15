@@ -26,9 +26,10 @@ mod tests;
 
 pub use backend::{
     BrokeredCaller, DECISION_CHANNEL_STORE_DIR, DeliveredPluginSecret, DroppedFsRoot,
-    PLUGIN_GRANT_WITNESS_DIR, PLUGIN_SECRET_STORE_DIR, PLUGIN_TIMEOUT_CEILING_MS,
-    PluginBackendSpec, PluginConfigSection, PluginProgramStatus, PluginSandboxProfile,
-    PluginSecretDelivery, PluginSecretRotation, PluginSecretSource, RenderedFsRoots,
+    ORBIT_PRODUCT_MARKER, PLUGIN_GRANT_WITNESS_DIR, PLUGIN_SECRET_STORE_DIR,
+    PLUGIN_TIMEOUT_CEILING_MS, PluginBackendSpec, PluginConfigSection, PluginProgramStatus,
+    PluginSandboxProfile, PluginSecretDelivery, PluginSecretRotation, PluginSecretSource,
+    RenderedFsRoots, mark_resolution_drift, orbit_product_markers_above_roots,
     plugin_grant_witness_relative, program_statuses, render_fs_roots, resolve_declared_programs,
 };
 pub use build::{
@@ -40,10 +41,10 @@ pub use build::{
     prebuilt_outputs_present, run_plugin_build,
 };
 pub use callback::{
-    CallbackResolution, HOST_ROUTED_CALLBACK_TOOLS, HostRouteOutcome, ORBIT_PLUGIN_CALLBACK_ENV,
-    ORBIT_PLUGIN_CALLBACK_FD_ENV, ORBIT_PLUGIN_ENV, PLUGIN_CALLBACK_FD, PLUGIN_HOST_ROUTE_FD,
-    PluginCallbackIdentity, PluginCallbackSession, forward_host_routed_callback,
-    is_host_routed_callback_tool, resolve_plugin_callback, resolve_plugin_callback_session,
+    CallbackResolution, HostRouteOutcome, ORBIT_PLUGIN_CALLBACK_ENV, ORBIT_PLUGIN_CALLBACK_FD_ENV,
+    ORBIT_PLUGIN_ENV, PLUGIN_CALLBACK_FD, PLUGIN_HOST_ROUTE_FD, PluginCallbackIdentity,
+    PluginCallbackSession, forward_host_routed_callback, is_host_routed_callback_tool,
+    pin_routed_application_task, resolve_plugin_callback, resolve_plugin_callback_session,
     retired_callback_credential, stale_plugin_callback_session_count, unidentified_plugin_child,
 };
 pub use envelope::{
@@ -54,9 +55,10 @@ pub use lifecycle::{BrokerCall, BrokerSessions};
 pub use loader::{
     FIRST_PARTY_MANIFEST_DIGESTS, LoadedPlugin, LoadedPluginTestFile, PluginDefinitionFiles,
     PluginLoadError, PluginValidationPolicy, ResolvedPluginTool, first_party_source,
-    fs_write_root_covers, load_plugin_dir, manifest_digest, manifest_refusal,
-    physical_with_missing_tail, plugin_symlink_refusal, refuse_covering_fs_write_roots,
-    refuse_plugin_tree_symlinks, resolve_plugin_definitions, validate_loaded_plugin,
+    fs_write_root_covers, load_plugin_dir, load_plugin_dir_without_tests, manifest_digest,
+    manifest_refusal, physical_with_missing_tail, plugin_symlink_refusal,
+    refuse_covering_fs_write_roots, refuse_plugin_tree_symlinks, resolve_plugin_definitions,
+    validate_loaded_plugin,
 };
 pub use mcp::{McpBackend, McpExpectedTool};
 pub use migrate::{SidecarManifest, load_sidecar_manifest, migrate_sidecars};

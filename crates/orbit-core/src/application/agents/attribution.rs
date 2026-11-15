@@ -1,6 +1,5 @@
 //! Who each problem counts against. Every problem the scan found gets
-//! exactly one owning role and the run (or orchestrator) charged, or a Not
-//! scored reason; the roles and the attribution strip read these charges, so
+//! exactly one owning role and the run charged, or a Not scored reason; the roles and the attribution strip read these charges, so
 //! the strip and the rankings always agree.
 //!
 //! A rework cause names its owner (spec, crew, or none for infrastructure
@@ -20,9 +19,8 @@ use serde_json::{Map, Value, json};
 
 use super::facts::{Problem, Record, RegressionLink, Review, TaskFacts, filing_attempt};
 use super::records::{Cause, label};
-use super::roles::pilot_warnings::{Assessment, Outcome};
 use super::roles::pilots::{Graded, costly_charge_detail, wait_charge_detail};
-use super::{AgentFacts, AgentRole, MODEL_UNKNOWN};
+use super::{AgentFacts, AgentRole, WindowBounds};
 use crate::application::task::FindingVerdict;
 
 /// What a problem counts against.
@@ -42,8 +40,7 @@ pub struct Charge {
     pub task_id: String,
     pub problem: Problem,
     pub owner: Owner,
-    /// The charged row's crew, or the orchestrator for orchestrators.
-    /// `None` when the owning run recorded none, and for Not scored.
+    /// The charged row's crew. `None` when the owning run recorded none, and for Not scored.
     pub crew: Option<String>,
     /// The charged run's model; `None` when it recorded none.
     pub model: Option<String>,
@@ -52,15 +49,26 @@ pub struct Charge {
     /// When the problem was recorded.
     pub at: DateTime<Utc>,
     /// The time of the owner's unit of work, which decides the window the
-    /// problem falls in: the task's creation for orchestrators, the charged
-    /// attempt's start for implementers, the settlement for reviewers, and
+    /// problem falls in: the charged attempt's start for implementers, the settlement for reviewers, and
     /// the problem itself when Not scored.
     pub anchor: DateTime<Utc>,
     pub detail: String,
-    /// The rework cause, for rework.
-    pub(super) cause: Option<Cause>,
+    /// The producing step or worker of the charged unit, as invocations
+    /// record it, when the unit identifies one (a pilot receipt's worker,
+    /// a review settlement's gate).
+    pub(super) activity_id: Option<String>,
+    /// The previous settlement on the task, for a review settlement's
+    /// charge: an invocation that ended by then produced the earlier round.
+    pub(super) after: Option<DateTime<Utc>>,
     /// The regression link's severity, for a regression.
     pub severity: Option<DefectSeverity>,
+    /// The defect sites the regression link names (`symbol:`, `file:` or
+    /// `dir:` selectors), for a regression; empty otherwise.
+    pub(super) sites: Vec<String>,
+    /// The effort the charged attempt's follower reported on its claim
+    /// settlement, in the shared encoding; the fallback when the owner holds
+    /// no invocation evidence of its own for the run.
+    pub(super) reported_effort: Option<Option<String>>,
 }
 
 impl Charge {
@@ -84,6 +92,8 @@ pub struct Credit {
     pub at: Option<DateTime<Utc>>,
     /// The final implementation attempt's start.
     pub anchor: DateTime<Utc>,
+    /// The effort the credited attempt's follower reported, as on [`Charge`].
+    pub(super) reported_effort: Option<Option<String>>,
 }
 
 /// Every problem in `tasks`, every regression against them and every pilot
@@ -100,7 +110,6 @@ pub(super) fn attribute(
         for record in &task.records {
             charges.push(record_charge(task, record));
         }
-        charges.extend(pilot_warning_charge(task));
         for review in &task.reviews {
             charges.extend(review_charge(task, review));
             for finding in review.disposed() {
@@ -109,7 +118,6 @@ pub(super) fn attribute(
                     problem: Problem::DisposedFinding,
                     at: review.at,
                     detail: format!("review attempt {}: {}", review.attempt_id, finding.line),
-                    cause: None,
                     severity: None,
                 };
                 charges.push(charge.reviewer(Some(review)));
@@ -129,6 +137,7 @@ pub(super) fn attribute(
                 weight: 1,
                 at: task.landed_at,
                 anchor: attempt.start,
+                reported_effort: attempt.runner.reported_effort.clone(),
             });
         }
     }
@@ -153,7 +162,6 @@ pub(super) fn attribute(
             problem: Problem::RejectedFinding,
             at,
             detail: "finding verification REJECTED this review-filed finding".to_string(),
-            cause: None,
             severity: None,
         };
         charges.push(draft.review_job(filing_attempt(&by_id, task)));
@@ -169,77 +177,12 @@ pub(super) fn attribute(
     (charges, credits)
 }
 
-/// A confirmed scope warning charges its orchestrator once per task. The
-/// shared pilot settlement is authoritative, without the pilot score's
-/// minimum support. Keep existing charges when they already count the event
-/// that confirmed any qualifying warning; unrelated later defects still count.
-fn pilot_warning_charge(task: &TaskFacts) -> Option<Charge> {
-    task.orchestrator.as_ref()?;
-    let mut confirmed = None;
-    for assessment in &task.warnings.assessments {
-        if assessment.outcome != Outcome::Confirmed
-            || !assessment
-                .held
-                .iter()
-                .any(|finding| spec_warning(&finding.kind))
-        {
-            continue;
-        }
-        let Some((at, _)) = &assessment.settled else {
-            continue;
-        };
-        if task.records.iter().any(|record| {
-            record.at == *at
-                && matches!(
-                    record.problem,
-                    Problem::SpecEdit | Problem::CriteriaBlock | Problem::CriteriaEscalation
-                )
-        }) {
-            return None;
-        }
-        confirmed.get_or_insert(assessment);
-    }
-    let assessment: &Assessment = confirmed?;
-    let (at, settlement) = assessment.settled.as_ref()?;
-    let findings: Vec<String> = assessment
-        .held
-        .iter()
-        .filter(|finding| spec_warning(&finding.kind))
-        .map(|finding| format!("{}: {}", finding.kind, finding.text))
-        .collect();
-    let run_id = assessment.run_id();
-    Some(
-        Draft {
-            task,
-            problem: Problem::PilotWarning,
-            at: *at,
-            detail: format!(
-                "confirmed task-pilot hold (pilot run {}): {}; {settlement}",
-                run_id.as_deref().unwrap_or("unknown"),
-                findings.join("; ")
-            ),
-            cause: None,
-            severity: None,
-        }
-        .orchestrator(),
-    )
-}
-
-/// Prerequisite ordering (`blocked_by`) is not an unattainable specification.
-fn spec_warning(kind: &str) -> bool {
-    matches!(
-        kind,
-        "validation_tool_warnings" | "adr_conflicts" | "surface_warnings" | "utility_warnings"
-    )
-}
-
 /// A problem on `task` before its owner is decided.
 struct Draft<'a> {
     task: &'a TaskFacts,
     problem: Problem,
     at: DateTime<Utc>,
     detail: String,
-    cause: Option<Cause>,
     severity: Option<DefectSeverity>,
 }
 
@@ -262,8 +205,11 @@ impl Draft<'_> {
             at: self.at,
             anchor,
             detail: self.detail,
-            cause: self.cause,
+            activity_id: None,
+            after: None,
             severity: self.severity,
+            sites: Vec::new(),
+            reported_effort: None,
         }
     }
 
@@ -272,28 +218,16 @@ impl Draft<'_> {
         self.charge(Owner::NotScored(reason), None, None, None, at)
     }
 
-    /// The task's orchestrator attribution and its recorded model, or Not
-    /// scored when it names no orchestrator.
-    fn orchestrator(self) -> Charge {
-        match self.task.orchestrator.clone() {
-            Some(name) => {
-                let anchor = self.task.created_at;
-                let model = self.task.orchestrator_model.clone();
-                self.charge(
-                    Owner::Role(AgentRole::Orchestrators),
-                    Some(name),
-                    model,
-                    None,
-                    anchor,
-                )
-            }
-            None => self.not_scored("unattributed"),
-        }
+    /// A problem the task's specification caused: no agent role scores
+    /// task authorship, so it is Not scored.
+    fn spec(self) -> Charge {
+        self.not_scored("spec")
     }
 
     /// The implementation attempt at `index`, or Not scored when the task
     /// has no attempt to charge. An attempt admitted as
-    /// `no-diff-expected` work is not implementation, so its problems
+    /// `no-diff-expected` work is not implementation, and an attempt that
+    /// launched no implementer is no implementer unit, so their problems
     /// charge no implementer row.
     fn implementer(self, index: Option<usize>) -> Charge {
         let Some(attempt) = index.and_then(|index| self.task.attempts.get(index)) else {
@@ -302,15 +236,20 @@ impl Draft<'_> {
         if attempt.no_diff() {
             return self.not_scored("no_diff_expected");
         }
+        if !attempt.implementer {
+            return self.not_scored("no_implementer");
+        }
         let runner = attempt.runner.clone();
         let anchor = attempt.start;
-        self.charge(
+        let mut charge = self.charge(
             Owner::Role(AgentRole::Implementers),
             runner.crew,
             runner.model,
             runner.run_id,
             anchor,
-        )
+        );
+        charge.reported_effort = runner.reported_effort;
+        charge
     }
 
     /// The review job attempt that filed the finding, or Not scored when no
@@ -321,13 +260,15 @@ impl Draft<'_> {
         };
         let runner = attempt.runner.clone();
         let anchor = attempt.start;
-        self.charge(
+        let mut charge = self.charge(
             Owner::Role(AgentRole::Reviewers),
             runner.crew,
             runner.model,
             runner.run_id,
             anchor,
-        )
+        );
+        charge.reported_effort = runner.reported_effort;
+        charge
     }
 
     /// The reviewer of `review`, or Not scored when no review settled.
@@ -339,13 +280,23 @@ impl Draft<'_> {
             .task
             .attempt_at(review.at)
             .and_then(|index| self.task.attempts[index].runner.run_id.clone());
-        self.charge(
+        let after = self
+            .task
+            .reviews
+            .iter()
+            .filter(|earlier| earlier.at < review.at)
+            .map(|earlier| earlier.at)
+            .max();
+        let mut charge = self.charge(
             Owner::Role(AgentRole::Reviewers),
             review.reviewer.crew.clone(),
             review.reviewer.model.clone(),
             run_id,
             review.at,
-        )
+        );
+        charge.activity_id.clone_from(&review.activity_id);
+        charge.after = after;
+        charge
     }
 }
 
@@ -356,18 +307,15 @@ fn record_charge(task: &TaskFacts, record: &Record) -> Charge {
         problem: record.problem,
         at: record.at,
         detail: record.detail.clone(),
-        cause: record.cause,
         severity: None,
     };
     match record.problem {
-        Problem::SpecEdit | Problem::CriteriaBlock | Problem::CriteriaEscalation => {
-            draft.orchestrator()
-        }
+        Problem::SpecEdit | Problem::CriteriaBlock | Problem::CriteriaEscalation => draft.spec(),
         Problem::RepeatRun
         | Problem::BlockedPr
         | Problem::UnmergedPr
         | Problem::OperatorRequeue => match record.cause {
-            Some(Cause::Spec) => draft.orchestrator(),
+            Some(Cause::Spec) => draft.spec(),
             Some(Cause::Crew) => {
                 let attempt = record.ended.or_else(|| task.attempt_at(record.at));
                 draft.implementer(attempt)
@@ -385,8 +333,7 @@ fn record_charge(task: &TaskFacts, record: &Record) -> Charge {
         }
         // Read from settlements, verdicts, relations and pilot grading, never
         // from records.
-        Problem::PilotWarning
-        | Problem::ReviewReject
+        Problem::ReviewReject
         | Problem::ReviewFixes
         | Problem::Regression
         | Problem::DisposedFinding
@@ -419,7 +366,6 @@ fn review_charge(task: &TaskFacts, review: &Review) -> Option<Charge> {
             review.attempt_id,
             review.verdict.as_str()
         ),
-        cause: None,
         severity: None,
     };
     Some(match problem {
@@ -452,7 +398,6 @@ fn regression_charge(task: &TaskFacts, link: &RegressionLink) -> Charge {
             classification.severity.as_str(),
             classification.severity_source.as_str(),
         ),
-        cause: None,
         severity: Some(classification.severity),
     };
     match classification.nature {
@@ -463,8 +408,8 @@ fn regression_charge(task: &TaskFacts, link: &RegressionLink) -> Charge {
         | RegressionNature::Incomplete
         | RegressionNature::Unclassified => {}
     }
-    match classification.escape {
-        RegressionEscape::SpecAmbiguous => draft.orchestrator(),
+    let mut charge = match classification.escape {
+        RegressionEscape::SpecAmbiguous => draft.spec(),
         RegressionEscape::ReviewMissed => {
             let accepted = task
                 .reviews
@@ -478,7 +423,9 @@ fn regression_charge(task: &TaskFacts, link: &RegressionLink) -> Charge {
         RegressionEscape::PlatformOnly => draft.not_scored("platform_only"),
         RegressionEscape::Nondeterministic => draft.not_scored("nondeterministic"),
         RegressionEscape::Unclassified => draft.not_scored("unclassified"),
-    }
+    };
+    charge.sites.clone_from(&classification.sites);
+    charge
 }
 
 /// An assessment's costly misses and the lock waits it caused, charged to
@@ -496,8 +443,11 @@ fn pilot_charges(graded: &Graded) -> impl Iterator<Item = Charge> + '_ {
             at,
             anchor: graded.at,
             detail,
-            cause: None,
+            activity_id: run.and_then(|run| run.activity_id.clone()),
+            after: None,
             severity: None,
+            sites: Vec::new(),
+            reported_effort: None,
         }
     };
     let misses = graded.costly.iter().map(move |(path, contest)| {
@@ -516,22 +466,65 @@ fn pilot_charges(graded: &Graded) -> impl Iterator<Item = Charge> + '_ {
 
 /// The window's problems by owner, with Not scored by reason and each
 /// role's problems by row.
-pub(super) fn strip(facts: &AgentFacts, since: DateTime<Utc>) -> Value {
+pub(super) fn strip(facts: &AgentFacts, window: WindowBounds) -> Value {
     let mut owners: BTreeMap<AgentRole, u64> =
         AgentRole::ALL.iter().map(|role| (*role, 0)).collect();
-    let mut rows: BTreeMap<AgentRole, BTreeMap<(String, String), u64>> = BTreeMap::new();
+    let mut rows: BTreeMap<
+        AgentRole,
+        BTreeMap<super::effort::ModelEffortKey, (u64, std::collections::BTreeSet<String>)>,
+    > = BTreeMap::new();
     let mut reasons: BTreeMap<&str, u64> = BTreeMap::new();
     let mut total = 0;
-    for charge in facts.charges.iter().filter(|charge| charge.anchor >= since) {
+    for charge in facts
+        .charges
+        .iter()
+        .filter(|charge| window.admits(charge.anchor))
+    {
         total += 1;
         match charge.owner {
             Owner::Role(role) => {
                 *owners.entry(role).or_default() += 1;
-                *rows
+                // A rejected finding charges the review job that filed it,
+                // whose executor invocation performed the filing; other
+                // reviewer charges are gate reviewers' own invocations.
+                let activity = match role {
+                    AgentRole::Implementers => super::effort::MainActivity::Implement,
+                    AgentRole::Reviewers if charge.problem == Problem::RejectedFinding => {
+                        super::effort::MainActivity::ReviewJob
+                    }
+                    AgentRole::Reviewers => super::effort::MainActivity::Review,
+                    AgentRole::Pilots => super::effort::MainActivity::Pilot,
+                };
+                let effort = super::effort::main_invocation_effort(
+                    facts,
+                    super::effort::MainInvocationUnit {
+                        run_id: charge.run_id.as_deref(),
+                        activity,
+                        task_id: Some(&charge.task_id),
+                        model: charge.model.as_deref(),
+                        activity_id: charge.activity_id.as_deref(),
+                        after: charge.after,
+                        until: charge
+                            .activity_id
+                            .as_ref()
+                            .filter(|_| matches!(activity, super::effort::MainActivity::Review))
+                            .map(|_| charge.anchor),
+                        reported: charge.reported_effort.as_ref(),
+                        crew: charge.crew.as_deref(),
+                    },
+                );
+                let entry = rows
                     .entry(role)
                     .or_default()
-                    .entry(row_key(charge.crew.as_deref(), charge.model.as_deref()))
-                    .or_default() += 1;
+                    .entry(super::effort::model_effort_key(
+                        charge.model.as_deref(),
+                        effort,
+                    ))
+                    .or_default();
+                entry.0 += 1;
+                if let Some(crew) = &charge.crew {
+                    entry.1.insert(crew.clone());
+                }
             }
             Owner::NotScored(reason) => *reasons.entry(reason).or_default() += 1,
         }
@@ -551,31 +544,30 @@ pub(super) fn strip(facts: &AgentFacts, since: DateTime<Utc>) -> Value {
         .iter()
         .map(|role| {
             let mut list: Vec<_> = rows.remove(role).unwrap_or_default().into_iter().collect();
-            list.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
+            list.sort_by(|left, right| (right.1).0.cmp(&(left.1).0).then(left.0.cmp(&right.0)));
             (
                 role.as_str().to_string(),
                 list.into_iter()
-                    .map(|((crew, model), problems)| {
-                        json!({"crew": crew, "model": model, "problems": problems})
+                    .map(|((model, effort), (problems, crews))| {
+                        json!({
+                            "crew": crews.first(),
+                            "crews": crews,
+                            "model": model,
+                            "reasoning_effort": effort,
+                            "effort_label": super::effort::effort_label(&effort),
+                            "label": super::effort::row_label(&model, &effort),
+                            "problems": problems,
+                        })
                     })
                     .collect(),
             )
         })
         .collect();
     json!({
-        "since": since.to_rfc3339_opts(SecondsFormat::Secs, true),
+        "since": window.since().to_rfc3339_opts(SecondsFormat::Secs, true),
+        "until": window.reported_until().to_rfc3339_opts(SecondsFormat::Secs, true),
         "total": total,
         "owners": owner_counts,
         "charged": charged,
     })
-}
-
-/// The row a charge or credit counts in: its crew and model, `crew unknown`
-/// and `model unknown` when the run (or, for an orchestrator, the task)
-/// recorded none.
-pub(super) fn row_key(crew: Option<&str>, model: Option<&str>) -> (String, String) {
-    (
-        crew.unwrap_or(super::CREW_UNKNOWN).to_string(),
-        model.unwrap_or(MODEL_UNKNOWN).to_string(),
-    )
 }

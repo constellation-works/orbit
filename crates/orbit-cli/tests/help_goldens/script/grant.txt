@@ -22,6 +22,12 @@ Options:
       --follower
           Grant for a pull follower host instead of the workspace owner
 
+      --output-max-files <COUNT>
+          Most output files one step may keep, up to 64 (default 8). Each grant states it again; a re-grant without it returns to the default
+
+      --output-max-file-bytes <BYTES>
+          Largest output file one step may keep, in bytes, up to 67108864 (64 MiB; default 1048576). A step's whole output set is also bounded by files times bytes and never exceeds 256 MiB
+
   -h, --help
           Print help (see a summary with '-h')
 

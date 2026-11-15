@@ -1,10 +1,14 @@
 //! `orbit plugin test <dir>`: run a plugin's `spec.tests` goldens through the
 //! real protocol and record the Orbit version they passed on (design §5).
 //!
-//! A temp directory stands in for the Orbit global root and the workspace, so
-//! template paths (`{{workspace}}`, `{{plugin_root}}`, `{{plugin_state}}`,
-//! `{{config.<key>}}`) do not touch the operator's Orbit state. The backend
-//! runs under the profile the manifest requests for those template paths,
+//! A temp directory stands in for the Orbit global root and the workspace.
+//! Configuration comes only from manifest defaults plus an optional
+//! `--fixture-config` JSON object; caller `[plugins.<ns>]` settings never
+//! reach templates or backends. Fixture strings can use `{{workspace}}` and
+//! `{{plugin_root}}`. There is no caller-configuration execution mode.
+//! Temporary execution roots alone do not isolate absolute paths in defaults,
+//! fixture values or the manifest, nor explicitly passed environment variables.
+//! The backend runs under the profile the manifest requests for those paths,
 //! `network: loopback`, and `orbit_tools`: the run answers whether the plugin
 //! would work once those grants are recorded.
 //!
@@ -13,7 +17,7 @@
 //! root that resolves outside the temp directory, `network: any`, or any
 //! `env_pass`, unless the caller passes `--accept-requested` or a `--grant`
 //! list that names each of those grants. Write roots are judged where the
-//! backend would open them: rendered with the effective configuration,
+//! backend would open them: rendered with the fixture configuration,
 //! resolved against the plugin root and followed through symlinks, so a
 //! `{{config.<key>}}` default or a relative `../` root naming a host
 //! directory needs consent like an absolute one. With that consent the run
@@ -23,8 +27,8 @@
 //! Secrets come from the goldens alone: a case's `secrets` map is delivered
 //! the way the host delivers stored values (`context.secrets` /
 //! `_meta.orbit.secrets`, each at version `fixture`), and the host's own
-//! secret store is never opened, so a run cannot read — or certify against —
-//! a real credential.
+//! secret store is never opened. Only supplied fixtures can satisfy declared
+//! secrets; explicit environment grants still carry their usual consequences.
 //!
 //! Certification is written only when this host has the same plugin
 //! installed at the same manifest digest: a directory that differs from the

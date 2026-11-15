@@ -1,6 +1,6 @@
 //! Revisions, the fetched branch head and remote observation.
 
-use orbit_automation::{AutomationError, DeferredReason, delivery::digest};
+use orbit_automation::{AutomationError, DeferredReason};
 use orbit_common::fs::git::{
     GIT_FETCH_CAS_ATTEMPTS, git_fetch_cas_retry_delay, git_fetch_lock_target,
     should_retry_git_ref_cas,
@@ -10,6 +10,18 @@ use orbit_types::workflow::automation::*;
 use std::{path::Path, time::Duration};
 
 use super::{SOURCE_DEADLINE, Source};
+
+/// One commit in a pinned release survey, with the subject that names its tasks.
+pub(crate) struct SurveyedCommit {
+    pub(crate) sha: String,
+    pub(crate) subject: String,
+}
+
+/// The pinned release survey: latest reachable tag and its no-merge range.
+pub(crate) struct PinnedReleaseSurvey {
+    pub(crate) latest_tag: Option<String>,
+    pub(crate) commits: Vec<SurveyedCommit>,
+}
 
 impl<'a> Source<'a> {
     pub(crate) fn revision(&self, spec: &str) -> Result<SourceRevision, AutomationError> {
@@ -293,6 +305,56 @@ impl<'a> Source<'a> {
         }))
     }
 
+    /// Independently verified release survey at `pinned`: the latest reachable
+    /// `v*` tag and the no-merge commits in `<latest-tag>..<pinned>`, oldest
+    /// first, each with its subject. This reads only local Git objects; it
+    /// never fetches and never consults candidate evidence. `None` tag means
+    /// no release baseline reaches the pin, so the range is empty.
+    pub(crate) fn release_survey(
+        &self,
+        pinned: &str,
+    ) -> Result<PinnedReleaseSurvey, AutomationError> {
+        self.revision(pinned)?;
+        let tags = self.git(&[
+            "tag",
+            "--merged",
+            pinned,
+            "--list",
+            "v*",
+            "--sort=-version:refname",
+        ])?;
+        let Some(latest_tag) = tags.lines().map(str::trim).find(|line| !line.is_empty()) else {
+            return Ok(PinnedReleaseSurvey {
+                latest_tag: None,
+                commits: Vec::new(),
+            });
+        };
+        let latest_tag = latest_tag.to_string();
+        let range = format!("{latest_tag}..{pinned}");
+        let log = self.git(&[
+            "log",
+            "--no-merges",
+            "--reverse",
+            "--pretty=%H%x09%s",
+            &range,
+        ])?;
+        let commits = log
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                let (sha, subject) = line.split_once('\t').unwrap_or((line, ""));
+                SurveyedCommit {
+                    sha: sha.trim().to_string(),
+                    subject: subject.to_string(),
+                }
+            })
+            .collect();
+        Ok(PinnedReleaseSurvey {
+            latest_tag: Some(latest_tag),
+            commits,
+        })
+    }
+
     /// `true` when `older` is an ancestor of `newer`. A missing object is
     /// divergence, not success. A source deadline propagates.
     pub(crate) fn is_ancestor(&self, older: &str, newer: &str) -> Result<bool, AutomationError> {
@@ -334,23 +396,9 @@ impl<'a> Source<'a> {
     /// anything else is identified by a digest of its remote or git dir.
     pub(crate) fn repository(&self) -> Result<String, AutomationError> {
         let remote = self.origin_url()?.unwrap_or_default();
-
-        let normalized = remote.trim_end_matches(".git");
-        let repository = if let Some(github) = normalized
-            .strip_prefix("https://github.com/")
-            .or_else(|| normalized.strip_prefix("git@github.com:"))
-        {
-            github.to_string()
-        } else {
-            let identity = if remote.is_empty() {
-                self.git(&["rev-parse", "--path-format=absolute", "--git-common-dir"])?
-            } else {
-                remote
-            };
-            format!("git:{}", digest(identity.as_bytes()))
-        };
-
-        Ok(repository)
+        super::repository_identity(&remote, || {
+            self.git(&["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        })
     }
 }
 

@@ -19,10 +19,7 @@ const EXCLUDED_BACKLOG_RECORDED: usize = 20;
 pub(super) fn waiting_reason(
     reason: crate::application::admission::backlog_exclusion::BacklogTaskExclusionReason,
 ) -> String {
-    serde_json::to_value(reason)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_string))
-        .unwrap_or_else(|| "excluded".to_string())
+    orbit_common::protocol::serde_string_label(&reason).unwrap_or_else(|| "excluded".to_string())
 }
 
 pub(super) fn waiting_excluded(

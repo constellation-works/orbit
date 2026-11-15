@@ -1,9 +1,8 @@
-//! SkillCatalog listing, loading, doctor rows and layered scoped-store resolution.
+//! SkillCatalog listing, loading, doctor rows and layered scoped lookup.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::scope::{ScopeStrategy, ScopedStore, resolve};
 use orbit_common::security::release::sha256_hex;
 use orbit_common::{NotFoundKind, OrbitError};
 
@@ -93,12 +92,38 @@ impl SkillCatalog {
 
         // Skills use MergeByKey semantics: workspace wins for the named key,
         // otherwise fall through to the global default.
-        match resolve::<LoadedSkill, _>(self, skill_id)? {
+        match self.get_workspace(skill_id)? {
             Some(skill) => Ok(skill),
-            None => Err(OrbitError::not_found(
-                NotFoundKind::Skill,
-                skill_id.to_string(),
-            )),
+            None => match self.get_global(skill_id)? {
+                Some(skill) => Ok(skill),
+                None => Err(OrbitError::not_found(
+                    NotFoundKind::Skill,
+                    skill_id.to_string(),
+                )),
+            },
+        }
+    }
+
+    fn get_workspace(&self, key: &str) -> Result<Option<LoadedSkill>, OrbitError> {
+        validate_skill_id(key)?;
+        let dir = self.root.join(key);
+        if dir.exists() {
+            load_skill_from_dir(key, &dir).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn get_global(&self, key: &str) -> Result<Option<LoadedSkill>, OrbitError> {
+        validate_skill_id(key)?;
+        let Some(ref global) = self.global_root else {
+            return Ok(None);
+        };
+        let dir = global.join(key);
+        if dir.exists() {
+            load_skill_from_dir(key, &dir).map(Some)
+        } else {
+            Ok(None)
         }
     }
 
@@ -131,37 +156,6 @@ impl SkillCatalog {
                 .global_root
                 .as_ref()
                 .map_or(workspace, |global| global.join(skill_id)))
-        }
-    }
-}
-
-impl ScopedStore<LoadedSkill> for SkillCatalog {
-    type Err = OrbitError;
-
-    fn strategy(&self) -> ScopeStrategy {
-        ScopeStrategy::MergeByKey
-    }
-
-    fn get_workspace(&self, key: &str) -> Result<Option<LoadedSkill>, OrbitError> {
-        validate_skill_id(key)?;
-        let dir = self.root.join(key);
-        if dir.exists() {
-            load_skill_from_dir(key, &dir).map(Some)
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn get_global(&self, key: &str) -> Result<Option<LoadedSkill>, OrbitError> {
-        validate_skill_id(key)?;
-        let Some(ref global) = self.global_root else {
-            return Ok(None);
-        };
-        let dir = global.join(key);
-        if dir.exists() {
-            load_skill_from_dir(key, &dir).map(Some)
-        } else {
-            Ok(None)
         }
     }
 }

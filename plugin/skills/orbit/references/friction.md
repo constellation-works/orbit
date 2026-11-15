@@ -29,16 +29,15 @@ re-diagnosing the same problem.
 
 Records live in Orbit's store, keyed by `(workspace_id, friction_id)` — IDs are
 workspace-local and monthly (`F<YYYY>-<MM>-<NNN>`), so the same ID in two
-workspaces is two unrelated records. Reach them only through `orbit.friction.*`;
+workspaces is two unrelated records. Reach them only through `orbit.friction` and the friction CLI;
 any `.orbit/frictions/` markdown tree is legacy evidence, and editing a file
 there cannot change what a read returns. Creation is durable; `update` can replace the body and triage metadata. New records start `open` and may become `triaged` or `resolved`.
 
 ```bash
-orbit tool run orbit.friction.add --input '{
+orbit tool run orbit.friction --input '{"action":"add",
   "title": "<the surface and the failure, max 120 chars>",
   "body": "<what happened, where, and why it caused friction>",
   "tags": ["<tag>"], "during_task": "<optional task id>",
-  "model": "<agent-family>"
 }'
 ```
 
@@ -65,7 +64,7 @@ Over MCP or `orbit tool run`, list frictions with `orbit.search`, `kind:
 "friction"`, and no `query`:
 
 ```bash
-orbit tool run orbit.search --input '{"kind":"friction","status":"friction:open","model":"<agent-family>"}'
+orbit tool run orbit.search --input '{"kind":"friction","status":"friction:open"}'
 ```
 
 A listing covers every status unless a `friction:<open|triaged|resolved>`
@@ -113,11 +112,11 @@ sends everything to `other` is telling you it's the wrong taxonomy.
 ## Lifecycle
 
 ```bash
-orbit tool run orbit.friction.update --input '{"id":"<ID>","status":"triaged","model":"<agent-family>"}'
-orbit tool run orbit.friction.update --input '{"id":"<ID>","status":"resolved","model":"<agent-family>"}'
+orbit tool run orbit.friction --input '{"action":"update","id":"<ID>","status":"triaged"}'
+orbit tool run orbit.friction --input '{"action":"update","id":"<ID>","status":"resolved"}'
 ```
 
-`update` also accepts `tags`, `body`, `title`, and `rehome_to`. Over MCP, use `orbit_friction_update`
+`update` also accepts `tags`, `body`, `title`, and `rehome_to`. Over MCP, use `orbit_friction` action `update`
 with `status: resolved`; the separate CLI resolve operation is not an advertised
 MCP tool. Include the selected `workspace` in every MCP example here.
 
@@ -139,19 +138,23 @@ owner PR completion path uses its verified merge evidence too.
 The implementer never has to close a record with a future merge SHA: a
 "resolved with the merge sha" criterion is fulfilled by owner-side landing.
 Local and already-landed handoffs name the candidate or covering commit;
-verified no-diff handoffs name the synchronized base, with PR `none`.
+verified no-diff handoffs name the synchronized base, with PR `none`. A final
+recovery's completion names the covering commit it verified, also with PR `none`.
 Auto-resolve runs on the transition into `done`, not on later writes to the
-done task: a friction reopened afterwards stays open. A resolution that failed
-at that transition is recorded in the task's history and retried by the task's
-next write, retaining the original delivery evidence.
+done task: a friction reopened afterwards stays open. The transition commits
+each named target as owed in the task's history. A resolution that failed or
+never ran, because of a failed write, an unreadable history or a crash, is
+retried by the task's next write, retaining the original delivery evidence.
+A target named only in text, on a completion with no delivered commit, is
+closed out in the task's history and the friction stays open.
 
 A target that does not exist in this workspace and is not known to belong
 elsewhere is dangling: audit-visible, and it does not block completion. A
 target that exists only in another workspace on this host is **not**
 dangling — completing the task is rejected with `friction_not_local`. Resolve
 that friction from its owning workspace — `orbit friction resolve <id>` is the
-operator CLI path; an agent instead runs `orbit tool run orbit.friction.update
---input '{"id":"<id>","status":"resolved"}'`, which stamps the same resolution
+operator CLI path; an agent instead runs `orbit tool run orbit.friction
+--input '{"action":"update","id":"<id>","status":"resolved"}'`, which stamps the same resolution
 metadata — or land a covering task there. Do not count a foreign `resolves`
 edge as coverage.
 
@@ -166,7 +169,7 @@ Close a local legacy report from that replica using the normal audited path:
 
 ```bash
 orbit --workspace <replica-workspace> friction resolve <ID>
-orbit tool run orbit.friction.update --input '{"workspace":"<replica-workspace>","id":"<ID>","status":"resolved","body":"<original report plus disposition evidence>","model":"<agent-family>"}'
+orbit tool run orbit.friction --input '{"action":"update","workspace":"<replica-workspace>","id":"<ID>","status":"resolved","body":"<original report plus disposition evidence>"}'
 ```
 
 The update must explicitly set `status: resolved`; it may include body, title,
@@ -192,11 +195,11 @@ a `resolves` edge from the owning workspace cannot reach the record.
 `rehome_to` on an update:
 
 ```bash
-orbit tool run orbit.friction.update --input '{"id":"<ID>","rehome_to":"<name-or-ws-id>","model":"<agent-family>"}'
+orbit tool run orbit.friction --input '{"action":"update","id":"<ID>","rehome_to":"<name-or-ws-id>"}'
 orbit friction rehome <ID> --to-workspace <name-or-ws-id>   # CLI spelling of the same move
 ```
 
-Over MCP, use `orbit_friction_update` with the source `workspace`. Any other
+Over MCP, use `orbit_friction` action `update` with the source `workspace`. Any other
 edits in the same call apply first, then the move runs as one transaction:
 
 - The owning workspace gets a copy under an ID it allocates, returned as
@@ -217,7 +220,7 @@ disposition: the record stays open, and curation counts it as dispositioned,
 not as uncovered. `"rehome_to": ""` clears a recorded disposition.
 
 ```bash
-orbit tool run orbit.friction.update --input '{"id":"<ID>","rehome_to":"<owning-workspace>","move":false,"model":"<agent-family>"}'
+orbit tool run orbit.friction --input '{"action":"update","id":"<ID>","rehome_to":"<owning-workspace>","move":false}'
 ```
 
 ## Reading the corpus

@@ -47,22 +47,23 @@
 //! or, when the note names no landing and the task leaves `review`, the PR it
 //! was reviewed through. The whole pass
 //! is best effort: the transition has already been written, so a forge error is
-//! a warning (log plus session event), never a failure. Branches are kept.
+//! a logged warning, never a failure. Each successful close
+//! is recorded in the task's history with its comment. Branches are kept.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::{ClaimInspection, JobRunQuery};
-use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    CANDIDATE_DISCARDED_EVENT, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskStatus,
+    CANDIDATE_DISCARDED_EVENT, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskHistoryEntry, TaskStatus,
     names_task_delivery_pull_request,
 };
 use orbit_types::workflow::JobRunState;
 use orbit_types::workflow::handoff::HandoffDelivery;
 
 use crate::OrbitRuntime;
+use crate::application::task::helpers::SYSTEM_ACTOR_LABEL;
 use crate::runtime::task::FINAL_RECOVERY_REQUEUED_EVENT;
 use crate::runtime::task_pr_forge::TaskPrForge;
 
@@ -84,7 +85,7 @@ impl OrbitRuntime {
         if previous == task.status || previous == TaskStatus::Done || !task.status.is_terminal() {
             return true;
         }
-        if !self.context.settings().pr_settings().close_on_terminal {
+        if !orbit_types::workflow::PR_CLOSE_ON_TERMINAL {
             return true;
         }
         let landing_prs = if task.status == TaskStatus::Done {
@@ -127,7 +128,7 @@ impl OrbitRuntime {
             )
             || (previous == TaskStatus::Someday && task.status == TaskStatus::Backlog)
             || !matches!(task.status, TaskStatus::Backlog | TaskStatus::Someday)
-            || !self.context.settings().pr_settings().close_on_terminal
+            || !orbit_types::workflow::PR_CLOSE_ON_TERMINAL
         {
             return true;
         }
@@ -235,10 +236,28 @@ impl OrbitRuntime {
                         status = %task.status,
                         "{closed_message}"
                     );
-                    self.record_session_event(OrbitEvent::TaskPullRequestClosed {
-                        task_id: task.id.clone(),
-                        pr_number: pr.number,
-                    });
+                    if let Err(error) = self.append_system_history(
+                        &task.id,
+                        vec![TaskHistoryEntry {
+                            at: chrono::Utc::now(),
+                            by: SYSTEM_ACTOR_LABEL.to_string(),
+                            event: "pull_request_closed".to_string(),
+                            note: Some(format!("Closed pull request #{}: {comment}", pr.number)),
+                            from_status: None,
+                            to_status: None,
+                            operation_id: None,
+                            decision: None,
+                        }],
+                    ) {
+                        self.warn_pr_closure(
+                            &task.id,
+                            Some(pr.number),
+                            &OrbitError::Execution(format!(
+                                "pull request was closed, but recording its task history failed: {error}"
+                            )),
+                        );
+                        settled = false;
+                    }
                 }
                 Err(error) => {
                     self.warn_pr_closure(&task.id, Some(pr.number), &error);
@@ -300,7 +319,7 @@ impl OrbitRuntime {
         // Pending, running and retrying are the live delivery states. Skipped
         // is non-terminal but is not a delivery in progress.
         match self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
-            job_id: Some("task_pr_pipeline".to_string()),
+            job_id: Some(orbit_types::workflow::TASK_PR_PIPELINE_JOB.to_string()),
             task_id: Some(task.id.clone()),
             states: vec![
                 JobRunState::Pending,
@@ -330,14 +349,29 @@ impl OrbitRuntime {
         &self,
         task: &Task,
     ) -> Result<Option<ClaimInspection>, String> {
-        let claims = self
+        match self
             .stores()
             .tasks()
-            .inspect_execution_claims()
-            .map_err(|_| "its execution claims cannot be read".to_string())?;
+            .inspect_task_execution_claims(&task.id)
+        {
+            Ok(claims) => Self::unsettled_task_claim_with_claims(task, Some(&claims)),
+            Err(_) => Self::unsettled_task_claim_with_claims(task, None),
+        }
+    }
+
+    /// [`Self::unsettled_task_claim`] over an already-read claim ledger:
+    /// `None` means the ledger could not be read.
+    pub(super) fn unsettled_task_claim_with_claims(
+        task: &Task,
+        claims: Option<&[ClaimInspection]>,
+    ) -> Result<Option<ClaimInspection>, String> {
+        let Some(claims) = claims else {
+            return Err("its execution claims cannot be read".to_string());
+        };
         Ok(claims
-            .into_iter()
-            .find(|claim| claim.claim.task_id == task.id && claim.claim.phase.is_unsettled()))
+            .iter()
+            .find(|claim| claim.claim.task_id == task.id && claim.claim.phase.is_unsettled())
+            .cloned())
     }
 
     /// Whether the task's next run resumes the candidate its shelving kept:
@@ -400,10 +434,23 @@ impl OrbitRuntime {
     /// claims, or a failed read, contributes none: those PRs then stay open
     /// rather than being guessed at.
     pub(super) fn accepted_handoff_pull_requests(&self, task_id: &str) -> BTreeMap<u64, String> {
-        let tasks = self.stores().tasks();
-        let Ok(claims) = tasks.inspect_execution_claims() else {
+        match self.stores().tasks().inspect_task_execution_claims(task_id) {
+            Ok(claims) => self.accepted_handoff_pull_requests_with_claims(task_id, Some(&claims)),
+            Err(_) => self.accepted_handoff_pull_requests_with_claims(task_id, None),
+        }
+    }
+
+    /// [`Self::accepted_handoff_pull_requests`] over an already-read claim
+    /// ledger: `None` (an unreadable ledger) contributes no PRs.
+    pub(super) fn accepted_handoff_pull_requests_with_claims(
+        &self,
+        task_id: &str,
+        claims: Option<&[ClaimInspection]>,
+    ) -> BTreeMap<u64, String> {
+        let Some(claims) = claims else {
             return BTreeMap::new();
         };
+        let tasks = self.stores().tasks();
         claims
             .iter()
             .filter(|claim| claim.claim.task_id == task_id)
@@ -431,15 +478,6 @@ impl OrbitRuntime {
             "could not close an Orbit-authored pull request after the task's terminal decision; \
              the transition stands"
         );
-        self.record_session_event(OrbitEvent::TaskPullRequestCloseFailed {
-            task_id: task_id.to_string(),
-            pr_number,
-            reason: error.to_string(),
-        });
-    }
-
-    fn record_session_event(&self, event: OrbitEvent) {
-        self.event_log.append(event);
     }
 }
 
@@ -502,7 +540,18 @@ fn closure_comment(task: &Task, note: Option<&str>) -> String {
     let note = note.map(str::trim).filter(|note| !note.is_empty());
     let decision = match (task.status, note) {
         (TaskStatus::Done, Some(landing)) => {
-            format!("Task {} landed: {landing}", task.id)
+            let prs = referenced_pr_numbers(landing);
+            let supersession = if prs.is_empty() {
+                String::new()
+            } else {
+                let prs = prs
+                    .iter()
+                    .map(|number| format!("#{number}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("\n\nThis pull request is superseded by {prs}.")
+            };
+            format!("Task {} landed: {landing}{supersession}", task.id)
         }
         (TaskStatus::Done, None) => format!("Task {} is done.", task.id),
         (status, Some(reason)) => format!("Task {} was {status}: {reason}", task.id),

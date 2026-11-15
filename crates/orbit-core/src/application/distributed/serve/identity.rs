@@ -15,7 +15,18 @@ impl OrbitRuntime {
     /// The receipt this owner recorded when it admitted `claim_id`'s claim.
     pub(crate) fn claim_receipt(&self, claim_id: &str) -> Result<AdmissionReceipt, OrbitError> {
         let claim = self.current_claim(claim_id)?;
-        let AdmissionLookup::Found { receipt, .. } = self.admission_boundary()?.lookup_admission(
+        Self::admitted_claim_receipt(&self.admission_boundary()?, &claim)
+    }
+
+    /// The receipt this owner recorded when it admitted `claim`, read through
+    /// an already open `boundary`. A caller holding many claims from one
+    /// inspection uses this instead of [`Self::claim_receipt`], which
+    /// re-inspects every claim and reopens the boundary on each call.
+    pub(crate) fn admitted_claim_receipt(
+        boundary: &TaskCommitBoundary,
+        claim: &ExecutionClaim,
+    ) -> Result<AdmissionReceipt, OrbitError> {
+        let AdmissionLookup::Found { receipt, .. } = boundary.lookup_admission(
             &AdmissionIdentity::trusted_local(claim.executed_on.clone()),
             &claim.request_id,
         )?

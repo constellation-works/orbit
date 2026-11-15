@@ -3,6 +3,10 @@
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(
+    not(any(test, feature = "test-support")),
+    deny(clippy::disallowed_methods)
+)]
 //! Process spawning, sandboxing, and timeout handling for Orbit tool execution.
 //!
 //! Provides the low-level primitives for launching child processes with
@@ -63,16 +67,21 @@ mod result;
 mod runner;
 mod sandbox;
 mod supervision;
+#[cfg(test)]
+mod tests;
 mod validation_env;
 
 pub use build_sandbox::{
     BUILD_FETCH_PHASE_SUPPORTED, BuildLog, BuildPhaseEnd, BuildPhaseNetwork, BuildPhaseRequest,
     BuildSandboxProbe, BuildSandboxSpec, PLUGIN_BUILD_DIR_CAP_BYTES, PLUGIN_BUILD_FETCH_PORT,
-    PLUGIN_BUILD_LOG_CAP_BYTES, SCRIPT_LOG_CAP_BYTES, SCRIPT_SANDBOX_MOUNT, SCRIPT_SCRATCH_DIRS,
-    SCRIPT_STDOUT_CAP_BYTES, SCRIPT_TERMINATION_GRACE, ScriptRunEnd, ScriptSandboxRequest,
-    ScriptSandboxRun, ScriptSandboxSpec, compile_linux_build_argv, compile_linux_script_argv,
-    compile_macos_build_profile, probe_build_sandbox, probe_script_sandbox, run_build_phase,
-    run_script_sandboxed,
+    PLUGIN_BUILD_LOG_CAP_BYTES, SCRIPT_HTTPS_PORT, SCRIPT_LOG_CAP_BYTES, SCRIPT_MACOS_PROFILE_GAPS,
+    SCRIPT_OPEN_FILES_LIMIT, SCRIPT_SANDBOX_MOUNT, SCRIPT_SCRATCH_DIRS, SCRIPT_STDOUT_CAP_BYTES,
+    SCRIPT_TERMINATION_GRACE, ScriptRootAccess, ScriptRunEnd, ScriptSandboxInput,
+    ScriptSandboxNetwork, ScriptSandboxRequest, ScriptSandboxRun, ScriptSandboxSpec,
+    compile_linux_build_argv, compile_linux_script_argv, compile_macos_build_profile,
+    compile_macos_script_profile, probe_build_sandbox, probe_script_root, probe_script_sandbox,
+    probe_script_sandbox_network, run_build_phase, run_script_sandboxed, script_input_conflict,
+    script_scratch_path_in_sandbox,
 };
 pub use credential_paths::default_credential_read_denies;
 pub use linux_landlock::{
@@ -117,6 +126,7 @@ pub use supervision::{
 };
 pub use validation_env::{
     LOGIN_SHELL_CACHE_TTL, LOGIN_SHELL_TIMEOUT, LOGIN_SHELL_TOOLCHAIN_VARS, LoginShell,
-    LoginShellEnv, LoginShellMode, ValidationEnvPolicy, ValidationEnvSource, ValidationEnvironment,
-    ValidationPathMode, program_on_path,
+    LoginShellEnv, LoginShellMode, VALIDATION_CARGO_INCREMENTAL, VALIDATION_INTERACTIVE_PROBE,
+    VALIDATION_LOGIN_SHELL, VALIDATION_PATH_MODE, ValidationEnvPolicy, ValidationEnvSource,
+    ValidationEnvironment, ValidationPathMode, program_on_path,
 };

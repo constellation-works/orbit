@@ -6,6 +6,21 @@ use orbit_types::workflow::handoff::{LandingAttemptState, LandingRetryRequest};
 
 use super::{LANDING_JOB, LandingDispatch};
 use crate::OrbitRuntime;
+use crate::application::operator_input;
+
+/// Trim the operator fields and check the reason and replay key. The
+/// normalized request is what the receipt stores and replays against, so the
+/// same input always compares equal whichever surface sent it.
+fn normalized_retry_request(
+    request: &LandingRetryRequest,
+) -> Result<LandingRetryRequest, OrbitError> {
+    let mut normalized = request.clone();
+    normalized.expected_candidate_commit = request.expected_candidate_commit.trim().to_string();
+    normalized.expected_base_commit = request.expected_base_commit.trim().to_string();
+    normalized.reason = operator_input::reason(&request.reason, "retrying a handoff")?;
+    normalized.request_key = operator_input::replay_key(&request.request_key)?;
+    Ok(normalized)
+}
 
 impl OrbitRuntime {
     /// Retry a stopped, terminal-job dispatched, or uncertain landing under
@@ -14,6 +29,19 @@ impl OrbitRuntime {
     /// `owner_workspace_id` is explicit and must identify this owner partition.
     /// Replaying a receipt returns its original run even after it settles.
     pub fn retry_handoff_as_operator(
+        &self,
+        owner_workspace_id: &str,
+        request: &LandingRetryRequest,
+        actor: &str,
+    ) -> Result<LandingDispatch, OrbitError> {
+        let normalized = normalized_retry_request(request)?;
+        self.reserve_landing_retry(owner_workspace_id, &normalized, actor)
+    }
+
+    /// The reservation behind every landing retry. Operator input is bounded
+    /// by `retry_handoff_as_operator`; the owner's automatic waiting-gate retry
+    /// calls this directly with its own internal keys.
+    pub(crate) fn reserve_landing_retry(
         &self,
         owner_workspace_id: &str,
         request: &LandingRetryRequest,
@@ -71,7 +99,7 @@ impl OrbitRuntime {
                 .landing_retry_receipt(&request.handoff_id, &request.request_key)?
                 .is_some()
             {
-                return self.retry_handoff_as_operator(owner_workspace_id, request, actor);
+                return self.reserve_landing_retry(owner_workspace_id, request, actor);
             }
             return Err(OrbitError::InvalidInput(
                 "a landing job is still live; retry refused".into(),
@@ -84,7 +112,7 @@ impl OrbitRuntime {
             actor.to_string(),
         )
         .with_handoff_observation(observation);
-        if let Err(error) = tasks.mutate_execution_claim(
+        if let Err(error) = self.mutate_execution_claim(
             Some(&context),
             &format!("landing-retry:{}", request.request_key),
             &ClaimMutation::RetryLanding(request.clone()),
@@ -103,7 +131,7 @@ impl OrbitRuntime {
                     ))?
                     .is_some()
             {
-                return self.retry_handoff_as_operator(owner_workspace_id, request, actor);
+                return self.reserve_landing_retry(owner_workspace_id, request, actor);
             }
             return Err(error);
         }
@@ -145,7 +173,7 @@ impl OrbitRuntime {
         {
             return Ok(());
         }
-        self.stores().tasks().mutate_execution_claim(
+        self.mutate_execution_claim(
             Some(&self.landing_invocation(&claim)),
             &format!("landing-retry-attach:{}:{run_id}", request.request_key),
             &ClaimMutation::AttachLandingRetry {

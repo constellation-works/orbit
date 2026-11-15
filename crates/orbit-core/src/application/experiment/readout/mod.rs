@@ -4,6 +4,7 @@
 //! its arm whatever its outcome; forced assignments are left out and
 //! counted.
 
+mod admission;
 mod build;
 mod metrics;
 mod model;

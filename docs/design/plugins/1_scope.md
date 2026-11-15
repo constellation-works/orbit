@@ -7,8 +7,8 @@ doc_role: scope
 type: design
 summary: "Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest"
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
-last_updated: 2026-10-27
-last_validated: 2026-10-27
+last_updated: 2026-11-12
+last_validated: 2026-11-12
 stage: shipped
 next: "—"
 ---
@@ -184,7 +184,8 @@ Rules:
 - Templates are limited to `{{workspace}}`, `{{plugin_root}}`, `{{plugin_state}}` and
   `{{config.<key>}}`. Filesystem templates render against the effective `[plugins.<ns>]`
   values (workspace config over global config over manifest defaults), stringifying non-string
-  scalars.
+  scalars. Conformance instead uses manifest defaults plus explicit fixture overrides (§5),
+  excluding caller settings.
 - Every path is canonicalised and must stay inside the plugin root or the granted fs profile.
   A rendered relative fs root is relative to the plugin root everywhere (validation,
   registration, conformance, call-time sandboxing), never to Orbit's working directory.
@@ -256,8 +257,10 @@ still prevents the write.
   and writes nothing: a toggle can never switch on what the host has not consented to.
 - The toggle is outside the grants witness. It can only narrow, so a tampered toggle can take
   a plugin off but never widen its grants or switch on a host-disabled plugin.
-- `[plugin_enablement]` in the global `config.toml` is refused at load; host enablement is
-  the plugin store row. A workspace file holding only the toggle table does not count as a
+- `[plugin_enablement]` in the global `config.toml` is refused at load with a typed
+  `host_configuration` error naming the host and file (not the caller's `invalid_input`);
+  host enablement is the plugin store row. Final recovery treats that error as transient
+  infrastructure, and `orbit doctor` reports the misplaced table with its exact fix. A workspace file holding only the toggle table does not count as a
   workspace config layer, so the replace-only execution keys keep inheriting from global.
 - Skill links are host-level and stay while the host row is enabled.
 - `list`, `show` and `doctor` report the host state beside the effective one and why it
@@ -477,7 +480,7 @@ links, refuse the enable without writing schedule files or plugin provenance in 
 ### 4.1 Placement, never permission
 
 The manifest declares where a tool appears (`mcp_scope`, CLI shape) and its execution
-kind. Three generic governed rows in `orbit-common/src/governance/authorization/catalog.rs`
+kind. Three generic governed rows in `orbit-common/src/governance/authorization/catalog/types.rs`
 set the capability floor:
 
 | Declaration | Governed row | Caller capabilities |
@@ -573,6 +576,29 @@ Refused:
 The rule runs at `orbit plugin validate`, registration (against a synthetic workspace) and
 call time (against the real one). An `fs` grant therefore cannot reopen `bin/`,
 `plugins/.grants`, another plugin's tree, workspace control files or Git hooks.
+
+**Exact-file write admission.** `permissions.fs.write_files` requests writes to
+existing regular files, separately from directory roots in `fs.write`. It uses the
+same templates, `fs` consent (including scoped `fs=<root>` grants), digest binding,
+certification and upgrade re-consent. Omit the list when unused; empty, missing or
+non-file paths refuse rather than materialize a file or grant its parent. The exact
+file must be user-owned, have one hard link, and have no group/other write bits.
+Its physical path may not traverse symbolic links or unsafe directories; use the
+physical spelling (for example `/private/tmp` rather than macOS's `/tmp` alias).
+Orbit opens each component without following links and validates the opened file,
+then repeats admission before spawning. Protected install, Orbit state and workspace
+metadata boundaries apply to exact files too. A scoped grant covers a requested file
+only when it names that file or an ancestor directory; a descendant never grants a
+directory beneath the file. File replacement/creation and atomic rename require a
+separate directory capability. macOS emits a `subpath` rule rooted at the file itself,
+which matches only that file because a regular file has no descendants; Linux binds the
+existing inode. Neither turns the request into a parent-directory grant. Any path
+component (the file or an ancestor) containing `*` or `?` is refused at admission: the
+macOS compiler reads those characters as glob patterns, so `grant?` would also allow
+`grantX`. Existing
+platform scratch permissions remain unchanged. Adding a file or changing its resolved
+config destination requires re-consent; old manifests omit this field and retain their
+previous permissions and digest representation.
 
 ### 4.2 Execution protocol
 
@@ -742,11 +768,14 @@ call, neither read from the child's environment:
 - The *session* half is fixed at mint and never rewritten, so nothing done to the row
   afterwards (re-grant, widening upgrade, a backend rewriting its tree) widens a live child.
 
-**Session record schema.** Current records use `schema_version: 3`, carrying their own token
-as well as the tool ceiling introduced in version 2. A record with no ceiling or a schema this
-host cannot read is refused and counted stale: `orbit plugin doctor` reports it and the next
-session mint's sweep removes it [ORB-12879]. Incomplete JSON is left alone, since a record is
-briefly empty between open and its single write.
+**Session record schema.** Current records use `schema_version: 5`: version 5 adds the
+application-invocation evidence (entry bindings, text digests, the predicate it was admitted
+on) and the pin slot, version 4 bound the application scope, version 3 gave records their own
+token, and the tool ceiling dates to version 2. The reader still accepts the previous schema
+4, whose invocations read with the newer fields defaulted. A record with no ceiling or a
+schema this host cannot read is refused and counted stale: `orbit plugin doctor` reports it
+and the next session mint's sweep removes it [ORB-12879]. Incomplete JSON is left alone,
+since a record is briefly empty between open and its single write.
 
 **Every other CLI command is refused.** The CLI resolves the callback session once, before it
 pins a generation or opens a runtime. A recognized plugin child may run only `orbit tool run
@@ -758,19 +787,43 @@ a read a refused command offered requests the serving tool instead:
 | read | tool | entry point | also needs |
 | --- | --- | --- | --- |
 | `orbit workspace list` | `orbit.workspace.list` | MCP `tools/call` only — workspace discovery is owned by the MCP server ([federated-mcp](../federated-mcp/1_overview.md)) | — |
-| `orbit run show <id>` | `orbit.workflow.run.show` | `orbit tool run` or MCP | the `operator` capability |
+| `orbit run show <id>` | `orbit.run` action `show` | `orbit tool run` or MCP | the `operator` capability |
 | a run's commit and landing for one task | `orbit.task.show` with `field: "delivery"` | `orbit tool run` or MCP | — (bounded host evidence; no `operator`) |
 
-Reaching another machine through a federated destination still needs a `network` grant and
-`ssh` in `requires.programs`.
+Cross-host callbacks through `orbit tool run` are unsupported [ORB-21384]. A
+`network` grant and `ssh` in `requires.programs` do not grant access to the
+host’s SSH credentials.
+This includes a registered remote host addressed through `--host <host> --workspace <name>`
+and an id-only tool call whose task prefix belongs to that host (without an explicit
+workspace or root). Both are refused with `policy_denied` before SSH discovery
+or delivery [ORB-21774].
+The error names the destination; a plugin-attributed `WARN` records the tool, destination
+(in the `workspace` field) and refusal in `orbit.jsonl`, as for a direct remote selector.
 
-**Workspace addressing.** A callback addresses a workspace with the same `workspace` selector as any `orbit tool run`, and the session does not narrow it. The session carries a tool ceiling, not a workspace ceiling, so a callback may name any workspace the local registry lists (by name, `ws_*` ID or checkout path), not only its plugin's own. Narrowing callbacks to the plugin's own workspace is not implemented. A `hm_*/ws_*` selector is decided by the host it names:
+**Workspace addressing.** A CLI callback uses the same `workspace` selectors as any
+`orbit tool run` (name, `ws_*` ID or checkout path), but a confined backend only covers the
+workspace the host bound its backend to. The host records that root in the callback
+credential for both exec and MCP backends, along with whether the effective profile
+is unconfined. Backends the host spawned with the `unsandboxed` grant retain
+cross-workspace local calls. A selector for another local checkout is
+refused before runtime bootstrap or any selected store open, with
+`callback_workspace_outside_sandbox` [ORB-21432]. The error names the selector and explains the
+sandbox limit; a `WARN` entry in `orbit.jsonl` records the plugin, tool, selector and
+code. Changing cwd does not change the host-recorded binding. Sessions minted before
+that binding was recorded must restart their backend before using an explicit
+workspace selector: preflight cannot prove which checkout their sandbox covers.
+This preflight refusal precedes
+the persistent CLI audit guard; same-workspace callbacks still pass through the
+recorded allowlist, session ceiling and normal audit. The host-routed decision and
+application callbacks below retain their separate route.
 
-- This machine's own ID runs locally.
-- A host registered with `orbit host add` is reached over the federated route. That route needs the `network` grant and `ssh` in `requires.programs`, as stated above; without them the call fails with `unreachable_destination`.
+A `hm_*/ws_*` selector is decided by the host it names:
+
+- This machine's own ID runs locally, subject to the same checkout preflight.
+- For `orbit tool run`, a host registered with `orbit host add` is refused before any SSH attempt with `policy_denied`. The error names the selector and explains that cross-host callbacks are not supported from confined plugins. A `WARN` entry in `orbit.jsonl` records the plugin, tool, selector and refusal; the same warning reaches stderr. This is a preflight refusal, before the runtime’s persistent CLI audit guard opens. Local callbacks still use the recorded allowlist and session ceiling.
 - A host this machine does not list is refused before the selected workspace is opened, with `invalid_input` naming the host.
 
-MCP `tools/call` takes the same selectors. A host-qualified selector there goes through the MCP server's federated router, which refuses a machine it does not list with `unknown_selector` before contacting any destination, a host that does not answer with `unreachable_destination`, a host that answers without the workspace with `stale_route`, and an ambiguous workspace name with `unknown_selector`. (`unknown_host` belongs to the distinct explicit host-resolution entry point `host_workspace_selector`, not to `tools/call` selector routing.)
+For ordinary clients, MCP `tools/call` takes the same selectors. A host-qualified selector there goes through the MCP server's federated router, which refuses a machine it does not list with `unknown_selector` before contacting any destination, a host that does not answer with `unreachable_destination`, a host that answers without the workspace with `stale_route`, and an ambiguous workspace name with `unknown_selector`. (`unknown_host` belongs to the distinct explicit host-resolution entry point `host_workspace_selector`, not to `tools/call` selector routing.)
 
 **Credential binding.** The descriptor must hold a current session record whose token names
 the same device and inode in the host-owned session directory; a forged file is no credential.
@@ -810,11 +863,12 @@ reliability view.
 |---|---|---|---|
 | (always) | — | Plugin root and its own `{{plugin_state}}` readable (the plugin root also executable); host runtime grants (`/usr`, loader, resolver files, `PATH` dirs, tool state) from the shared Landlock host table; the default credential paths (`~/.config/gh`, `~/.ssh`, …) and the unreadable trees below get no grant, carved out of the host grants as well as the granted roots | The compiler's read allow plus its credential denies; the unreadable trees below as `(deny file-read* (subpath …))`, then literal `file-read-metadata` on any denied ancestors needed to reach the child's own state, record and witness; the state is re-allowed as a `subpath` and the two files as `literal`s (last match wins) |
 | `permissions.fs.read` | `fs` | Each rendered path as a read tree or file | `(allow file-read* (subpath …))` |
+| `permissions.fs.write_files` | `fs` | Each admitted existing regular file, never its parent | `(allow file-write* (subpath …))` rooted at the file, which matches only that file; a name with `*` or `?` in any component is refused at admission |
 | `permissions.fs.write` | `fs` | Each rendered path as a write tree, after §4.1 write-root admission; paths without a write grant are read-only. The plugin write boundary handles standalone truncate and requires Landlock ABI 3 even if no write path is granted; older kernels refuse the spawn | `(allow file-write* (subpath …))`, same admission |
 | `network: none` (default) | — | TCP bind/connect handled with no rule, refusing every endpoint (needs Landlock ABI 4; older kernels fail closed) | `(deny network*)` |
 | `network: loopback` | `network` | TCP left open (Landlock has no address filter) | `(deny network*)` then loopback re-allows |
 | `network: any` | `network` | TCP left open | `(allow network*)` stands |
-| `permissions.orbit_tools` | `orbit_tools` | See the inventory below | Same inventory: write dirs as `(subpath …)`, named files literally; the unreadable trees stay denied as in the first row |
+| `permissions.orbit_tools` | `orbit_tools` | See the inventory below | Same inventory: write dirs as `(subpath …)`, named files as file-rooted `(subpath …)` rules; the unreadable trees stay denied as in the first row |
 | `permissions.env_pass` | `env_pass` | Named vars copied into the allowlisted child env via `allowlisted_child_env`; `ORBIT_*` names are refused by `validate_structure`, so `ORBIT_OPERATOR` or `ORBIT_WORKSPACE_CLAIM_TOKEN` never reach a child | same |
 | `requires.programs` | — (resolved at enable) | Each program's recorded path as a read-and-execute file, whatever the caller's `PATH`; also bounded per caller (below) and stamped into `ORBIT_PROC_ALLOWED_PROGRAMS` | The same path as a read `subpath` (the compiler already allows `process*`) |
 | `backend.sandbox: none` | `unsandboxed` | No ruleset | No `sandbox-exec` wrapper |
@@ -830,6 +884,17 @@ the consenting operator's `PATH`:
   path is what gets recorded, in the grant witness (§3).
 - The profile grants each recorded path read and execute, whichever caller (systemd unit, MCP
   server, ssh shell) spawns the backend. Nothing is resolved at call time.
+- The backend child's `PATH` is prepended with the host's per-plugin program link directory,
+  `<global>/plugins/.programs/<ns>/`, which holds one symbolic link per granted bare name
+  pointing at its recorded path. The name therefore resolves whatever the file's own name,
+  whatever the spawning caller's `PATH`, and whatever symlink layout the operator's `PATH`
+  used (an installed `claude` is commonly a link into a versioned tree). Only the host writes
+  the directory: the plugin is granted read on it and never write, so it cannot re-point a
+  granted name. The links are rebuilt on every backend call, and a link for a name that is no
+  longer granted is removed. `orbit plugin validate --render` only names that directory in the
+  projected `PATH`; it does not create, repoint or remove the links. A program whose recorded
+  path is no longer granted gets no link and adds
+  nothing to the child's `PATH`. Absolute declared entries run as written and get no link.
 - A recorded path is granted only while it still names that executable: it exists, is an
   executable regular file, is still its own canonical path (a link retargeted after consent
   stops matching), and lies outside the unreadable trees below. A path for a name the manifest
@@ -840,6 +905,11 @@ the consenting operator's `PATH`:
   `orbit plugin doctor` reports every program of an active plugin that will not be granted,
   including those with no recorded path (unresolved at enable, or enabled by an Orbit that did
   not record them).
+- Drift is inspection only. When a bare name now resolves on the inspecting `PATH` to a file
+  other than the recorded one (an auto-updated CLI), `orbit plugin show` marks the row with the
+  new file and the fix, and `orbit plugin doctor` reports it for an active plugin. The plugin
+  keeps running the recorded file; the fix is re-running `orbit plugin enable <ns>`. The call
+  path never reads the inspecting `PATH`, so drift cannot change what runs.
 
 **Who bounds the declared programs.** Before a call runs, every `requires.programs` entry is
 checked against a bound chosen by who chose the call. The tool context names the caller kind
@@ -867,7 +937,12 @@ explicitly (`ToolCaller`). The kind is never inferred from an empty or missing
 
 **The `orbit_tools` inventory.** A callback *is* `orbit tool run`, which needs `config.toml`,
 the recorded install and `workspaces.json`, so the global root and the workspace `.orbit/`
-become **readable**. Writable is a named inventory, never the roots:
+become **readable**. Before it opens state, the nested `orbit` also reads the product marker
+(`.orbit-product`) in every physical ancestor of those roots, so each such marker that exists
+as a regular file is granted read as a single file and its directory stays unreadable. An
+Orbit root nested under another Orbit tree (a managed worktree inside its repository's
+`.orbit/state/worktrees/`) otherwise refuses every callback with `storage_access_denied`.
+Writable is a named inventory, never the roots:
 
 - directories `state/logs`, `state/audit`, `tasks` under the global root, and `tasks`,
   `frictions`, `state/audit`, `state/logs`, `state/job-runs` under the workspace `.orbit/`;
@@ -983,6 +1058,13 @@ granting no ancestor of a denied path and granting each allowed sibling in its o
   job" below.
 - Activity and job names are unique across active plugins. Loading is deterministic: the first
   valid plugin keeps the name, a later one is refused with a diagnostic naming both.
+- An activity whose tool allowlist names a tool the workspace does not register (say, one
+  from a plugin that is not installed) is withdrawn from the catalog on its own: a job that
+  references it is refused at load with a message naming the activity and the tool, every
+  other job keeps running, and `orbit plugin enable` warns [ORB-21453]. One
+  plugin's unresolvable
+  activity never fails the whole catalog. `orbit doctor` checks configured activity-catalog
+  directories; it does not inspect plugin-contributed activity files [ORB-21609].
 - Plugin activities are `agent_loop`, or `deterministic` with the one new action
   `plugin.tool_call { tool: <ns>.<verb>, input: {…} }` — the only addition to the closed
   action enums. Such a step may spawn the plugin's granted `requires.programs` (§4.3), even
@@ -998,7 +1080,7 @@ granting no ancestor of a denied path and granting each allowed sibling in its o
   reconciliation path with a warning naming the plugin, not load errors. A plugin switched
   off by a workspace toggle is skipped only in that workspace, and the warning says so.
 - Listings hide them. `orbit auto-task list`, `orbit routine list`, MCP
-  `orbit.auto_task.list` and the dashboard's auto-task and routine views omit a definition
+  `orbit.auto_task` action `list` and the dashboard's auto-task and routine views omit a definition
   whose provenance names a plugin that is not active where it lives, and leave it out of
   every count and next-fire summary. `--all` / `--include-inactive-plugins` (MCP
   `include_inactive_plugins`, the dashboard's "Show hidden") lists it marked
@@ -1054,9 +1136,9 @@ removed. A typed task field would do the same job as the tag but change the pers
 | `string` | `--kebab-case <VALUE>`; an `enum` becomes clap's possible values |
 | `integer` / `number` | `--kebab-case <N>`, sent as a JSON number; `NaN`, infinities and overflowing literals such as `1e999` are refused |
 | `boolean` | `--kebab-case` for true, or `--kebab-case=<true\|false>` (the `=` is required, so a boolean never swallows a following positional) |
-| `array` of scalars | `--kebab-case <VALUE>`, repeated |
-| `object`, `array` of objects, or untyped | `--kebab-case-json '<JSON>'` |
-| named in `cli.positional` | also a positional argument, in manifest order; its flag remains |
+| `array` of `string` / `integer` / `number` | `--kebab-case <VALUE>`, repeated |
+| `object`, `array` of objects, `array` of booleans, or untyped | `--kebab-case-json '<JSON>'` (so `flags: {type: array, items: {type: boolean}}` uses `--flags-json '[true,false]'`) |
+| named in `cli.positional` | also a positional argument, in manifest order; its flag remains — except a JSON-shaped property, which keeps only its `--<name>-json` flag (an object named in `cli.positional` has no positional form) |
 
 - `cli.verb` renames the subcommand; two tools of one plugin may not claim the same one.
   Each `cli.positional` entry must name a top-level property exactly once or the plugin is
@@ -1172,8 +1254,8 @@ schemas compile at read time (naming the tool on failure) and may reference only
 `orbit plugin validate <dir>` — manifest schema, path containment, namespace collisions,
 schema self-consistency, definition cross-references, and the `spec.web` rules of §4.7.
 With `--render`, it previews the effective sandbox profile and child environment without
-starting a backend. Human and JSON output preserve environment names and non-sensitive
-values while redacting credential values. Redaction applies only to this diagnostic
+starting a backend or writing program links. Human and JSON output preserve environment names
+and non-sensitive values while redacting credential values. Redaction applies only to this diagnostic
 projection; backend calls receive their admitted environment values unchanged.
 
 `orbit plugin test <dir>` — runs `spec.tests` goldens through the real protocol.
@@ -1185,12 +1267,23 @@ projection; backend calls receive their admitted environment values unchanged.
   as stored ones are, each at version `fixture`; a declared secret the case omits is unset for
   that case. A fixture for an undeclared name refuses the directory. The run never reads the
   host's secret store, and refuses every `secret_updates` entry a backend returns.
-- A temp directory stands in for the global root and workspace. Template paths,
+- Configuration is manifest defaults plus an optional `--fixture-config <file>` JSON
+  object of plugin keys, schema-validated before a backend starts. Strings from the fixture
+  file substitute `{{workspace}}` and `{{plugin_root}}` before merging; manifest defaults
+  pass through unchanged, matching installed calls. The same merged section feeds templates
+  and backend context. Template expansion is single-pass, so markers inside a manifest
+  default are not expanded recursively. Caller global/workspace `[plugins.<ns>]` values are
+  never loaded for conformance, regardless of grants or workspace selection. There is no
+  caller-config execution mode.
+  Fixture-config runs do not certify the installed plugin's default suite.
+- A temp directory stands in for the global root and workspace. This alone does not isolate
+  absolute paths in configuration, explicit permissions or passed environment credentials.
+  Use disposable sentinel state and model stubs when exercising external paths. Template paths,
   `network: loopback` and `orbit_tools` run under the requested profile. `sandbox: none`, an
   `fs.write` root that resolves outside the temp directory, `network: any`, or any `env_pass`
   is refused (printing the requested grants) unless `--accept-requested` or a `--grant` list
   names each; that consent is for the run only. Write roots are judged as the sandbox will
-  open them — rendered with the effective `[plugins.<ns>]` values, relative roots joined to the
+  open them — rendered with manifest defaults plus explicit fixture overrides, relative roots joined to the
   plugin root, and physically resolved — so a `{{config.<key>}}` default or a `../` root naming
   a host directory needs consent like an absolute path. Consent never lifts the write-root
   admission refusals (§4.1).
@@ -1205,9 +1298,7 @@ projection; backend calls receive their admitted environment values unchanged.
 
 `orbit plugin scaffold <ns>` — in `<ns>/.orbit-plugin/`: a Python `exec` backend, one
 `read_only` tool with schemas, one `kv` panel over it, one disabled auto-task, one skill stub,
-and two passing goldens.
-`orbit tool scaffold` still writes the v1 sidecar pair and prints a deprecation naming its
-replacement.
+and three passing goldens.
 
 ## 6. What opens up in the codebase
 
@@ -1287,5 +1378,14 @@ provenance-aware disabled-plugin skip beside `RETIRED_ROUTINE_JOBS`;
 - [ORB-12879] — repaired the callback schema v2 bump's tests and v1
   leftovers.
 - [ORB-13115] — added task and run identity to the plugin call context.
+- [ORB-21384] — refused unsupported remote-host callbacks with a clear warning.
+- [ORB-21432] — refused same-host workspace callbacks outside a confined
+  backend's binding before runtime bootstrap or store access.
+- [ORB-21453] — withdrew one activity with an unregistered tool while keeping
+  unrelated jobs available.
+- [ORB-21609] — corrected the plugin activity `orbit doctor` claim to match
+  its configured-catalog-only scope.
+- [ORB-21774] — closed `--host` and id-routed bypasses of the cross-host
+  callback refusal.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

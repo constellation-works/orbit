@@ -3,7 +3,7 @@ summary: "User Interface — Decisions"
 type: design
 title: "User Interface — Decisions"
 owner: gemini
-last_updated: 2026-10-28
+last_updated: 2026-11-05
 last_validated: 2026-10-28
 status: Draft
 feature: user-interface
@@ -47,7 +47,7 @@ The Denials 24h tile counted SQLite audit rows and v2 loop denials, but the Poli
 Aggregate v2 denial envelopes and SQLite `status = denied` audit events in the policy-denials endpoint. SQLite filesystem denials without an activity fsProfile use `workspace-boundary`.
 
 ### Consequences
-- The policy-denials endpoint includes direct `orbit tool run` policy denials and retained coordination/protocol refusal evidence. (Its Audit > Policy view was retired by [ORB-15355]; the canonical count is now the rail's denial badge, which opens Audit > Events filtered to denials.) The policy-denials KPI counts canonical capability/policy decisions only; lock contention and claim-settlement protocol refusals remain visible with distinct diagnostics.
+- The policy-denials endpoint includes direct `orbit tool run` policy denials and retained coordination/protocol refusal evidence. (Its Audit > Policy view was retired by [ORB-15355]; the canonical count was then the rail's denial badge, which opens Audit > Events filtered to denials. [ORB-20662] removed that badge. The same count is now exposed as `denials` on `/api/audit/summary` and as `policy_decisions.total` on `/api/diagnostics/denials`.) The policy-denials KPI counts canonical capability/policy decisions only; lock contention and claim-settlement protocol refusals remain visible with distinct diagnostics.
 - Cost: The endpoint carries a translation layer because SQLite audit rows lack typed denial fields like `profile` and `path`.
 
 ## Compact Scoreboard Ratio Columns
@@ -202,7 +202,7 @@ Ship is one click with no configuration UI: the dashboard posts only the task id
 
 **Decision.** Compute both rates entirely from persisted `job_runs` and `invocations` rows via count-only store queries that reference no token or cost column, and discover activity roles from the job catalog at query time.
 
-`RunOutcome` partitions the observed `job_runs.state` values. `success` is succeeded. `failed`, `timeout`, and `interrupted` are failures — all three are runs the pipeline intended to finish and did not. `cancelled` (a deliberate operator action) and `skipped` (never ran) are terminal but sit outside the rate. `pending`, `running`, and `retrying` are in flight. Anything unparseable lands in an explicit `unknown` bucket rather than being folded into an outcome. The failure rate divides by settled deliveries only. [ORB-16400] folds wrapper echoes out of that fraction before the division; the paragraph below is the current rule. The payload carries the total, the cascaded echoes, and each excluded bucket so the UI cannot imply that ok + failed is the population.
+`RunOutcome` partitions the observed `job_runs.state` values. `success` is succeeded. `failed`, `timeout`, and `interrupted` are failures — all three are runs the pipeline intended to finish and did not. `cancelled` (a deliberate operator action) and `skipped` (never ran) are terminal but sit outside the rate. `pending`, `running`, and `retrying` are in flight. Anything unparseable lands in an explicit `unknown` bucket rather than being folded into an outcome. The failure rate divides by settled deliveries only. [ORB-16400] folds wrapper echoes out of that fraction before the division; the paragraph below is the current rule. The payload carries the total, the cascaded echoes, and each excluded bucket so the UI cannot imply that ok + failed is the population. The one exception is an `interrupted` run whose recorded error code is `upgrade_quiesce`: an Orbit upgrade paused it for the clock to resume, so it counts as `upgrade_paused`, outside the rate.
 
 A failed, timed-out, or interrupted run whose pipeline state records a `root_cause` failed only because that leaf failed (`pipeline_success_guard`). The numerator counts distinct leaves: a run with no `root_cause` is its own leaf, and a leaf absent from the window still counts once, so a claimed leaf that settled on another host is not dropped. The other echo rows are `cascaded`. They sit outside both the numerator and the denominator. Settled is succeeded plus that folded failure count, so the rate's two sides use the same rule, and `total = settled + excluded + cascaded`. The same fold applies to the by-job rows, the over-time series, and the fleet totals, which sum the already-folded workspace counts. The denominator label and the card's denominator note state the rule. The recovery rates are unchanged. The raw `observed_states` counts stay unfolded, so the store's rows remain visible beside the delivery count.
 
@@ -274,5 +274,6 @@ Keep every route, endpoint and control, and change the presentation around them:
 - [ORB-10458] — backfilled design-doc ADRs with no ADR-store record, including the Canon Refined and multi-workspace entries.
 - [ORB-10627] — removed the planning duel subsystem and the UI surfaces and scoreboard projections it fed.
 - [ORB-15355] — replaced Audit › Policy with the Codebase analytics view.
+- [ORB-20662] — removed the Health rail denial badge; the count stays on the audit summary and Events.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -2,7 +2,7 @@
 //! plugin tool surface the MCP server advertises.
 
 mod host;
-mod mcp_surface;
+pub(crate) mod mcp_surface;
 mod runtime;
 
 pub(super) use host::global_only_config;

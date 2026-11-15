@@ -1,4 +1,44 @@
+use orbit_types::task::ReservationOwnerMetadata;
 use serde::{Deserialize, Serialize};
+
+/// Serde for the owner-metadata field of the reservation records below:
+/// on the wire / in persisted serde shapes it stays
+/// `owner_metadata_json` carrying the JSON document as a string, exactly
+/// as before the field was typed. In process it is the parsed struct.
+mod owner_metadata_as_json_string {
+    use orbit_types::task::ReservationOwnerMetadata;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(
+        value: &Option<ReservationOwnerMetadata>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            None => serializer.serialize_none(),
+            Some(metadata) => serializer.serialize_some(
+                &metadata
+                    .encode_owner_metadata()
+                    .map_err(serde::ser::Error::custom)?,
+            ),
+        }
+    }
+
+    pub fn deserialize<'de, D>(
+        deserializer: D,
+    ) -> Result<Option<ReservationOwnerMetadata>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = Option::<String>::deserialize(deserializer)?;
+        raw.map(|raw| {
+            ReservationOwnerMetadata::parse_owner_metadata(&raw).map_err(serde::de::Error::custom)
+        })
+        .transpose()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -71,7 +111,7 @@ pub struct TaskReservationReserveParams {
     pub actor: String,
     pub ttl_seconds: u32,
     pub owner_run_id: Option<String>,
-    pub owner_metadata_json: Option<String>,
+    pub owner_metadata: Option<ReservationOwnerMetadata>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,7 +133,7 @@ pub struct TaskReservationReleaseParams {
     pub release_metadata_json: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskReservationReleaseResult {
     pub released: bool,
     pub released_at: Option<String>,
@@ -101,7 +141,7 @@ pub struct TaskReservationReleaseResult {
     pub expired_reservations: Vec<ExpiredTaskReservation>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActiveTaskReservation {
     pub reservation_id: String,
     /// A task reservation, or a hard path lease. Advisory leases hold no
@@ -115,7 +155,12 @@ pub struct ActiveTaskReservation {
     pub created_at: String,
     pub expires_at: String,
     pub owner_run_id: Option<String>,
-    pub owner_metadata_json: Option<String>,
+    #[serde(
+        default,
+        rename = "owner_metadata_json",
+        with = "owner_metadata_as_json_string"
+    )]
+    pub owner_metadata: Option<ReservationOwnerMetadata>,
 }
 
 /// One file reservation as recorded, active or released, for read-only
@@ -131,7 +176,7 @@ pub struct TaskReservationRecord {
     pub owner_run_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReleasedTaskReservation {
     pub reservation_id: String,
     pub workspace_id: Option<String>,
@@ -142,12 +187,17 @@ pub struct ReleasedTaskReservation {
     pub expires_at: String,
     pub released_at: String,
     pub owner_run_id: Option<String>,
-    pub owner_metadata_json: Option<String>,
+    #[serde(
+        default,
+        rename = "owner_metadata_json",
+        with = "owner_metadata_as_json_string"
+    )]
+    pub owner_metadata: Option<ReservationOwnerMetadata>,
     pub release_reason: TaskReservationReleaseReason,
     pub release_metadata_json: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskReservationListResult {
     pub reservations: Vec<ActiveTaskReservation>,
     pub expired_reservations: Vec<ExpiredTaskReservation>,
@@ -162,7 +212,7 @@ pub struct TaskReservationReleaseByOwnerParams {
     pub release_metadata_json: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskReservationReleaseByOwnerResult {
     pub released_reservations: Vec<ReleasedTaskReservation>,
     pub expired_reservations: Vec<ExpiredTaskReservation>,
@@ -176,7 +226,7 @@ pub struct TaskReservationOwnedConflictsParams {
     pub limit: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskReservationOwnedConflictsResult {
     pub reservations: Vec<ActiveTaskReservation>,
     pub expired_reservations: Vec<ExpiredTaskReservation>,

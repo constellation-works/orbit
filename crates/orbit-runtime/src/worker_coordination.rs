@@ -352,31 +352,20 @@ fn is_not_found(error: &OrbitError) -> bool {
     )
 }
 
-/// Type a call the owner never answered as an owner-route failure
-/// [ORB-14257]: the step it fails carries the marker, so a claimed leaf that
-/// lost its route to the owner settles as a release rather than as a failure
-/// of its candidate. A call the owner could not serve only because a lock
-/// stayed held is typed transient the same way [ORB-15088], so a step it
-/// fails — a rebase onto a moved base included — never settles as the
+/// A call the owner never answered is an owner-route failure [ORB-14257]:
+/// its variants keep their messages, and the typing is expressed through
+/// the step-failure code parsed from the variant where a step failure is
+/// ingested ([`OrbitError::step_failure_code`]), so a claimed leaf that
+/// lost its route to the owner settles as a release rather than as a
+/// failure of its candidate. A call the owner could not serve only
+/// because a lock stayed held is typed transient [ORB-15088], so a step
+/// it fails — a rebase onto a moved base included — never settles as the
 /// candidate's failure or as a base conflict. It also carries the
 /// owner-busy marker, so the release a claimed leaf settles with blames
-/// neither its host nor its crew and the drain backs off instead. The variant
-/// is kept; a refusal, an ambiguous outcome and a local error are left as
-/// they are.
+/// neither its host nor its crew and the drain backs off instead. A
+/// refusal, an ambiguous outcome and a local error are left as they are.
 fn owner_route_failure(error: OrbitError) -> OrbitError {
-    let typed = |message: String| {
-        format!(
-            "{} {message}",
-            orbit_types::workflow::OWNER_ROUTE_UNAVAILABLE_MARKER
-        )
-    };
     match error {
-        OrbitError::UnreachableDestination(message) => {
-            OrbitError::UnreachableDestination(typed(message))
-        }
-        OrbitError::OwnerUnavailable(message) => OrbitError::OwnerUnavailable(typed(message)),
-        OrbitError::StaleRoute(message) => OrbitError::StaleRoute(typed(message)),
-        OrbitError::OwnerNegotiation(message) => OrbitError::OwnerNegotiation(typed(message)),
         OrbitError::RemoteTool {
             code: code @ RemoteToolCode::LockBusy,
             message,
@@ -445,11 +434,22 @@ pub fn check_worker_search_scope(input: &Value) -> Result<(), OrbitError> {
 }
 
 pub fn is_coordination_tool(name: &str) -> bool {
+    orbit_types::tool::tool_policy_operations(name)
+        .into_iter()
+        .any(is_coordination_operation)
+}
+
+fn is_coordination_operation(name: &str) -> bool {
     name.starts_with("orbit.task.")
         || name.starts_with("orbit.friction.")
         || matches!(
             name,
-            "orbit.search" | "orbit.auto_task.add" | "orbit.auto_task.update"
+            "orbit.search"
+                | "orbit.auto_task.add"
+                | "orbit.auto_task.update"
+                | "orbit.notice.post"
+                | "orbit.notice.show"
+                | "orbit.notice.close"
         )
 }
 

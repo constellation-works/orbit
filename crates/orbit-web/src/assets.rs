@@ -62,6 +62,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/provider-usage.js"),
     ),
     (
+        "/static/js/global-search.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/global-search.js"),
+    ),
+    (
         "/static/app.js",
         JS,
         include_bytes!("../assets/dashboard/app.js"),
@@ -72,6 +77,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/common.js"),
     ),
     (
+        "/static/js/progress-strip.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/progress-strip.js"),
+    ),
+    (
         "/static/js/config.js",
         JS,
         include_bytes!("../assets/dashboard/js/config.js"),
@@ -80,6 +90,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         "/static/js/config-topics.js",
         JS,
         include_bytes!("../assets/dashboard/js/config-topics.js"),
+    ),
+    (
+        "/static/js/settings-ui.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/settings-ui.js"),
     ),
     (
         "/static/js/hosts.js",
@@ -152,6 +167,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/task-evidence.js"),
     ),
     (
+        "/static/js/task-decision.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-decision.js"),
+    ),
+    (
         "/static/js/task-fields.js",
         JS,
         include_bytes!("../assets/dashboard/js/task-fields.js"),
@@ -217,11 +237,6 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/agents.js"),
     ),
     (
-        "/static/js/agents-orchestrators.js",
-        JS,
-        include_bytes!("../assets/dashboard/js/agents-orchestrators.js"),
-    ),
-    (
         "/static/js/agents-reviewers.js",
         JS,
         include_bytes!("../assets/dashboard/js/agents-reviewers.js"),
@@ -230,6 +245,26 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         "/static/js/agents-pilots.js",
         JS,
         include_bytes!("../assets/dashboard/js/agents-pilots.js"),
+    ),
+    (
+        "/static/js/agents-implementers.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/agents-implementers.js"),
+    ),
+    (
+        "/static/js/agents-rank.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/agents-rank.js"),
+    ),
+    (
+        "/static/js/agents-rank-frontier.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/agents-rank-frontier.js"),
+    ),
+    (
+        "/static/js/agents-rank-format.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/agents-rank-format.js"),
     ),
     (
         "/static/js/scoreboard.js",
@@ -287,6 +322,31 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/forecast.js"),
     ),
     (
+        "/static/js/forecast-shared.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/forecast-shared.js"),
+    ),
+    (
+        "/static/js/forecast-summary.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/forecast-summary.js"),
+    ),
+    (
+        "/static/js/forecast-accuracy.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/forecast-accuracy.js"),
+    ),
+    (
+        "/static/js/forecast-gaps.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/forecast-gaps.js"),
+    ),
+    (
+        "/static/js/resource-forecast.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/resource-forecast.js"),
+    ),
+    (
         "/static/js/experiments.js",
         JS,
         include_bytes!("../assets/dashboard/js/experiments.js"),
@@ -295,6 +355,16 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         "/static/js/experiment-form.js",
         JS,
         include_bytes!("../assets/dashboard/js/experiment-form.js"),
+    ),
+    (
+        "/static/js/experiment-lifecycle.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/experiment-lifecycle.js"),
+    ),
+    (
+        "/static/js/experiment-readout.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/experiment-readout.js"),
     ),
     (
         "/static/js/doctor.js",
@@ -402,9 +472,29 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/operations-routines.js"),
     ),
     (
+        "/static/js/operations-routines-catalogue.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/operations-routines-catalogue.js"),
+    ),
+    (
+        "/static/js/operations-routines-editor.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/operations-routines-editor.js"),
+    ),
+    (
         "/static/js/operations-auto-tasks.js",
         JS,
         include_bytes!("../assets/dashboard/js/operations-auto-tasks.js"),
+    ),
+    (
+        "/static/js/operations-scripts.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/operations-scripts.js"),
+    ),
+    (
+        "/static/js/operations-residents.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/operations-residents.js"),
     ),
     (
         "/static/js/operations-jobs.js",
@@ -432,9 +522,14 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/leases.js"),
     ),
     (
-        "/static/js/locks.js",
+        "/static/js/notices.js",
         JS,
-        include_bytes!("../assets/dashboard/js/locks.js"),
+        include_bytes!("../assets/dashboard/js/notices.js"),
+    ),
+    (
+        "/static/js/memory.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/memory.js"),
     ),
 ];
 pub(super) const DASHBOARD_CSP: &str = concat!(

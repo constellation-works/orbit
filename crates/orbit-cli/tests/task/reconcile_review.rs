@@ -125,13 +125,13 @@ fn operator_reconciliation_output_preserves_ids_outcomes_and_exact_next_steps() 
         store.review_reconciliation_open(&workspace, &record).unwrap();
     }
 
-    let input = json!({"action": "status", "id": task, "workspace": fixture.repo}).to_string();
+    let input = json!({"action": "reconcile_review", "mode": "status", "id": task, "workspace": fixture.repo}).to_string();
     let tool = operator_json(
         &fixture,
         &[
             "tool",
             "run",
-            "orbit.task.reconcile_review",
+            "orbit.task.recover",
             "--input",
             &input,
             "--format",

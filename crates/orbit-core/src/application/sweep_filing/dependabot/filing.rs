@@ -77,7 +77,7 @@ where
         )));
     }
 
-    let (floor_name, floor_source) = severity_floor(runtime, input)?;
+    let (floor_name, floor_source) = severity_floor(input)?;
     let floor = severity_rank(&floor_name).ok_or_else(|| {
         OrbitError::InvalidInput(
             "input.min_severity must be one of low, moderate, high, or critical".to_string(),
@@ -435,10 +435,13 @@ where
     }))
 }
 
-fn severity_floor(
-    runtime: &OrbitRuntime,
-    input: &Value,
-) -> Result<(String, &'static str), OrbitError> {
+/// Minimum Dependabot and code-scanning severity the security sweep files
+/// when its job input names none.
+///
+/// The former `security_alert_sweep.min_severity` default, fixed when the key was removed [ORB-22808].
+pub(crate) const SECURITY_ALERT_MIN_SEVERITY: &str = "moderate";
+
+fn severity_floor(input: &Value) -> Result<(String, &'static str), OrbitError> {
     match input.get("min_severity") {
         // The job renderer binds an absent optional string input as empty.
         None | Some(Value::Null) => {}
@@ -450,22 +453,7 @@ fn severity_floor(
             ));
         }
     }
-    let key = "security_alert_sweep.min_severity";
-    let config = orbit_config::load_effective_config(&orbit_config::ConfigRoots::new(
-        runtime.global_root(),
-        runtime.shared_root(),
-    ))?;
-    let entry = config.values().iter().find(|entry| entry.key == key);
-    entry
-        .and_then(|entry| {
-            entry
-                .value
-                .as_str()
-                .map(|value| (value.to_string(), entry.source.kind().label()))
-        })
-        .ok_or_else(|| {
-            OrbitError::InvalidInput(format!("{key} is unavailable in the admitted config"))
-        })
+    Ok((SECURITY_ALERT_MIN_SEVERITY.to_string(), "built-in"))
 }
 
 /// The open tasks that already own same-cause alerts left out of a group, as

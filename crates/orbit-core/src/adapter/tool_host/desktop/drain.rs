@@ -1,8 +1,11 @@
 //! Desktop auto-drain translation. Authorization remains at the tool chokepoint;
 //! scheduling, claims, stopping and settlement reuse the CLI/dashboard runtime.
-use crate::application::job::{DrainWorkerLimitRequest, SubmissionKind};
+use crate::application::job::{
+    AutoDrainSubmissionProfile, AutoDrainSubmissionSource, DrainWorkerLimitChangeProfile,
+    DrainWorkerLimitRequest,
+};
 use crate::application::workflow::drain_window_input_error;
-use crate::{CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime};
+use crate::{AutoDrainRequest, CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime};
 use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::{
     optional_csv_or_string_list_alias, optional_string, optional_string_list_alias, required_string,
@@ -104,19 +107,19 @@ pub(in crate::adapter::tool_host) fn control(
                 .transpose()?
                 .unwrap_or(false);
             let review = super::super::workflow_tools::review_layer(&input)?;
-            let run = runtime.submit_workspace_auto_run_with_mode(
-                Some(seconds),
-                concurrency,
+            let run = runtime.submit_workspace_auto_run(AutoDrainRequest {
+                for_seconds: Some(seconds),
+                max_active_leaf_runs: concurrency,
                 completion,
-                &[],
-                &Default::default(),
-                Some("desktop"),
-                claim.as_deref(),
+                allowed_crews: &[],
+                complexity_crews: Default::default(),
+                actor: Some("desktop"),
+                claim_token: claim.as_deref(),
                 trigger,
-                false,
+                strict_containment: false,
                 approve_proposed,
-                false,
-                input
+                auto_fix: false,
+                auto_concurrency: input
                     .get("auto_concurrency")
                     .map(|value| {
                         serde_json::from_value(value.clone())
@@ -124,15 +127,14 @@ pub(in crate::adapter::tool_host) fn control(
                     })
                     .transpose()?,
                 review,
-            )?;
-            let mut started = json!({"action":"start","run_id":run.run_id,"state":if run.queued {"queued"} else {"submitted"},
-                "completion":completion.as_input_value(),"approve_proposed":approve_proposed,"submitted_at":run.submitted_at});
-            started["review"] = runtime.run_review_layer(&run.run_id)?;
-            started["auto_concurrency"] = runtime.run_auto_concurrency(&run.run_id)?;
+            })?;
             runtime
-                .submission_notices(SubmissionKind::Drain)
-                .insert_into(&mut started);
-            started
+                .auto_drain_submission_receipt(
+                    &run,
+                    AutoDrainSubmissionSource::Local,
+                    AutoDrainSubmissionProfile::Tool,
+                )?
+                .to_json()
         }
         "stop" => {
             if ["for_seconds", "concurrency", "complete", "approve_proposed"]
@@ -236,15 +238,11 @@ fn resize(
         source: "tool",
         claim_token: claim,
     })?;
-    Ok(json!({
-        "action": "resize",
-        "run_id": change.run_id,
-        "job_id": change.job_id,
-        "outcome": change.outcome,
-        "previous_concurrency": change.previous_max_active_leaf_runs,
-        "concurrency": change.max_active_leaf_runs,
-        "revision": change.revision,
-    }))
+    let mut result = change.to_json(DrainWorkerLimitChangeProfile::Standalone);
+    if let Value::Object(map) = &mut result {
+        map.shift_insert(0, "action".to_string(), json!("resize"));
+    }
+    Ok(result)
 }
 
 fn optional_u32(input: &Value, field: &str) -> Result<Option<u32>, OrbitError> {

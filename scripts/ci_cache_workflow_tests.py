@@ -31,10 +31,12 @@ class CiDependencyCacheWorkflowTests(unittest.TestCase):
         self.document = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
         self.jobs = self.document["jobs"]
         self.seed = yaml.safe_load((ROOT / ".github/workflows/ci-cache-seed.yml").read_text())
+        msrv = yaml.safe_load((ROOT / ".github/workflows/msrv.yml").read_text())["jobs"]["msrv"]
         self.producers = {
-            name: next(step for step in self.jobs[name]["steps"]
+            name: next(step for step in job["steps"]
                        if step.get("uses", "").startswith("Swatinem/rust-cache@"))
-            for name in ("ci", "test-build", "msrv")
+            for name, job in (("ci", self.jobs["ci"]), ("test-build", self.jobs["test-build"]),
+                              ("msrv", msrv))
         }
 
     def cache_identity(self, step):
@@ -186,15 +188,20 @@ class CiDependencyCacheWorkflowTests(unittest.TestCase):
                         self.assertEqual(commands, [])
                         continue
                     self.assertTrue(commands)
-                    self.assertTrue(all(c["wrapper"] == "clippy-driver" for c in commands))
                     if role == "seed-check":
                         self.assertEqual([c["argv"] for c in commands], [
                             ["check", "--locked", "--workspace", "--lib", "--bins"],
-                            ["doc", "--locked", "--no-deps", "--workspace"]])
+                            ["doc", "--locked", "--no-deps", "--workspace"],
+                            ["check", "--locked", "--workspace", "--lib", "--bins", "--tests",
+                             "--target", "aarch64-apple-darwin"]])
+                        self.assertEqual([c["wrapper"] for c in commands],
+                                         ["clippy-driver", "clippy-driver", None])
                         self.assertEqual(commands[1]["doc"], "-D warnings")
-                        self.assertTrue(all("-D__CLIPPY_HACKERY__clippy::disallowed_methods" in c["lint"]
-                                            for c in commands))
+                        self.assertIsNone(commands[2]["lint"])
+                        self.assertTrue(all("-A__CLIPPY_HACKERY__clippy::disallowed_methods" in c["lint"]
+                                            for c in commands[:2]))
                     else:
+                        self.assertTrue(all(c["wrapper"] == "clippy-driver" for c in commands))
                         self.assertEqual([c["argv"] for c in commands], [
                             ["test", "--no-run", "--locked", "--workspace", "--lib", "--bins", "--tests", "--examples"]])
                         self.assertIn("-A__CLIPPY_HACKERY__clippy::disallowed_methods", commands[0]["lint"])

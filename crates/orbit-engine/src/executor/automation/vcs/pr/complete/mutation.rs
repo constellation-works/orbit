@@ -66,6 +66,36 @@ pub(super) fn observation_failure<H: RuntimeHost + ?Sized>(
     }
 }
 
+/// [ORB-21766] A transient required-checks read failure routed through
+/// [`observation_failure`] that it deliberately kept — because a completion
+/// mutation happened in this invocation or is recorded in durable history —
+/// still holds auto-fix as inconclusive check evidence. The required-checks
+/// read is read-only: holding does not claim nothing changed on the forge
+/// (unlike [`DeliveryRefusal::ForgeObservationUnavailable`]), and the next
+/// auto-fix pass re-reads the PR status, reconciling any earlier mutation
+/// from the forge. Every outcome `observation_failure` already decided
+/// (a resumable read-only observation, a forge hold, a typed refusal, or a
+/// non-transient failure) is returned unchanged.
+pub(super) fn checked_required_check_observation_failure<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    mutated: bool,
+    deadline_ms: Option<u64>,
+    error: OrbitError,
+) -> OrbitError {
+    let error = observation_failure(host, input, mutated, deadline_ms, error);
+    let is_transient = error
+        .private_vcs_failure()
+        .is_some_and(|failure| failure.class == PrivateVcsFailureClass::TransientObservation);
+    if !is_transient {
+        return error;
+    }
+    OrbitError::DeliveryRefused {
+        refusal: DeliveryRefusal::CheckEvidenceInconclusive,
+        message: error.to_string(),
+    }
+}
+
 /// [ORB-19430] The diagnostic of a run held because completion's read-only
 /// forge observation kept failing with a transport error; `cause` is the
 /// failure's original text.
@@ -128,20 +158,18 @@ pub(super) fn record_completion_mutation<H: RuntimeHost + ?Sized>(
         host.apply_task_automation_update(
             &task.id,
             crate::context::TaskAutomationUpdate {
-                append_history: vec![orbit_types::task::TaskHistoryEntry {
-                    at: chrono::Utc::now(),
-                    by: "system".into(),
-                    event: PR_COMPLETION_MUTATION_STARTED_EVENT.into(),
-                    note: Some(
+                append_history: vec![
+                    orbit_types::task::TaskHistoryEntry::new(
+                        chrono::Utc::now(),
+                        "system",
+                        PR_COMPLETION_MUTATION_STARTED_EVENT,
+                    )
+                    .with_note(Some(
                         json!({"run_id":context.batch_id,"operation":operation,
                         "pr_number":input["pr_number"],"head_sha":input["published_head_sha"]})
                         .to_string(),
-                    ),
-                    from_status: None,
-                    to_status: None,
-                    operation_id: None,
-                    decision: None,
-                }],
+                    )),
+                ],
                 ..Default::default()
             },
         )?;
@@ -167,6 +195,7 @@ pub(super) fn request_merge<H: RuntimeHost + ?Sized>(
             "auto": auto,
             "reviewed_head_sha": reviewed_head_sha,
             "report_base_modified": reviewed_head_sha.is_some(),
+            "report_ambiguous": reviewed_head_sha.is_some(),
             "workspace_path": workspace_path,
         }),
     )?;

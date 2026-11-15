@@ -2,8 +2,7 @@
 
 How scheduled work happens, and what to turn on. A fresh workspace carries the
 defaults selected by its [seeding policy](configuration.md#seeding-policy).
-Scheduled work requires a host clock and enabled definitions; the seeded
-`crew-performance-refresh` exception below no-ops while crew performance is off.
+Scheduled work requires a host clock and enabled definitions.
 This is the reference for opting in deliberately.
 
 ## The chain
@@ -77,13 +76,34 @@ out remain in the service cgroup and can be killed when that service stops.
 recovery settings. Run `orbit clock repair` to update an older service, even
 when it already names the current binary. A paused clock stays paused.
 
-**2. Enable routines, one at a time.** Each is a YAML file in this checkout's
-`.orbit/routines/`. `.orbit/` is per-user state that git ignores, so flipping
-`enabled: true` is a local edit to that file, not a commit; `orbit routine
-pause` is the separate host-local toggle. Registering the
-checkout already made the workspace a routine source; an older `.orbit/config.toml`
-may still carry a `[routines]` section, which is ignored with a warning and can
-be deleted.
+**2. Enable routines, one at a time, as an operator.** Each routine is a YAML
+file in this checkout's `.orbit/routines/`. Set its `enabled` field with the
+audited verbs rather than by editing the file:
+
+```bash
+orbit routine list                          # rendered names, enabled and paused state
+orbit routine enable <routine-name>         # operator only: sets enabled: true
+orbit routine show <routine-name>           # confirm enabled and the effective state
+orbit clock tick --dry-run                  # what would fire on this host; writes nothing
+```
+
+`enable` and `disable` (`orbit routine disable <routine-name>`) need operator
+authority; an agent session is refused. They act on the selected workspace:
+`--workspace <name>` when given (`orbit --workspace <name> routine enable
+<routine-name>`), otherwise the current checkout. A routine that belongs to
+another registered workspace is refused, and the error names the workspace to
+rerun with. The write re-checks the state it read and refuses if the routine
+changed in the meantime; the command is audited. Copy the name from `orbit
+routine list`: seeded names carry the workspace suffix (`<base>-<workspace>`),
+which the base names in the table below omit.
+
+`.orbit/` is per-user state that git ignores, so the enabled field is a local
+setting, not a commit. The host-local pause (`orbit routine pause`) and the host
+clock (`orbit clock`) are separate controls; see
+[Observe and control](#observe-and-control). Registering the checkout already
+made the workspace a routine source; an older `.orbit/config.toml` may still
+carry a `[routines]` section, which is ignored with a warning and can be
+deleted.
 
 <a id="the-nine-seeded-routines"></a>
 <a id="the-ten-seeded-routines"></a>
@@ -93,12 +113,15 @@ be deleted.
 `orbit workspace init` seeds the routines selected by `seeding.routines`
 (`"all"` by default) from this catalog, with a workspace-unique name
 (`<base>-<workspace>`) resolved at seed time. See [Seeding policy](configuration.md#seeding-policy)
-to change that selection and reconcile an existing workspace. Every default starts disabled
-except `crew-performance-refresh`, which is seeded enabled because it
-no-ops while `workflow.crew_performance` is `off`. The cron routines
+to change that selection and reconcile an existing workspace. Every routine default starts disabled
+except `worktree-gc`, `task-pilot` and `crew-memory-dream`, which gates itself on
+`crew_memory.enabled`. A workspace seeded while `worktree-gc` or `task-pilot`
+shipped disabled keeps its `enabled` value. The `host-health` auto-task is the one shipped
+auto-task seeded enabled ([Auto-tasks](auto-tasks.md)). Each of these starts enabled only when
+the seeding policy selects it. The cron routines
 resolve nothing else per machine, so two hosts seed identical bytes.
-`task-pilot`, `finding-verification`, `pilot-warning-triage` and
-`blocked-task-triage` are state-triggered and additionally resolve this host's
+`task-pilot` and `resident-cycle`
+are state-triggered and additionally resolve this host's
 machine id as `trigger.state.owner_machine` and the registered base branch as
 `trigger.state.branch`; a second host registering the same workspace seeds
 itself as owner of its own copy. Run `orbit routine list` to see their names
@@ -106,46 +129,28 @@ on this host.
 
 | Base name | Cadence | Target | What it does |
 |---|---|---|---|
-| `worktree-gc` | hourly | `worktree_gc_pipeline` | Reclaims worktrees whose task settled to done, rejected, or archived, or has been parked in someday for `worktree.parked_reclaim_after_hours` (default 336), and prunes `.orbit/tmp` entries untouched for 24 hours (`scratch_older_than_hours`). |
+| `worktree-gc` | hourly | `worktree_gc_pipeline` | Reclaims worktrees whose task settled to done, rejected, or archived, or has been parked in someday for 336 hours (14 days), and prunes `.orbit/tmp` entries untouched for 24 hours (`scratch_older_than_hours`). |
 | `task-pilot` | state trigger (`preparation_eligible`) | `task_pilot_pipeline` | Fingerprints eligible proposed/backlog tasks each tick and preflights a batch whose material has no fresh assessment (seeded `batch_size` 5, mixed crews included); quiet while the backlog is unchanged. |
-| `finding-verification` | state trigger (`finding_unverified`) | `finding_verification_pipeline` | Disabled by default; verifies review-filed bug findings still owed a verdict in proposed, someday, or backlog, recording confirmation or rejection with evidence. |
-| `pilot-warning-triage` | state trigger (`pilot_warnings_held`) | `escalation_triage_pipeline` | Disabled by default; once per assessment, a hard-tier triager reads each proposed task whose task-pilot assessment holds promotion on warnings and records a decision proposal or the human action that settles the hold. It only proposes: it never approves, promotes, clears a hold or edits the task. Approve with `orbit task update <task-id> --approve --note "<evidence>"`. |
-| `blocked-task-triage` | state trigger (`block_escalated`) | `escalation_triage_pipeline` | Disabled by default; once per block episode, a hard-tier triager reads each blocked task whose block final recovery escalated (or that stayed undecided past 72 hours) and requeues, proposes or reports it — [Blocked-task triage](#blocked-task-triage). Replaces the retired `blocked-task-triage` auto-task. |
+| `resident-cycle` | state trigger (`resident_due`) | `resident_cycle_pipeline` | Disabled by default; starts one bounded cycle for each active resident mandate whose wake digest changed (a watched task, an answered decision request, an operator comment, a notice) or whose heartbeat expired, never inside its cadence floor and never beside a live cycle. Core scopes the cycle's tool calls to the mandate's granted rights and workspaces, and an open maintenance notice makes it observe-only. Lint without restoration only reads; `orbit task lint --restore-pruned` (one task or a sweep) is refused inside a resident cycle because no right grants context maintenance. Use an operator outside the cycle for restoration. |
 | `ci-failure-sweep` | hourly at :05 | `ci_failure_sweep_pipeline` | Files deduped proposed CI findings, pilots them, and admits only current warning-free repairs to backlog. |
-| `crew-performance-refresh` | hourly at :23 | `crew_performance_refresh_pipeline` | Rebuilds this workspace's crew-performance snapshot (the implementer by-type cell matrix) that performance-weighted crew draws read. The one routine seeded enabled: while `workflow.crew_performance` is `off` (the default) it skips the scan, records `skipped: crew_performance_off` and writes no snapshot; once the feature is on, keeps the snapshot fresh — [Crew performance snapshot](#crew-performance-snapshot). |
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |
 | `store-gc` | daily at 04:17 | `store_gc_pipeline` | Applies `orbit gc audit` and `orbit gc runs`: prunes audit rows older than `retention.audit_days` (this workspace and workspace ids that are no longer registered) and the audit blobs nothing names, and drops the pipeline state of terminal runs older than `retention.runs_days` and the per-minute resource history and admission forecasts older than 30 days, except the newest counted rows that stay at any age. Another registered workspace keeps its own window. Review both plans before enabling it — [maintenance.md](maintenance.md#store-retention). On a large store, consider `retention.runs_days = 30` first; smaller windows are refused to preserve 30-day reliability and forecast-accuracy evidence. |
-| `task-publication` | weekly Sunday at 04:47 host-local time (`47 4 * * 0`) | `task_publication_pipeline` | Disabled by default because publishing task prose to a remote is an operator decision. Publishes only this owned workspace; unbound workspaces record `skipped: publication_unbound`. Unchanged content is a recorded no-op. Attachments default to `omit` under `publication.routine_attachments`; `include` fails closed without the explicit unscanned opt-in. Replicas report it owner-only and never fire it. Missed runs skip; overlaps are forbidden — [publication.md](publication.md#weekly-publication-routine). |
-| `ux-rules` | daily at 06:40 | `ux_rules_pipeline` | Disabled by default. Runs the UX rules on each surface in `ux_rules.surfaces` through an operator-granted `ux_rules_runner` script step, then files proposed bug tasks for failing rules, capped by `ux_rules.max_new_tasks`. With no grant or no surfaces it does no work. |
+| `task-publication` | weekly Sunday at 04:47 host-local time (`47 4 * * 0`) | `task_publication_pipeline` | Disabled by default because publishing task prose to a remote is an operator decision. Publishes only this owned workspace; unbound workspaces record `skipped: publication_unbound`. Unchanged content is a recorded no-op. Attachments are always omitted. Replicas report it owner-only and never fire it. Missed runs skip; overlaps are forbidden — [publication.md](publication.md#weekly-publication-routine). |
+| `crew-memory-dream` | weekly Monday at 02:00 host-local time (`0 2 * * 1`) | `crew_memory_dream_pipeline` | Experimental. Seeded enabled but mints nothing while `crew_memory.enabled` is false or no running shadow or live experiment has a crew memory arm. Otherwise mints one low-priority reflection chore per model with at least 10 implementer units in the past 7 days, crewed by that model's base crew and carrying a score-free evidence pack (`crew-memory-evidence.json`, at most 64 KiB); a model with an open one, or with no problem task to cite, is skipped. Only that task's run may write the model's memory or propose a global note. Replicas never fire it. Missed runs skip; overlaps are forbidden. Enabling this routine does not set `crew_memory.enabled`. Disable the routine to stop dreaming and leave memory available; disable the key to stop memory itself ([Crew memory](crew-memory.md)). |
 
-### Crew performance snapshot
-
-A crew draw must never run the scorecard scan, so the by-type cell matrix is
-persisted as a per-workspace snapshot: one row per `(crew, model, tier, type)`
-cell with its raw score, sample count, crew mean and shrunk score, plus the
-evidence window, a hash of the type list, and `computed_at`. The seeded
-`crew-performance-refresh` routine runs hourly (`cron: "23 * * * *"`, target
-`job:crew_performance_refresh_pipeline`) to rebuild it atomically. Run it on
-demand with:
-
-```bash
-orbit run job crew_performance_refresh_pipeline
-```
-
-While `workflow.crew_performance` is `off` (the default) the refresh writes no
-snapshot, records `skipped: crew_performance_off`, and skips the scan (the hourly
-routine still records a job run). `off` is the only mode that skips the scan;
-`absolute`, `comparative`, `shadow_absolute` and `shadow_comparative` all build
-snapshots over `workflow.crew_performance_window_days` (default `30`, `1`–`90`).
-
-A stored snapshot is usable only while fresh: a reader gets the typed reason
-`missing`, `stale` (older than 24 hours) or `type_list_changed` (built from a
-different `workflow.crew_performance_types` list) otherwise; performance-weighted
-draws treat any unusable reason as factor 1.
-
-Verify the snapshot with `orbit run readiness`: the output prints one line for
-the snapshot (its computed time, window, type list or the unusable reason), and
-`orbit run readiness --json` carries the same details under `crew_performance`.
+The `finding-verification`, `evolution-pass`, and `ux-rules` routines were removed,
+while `pilot-warning-triage` was retired via its `pilot_warnings_held` state
+trigger rather than its job. `orbit workspace sync` retires a workspace's seeded copies,
+and a definition that still targets one of the three removed jobs
+(`finding_verification_pipeline`, `evolution_pass_pipeline`,
+`ux_rules_pipeline`) loads as retired and never fires unless the workspace
+defines a job of the same name, which resolves first and stays active. A
+definition on the retired `pilot_warnings_held` trigger loads as retired even
+though its `escalation_triage_pipeline` target still ships, so a cron definition
+targeting that job without the retired trigger stays active. Triage a task held on pilot warnings from the dashboard's
+Triage action, which still runs `escalation_triage_pipeline`. No routine or installed command
+runs the UX rules now; Orbit runs no UI rule checks and files no tasks from them. The leftover keys of these removals are listed in
+[Maintenance — Retired features](maintenance.md#retired-features-and-their-keys).
 
 ## Built in: final recovery of blocked tasks
 
@@ -175,64 +180,56 @@ worker.
 The crew comes from `workflow.purpose_crews.final_recovery`. To opt out, set
 it to `[]`; this also turns off final recovery inside the delivery pipelines.
 
-### Blocked-task triage
+### What a block gets: mechanical steps, a recheck, then a decision card
 
-What final recovery escalates stays blocked for a human. The seeded
-`blocked-task-triage` routine (disabled until you set `enabled: true` in
-`.orbit/routines/blocked_task_triage.yaml`) reads those blocks once each,
-shortly after they appear. A block episode — the task's latest move to
-`blocked` — awaits triage when its final-recovery decision was an escalation,
-or when it has none and is older than the 72 hours after which the backstop
-above never decides it. An episode is skipped when a human set the block or
-commented, changed the status, attached an artifact or made an unattributed
-edit after it, and once triaged; a later block is a new episode. Its
-`block_escalated` trigger waits two minutes for an episode to settle, then
-submits up to five episodes that share one stored crew into one
-`escalation_triage_pipeline` run, whose triager is drawn from
-`workflow.hard_complexity_crews`. With nothing waiting it stays quiet.
+Final recovery is the single decider for a blocked task; there is no separate
+triage pass. Before it escalates it runs bounded mechanical steps, each at
+most once per head or run and each recorded in the task history:
 
-It replaces the `blocked-task-triage` auto-task, which Orbit no longer seeds.
-`orbit workspace sync` removes an unedited copy of that auto-task (with its
-settings), keeps a copy you edited, and, when the copy was enabled, tells you
-the routine replaces it. It never enables the routine for you.
+- `resume_run` resumes the failed run from its checkpoints (once per run);
+- `rerun_ci` re-requests the failed required checks of the task's pull request
+  (once per head);
+- `requeue` moves the task to `backlog`; it counts against the bound of 2
+  requeues per 24 hours that every requeue, resume and CI rerun shares. Past
+  the bound, or when the count cannot be read, it is refused and the task
+  stays blocked;
+- `complete_no_diff` closes a task whose work is already on the base;
+- `friction_reported` links or files the friction record for an Orbit defect
+  with no supported recovery and leaves the task blocked.
 
-The triager records exactly one disposition per episode through
-`orbit.task.block_triage`, whose `candidates` action lists what qualifies:
+A refused step escalates and the comment reads `<step> refused: <why>`.
 
-- **Mechanical** — a cause with a supported recovery. `requeue` moves the task
-  to `backlog` as a final-recovery requeue: it counts against the same bound
-  (2 requeues per 24 hours, one count shared with final recovery), and the
-  comment records `requeue n of 2 per 24h`. Past the bound it is refused and
-  the task stays blocked with the bound named; when the count cannot be read
-  nothing is written. An Orbit defect with no supported recovery gets a
-  friction record and a report, never a requeue.
-- **Decision** — a scope or requirements choice. `propose` writes one comment
-  quoting the blocker, with two or three options, their consequences, a
-  `target` field (`acceptance_criteria` or `description`) and the ready-to-apply
-  replacement text for it, and a recommendation; nothing else on the task
-  changes. Answering an option through the decision channel writes that
-  replacement as the field's whole new value and returns the task to
-  `backlog` in one human update; an option with no target, or one that would
-  change nothing, is refused and the task stays blocked.
-- **Human-only** — credentials or login, a named owner sign-off, a `security`
-  or `security-review` tag, a run another machine executed, or an OS or
-  browser-kit requirement. `report` names the human action and changes
-  nothing else. The tool itself refuses to requeue a security-tagged task or
-  one whose run executed on another machine.
+The backstop tick also runs a deterministic recheck with no agent. It settles
+a blocked task whose pull request merged outside Orbit (the task follows the
+merge to `done`), whose failing required checks were recorded as inherited from
+the base and now pass (back to `backlog`), or whose infrastructure block
+cleared, and records why in a `blocked_task_rechecked` history entry.
 
-The triager holds no task-update, requeue or run-resume tool and no `--force`
-path: it never completes, rejects or archives a task, resumes a run, or merges
-or closes a pull request. A recovery that needs one of those is reported with
-the exact operator command. To triage one blocked task now, run
-`orbit run job escalation_triage_pipeline --input 'subject="block"' --input
-'task_ids=["<task-id>"]'`. The dashboard's task details panel offers the
-same explicit submission as a **Triage** action — on a blocked task with
-`subject="block"`, and on a proposed task held by pilot warnings with the
-default `pilot_warning` subject (`orbit run job escalation_triage_pipeline
---input 'task_ids=["<task-id>"]'`). The action is enabled only while the
-task currently qualifies and is otherwise disabled with the reason; on
-success it links the submitted run, whose triage comment appears on the
-refreshed task.
+What none of that settles, final recovery either escalates or decides:
+
+- **`escalate`** names the diagnosis and the one human action. The task stays
+  blocked and its dashboard card shows the summary and that action.
+- **`decide`** opens a decision request for a scope or requirements choice: a
+  short summary, two or three options and a recommendation. Each option has a
+  summary, a consequence, an optional field rewrite (`description`,
+  `acceptance_criteria`) and an optional action (`requeue`, `re_pilot`,
+  `change_crew`, `split`, `reject`, `archive`). An option with neither a
+  rewrite nor an action, or with an unknown action, is refused.
+
+A human answers a card from the dashboard, `orbit decision answer` or the
+decision channel. The answer records a comment naming the option and note,
+applies the rewrite, runs the action, moves the task out of `blocked` and closes
+the request in one operation. An answer attributed to an agent or other
+automation is refused. A proposed task held by pilot warnings gets the same
+card from pilot-warning triage (approve, re-pilot or rewrite), started from the
+dashboard's Triage action; that triager only proposes and never approves, promotes or edits the task itself.
+
+The seeded `blocked-task-triage` routine and its `block_escalated` trigger are
+retired. `orbit workspace sync` removes an unedited copy; an existing
+`blocked-task-triage-*` routine file loads inert and is reported as retired.
+`orbit.task.block_triage` now serves pilot-warning triage only, and
+`subject="block"` is refused with a message naming final recovery. Old
+`blocked_task_triaged` history entries still render.
 
 ## Built in: re-checking tasks held for a red base
 
@@ -260,12 +257,21 @@ It never runs on a follower or inside a claimed worker.
 
 This also needs no enablement. On a Linux owner, every clock sweep looks for
 in-progress tasks whose before-PR review is held only for a `codeql` result. A
-macOS reviewer, local or claimed, cannot complete
-`scripts/codeql-rust-local.sh`, so it holds instead. For each such task the
-sweep dispatches one `review_evidence_fulfilment_pipeline` run, one at a time.
-The run executes the named command at the held commit and attaches the result,
-which queues a fresh review. A failed or incomplete run attaches only its log,
-with a typed reason, and the hold stays. Each run needs `min_free_mib` free
+macOS reviewer, local or claimed, cannot complete that check, so it holds
+instead. The built-in fulfilment runs only `scripts/codeql-rust-local.sh`
+with optional `--ram <mib>` and `--toolchain <version>` and exactly one query
+selector. Download the script from
+<https://raw.githubusercontent.com/constellation-works/orbit/v0.49.0/scripts/codeql-rust-local.sh>
+and save it at `scripts/codeql-rust-local.sh` in the workspace, then make it
+executable (`chmod +x scripts/codeql-rust-local.sh`, committed as mode 100755):
+the fulfilment executes that path directly, so a copy saved without the
+executable bit cannot run. A custom
+command is not fulfilled by the built-in path: the run attaches its log with
+that refusal and the hold stays. For each such task the sweep dispatches one
+`review_evidence_fulfilment_pipeline` run, one at a time. The run executes an
+admitted command at the held commit and attaches the result, which queues
+a fresh review. A failed or incomplete run attaches only its log, with a typed
+reason, and the hold stays. Each run needs `min_free_mib` free
 (30 GiB by default; override it in a workspace copy of the job) and is audited
 as `review.evidence_fulfilment`. It never runs on a follower, inside a claimed
 worker, or on another platform. See
@@ -273,7 +279,8 @@ worker, or on another platform. See
 
 ## Recommended enablement order
 
-Enable in this order and stop wherever the value runs out. Each step is safe
+A newly initialized workspace starts with steps 1 and 2 enabled. Otherwise,
+enable in this order and stop wherever the value runs out. Each step is safe
 without the ones after it; **the reverse is not true.**
 
 1. **`worktree-gc` first.** It is the only one that reclaims disk, and every
@@ -378,9 +385,11 @@ in the website's Scheduling YAML reference, Condition triggers.
 A job may also name an auto-task as a step (`target: auto-task:<name>`) with
 CEL `wait_until`, `expire_when` and `reuse_when` fields. These steps are
 checked when the job loads and explained by `orbit automation explain
-job:<name>`, but cannot run yet: such a job must stay `state: disabled`, and
-submitting it is refused. It declares `schemaVersion: 3`, and keeps those
-restrictions until its author declares 2 again; the same fields under
+job:<name>`. An enabled job declares `schemaVersion: 3` and runs detached;
+when a step waits, the run parks durably and the owner clock revisits it. A
+step with `require_result` also needs the definition's matching `completion`
+block ([auto-tasks](auto-tasks.md#proving-a-job-step-with-a-completion-contract))
+and otherwise holds. The same fields under
 `schemaVersion: 2` fail to load, even when null, so an older Orbit refuses the
 file instead of dropping its waits. The keys are in the website's Activity and job
 YAML reference, Auto-task steps.
@@ -403,6 +412,192 @@ file where it is: the clock tick skips it, never as a load error, and
 lists it as `inactive` with a reason naming the plugin, and `orbit routine show
 <name>` still resolves it. Re-enabling brings it back with no re-seed.
 
+## Workspace scripts
+
+A workspace script is a program that a job step runs as `target: script:<name>`.
+Its manifest lives at `.orbit/resources/scripts/<name>.yaml`, and the manifest's
+`entry` names the program file in the workspace. A script step runs only while
+the script holds an operator grant on the host that runs it. Granting runs
+nothing; the step runs when a job reaches it.
+
+A manifest whose entry is missing or invalid is unavailable; jobs that name
+it refuse with an error naming the manifest. Other jobs can still run. Repair it, or delete a retired
+script's manifest and run `orbit script revoke <name>`. The retired ux-rules
+routine left one: if the workspace set it up, delete
+`.orbit/resources/scripts/ux_rules_runner.yaml` and run
+`orbit script revoke ux_rules_runner`. `orbit doctor` reports it under
+`retired-scripts`, and a manifest that fails to load under `script-grants`.
+
+### Grants
+
+A grant is the operator's host-local consent to run one script at one set of
+content. It binds to the digests of both the manifest and the entry file.
+Editing either file makes the grant `stale`: the script does not run until an
+operator grants it again at the new digests.
+
+Only operators grant and revoke. An agent session can list, show, and read
+history, but must not grant, even when it can edit the manifest or the program.
+
+```bash
+orbit script grant <name>                          # grant at the current digests
+orbit script grant <name> --read-root /srv/reports --write-root /srv/out
+orbit script grant <name> --follower               # grant on a pull follower, not the owner
+orbit script revoke <name>                         # revoke this host's grant
+```
+
+| Grant flag | Meaning |
+|---|---|
+| `--network` | Network the grant allows: `none`, `https` or `any`. Default: what the manifest requests. |
+| `--read-root <path>` | Extra absolute read root to grant. Repeatable. |
+| `--write-root <path>` | Extra absolute write root to grant. Repeatable. |
+| `--env-pass <NAME>` | Extra environment variable name to pass to the script. Repeatable. |
+| `--follower` | Grant for a pull follower host instead of the workspace owner. |
+| `--output-max-files <n>` | Most declared output files one step may keep, 1 to 64. Default 8. |
+| `--output-max-file-bytes <b>` | Largest output file one step may keep, up to 64 MiB. Default 1 MiB. |
+
+Every read and write root, from the flags or the manifest's `requests`, must
+already exist, sit outside the credential paths (`~/.ssh`, `~/.config/gh`, the
+keychains, …), and pass a probe by the granting process: it lists the directory
+(or opens a file root), and for a write root creates and removes a file. A root
+that fails refuses the grant, names the path, and nothing is granted. Before
+every run, the process that runs the job repeats the probe; a root that is
+missing or denied then refuses the step with `script_root_unavailable`, naming
+the path, and nothing runs. Orbit never creates a granted root.
+
+A script that declares `files.outputs` in its manifest keeps the regular files it
+writes at the top level of `out/`, and later steps read them as
+`steps.<id>.files` (`name`, `path`, `bytes`, `media_type`, `sha256`). The
+manifest's caps must fit the grant: asking for more than the grant allows
+refuses the step with `grant_insufficient` and names the flag to grant again
+with. Each grant states its output limits again, so granting without the flags
+returns to the defaults. A step's whole set never exceeds 256 MiB. Output over
+the caps, a symlink, a subdirectory or an unsafe file name fails the step and
+exposes none of its files.
+
+To file a task that carries those files, a later step of the same job runs the
+shipped `attach_script_files` activity with `task_id` and `step` (the script
+step's id), and optionally `files` (names to attach; all by default) and
+`path_prefix` (prepended to each artifact path). It attaches each file as a
+task artifact from bytes that still match the recorded SHA-256. A changed file,
+a name outside the set, a file over the 1 MiB task-artifact limit or a script
+step that is not a direct, earlier step of the job refuses the step and
+attaches nothing.
+
+A manifest's `files.inputs` lists `{from, as}` entries. `from` may read the
+step input (`{{ input.<field> }}`) and resolves, symlinks followed, to a file
+or directory inside the step's cwd tree or a granted read root (`--read-root`).
+Each one appears read-only at `in/<as>` (`$ORBIT_SCRIPT_IN/<as>`). An input
+that is missing, resolves anywhere else, or overlaps the workspace's `.orbit/`
+or a credential path refuses the step before it runs with
+`script_file_input_unavailable`, naming the input. Each attempt records every
+input's name, source path and SHA-256 (for a directory, a digest over its whole
+tree) as `input_files` in the `--json` output of `orbit run show` and
+`orbit script history`.
+
+A granted script step runs on Linux under `linux-bwrap-script-v1` and on macOS
+under `macos-sandbox-script-v1`; other platforms refuse the step with
+`script_sandbox_unavailable`, and so does a step started inside another sandbox
+(a worker's own Seatbelt or Bubblewrap sandbox), which never runs nested. The
+`RLIMIT_CPU` soft limit is the timeout rounded up to whole CPU seconds per
+process, with a minimum of 1 CPU second, and its hard limit is 10 CPU seconds
+later, capped at the hard limit inherited by the wrapper. The script can raise
+its CPU soft limit up to that hard limit. `RLIMIT_NOFILE` is 1024 for both its
+soft and hard limits, capped at the wrapper's inherited hard limit, so the
+script cannot raise it. On Linux, network access is off unless allowed by the
+grant. `--network https` shares the host network but admits outbound TCP to
+port 443 only (it needs Landlock ABI 4, so an older kernel refuses the step),
+and `--network any` shares it with no rule.
+Only the variables named with `--env-pass` (or in the manifest's
+`requests.env_pass`) reach the script, copied from the environment of the
+process that runs the job; `ORBIT_*` names and the profile's own `PATH`,
+`HOME`, `TMPDIR`, `LANG` and `TZ` are never passed. A passed value is redacted
+from the step's log, its output and `orbit run show` / `orbit script history`.
+A manifest asking for more network or another variable than its grant refuses
+with `grant_insufficient`. If the sandbox itself fails, see
+[Linux sandbox](linux-sandbox.md).
+
+On macOS a script step never has network: a grant with `--network https` or
+`any` refuses the step with `script_sandbox_unavailable`. The macOS profile
+allows the same paths as the Linux one, but the script sees its scratch
+directory at its host path (use `$ORBIT_SCRIPT_IN`, `$ORBIT_SCRIPT_OUT`,
+`$HOME` and `$TMPDIR`, never `/orbit-script`), and declared inputs are copied
+into `in/`, so they count against the scratch size limit. It has no memory or
+task limits, a timed-out descendant that calls `setsid` can outlive the step
+(still confined), and file metadata outside the grant stays visible; `orbit
+doctor` lists these gaps in its `script-sandbox` row. With
+`machine.worker_containment = "strict"`, every script step on macOS is refused.
+macOS privacy permissions (TCC) apply on top of the profile and belong to the
+process that runs the job (the Orbit clock's launch agent, or the `orbit`
+binary it runs), not to the terminal that granted. A root they deny refuses the
+step with `script_root_unavailable`, naming the path and the System Settings >
+Privacy & Security pane to allow it in.
+
+### Grant states
+
+`orbit script list` and `orbit script show` report one of these states:
+
+| State | Meaning |
+|---|---|
+| `granted` | The grant's digests match the current manifest and entry file. |
+| `stale` | A verified grant whose digests no longer match: one of the files changed after granting. |
+| `ungranted` | A manifest with no grant. |
+| `orphaned` | A grant whose manifest no longer exists. |
+| `unavailable` | The manifest could not be loaded; its diagnostic names the error and remedy. |
+| `witness_refused` | The stored grant is not trusted because its witness is missing or invalid, its row does not match the witness, or its timeout ceiling is outside `1..=4294967295` seconds. Review it and run `orbit script grant <name>` to re-authorize it. |
+
+### Grant requests
+
+When a script step is refused with `grant_missing`, `grant_stale` or
+`grant_insufficient`, Orbit also raises a `script_grant` decision request, and the
+refusal message names it. The request carries the script, the digest it would
+grant, the refused grant's digest, the diff against the last granted bytes, and
+the requested against granted capabilities. Another refusal at the same digest and
+capability set reuses the open request. After an edit, the next refusal raises a new
+request and supersedes the old one. Requests live on a `someday` task per script,
+titled ``Script grant requests: `<name>` ``, which agents never pick up. A witness
+failure, a missing sandbox or a changed interpreter raises no request, because a
+grant would not clear it.
+
+```bash
+orbit decision list --gate script_grant     # open grant requests
+orbit decision show <id>                     # script, digests, capabilities and the diff to review
+orbit decision answer <id> grant             # write the grant at that digest (operator only)
+orbit decision answer <id> reject            # leave the script ungranted
+```
+
+A `grant` answer writes the grant exactly as requested, with the answering human
+as grantor. It is refused, and writes nothing, when the script's bytes or requested
+capabilities have changed since the request was raised. The same answer also comes
+from a registered [decision channel](plugins.md#decision-channels) (provenance
+`decision-channel <name>`) or from the dashboard. An agent session or plugin
+callback can neither answer the request nor write a grant.
+
+The dashboard's **Automation › Scripts** view lists every script with its state
+(adding `revoked` for a script whose grant was withdrawn after it ran), digests,
+the commit that made it stale, requested against granted capabilities, its open
+request and the diff. An operator session can grant from there; the action is
+bound to the digest shown, so bytes that change after the page loaded are refused.
+A grant answer binds the catalog bytes in the workspace's primary checkout. A step
+that ran from a worktree with different bytes is refused as superseded until those
+bytes land.
+
+### Verify a grant
+
+```bash
+orbit script list                  # NAME, ENTRY, GRANT, DIGEST for every script
+orbit script show <name>           # manifest and entry paths, current and granted digests, network, grantor, detail
+orbit script history <name>        # recent attempts, newest first, refusals included (--limit, default 20)
+```
+
+1. `orbit script list` should show `granted` in the GRANT column for each script
+   you expect to run. `stale`, `ungranted` or `orphaned` means the step will
+   not run.
+2. `orbit script show <name>` should report `grant state: granted`, with the
+   current manifest and entry digests equal to the granted ones. A difference
+   after an edit is the staleness above; grant again to accept the edited files.
+3. After a run, `orbit script history <name>` lists each attempt, including the
+   refused ones.
+
 ## Tuning which tasks task-pilot prepares
 
 The seeded `task_pilot.yaml` carries an optional `eligibility` block under
@@ -423,7 +618,7 @@ trigger:
     deadline_minutes: 90
     eligibility:
       statuses: [proposed, backlog]  # non-empty subset of these two
-      exclude_tags: [no-diff-expected, no-diff-needed]
+      exclude_tags: [no-diff-expected, no-diff-needed, no-pilot]
       require_tags: []               # every listed tag must be present
       task_types: []                 # empty admits every type
 ```
@@ -432,17 +627,20 @@ trigger:
 `task_pilot_pipeline` run. Tasks whose stored `task.crew` differs, including
 set versus unset, share that run; prepare gives each crew its own partitions
 of at most five, so one pass assesses every crew instead of refusing a mixed
-bundle. A hand-assembled `orbit run task-pilot` list that mixes crews is still
-refused at run start. A burst of same-crew filed tasks is prepared as one run
-rather than one run per task, and
+bundle. The supported `orbit run task-pilot` command groups explicit tasks by
+stored crew and submits one homogeneous run per crew. A hand-assembled direct
+`orbit run job task_pilot_pipeline` with mixed task crews is still refused at
+run start. A burst of same-crew filed tasks is prepared as one run rather than
+one run per task, and
 `orbit clock tick --dry-run` lists the batch it would admit. Narrow the
 predicate to, say, `statuses: [backlog]` or `require_tags: [pilot]` to keep the
 scheduled pilot off proposals a human has not looked at yet. Unknown keys and
-an empty `statuses` fail the definition closed. The resolved predicate is part
-of each task's material fingerprint, so changing it re-prepares tasks assessed
-under the old one; the default predicate keeps the fingerprints a workspace
-accepted before the block existed. Explicit runs (`orbit run task-pilot <id>`)
-ignore the block.
+an empty `statuses` fail the definition closed. The predicate selects eligible
+never-assessed tasks for their first automatic assessment. It is also part of
+the material fingerprint checked during preparation and apply, but changing it
+does not queue another assessment for a task with an applied assessment. The
+default predicate keeps fingerprints accepted before the block existed. Explicit
+runs (`orbit run task-pilot <id>`) ignore the block.
 
 An active pilot temporarily holds its tasks across routines, drains, manual
 runs and targeted CI-sweep pilots, from the reservation its prepare step writes
@@ -456,15 +654,35 @@ claimed task edited before its batch is prepared is claimed afresh on its own;
 the rest of the batch is piloted. Inspect
 `orbit run show <RUN_ID> -s prepare --json` to find the holder.
 
-Which edits make an assessed task due again is `[workflow.task_pilot_freshness]`
-in `config.toml`. By default only a change to the title, description,
-acceptance criteria, plan or selectors does; retagging, reassigning crew, and
-merges to the branch do not. Add fields to `material_fields` (`tags`, `crew`,
-`tools`, `type`, `complexity`, `relations`, `dependencies`, `instructions`) or
-set `source_sensitivity` to `context_files` (a merge that touches a task's
-selector paths) or `any` (every merge). A `freshness:` block under the
-routine's `trigger.state` overrides either key for that routine. Changing the
-resolved value re-prepares tasks assessed under the old one.
+`[workflow.task_pilot_freshness]` controls material drift checks, not automatic
+re-piloting. By default `material_fields` covers title, description, acceptance
+criteria, plan and selectors. It can also include `tags`, `crew`, `tools`,
+`type`, `complexity`, `relations`, `dependencies` and `instructions`.
+`source_sensitivity` defaults to `ignore`; choose `context_files` to check
+branch changes at selector paths or `any` to check every branch-head move.
+These settings guard prepare/apply and assessment admission. A `freshness:`
+block under the routine's `trigger.state` overrides either key for that routine:
+routine value, then workspace config, then default. Changing material or the
+resolved policy does not queue another pilot for an assessed task.
+
+For example, after choosing a policy, set and inspect the workspace values:
+
+```bash
+orbit config set workflow.task_pilot_freshness.source_sensitivity context_files
+orbit config get workflow.task_pilot_freshness.source_sensitivity
+orbit config get workflow.task_pilot_freshness.material_fields
+orbit config show --all                    # effective config and provenance
+orbit routine show task_pilot              # inspect routine overrides
+orbit run readiness <id> --json             # inspect task holds
+```
+
+Description or criteria edits hold dispatch as `pilot_assessment_stale` until
+a new assessment completes (the drain queues one automatically for an
+unclaimed task), unless an authorized operator skips pilot
+admission with `no-pilot`. Other readiness, dependency, lock and delivery gates
+still apply. For the operator's explicit `orbit task repilot <id>` procedure,
+no-pilot authority and bounded re-check/full behavior, follow
+[task-pilot orchestration](../../orbit-orchestrate/references/orchestration.md).
 
 **Upgrading from the cron form.** A workspace seeded before the state form
 holds a cron `task_pilot.yaml` (`*/40 * * * *`). `orbit workspace sync` refreshes
@@ -492,22 +710,40 @@ and store-GC routines.
 ## Observe and control
 
 Fires are ordinary runs — they appear in `orbit run history` under the actor
-`routine/<name>`.
+`routine/<name>`. Three controls act at different scopes, and an enabled
+routine can still be held on one host:
+
+| Control | Scope | Commands |
+|---|---|---|
+| Enabled (the definition) | The routine's versioned `enabled` field in this checkout | `orbit routine enable <name>`, `orbit routine disable <name>` (operator only, audited) |
+| Host-local pause | This host only; unversioned; survives reboots | `orbit routine pause <name>`, `orbit routine resume <name>` |
+| Host clock | Every routine and auto-task this host runs | `orbit clock pause`, `orbit clock enable` (definition state is untouched) |
 
 ```bash
-orbit routine pause <name>         # this host only; survives reboots
-orbit routine resume <name>
+orbit routine enable <routine-name>   # set enabled: true (operator only)
+orbit routine disable <routine-name>  # set enabled: false (operator only)
+orbit routine pause <name>            # hold it on this host only
+orbit routine resume <name>           # clear the host-local pause
+orbit clock status                    # clock cadence and whether it is paused
 ```
+
+Verify an enablement, a pause and the clock separately. `orbit routine list`
+shows each routine's enabled and paused state and its next due time, and
+`orbit routine show <name>` shows its definition and effective state. An
+auto-task uses its own kill-switch, `orbit auto-task toggle <name> on|off`
+([Auto-tasks](auto-tasks.md)).
 
 ## "Why didn't it fire?"
 
 Resolve the toggles in this order — `orbit routine list` shows both at once:
 
-1. `enabled: false` in this checkout's definition (per-user, gitignored).
-2. A local pause (this host only, unversioned, durable across reboots).
+1. `enabled: false` in this checkout's definition (`orbit routine enable` sets
+   it; per-user, gitignored).
+2. A local pause (`orbit routine pause`: this host only, unversioned, durable
+   across reboots).
 
 If neither explains it, check further out: is this checkout registered as an
-owner (`orbit workspace list`), is the clock unit running
+owner (`orbit workspace list`), is the clock unit running and not paused
 (`orbit clock status`), and did the tick itself error
 (`orbit log tail --level warn --since 1h`)? For a fire
 that started and then failed, the run is the evidence —
@@ -538,18 +774,14 @@ standalone `task_pilot_pipeline` run carry no such authority. Set the CI
 integration branch explicitly when it differs from GitHub's default branch.
 CI defaults bound investigation to six runs and filing to five tasks. The
 security job defaults to `moderate` and above for Dependabot/code-scanning
-findings. Set `[security_alert_sweep] min_severity = "high"` in the workspace
-`.orbit/config.toml` or global `~/.orbit/config.toml` to change the floor for
-scheduled routines and manual runs. Allowed values are `low`, `moderate`,
-`high` and `critical`; precedence is explicit run/job `min_severity` input >
-workspace config > global config > built-in `moderate`. The `--input
-min_severity=high` example overrides config for that run only. Invalid config
-values fail validation with `security_alert_sweep.min_severity` named in the
-error. Secret-scanning findings are always considered regardless of this floor;
+findings; the floor is fixed. A run's `--input min_severity=high` (`low`,
+`moderate`, `high` or `critical`) overrides it for that run only.
+`security_alert_sweep.min_severity` loads with a deprecation warning, is
+ignored, and stops being recognised after 2026-12-08. Secret-scanning findings are always considered regardless of this floor;
 dependency alerts with an open Dependabot PR are skipped by default. Its catalog
 exposes per-source collection caps. The file step records the effective
-`min_severity`, `min_severity_source` (`input`, `workspace`, `global` or
-`built-in`), and `excluded_below_min_severity`. `orbit run show <RUN_ID>`
+`min_severity`, `min_severity_source` (`input` or `built-in`; runs recorded
+before the fixed floor may name `workspace` or `global`), and `excluded_below_min_severity`. `orbit run show <RUN_ID>`
 summarizes the filed count, floor and source, and excluded alert count and
 numbers, including for a successful sweep.
 Secret values must not be copied into task prose or logs.
@@ -558,9 +790,20 @@ A missing GitHub client, authentication, or API permission is a capability gap,
 not evidence of a clean repository. Read the collect/file step outcomes. CI
 filing honors operator `covered_by` relations and timed archive/reject
 suppression of the same evidenced cause
-(`ci_failure.operator_suppression_hours`, default 6; see
+(a fixed 6 hours; see
 [recovery](../../orbit-orchestrate/references/recovery.md)). Equal normalized
 failing-test signatures consolidate across jobs with every job retained.
+A job whose log has a line starting with an entry of
+`workflow.ci_infrastructure_signatures` is listed under `infrastructure`, not
+filed, and on a pull request it gets a CI rerun rather than a repair agent. The
+sweep itself reruns nothing, so a failed landing-branch run stays red until a
+rerun or a newer push. That rerun is bounded by
+[CI infrastructure reruns](configuration.md#ci-infrastructure-reruns):
+`workflow.ci_infrastructure_retry.max_attempts` (default `3`, `0`..`10`;
+`0` disables the recovery) caps reruns per pull-request head, and
+`workflow.ci_infrastructure_retry.backoff_seconds` (default `60`,
+`1`..`3600` seconds) sets the initial delay before doubling waits. Reading
+the sweep output or this policy grants no repair or merge authority.
 Otherwise filing first reuses a still-open `ci-failure:<key>` owner, then follows
 a rejected exact-key task's inbound `Supersedes` relation to its covering owner,
 preferring a still-open owner and then the lowest task ID if several supersede

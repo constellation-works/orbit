@@ -1,8 +1,8 @@
 ---
 title: "Scope: Scheduled tasks (not_before)"
 owner: claude
-last_updated: 2026-10-27
-last_validated: 2026-10-30
+last_updated: 2026-11-14
+last_validated: 2026-11-14
 status: Draft
 stage: shipped
 next: "Consumer calendar and Schedule picker in orbit-office"
@@ -86,9 +86,9 @@ A new admission exclusion, `Scheduled`, beside `ProviderBackoff`:
 - **Every dispatcher honours it:**
   - the workspace auto drain's backlog listing;
   - the owner's pull-drain claim admission, so followers inherit it;
-  - explicit `orbit run ship <ids>` / `orbit.workflow.ship`. This path is
-    the one that matters most: explicit ids skip the backlog listing today,
-    so the check must be added there. A scheduled id is refused with a
+  - explicit `orbit run ship <ids>` / `orbit.workflow` action `ship`
+    ([ORB-23280]). Explicit ids skip the backlog listing, so the hold is
+    checked on this path ([ORB-19214]). A scheduled id is refused with a
     typed `task_scheduled` error naming the time. An operator-only
     `orbit run ship <ids> --ignore-schedule` starts it anyway. Once every
     other ship check passes, and before the run is submitted (its worker
@@ -162,8 +162,8 @@ A new admission exclusion, `Scheduled`, beside `ProviderBackoff`:
     (`application/distributed/serve/admission.rs`, `admit_pull_request`). And the
     workflow-entry check
     `ensure_task_can_enter_workflow_honouring_schedule`
-    (`application/task/transitions.rs`), which is shared by explicit ship
-    (`application/job/pipeline/submit.rs`), the gate's dispatch re-check
+    (`application/task/transitions/`), which is shared by explicit ship
+    (`application/job/pipeline/submit/ship.rs`), the gate's dispatch re-check
     (`application/job/pipeline_actions/gate/admission.rs`) and worktree
     admission (`admit_task_for_workflow_as_system`, reached from
     `adapter/engine_host/runtime_host/claims.rs`). So a resumed or
@@ -200,11 +200,12 @@ A new admission exclusion, `Scheduled`, beside `ProviderBackoff`:
 
 1. **Core:** the field, the `Scheduled` exclusion, the ship-by-id refusal
    with the operator override, and readiness and run-show reporting.
+   (done, [ORB-19214])
 2. **Surfaces:** the `orbit.task.list` range filter and `--scheduled`,
    the dashboard detail and an editable field, and
-   the forecast placement.
+   the forecast placement. (done, [ORB-19215])
 3. **Consumers:** orbit-office's To-dos "Schedule…" picker and calendar
-   blocks (in that repository's own docs).
+   blocks (in that repository's own docs; pending in orbit-office).
 
 ## Open questions
 
@@ -230,5 +231,6 @@ A new admission exclusion, `Scheduled`, beside `ProviderBackoff`:
 ## Task References
 
 - [ORB-14266] — added the `ProviderBackoff` hold and its `not_before`, the pattern this hold follows.
-- [ORB-19214] — builds the field, the `Scheduled` hold and the ship refusal.
-- [ORB-19215] — builds the list filter, `--scheduled`, the dashboard field and the forecast placement.
+- [ORB-19214] — built the field, the `Scheduled` hold and the ship refusal.
+- [ORB-19215] — built the list filter, `--scheduled`, the dashboard field and the forecast placement.
+- [ORB-23280] — renamed the explicit-ship tool to `orbit.workflow` action `ship`.

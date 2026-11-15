@@ -1,0 +1,23 @@
+Record an interactive cost event
+
+Usage: orbit evolution add [OPTIONS] --event <EVENT>
+
+Options:
+      --event <EVENT>
+          Cost event as JSON
+
+      --mandate <MANDATE>
+          Assignment task for this occurrence
+
+      --cycle <CYCLE>
+          Cycle identifier
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

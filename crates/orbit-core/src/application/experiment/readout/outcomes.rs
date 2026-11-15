@@ -10,16 +10,14 @@ use orbit_common::OrbitError;
 use orbit_runtime::cost::IMPLEMENT_INVOCATION_IDS;
 use orbit_store::V2AuditEventFilter;
 use orbit_store::contracts::{ExperimentAssignment, InvocationQuery, JobRunQuery};
-use orbit_types::task::{Task, TaskHistoryEntry, TaskRelationType, TaskStatus, complexity_bucket};
+use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus, complexity_bucket};
 use orbit_types::workflow::{
-    PR_AUTO_FIX_ADMITTED_EVENT, PrAutoFixAttempt, PrAutoFixBlocker, ReviewVerdict, V2AuditEvent,
-    V2AuditEventKind,
+    CapturedExperiments, ReviewVerdict, TagInstructionRole, V2AuditEvent, V2AuditEventKind,
 };
-use serde::Deserialize;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::agents::review_gate_verdicts;
+use crate::application::agents::{self, ExecutionMode, task_execution_modes};
 
 /// How long after landing a `regression_from` filing counts as an escape.
 pub(super) const REGRESSION_WINDOW_DAYS: i64 = 14;
@@ -28,198 +26,35 @@ pub(super) const REGRESSION_WINDOW_DAYS: i64 = 14;
 const READ_SLACK: Duration = Duration::days(1);
 /// Invocation records read per implement activity.
 const INVOCATION_LIMIT: usize = 100_000;
+/// Stored names of an explorer delegation. Matched case-insensitively on
+/// the full tool name and on the tail after the last `__`.
+const EXPLORER_DELEGATION: &[&str] = &["orbit.agent.invoke", "orbit_agent_invoke"];
 /// Audit rows read per page.
 const AUDIT_PAGE: usize = 2_000;
 /// The step recovery activity that resolves rebase conflicts.
 const CONFLICT_RECOVERY_ACTIVITY: &str = "pr_conflict_recovery";
-/// The task history event of an auto-fix started outside the run.
-const AUTO_FIX_OUT_OF_RUN_EVENT: &str = "pr_auto_fix_out_of_run";
 
-/// Whether an arm does better with a lower or a higher value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Better {
-    Lower,
-    Higher,
+/// The `step_finished` outcome of a step that completed.
+const STEP_SUCCESS: &str = "success";
+
+/// Whether `name` is an explorer delegation, including the tool's own name
+/// on the tail of an MCP identifier (`mcp__orbit__orbit_agent_invoke`).
+fn is_explorer_delegation(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let tail = match lower.rsplit_once("__") {
+        Some((_, tail)) => tail,
+        None => lower.as_str(),
+    };
+    EXPLORER_DELEGATION
+        .iter()
+        .any(|known| *known == tail || *known == lower.as_str())
 }
 
-/// How a metric is summarised: a mean of per-task values, or a rate of
-/// per-task 0/1 outcomes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Kind {
-    Mean,
-    Rate,
-}
-
-pub(super) struct MetricSpec {
-    pub(super) name: &'static str,
-    pub(super) kind: Kind,
-    pub(super) better: Better,
-    pub(super) unit: &'static str,
-    /// `false` for a metric whose source series does not exist yet.
-    pub(super) measured: bool,
-}
-
-const fn spec(
-    name: &'static str,
-    kind: Kind,
-    better: Better,
-    unit: &'static str,
-    measured: bool,
-) -> MetricSpec {
-    MetricSpec {
-        name,
-        kind,
-        better,
-        unit,
-        measured,
-    }
-}
-
-/// Every metric an experiment may name, in the definition's order.
-pub(super) const METRIC_SPECS: &[MetricSpec] = &[
-    spec(
-        "implement_tokens",
-        Kind::Mean,
-        Better::Lower,
-        "normalized_tokens",
-        true,
-    ),
-    spec(
-        "total_tokens",
-        Kind::Mean,
-        Better::Lower,
-        "normalized_tokens",
-        true,
-    ),
-    spec("cost_usd", Kind::Mean, Better::Lower, "usd", true),
-    spec("lead_time", Kind::Mean, Better::Lower, "hours", true),
-    spec(
-        "implement_duration",
-        Kind::Mean,
-        Better::Lower,
-        "minutes",
-        true,
-    ),
-    spec(
-        "turns_before_first_edit",
-        Kind::Mean,
-        Better::Lower,
-        "turns",
-        true,
-    ),
-    spec(
-        "result_bytes_before_first_edit",
-        Kind::Mean,
-        Better::Lower,
-        "bytes",
-        true,
-    ),
-    spec(
-        "first_pass_acceptance",
-        Kind::Rate,
-        Better::Higher,
-        "rate",
-        true,
-    ),
-    spec("review_repairs", Kind::Mean, Better::Lower, "count", true),
-    spec("step_recoveries", Kind::Mean, Better::Lower, "count", true),
-    spec("final_recoveries", Kind::Mean, Better::Lower, "count", true),
-    spec("failed_checks", Kind::Mean, Better::Lower, "count", true),
-    spec("merge_conflicts", Kind::Mean, Better::Lower, "count", true),
-    spec(
-        "delivery_done_rate",
-        Kind::Rate,
-        Better::Higher,
-        "rate",
-        true,
-    ),
-    spec(
-        "escaped_regressions",
-        Kind::Mean,
-        Better::Lower,
-        "count",
-        true,
-    ),
-    spec("lines_changed", Kind::Mean, Better::Lower, "lines", true),
-    // Visual review §12.3: the post-landing comparison's severity-weighted
-    // confirmed findings, the visual fixes and follow-ups of the delivery,
-    // and its reviewer's CONFIRMED / (CONFIRMED + REJECTED).
-    spec(
-        "visual_landed_mismatches",
-        Kind::Mean,
-        Better::Lower,
-        "weighted_findings",
-        true,
-    ),
-    spec(
-        "visual_review_repairs",
-        Kind::Mean,
-        Better::Lower,
-        "count",
-        true,
-    ),
-    spec(
-        "visual_verified_finding_rate",
-        Kind::Mean,
-        Better::Higher,
-        "rate",
-        true,
-    ),
-];
-
-pub(super) fn metric_spec(name: &str) -> Option<&'static MetricSpec> {
-    METRIC_SPECS.iter().find(|spec| spec.name == name)
-}
-
-/// One task's value for one metric.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) enum Outcome {
-    Value(f64),
-    /// Not settled yet: the task is in flight, or its regression window is
-    /// still open.
-    Open,
-    /// Settled, but the records hold no value (no covered invocation, no
-    /// review, nothing landed).
-    Unmeasured,
-}
-
-/// One enrolled, unforced task with its outcomes.
-pub(super) struct TaskOutcome {
-    pub(super) task_id: String,
-    pub(super) arm: String,
-    pub(super) segment: u32,
-    pub(super) complexity: String,
-    /// The crew pool recorded at admission for the task's latest
-    /// delivery, when that evidence exists [ORB-19487]. `None` means the
-    /// historical pool is unavailable, not that the crew mismatched.
-    pub(super) admitted_pool: Option<BTreeSet<String>>,
-    /// What `admitted_pool` is, for a mismatch message.
-    pub(super) admitted_pool_label: Option<String>,
-    /// `task.crew`, the crew of the task's latest delivery [ORB-19416].
-    pub(super) crew: String,
-    pub(super) terminal: bool,
-    pub(super) assigned_at: DateTime<Utc>,
-    pub(super) assignment_digest: Option<String>,
-    /// Present only for settled tasks with complete invocation cost coverage.
-    pub(super) cost_source: Option<CostSource>,
-    pub(super) values: BTreeMap<&'static str, Outcome>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum CostSource {
-    Reported,
-    Estimated,
-}
-
-/// What the records say about the enrolled tasks.
-pub(super) struct Observed {
-    pub(super) tasks: Vec<TaskOutcome>,
-    /// The shared scan could not confirm tasks' earliest implement invocations.
-    pub(super) first_edit_incomplete: bool,
-    /// Each arm's overlay digests as its runs received them.
-    pub(super) run_digests: BTreeMap<String, BTreeSet<String>>,
-    /// Landed tasks whose regression window is still open.
-    pub(super) open_regression_windows: usize,
+/// Which analysed tasks the implement invocations' tool calls show delegating
+/// to an explorer.
+struct ExplorerObservations {
+    found: BTreeSet<String>,
+    unobserved: BTreeSet<String>,
 }
 
 #[derive(Default)]
@@ -243,14 +78,6 @@ impl Spend {
     }
 }
 
-/// The head and blocker an out-of-run auto-fix start names.
-#[derive(Deserialize)]
-struct OutOfRunStart {
-    pr_number: String,
-    head_sha: String,
-    blocker: PrAutoFixBlocker,
-}
-
 fn crew_names_from_entries(entries: Option<&Value>) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
     if let Some(Value::Array(items)) = entries {
@@ -270,6 +97,18 @@ fn captured_pool_for_tier(pools: Option<&Value>, tier: &str) -> BTreeSet<String>
         return BTreeSet::new();
     };
     crew_names_from_entries(pool.get("crews").or_else(|| pool.as_array().map(|_| pool)))
+}
+
+/// What a readout reads from its tasks' run audit trails.
+struct RunAudit {
+    /// Recoveries and conflicts per task.
+    events: BTreeMap<String, RunEvents>,
+    /// Each arm's overlay digests as its dispatches received them.
+    digests: BTreeMap<String, BTreeSet<String>>,
+    /// Roles in which each task's arm overlay reached a step that succeeded.
+    delivered: BTreeMap<String, BTreeSet<TagInstructionRole>>,
+    /// The crew memory each task's first memory-bearing dispatch received.
+    memory: BTreeMap<String, TaskMemoryDelivery>,
 }
 
 impl OrbitRuntime {
@@ -308,8 +147,10 @@ impl OrbitRuntime {
             let mut pools = input
                 .and_then(|value| value.get("auto_crew_pools"))
                 .cloned();
+            // An unreadable checkpoint leaves admission evidence
+            // unavailable for this run rather than failing the readout.
             if (selection.is_none() || pools.is_none())
-                && let Some(state) = self.read_run_state(&run.run_id.to_string())?
+                && let Some(state) = self.read_run_state(&run.run_id.to_string()).ok().flatten()
             {
                 if selection.is_none() {
                     selection = state.crew_selection.filter(|selection| {
@@ -377,6 +218,7 @@ impl OrbitRuntime {
         created_at: DateTime<Utc>,
         enrolled: &[&ExperimentAssignment],
         now: DateTime<Utc>,
+        shadow: bool,
     ) -> Result<Observed, OrbitError> {
         let ids: BTreeSet<String> = enrolled.iter().map(|row| row.task_id.clone()).collect();
         if ids.is_empty() {
@@ -385,9 +227,15 @@ impl OrbitRuntime {
                 first_edit_incomplete: false,
                 run_digests: BTreeMap::new(),
                 open_regression_windows: 0,
+                interactive_excluded: 0,
             });
         }
         let since = created_at - READ_SLACK;
+        let assigned_at: BTreeMap<String, DateTime<Utc>> = enrolled
+            .iter()
+            .map(|row| (row.task_id.clone(), row.assigned_at))
+            .collect();
+        let explorer = self.explorer_observations(&ids, &assigned_at, since)?;
         let all_tasks = self.list_task_metadata()?;
         let tasks: BTreeMap<&str, &Task> = all_tasks
             .iter()
@@ -397,7 +245,13 @@ impl OrbitRuntime {
         let tokens = self.task_token_totals(Some(since))?;
         let spend = self.task_spend(&ids, since)?;
         let lines = self.landed_task_lines_changed(&ids, since)?;
-        let (run_events, run_digests) = self.run_audit(experiment_id, &ids, since)?;
+        let reviewable_rows = self.landed_task_reviewable_lines(&ids, since)?;
+        let RunAudit {
+            events: run_events,
+            digests: run_digests,
+            delivered: delivered_roles,
+            memory: task_memory,
+        } = self.run_audit(experiment_id, &ids, since)?;
         let first_edits = self.first_implement_edits(Some(since))?;
 
         let mut landed_at = BTreeMap::new();
@@ -412,7 +266,36 @@ impl OrbitRuntime {
         let regressions = regressions(&all_tasks, &landed_at);
         let window = Duration::days(REGRESSION_WINDOW_DAYS);
         let mut open_regression_windows = 0;
+        // Only a job applies an arm's overlay, so a task worked in an
+        // interactive session was assigned but never treated.
+        let executed: Vec<(&Task, &[TaskHistoryEntry])> = tasks
+            .values()
+            .map(|task| {
+                let history = histories
+                    .get(task.id.as_str())
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                (*task, history)
+            })
+            .collect();
+        let modes = task_execution_modes(self, since, &executed, now);
+        let mut interactive_excluded = 0;
 
+        let claimed_treatments = self.latest_claim_experiment_treatments(experiment_id, &ids)?;
+        // Captures are only reported for shadow arms, so a live readout
+        // never scans (or fails on) historical pipeline checkpoints.
+        let mut captured_memory = if shadow {
+            self.captured_memory_from_runs(experiment_id, &ids)?
+        } else {
+            BTreeMap::new()
+        };
+        for (id, claim) in &claimed_treatments {
+            if let Some(memory) = &claim.captured_memory {
+                captured_memory
+                    .entry(id.clone())
+                    .or_insert_with(|| memory.clone());
+            }
+        }
         let mut outcomes = Vec::with_capacity(enrolled.len());
         for row in enrolled {
             let (Some(arm), Some(task)) = (row.arm.as_ref(), tasks.get(row.task_id.as_str()))
@@ -420,6 +303,10 @@ impl OrbitRuntime {
                 continue;
             };
             let id = row.task_id.as_str();
+            if modes.get(id) == Some(&ExecutionMode::Interactive) {
+                interactive_excluded += 1;
+                continue;
+            }
             let terminal = task.status.is_terminal();
             let done = task.status == TaskStatus::Done;
             let settled = |value: Option<f64>| match (terminal, value) {
@@ -429,7 +316,7 @@ impl OrbitRuntime {
             };
             let history = histories.get(id).map(Vec::as_slice).unwrap_or_default();
             let comments = self.get_task_comments(id)?;
-            let verdicts = review_gate_verdicts(&comments);
+            let verdicts = agents::review_gate_verdicts(history, &comments);
             let first_judged = verdicts
                 .iter()
                 .find(|verdict| **verdict != ReviewVerdict::Incomplete);
@@ -516,7 +403,12 @@ impl OrbitRuntime {
                 .iter()
                 .filter(|verdict| **verdict == ReviewVerdict::AcceptWithFixes)
                 .count();
-            values.insert("review_repairs", settled(Some(repairs as f64)));
+            // No review happened without a settlement, so that is
+            // unmeasured, not a measured zero repairs.
+            values.insert(
+                "review_repairs",
+                settled((!verdicts.is_empty()).then_some(repairs as f64)),
+            );
             let count = |pick: fn(&RunEvents) -> u64| Some(events.map_or(0, pick) as f64);
             values.insert("step_recoveries", settled(count(|e| e.step_recoveries)));
             values.insert("final_recoveries", settled(count(|e| e.final_recoveries)));
@@ -534,23 +426,15 @@ impl OrbitRuntime {
                 "lines_changed",
                 settled(lines.get(id).filter(|_| done).map(|lines| *lines as f64)),
             );
-            let visual = self.visual_outcomes(id)?;
-            values.insert(
-                "visual_landed_mismatches",
-                match visual.landed_mismatches.filter(|_| done) {
-                    Some(weighted) => Outcome::Value(weighted),
-                    None if terminal => Outcome::Unmeasured,
-                    None => Outcome::Open,
-                },
-            );
-            values.insert(
-                "visual_review_repairs",
-                settled(visual.repairs.filter(|_| done)),
-            );
-            values.insert(
-                "visual_verified_finding_rate",
-                settled(visual.verified_rate),
-            );
+            let reviewable = if !done {
+                ReviewableDenominator::NotDone
+            } else {
+                match reviewable_rows.get(id) {
+                    None => ReviewableDenominator::Missing,
+                    Some(None) => ReviewableDenominator::Unavailable,
+                    Some(Some(lines)) => ReviewableDenominator::Measured(*lines),
+                }
+            };
             let crew_name = task.crew.clone().unwrap_or_else(|| "unset".to_string());
             let (admitted_pool, admitted_pool_label) =
                 match self.admitted_crew_pool(id, &crew_name)? {
@@ -567,9 +451,25 @@ impl OrbitRuntime {
                 admitted_pool_label,
                 crew: crew_name,
                 terminal,
+                has_review_settlement: !verdicts.is_empty(),
+                admitted_treatment: self.admitted_experiment_treatment(
+                    id,
+                    experiment_id,
+                    claimed_treatments.get(id),
+                )?,
+                explorer_call: explorer.found.contains(id),
+                explorer_unobserved: explorer.unobserved.contains(id),
+                first_edit_trace_incomplete: first_edits
+                    .by_task
+                    .get(id)
+                    .is_some_and(|edit| edit.incomplete_trace),
                 assigned_at: row.assigned_at,
                 assignment_digest: row.digest.clone(),
+                delivered_roles: delivered_roles.get(id).cloned().unwrap_or_default(),
+                memory: task_memory.get(id).cloned(),
+                captured_memory: captured_memory.get(id).cloned(),
                 cost_source,
+                reviewable,
                 values,
             });
         }
@@ -578,7 +478,114 @@ impl OrbitRuntime {
             first_edit_incomplete: first_edits.truncated,
             run_digests,
             open_regression_windows,
+            interactive_excluded,
         })
+    }
+
+    /// Captured crew memory per task from its runs' `experiment_capture`
+    /// (or pipeline `initial_input`), earliest run first. Shadow arms are
+    /// captured but never delivered, so this is their only memory evidence;
+    /// live arms keep using the overlay-applied audit rows for delivery.
+    fn captured_memory_from_runs(
+        &self,
+        experiment_id: &str,
+        ids: &BTreeSet<String>,
+    ) -> Result<BTreeMap<String, TaskMemoryDelivery>, OrbitError> {
+        let mut captured: BTreeMap<String, TaskMemoryDelivery> = BTreeMap::new();
+        for id in ids {
+            let mut runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
+                task_id: Some(id.clone()),
+                include_steps: false,
+                ..Default::default()
+            })?;
+            runs.sort_by(|left, right| {
+                left.created_at
+                    .cmp(&right.created_at)
+                    .then_with(|| left.run_id.cmp(&right.run_id))
+            });
+            for run in runs {
+                // The run input already answers when it carries a capture;
+                // pipeline state is only a fallback for runs without one.
+                // An unreadable fallback checkpoint skips this run instead
+                // of failing the whole readout, matching the soft skip for
+                // a capture that does not deserialize below.
+                let raw = match run
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("experiment_capture"))
+                    .cloned()
+                {
+                    Some(raw) => Some(raw),
+                    None => match self.read_run_state(&run.run_id.to_string()) {
+                        Ok(state) => state
+                            .as_ref()
+                            .and_then(|state| state.initial_input.get("experiment_capture"))
+                            .cloned(),
+                        Err(_) => continue,
+                    },
+                };
+                let Some(raw) = raw else { continue };
+                let Ok(capture) = serde_json::from_value::<CapturedExperiments>(raw) else {
+                    continue;
+                };
+                let Some(entry) = capture
+                    .assignments
+                    .iter()
+                    .find(|entry| entry.experiment == experiment_id)
+                else {
+                    continue;
+                };
+                let Some(memory) = &entry.memory else {
+                    continue;
+                };
+                if !memory.enabled {
+                    continue;
+                }
+                let Some(delivery) = memory.deliveries.first() else {
+                    continue;
+                };
+                captured.insert(
+                    id.clone(),
+                    TaskMemoryDelivery {
+                        week: delivery
+                            .revised_at
+                            .as_deref()
+                            .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
+                            .map(|at| at.format("%G-W%V").to_string()),
+                        digest: delivery.digest.clone(),
+                        model: delivery.model.clone(),
+                        model_revision: delivery.block.revision.model,
+                        global_revision: delivery.block.revision.global,
+                        renderer_version: delivery.renderer_version,
+                    },
+                );
+                break;
+            }
+        }
+        Ok(captured)
+    }
+
+    /// The summed complete cost of `ids` (crew memory dreaming tasks) and
+    /// how many of them have an unpriced invocation, which leave the sum.
+    pub(super) fn dreaming_spend(
+        &self,
+        ids: &BTreeSet<String>,
+        since: DateTime<Utc>,
+    ) -> Result<(f64, usize), OrbitError> {
+        if ids.is_empty() {
+            return Ok((0.0, 0));
+        }
+        let spend = self.task_spend(ids, since - READ_SLACK)?;
+        let mut total = 0.0;
+        let mut unpriced = 0;
+        for task in spend.values() {
+            match task.complete_cost() {
+                Some(cost) => total += cost,
+                None if task.unpriced => unpriced += 1,
+                None => {}
+            }
+        }
+        Ok((total, unpriced))
     }
 
     /// Cost over every linked invocation (provider-reported first, then the
@@ -592,13 +599,6 @@ impl OrbitRuntime {
     ) -> Result<BTreeMap<String, Spend>, OrbitError> {
         let mut spend: BTreeMap<String, Spend> = BTreeMap::new();
         for invocation in self.invocation_spend(Some(since))? {
-            // [visual-review §12.3] The post-landing comparison measures the
-            // arms; it is not a cost either arm's delivery pays.
-            if invocation.activity_id.as_deref().is_some_and(|activity| {
-                orbit_types::task::VISUAL_MEASURE_INVOCATION_IDS.contains(&activity)
-            }) {
-                continue;
-            }
             for id in invocation.task_ids.iter().filter(|id| ids.contains(*id)) {
                 let task = spend.entry(id.clone()).or_default();
                 if let Some(cost) = invocation.provider_cost_usd.or(invocation.derived_cost_usd) {
@@ -614,6 +614,8 @@ impl OrbitRuntime {
                 since: Some(since),
                 activity_id: Some((*activity).to_string()),
                 limit: INVOCATION_LIMIT,
+                // Implement wall time reads task links and durations only.
+                skip_tool_calls: true,
                 ..Default::default()
             })?;
             for record in records {
@@ -629,41 +631,97 @@ impl OrbitRuntime {
         Ok(spend)
     }
 
-    /// Lines added plus deleted over every landed delivery, per task.
-    pub(crate) fn landed_task_lines_changed(
+    /// Analysed-task ids with at least one explorer-delegation tool call on
+    /// an implement invocation at or after that task's assignment, and those
+    /// with none whose absence is unproven because an invocation at or after
+    /// assignment lost early tool calls to the bounded output capture.
+    ///
+    /// Each task is read on its own: the store applies the `task_id` filter
+    /// before its newest-first limit, so unrelated workspace invocations,
+    /// however many and however new, cannot evict an enrolled task's
+    /// recorded call the way one workspace-wide scan could [ORB-20573].
+    fn explorer_observations(
+        &self,
+        ids: &BTreeSet<String>,
+        assigned_at: &BTreeMap<String, DateTime<Utc>>,
+        since: DateTime<Utc>,
+    ) -> Result<ExplorerObservations, OrbitError> {
+        let mut found = BTreeSet::new();
+        let mut incomplete = BTreeSet::new();
+        for id in ids {
+            let Some(assigned) = assigned_at.get(id) else {
+                continue;
+            };
+            for activity in IMPLEMENT_INVOCATION_IDS {
+                if found.contains(id) {
+                    break;
+                }
+                let records = self.workspace_invocation_records(InvocationQuery {
+                    since: Some(since),
+                    activity_id: Some((*activity).to_string()),
+                    task_id: Some(id.clone()),
+                    limit: INVOCATION_LIMIT,
+                    ..Default::default()
+                })?;
+                for record in records {
+                    if record.ts < *assigned {
+                        continue;
+                    }
+                    if record
+                        .tool_calls
+                        .iter()
+                        .any(|call| is_explorer_delegation(&call.tool_name))
+                    {
+                        found.insert(id.clone());
+                        break;
+                    }
+                    if record.tool_calls_incomplete {
+                        incomplete.insert(id.clone());
+                    }
+                }
+            }
+        }
+        let unobserved = incomplete.difference(&found).cloned().collect();
+        Ok(ExplorerObservations { found, unobserved })
+    }
+
+    /// Reviewable added plus deleted lines per task. `None` means at least
+    /// one row in the window has an unavailable denominator, so the task is
+    /// left out of per-line metrics rather than filled in from a shared range.
+    /// A task with no row is absent. Several measured rows add.
+    pub(crate) fn landed_task_reviewable_lines(
         &self,
         ids: &BTreeSet<String>,
         since: DateTime<Utc>,
-    ) -> Result<BTreeMap<String, u64>, OrbitError> {
-        let mut lines: BTreeMap<String, u64> = BTreeMap::new();
+    ) -> Result<BTreeMap<String, Option<u64>>, OrbitError> {
+        let mut lines: BTreeMap<String, Option<u64>> = BTreeMap::new();
         for row in self.landed_diff_stats(Some(since))? {
             if !ids.contains(&row.task_id) {
                 continue;
             }
-            let changed: u64 = [row.code, row.tests, row.other]
-                .iter()
-                .map(|class| class.added + class.deleted)
-                .sum();
-            *lines.entry(row.task_id).or_default() += changed;
+            let slot = lines.entry(row.task_id).or_insert(Some(0));
+            match row.reviewable {
+                None => *slot = None,
+                Some(reviewable) => {
+                    if let Some(total) = slot.as_mut() {
+                        *total = total.saturating_add(reviewable.total());
+                    }
+                }
+            }
         }
         Ok(lines)
     }
 
-    /// Recoveries and conflicts per task from its runs' audit trails, and
-    /// the overlay digests each arm's dispatches received.
-    #[allow(clippy::type_complexity)]
+    /// Recoveries and conflicts per task from its runs' audit trails, the
+    /// overlay digests each arm's dispatches received, the roles in which
+    /// each task's arm overlay reached a step that then succeeded, and the
+    /// crew memory each task first received.
     fn run_audit(
         &self,
         experiment_id: &str,
         ids: &BTreeSet<String>,
         since: DateTime<Utc>,
-    ) -> Result<
-        (
-            BTreeMap<String, RunEvents>,
-            BTreeMap<String, BTreeSet<String>>,
-        ),
-        OrbitError,
-    > {
+    ) -> Result<RunAudit, OrbitError> {
         let mut run_tasks: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for id in ids {
             let runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
@@ -680,6 +738,11 @@ impl OrbitRuntime {
         }
         let mut events: BTreeMap<String, RunEvents> = BTreeMap::new();
         let mut digests: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut memory: BTreeMap<String, TaskMemoryDelivery> = BTreeMap::new();
+        // (run, step) -> (task, role) of each dispatch that received an arm
+        // overlay of this experiment.
+        let mut dispatches: BTreeMap<(String, String), BTreeSet<(String, TagInstructionRole)>> =
+            BTreeMap::new();
         let mut seen = BTreeSet::new();
         let mut offset = 0;
         loop {
@@ -734,7 +797,10 @@ impl OrbitRuntime {
                             continue;
                         };
                         if let V2AuditEventKind::ExperimentOverlayApplied {
-                            task_id, overlays, ..
+                            step_id,
+                            task_id,
+                            overlays,
+                            ..
                         } = event.kind
                             && ids.contains(&task_id)
                         {
@@ -742,6 +808,30 @@ impl OrbitRuntime {
                                 .into_iter()
                                 .filter(|overlay| overlay.experiment == experiment_id)
                             {
+                                dispatches
+                                    .entry((row.run_id.clone(), step_id.clone()))
+                                    .or_default()
+                                    .insert((task_id.clone(), overlay.role));
+                                // Oldest first: the first memory delivery
+                                // names the task's revision stratum.
+                                if let Some(received) = &overlay.memory {
+                                    memory.entry(task_id.clone()).or_insert_with(|| {
+                                        TaskMemoryDelivery {
+                                            week: received
+                                                .revised_at
+                                                .as_deref()
+                                                .and_then(|at| {
+                                                    DateTime::parse_from_rfc3339(at).ok()
+                                                })
+                                                .map(|at| at.format("%G-W%V").to_string()),
+                                            digest: received.digest.clone(),
+                                            model: received.model.clone(),
+                                            model_revision: received.model_revision,
+                                            global_revision: received.global_revision,
+                                            renderer_version: received.renderer_version,
+                                        }
+                                    });
+                                }
                                 digests
                                     .entry(overlay.arm)
                                     .or_default()
@@ -756,193 +846,66 @@ impl OrbitRuntime {
                 break;
             }
         }
-        Ok((events, digests))
-    }
-}
-
-/// When the task last moved to done.
-fn landing(history: &[TaskHistoryEntry]) -> Option<DateTime<Utc>> {
-    history
-        .iter()
-        .rev()
-        .find(|entry| entry.to_status == Some(TaskStatus::Done))
-        .map(|entry| entry.at)
-}
-
-/// `regression_from` filings per landed culprit, filed within the window
-/// after it landed, whatever their escape class.
-fn regressions(
-    tasks: &[Task],
-    landed_at: &BTreeMap<String, DateTime<Utc>>,
-) -> BTreeMap<String, u64> {
-    let window = Duration::days(REGRESSION_WINDOW_DAYS);
-    let mut counts: BTreeMap<String, u64> = BTreeMap::new();
-    for task in tasks {
-        let culprits: BTreeSet<String> = task
-            .relations
-            .iter()
-            .filter(|relation| relation.relation_type == TaskRelationType::RegressionFrom)
-            .map(|relation| relation.target.to_string())
-            .collect();
-        for culprit in culprits {
-            if let Some(at) = landed_at.get(&culprit)
-                && task.created_at >= *at
-                && task.created_at <= *at + window
+        let mut delivered: BTreeMap<String, BTreeSet<TagInstructionRole>> = BTreeMap::new();
+        let runs: BTreeSet<&str> = dispatches.keys().map(|(run, _)| run.as_str()).collect();
+        for run in runs {
+            let finished = self.step_outcomes(run)?;
+            for ((_, step), received) in dispatches
+                .iter()
+                .filter(|((dispatch_run, _), _)| dispatch_run == run)
             {
-                *counts.entry(culprit).or_default() += 1;
+                if finished.get(step).map(String::as_str) != Some(STEP_SUCCESS) {
+                    continue;
+                }
+                for (task, role) in received {
+                    delivered.entry(task.clone()).or_default().insert(*role);
+                }
             }
         }
-    }
-    counts
-}
-
-/// Distinct pull-request heads the task's auto-fix history saw fail a
-/// required check.
-fn failed_check_heads(history: &[TaskHistoryEntry]) -> usize {
-    let mut heads = BTreeSet::new();
-    for entry in history {
-        let Some(note) = entry.note.as_deref() else {
-            continue;
-        };
-        let (pr, head, blocker) = if entry.event == PR_AUTO_FIX_ADMITTED_EVENT {
-            let Ok(attempt) = serde_json::from_str::<PrAutoFixAttempt>(note) else {
-                continue;
-            };
-            (attempt.pr_number, attempt.head_sha, attempt.blocker)
-        } else if entry.event == AUTO_FIX_OUT_OF_RUN_EVENT {
-            let Ok(start) = serde_json::from_str::<OutOfRunStart>(note) else {
-                continue;
-            };
-            (start.pr_number, start.head_sha, start.blocker)
-        } else {
-            continue;
-        };
-        if blocker == PrAutoFixBlocker::FailedChecks {
-            heads.insert((pr, head));
-        }
-    }
-    heads.len()
-}
-
-/// One task's visual review outcomes (§12.3), each `None` when its record
-/// is absent.
-struct VisualOutcomes {
-    landed_mismatches: Option<f64>,
-    repairs: Option<f64>,
-    verified_rate: Option<f64>,
-}
-
-impl OrbitRuntime {
-    fn visual_outcomes(&self, task_id: &str) -> Result<VisualOutcomes, OrbitError> {
-        use orbit_types::task::{
-            VisualPass, VisualResolution, VisualReviewRecord, VisualVerdictKind,
-            visual_severity_weight,
-        };
-        let read = |pass: VisualPass| -> Result<Option<VisualReviewRecord>, OrbitError> {
-            Ok(self
-                .get_task_artifact(task_id, &pass.review_artifact())?
-                .and_then(|artifact| serde_json::from_slice(&artifact.content).ok()))
-        };
-        let capture = self
-            .get_task_artifact(task_id, &VisualPass::Measure.capture_artifact())?
-            .and_then(|artifact| {
-                serde_json::from_slice::<orbit_types::task::VisualCaptureRecord>(&artifact.content)
-                    .ok()
-            });
-        let landed = match self.get_task(task_id)?.job_run_id {
-            Some(run) => crate::application::visual_delivery::visual_measurement_landed_revision(
-                self, task_id, &run,
-            )?,
-            None => None,
-        };
-        let settle = self
-            .get_task_artifact(task_id, &VisualPass::Measure.settle_artifact())?
-            .and_then(|artifact| {
-                serde_json::from_slice::<orbit_types::task::VisualSettleRecord>(&artifact.content)
-                    .ok()
-            });
-        let landed_mismatches = read(VisualPass::Measure)?
-            .filter(|record| {
-                landed.as_deref() == Some(record.candidate_sha.as_str())
-                    && record.task_id == task_id
-                    && record.purpose == orbit_types::task::VISUAL_MEASURE_PURPOSE
-                    && record.outcome == "reviewed"
-                    && record.not_established.is_empty()
-                    && record.budget.not_shown.is_empty()
-                    && record.invalid_evidence_dropped == 0
-                    && record.over_max_findings_dropped == 0
-                    && record
-                        .findings
-                        .iter()
-                        .all(|finding| finding.verdict.verdict != VisualVerdictKind::Unverified)
-                    && settle.as_ref().is_some_and(|settle| {
-                        settle.candidate_sha == record.candidate_sha
-                            && settle.outcome == orbit_types::task::VisualSettleOutcome::Established
-                            && settle.refusals.is_empty()
-                            && settle.not_established.is_empty()
-                    })
-                    && capture.as_ref().is_some_and(|capture| {
-                        capture.outcome == orbit_types::task::VisualCaptureOutcome::Captured
-                            && capture.candidate_sha == record.candidate_sha
-                            && capture.task_id == task_id
-                            && capture.not_established.is_empty()
-                            && capture.over_budget.is_empty()
-                            && !capture.mocks.is_empty()
-                            && capture.mocks.iter().all(|mock| {
-                                record
-                                    .budget
-                                    .shown
-                                    .iter()
-                                    .any(|shown| shown.mock == mock.artifact)
-                            })
-                            && capture.mocks.iter().all(|mock| {
-                                mock.error.is_none()
-                                    && mock
-                                        .capture
-                                        .as_ref()
-                                        .is_some_and(|image| image.commit == record.candidate_sha)
-                            })
-                    })
-            })
-            .map(|record| {
-                record
-                    .findings
-                    .iter()
-                    .filter(|finding| finding.verdict.verdict == VisualVerdictKind::Confirmed)
-                    .map(|finding| visual_severity_weight(finding.severity_of_record()))
-                    .sum()
-            });
-        let delivery = read(VisualPass::Delivery)?;
-        let repairs = delivery.as_ref().map(|record| {
-            record
-                .findings
-                .iter()
-                .filter(|finding| {
-                    finding.resolution == Some(VisualResolution::Fixed)
-                        || finding.follow_up.is_some()
-                })
-                .count() as f64
-        });
-        let verified_rate = delivery.as_ref().and_then(|record| {
-            let (confirmed, rejected) = record
-                .findings
-                .iter()
-                .filter(|finding| finding.source == "comparison")
-                .fold(
-                    (0u32, 0u32),
-                    |(confirmed, rejected), finding| match finding.verdict.verdict {
-                        VisualVerdictKind::Confirmed => (confirmed + 1, rejected),
-                        VisualVerdictKind::Rejected => (confirmed, rejected + 1),
-                        VisualVerdictKind::Unverified => (confirmed, rejected),
-                    },
-                );
-            (confirmed + rejected > 0)
-                .then(|| f64::from(confirmed) / f64::from(confirmed + rejected))
-        });
-        Ok(VisualOutcomes {
-            landed_mismatches,
-            repairs,
-            verified_rate,
+        Ok(RunAudit {
+            events,
+            digests,
+            delivered,
+            memory,
         })
     }
+
+    /// Each step's last `step_finished` outcome in `run`'s audit trail.
+    fn step_outcomes(&self, run: &str) -> Result<BTreeMap<String, String>, OrbitError> {
+        let mut outcomes = BTreeMap::new();
+        let mut offset = 0;
+        loop {
+            let page = self.list_v2_audit_events(V2AuditEventFilter {
+                run_id: Some(run.to_string()),
+                source: Some("v2_envelope".to_string()),
+                body_kinds: vec!["step_finished".to_string()],
+                limit: Some(AUDIT_PAGE),
+                offset: Some(offset),
+                oldest_first: true,
+                ..Default::default()
+            })?;
+            let fetched = page.len();
+            offset += fetched;
+            for row in page {
+                let Ok(event) = serde_json::from_str::<V2AuditEvent>(&row.payload_json) else {
+                    continue;
+                };
+                if let V2AuditEventKind::StepFinished {
+                    step_id, outcome, ..
+                } = event.kind
+                {
+                    outcomes.insert(step_id, outcome);
+                }
+            }
+            if fetched < AUDIT_PAGE {
+                break;
+            }
+        }
+        Ok(outcomes)
+    }
 }
+
+use super::metrics::{failed_check_heads, landing, regressions};
+pub(super) use super::model::{
+    CostSource, Observed, Outcome, ReviewableDenominator, TaskMemoryDelivery, TaskOutcome,
+};

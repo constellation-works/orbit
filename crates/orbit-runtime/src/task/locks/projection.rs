@@ -152,7 +152,10 @@ pub(super) fn lock_listing_json(
                 "created_at": reservation.created_at.clone(),
                 "expires_at": reservation.expires_at.clone(),
                 "owner_run_id": reservation.owner_run_id.clone(),
-                "owner_metadata_json": reservation.owner_metadata_json.clone(),
+                "owner_metadata_json": reservation
+                    .owner_metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.encode_owner_metadata().ok()),
             })
         })
         .collect::<Vec<_>>();

@@ -16,10 +16,10 @@
 //! are the MCP wire; CLI flag spellings and help text are the argv surface.
 
 use orbit_types::task::TASK_SHOW_DELIVERY_FIELD;
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 use super::lifecycle_operations::{
-    BLOCK_TRIAGE, DELETE, RECONCILE_REVIEW, RECOVER_CLAIM, REJECT, REQUEUE, RETRY_HANDOFF,
+    BLOCK_TRIAGE, DELETE, RECONCILE_REVIEW, RECOVER_CLAIM, REJECT, REPILOT, REQUEUE, RETRY_HANDOFF,
     REVIEW_RESET, REVOKE_HANDOFF,
 };
 use super::nested_operations::{
@@ -28,8 +28,8 @@ use super::nested_operations::{
 use super::write_operations::{ADD, UPDATE};
 use crate::governance::operation::{
     CliArgKind, CliGroup, CliHelp, Description, Effect, EnumValue, NounSpec, OperationSpec,
-    ParamSpec, ParamType, ToolOnlyRegistration, UnknownFields, aliased, both, cli_only, defaulted,
-    mcp_only, operation_registry, preserve_empty,
+    ParamSpec, ParamType, RETIRED_AGENT_FIELD, ToolOnlyRegistration, UnknownFields, aliased, both,
+    cli_only, defaulted, mcp_only, operation_registry, preserve_empty,
 };
 
 operation_registry! {
@@ -74,12 +74,14 @@ operation_registry! {
         /// Requeue a blocked task onto its published candidate, as an
         /// operator decision.
         Requeue => REQUEUE,
+        /// Explicitly request one new task-pilot assessment.
+        Repilot => REPILOT,
         /// Read escalated blocks awaiting triage, or record one triage
         /// decision within the shared final-recovery requeue bound.
         BlockTriage => BLOCK_TRIAGE,
         /// Retry a stopped or uncertain authorized owner handoff.
         RetryHandoff => RETRY_HANDOFF,
-        /// Recover a live claim to blocked or backlog, as an operator decision.
+        /// Recover a live claim to a lifecycle-valid status, as an operator decision.
         RecoverClaim => RECOVER_CLAIM,
         /// Revoke a handoff's completion authority, as an operator decision.
         RevokeHandoff => REVOKE_HANDOFF,
@@ -184,67 +186,41 @@ pub const TASK_STATUS_VALUES: &[EnumValue] = &[
         aliases: &["in_progress"],
     },
     EnumValue::helped("review", "Implementation complete; awaiting review/merge"),
-    EnumValue::helped(
-        "done",
-        "Accepted and closed. Terminal; reopening requires a human operator to use `task update --force`",
-    ),
+    EnumValue::helped("done", "Accepted and closed (terminal)"),
     EnumValue::helped(
         "blocked",
         "Temporarily paused (waiting on a dependency or decision)",
     ),
-    EnumValue::helped(
-        "archived",
-        "Soft-deleted. Terminal; restoration requires a human operator to use `task update --force`",
-    ),
-    EnumValue::helped(
-        "rejected",
-        "Declined. Ordinary edits may return it to backlog or in-progress; other transitions require a human operator to use `task update --force`",
-    ),
-    EnumValue::helped(
-        "someday",
-        "Future-scoped — wanted but not yet actionable. Agents skip someday tasks",
-    ),
+    EnumValue::helped("archived", "Soft-deleted (terminal)"),
+    EnumValue::helped("rejected", "Declined"),
+    EnumValue::helped("someday", "Future-scoped — wanted but not yet actionable"),
 ];
 
 /// The statuses a task can be eligible from: work nobody has taken yet.
-const ELIGIBLE_STATUS_VALUES: &[EnumValue] =
+pub(crate) const ELIGIBLE_STATUS_VALUES: &[EnumValue] =
     &[EnumValue::plain("backlog"), EnumValue::plain("proposed")];
 
 /// `--help` for the `--host` flag every id-routed task command takes.
-pub const TASK_HOST_HELP: &str = "Host that `--workspace` names, by registered host name or `machine_id` (see `orbit host list`). Orbit reads that host's live workspace list and uses the selector it lists for the workspace. Without it, a task id goes to the host its prefix names";
-
-/// The attribution fields every task tool accepts.
-pub(super) const IDENTITY_PARAMS: &[ParamSpec] = &[
-    mcp_only(
-        "agent",
-        ParamType::String,
-        "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`).",
-    ),
-    mcp_only(
-        "model",
-        ParamType::String,
-        "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized.",
-    ),
-];
+pub const TASK_HOST_HELP: &str = "Host that `--workspace` names (`orbit host list` name or `machine_id`); without it a task id routes by its prefix";
 
 /// The `view: "bounded"` selector of the dashboard's bounded reads.
 const BOUNDED_VIEW_PARAM: ParamSpec = mcp_only(
     "view",
     ParamType::String,
-    "bounded: bounded metadata, pagination and display truncation. It always needs an explicit `workspace` selector copied from `orbit_workspace_list`, even in a workspace-bound session; without one the call is refused. Omit for the default response.",
+    "Bounded metadata view. The only accepted value is `bounded`.",
 );
 
 const LIST: TaskOperation = TaskOperation {
     verb: TaskVerb::List,
     cli_path: &["list"],
     tool_name: "orbit.task.list",
-    tool_description: "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Each task is a compact row (see `fields`); pass `fields` to add long-text fields such as description or plan. Optional filters: status, parent, type, origin, tag, dependency readiness, path, runs_on, not_before_from, not_before_until (inclusive RFC 3339 bounds; unscheduled tasks do not match). scheduled:true lists future schedules soonest first, including proposed tasks. Default rows carry not_before (null when unset). os_requirement is derived from OS tags intersected with the stored crew executor host_os, with source and unresolved/conflict states.",
+    tool_description: "List tasks as {tasks, total, truncated}; rules are in the installed Orbit skill `references/task-fields.md`.",
     cli_about: "List tasks with optional filters",
     cli_help: CliHelp {
         constraints: &[],
         long_about: None,
         after_help: Some(
-            "Examples:\n  orbit task list\n  orbit task list --limit 100\n  orbit task list --status backlog\n  orbit task list --status in-progress,review\n  orbit task list --type feature\n  orbit task list --origin operator_request\n  orbit task list --priority high\n  orbit task list --parent T12345678-123456\n  orbit task list --ref jira:ENG-1234\n  orbit task list --has-ref jira\n  orbit task list --tag perf --tag bench\n  orbit task list --path src/auth/login.rs\n  orbit task list --json",
+            "Status meanings, lifecycle and listing-order rules: installed Orbit skill `references/task-fields.md`.\n\nExamples:\n  orbit task list\n  orbit task list --limit 100\n  orbit task list --status backlog\n  orbit task list --status in-progress,review\n  orbit task list --type feature\n  orbit task list --origin operator_request\n  orbit task list --priority high\n  orbit task list --parent T12345678-123456\n  orbit task list --ref jira:ENG-1234\n  orbit task list --has-ref jira\n  orbit task list --tag perf --tag bench\n  orbit task list --path src/auth/login.rs\n  orbit task list --json",
         ),
         flag_order: &[
             "status",
@@ -269,194 +245,199 @@ const LIST: TaskOperation = TaskOperation {
         ],
     },
     effect: Effect::Read,
-    params: &[
-        &[
+    params: &[&[
+        both(
+            "status",
+            ParamType::EnumList(TASK_STATUS_VALUES),
+            "Filter by status name.",
+            CliArgKind::Flag {
+                long: "status",
+                delimiter: Some(','),
+                aliases: &[],
+                visible_aliases: &[],
+                value_name: None,
+                multiple: false,
+            },
+            "Filter by one or more statuses (comma-separated)",
+        ),
+        aliased(
             both(
-                "status",
-                ParamType::EnumList(TASK_STATUS_VALUES),
-                "Optional task status filter. Pass a comma-separated string or an array of status names.",
+                "parent_id",
+                ParamType::String,
+                "Parent task ID.",
+                CliArgKind::flag("parent"),
+                "Filter to subtasks belonging to a parent task",
+            ),
+            &["parent", "parentId"],
+        ),
+        aliased(
+            both(
+                "type",
+                ParamType::Enum(TASK_TYPE_VALUES),
+                "Filter by task type.",
                 CliArgKind::Flag {
-                    long: "status",
+                    long: "type",
+                    delimiter: None,
+                    aliases: &[],
+                    visible_aliases: &[],
+                    value_name: Some("TASK_TYPE"),
+                    multiple: false,
+                },
+                "Filter by task type (feature, bug, refactor, chore)",
+            ),
+            &["task_type", "taskType"],
+        ),
+        both(
+            "scheduled",
+            ParamType::Switch,
+            "Keep only future schedules, soonest first.",
+            CliArgKind::flag("scheduled"),
+            "List future-scheduled tasks soonest first, including proposed tasks labelled by status",
+        ),
+        preserve_empty(both(
+            "not_before_from",
+            ParamType::String,
+            "Inclusive lower schedule bound as RFC 3339.",
+            CliArgKind::flag("not-before-from"),
+            "Inclusive lower schedule bound (RFC 3339 with an offset)",
+        )),
+        preserve_empty(both(
+            "not_before_until",
+            ParamType::String,
+            "Inclusive upper schedule bound as RFC 3339.",
+            CliArgKind::flag("not-before-until"),
+            "Inclusive upper schedule bound (RFC 3339 with an offset)",
+        )),
+        both(
+            "origin",
+            ParamType::Enum(TASK_ORIGIN_VALUES),
+            "Filter by task origin.",
+            CliArgKind::flag("origin"),
+            "Filter by task origin (operator_request, orchestrator_initiative, automation); tasks without a recorded origin never match",
+        ),
+        both(
+            "job_run_id",
+            ParamType::String,
+            "Filter by job run ID",
+            CliArgKind::flag("job-run-id"),
+            "Filter by job run ID",
+        ),
+        aliased(
+            both(
+                "tag",
+                ParamType::StringList,
+                "Filter by tag; an array matches every listed tag.",
+                CliArgKind::Flag {
+                    long: "tag",
                     delimiter: Some(','),
                     aliases: &[],
                     visible_aliases: &[],
-                    value_name: None,
+                    value_name: Some("TAGS"),
                     multiple: false,
                 },
-                "Filter by one or more statuses (comma-separated). Opt-in: with no `--status`, tasks of every lifecycle status are listed under a status-aware rule (non-terminal tasks first, then terminal tasks)",
+                "Filter by tag. Repeat for AND semantics",
             ),
-            aliased(
-                both(
-                    "parent_id",
-                    ParamType::String,
-                    "Optional parent task ID to list subtasks for",
-                    CliArgKind::flag("parent"),
-                    "Filter to subtasks belonging to a parent task",
-                ),
-                &["parent", "parentId"],
-            ),
-            aliased(
-                both(
-                    "type",
-                    ParamType::Enum(TASK_TYPE_VALUES),
-                    "Optional task type filter",
-                    CliArgKind::Flag {
-                        long: "type",
-                        delimiter: None,
-                        aliases: &[],
-                        visible_aliases: &[],
-                        value_name: Some("TASK_TYPE"),
-                        multiple: false,
-                    },
-                    "Filter by task type (feature, bug, refactor, chore)",
-                ),
-                &["task_type", "taskType"],
-            ),
+            &["tags"],
+        ),
+        both(
+            "runs_on",
+            ParamType::Enum(&[
+                EnumValue::helped("linux", "Linux hosts"),
+                EnumValue::helped("macos", "macOS hosts"),
+                EnumValue::helped("windows", "Windows hosts"),
+            ]),
+            "Filter by effective host OS.",
+            CliArgKind::flag("runs-on"),
+            "Filter by effective host OS: tags intersected with the stored crew executor; unrestricted tasks match, unresolved crews and conflicts do not",
+        ),
+        both(
+            "pilot_warnings",
+            ParamType::Switch,
+            "Keep proposed tasks held by pilot warnings.",
+            CliArgKind::flag("pilot-warnings"),
+            "Keep proposed tasks held by pilot warning findings",
+        ),
+        both(
+            "ready",
+            ParamType::Switch,
+            "Keep tasks whose dependencies are satisfied.",
+            CliArgKind::flag("ready"),
+            "Keep only tasks whose dependencies are already satisfied",
+        ),
+        both(
+            "path",
+            ParamType::String,
+            "Filter by context selector path.",
+            CliArgKind::flag("path"),
+            "Filter to tasks whose `context_files` selectors apply to this path",
+        ),
+        defaulted(
             both(
-                "scheduled",
-                ParamType::Switch,
-                "Keep only future not_before schedules, soonest first, including proposed tasks. Other filters still apply.",
-                CliArgKind::flag("scheduled"),
-                "List future-scheduled tasks soonest first, including proposed tasks labelled by status",
+                "limit",
+                ParamType::Integer,
+                "Maximum number of tasks to return.",
+                CliArgKind::flag("limit"),
+                "Maximum number of tasks to return (default 50). Must be at least 1",
             ),
-            preserve_empty(both(
-                "not_before_from",
-                ParamType::String,
-                "Inclusive lower not_before bound (RFC 3339 with an offset). Unscheduled tasks do not match.",
-                CliArgKind::flag("not-before-from"),
-                "Inclusive lower schedule bound (RFC 3339 with an offset)",
-            )),
-            preserve_empty(both(
-                "not_before_until",
-                ParamType::String,
-                "Inclusive upper not_before bound (RFC 3339 with an offset). Unscheduled tasks do not match.",
-                CliArgKind::flag("not-before-until"),
-                "Inclusive upper schedule bound (RFC 3339 with an offset)",
-            )),
-            both(
-                "origin",
-                ParamType::Enum(TASK_ORIGIN_VALUES),
-                "Optional task origin filter: operator_request, orchestrator_initiative or automation. Tasks without a recorded origin never match.",
-                CliArgKind::flag("origin"),
-                "Filter by task origin (operator_request, orchestrator_initiative, automation); tasks without a recorded origin never match",
-            ),
-            both(
-                "job_run_id",
-                ParamType::String,
-                "Filter by job run ID",
-                CliArgKind::flag("job-run-id"),
-                "Filter by job run ID",
-            ),
-            aliased(
-                both(
-                    "tag",
-                    ParamType::StringList,
-                    "Filter by tag. Repeat or pass an array for AND semantics.",
-                    CliArgKind::Flag {
-                        long: "tag",
-                        delimiter: Some(','),
-                        aliases: &[],
-                        visible_aliases: &[],
-                        value_name: Some("TAGS"),
-                        multiple: false,
-                    },
-                    "Filter by tag. Repeat for AND semantics",
-                ),
-                &["tags"],
-            ),
-            both(
-                "runs_on",
-                ParamType::Enum(&[
-                    EnumValue::helped("linux", "Linux hosts"),
-                    EnumValue::helped("macos", "macOS hosts"),
-                    EnumValue::helped("windows", "Windows hosts"),
-                ]),
-                "Filter by effective host OS: linux, macos or windows. Intersects OS tags with the stored crew executor. Unrestricted tasks match; unresolved crews and conflicts do not.",
-                CliArgKind::flag("runs-on"),
-                "Filter by effective host OS: tags intersected with the stored crew executor; unrestricted tasks match, unresolved crews and conflicts do not",
-            ),
-            both(
-                "ready",
-                ParamType::Switch,
-                "When true, keep only tasks whose dependencies are satisfied",
-                CliArgKind::flag("ready"),
-                "Keep only tasks whose dependencies are already satisfied",
-            ),
-            both(
-                "path",
-                ParamType::String,
-                "Filter to tasks whose `context_files` selectors apply to this path. Supports file:, dir:, symbol:, and bare path selectors; bidirectional containment.",
-                CliArgKind::flag("path"),
-                "Filter to tasks whose `context_files` selectors apply to this path. Selector forms supported: `file:`, `dir:`, `symbol:`, and bare paths. Bidirectional containment — passing a directory matches every selector under it",
-            ),
-            defaulted(
-                both(
-                    "limit",
-                    ParamType::Integer,
-                    "Maximum number of tasks to return (default 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first. Must be at least 1.",
-                    CliArgKind::flag("limit"),
-                    "Maximum number of tasks to return (default 50). Must be at least 1. Under the default status-aware rule, non-terminal tasks are listed first (newest first), followed by terminal tasks (newest first)",
-                ),
-                "50",
-            ),
-            mcp_only(
-                "fields",
-                ParamType::StringList,
-                "Optional per-task field projection as a string or array, using the field names `orbit.task.show` accepts (for example `id`, `title`, `status`). When set, each listed task is an object holding only those fields. Omit it for compact rows (id, title, status, priority, type, dependencies, resolved_dependencies, implemented_by, not_before, created_at, updated_at, workspace), the same rows `orbit tool run orbit.task.list` returns. For long-text fields such as description, acceptance_criteria, plan or execution_summary, name them here, or fetch one task with `orbit.task.show`.",
-            ),
-            BOUNDED_VIEW_PARAM,
-            mcp_only("offset", ParamType::Integer, "Bounded view list offset"),
-            mcp_only(
-                "search",
-                ParamType::String,
-                "Bounded view key/title substring",
-            ),
-            both(
-                "priority",
-                ParamType::Enum(TASK_PRIORITY_VALUES),
-                "Optional task priority filter",
-                CliArgKind::flag("priority"),
-                "Filter by priority level",
-            ),
-            both(
-                "external_ref",
-                ParamType::String,
-                "Optional exact external reference filter in `system:id` form",
-                CliArgKind::flag("ref"),
-                "Filter by exact external reference in `system:id` form",
-            ),
-            both(
-                "has_ref",
-                ParamType::String,
-                "Optional external reference system filter: keep tasks with any reference in this system",
-                CliArgKind::flag("has-ref"),
-                "Filter by external reference system",
-            ),
-            cli_only(
-                "all",
-                ParamType::Switch,
-                CliArgKind::flag("all"),
-                "Deprecated no-op: task listing is status-neutral by default, so `--all` is no longer required to see every lifecycle status. Accepted for backward compatibility and ignored",
-            ),
-            cli_only(
-                "ops",
-                ParamType::Switch,
-                CliArgKind::flag("ops"),
-                "Output signal-tier JSON (id, title, type, status, priority only)",
-            ),
-            cli_only(
-                "full",
-                ParamType::Switch,
-                CliArgKind::flag("full"),
-                "Show all table columns in text output",
-            ),
-        ],
-        IDENTITY_PARAMS,
-    ],
+            "50",
+        ),
+        mcp_only(
+            "fields",
+            ParamType::StringList,
+            "Name fields, or fetch one task with `orbit.task.show`; compact rows match `orbit tool run orbit.task.list`.",
+        ),
+        BOUNDED_VIEW_PARAM,
+        mcp_only("offset", ParamType::Integer, "Bounded view list offset."),
+        mcp_only(
+            "search",
+            ParamType::String,
+            "Bounded view key or title substring.",
+        ),
+        both(
+            "priority",
+            ParamType::Enum(TASK_PRIORITY_VALUES),
+            "Filter by priority.",
+            CliArgKind::flag("priority"),
+            "Filter by priority level",
+        ),
+        both(
+            "external_ref",
+            ParamType::String,
+            "Exact external reference in system:id form.",
+            CliArgKind::flag("ref"),
+            "Filter by exact external reference in `system:id` form",
+        ),
+        both(
+            "has_ref",
+            ParamType::String,
+            "Keep tasks with a reference in this system.",
+            CliArgKind::flag("has-ref"),
+            "Filter by external reference system",
+        ),
+        cli_only(
+            "all",
+            ParamType::Switch,
+            CliArgKind::flag("all"),
+            "Deprecated no-op; accepted and ignored",
+        ),
+        cli_only(
+            "ops",
+            ParamType::Switch,
+            CliArgKind::flag("ops"),
+            "Output signal-tier JSON (id, parent_id, title, type, status, priority, complexity)",
+        ),
+        cli_only(
+            "full",
+            ParamType::Switch,
+            CliArgKind::flag("full"),
+            "Show all table columns in text output",
+        ),
+    ]],
     at_least_one_of: &[],
-    retired_fields: &[],
-    unknown_fields: UnknownFields::Warn,
+    retired_fields: &[RETIRED_AGENT_FIELD],
+    unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const ELIGIBLE: TaskOperation = TaskOperation {
@@ -476,53 +457,51 @@ const ELIGIBLE: TaskOperation = TaskOperation {
         flag_order: &[],
     },
     effect: Effect::Read,
-    params: &[
-        &[
+    params: &[&[
+        both(
+            "status",
+            ParamType::EnumList(ELIGIBLE_STATUS_VALUES),
+            "Candidate statuses: `backlog`, `proposed`, or both (the default). Pass a comma-separated string or an array.",
+            CliArgKind::Flag {
+                long: "status",
+                delimiter: Some(','),
+                aliases: &[],
+                visible_aliases: &[],
+                value_name: None,
+                multiple: false,
+            },
+            "Candidate statuses (comma-separated). Default: backlog and proposed",
+        ),
+        both(
+            "path",
+            ParamType::String,
+            "Keep only candidates whose `context_files` selectors apply to this path, matched as `orbit.task.list` matches `path`.",
+            CliArgKind::flag("path"),
+            "Keep only candidates whose `context_files` selectors apply to this path, matched as `orbit task list --path` matches",
+        ),
+        defaulted(
             both(
-                "status",
-                ParamType::EnumList(ELIGIBLE_STATUS_VALUES),
-                "Candidate statuses: `backlog`, `proposed`, or both (the default). Pass a comma-separated string or an array.",
-                CliArgKind::Flag {
-                    long: "status",
-                    delimiter: Some(','),
-                    aliases: &[],
-                    visible_aliases: &[],
-                    value_name: None,
-                    multiple: false,
-                },
-                "Candidate statuses (comma-separated). Default: backlog and proposed",
+                "limit",
+                ParamType::Integer,
+                "Maximum eligible tasks to return (default 50). Must be at least 1.",
+                CliArgKind::flag("limit"),
+                "Maximum eligible tasks to list (default 50). Must be at least 1",
             ),
-            both(
-                "path",
-                ParamType::String,
-                "Keep only candidates whose `context_files` selectors apply to this path, matched as `orbit.task.list` matches `path`.",
-                CliArgKind::flag("path"),
-                "Keep only candidates whose `context_files` selectors apply to this path, matched as `orbit task list --path` matches",
-            ),
-            defaulted(
-                both(
-                    "limit",
-                    ParamType::Integer,
-                    "Maximum eligible tasks to return (default 50). Must be at least 1.",
-                    CliArgKind::flag("limit"),
-                    "Maximum eligible tasks to list (default 50). Must be at least 1",
-                ),
-                "50",
-            ),
-            both(
-                "explain",
-                ParamType::Switch,
-                "When true, also return `conflicting`: every held-back candidate with the overlapping selector and the in-progress or review task holding it.",
-                CliArgKind::flag("explain"),
-                "Also list the held-back candidates, each with the overlapping file and the in-progress or review task holding it",
-            ),
-        ],
-        IDENTITY_PARAMS,
-    ],
+            "50",
+        ),
+        both(
+            "explain",
+            ParamType::Switch,
+            "When true, also return `conflicting`: every held-back candidate with the overlapping selector and the in-progress or review task holding it.",
+            CliArgKind::flag("explain"),
+            "Also list the held-back candidates, each with the overlapping file and the in-progress or review task holding it",
+        ),
+    ]],
     at_least_one_of: &[],
-    retired_fields: &[],
-    unknown_fields: UnknownFields::Warn,
+    retired_fields: &[RETIRED_AGENT_FIELD],
+    unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const SHOW: TaskOperation = TaskOperation {
@@ -533,7 +512,7 @@ const SHOW: TaskOperation = TaskOperation {
     cli_about: "Show detailed information about a task, found by ID with an optional workspace filter",
     cli_help: CliHelp {
         long_about: Some(
-            "Show a task by ID. Runs on reports OS tags intersected with the stored crew executor host_os, naming the source or an unresolved/conflicting constraint. This readout is derived and never stored. An unset crew leaves automatic routing undecided.",
+            "Show a task by ID. The `Runs on` readout summarizes the task's effective OS requirement by intersecting its OS tags with the stored crew executor's `host_os`. It identifies the source of the requirement or any unresolved or conflicting constraint. This readout is derived and never stored. Without a crew, automatic routing remains undecided.",
         ),
         ..CliHelp::NONE
     },
@@ -560,7 +539,6 @@ const SHOW: TaskOperation = TaskOperation {
                 "True returns a bounded versioned snapshot with opaque revision and available actions. Requires explicit workspace; snapshot grants no authority and cannot combine with field projections.",
             ),
         ],
-        IDENTITY_PARAMS,
         &[
             ParamSpec {
                 name: "fields",
@@ -571,7 +549,7 @@ const SHOW: TaskOperation = TaskOperation {
                 default: None,
                 redact: crate::governance::operation::Redaction::None,
                 mcp_description: Some(Description::Static(
-                    "Optional field names as a string or array; returns only those fields. `delivery` must be selected alone. Catalogue and response semantics: installed Orbit skill `references/task-fields.md`.",
+                    "No pagination with a projection on a claimed read. Fields to return, keyed (even one); `delivery` alone selects delivery evidence. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop the projection to page the full task, or drop pagination for a projection.",
                 )),
                 cli: Some(crate::governance::operation::CliBinding {
                     required: false,
@@ -584,14 +562,14 @@ const SHOW: TaskOperation = TaskOperation {
                         multiple: true,
                     },
                     help: Description::Static(
-                        "Print only the specified field projection(s), for example `--fields title,status`. Repeat the flag or use a comma-separated list. Valid names and JSON output shapes: installed Orbit skill `references/task-fields.md`.",
+                        "Print only the specified field projection(s), for example `--fields title,status`. Repeat the flag or use a comma-separated list. Valid names and JSON output shapes: installed Orbit skill `references/task-fields.md`. No pagination with a projection on a claimed read: drop the projection to page the full task, or drop pagination for a projection.",
                     ),
                 }),
             },
             mcp_only(
                 "field",
                 ParamType::String,
-                "Compatibility alias for a single field projection. Example: `field: \"artifacts\"`.",
+                "No pagination with a projection on a claimed read. Compatibility alias for a single field projection, for example `field: \"artifacts\"`. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop the projection to page the full task, or drop pagination for a projection.",
             ),
             ParamSpec {
                 mcp_description: Some(Description::Computed(show_run_id_description)),
@@ -600,23 +578,36 @@ const SHOW: TaskOperation = TaskOperation {
             mcp_only(
                 "workspace",
                 ParamType::String,
-                "Optional explicit workspace filter. `id` is resolved globally by default; do not pass cwd, MCP session/initialize metadata, or a linked-worktree runtime identity (for example `orbit-5c61b3`). When supplied, a registered workspace name, logical workspace ID (`ws_*`), or absolute local checkout path is fail-closed: a valid workspace that does not own the task returns not-found, and an unknown selector is rejected by name.",
+                "Optional workspace filter by registered name, ID or path; task `id` is resolved globally by default.",
             ),
             BOUNDED_VIEW_PARAM,
-            mcp_only("limit", ParamType::Integer, "Bounded detail page size"),
-            mcp_only("comments_offset", ParamType::Integer, "Comment offset"),
-            mcp_only("history_offset", ParamType::Integer, "History offset"),
+            mcp_only(
+                "limit",
+                ParamType::Integer,
+                "No projection with pagination on a claimed read. Bounded detail page size for a paginated claimed read, which accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
+            ),
+            mcp_only(
+                "comments_offset",
+                ParamType::Integer,
+                "No projection with pagination on a claimed read. Comment offset for a paginated claimed read, which accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
+            ),
+            mcp_only(
+                "history_offset",
+                ParamType::Integer,
+                "No projection with pagination on a claimed read. History offset for a paginated claimed read, which accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
+            ),
             mcp_only(
                 "artifacts_offset",
                 ParamType::Integer,
-                "Artifact metadata offset",
+                "No projection with pagination on a claimed read. Artifact metadata offset for a paginated claimed read, which accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
             ),
         ],
     ],
     at_least_one_of: &[],
-    retired_fields: &[],
-    unknown_fields: UnknownFields::Warn,
+    retired_fields: &[RETIRED_AGENT_FIELD],
+    unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Task,
 };
 
 const LINT: TaskOperation = TaskOperation {
@@ -629,50 +620,48 @@ const LINT: TaskOperation = TaskOperation {
         constraints: &[],
         long_about: None,
         after_help: Some(
-            "Examples:\n  orbit task lint <TASK_ID>                   # findings for one task\n  orbit task lint                             # sweep active tasks for context that needs repair\n  orbit task lint <TASK_ID> --restore-pruned  # re-declare selectors an old prune recorded\n  orbit task lint --restore-pruned            # apply the restoration across the sweep\n  orbit task lint --status review",
+            "Status meanings and lifecycle rules: installed Orbit skill `references/task-fields.md`.\n\nExamples:\n  orbit task lint <TASK_ID>                   # findings for one task\n  orbit task lint                             # sweep active tasks for context that needs repair\n  orbit task lint <TASK_ID> --restore-pruned  # re-declare selectors an old prune recorded\n  orbit task lint --restore-pruned            # apply the restoration across the sweep\n  orbit task lint --status review",
         ),
         flag_order: &[],
     },
     // Writes only with `restore_pruned`; the CLI opens the read-only runtime
     // without it.
     effect: Effect::Write,
-    params: &[
-        &[
-            both(
-                "id",
-                ParamType::String,
-                "Task ID. Omit to sweep the active tasks for `context_files` that need repair.",
-                CliArgKind::Positional,
-                "Task ID. Omit to sweep all active tasks for `context_files` that need repair",
-            ),
-            both(
-                "restore_pruned",
-                ParamType::Switch,
-                "When true, re-declare `context_files` entries that an earlier prune recorded in task history.",
-                CliArgKind::flag("restore-pruned"),
-                "Re-declare `context_files` entries that an earlier prune recorded in task history",
-            ),
-            both(
-                "status",
-                ParamType::EnumList(TASK_STATUS_VALUES),
-                "Sweep only tasks in these statuses (sweep mode only; refused with `id`). Pass a comma-separated string or an array.",
-                CliArgKind::Flag {
-                    long: "status",
-                    delimiter: None,
-                    aliases: &[],
-                    visible_aliases: &[],
-                    value_name: Some("STATUSES"),
-                    multiple: false,
-                },
-                "Restrict the sweep to specific statuses (repeatable; sweep mode only)",
-            ),
-        ],
-        IDENTITY_PARAMS,
-    ],
+    params: &[&[
+        both(
+            "id",
+            ParamType::String,
+            "Task ID. Omit to sweep the active tasks for `context_files` that need repair.",
+            CliArgKind::Positional,
+            "Task ID. Omit to sweep all active tasks for `context_files` that need repair",
+        ),
+        both(
+            "restore_pruned",
+            ParamType::Switch,
+            "When true, re-declare `context_files` entries that an earlier prune recorded in task history.",
+            CliArgKind::flag("restore-pruned"),
+            "Re-declare `context_files` entries that an earlier prune recorded in task history",
+        ),
+        both(
+            "status",
+            ParamType::EnumList(TASK_STATUS_VALUES),
+            "Sweep only tasks in these statuses (sweep mode only; refused with `id`). Pass a comma-separated string or an array.",
+            CliArgKind::Flag {
+                long: "status",
+                delimiter: None,
+                aliases: &[],
+                visible_aliases: &[],
+                value_name: Some("STATUSES"),
+                multiple: false,
+            },
+            "Restrict the sweep to specific statuses (repeatable; sweep mode only)",
+        ),
+    ]],
     at_least_one_of: &[],
-    retired_fields: &[],
-    unknown_fields: UnknownFields::Warn,
+    retired_fields: &[RETIRED_AGENT_FIELD],
+    unknown_fields: UnknownFields::Refuse,
     mcp_scope: None,
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 /// The globally unique task id `show` addresses.
@@ -689,6 +678,6 @@ const TASK_ID_PARAM: ParamSpec = ParamSpec {
 
 fn show_run_id_description() -> String {
     format!(
-        "With `field: \"{TASK_SHOW_DELIVERY_FIELD}\"` only: the delivery run to report. Omitted, the newest task-delivery run submitted with this task is used."
+        "No pagination with a delivery selector on a claimed read. With `field: \"{TASK_SHOW_DELIVERY_FIELD}\"` only: the delivery run to report. Omitted, the newest task-delivery run submitted with this task is used. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop `run_id` (and any projection) to page the full task, or drop pagination for a projection."
     )
 }

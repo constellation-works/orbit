@@ -5,15 +5,13 @@
 //! kernel crate's items. [`OrbitRuntime`] owns a [`RuntimeKernel`] and
 //! dereferences to it, so kernel methods are called on it directly, while
 //! application and adapter methods stay inherent on this crate's type. The
-//! kernel reaches those methods only through [`ApplicationPort`], which this
-//! module implements.
+//! kernel reaches those methods only through [`ApplicationPort`], which
+//! composition implements.
 
 use std::ops::{Deref, DerefMut};
 
-pub(crate) use application_port::APPLICATION_PORT;
 pub use orbit_runtime::*;
 
-mod application_port;
 mod builders;
 mod forwarders;
 
@@ -55,7 +53,10 @@ impl OrbitRuntime {
         self.kernel
     }
 
-    fn from_kernel_ref(kernel: &RuntimeKernel) -> &Self {
+    /// View a kernel a kernel interface lent back, such as the runtime a
+    /// [`WorkspaceCatalog`](workspace::catalog::WorkspaceCatalog) hook receives,
+    /// as the runtime that owns it.
+    pub fn from_kernel_ref(kernel: &RuntimeKernel) -> &Self {
         // SAFETY: `OrbitRuntime` is `repr(transparent)` over its only field,
         // a `RuntimeKernel`, so both types share one layout and the cast
         // keeps the reference's lifetime and validity.

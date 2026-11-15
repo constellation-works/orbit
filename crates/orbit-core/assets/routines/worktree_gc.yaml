@@ -1,11 +1,12 @@
 # Default worktree garbage-collection routine [ORB-10374].
-# Seeded disabled: operators must review and opt in before unattended deletion.
+# Seeded enabled in a newly initialized workspace; set `enabled: false` to
+# stop unattended reclamation. A workspace seeded earlier keeps its setting.
 schemaVersion: 1
 name: __ORBIT_ROUTINE_NAME__
 description: >
   Hourly reclamation of worktrees whose associated task has settled to
   rejected, archived, or done.
-enabled: false
+enabled: true
 trigger:
   cron: "35 * * * *"
   # One make-up pass after a gap. Skip would drop every missed hourly slot.

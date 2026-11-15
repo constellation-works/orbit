@@ -109,13 +109,13 @@ fn invalid_wait_deadline_does_not_submit_work() {
         let mut command = fixture.orbit();
         let output = command
             .args(&args)
-            .args(["--wait", "--timeout-seconds", "21601", "--json"])
+            .args(["--wait", "--timeout-seconds", "86401", "--json"])
             .assert()
             .failure()
             .get_output()
             .clone();
         let error: Value = serde_json::from_slice(&output.stderr).unwrap();
-        assert!(error.to_string().contains("must be <= 21600"), "{error}");
+        assert!(error.to_string().contains("must be <= 86400"), "{error}");
         fixture
             .orbit()
             .args(&args)
@@ -366,6 +366,313 @@ fn explicit_task_pilot_refuses_unsupported_status_before_submission() {
     assert_eq!(fs::read_to_string(calls).unwrap().lines().count(), 2);
 }
 
+/// Installs a fake codex provider that assesses every task id its prompt
+/// names, so a pilot run completes without a real provider.
+#[cfg(unix)]
+fn install_pilot_provider(fixture: &Fixture, runtime: &orbit_core::OrbitRuntime) {
+    use orbit_types::resource::ExecutorResource;
+    use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind};
+    use std::os::unix::fs::PermissionsExt;
+
+    let provider = fixture.home.join("empty-bin/codex");
+    fs::write(
+        &provider,
+        r##"#!/usr/bin/env python3
+import json, re, subprocess, sys
+prompt = sys.stdin.read()
+ids = []
+for blob in re.findall(r'"task_ids"\s*:\s*(\[[^\]]*\])', prompt):
+    try:
+        parsed = json.loads(blob)
+    except json.JSONDecodeError:
+        continue
+    ids = [item for item in parsed if isinstance(item, str) and re.fullmatch(r"ORB-\d+", item)]
+    if ids:
+        break
+if not ids:
+    sys.stderr.write("provider saw no task ids\n")
+    sys.exit(1)
+head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+tree = subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True).strip()
+tasks = [{
+    "task_id": task_id,
+    "context_files_after": ["file:README.md"],
+    "disposition": "selectors",
+    "recommended_crew": "fixture",
+    "recommended_complexity": "low",
+    "confidence": "high",
+    "assessment_rationale": "README.md identifies the fixture scope.",
+    "validation_approach": "Inspect persisted selectors.",
+    "evidence_gaps": [],
+    "reassessment_triggers": [],
+    "blocked_by": [],
+    "adr_conflicts": [],
+    "utility_warnings": [],
+    "surface_warnings": [],
+    "duplicate_of": None,
+    "already_landed": None,
+} for task_id in ids]
+sys.stdout.write(json.dumps({
+    "schemaVersion": 1,
+    "status": "success",
+    "error": None,
+    "result": {
+        "partition_index": 0,
+        "observed_revision": head,
+        "observed_tree": tree,
+        "task_ids": ids,
+        "tasks": tasks,
+    },
+}))
+"##,
+    )
+    .unwrap();
+    fs::set_permissions(&provider, fs::Permissions::from_mode(0o755)).unwrap();
+    let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../orbit-core/assets");
+    let mut executor: ExecutorResource =
+        serde_yaml::from_str(&fs::read_to_string(assets.join("executors/codex.yaml")).unwrap())
+            .unwrap();
+    executor.spec.command = Some(provider.display().to_string());
+    executor.spec.sandbox = Some(ExecutorSandboxKind::Off);
+    runtime
+        .upsert_executor_def(&ExecutorDef::from_resource_spec(
+            executor.metadata.name,
+            executor.spec,
+            None,
+            None,
+        ))
+        .unwrap();
+}
+
+#[cfg(unix)]
+fn explicit_task_pilot_partitions_mixed_crews_before_submission() {
+    use orbit_core::application::task::TaskAddParams;
+    use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
+    use orbit_types::workflow::JobRunState;
+
+    let fixture = Fixture::terminal();
+    fs::write(fixture.work.join("README.md"), "fixture\n").unwrap();
+    for args in [
+        vec!["config", "user.name", "Orbit Test"],
+        vec!["config", "user.email", "orbit-test@example.com"],
+        vec!["config", "commit.gpgsign", "false"],
+        vec!["add", "README.md"],
+        vec!["commit", "-m", "seed"],
+    ] {
+        crate::git_repo::run(&fixture.work, &args);
+    }
+    let config_path = fixture.home.join(".orbit/config.toml");
+    let mut config: toml_edit::DocumentMut =
+        fs::read_to_string(&config_path).unwrap().parse().unwrap();
+    config["crews"]["haiku"]["enabled"] = toml_edit::value(true);
+    config["crews"]["haiku"]["provider"] = toml_edit::value("codex");
+    config["crews"]["haiku"]["model"] = toml_edit::value("fixture-model");
+    config["crews"]["haiku"]["backend"] = toml_edit::value("cli");
+    fs::write(&config_path, config.to_string()).unwrap();
+
+    let runtime =
+        OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
+            .unwrap();
+    install_pilot_provider(&fixture, &runtime);
+    let add = |title: &str, crew: &str| {
+        runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                description: "Explicit mixed-crew pilot fixture".into(),
+                acceptance_criteria: vec!["Assess only eligible tasks".into()],
+                plan: "Inspect README.md".into(),
+                context_files: vec!["file:README.md".into()],
+                tags: vec!["delivery:task_local_pipeline".into()],
+                complexity: TaskComplexity::Low,
+                task_type: Some(TaskType::Feature),
+                status: Some(TaskStatus::Proposed),
+                crew: Some(crew.into()),
+                ..Default::default()
+            })
+            .unwrap()
+    };
+    let haiku = add("haiku pilot task", "haiku");
+    let sol = add("sol pilot task", "sol");
+
+    let output = fixture
+        .orbit()
+        .env("PATH", std::env::var_os("PATH").unwrap())
+        .args([
+            "run",
+            "task-pilot",
+            &haiku.id,
+            &sol.id,
+            "--wait",
+            "--timeout-seconds",
+            "120",
+            "--json",
+        ])
+        .timeout(std::time::Duration::from_secs(180))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "mixed-crew selection must be partitioned before run start: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let submitted: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let runs = submitted["runs"].as_array().expect("two crew partitions");
+    assert_eq!(runs.len(), 2, "{submitted}");
+    let mut task_ids = Vec::new();
+    for entry in runs {
+        assert_eq!(entry["state"], "success", "{entry}");
+        let run = runtime
+            .show_job_run(entry["run_id"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(run.state, JobRunState::Success, "{run:?}");
+        let state = runtime
+            .read_run_state(&run.run_id)
+            .unwrap()
+            .expect("completed pilot run state");
+        assert_eq!(
+            state.pipeline["prepare"]["task_ids"],
+            serde_json::json!(run.input.as_ref().unwrap()["task_ids"]),
+            "each crew run must prepare its selected task: {:#}",
+            state.pipeline["prepare"]
+        );
+        let ids = run
+            .input
+            .as_ref()
+            .and_then(|input| input["task_ids"].as_array())
+            .expect("each run carries an explicit crew-homogeneous selection");
+        assert_eq!(ids.len(), 1, "mixed-crew run input: {run:?}");
+        task_ids.push(ids[0].as_str().unwrap().to_string());
+    }
+    task_ids.sort();
+    let mut expected = vec![haiku.id, sol.id];
+    expected.sort();
+    assert_eq!(task_ids, expected);
+}
+
+/// With `--max-tasks` omitted, the effective job's `max_tasks` default caps the
+/// explicit selection, so a job that raises it admits more than the shipped 50
+/// [ORB-20445]. An explicit `--max-tasks` still refuses an over-limit selection
+/// before any run is submitted.
+#[cfg(unix)]
+fn explicit_task_pilot_honors_job_default_max_tasks() {
+    use orbit_core::application::task::TaskAddParams;
+    use orbit_core::{TaskComplexity, TaskStatus, TaskType};
+
+    let fixture = Fixture::terminal();
+    fs::write(fixture.work.join("README.md"), "fixture\n").unwrap();
+    for args in [
+        vec!["config", "user.name", "Orbit Test"],
+        vec!["config", "user.email", "orbit-test@example.com"],
+        vec!["config", "commit.gpgsign", "false"],
+        vec!["add", "README.md"],
+        vec!["commit", "-m", "seed"],
+    ] {
+        crate::git_repo::run(&fixture.work, &args);
+    }
+    let config_path = fixture.home.join(".orbit/config.toml");
+    let mut config: toml_edit::DocumentMut =
+        fs::read_to_string(&config_path).unwrap().parse().unwrap();
+    config["crews"]["haiku"]["enabled"] = toml_edit::value(true);
+    config["crews"]["haiku"]["provider"] = toml_edit::value("codex");
+    config["crews"]["haiku"]["model"] = toml_edit::value("fixture-model");
+    config["crews"]["haiku"]["backend"] = toml_edit::value("cli");
+    fs::write(&config_path, config.to_string()).unwrap();
+
+    // A global definition of the shipped job whose default max_tasks is 100.
+    let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../orbit-core/assets");
+    let shipped = fs::read_to_string(assets.join("jobs/task_pilot_pipeline.yaml")).unwrap();
+    let raised = shipped.replacen("    max_tasks: 50\n", "    max_tasks: 100\n", 1);
+    assert_ne!(
+        raised, shipped,
+        "shipped task_pilot_pipeline must declare default max_tasks 50"
+    );
+    let jobs = fixture.home.join(".orbit/resources/jobs");
+    fs::create_dir_all(&jobs).unwrap();
+    fs::write(jobs.join("task_pilot_pipeline.yaml"), raised).unwrap();
+
+    let runtime = fixture.runtime();
+    install_pilot_provider(&fixture, &runtime);
+    let ids: Vec<String> = (0..51)
+        .map(|index| {
+            runtime
+                .add_task(TaskAddParams {
+                    title: format!("job default pilot task {index}"),
+                    description: "Explicit job-default pilot fixture".into(),
+                    acceptance_criteria: vec!["Assess only eligible tasks".into()],
+                    plan: "Inspect README.md".into(),
+                    context_files: vec!["file:README.md".into()],
+                    tags: vec!["delivery:task_local_pipeline".into()],
+                    complexity: TaskComplexity::Low,
+                    task_type: Some(TaskType::Feature),
+                    status: Some(TaskStatus::Proposed),
+                    crew: Some("haiku".into()),
+                    ..Default::default()
+                })
+                .unwrap()
+                .id
+        })
+        .collect();
+
+    let before = fixture.snapshot();
+    let refused = fixture
+        .orbit()
+        .env("PATH", std::env::var_os("PATH").unwrap())
+        .args(["run", "task-pilot"])
+        .args(&ids)
+        .args(["--max-tasks", "50", "--json"])
+        .timeout(std::time::Duration::from_secs(60))
+        .output()
+        .unwrap();
+    let refusal = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(
+        !refused.status.success() && refusal.contains("exceeding max_tasks 50"),
+        "an explicit --max-tasks 50 must refuse 51 tasks: {refusal}"
+    );
+    assert_eq!(
+        fixture.snapshot(),
+        before,
+        "a refused explicit selection must submit no run"
+    );
+
+    let output = fixture
+        .orbit()
+        .env("PATH", std::env::var_os("PATH").unwrap())
+        .args(["run", "task-pilot"])
+        .args(&ids)
+        .args(["--wait", "--timeout-seconds", "300", "--json"])
+        .timeout(std::time::Duration::from_secs(360))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "the job's default max_tasks 100 must admit 51 omitted-flag tasks: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // One crew group is one run, so the payload is that run's flat record.
+    let submitted: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(submitted["state"], "success", "{submitted}");
+    let run_id = submitted["run_id"].as_str().expect("submitted run id");
+    let state = runtime
+        .read_run_state(run_id)
+        .unwrap()
+        .expect("completed pilot run state");
+    let prepared = state.pipeline["prepare"]["task_ids"]
+        .as_array()
+        .expect("preparation reports its selection");
+    assert_eq!(
+        prepared.len(),
+        51,
+        "preparation must receive the whole selection: {:#}",
+        state.pipeline["prepare"]
+    );
+}
+
 /// A provider-capacity pilot failure ends `held`: an accepted async
 /// submission still exits zero, while `--wait` exits nonzero with
 /// `state=held` and the provider diagnostic in both text and JSON.
@@ -545,4 +852,22 @@ fn wait_contracts() {
         tracing::info!(case = name, "CLI contract row");
         check();
     }
+}
+
+#[test]
+fn explicit_task_pilot_mixed_crew_contract() {
+    if !isolated_run_observation("run_observation::wait::explicit_task_pilot_mixed_crew_contract") {
+        return;
+    }
+    explicit_task_pilot_partitions_mixed_crews_before_submission();
+}
+
+#[test]
+fn explicit_task_pilot_honors_job_default_max_tasks_contract() {
+    if !isolated_run_observation(
+        "run_observation::wait::explicit_task_pilot_honors_job_default_max_tasks_contract",
+    ) {
+        return;
+    }
+    explicit_task_pilot_honors_job_default_max_tasks();
 }

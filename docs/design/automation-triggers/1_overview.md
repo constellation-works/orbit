@@ -1,8 +1,8 @@
 ---
 title: Automation Triggers — Overview
 owner: codex
-last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_updated: 2026-11-05
+last_validated: 2026-11-03
 status: Draft
 stage: shipped
 next: "—"
@@ -87,8 +87,9 @@ review coverage remains uncovered.
 
 Execution waited until the OpenCode prerequisite [ORB-11295] landed as
 `8da5a925f` (PR 1382), an ancestor of the inspected checkout `c286142bce`.
-This candidate belongs in a dedicated task PR to `agent-main`, left unmerged;
-publication does not approve the proposed runtime behavior.
+The design landed through a dedicated task PR to `agent-main`; publication
+did not approve the proposed runtime behavior. Delivery triggers and bounded
+state preparation have since shipped in [ORB-11330] and [ORB-11331].
 
 ## Task References
 
@@ -101,5 +102,9 @@ publication does not approve the proposed runtime behavior.
 - [ORB-11333] — implements review timing, repair bounds, and delivery coverage.
 - [ORB-19288] — scopes the `condition` trigger kind beside the typed kinds,
   reversing the user-expression non-goal.
+- [ORB-11314] — designed the operation-mode presets for automated preparation
+  and delivery; the mode concept was later removed.
+- [ORB-11316] — extended the operation-mode design with review timing and
+  repair policy; the mode concept was later removed.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

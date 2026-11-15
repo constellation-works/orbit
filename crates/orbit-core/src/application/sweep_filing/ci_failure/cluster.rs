@@ -418,8 +418,11 @@ impl FailureCluster {
 
     /// Render the evidence a remediation agent needs, inline.
     ///
-    /// This is the whole point of the sweep: the agent that picks this task up
-    /// cannot reach GitHub, so anything absent here is unavailable to it.
+    /// This is the whole point of the sweep: every CI query ran on the host
+    /// before this task existed, so the inline evidence below is the
+    /// authoritative record for the named run and job. Where the granted
+    /// read-only `github.run.logs` / `github.run.view` tools are available,
+    /// the implementer may use them to read more of that run or job.
     /// `runners` is [`Self::runner_os`], the evidence behind the task's `os:`
     /// tags.
     pub(super) fn description(&self, evidence: &Value, runners: &[RunnerOsEvidence]) -> String {
@@ -427,8 +430,9 @@ impl FailureCluster {
         out.push_str(
             "This task was filed automatically from a host-side sweep of this repository's \
              GitHub Actions runs. Every CI query ran on the host before this task existed, so \
-             the evidence below is all of it — the execution lane for this task cannot reach \
-             GitHub, and it is not expected to.\n\n",
+             the evidence below is the authoritative record for the named run and job. Where the \
+             granted read-only `github.run.logs` / `github.run.view` tools are available, they may \
+             be used to read more of that run or job.\n\n",
         );
 
         out.push_str("## Failure\n\n");

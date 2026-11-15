@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use orbit_common::process::build_budget::read_waits;
 use orbit_common::security::redaction::PatternRedactor;
-use orbit_types::workflow::activity_job::V2AuditEventKind;
+use orbit_types::workflow::activity_job::{Provider, V2AuditEventKind};
 
 use crate::activity_job::cli_runner::image_input::StagedImages;
 use crate::activity_job::cli_runner::inspection::SourceInspection;
@@ -17,8 +17,10 @@ use super::super::evidence::{
 use super::{CliDispatchContext, subprocess};
 
 pub(super) struct CliProviderCompletion<'a> {
+    pub(super) started_at: chrono::DateTime<chrono::Utc>,
     pub(super) context: CliDispatchContext<'a>,
     pub(super) provider: String,
+    pub(super) provider_enum: Provider,
     pub(super) model: Option<String>,
     pub(super) agent_execution_id: Option<i64>,
     pub(super) task_ids: &'a [String],
@@ -41,9 +43,12 @@ pub(super) struct CliProviderCompletion<'a> {
 pub(super) fn finish_cli_dispatch(
     completion: CliProviderCompletion<'_>,
 ) -> Result<DispatchOutcome, DispatchError> {
+    let finished_at = chrono::Utc::now();
     let CliProviderCompletion {
         context,
+        started_at,
         provider,
+        provider_enum,
         model,
         agent_execution_id,
         task_ids,
@@ -132,11 +137,15 @@ pub(super) fn finish_cli_dispatch(
 
     let canary_provider = staged_images.is_some().then(|| provider.clone());
     let mut completion = project_completion(ProviderExit {
+        audit,
+        started_at,
+        finished_at,
         host,
         spec,
         input,
         run_id,
         provider,
+        provider_enum,
         model,
         agent_execution_id,
         task_ids,

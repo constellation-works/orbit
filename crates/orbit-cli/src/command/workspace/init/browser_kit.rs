@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use crate::output::sink::{stderr_is_terminal, stdin_is_terminal};
 
-const INSTALL: &str = "orbit browser-kit install";
+const INSTALL: &str = "orbit config browser-kit install";
 
 pub(super) enum BrowserKitOutcome {
     /// No `package.json` or HTML file, so nothing to offer.
@@ -72,7 +72,7 @@ pub(super) fn offer_browser_kit(root: &Path, install_requested: bool) -> Browser
             marker,
             ready: report.ready(),
             error: (!report.ready()).then(|| {
-                "the kit is not verified; `orbit browser-kit status` names what is missing"
+                "the kit is not verified; `orbit config browser-kit status` names what is missing"
                     .to_string()
             }),
         },

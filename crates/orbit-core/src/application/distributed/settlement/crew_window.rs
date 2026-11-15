@@ -3,6 +3,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_store::contracts::{AdmissionCrewCapability, AdmissionCrewPressure, LocalPullPhase};
+use orbit_types::identity::same_crew_family;
 use orbit_types::workflow::{CrewExclusion, CrewExclusionSource, PullAuthExclusion};
 use serde::Serialize;
 
@@ -19,6 +20,11 @@ use super::entries::RefusedPullSettlement;
 /// outside that restriction [ORB-14174]. Derived from the drain's run input
 /// and its own admission records, so it survives a follower restart and a
 /// resume, and ends with the drain.
+///
+/// [ORB-20400] Every name match counts a crew's family: an exclusion of
+/// `opus` keeps `opus@medium` off the window too, and a capacity backoff of
+/// `opus@medium` backs off `opus` and its other effort references, which
+/// share the model and account.
 ///
 /// [ORB-14697] Each pass also excludes the crews this host's provider-limit
 /// store finds at their usage limit, until the reading lapses. The reason
@@ -64,6 +70,9 @@ pub struct PullCrewWindow {
     /// not the review it owes.
     #[serde(skip)]
     pub(super) reviewable: Option<Vec<String>>,
+    /// Preflight crews permitted by the effective allowlist, before timed holds.
+    #[serde(skip)]
+    pub(super) permitted: Option<Vec<String>>,
     /// Per-crew weekly usage pressure from this host's own readings
     /// [ORB-17773], recomputed each pass like the limit gate. Empty under
     /// `workflow.crew_selection = "static"`: then the capability reports
@@ -96,7 +105,9 @@ impl PullCrewWindow {
             .filter(|exclusion| exclusion.source != CrewExclusionSource::ProviderLimit)
             .cloned()
             .collect();
-        if let Some(exclusion) = excluded.iter().find(|exclusion| exclusion.crew == crew)
+        if let Some(exclusion) = excluded
+            .iter()
+            .find(|exclusion| same_crew_family(&exclusion.crew, crew))
             && let Some(until) = exclusion.until
         {
             return Some(format!(
@@ -133,30 +144,12 @@ impl PullCrewWindow {
         if self.host_suppressed.is_some() || self.runnable.as_ref().is_some_and(|r| !r.is_empty()) {
             return false;
         }
-        let candidate_crews: Vec<&str> = match (&self.allowed, &self.reviewable) {
-            (Some(allowed), Some(reviewable)) => reviewable
-                .iter()
-                .filter(|crew| allowed.iter().any(|a| a == *crew))
-                .map(String::as_str)
-                .collect(),
-            (None, Some(reviewable)) => reviewable.iter().map(String::as_str).collect(),
-            (Some(allowed), None) => allowed
-                .iter()
-                .filter(|crew| {
-                    !self
-                        .excluded
-                        .iter()
-                        .any(|exclusion| &exclusion.crew == *crew && exclusion.until.is_none())
-                })
-                .map(String::as_str)
-                .collect(),
-            (None, None) => Vec::new(),
-        };
+        let candidate_crews = self.permitted.as_deref().unwrap_or_default();
         !candidate_crews.is_empty()
             && candidate_crews.iter().all(|crew| {
-                self.excluded
-                    .iter()
-                    .any(|exclusion| exclusion.crew == *crew && exclusion.until.is_some())
+                self.excluded.iter().any(|exclusion| {
+                    same_crew_family(&exclusion.crew, crew) && exclusion.until.is_some()
+                })
             })
     }
 
@@ -350,8 +343,5 @@ pub(super) fn phase_guidance(
 }
 
 pub(super) fn phase_name(phase: LocalPullPhase) -> String {
-    serde_json::to_value(phase)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_string))
-        .unwrap_or_else(|| "unknown".to_string())
+    orbit_common::protocol::serde_string_label(&phase).unwrap_or_else(|| "unknown".to_string())
 }

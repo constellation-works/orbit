@@ -50,14 +50,17 @@ use orbit_core::{
 };
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
-use orbit_types::policy::Role;
 use orbit_types::task::{CONTEXT_FILES_WIDENED_EVENT, ContextWideningStep, TaskDecision};
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 use orbit_types::workflow::{JobRunState, JobRunTrigger, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod crew_env;
+mod follower_claims;
 mod gap_fit;
+mod human_crew;
+mod load_failure;
 mod lock_busy_pass;
 mod replay_crew;
 mod reservation_grants;
@@ -124,6 +127,7 @@ fn isolated_with_ignored(test: &str, ignored: bool) -> bool {
 }
 
 fn runtime() -> (TempDir, OrbitRuntime, PathBuf) {
+    crate::scenarios::require_isolated_mutable_fixture("dispatch_admission::runtime");
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let repo = root.path().join("repo");
@@ -138,6 +142,7 @@ fn runtime() -> (TempDir, OrbitRuntime, PathBuf) {
 
 /// Open a calm runtime with fixture configuration and workspace files in place.
 fn configured_runtime(config: &str, files: &[&str]) -> (TempDir, OrbitRuntime, Arc<PressureProbe>) {
+    crate::scenarios::require_isolated_mutable_fixture("dispatch_admission::configured_runtime");
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let repo = root.path().join("repo");
@@ -405,6 +410,18 @@ fn doc_duties_mints_an_admissible_locking_context() {
         "a whole-tree lock starves on a busy drain [ORB-18264]: {:?}",
         minted.context_files
     );
+    // The shipped chore mints proposed and awaits approval. Approve it so the
+    // drain admits it from backlog, as an approved chore does.
+    runtime
+        .update_task_as_human(
+            &minted.id,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+            "fixture-operator".into(),
+        )
+        .expect("approve the minted documentation chore");
     assert_eq!(
         admitted(&list_backlog_tasks(&runtime, json!({}))),
         vec![minted.id.clone()]
@@ -921,10 +938,9 @@ fn reserve_locks(runtime: &OrbitRuntime, task_id: &str) -> Value {
 
 fn as_operator(runtime: &OrbitRuntime, tool: &str, input: Value) -> Value {
     runtime
-        .run_tool_with_context_and_role(
+        .run_tool_with_context(
             tool,
             input,
-            Role::Admin,
             ToolContext {
                 session_context: ToolSessionContext {
                     effective_capabilities: BTreeSet::from([McpCapability::Operator]),
@@ -940,16 +956,17 @@ fn as_operator(runtime: &OrbitRuntime, tool: &str, input: Value) -> Value {
 /// submission that passes the claim gate fails next on the missing asset.
 fn ship(runtime: &OrbitRuntime, claim_token: Option<&str>) -> OrbitError {
     runtime
-        .submit_ship_run(
-            ShipMode::Local,
-            Some("main"),
-            &[],
-            CompletionPolicy::Review,
-            &[],
-            Some("test"),
+        .submit_ship_run(orbit_core::ShipRunRequest {
+            mode: ShipMode::Local,
+            base_branch: Some("main"),
+            task_ids: &[],
+            completion: CompletionPolicy::Review,
+            allowed_crews: &[],
+            actor: Some("test"),
             claim_token,
-            JobRunTrigger::cli(),
-        )
+            trigger: JobRunTrigger::cli(),
+            ..Default::default()
+        })
         .expect_err("a fixture without job assets never submits a run")
 }
 
@@ -1305,13 +1322,30 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
             comments[1].by, "system",
             "ORB-13916: gate is not a human intervention"
         );
-        // Gate settlement does not create synthetic history stubs. Existing
+        // Gate settlement records a typed decision with its comment. Existing
         // human creation history must survive without new human entries; a
         // repair outside the selectors records the semantic scope update and
         // the widening provenance, both attributed to the system.
         let history = runtime.get_task_history(&task.id).unwrap();
         assert_eq!(history[..history_before.len()], history_before[..]);
         let added = &history[history_before.len()..];
+        let (settled, added) = added.split_last().expect("typed settlement row");
+        let Some(TaskDecision::ReviewSettlement(recorded)) = &settled.decision else {
+            panic!("expected typed settlement, got {settled:?}");
+        };
+        assert_eq!(
+            recorded,
+            &orbit_types::task::RecordedReviewSettlement::from_certificate(
+                &certificate,
+                orbit_types::task::ReviewSettlementGate::BeforePr,
+            )
+        );
+        assert_eq!(settled.at, comments[1].at);
+        assert_eq!(settled.by, "system");
+        assert_eq!(
+            orbit_types::task::recorded_review_settlements(&history, &comments).len(),
+            1
+        );
         if repaired {
             let [updated, widened] = added else {
                 panic!("expected a scope update and its widening entry, got {added:?}");
@@ -1592,16 +1626,17 @@ fn fresh_runtime_discovery_recovers_host_pressure_without_a_drain() {
         "explicit selection carries the throttle warning"
     );
     let explicit_submission = runtime
-        .submit_ship_run(
-            ShipMode::Local,
-            Some("main"),
-            std::slice::from_ref(&queued.id),
-            CompletionPolicy::Review,
-            &[],
-            Some("test"),
-            None,
-            JobRunTrigger::cli(),
-        )
+        .submit_ship_run(orbit_core::ShipRunRequest {
+            mode: ShipMode::Local,
+            base_branch: Some("main"),
+            task_ids: std::slice::from_ref(&queued.id),
+            completion: CompletionPolicy::Review,
+            allowed_crews: &[],
+            actor: Some("test"),
+            claim_token: None,
+            trigger: JobRunTrigger::cli(),
+            ..Default::default()
+        })
         .expect_err("the fixture has no delivery job asset");
     assert!(matches!(explicit_submission, OrbitError::NotFound { .. }));
 
@@ -1783,10 +1818,9 @@ fn sustained_host_pressure(kind: HostPressure) {
             ..ToolContext::default()
         };
         let status = runtime
-            .run_tool_with_context_and_role(
+            .run_tool_with_context(
                 "orbit.workflow.auto",
                 json!({"workspace": runtime.workspace_id().unwrap(), "action": "status"}),
-                Role::Admin,
                 operator,
             )
             .expect("mcp status");
@@ -2355,15 +2389,15 @@ pub(super) fn admitted_frozen_batch(
     assert!(store.automation_commit(&baseline, &admitted, None).unwrap());
 }
 
-/// A shutdown inside the configured horizon holds a local wave and readiness.
-/// One minute past that horizon admits, while readiness and the entry decision
-/// still name the schedule.
+/// A shutdown inside the fixed 180-minute horizon holds a local wave and
+/// readiness. One minute past that horizon admits, while readiness and the
+/// entry decision still name the schedule.
 fn a_shutdown_inside_the_hold_horizon_holds_local_admission_and_one_beyond_it_admits() {
-    let (_root, runtime, _probe) = configured_runtime(
-        "[machine]\nhost_shutdown_hold_minutes = 30\n",
-        &["src/queued.rs"],
+    let (_root, runtime, _probe) = configured_runtime("", &["src/queued.rs"]);
+    assert_eq!(
+        runtime.host_shutdown_hold_minutes(),
+        orbit_runtime::host_signal::HOST_SHUTDOWN_HOLD_MINUTES
     );
-    assert_eq!(runtime.host_shutdown_hold_minutes(), 30);
     let queued = seed(&runtime, Seed::default().files(&["file:src/queued.rs"]));
     let schedule = |minutes: i64| {
         orbit_core::runtime::host_signal::FixedHostSignals::scheduled(
@@ -2380,8 +2414,8 @@ fn a_shutdown_inside_the_hold_horizon_holds_local_admission_and_one_beyond_it_ad
             .with_host_signal_probe(Arc::new(schedule(minutes)))
     };
 
-    // 30 minutes is inside the horizon and holds; 31 admits. Both still name the schedule.
-    for (minutes, holding) in [(30_i64, true), (31, false)] {
+    // 180 minutes is inside the horizon and holds; 181 admits. Both still name the schedule.
+    for (minutes, holding) in [(180_i64, true), (181, false)] {
         let runtime = presented(minutes);
         let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
         let wave = classify(&runtime, &drain);
@@ -2427,7 +2461,64 @@ fn a_shutdown_inside_the_hold_horizon_holds_local_admission_and_one_beyond_it_ad
     }
 }
 
+/// A `no-drain` backlog task is never admitted automatically, reports
+/// `no_drain_tag` in readiness, still ships explicitly, and re-admits after
+/// the tag is removed.
+fn no_drain_task_is_excluded_automatically_but_ships_explicitly() {
+    let (_root, runtime, _repo) = runtime();
+    let held = seed(
+        &runtime,
+        Seed::named("interactive-owned").tags(&["no-drain"]),
+    );
+    let free = seed(&runtime, Seed::named("drain-owned"));
+
+    let output = list_backlog_tasks(&runtime, json!({}));
+    assert_eq!(admitted(&output), vec![free.id.clone()], "{output}");
+    assert_eq!(
+        excluded_entry(&output, &held.id)["reason"],
+        "no_drain_tag",
+        "{output}"
+    );
+
+    let readiness = default_readiness(&runtime);
+    let entry = readiness_task(&readiness, &held.id);
+    assert_eq!(entry["eligible"], false, "{entry}");
+    assert_eq!(entry["reason"], "no_drain_tag", "{entry}");
+    assert!(
+        entry["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("no-drain")),
+        "{entry}"
+    );
+
+    // Explicit single-task dispatch still runs it.
+    let explicit = list_backlog_tasks(&runtime, json!({"task_ids": [held.id]}));
+    assert_eq!(admitted(&explicit), vec![held.id.clone()], "{explicit}");
+
+    // Removing the tag makes it admissible on the next pass.
+    runtime
+        .update_task_as_human(
+            &held.id,
+            orbit_core::application::task::TaskUpdateParams {
+                tags: Some(Vec::new()),
+                ..Default::default()
+            },
+            "fixture operator".into(),
+        )
+        .unwrap();
+    let after = list_backlog_tasks(&runtime, json!({}));
+    assert!(
+        admitted(&after).contains(&held.id),
+        "tag removal re-admits: {after}"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    no_drain_task_is_excluded_automatically_but_ships_explicitly_scenarios,
+    no_drain_task_is_excluded_automatically_but_ships_explicitly
+);
+
 crate::scenario_table!(
     empty_context_is_admitted_on_auto_ship_and_readiness_without_locks_scenarios,
     empty_context_is_admitted_on_auto_ship_and_readiness_without_locks,

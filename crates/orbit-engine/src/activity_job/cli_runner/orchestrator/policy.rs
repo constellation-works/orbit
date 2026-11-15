@@ -3,12 +3,19 @@
 //! tool deltas.
 
 use orbit_common::security::child_env::{
-    ACTIVITY_DEADLINE_ENV, ACTIVITY_NAME_ENV, ACTIVITY_TOOL_POLICY_ENV, ACTIVITY_TOOLS_DENY_ENV,
+    ACTIVITY_DEADLINE_ENV, ACTIVITY_MCP_TOOLSETS_ENV, ACTIVITY_NAME_ENV, ACTIVITY_TOOL_POLICY_ENV,
+    ACTIVITY_TOOLS_DENY_ENV,
 };
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
 use orbit_types::tool::{AGENT_CONTRACT_TOOLS, CLAIMED_MODE_DENIED_TOOLS};
-use orbit_types::workflow::activity_job::{ActivityToolPolicyMode, AgentLoopSpec};
-use orbit_types::workflow::{ExperimentActivityOverlay, ExperimentOverlayRecord, tool_allowed};
+use orbit_types::workflow::activity_job::{
+    ActivityToolPolicyMode, AgentLoopSpec, MUTATING_TOOLS, is_response_correction_mutating_tool,
+};
+use orbit_types::workflow::{
+    AGENT_IMPLEMENT_ACTIVITY, AGENT_REVIEW_REPAIR_ACTIVITY, ExperimentActivityOverlay,
+    ExperimentOverlayRecord, PR_CONFLICT_RECOVERY_ACTIVITY, STEP_FAILURE_RECOVERY_ACTIVITY,
+    TASK_PILOT_ACTIVITY, tool_allowed, tools_allowed_by_disallow_list,
+};
 use serde_json::Value;
 
 use crate::context::{ResolvedActivityTools, RuntimeHost};
@@ -65,17 +72,16 @@ fn legacy_program_allowlist_for_mcp(activity: &str, disallowed: &[String]) -> Op
         return None;
     }
     match activity {
-        "agent_implement" | "agent_review_repair" => Some(concat!(
+        AGENT_IMPLEMENT_ACTIVITY | AGENT_REVIEW_REPAIR_ACTIVITY => Some(concat!(
             "git,make,rg,orbit,bash,sh,cat,ls,find,sed,awk,grep,jq,",
             "cargo,rustc,rustfmt,node,npm,npx,pnpm,yarn,bun,deno,",
             "python,python3,uv,poetry,pytest,ruff,mypy,go,gofmt,",
             "java,javac,mvn,gradle,dotnet,cc,c++,clang,clang++,gcc,g++,",
             "cmake,ctest,ninja,swift,ruby,bundle,rake"
         )),
-        "agent_invoke" => Some("awk,bash,cargo,cat,find,git,grep,jq,ls,make,ps,python3,rg,sed,sh"),
-        "pr_conflict_recovery" => Some("cargo,git,make,orbit,rg"),
-        "step_failure_recovery" => Some("git,gh,orbit,rg"),
-        "task_pilot" => Some("git,rg"),
+        PR_CONFLICT_RECOVERY_ACTIVITY => Some("cargo,git,make,orbit,rg"),
+        STEP_FAILURE_RECOVERY_ACTIVITY => Some("git,gh,orbit,rg"),
+        TASK_PILOT_ACTIVITY => Some("git,rg"),
         _ => None,
     }
 }
@@ -175,7 +181,24 @@ pub(super) fn resolve_activity_tool_grant(
     };
     if let Some(disallow_list) = tool_disallow_list.as_mut() {
         lift_granted_denials(disallow_list, &mut activity_tools, claimed);
+        // A host switch that suppressed a tool from the effective baseline
+        // must also deny it to the child: deny mode ignores the legacy
+        // allowlist, so the removal alone would leave the tool callable.
+        // Added after the granted lift, so a grant cannot re-open it.
+        for tool in &activity_tools.suppressed_tools {
+            if !tool_allowed(tool, disallow_list) {
+                disallow_list.push(tool.clone());
+            }
+        }
     }
+    drop_mutating_tools_for_response_correction(
+        host,
+        spec,
+        activity_name,
+        task_ids,
+        &mut activity_tools,
+        tool_disallow_list.as_mut(),
+    )?;
     if claimed && tool_disallow_list.is_none() {
         restrict_allowlist(
             host,
@@ -190,6 +213,67 @@ pub(super) fn resolve_activity_tool_grant(
         tool_disallow_list,
         activity_tools,
     })
+}
+
+/// A `response_correction` activity must never receive a built-in mutating
+/// tool, however its grant was composed. Asset load already refuses such a
+/// tool in the activity's own list, but a task's `required_tools` are only
+/// admitted at run time and, in allowlist mode, are added to the baseline
+/// without that check. Drop a mutating requirement here, with an
+/// omitted-requirement note like the one a deny-mode non-implementer records,
+/// and strip any mutating name (including one a wildcard baseline covers)
+/// from the effective grant. Deny mode keeps its existing behaviour: the host
+/// already refused or dropped a covered requirement, and this only re-denies
+/// the mutating names to the child. Activities without `response_correction`
+/// are untouched.
+fn drop_mutating_tools_for_response_correction(
+    host: &dyn RuntimeHost,
+    spec: &AgentLoopSpec,
+    activity_name: &str,
+    task_ids: &[String],
+    activity_tools: &mut ResolvedActivityTools,
+    tool_disallow_list: Option<&mut Vec<String>>,
+) -> Result<(), DispatchError> {
+    if spec.response_correction.is_none() {
+        return Ok(());
+    }
+    for tool in &activity_tools.requested_tools {
+        if is_response_correction_mutating_tool(tool) {
+            let note = format!(
+                "required tool `{tool}` dropped from requested_tools: the activity declares response_correction, so a task's required_tools cannot grant a mutating tool to it"
+            );
+            tracing::warn!("{note}");
+            if !activity_tools.omitted_requirement_notes.contains(&note) {
+                activity_tools.omitted_requirement_notes.push(note);
+            }
+        }
+    }
+    activity_tools
+        .granted_tools
+        .retain(|tool| !is_response_correction_mutating_tool(tool));
+    match tool_disallow_list {
+        Some(disallow_list) => {
+            for tool in MUTATING_TOOLS {
+                if !tool_allowed(tool, disallow_list) {
+                    disallow_list.push((*tool).to_string());
+                }
+            }
+            activity_tools
+                .requested_tools
+                .retain(|tool| !is_response_correction_mutating_tool(tool));
+            narrow_callable_tools(&mut activity_tools.effective_tools, disallow_list);
+        }
+        None => {
+            restrict_allowlist(
+                host,
+                activity_tools,
+                activity_name,
+                task_ids,
+                MUTATING_TOOLS,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// Removes the granted names the host lifted from the disallow list the child
@@ -242,13 +326,16 @@ pub(super) fn apply_experiment_tool_overlays(
             .iter()
             .map(String::as_str)
             .filter(|tool| {
-                !AGENT_CONTRACT_TOOLS.contains(tool)
+                let removal = [(*tool).to_string()];
+                !AGENT_CONTRACT_TOOLS
+                    .iter()
+                    .any(|contract| tool_allowed(contract, &removal))
                     && !grant
                         .activity_tools
                         .requested_tools
                         .iter()
                         .chain(&grant.activity_tools.granted_tools)
-                        .any(|required| required == tool)
+                        .any(|required| tool_allowed(required, &removal))
             })
             .collect::<Vec<_>>();
         match grant.tool_disallow_list.as_mut() {
@@ -258,10 +345,7 @@ pub(super) fn apply_experiment_tool_overlays(
                         disallow_list.push((*tool).to_string());
                     }
                 }
-                grant
-                    .activity_tools
-                    .effective_tools
-                    .retain(|tool| !removals.contains(&tool.as_str()));
+                narrow_callable_tools(&mut grant.activity_tools.effective_tools, disallow_list);
             }
             None if !removals.is_empty() => restrict_allowlist(
                 host,
@@ -309,12 +393,21 @@ pub(super) fn apply_experiment_tool_overlays(
             || !overlay.skills.is_empty()
             || !removed.is_empty()
             || overlay.instruction.is_some()
-            || overlay.suppress_default_instructions;
+            || overlay.suppress_default_instructions
+            || overlay.memory.is_some();
         if has_effect {
             records.push(ExperimentOverlayRecord::received(overlay, added, removed));
         }
     }
     Ok(records)
+}
+
+/// Re-derive a deny-mode run's callable set after `disallow_list` grew: a
+/// family it now covers only partly is replaced by its remaining
+/// `family:action` names, and a fully covered name is dropped.
+fn narrow_callable_tools(effective_tools: &mut Vec<String>, disallow_list: &[String]) {
+    *effective_tools =
+        tools_allowed_by_disallow_list(disallow_list, effective_tools.iter().map(String::as_str));
 }
 
 /// Removes `denied` from an allowlisted activity's grant.
@@ -331,6 +424,10 @@ fn restrict_allowlist(
     denied: &[&str],
 ) -> Result<(), DispatchError> {
     let is_denied = |tool: &str| denied.contains(&tool);
+    let denied_list = denied
+        .iter()
+        .map(|tool| (*tool).to_string())
+        .collect::<Vec<_>>();
     let covers_denied = |entry: &String| {
         denied
             .iter()
@@ -354,14 +451,15 @@ fn restrict_allowlist(
                             .effective_tools,
                     );
                 }
-                registered
-                    .iter()
-                    .flatten()
-                    .filter(|tool| {
-                        !is_denied(tool) && tool_allowed(tool, std::slice::from_ref(entry))
-                    })
-                    .cloned()
-                    .collect()
+                // A family the denial covers only partly stays as its
+                // remaining `family:action` names.
+                tools_allowed_by_disallow_list(
+                    &denied_list,
+                    registered.iter().flatten().map(String::as_str),
+                )
+                .into_iter()
+                .filter(|tool| tool_allowed(tool, std::slice::from_ref(entry)))
+                .collect()
             };
             for tool in expanded {
                 if !restricted.contains(&tool) {
@@ -419,8 +517,8 @@ pub(super) fn activity_policy_env(
 /// run's allowlist [ORB-13427]. Drop those inherited names before this
 /// activity's envelope is stamped. A deny-mode activity restamps its marker,
 /// its list (including an explicit empty list), and the legacy MCP allowlist.
-/// An outer run's activity deadline is dropped too: every invocation stamps
-/// its own.
+/// An outer run's activity deadline and MCP toolsets are dropped too: every
+/// invocation stamps its own.
 pub(super) fn drop_inherited_policy_env(child_env: &mut Vec<(String, String)>) {
     child_env.retain(|(key, _)| {
         ![
@@ -428,6 +526,7 @@ pub(super) fn drop_inherited_policy_env(child_env: &mut Vec<(String, String)>) {
             ACTIVITY_TOOLS_DENY_ENV,
             ACTIVITY_NAME_ENV,
             ACTIVITY_DEADLINE_ENV,
+            ACTIVITY_MCP_TOOLSETS_ENV,
             PROC_ALLOWED_PROGRAMS_ENV,
             PROC_PROGRAM_POLICY_ENV,
             PROC_DISALLOWED_PROGRAMS_ENV,

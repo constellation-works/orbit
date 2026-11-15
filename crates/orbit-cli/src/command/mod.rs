@@ -1,4 +1,6 @@
 pub mod agents;
+pub mod application;
+pub mod attention;
 pub mod audit;
 pub mod auto_task;
 pub mod automation;
@@ -6,9 +8,9 @@ pub mod browser_kit;
 pub mod clock;
 pub mod codebase;
 pub mod config;
-pub mod crew;
 pub mod decision;
 pub mod doctor;
+pub mod evolution;
 pub mod experiment;
 pub mod friction;
 pub mod gc;
@@ -16,13 +18,14 @@ pub mod host;
 pub(crate) mod host_route;
 pub mod init;
 pub mod job;
-pub mod lease;
 pub mod locks;
 pub mod log;
 pub mod mcp;
+pub mod memory;
 pub mod migrate;
+pub mod notice;
 pub mod operation;
-pub mod orchestrator;
+pub mod resident;
 pub use operation::args as operation_args;
 pub mod plugin;
 pub mod routine;
@@ -34,7 +37,6 @@ pub mod sweep;
 pub mod task;
 pub mod tool;
 pub mod update;
-pub mod visual;
 pub mod web;
 pub mod workspace;
 
@@ -70,76 +72,11 @@ pub(crate) fn require_confirmation(confirm: bool, action: &str) -> Result<(), Or
     )))
 }
 
-// Clap derive does not support per-variant subcommand `help_heading`
-// (`next_help_heading` is args-only; `subcommand_help_heading` only renames
-// the single `Commands:` block). To render grouped sections in `--help` we
-// hand-roll the template below. Keep the variant order and the template's
-// section order in sync when adding new commands — the variant order also
-// determines where a missing-from-template command would otherwise appear.
-//
-// It is a named constant rather than an inline literal because `main`
-// splices in a `Plugins:` section for the host's installed plugin groups
-// before parsing, and clap does not hand a built template back out.
-pub(crate) const ROOT_HELP_TEMPLATE: &str = "\
-{name} {version}
-
-{usage-heading} {usage}
-
-Environment:
-  init         Initialize the global Orbit root (~/.orbit)
-  workspace    Manage workspaces
-  config       Show or update Orbit configuration
-  host         Register and inspect the remote Orbit hosts this machine reaches over SSH
-  browser-kit  Install, verify and remove the headless browser kit workers check UIs with
-  plugin       Install and manage Orbit plugins
-  migrate      Apply or inspect pending .orbit layout/schema migrations
-  update       Install a published Orbit release and converge to it
-
-Knowledge:
-  task         Create, update, and manage tasks
-  visual       Capture the working tree beside a task's mocks for comparison
-  decision     List, show and answer human decision requests on held work
-  friction     Report, list, and triage friction records
-  search       Search tasks and frictions
-
-Operate:
-  run          Run workflows, drain the backlog, and inspect runs
-  job          Define, list, and manage job workflows
-  script       Grant and inspect workspace scripts a job step may run
-  experiment   Define, run and conclude experiments over agent treatments
-  lease        Coordinate path leases with the workspace owner
-  tool         Manage and run Orbit tools, including external MCP plugins
-  gc           Inspect and explicitly reap Orbit-managed garbage
-
-Observe:
-  audit        Query the audit event log
-  codebase     Rank the repository paths that are risky for agents to change
-  agents       Score orchestrators, implementers, reviewers and pilots by crew and model
-  crew         Show how crews are laddered across complexity tiers
-  log          Tail the unified Orbit log feed
-  doctor       Diagnose workspace health, provider CLIs, and filesystem access
-
-Scheduler:
-  clock        Inspect, control, and manually tick the machine scheduler
-  sweep        Compatibility alias for `orbit clock tick`
-  routine      Inspect and control scheduled routines on this machine
-  auto-task    Define recurring auto-task templates (the scheduler primitive)
-  automation   Explain what condition-triggered routines and auto-tasks would match
-
-Services:
-  mcp          Register MCP client integrations and run the MCP server
-  web          Run the Orbit dashboard
-
-Options:
-{options}";
-
+// Grouped `--help` sections come from the row tables in `help.rs`, attached in `entry/discover.rs`.
 #[derive(Parser)]
 #[command(name = "orbit")]
 #[command(about = "Orbit CLI", version)]
-#[command(
-    disable_help_subcommand = true,
-    help_template = ROOT_HELP_TEMPLATE
-)]
+#[command(disable_help_subcommand = true)]
 pub struct Cli {
     /// Orbit data directory to use (overrides every other source)
     #[arg(long, global = true)]
@@ -155,21 +92,17 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    // ── Environment ──
+    // ── Setup ──
     Init(init::InitCommand),
     Workspace(workspace::WorkspaceCommand),
     Config(config::ConfigCommand),
     Host(host::HostCommand),
-    #[command(name = "browser-kit")]
-    BrowserKit(browser_kit::BrowserKitCommand),
     Plugin(plugin::PluginCommand),
     Migrate(migrate::MigrateCommand),
     Update(update::UpdateCommand),
 
-    // ── Knowledge ──
+    // ── Work ──
     Task(Box<task::TaskCommand>),
-    Visual(visual::VisualCommand),
-    Decision(decision::DecisionCommand),
     Friction(friction::FrictionCommand),
     Search(search::SearchCommand),
 
@@ -177,22 +110,22 @@ pub enum Commands {
     Run(run::RunCommand),
     Job(job::JobCommand),
     Script(script::ScriptCommand),
-    Experiment(experiment::ExperimentCommand),
-    Lease(lease::LeaseCommand),
+    Notice(notice::NoticeCommand),
     Tool(tool::ToolCommand),
     Gc(gc::GcCommand),
 
     // ── Observe ──
+    Attention(attention::AttentionCommand),
     Audit(audit::AuditCommand),
-    Codebase(codebase::CodebaseCommand),
-    Agents(agents::AgentsCommand),
-    Crew(crew::CrewCommand),
     Log(log::LogCommand),
     Doctor(doctor::DoctorCommand),
 
+    // ── Analytics ──
+    Agents(agents::AgentsCommand),
+    Codebase(codebase::CodebaseCommand),
+
     // ── Scheduler ──
     Clock(clock::ClockCommand),
-    Sweep(sweep::SweepCommand),
     Routine(routine::RoutineCommand),
     #[command(name = "auto-task")]
     AutoTask(auto_task::AutoTaskCommand),
@@ -201,6 +134,14 @@ pub enum Commands {
     // ── Services ──
     Mcp(mcp::McpCommand),
     Web(web::WebCommand),
+
+    // ── Advanced ──
+    Application(application::ApplicationCommand),
+    Decision(decision::DecisionCommand),
+    Evolution(evolution::EvolutionCommand),
+    Experiment(experiment::ExperimentCommand),
+    Memory(memory::MemoryCommand),
+    Resident(resident::ResidentCommand),
 
     // ── plugin-derived command groups ──
     //
@@ -215,8 +156,11 @@ pub enum Commands {
     // ── hidden compatibility commands ──
     #[command(hide = true)]
     Skill(skill::SkillCommand),
-    // Deprecated alias of `orbit agents --role orchestrators`, removed in the
-    // next release.
+    // Deprecated path of `orbit config browser-kit`, kept for the compatibility
+    // window; each use warns on stderr.
+    #[command(name = "browser-kit", hide = true)]
+    BrowserKit(browser_kit::BrowserKitCommand),
+    // Compatibility spelling of `orbit clock tick`.
     #[command(hide = true)]
-    Orchestrator(orchestrator::OrchestratorCommand),
+    Sweep(sweep::SweepCommand),
 }

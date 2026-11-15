@@ -1,11 +1,13 @@
 //! Failure-activity and final-recovery checkpoints.
 
+use std::fmt;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::task::TaskStatus;
-use crate::workflow::final_recovery::FinalRecoveryDecision;
+use crate::workflow::final_recovery::{FaultAttribution, FinalRecoveryDecision};
 
 /// Durable result of a job-level terminal failure activity.
 ///
@@ -18,6 +20,146 @@ pub struct FailureActivityCheckpoint {
     pub activity_name: String,
     pub failed_step_id: String,
     pub output: Value,
+}
+
+/// The `decision` a `pr_failure_handoff` outcome records in its
+/// [`FailureActivityCheckpoint::output`].
+///
+/// Persisted as a plain string through [`Self::as_str`]; older run states
+/// are re-read on resume, so the tokens must not change. Reading is
+/// tolerant: an unknown or missing `decision` gives `None` from
+/// [`Self::from_output`], which is what every reader did with string
+/// literals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FailureHandoffDecision {
+    /// The implementer or step recovery declared a blocker.
+    BlockedByAgent,
+    /// Waiting on recorded owner approval.
+    HeldOwnerSignoff,
+    /// Required validation could not run in its environment.
+    BlockedValidationEnvironment,
+    /// The provider failed the run.
+    HeldProviderFailure,
+    /// An Orbit upgrade refused the agent mid-step.
+    HeldUpgradePending,
+    /// The parent stopped waiting for a blocking child.
+    HeldChildTimeout,
+    /// Required validation fails on the base as on the candidate.
+    HeldBaselineRed,
+    /// A before-landing review did not approve.
+    LandingReviewFailure,
+    /// PR completion failed after publication (non-landing).
+    ReviewCompletionFailure,
+    /// A rebase this run did not start was left untouched.
+    ForeignRebaseRefused,
+    /// Waiting on named external evidence for review.
+    AwaitingReviewEvidence,
+    /// The before-PR review gate blocked publication.
+    BlockedReviewGate,
+    /// The reviewer timed out and settled incomplete.
+    IncompleteReviewTimeout,
+    /// A review repair was preserved after its PR merged.
+    ReviewRepairAfterMerge,
+    /// No candidate was preserved.
+    NoCandidate,
+    /// A `[BLOCKED]` PR was opened for a conflicting candidate.
+    BlockedConflictPr,
+    /// A `[BLOCKED]` PR was opened for a failed candidate.
+    BlockedFailurePr,
+}
+
+impl FailureHandoffDecision {
+    /// The persisted token for this decision.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BlockedByAgent => "blocked_by_agent",
+            Self::HeldOwnerSignoff => "held_owner_signoff",
+            Self::BlockedValidationEnvironment => "blocked_validation_environment",
+            Self::HeldProviderFailure => "held_provider_failure",
+            Self::HeldUpgradePending => "held_upgrade_pending",
+            Self::HeldChildTimeout => "held_child_timeout",
+            Self::HeldBaselineRed => "held_baseline_red",
+            Self::LandingReviewFailure => "landing_review_failure",
+            Self::ReviewCompletionFailure => "review_completion_failure",
+            Self::ForeignRebaseRefused => "foreign_rebase_refused",
+            Self::AwaitingReviewEvidence => "awaiting_review_evidence",
+            Self::BlockedReviewGate => "blocked_review_gate",
+            Self::IncompleteReviewTimeout => "incomplete_review_timeout",
+            Self::ReviewRepairAfterMerge => "review_repair_after_merge",
+            Self::NoCandidate => "no_candidate",
+            Self::BlockedConflictPr => "blocked_conflict_pr",
+            Self::BlockedFailurePr => "blocked_failure_pr",
+        }
+    }
+
+    /// The decision a failure-handoff `output` records, or `None` when its
+    /// `decision` is missing, not a string, or not a known token.
+    #[must_use]
+    pub fn from_output(output: &Value) -> Option<Self> {
+        match output.get("decision").and_then(Value::as_str)? {
+            "blocked_by_agent" => Some(Self::BlockedByAgent),
+            "held_owner_signoff" => Some(Self::HeldOwnerSignoff),
+            "blocked_validation_environment" => Some(Self::BlockedValidationEnvironment),
+            "held_provider_failure" => Some(Self::HeldProviderFailure),
+            "held_upgrade_pending" => Some(Self::HeldUpgradePending),
+            "held_child_timeout" => Some(Self::HeldChildTimeout),
+            "held_baseline_red" => Some(Self::HeldBaselineRed),
+            "landing_review_failure" => Some(Self::LandingReviewFailure),
+            "review_completion_failure" => Some(Self::ReviewCompletionFailure),
+            "foreign_rebase_refused" => Some(Self::ForeignRebaseRefused),
+            "awaiting_review_evidence" => Some(Self::AwaitingReviewEvidence),
+            "blocked_review_gate" => Some(Self::BlockedReviewGate),
+            "incomplete_review_timeout" => Some(Self::IncompleteReviewTimeout),
+            "review_repair_after_merge" => Some(Self::ReviewRepairAfterMerge),
+            "no_candidate" => Some(Self::NoCandidate),
+            "blocked_conflict_pr" => Some(Self::BlockedConflictPr),
+            "blocked_failure_pr" => Some(Self::BlockedFailurePr),
+            _ => None,
+        }
+    }
+
+    /// Whether this decision leaves a candidate on a branch that a later
+    /// run may resume.
+    #[must_use]
+    pub const fn preserves_candidate(self) -> bool {
+        match self {
+            Self::BlockedFailurePr
+            | Self::BlockedConflictPr
+            | Self::BlockedReviewGate
+            | Self::AwaitingReviewEvidence
+            | Self::IncompleteReviewTimeout
+            | Self::BlockedValidationEnvironment
+            | Self::HeldBaselineRed
+            | Self::HeldProviderFailure
+            | Self::HeldUpgradePending
+            | Self::HeldChildTimeout
+            | Self::HeldOwnerSignoff => true,
+            Self::BlockedByAgent
+            | Self::LandingReviewFailure
+            | Self::ReviewCompletionFailure
+            | Self::ForeignRebaseRefused
+            | Self::ReviewRepairAfterMerge
+            | Self::NoCandidate => false,
+        }
+    }
+
+    /// Whether this decision is a blocked pull request (`blocked_failure_pr`
+    /// or `blocked_conflict_pr`). For follow-up Core readers.
+    #[must_use]
+    pub const fn is_blocked_pull_request(self) -> bool {
+        matches!(self, Self::BlockedFailurePr | Self::BlockedConflictPr)
+    }
+
+    /// Whether this decision is a review failure (`landing_review_failure`
+    /// or `review_completion_failure`). For follow-up Core readers.
+    #[must_use]
+    pub const fn is_review_failure(self) -> bool {
+        matches!(
+            self,
+            Self::LandingReviewFailure | Self::ReviewCompletionFailure
+        )
+    }
 }
 
 /// One weighted member of the pool an activity crew draw ran on.
@@ -45,11 +187,118 @@ pub struct ActivityCrewDraw {
     pub crew: String,
     /// The configuration the pool came from (`workflow.purpose_crews.final_recovery`,
     /// `workflow.<tier>_complexity_crews`), plus a note when the draw fell
-    /// back to `workflow.default_crew` or met a provider limit.
-    pub source: String,
+    /// back to `workflow.default_crew` or met a provider limit. Stored as
+    /// that exact string; its origin is classified once when it is read.
+    pub source: ActivityDrawSource,
     /// The permitted members and weights the draw ran on, so `run show`
     /// can explain the choice.
     pub eligible_pool: Vec<ActivityCrewPoolMember>,
+    /// The effort a `<crew>@auto` member resolved to, and why; absent when
+    /// the drawn member names its effort (or none) itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_effort: Option<crate::identity::AutoEffortChoice>,
+}
+
+/// Where an activity crew draw's pool came from, classified once from its
+/// recorded source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActivityDrawOrigin {
+    /// The draw fell back to `workflow.default_crew`.
+    DefaultCrew,
+    /// The draw ran on the configured pool `key` (a `workflow.*` crew pool
+    /// key such as `workflow.purpose_crews.task_pilot` or
+    /// `workflow.low_complexity_crews`).
+    ConfiguredPool { key: String },
+    /// A recorded source in no known form; kept verbatim.
+    Other,
+}
+
+/// The provenance an [`ActivityCrewDraw`] records: the exact descriptive
+/// string, notes included, and the origin classified from it.
+///
+/// Serializes as that string, byte for byte, so persisted run states keep
+/// their shape; reading one classifies it with the same decoder new draws
+/// use. A string in no known form reads as [`ActivityDrawOrigin::Other`] and
+/// writes back unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivityDrawSource {
+    text: String,
+    origin: ActivityDrawOrigin,
+}
+
+impl ActivityDrawSource {
+    /// Configuration key every default-crew fallback source begins with.
+    const DEFAULT_CREW_KEY: &'static str = "workflow.default_crew";
+
+    /// Classify a descriptive draw source: the one decoder for new draws and
+    /// persisted ones. The origin is the leading configuration key, the text
+    /// before any ` `, `;` or `(` note.
+    pub fn parse(text: impl Into<String>) -> Self {
+        let text = text.into();
+        let origin = if text.starts_with(Self::DEFAULT_CREW_KEY) {
+            ActivityDrawOrigin::DefaultCrew
+        } else {
+            let key = text.split([' ', ';', '(']).next().unwrap_or_default();
+            if key.len() > "workflow.".len() && key.starts_with("workflow.") {
+                ActivityDrawOrigin::ConfiguredPool {
+                    key: key.to_string(),
+                }
+            } else {
+                ActivityDrawOrigin::Other
+            }
+        };
+        Self { text, origin }
+    }
+
+    /// This source with `note` appended as `<source>; <note>`, keeping its
+    /// origin.
+    #[must_use]
+    pub fn with_note(&self, note: &str) -> Self {
+        Self {
+            text: format!("{}; {note}", self.text),
+            origin: self.origin.clone(),
+        }
+    }
+
+    /// Where the drawn pool came from.
+    pub fn origin(&self) -> &ActivityDrawOrigin {
+        &self.origin
+    }
+
+    /// The exact recorded string, notes included.
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+}
+
+impl fmt::Display for ActivityDrawSource {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.text)
+    }
+}
+
+impl From<String> for ActivityDrawSource {
+    fn from(text: String) -> Self {
+        Self::parse(text)
+    }
+}
+
+impl From<&str> for ActivityDrawSource {
+    fn from(text: &str) -> Self {
+        Self::parse(text)
+    }
+}
+
+impl Serialize for ActivityDrawSource {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.text)
+    }
+}
+
+impl<'de> Deserialize<'de> for ActivityDrawSource {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer).map(Self::parse)
+    }
 }
 
 /// The task revision final recovery observed when it was admitted.
@@ -130,6 +379,10 @@ pub struct FinalRecoveryCheckpoint {
     /// as the `escalate` they became.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision: Option<FinalRecoveryDecision>,
+    /// Whose fault the failure was, recorded with the decision. A checkpoint
+    /// written before faults were recorded reads as `unknown`.
+    #[serde(default)]
+    pub fault: FaultAttribution,
     /// A repair committed during recovery, recorded with the resume decision.
     /// Older run states carry no permission to accept a moved HEAD.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -137,8 +390,87 @@ pub struct FinalRecoveryCheckpoint {
     /// Repair context captured before the resumed steps lose their outputs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_context: Option<FinalRecoveryResume>,
-    /// What applying the decision did (`resume`, `settled: …` or
-    /// `escalated: …`); absent while the decision is only intended.
+    /// What applying the decision did; absent while the decision is only
+    /// intended.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub outcome: Option<String>,
+    pub outcome: Option<FinalRecoveryCheckpointOutcome>,
+}
+
+/// What applying a final-recovery decision did, recorded on its checkpoint.
+///
+/// Persisted run states written before this type existed hold the outcome as
+/// the string `resume`, `settled: <detail>` or `escalated: <detail>`. Those
+/// legacy strings deserialize into this enum (the `settled:`/`escalated:`
+/// prefix is split once, here and nowhere else); a string in none of those
+/// forms is a deserialization error. New writes use the tagged form.
+/// [`fmt::Display`] reproduces the legacy text, so `run show` output is
+/// unchanged.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum FinalRecoveryCheckpointOutcome {
+    /// Recorded; the engine reruns from the decision's step.
+    Resume,
+    /// The task was settled; `detail` says how.
+    Settled { detail: String },
+    /// The task is parked for a human; `detail` says why.
+    Escalated { detail: String },
+}
+
+impl fmt::Display for FinalRecoveryCheckpointOutcome {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Resume => formatter.write_str("resume"),
+            Self::Settled { detail } => write!(formatter, "settled: {detail}"),
+            Self::Escalated { detail } => write!(formatter, "escalated: {detail}"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for FinalRecoveryCheckpointOutcome {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+        enum TypedOutcome {
+            Resume,
+            Settled { detail: String },
+            Escalated { detail: String },
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum StoredOutcome {
+            Legacy(String),
+            Typed(TypedOutcome),
+        }
+
+        fn legacy_detail<'a>(stored: &'a str, prefix: &str) -> Option<&'a str> {
+            stored
+                .strip_prefix(prefix)
+                .map(|detail| detail.strip_prefix(' ').unwrap_or(detail))
+        }
+
+        match StoredOutcome::deserialize(deserializer)? {
+            StoredOutcome::Typed(TypedOutcome::Resume) => Ok(Self::Resume),
+            StoredOutcome::Typed(TypedOutcome::Settled { detail }) => Ok(Self::Settled { detail }),
+            StoredOutcome::Typed(TypedOutcome::Escalated { detail }) => {
+                Ok(Self::Escalated { detail })
+            }
+            StoredOutcome::Legacy(stored) if stored == "resume" => Ok(Self::Resume),
+            StoredOutcome::Legacy(stored) => {
+                if let Some(detail) = legacy_detail(&stored, "settled:") {
+                    Ok(Self::Settled {
+                        detail: detail.to_string(),
+                    })
+                } else if let Some(detail) = legacy_detail(&stored, "escalated:") {
+                    Ok(Self::Escalated {
+                        detail: detail.to_string(),
+                    })
+                } else {
+                    Err(serde::de::Error::custom(format!(
+                        "unknown final-recovery checkpoint outcome '{stored}'"
+                    )))
+                }
+            }
+        }
+    }
 }

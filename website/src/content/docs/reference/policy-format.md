@@ -1,9 +1,16 @@
 ---
-title: Policy format
-description: "Reference for Orbit policy YAML and filesystem profiles."
-sidebar:
-  order: 4
+title: Policies
+description: "Bound what a run can read and modify with filesystem profiles and global deny rules."
 ---
+
+A policy bounds the filesystem for a run. A profile lists the paths an
+activity may read and modify, and global deny rules apply on top of every
+profile. Spawned agent CLIs run inside an OS sandbox scoped by the resolved
+profile; see [Platform support](/concepts/agents/#platform-support) for what
+each platform enforces.
+
+Give review and summarization activities a read-only profile. Grant write
+access only where an agent is expected to edit.
 
 ## Envelope
 
@@ -18,28 +25,8 @@ spec:
   fsProfiles: {}
 ```
 
-`spec.description` is an optional free-text label. A rule is a glob relative to
-the workspace root and cannot leave it: `~` and `..` are refused.
-
-## Global denies
-
-`denyRead` blocks reads and `denyModify` blocks writes. Deny rules accumulate
-globally and apply after the selected filesystem profile is resolved.
-
-```yaml
-denyRead:
-  - "**/*.env"
-denyModify:
-  - .orbit/**
-  - "!.orbit/tmp/**"
-  - "**/*.env"
-```
-
-A `denyModify` entry that starts with `!` is an exception. It names an exact
-path or a `<path>/**` subtree strictly inside an earlier deny, and reopens it
-only for profiles that already allow writing there. In the example,
-`.orbit/tmp/**` is writable for a profile that grants it, and the rest of
-`.orbit/` stays blocked. `denyRead` takes no exceptions.
+`spec.description` is an optional label. A rule is a glob relative to the
+workspace root and cannot leave it: `~` and `..` are refused.
 
 ## Filesystem profiles
 
@@ -58,21 +45,10 @@ fsProfiles:
       - "!docs/drafts/**"
 ```
 
-Rules run in order and the last rule that matches a path decides it, so a rule
-starting with `!` carves a path out of an earlier grant: `implementer` cannot
-modify `docs/drafts/`. Every `modify` rule must be covered by a `read` rule,
-and a profile rule may not repeat a global deny entry.
-
-Orbit's default policy defines `implementer`, `reviewer`, `docs_writer` and
-`pure_compute`. An activity with no `fsProfile` gets `unrestricted`. Unless the
-policy defines that profile explicitly, Orbit supplies it with read and modify
-access to everything the global denies leave open. A workspace policy of the
-same name merges over the host's: deny rules accumulate, and a workspace
-profile replaces a host profile of the same name. See [Scoping rules](../scoping/).
-
-When the host policy has write denies, a workspace `denyModify` exception must
-stay inside an exception the host already allows; it cannot reopen another
-host-denied path.
+Rules run in order and the last rule that matches a path decides it. A rule
+that starts with `!` carves a path out of an earlier grant, so `implementer`
+cannot modify `docs/drafts/`. Every `modify` rule must be covered by a `read`
+rule, and a profile rule may not repeat a global deny entry.
 
 An activity selects a profile with `fsProfile`:
 
@@ -82,6 +58,42 @@ spec:
   fsProfile: implementer
 ```
 
+Orbit's default policy defines `implementer`, `reviewer`, `docs_writer` and
+`pure_compute`. An activity that names no profile gets `unrestricted`: read and
+modify access to everything the global denies leave open.
+
 To test a path against a profile, run `orbit doctor fs-access <profile> <path>`.
-For which OS sandbox enforces a profile on each platform, and what happens
-where none is available, see [Platform Support](../../concepts/agents/#platform-support).
+
+## Global denies
+
+`denyRead` blocks reads and `denyModify` blocks writes, whatever profile is
+selected.
+
+```yaml
+denyRead:
+  - "**/*.env"
+denyModify:
+  - .orbit/**
+  - "!.orbit/tmp/**"
+  - "**/*.env"
+```
+
+A `denyModify` entry that starts with `!` is an exception. It names an exact
+path or a `<path>/**` subtree inside an earlier deny, and reopens it only for
+profiles that already allow writing there. Here `.orbit/tmp/**` is writable for
+a profile that grants it, and the rest of `.orbit/` stays blocked. `denyRead`
+takes no exceptions.
+
+## Machine and workspace policies
+
+A workspace policy merges over the machine policy of the same name: deny rules
+accumulate, and a workspace profile replaces a machine profile of the same
+name. A workspace `denyModify` exception must stay inside an exception the
+machine policy already allows. See [Where state lives](/reference/scoping/).
+
+## What a policy does not cover
+
+Tool access is a separate check. A task's `required_tools` extend the tools an
+activity offers, but a filesystem profile, a caller's role or a tool's own
+policy can still deny a call. See
+[Task tool grants](/concepts/tasks/#task-tool-grants).

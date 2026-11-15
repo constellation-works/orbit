@@ -26,6 +26,8 @@
 
 import { captureWorkspaceVisit, clockStamp, el, fetchJson, formatDateTime, infoHint, postJson, isAggregateView, getRegisteredHosts, getWorkspace, getWorkspaceRevision, hostWriteRefusal, runHref } from './common.js';
 
+import * as progressStrip from './progress-strip.js';
+
 const CONSOLE_PATH = "/api/distributed/claims";
 
 // One task-scoped read per short window, shared by however many panels show
@@ -42,6 +44,7 @@ const inflightConsoles = new Map();
 // instead of flashing empty until the re-read lands; the re-read then replaces
 // it. Nothing decides from it: actions always carry a fresh read's identity.
 const knownConsoles = new Map();
+const KNOWN_CONSOLES_LIMIT = 50;
 // The outcome of the operator's last action, per task. It outlives the block
 // that reported it: the detail is rebuilt once the action changes the task, and
 // a message written only to the old container would be lost with it.
@@ -52,6 +55,7 @@ let lastFeedback = null;
 export function invalidateDistributedConsole() {
   cachedConsoles.clear();
   inflightConsoles.clear();
+  knownConsoles.clear();
   lastFeedback = null;
 }
 
@@ -87,7 +91,11 @@ export function loadDistributedConsole({ taskId, force = false } = {}) {
           return body;
         }
         cachedConsoles.set(key, { payload: body, at: Date.now() });
+        knownConsoles.delete(key);
         knownConsoles.set(key, { payload: body, revision });
+        while (knownConsoles.size > KNOWN_CONSOLES_LIMIT) {
+          knownConsoles.delete(knownConsoles.keys().next().value);
+        }
         inflightConsoles.delete(key);
         return body;
       })
@@ -256,22 +264,9 @@ export function deliverySteps(claims) {
   ];
 }
 
-/// The thin five-segment strip above the detail's tabs.
+/// Delivery progress uses the same strip as lifecycle and run stages.
 export function buildDeliveryProgress(steps) {
-  if (!Array.isArray(steps) || steps.length === 0) return null;
-  const list = el("ol", { class: "delivery-progress", "aria-label": "Delivery progress" });
-  for (const { label, state } of steps) {
-    const item = el("li", { class: `delivery-step ${state}` }, [
-      el("span", { class: "delivery-step-bar" }),
-      el("span", { class: "delivery-step-label", text: label }),
-    ]);
-    item.dataset.state = state;
-    if (state === "active") item.setAttribute("aria-current", "step");
-    // The colour is never the only signal: a reader hears the state too.
-    item.title = `${label}: ${STEP_STATE_WORDS[state] || state}`;
-    list.appendChild(item);
-  }
-  return list;
+  return progressStrip.buildProgressStrip(steps, { className: "delivery-progress", label: "Delivery progress" });
 }
 
 // Server text reads as a sentence here: a capital first letter and a stop.
@@ -289,8 +284,6 @@ function firstLine(text) {
   if (!value) return null;
   return value.length > 240 ? `${value.slice(0, 239)}…` : value;
 }
-
-const STEP_STATE_WORDS = { done: "done", failed: "failed", active: "in progress", pending: "not yet" };
 
 /// The callout at the top of the detail. `options.pullRequest` is the task's
 /// `{number, url}` when it has one; `options.onRetry(claim)` takes the
@@ -825,6 +818,14 @@ const RECOVERY_GROUPS = [
 
 let reasonFieldSeq = 0;
 
+/// The statuses the owner says this claim's task may be recovered to. An
+/// owner that predates the list offered blocked and backlog, so those stay
+/// the fallback when the field is absent; an empty list means none is valid.
+function recoverTargets(claim) {
+  if (Array.isArray(claim.recover_targets)) return claim.recover_targets.filter((value) => typeof value === "string");
+  return ["blocked", "backlog"];
+}
+
 /// The owner actions, in one card apart from the task's own actions: approval
 /// first, then recovery — one reason field shared by every reason-gated
 /// action, and those actions grouped by what they act on.
@@ -886,17 +887,19 @@ function buildClaimActions(claim, capabilities, handlers) {
       },
     });
   }
-  if (claim.unsettled) {
+  // Only the owner can prove currency: a failed claim can survive a later
+  // pull, and creation-time ordering does not grant it recovery authority.
+  if (claim.current === true && (claim.unsettled || claim.phase === "failed")) {
+    const targets = recoverTargets(claim);
     offers.push({
       key: "recover", text: "Recover claim", capabilityKey: "claim_recover", group: "claim",
       onRun: (reason, status, requestId) => handlers.onRecover && handlers.onRecover(claim, reason, status, requestId),
       opts: {
         reasonRequired: true,
-        blocked: claim.unresolved_merge_intent ? MERGE_INTENT_BLOCK : null,
-        statusChoices: [
-          { value: "blocked", label: "Recover claim → blocked" },
-          { value: "backlog", label: "Recover claim → backlog" },
-        ],
+        blocked: claim.unresolved_merge_intent
+          ? MERGE_INTENT_BLOCK
+          : (targets.length === 0 ? "no status is valid for this task from where it stands" : null),
+        statusPicker: targets,
         confirm: (_reason, status) =>
           `Recover claim ${shortId(claim.claim_id)} for task ${claim.task_id}?\n\nThis fences the current attempt and moves the task to ${status}. Recovery is deliberate and cannot be undone.`,
       },
@@ -962,12 +965,27 @@ function buildClaimActions(claim, capabilities, handlers) {
       return;
     }
     const field = opts.reasonRequired && !opts.blocked ? input : null;
-    const choices = opts.statusChoices || [{ value: null, label: text }];
+    // A status picker offers only the targets the owner says are valid for
+    // this task; one button then acts on the chosen status.
+    let picker = null;
+    if (opts.statusPicker && opts.statusPicker.length > 0) {
+      picker = el("select", { class: "claim-status-picker" });
+      picker.setAttribute("aria-label", `${text}: target status`);
+      picker.setAttribute("data-status-for", key);
+      for (const status of opts.statusPicker) {
+        const option = el("option", { text: `→ ${status}` });
+        option.value = status;
+        picker.appendChild(option);
+      }
+      picker.disabled = !!opts.blocked;
+      controls.push({ node: picker, blocked: !!opts.blocked });
+      target.appendChild(picker);
+    }
+    const choices = [{ value: null, label: text }];
     for (const choice of choices) {
       const button = el("button", { class: `claim-action ${key}`, text: choice.label });
       button.type = "button";
       button.setAttribute("data-action", key);
-      if (choice.value) button.setAttribute("data-status", choice.value);
       const blocked = !!opts.blocked;
       button.disabled = blocked;
       controls.push({ node: button, blocked, text: choice.label });
@@ -984,12 +1002,13 @@ function buildClaimActions(claim, capabilities, handlers) {
           return;
         }
         clearProblem();
-        if (opts.confirm && !confirmed(opts.confirm(reason, choice.value))) return;
+        const status = picker ? picker.value : choice.value;
+        if (opts.confirm && !confirmed(opts.confirm(reason, status))) return;
         setBusy(true, button);
-        const requestId = requestIdFor(`${key}|${choice.value || ""}|${reason || ""}`);
+        const requestId = requestIdFor(`${key}|${status || ""}|${reason || ""}`);
         // An async wrapper: the request starts now, and a synchronous throw in
         // a handler still releases the card.
-        (async () => onRun(reason, choice.value, requestId))()
+        (async () => onRun(reason, status, requestId))()
           .catch(() => {})
           .then(() => setBusy(false));
       });
@@ -1104,19 +1123,54 @@ export function retryHandoff(claim, reason, requestId) {
     expectedCandidate(claim), claim.handoff.landing.attempt, claim.handoff.landing.state, reason]);
   const storageKey = `orbit-handoff-retry:${identity}`;
   let durableKey;
+  let retainedKey = false;
   try {
-    durableKey = localStorage.getItem(storageKey) || requestId || newRequestId();
+    const storedKey = localStorage.getItem(storageKey);
+    retainedKey = !!storedKey;
+    durableKey = storedKey || requestId || newRequestId();
+    // Never evict another retry key to make room: settled retries remove
+    // their own key below, so any other key still present is unresolved
+    // (lost reply or in flight) and its identity must survive. If the
+    // store cannot hold this key, no request is sent yet.
     localStorage.setItem(storageKey, durableKey);
   } catch (_) {
     return Promise.reject(new Error("Landing retry needs browser storage to retain its request key; use the owner CLI with a saved request key."));
   }
+  const removeKey = () => {
+    try { localStorage.removeItem(storageKey); } catch (_) { /* already gone */ }
+  };
+  // Only an authoritative outcome settles this identity. A successful reply
+  // resolves the receipt, and a definitive HTTP refusal (400/409 and other
+  // 4xx below) proves this key recorded no dispatch to replay: the owner
+  // checks such refusals before or instead of reserving a receipt, so its
+  // key can go. Everything else is uncertain and keeps the key for an
+  // identical replay: a transport failure (fetch or response body, no
+  // HTTP status) may follow a received request, a 408/429/5xx reply does
+  // not prove no reservation happened, and an authorization refusal
+  // (401/403/404) on a retained key is checked before the receipt lookup,
+  // so it says nothing about an earlier uncertain attempt. The same holds
+  // for the typed `workspace_unavailable` refusal: the workspace extractor
+  // answers it before the handler (and its receipt lookup) runs, and the
+  // workspace may only be temporarily inactive in the registry, so it
+  // proves nothing about an earlier uncertain attempt's receipt.
+  const settled = (error) => {
+    const status = error && typeof error.status === "number" ? error.status : null;
+    if (status === null) return false;
+    if (status === 408 || status === 429 || status >= 500) return false;
+    if (retainedKey && (status === 401 || status === 403 || status === 404)) return false;
+    if (retainedKey && error.code === "workspace_unavailable") return false;
+    return status >= 400 && status < 500;
+  };
   return postJson(`/api/distributed/handoffs/${encodeURIComponent(claim.handoff.handoff_id)}/retry`, {
     ...expectedCandidate(claim),
     expected_latest_attempt: claim.handoff.landing.attempt,
     expected_latest_state: claim.handoff.landing.state,
     reason: reason || "",
     request_key: durableKey,
-  });
+  }).then(
+    (result) => { removeKey(); return result; },
+    (error) => { if (settled(error)) removeKey(); throw error; },
+  );
 }
 
 export function revokeHandoff(claim, reason, requestId) {

@@ -7,10 +7,14 @@ pub(crate) use crate::runtime::assets::DEFAULT_JOB_FILES;
 mod layers;
 mod loading;
 mod projection;
+mod roles;
 
 pub use layers::CatalogReferenceLayer;
 
 pub(crate) use loading::{V2JobExecutionMembership, V2JobNameCache, seed_default_jobs};
-pub(in crate::application::job) use loading::{is_default_job_name, shipped_job_spec};
+pub(in crate::application::job) use loading::{
+    check_auto_task_job, is_default_job_name, shipped_job_spec,
+};
 
 pub use projection::{JobCatalogEntry, JobCatalogFilter, job_catalog_to_json_with_last_run};
+pub use roles::JobDefinitionReads;

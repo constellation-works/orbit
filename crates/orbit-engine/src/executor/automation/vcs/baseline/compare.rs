@@ -4,8 +4,7 @@ use super::super::required::command::{
     ValidationSummary, bounded_validation_text,
 };
 use super::cache::{
-    CACHE_SCHEMA_VERSION, cache_paths, cached_base_check, read_cached, remove_legacy_checkouts,
-    run_on_base,
+    CACHE_SCHEMA_VERSION, cache_paths, cached_base_check, read_cached, run_on_base,
 };
 use crate::context::RuntimeHost;
 use chrono::Utc;
@@ -519,7 +518,6 @@ fn compare_base<H: RuntimeHost + ?Sized>(
             "the base comparison deadline expired before a run could start".into(),
         );
     }
-    remove_legacy_checkouts(workspace_path, &cache.legacy_worktrees);
     let check = (|| match run_on_base(
         host,
         workspace_path,

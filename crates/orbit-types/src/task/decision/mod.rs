@@ -12,27 +12,55 @@
 //!
 //! [`TaskHistoryEntry::decision`]: super::TaskHistoryEntry::decision
 
+mod agent_request;
 mod ci_evidence;
 mod code_scanning;
+mod crew_assignment;
 mod desktop;
 mod publication;
 mod record;
 mod recovery;
 mod request;
+mod review_settlement;
+mod run_transition;
 
+pub use agent_request::{
+    AGENT_DECISION_MAX_OPTIONS, AGENT_DECISION_MIN_OPTIONS, AgentDecisionOptionInput,
+    AgentDecisionRequestError, agent_decision_answers, normalize_agent_decision_topic,
+};
 pub use ci_evidence::{CiFailureIdentity, CiFailureIdentityError, CiFailureSource};
 pub use code_scanning::{CodeScanningAlertEvidence, CodeScanningAlertEvidenceError};
+pub use crew_assignment::{
+    CREW_ASSIGNED_EVENT, CREW_REDRAWN_EVENT, CrewAssignmentField, CrewAssignmentState,
+    RecordedCrewAssignment,
+};
 pub use desktop::{DesktopMutationReceipt, DesktopMutationReceiptError};
 pub use publication::{
     PublicationHistoryError, PublicationProofContainer, PublicationProofValue,
     PublicationPushCheckpoint, PublicationPushDecision, PublicationPushPerformed,
     PublicationPushProof, PublicationSettlingDecision, PublicationSettlingObservation,
 };
-pub use record::{FINAL_RECOVERY_DECIDED_EVENT, PILOT_ADMISSION_DECIDED_EVENT, TaskDecision};
-pub use recovery::{PilotAdmissionVerdict, RecordedFinalRecovery};
+pub use record::{
+    FINAL_RECOVERY_DECIDED_EVENT, JobStepInvocation, PILOT_ADMISSION_DECIDED_EVENT, TaskDecision,
+};
+pub use recovery::{
+    PilotAdmissionOperatorRecord, PilotAdmissionRecordRefusal, PilotAdmissionVerdict,
+    RecordedFinalRecovery,
+};
 pub use request::{
-    DECISION_ANSWERED_EVENT, DECISION_DIGEST_EXPIRY_WINDOW_HOURS, DECISION_REQUESTED_EVENT,
-    DECISION_TOKEN_CONSUMED_EVENT, DEFAULT_DECISION_REQUEST_TTL_HOURS, DecisionAnswer,
-    DecisionBinding, DecisionGate, DecisionRequest, DecisionRequestState, DecisionResolution,
-    current_candidate_identity, decision_requests_from_history, open_decision_requests,
+    DECISION_ANSWERED_EVENT, DECISION_DIGEST_EXPIRY_WINDOW_HOURS, DECISION_MODEL_CONFIRMED_EVENT,
+    DECISION_REOPENED_EVENT, DECISION_REQUESTED_EVENT, DECISION_TOKEN_CONSUMED_EVENT,
+    DEFAULT_DECISION_REQUEST_TTL_HOURS, DecisionAction, DecisionAnswer, DecisionBinding,
+    DecisionGate, DecisionOption, DecisionOptionError, DecisionOptionInput, DecisionRequest,
+    DecisionRequestState, DecisionResolution, DecisionRewrite, DecisionRiskTier,
+    MODEL_ANSWER_ACTOR, MODEL_ANSWER_CONFIRM, MODEL_ANSWER_VETO, ModelAnswerCitation,
+    ModelAnswerConfirmation, ModelAnswerEnablement, ModelCitedPrecedent, PRECEDENT_ACTOR,
+    PRECEDENT_BOOKKEEPING_NOTE, PrecedentCitation, PrecedentSource, RESIDENT_AUTHORITY_GRANT,
+    RESIDENT_AUTHORITY_REJECT, SCRIPT_GRANT_GRANT, SCRIPT_GRANT_REJECT, current_candidate_identity,
+    decision_option_answers, decision_requests_from_history, is_precedent_bookkeeping,
+};
+
+pub use review_settlement::{
+    REVIEW_SETTLED_EVENT, RecordedReviewFinding, RecordedReviewSettlement, ReviewSettlementGate,
+    recorded_review_settlements,
 };

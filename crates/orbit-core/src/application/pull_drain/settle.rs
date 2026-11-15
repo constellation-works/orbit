@@ -53,14 +53,15 @@ use std::time::Duration;
 
 use super::candidate::stopping_candidate;
 use super::drain::{
-    PullDrain, RefusedDelivery, SettleScope, attach_claimed_review, attach_leaf_attribution,
-    leaf_failure_settlement, operator_cancel_release, recorded_base_no_longer_red,
+    PullDrain, PullTransportPort, RefusedDelivery, SettleScope, attach_claimed_review,
+    attach_leaf_attribution, leaf_failure_settlement, operator_cancel_release,
+    recorded_base_no_longer_red,
 };
 use crate::OrbitRuntime;
 use crate::application::contracts::{PULL_DRAIN_JOB, PullSettlementEntry, PullSettlementOutcome};
 use crate::application::distributed::{PendingPullSettlements, is_owner_transport_failure};
 use orbit_common::OrbitError;
-use orbit_engine::{RuntimeHost, run_worktree_has_reclaim_output};
+use orbit_engine::{RuntimeHost, WORKTREE_IDENTITY_INPUT_KEYS, run_worktree_has_reclaim_output};
 use orbit_store::contracts::{
     JobRunQuery, LocalPullAdmission, LocalPullMutation, LocalPullPhase, PullDestination,
 };
@@ -118,7 +119,7 @@ impl OrbitRuntime {
                 recorded_base_no_longer_red(self, repo, hold)
             });
         let settlement = attach_claimed_review(settlement, self.claimed_review_carry(run_id));
-        let settlement = attach_leaf_attribution(settlement, Some(&run));
+        let settlement = attach_leaf_attribution(settlement, Some(&run), diagnostic);
         match jobs.mutate_local_pull(
             &record.destination,
             &record.request.request_id,
@@ -239,6 +240,7 @@ impl OrbitRuntime {
             &LocalPullMutation::Settle(Box::new(attach_leaf_attribution(
                 operator_cancel_release(record, why, candidate),
                 Some(leaf),
+                None,
             ))),
         ) {
             Ok(settling) => Ok(settling),
@@ -482,8 +484,8 @@ impl OrbitRuntime {
                 })
                 .collect();
         };
-        let peer = self.routed_pull_peer(transport);
-        let launcher = self.leaf_pull_launcher();
+        let peer = self.follower_pull_peer(transport);
+        let launcher = self.bound_leaf_launcher();
         let claimed_review = |run_id: &str| self.claimed_review_carry(run_id);
         let drain = PullDrain {
             jobs: self.stores().jobs(),
@@ -558,35 +560,66 @@ impl OrbitRuntime {
     /// keeps a live worker's output; the next pass finds it exited. The
     /// checkout itself stays for worktree GC. Best-effort: a failure is
     /// logged and the next pass tries again.
-    pub(crate) fn reclaim_settled_leaf_build_output(&self) -> u64 {
+    ///
+    /// A leaf already found terminal with nothing to reclaim is not read
+    /// again: the admission records that, and a later pass asks only for
+    /// settled leaves that are still unmarked. A leaf whose run is not
+    /// terminal yet stays unmarked, so the pass that finds it exited still
+    /// reclaims. A leaf this pass itself settled also stays unmarked: its
+    /// checkout can appear after settlement, and the next pass is the one
+    /// that either reclaims it or records that there was nothing to reclaim.
+    /// `settled_before` names the leaves already settled before this pass
+    /// reconciled; only those may be marked clear.
+    pub(crate) fn reclaim_settled_leaf_build_output(&self, settled_before: &[String]) -> u64 {
         let jobs = self.stores().jobs();
-        let admissions = match jobs.local_pull_admissions() {
-            Ok(admissions) => admissions,
+        let pending = match jobs.settled_leaf_run_ids_pending_build_reclaim() {
+            Ok(pending) => pending,
             Err(error) => {
                 tracing::warn!(target: "orbit.core.pull", %error, "pull admissions unreadable; no build output reclaimed");
                 return 0;
             }
         };
+        if pending.is_empty() {
+            return 0;
+        }
+        let markable = settled_before
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
         // Skip settled history with no output before paying for Git queries.
         let patterns = self.worktree_reclaim_patterns();
         let repo_root = &self.paths().repo_root;
-        let leaves = admissions
-            .into_iter()
-            .filter(|record| record.phase == LocalPullPhase::Settled)
-            .filter_map(|record| record.leaf_run_id)
-            .filter(|leaf| {
-                jobs.get_job_run(leaf).ok().flatten().is_some_and(|run| {
-                    run.state.is_terminal()
-                        && run_worktree_has_reclaim_output(repo_root, &run, &patterns)
-                })
-            })
-            .collect::<Vec<_>>();
+        let mut leaves = Vec::new();
+        for leaf in pending {
+            let Some(run) = jobs.get_job_run(&leaf).ok().flatten() else {
+                continue;
+            };
+            if !run.state.is_terminal() {
+                continue;
+            }
+            if run_worktree_has_reclaim_output(repo_root, &run, &patterns) {
+                leaves.push(leaf);
+                continue;
+            }
+            if !markable.contains(leaf.as_str()) {
+                continue;
+            }
+            if let Err(error) = jobs.note_settled_leaf_build_output_clear(&leaf) {
+                tracing::warn!(
+                    target: "orbit.core.pull",
+                    leaf = %leaf,
+                    %error,
+                    "could not record that a settled leaf has no build output left; the next pass retries",
+                );
+            }
+        }
         if leaves.is_empty() {
             return 0;
         }
         // Every run, so the collector still sees a path two runs share.
         let runs = match jobs.list_job_runs_filtered(&JobRunQuery {
             include_steps: false,
+            input_keys: Some(WORKTREE_IDENTITY_INPUT_KEYS),
             ..JobRunQuery::default()
         }) {
             Ok(runs) => runs,

@@ -110,8 +110,10 @@ pub(crate) fn stale_tasks(
     }
 
     // `--no-renames` reports both sides of a rename; `--relative` keeps paths
-    // in the workspace frame the selectors and instruction scan use.
-    let changed = match source.git(&[
+    // in the workspace frame the selectors and instruction scan use. The
+    // NUL-delimited paths preserve filename whitespace exactly: trimming
+    // would drop a leading space from the first path and miss its selector.
+    let changed = match source.git_preserving_output(&[
         "diff",
         "--name-only",
         "--no-renames",

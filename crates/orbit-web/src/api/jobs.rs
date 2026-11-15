@@ -6,7 +6,9 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_common::governance::authorization::{DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_JOB_RUN};
-use orbit_core::application::job::{JobRunListParams, JobRunOrder};
+use orbit_core::application::job::{
+    JOB_FAILURE_STREAK_WARN, JobFailureStreak, JobRunListParams, JobRunOrder,
+};
 use orbit_core::{JobRunState, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -167,19 +169,64 @@ impl JobRunListState {
 pub(super) async fn list_jobs(Ws(runtime): Ws) -> Response {
     use orbit_core::application::job::JobCatalogFilter;
     match blocking("list jobs", move || {
-        runtime.list_job_catalog_with_last_run(true, JobCatalogFilter::All)
+        let rows = runtime.list_job_catalog_with_last_run(true, JobCatalogFilter::All)?;
+        let job_ids: Vec<String> = rows.iter().map(|(entry, _)| entry.job_id.clone()).collect();
+        let streaks = runtime.job_failure_streaks(&job_ids)?;
+        Ok((rows, streaks))
     })
     .await
     {
-        Ok(rows) => {
+        Ok((rows, streaks)) => {
+            let streaks: std::collections::HashMap<_, _> = streaks
+                .into_iter()
+                .map(|streak| (streak.job_id.clone(), streak))
+                .collect();
             let values: Vec<Value> = rows
                 .iter()
                 .map(|(entry, last_run)| {
-                    job_catalog_to_json_with_last_run(entry, last_run.as_ref())
+                    let mut value = job_catalog_to_json_with_last_run(entry, last_run.as_ref());
+                    value["failure_streak"] = streaks
+                        .get(&entry.job_id)
+                        .map_or(Value::Null, JobFailureStreak::to_json);
+                    value
                 })
                 .collect();
             Json(Value::Array(values)).into_response()
         }
+        Err(response) => *response,
+    }
+}
+
+/// Jobs whose current failure streak has reached the fixed
+/// [`JOB_FAILURE_STREAK_WARN`] threshold, with that threshold. The dashboard reads this for the catalogue badges and
+/// the Jobs rail count. Only manual-runnable jobs — the jobs the Catalogue
+/// shows — are counted, so the badge stays consistent with what the operator
+/// can see there; delivery and other non-runnable jobs' streaks do not count.
+/// Display only.
+pub(super) async fn list_job_failure_streaks(Ws(runtime): Ws) -> Response {
+    use orbit_core::application::job::JobCatalogFilter;
+    match blocking("list job failure streaks", move || {
+        let threshold = JOB_FAILURE_STREAK_WARN;
+        let job_ids: Vec<String> = runtime
+            .list_job_catalog_with_last_run(true, JobCatalogFilter::All)?
+            .into_iter()
+            .filter(|(entry, _)| entry.supports_no_input_submission())
+            .map(|(entry, _)| entry.job_id)
+            .collect();
+        let failing = runtime
+            .job_failure_streaks(&job_ids)?
+            .into_iter()
+            .filter(|streak| streak.count >= threshold as usize)
+            .collect::<Vec<_>>();
+        Ok((threshold, failing))
+    })
+    .await
+    {
+        Ok((threshold, failing)) => Json(json!({
+            "threshold": threshold,
+            "failing": failing.iter().map(JobFailureStreak::to_json).collect::<Vec<_>>(),
+        }))
+        .into_response(),
         Err(response) => *response,
     }
 }
@@ -236,14 +283,16 @@ fn job_runs_page(
     if include_running {
         // Keep the same bounded running projection as the separate dashboard
         // poll, but return it with the active total so one refresh needs one
-        // HTTP read. Both queries run after the active page's reconciliation.
+        // HTTP read. The active page above already reconciled stale runs once;
+        // read the already-reconciled running projection observed so this
+        // request performs no second stale-run scan.
         const RUNNING_RUN_LIMIT: usize = 100;
         let running_params = job_run_list_params(
             scope,
             JobRunListState::Concrete(JobRunState::Running),
             Some(RUNNING_RUN_LIMIT),
         );
-        let running = runtime.list_job_runs(running_params)?;
+        let running = runtime.list_job_runs_observed(running_params)?;
         let running_titles = super::runs::task_titles(runtime, &running)?;
         page["running_items"] = Value::Array(super::runs::run_list_rows(
             runtime,
@@ -342,11 +391,11 @@ pub(super) async fn resume_job_run_action(
         }
         Ok(runtime
             .submit_resume_run(&id, Some("dashboard"), body.claim_token.as_deref())
-            .map_err(|error| match error {
-                orbit_core::OrbitError::JobValidation(message) => {
+            .map_err(|error| match error.job_validation_message() {
+                Some(message) => {
                     (StatusCode::CONFLICT, Json(json!({ "error": message }))).into_response()
                 }
-                other => map_runtime_error(other),
+                None => map_runtime_error(error),
             }))
     })
     .await

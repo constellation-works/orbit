@@ -33,6 +33,7 @@ const JOB: &str = "env_pass_fixture";
 const CREW_SOURCE: &str = "FIXTURE_CREW_ENV_SOURCE";
 
 mod cleanup;
+mod crew_readiness;
 
 struct Fixture {
     _temp: Option<TempDir>,

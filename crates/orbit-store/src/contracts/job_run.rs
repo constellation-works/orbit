@@ -5,12 +5,17 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_types::identity::Crew;
 use orbit_types::workflow::{
-    JobRun, JobRunStartOutcome, JobRunState, KnowledgeRunMetrics, PipelineState, RunStateUpdate,
+    JobRun, JobRunStartOutcome, JobRunState, PipelineState, RunStateUpdate,
 };
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::params::*;
+
+/// Top-level run-input keys the dashboard's run list and run detail use
+/// for task labels (`task_id` and `task_ids`). A steps-free row read keeps
+/// only these.
+pub(crate) const JOB_RUN_TASK_INPUT_KEYS: &[&str] = &["task_id", "task_ids"];
 
 pub trait JobRunStoreBackend: Send + Sync {
     /// Read-only keyset page, including live runs so a later terminal state is
@@ -18,8 +23,9 @@ pub trait JobRunStoreBackend: Send + Sync {
     fn observed_run_page(&self, _after: &str, _limit: usize) -> Result<Vec<JobRun>, OrbitError> {
         Err(OrbitError::Store("run paging unavailable".into()))
     }
-    /// The workspace partition this store reads and writes runs under. Run
-    /// ids are only unique within it.
+    /// The workspace partition this store reads and writes runs under. Newly
+    /// minted run ids are unique across the host's shared store, but historical
+    /// run ids can collide across workspaces, so reads stay workspace-partitioned.
     fn workspace_id(&self) -> &str;
     /// Local permanent binding, independent of owner connectivity.
     fn local_pull_for_run(&self, _run_id: &str) -> Result<Option<LocalPullAdmission>, OrbitError> {
@@ -80,6 +86,32 @@ pub trait JobRunStoreBackend: Send + Sync {
     /// process uses this to deliver settlements a cancelled drain left behind.
     fn unsettled_local_pull_admissions(&self) -> Result<Vec<LocalPullAdmission>, OrbitError> {
         Ok(Vec::new())
+    }
+
+    /// Settled claims that may still have rebuildable build output, as leaf
+    /// run ids in admission order.
+    ///
+    /// Idle polls and refused requests are not decoded. A settled leaf whose
+    /// run was already found terminal with nothing left to reclaim is omitted;
+    /// [`Self::note_settled_leaf_build_output_clear`] records that, and the
+    /// omission survives a restart. A leaf settled while its run is still
+    /// going stays in the result until that note is written. Read without
+    /// creating the feature schema.
+    fn settled_leaf_run_ids_pending_build_reclaim(&self) -> Result<Vec<String>, OrbitError> {
+        Err(OrbitError::Store(
+            "local pull persistence unavailable".into(),
+        ))
+    }
+
+    /// Remember that `leaf_run_id`'s settled claim is terminal and has no
+    /// reclaimable build output, so a later pass does not read the run again.
+    ///
+    /// No-op when that admission is missing or no longer settled. The phase
+    /// and the settlement are left as they are.
+    fn note_settled_leaf_build_output_clear(&self, _leaf_run_id: &str) -> Result<(), OrbitError> {
+        Err(OrbitError::Store(
+            "local pull persistence unavailable".into(),
+        ))
     }
 
     /// How much leaf capacity both admission paths are already using
@@ -242,6 +274,41 @@ pub trait JobRunStoreBackend: Send + Sync {
     /// its `limit`.
     fn list_job_run_durations_filtered(&self, query: &JobRunQuery) -> Result<Vec<u64>, OrbitError>;
     fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError>;
+    /// Steps-free run rows for `run_ids`.
+    ///
+    /// Missing ids are omitted. Each `input` keeps only the task-label keys
+    /// `task_id` and `task_ids`. The SQLite backend reads these in chunks of
+    /// 500 ids (`run_id IN (...)`, the same bound-parameter chunk as step
+    /// hydration) and never selects `job_run_steps`. This default, for a
+    /// backend without that read, loads each id through [`Self::get_job_run`]
+    /// and then drops steps and every other input key. Neither path
+    /// reconciles a stale run.
+    fn get_job_runs_by_id(&self, run_ids: &[String]) -> Result<Vec<JobRun>, OrbitError> {
+        let mut runs = Vec::new();
+        let mut seen = HashSet::new();
+        for run_id in run_ids {
+            if !seen.insert(run_id.clone()) {
+                continue;
+            }
+            let Some(mut run) = self.get_job_run(run_id)? else {
+                continue;
+            };
+            run.steps.clear();
+            if let Some(input) = run.input.as_mut()
+                && let Some(object) = input.as_object_mut()
+            {
+                object.retain(|key, _| JOB_RUN_TASK_INPUT_KEYS.contains(&key.as_str()));
+            }
+            runs.push(run);
+        }
+        Ok(runs)
+    }
+    /// Only the run's lifecycle state: no step rows, no input and no pipeline
+    /// state. The default hydrates the whole run; persistent backends read
+    /// the one column.
+    fn get_job_run_state(&self, run_id: &str) -> Result<Option<JobRunState>, OrbitError> {
+        Ok(self.get_job_run(run_id)?.map(|run| run.state))
+    }
     fn list_pending_or_running_job_runs(&self, job_id: &str) -> Result<Vec<JobRun>, OrbitError>;
     fn insert_job_run(
         &self,
@@ -327,15 +394,28 @@ pub trait JobRunStoreBackend: Send + Sync {
     /// queued run with a live worker from one whose worker died. Returns
     /// `false` without writing when the run is missing or no longer pending.
     fn claim_pending_job_run_owner(&self, run_id: &str, pid: u32) -> Result<bool, OrbitError>;
+    /// [ORB-20158] Resume a deliberately parked `running` run under `pid`.
+    ///
+    /// In one immediate transaction: the run must still be `running` and its
+    /// pipeline state must carry the parked continuation recorded at
+    /// `parked_at`. The owner becomes `pid` and the park is cleared, so
+    /// exactly one worker resumes it and orphan reconciliation judges the new
+    /// owner from then on. `false` when the run is missing, no longer running,
+    /// not parked, or parked again under another mark.
+    fn adopt_parked_job_run(
+        &self,
+        _run_id: &str,
+        _parked_at: DateTime<Utc>,
+        _pid: u32,
+    ) -> Result<bool, OrbitError> {
+        Err(OrbitError::Store(
+            "parked job run adoption unavailable".into(),
+        ))
+    }
     fn complete_job_run_step(
         &self,
         run_id: &str,
         params: &JobRunStepParams,
-    ) -> Result<bool, OrbitError>;
-    fn record_job_run_knowledge_metrics(
-        &self,
-        run_id: &str,
-        metrics: KnowledgeRunMetrics,
     ) -> Result<bool, OrbitError>;
     fn record_job_run_crew(&self, run_id: &str, crew: &Crew) -> Result<bool, OrbitError>;
     /// Finalize a run and report the decision made with the state write in one
@@ -391,6 +471,24 @@ pub trait JobRunStoreBackend: Send + Sync {
         &self,
         run_ids: &[String],
     ) -> Result<HashMap<String, Option<PipelineState>>, OrbitError>;
+    /// Pipeline state for many runs in one store call, failing on unreadable JSON.
+    ///
+    /// [`Self::read_run_states`] turns unreadable JSON into `None` so a list
+    /// page still renders. A triage scan must not: the single-run read returns
+    /// `invalid pipeline_state_json`, and treating that row as absent would
+    /// bind the run from its submitted input instead. A run with no state row
+    /// is `None`. The default reads each run with [`Self::read_run_state`];
+    /// the SQLite backend issues one query per chunk.
+    fn read_run_states_exact(
+        &self,
+        run_ids: &[String],
+    ) -> Result<HashMap<String, Option<PipelineState>>, OrbitError> {
+        let mut states = HashMap::with_capacity(run_ids.len());
+        for run_id in run_ids {
+            states.insert(run_id.clone(), self.read_run_state(run_id)?);
+        }
+        Ok(states)
+    }
     fn write_run_state(&self, run_id: &str, state: &PipelineState) -> Result<(), OrbitError>;
     /// Initialize an existing run's pipeline state only while it is absent.
     /// Returns `false` if another writer already supplied state, preserving

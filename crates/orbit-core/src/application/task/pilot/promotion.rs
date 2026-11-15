@@ -10,26 +10,88 @@
 use std::collections::BTreeSet;
 
 use orbit_engine::DispatchError;
-use orbit_types::task::{NO_AUTO_APPROVE_TAG, TaskComment, TaskStatus, is_valid_orb_task_id};
+use orbit_types::task::{
+    NO_AUTO_APPROVE_TAG, NO_DRAIN_TAG, TaskComment, TaskStatus, is_valid_orb_task_id,
+};
 use orbit_types::workflow::DrainHoldFinding;
 use serde_json::{Value, json};
 
-use super::VALIDATION_TOOL_WARNINGS;
+use super::{CONTRACT_CONFLICTS, VALIDATION_TOOL_WARNINGS};
 
 /// Warning-shaped findings. `validation_tool_warnings` is the deterministic
 /// boundary's own finding rather than the pilot's, but it withholds promotion
 /// for the same reason the others do: the task would be admitted with an
 /// acceptance check the implementation lane cannot run [ORB-11980].
-const WARNING_FIELDS: [&str; 5] = [
+/// `contract_conflicts` is the pilot's typed per-criterion contradiction
+/// finding; it holds for the same reason and has no advisory opt-out.
+pub(super) const WARNING_FIELDS: [&str; 7] = [
+    "start_prerequisites",
     "blocked_by",
     "adr_conflicts",
+    CONTRACT_CONFLICTS,
     "utility_warnings",
     "surface_warnings",
     VALIDATION_TOOL_WARNINGS,
 ];
 
+/// The `hold` marker on the `utility_warnings` finding the apply boundary
+/// writes when the pilot could not establish a task's lock footprint and so
+/// returned `unassessed` for a task that keeps its assessed tier [ORB-22153].
+/// The finding is independent of the tier and of the selectors, so it holds
+/// promotion however either is set.
+pub(crate) const FOOTPRINT_UNRESOLVED: &str = "footprint_unresolved";
+
+/// The `hold` marker on the `utility_warnings` finding apply writes when the
+/// description leaves an ownership or policy choice, or an unenumerated
+/// surface a stop rule reaches, undecided [ORB-23255]. The finding holds
+/// even when its text names a done or dependency task.
+pub(crate) const UNDECIDED_CONSEQUENTIAL_DECISION: &str = "undecided_consequential_decision";
+
+/// The footprint hold in an applied assessment, if the apply boundary wrote
+/// one or the pilot declared the same unread source in a form applied
+/// assessments written before the marker was stamped for later-finishing
+/// predecessors still carry [ORB-22178].
+pub(super) fn footprint_hold(assessment: &Value) -> Option<&Value> {
+    let gaps = assessment_evidence_gaps(assessment);
+    assessment
+        .get("utility_warnings")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|finding| declares_unresolved_footprint(finding, &gaps))
+}
+
+/// The assessment's `evidence_gaps` as plain strings, for the unread-source
+/// declaration check the apply boundary also makes.
+fn assessment_evidence_gaps(assessment: &Value) -> Vec<String> {
+    assessment
+        .get("evidence_gaps")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
 /// Findings whose named prerequisites may already be enforced or completed.
 const PREREQUISITE_FIELDS: [&str; 3] = ["blocked_by", "utility_warnings", "surface_warnings"];
+
+/// Whether a finding is an unresolved-footprint hold. The host marker is
+/// this wrapper's fast path and is not part of
+/// [`text_declares_unresolved_footprint`], so apply can strip and restamp
+/// without the marker short-circuiting that pass. Otherwise the finding is
+/// the pilot declaration apply stamps, including on assessments written
+/// before the marker covered later-finishing predecessors [ORB-22178].
+fn declares_unresolved_footprint(finding: &Value, gaps: &[String]) -> bool {
+    if finding.get("hold").and_then(Value::as_str) == Some(FOOTPRINT_UNRESOLVED) {
+        return true;
+    }
+    text_declares_unresolved_footprint(
+        finding.get("holds_promotion").and_then(Value::as_bool) == Some(true),
+        warning_text(finding),
+        gaps,
+    )
+}
 
 /// Only surface and utility findings may explicitly be advisory. Legacy
 /// strings and malformed findings hold by default; prerequisite, conflict and
@@ -44,25 +106,65 @@ pub(super) fn finding_holds_promotion(field: &str, finding: &Value) -> bool {
 }
 
 /// Plain or structured finding text, shared with warning normalization.
+/// A typed `contract_conflicts` entry carries its text in `evidence`.
 pub(super) fn warning_text(finding: &Value) -> Option<&str> {
-    finding
-        .as_str()
-        .or_else(|| finding.get("text").and_then(Value::as_str))
+    finding.as_str().or_else(|| {
+        finding
+            .get("text")
+            .and_then(Value::as_str)
+            .or_else(|| finding.get("evidence").and_then(Value::as_str))
+    })
 }
 
 fn task_id_character(character: char) -> bool {
     character.is_alphanumeric() || matches!(character, '-' | '_')
 }
 
-/// Whole task IDs named in one finding's text.
-fn finding_task_ids(finding: &Value) -> Vec<String> {
-    let Some(text) = warning_text(finding) else {
-        return Vec::new();
-    };
+/// Whole task ids named in `text`, under any valid task-id prefix.
+fn named_task_ids(text: &str) -> Vec<String> {
     text.split(|character| !task_id_character(character))
-        .filter(|id| id.starts_with("ORB-") && is_valid_orb_task_id(id))
+        .filter(|token| is_valid_orb_task_id(token))
         .map(str::to_string)
         .collect()
+}
+
+/// Whether already-extracted finding text declares an unread footprint
+/// source. `holds_promotion` and non-empty `gaps` are required. The text
+/// then either contains `unread` (ASCII case-insensitive) or names a whole
+/// task id that the joined gaps also contain. "ORB-1 must land before
+/// adjusting the footprint" declares nothing: the word "footprint" alone is
+/// not evidence, and a finding with no gap behind it stays an ordinary
+/// prerequisite.
+///
+/// Callers extract text first. Apply passes `finding.text` only; promotion
+/// passes [`warning_text`], so an evidence-only object keeps that caller's
+/// current handling. The host marker [`FOOTPRINT_UNRESOLVED`] is not read
+/// here.
+pub(super) fn text_declares_unresolved_footprint(
+    holds_promotion: bool,
+    text: Option<&str>,
+    gaps: &[String],
+) -> bool {
+    if !holds_promotion || gaps.is_empty() {
+        return false;
+    }
+    let Some(text) = text else {
+        return false;
+    };
+    if text.to_ascii_lowercase().contains("unread") {
+        return true;
+    }
+    let gaps_text = gaps.join(" ");
+    named_task_ids(text)
+        .iter()
+        .any(|id| gaps_text.contains(id.as_str()))
+}
+
+/// Whole task IDs named in one finding's text.
+fn finding_task_ids(finding: &Value) -> Vec<String> {
+    warning_text(finding)
+        .map(named_task_ids)
+        .unwrap_or_default()
 }
 
 /// Named tasks whose completion promotion checks must read under their locks.
@@ -82,11 +184,11 @@ pub(super) fn promotion_task_ids(assessment: &Value) -> BTreeSet<String> {
 }
 
 /// Whether one `blocked_by` finding withholds promotion. A prerequisite
-/// already enforced as a dependency edge (or already `done` in this
-/// workspace) holds nothing: the dependency graph gates admission instead.
-/// Prose naming no task, a missing or other-workspace task, or an unfinished
-/// task that is not a recorded dependency still holds, because no edge
-/// enforces it.
+/// already enforced as a dependency edge (or already `done`, as `is_done`
+/// reports it through the registered workspaces) holds nothing: the
+/// dependency graph gates admission instead. Prose naming no task, a
+/// missing task, or an unfinished task that is not a recorded dependency
+/// still holds, because no edge enforces it.
 pub(super) fn blocked_by_holds_promotion(
     finding: &Value,
     dependencies: &[String],
@@ -99,23 +201,45 @@ pub(super) fn blocked_by_holds_promotion(
             .any(|id| !dependencies.iter().any(|dep| dep == id) && !is_done(id))
 }
 
+/// Whether a finding carries the host marker for an undecided consequential
+/// decision. The marker keeps the hold when the text names a done or
+/// dependency task, the same way [`FOOTPRINT_UNRESOLVED`] does.
+fn declares_undecided_consequential(finding: &Value) -> bool {
+    finding.get("hold").and_then(Value::as_str) == Some(UNDECIDED_CONSEQUENTIAL_DECISION)
+}
+
 /// Whether `field`'s `finding` withholds promotion. Prerequisite, utility and
 /// surface findings share the current dependency and completion exemption.
 fn holds_promotion(
     field: &str,
     finding: &Value,
+    gaps: &[String],
     dependencies: &[String],
     is_done: &dyn Fn(&str) -> bool,
 ) -> bool {
     finding_holds_promotion(field, finding)
         && (!PREREQUISITE_FIELDS.contains(&field)
+            || declares_unresolved_footprint(finding, gaps)
+            || declares_undecided_consequential(finding)
             || blocked_by_holds_promotion(finding, dependencies, is_done))
 }
 
 /// Whether the task's filer opted it out of automatic approval. The tag is
-/// also the hold reason, so the report names what to remove.
+/// also the hold reason, so the report names what to remove. `no-drain`
+/// implies this opt-out.
 pub(crate) fn auto_approval_opted_out(tags: &[String]) -> bool {
-    tags.iter().any(|tag| tag == NO_AUTO_APPROVE_TAG)
+    tags.iter()
+        .any(|tag| tag == NO_AUTO_APPROVE_TAG || tag == NO_DRAIN_TAG)
+}
+
+/// The hold classification for an auto-approval opt-out: `no-drain` when
+/// that tag is present, otherwise `no-auto-approve`.
+pub(crate) fn auto_approval_hold_classification(tags: &[String]) -> &'static str {
+    if tags.iter().any(|tag| tag == NO_DRAIN_TAG) {
+        NO_DRAIN_TAG
+    } else {
+        NO_AUTO_APPROVE_TAG
+    }
 }
 
 pub(crate) struct PromotionFindings<'a> {
@@ -152,6 +276,7 @@ pub(crate) fn promotion_findings<'a>(
             ));
         }
     }
+    let gaps = assessment_evidence_gaps(assessment);
     let warnings = WARNING_FIELDS
         .iter()
         .flat_map(|field| {
@@ -160,7 +285,7 @@ pub(crate) fn promotion_findings<'a>(
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .filter(move |value| holds_promotion(field, value, dependencies, is_done))
+                .filter(|value| holds_promotion(field, value, &gaps, dependencies, is_done))
                 .map(move |value| json!({ "field": field, "value": value }))
         })
         .collect();
@@ -178,6 +303,7 @@ pub(crate) fn warning_hold_findings(
     dependencies: &[String],
     is_done: &dyn Fn(&str) -> bool,
 ) -> Vec<DrainHoldFinding> {
+    let gaps = assessment_evidence_gaps(assessment);
     WARNING_FIELDS
         .iter()
         .flat_map(|field| {
@@ -186,11 +312,18 @@ pub(crate) fn warning_hold_findings(
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .filter(move |value| holds_promotion(field, value, dependencies, is_done))
+                .filter(|value| holds_promotion(field, value, &gaps, dependencies, is_done))
                 .filter_map(|value| {
                     finding_text(value).map(|text| DrainHoldFinding {
                         kind: (*field).to_string(),
-                        text,
+                        text: if *field == CONTRACT_CONFLICTS {
+                            match value.get("criterion").and_then(Value::as_u64) {
+                                Some(criterion) => format!("criterion {criterion}: {text}"),
+                                None => text,
+                            }
+                        } else {
+                            text
+                        },
                     })
                 })
         })
@@ -220,10 +353,47 @@ pub(crate) fn recommendation_has_evidence(value: &Value) -> bool {
     }
 }
 
+/// `kind` of the readout finding for a proposed task whose pilot audit cannot
+/// be resolved.
+const PILOT_ASSESSMENT_UNAVAILABLE_KIND: &str = "pilot_assessment_unavailable";
+
+impl crate::OrbitRuntime {
+    /// Holding pilot findings for a task, resolving assessment artifacts as
+    /// well as historical inline audits before classifying its latest receipt.
+    /// An audit that cannot be resolved (missing artifact, digest mismatch,
+    /// undecodable evidence) is reported as one unavailable finding for this
+    /// task alone, so list and show readers keep serving every other task.
+    /// Drain admission still fails closed on the same resolution.
+    pub fn task_pilot_warning_findings(
+        &self,
+        task: &orbit_types::task::Task,
+        comments: &[TaskComment],
+        is_done: &dyn Fn(&str) -> bool,
+    ) -> Vec<DrainHoldFinding> {
+        if task.status != TaskStatus::Proposed {
+            return Vec::new();
+        }
+        match self.resolve_task_pilot_comments(&task.id, comments) {
+            Ok(resolved) => task_pilot_warnings(
+                task.status,
+                &resolved,
+                &task.dependencies(),
+                is_done,
+            ),
+            Err(_) => vec![DrainHoldFinding {
+                kind: PILOT_ASSESSMENT_UNAVAILABLE_KIND.into(),
+                text: "pilot assessment unavailable: its artifact is missing, unreadable, or does not match its receipt; re-pilot the task to rebuild it".into(),
+            }],
+        }
+    }
+}
+
 /// Holding warnings from the task's latest durable pilot verification.
 /// Ordinary edits and comments preserve the last findings until re-piloted;
 /// a clean verification or leaving proposed clears the readout. No live
 /// drain or drain-pass snapshot is needed, and advisory findings are excluded.
+/// `comments` must contain resolved pilot audits; runtime readers resolve
+/// artifact references before calling this pure classifier.
 pub fn task_pilot_warnings(
     status: TaskStatus,
     comments: &[TaskComment],

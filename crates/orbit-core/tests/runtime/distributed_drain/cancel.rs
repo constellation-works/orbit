@@ -736,14 +736,13 @@ fn the_mcp_stop_control_with_force_stops_claimed_leaves() {
 
     let stopped = pair
         .follower
-        .run_tool_with_context_and_role(
+        .run_tool_with_context(
             "orbit.workflow.auto",
             json!({
                 "workspace": pair.follower.workspace_id().unwrap(),
                 "action": "stop",
                 "force": true,
             }),
-            Role::Admin,
             ToolContext {
                 session_context: ToolSessionContext {
                     transport: Some(McpTransport::Local),
@@ -849,10 +848,9 @@ fn a_forced_local_drain_cancel_reports_mixed_child_outcomes() {
     pair.follower
         .write_run_state(&another.run_id, &state)
         .unwrap();
-    let error = pair.follower.run_tool_with_context_and_role(
+    let error = pair.follower.run_tool_with_context(
         "orbit.workflow.auto",
         json!({"workspace": pair.follower.workspace_id().unwrap(), "action": "stop", "force": true}),
-        Role::Admin,
         ToolContext {
             session_context: ToolSessionContext {
                 transport: Some(McpTransport::Local),

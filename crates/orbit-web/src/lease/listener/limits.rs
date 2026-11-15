@@ -6,10 +6,46 @@ use std::task::{Context, Poll};
 use axum::body::{Body, Bytes};
 use axum::response::Response;
 use hyper::body::Frame;
-use orbit_config::LeaseListenerSettings;
+
+/// The former `lease.listener.limits.address_per_minute` default, fixed
+/// when the key was removed [ORB-22808].
+pub const LEASE_LISTENER_ADDRESS_PER_MINUTE: u32 = 120;
+/// The former `lease.listener.limits.ipv6_prefix_len` default, fixed
+/// when the key was removed [ORB-22808].
+pub const LEASE_LISTENER_IPV6_PREFIX_LEN: u32 = 64;
+/// The former `lease.listener.limits.token_reads_per_minute` default, fixed
+/// when the key was removed [ORB-22808].
+pub const LEASE_LISTENER_TOKEN_READS_PER_MINUTE: u32 = 60;
+/// The former `lease.listener.limits.token_writes_per_minute` default, fixed
+/// when the key was removed [ORB-22808].
+pub const LEASE_LISTENER_TOKEN_WRITES_PER_MINUTE: u32 = 20;
+/// The former `lease.listener.limits.max_streams_per_token` default, fixed
+/// when the key was removed [ORB-22808].
+pub const LEASE_LISTENER_MAX_STREAMS_PER_TOKEN: u32 = 2;
+/// The former `lease.listener.limits.max_in_flight_per_token` default, fixed
+/// when the key was removed [ORB-22808].
+pub const LEASE_LISTENER_MAX_IN_FLIGHT_PER_TOKEN: u32 = 8;
+/// The former `lease.listener.limits.max_connections` default, fixed
+/// when the key was removed [ORB-22808].
+pub const LEASE_LISTENER_MAX_CONNECTIONS: u32 = 64;
+/// The former `lease.listener.limits.max_in_flight_requests` default, fixed
+/// when the key was removed [ORB-22808].
+pub const LEASE_LISTENER_MAX_IN_FLIGHT_REQUESTS: u32 = 16;
+/// The former `lease.listener.limits.max_body_bytes` default, fixed
+/// when the key was removed [ORB-22808].
+pub const LEASE_LISTENER_MAX_BODY_BYTES: u32 = 65536;
+/// The former `lease.listener.limits.header_timeout_seconds` default, fixed
+/// when the key was removed [ORB-22808].
+pub const LEASE_LISTENER_HEADER_TIMEOUT_SECONDS: u32 = 5;
+/// The former `lease.listener.limits.request_timeout_seconds` default, fixed
+/// when the key was removed [ORB-22808].
+pub const LEASE_LISTENER_REQUEST_TIMEOUT_SECONDS: u32 = 10;
+/// The former `lease.listener.limits.max_tracked_keys` default, fixed
+/// when the key was removed [ORB-22808].
+pub const LEASE_LISTENER_MAX_TRACKED_KEYS: u32 = 4096;
 
 /// Validated listener resource limits, independent of Orbit Web on loopback.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeaseListenerLimits {
     /// Requests per minute from one resolved address or IPv6 prefix.
     pub address_per_minute: u32,
@@ -40,37 +76,18 @@ pub struct LeaseListenerLimits {
 impl Default for LeaseListenerLimits {
     fn default() -> Self {
         Self {
-            address_per_minute: 120,
-            ipv6_prefix_len: 64,
-            token_reads_per_minute: 60,
-            token_writes_per_minute: 20,
-            max_streams_per_token: 2,
-            max_in_flight_per_token: 8,
-            max_connections: 64,
-            max_in_flight_requests: 16,
-            max_body_bytes: 65536,
-            header_timeout_seconds: 5,
-            request_timeout_seconds: 10,
-            max_tracked_keys: 4096,
-        }
-    }
-}
-
-impl LeaseListenerLimits {
-    pub(super) fn from_settings(settings: &LeaseListenerSettings) -> Self {
-        Self {
-            address_per_minute: settings.address_per_minute,
-            ipv6_prefix_len: settings.ipv6_prefix_len,
-            token_reads_per_minute: settings.token_reads_per_minute,
-            token_writes_per_minute: settings.token_writes_per_minute,
-            max_streams_per_token: settings.max_streams_per_token,
-            max_in_flight_per_token: settings.max_in_flight_per_token,
-            max_connections: settings.max_connections,
-            max_in_flight_requests: settings.max_in_flight_requests,
-            max_body_bytes: settings.max_body_bytes,
-            header_timeout_seconds: settings.header_timeout_seconds,
-            request_timeout_seconds: settings.request_timeout_seconds,
-            max_tracked_keys: settings.max_tracked_keys,
+            address_per_minute: LEASE_LISTENER_ADDRESS_PER_MINUTE,
+            ipv6_prefix_len: LEASE_LISTENER_IPV6_PREFIX_LEN,
+            token_reads_per_minute: LEASE_LISTENER_TOKEN_READS_PER_MINUTE,
+            token_writes_per_minute: LEASE_LISTENER_TOKEN_WRITES_PER_MINUTE,
+            max_streams_per_token: LEASE_LISTENER_MAX_STREAMS_PER_TOKEN,
+            max_in_flight_per_token: LEASE_LISTENER_MAX_IN_FLIGHT_PER_TOKEN,
+            max_connections: LEASE_LISTENER_MAX_CONNECTIONS,
+            max_in_flight_requests: LEASE_LISTENER_MAX_IN_FLIGHT_REQUESTS,
+            max_body_bytes: LEASE_LISTENER_MAX_BODY_BYTES,
+            header_timeout_seconds: LEASE_LISTENER_HEADER_TIMEOUT_SECONDS,
+            request_timeout_seconds: LEASE_LISTENER_REQUEST_TIMEOUT_SECONDS,
+            max_tracked_keys: LEASE_LISTENER_MAX_TRACKED_KEYS,
         }
     }
 }

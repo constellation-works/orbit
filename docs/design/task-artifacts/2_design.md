@@ -3,8 +3,8 @@ summary: "Task Artifacts — Design"
 type: design
 title: "Task Artifacts — Design"
 owner: codex
-last_updated: 2026-10-23
-last_validated: 2026-10-19
+last_updated: 2026-11-08
+last_validated: 2026-11-08
 status: Draft
 feature: task-artifacts
 doc_role: design
@@ -13,7 +13,7 @@ tags: ["task-artifacts"]
 
 # Task Artifacts — Design
 
-This document describes the v2 task artifact implementation. The v2 store is the only task backend; the legacy status-directory store and its `[task] artifact_store` config gate were removed once Phase 6 began (`e9582eba`), and stale `artifact_store` keys are now rejected for every value. Sections below are prescriptive about invariants the live store maintains rather than aspirational about a target.
+This document describes the v2 task artifact implementation. The v2 store is the only task backend; the legacy status-directory store and its `[task] artifact_store` config gate were removed once Phase 6 began (`e9582eba`), and stale `artifact_store` keys are now rejected for every value. Atomic creation is complete [ORB-10466], and live full-bundle readers coordinate with lifecycle writers [ORB-11349]. Sections below are prescriptive about invariants the live store maintains rather than aspirational about a target.
 
 ---
 
@@ -73,7 +73,7 @@ relations:
   - type: resolves
     target: F2026-05-007
 context_files:
-  - file:crates/orbit-store/src/repository/task/v2_bundle.rs
+  - file:crates/orbit-store/src/repository/task/v2/crud.rs
 external_refs: []
 created_by: codex:gpt-5.5
 created_by_model: gpt-5.5   # only when the create named a full model
@@ -122,7 +122,7 @@ APIs should treat the Markdown file as the source of truth. They may offer parse
 
 JSONL appends use a single-line JSON record, append mode, flush, and file sync before success. Readers tolerate a final unterminated or invalid line as tail corruption: valid preceding rows remain readable, and repair may truncate only the corrupt tail. Sidecar rewrites use write-temp-in-same-directory, file sync, atomic rename, and parent-directory sync.
 
-V2 does not provide cross-file transactions for later mutations. A crash can leave an appended event before the envelope status update or artifact files before the manifest update. New-bundle creation is stricter: Orbit assembles and validates the entire bundle in a sibling staging directory, fsyncs it, and atomically renames the directory into its canonical path. A failed or interrupted create therefore leaves the final task path absent rather than exposing a partial bundle.
+V2 does not provide cross-file transactions for later mutations. A crash can leave an appended event before the envelope status update or artifact files before the manifest update. Live full-bundle readers hold the same per-task bundle lock as writers and therefore do not observe an in-flight lifecycle mismatch [ORB-11349]. New-bundle creation is stricter: Orbit assembles and validates the entire bundle in a sibling staging directory, fsyncs it, and atomically renames the directory into its canonical path. A failed or interrupted create therefore leaves the final task path absent rather than exposing a partial bundle.
 
 ## 5. Artifact Manifest
 
@@ -140,7 +140,7 @@ files:
 
 Manifest paths are stored in canonical relative form: slash-separated, no absolute paths, no `..`, no `.`, and no leading `./`. Writers that ingest hand-authored manifests should normalize a leading `./` before validation. SHA-256 values are lowercase hex; writer code should format digest bytes with lowercase hex (`{:x}`).
 
-Task artifact discovery surfaces (`orbit.task.show` with `field: "artifacts"`, `orbit task show <ID> --fields artifacts`) emit bounded metadata only (path, media type, size, attribution); storage and API DTOs must not require UTF-8, and artifact payload bytes are retrieved on demand through `orbit.task.artifact.get` or the dashboard download route.
+Task artifact discovery surfaces (`orbit.task.show` with `field: "artifacts"`, `orbit task show <ID> --fields artifacts`) emit bounded metadata only (path, media type, size, attribution); storage and API DTOs must not require UTF-8, and artifact payload bytes are retrieved on demand through `orbit.task.artifact` action `get` or the dashboard download route.
 
 ## 5a. Image Artifacts, Presentation, and Retrieval
 
@@ -152,15 +152,15 @@ Metadata listing stays compact and payloads are fetched on demand:
 
 | step | surface | call |
 | --- | --- | --- |
-| attach | MCP | `orbit.task.artifact.put` with `id`, `source_path`, optional `path` |
+| attach | MCP | `orbit.task.artifact` action `put` with `id`, `source_path`, optional `path` |
 | attach | CLI | `orbit task artifact put <ID> <SOURCE> --path <ARTIFACT_PATH>` |
 | list | MCP | `orbit.task.show` with `field: "artifacts"` — `path`, `media_type`, `size`, `created_by` |
 | list | CLI | `orbit task show <ID> --fields artifacts` |
-| view | MCP | `orbit.task.artifact.get` with `id` and `path` |
+| view | MCP | `orbit.task.artifact` action `get` with `id` and `path` |
 | view | CLI | `orbit task artifact get <ID> <PATH> [--out FILE]` |
 | view | dashboard | task detail → click the artifact row |
 
-The listing never carries artifact payloads, so a task with a large screenshot or log stays cheap to inspect. `orbit.task.artifact.get` reads through the same owning task bundle the dashboard route uses — there is no second artifact store, and no way to reach an artifact except through the task that owns it.
+The listing never carries artifact payloads, so a task with a large screenshot or log stays cheap to inspect. `orbit.task.artifact` action `get` reads through the same owning task bundle the dashboard route uses — there is no second artifact store, and no way to reach an artifact except through the task that owns it.
 
 ### Supported formats and the presentation classes
 
@@ -183,17 +183,29 @@ Two related but distinct policies live together in `orbit_types::task`:
 
 ### Size limit
 
-`MAX_TASK_ARTIFACT_CONTENT_BYTES` (1 MiB) bounds both directions: `orbit.task.artifact.put` refuses to read a larger source, and `orbit.task.artifact.get` refuses to return a larger stored payload rather than truncating it — a partial image is indistinguishable from a corrupt one. An oversize artifact remains fully reachable through the dashboard download route (`/api/tasks/<ID>/artifacts/<PATH>`), which streams without that bound.
+`MAX_TASK_ARTIFACT_CONTENT_BYTES` (1 MiB) bounds both directions: `orbit.task.artifact` action `put` refuses to read a larger source, and `orbit.task.artifact` action `get` refuses to return a larger stored payload rather than truncating it — a partial image is indistinguishable from a corrupt one. An oversize artifact remains fully reachable through the dashboard download route (`/api/tasks/<ID>/artifacts/<PATH>`), which streams without that bound.
+
+### Attachment result profiles
+
+Core owns the default `orbit.task.artifact` action `put` result projection used by
+`orbit tool run`, including `--host` and federated routing. It keeps the
+compact task fields plus the write sidecars: `warnings`, `warning`,
+`cycle_routine_disabled`, `cycle_routine_name`, `audit_warning`,
+`context_files_unverified`, `redactions_applied` and `redactions`. In
+particular, attaching a resident mandate while its cycle routine is disabled
+returns both the warning and the routine signals. MCP keeps its existing
+complete tool response. CLI `--full` keeps that complete response, while
+`--fields` remains an explicit field filter that also retains `audit_warning`.
 
 ### Transport: what a multimodal client actually receives
 
-`orbit.task.artifact.get` always returns the structured record. When the payload classifies as `image`, the MCP adapter *also* emits a protocol `image` content block carrying the base64 and its MIME type. This matters because base64 inside a JSON string field is only ever text to a model — a protocol image block is what reaches its vision input. The decision is made on the payload's shape, not the tool name, so the transport cannot disagree with the classification the artifact owner already made.
+`orbit.task.artifact` action `get` always returns the structured record. When the payload classifies as `image`, the MCP adapter *also* emits a protocol `image` content block carrying the base64 and its MIME type. This matters because base64 inside a JSON string field is only ever text to a model — a protocol image block is what reaches its vision input. The decision is made on the payload's shape, not the tool name, so the transport cannot disagree with the classification the artifact owner already made.
 
 To avoid spending the payload twice, the JSON text mirror is replaced with a one-line summary for image reads; the bytes appear in the image block and in `structuredContent` (for a text-only client), and nowhere else.
 
 ### `source_path` is caller-local, and paths do not travel
 
-`source_path` on `orbit.task.artifact.put` is resolved **on the machine that makes the call**, relative to that caller's cwd when not absolute, then confined to that machine's workspace checkout after symlink resolution. A relative path missing under that cwd is never read from the checkout root; when the same relative path names a confined file at the checkout root, the call is refused naming that file's absolute path, so a scratch-folder caller that repeats the checkout-relative prefix gets a clear remedy instead of a bare missing-file read. Absolute paths within the checkout are accepted; paths and in-workspace symlinks that resolve outside it are rejected as `invalid_input`. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR` in a managed worker; gitignored, run-scoped in a job worktree). Sources under `/tmp` are outside the workspace and are refused. The path is consumed locally and never crosses the coordination boundary: the spoke broker reads the bytes first and sends a path-free payload, which the hub accepts only over the authenticated `ssh-mcp` connector.
+`source_path` on `orbit.task.artifact` action `put` is resolved **on the machine that makes the call**, relative to that caller's cwd when not absolute, then confined to that machine's workspace checkout after symlink resolution. A relative path missing under that cwd is never read from the checkout root; when the same relative path names a confined file at the checkout root, the call is refused naming that file's absolute path, so a scratch-folder caller that repeats the checkout-relative prefix gets a clear remedy instead of a bare missing-file read. Absolute paths within the checkout are accepted; paths and in-workspace symlinks that resolve outside it are rejected as `invalid_input`. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR` in a managed worker; gitignored, run-scoped in a job worktree). Sources under `/tmp` are outside the workspace and are refused. The path is consumed locally and never crosses the coordination boundary: the spoke broker reads the bytes first and sends a path-free payload, which the hub accepts only over the authenticated `ssh-mcp` connector.
 
 CLI attachment preserves the supplied source filename, including leading
 or trailing whitespace, before filesystem resolution and bounded reads. MCP
@@ -206,9 +218,9 @@ does not select a sibling file with a trimmed name on the CLI.
 
 Attachment accepts only task `id`, `source_path`, optional artifact `path`, `model` attribution, and the transport `workspace` / `_meta` wrappers. The local path and artifact path have compatibility aliases. The authenticated spoke payload replaces the source and path fields with `artifacts`; it accepts the same identity and transport fields. Other task update fields, including `title`, `status`, and `plan`, are rejected before the task host is called. Task metadata changes belong on `orbit.task.update`.
 
-The consequence is the lesson from ORB-11364: **an operator-host path is not a portable worker reference.** An image attached from the operator checkout is stored successfully and confirmed by `task_show`, and a worker on another host still cannot open the original local path — the worker never had it. A worker should discover and retrieve an authorized artifact by **owning workspace, task ID, and artifact path**, through `orbit.task.artifact.get`, rather than by assuming operator filesystem visibility. That is the whole point of the read surface, and it removes the need for ad hoc `scp` between hosts wherever the configured connector supports the workspace.
+The consequence is the lesson from [ORB-11364]: **an operator-host path is not a portable worker reference.** An image attached from the operator checkout is stored successfully and confirmed by `task_show`, and a worker on another host still cannot open the original local path — the worker never had it. A worker should discover and retrieve an authorized artifact by **owning workspace, task ID, and artifact path**, through `orbit.task.artifact` action `get`, rather than by assuming operator filesystem visibility. That is the whole point of the read surface, and it removes the need for ad hoc `scp` between hosts wherever the configured connector supports the workspace.
 
-Retrieval routes to the authoritative workspace explicitly. `orbit.task.artifact.get` classifies as `control_plane`, so a federated call is delivered to the workspace's owning host using the host-qualified selector the caller copied from federated `orbit.workspace.list`. An unknown selector is refused, never guessed; workspace scoping stays fail-closed and no implicit cross-workspace access is introduced.
+Retrieval routes to the authoritative workspace explicitly. `orbit.task.artifact` action `get` classifies as `control_plane`, so a federated call is delivered to the workspace's owning host using the host-qualified selector the caller copied from federated `orbit.workspace.list`. An unknown selector is refused, never guessed; workspace scoping stays fail-closed and no implicit cross-workspace access is introduced.
 
 Attachment is not injection: storing an artifact on a task does not push it into an already-running worker's context. A worker picks it up on its next read.
 
@@ -298,13 +310,13 @@ The bundle remains canonical. The registry maintains generated projections from 
 - `task_bundle_tags`: normalized tag rows with AND-style filtering semantics.
 - `task_bundle_relations`: directed `(source_task_id, relation_type, target_id)` rows plus an inverse lookup index for task targets.
 
-Task mutations rewrite the generated rows after the envelope write. The index row `updated_at` is a version stamp for the canonical envelope. V2 list and filter paths may use the index only when every registered task has an index row and every indexed `updated_at` matches the bundle envelope. Count or version mismatches trigger a lazy rebuild from registered bundles; if rebuild fails, queries fall back to reading bundles directly, and the same refused rebuild is not retried until a bundle, registration or unresolved target changes (or a retry interval passes). Task search uses the optional workspace lexical index for BM25 over title, description, plan, execution summary, and acceptance criteria. The bundle matcher supplements those hits with comments, external references, artifact manifest paths, and tasks without indexed chunks; without task chunks, the bundle matcher is the only source. Neither source opens artifact payloads. The bundle matcher judges the caller's status, tag, and path filters from the index-validated envelopes before reading anything, prunes each remaining task from its envelope, its four documents, its comments, and its manifest (never its event log), reads whole only the tasks that can match, and stops as soon as the candidate budget fills. A damaged event log that a search did not need therefore does not fail it; a damaged document still does.
+Task mutations rewrite the generated rows after the envelope write. The index row `updated_at` is a version stamp for the canonical envelope. V2 list and filter paths may use the index only when every registered task has an index row and every indexed `updated_at` matches the bundle envelope. A row that still mismatches after a bounded 2 s wait for an in-flight bundle writer to publish, with a re-probe, triggers a lazy rebuild from registered bundles [ORB-22425]; count or version mismatches likewise trigger a lazy rebuild; if rebuild fails, queries fall back to reading bundles directly, and the same refused rebuild is not retried until a bundle, registration or unresolved target changes (or a retry interval passes). Task search uses the optional workspace lexical index for BM25 over title, description, plan, execution summary, and acceptance criteria. The bundle matcher supplements those hits with comments, external references, artifact manifest paths, and tasks without indexed chunks; without task chunks, the bundle matcher is the only source. Neither source opens artifact payloads. The bundle matcher judges the caller's status, tag, and path filters from the index-validated envelopes before reading anything, prunes each remaining task from its envelope, its four documents, its comments, and its manifest (never its event log), reads whole only the tasks that can match, and stops as soon as the candidate budget fills. A damaged event log that a search did not need therefore does not fail it; a damaged document still does.
 
 That comparison also supplies the metadata candidate selection filters and orders by, so it runs against every registered envelope. To keep it from re-parsing unchanged files, each process holds the parsed envelopes in memory and re-proves one against its file's stamp — filesystem identity, length, and modification time — before reusing it; anything the stamp cannot vouch for is read and parsed again. A stamp is evidence that a file was not rewritten rather than proof that its bytes are unchanged, so it never stands alone: the `updated_at` comparison above still runs on every reused envelope, and explicit reindex re-reads and re-validates every bundle from disk.
 
 ## 8. Crash Consistency
 
-Ordinary task updates persist artifacts before document and history changes. An
+Ordinary task updates persist artifacts before document and history changes [ORB-14345]. An
 artifact store rejection therefore leaves the task's status, document and history
 unchanged. Accepted artifacts are not rolled back if a later document or history
 write fails; this ordering does not make the combined update transactional.
@@ -433,10 +445,12 @@ Binary artifacts increase storage flexibility and require stronger validation. C
 
 ## Task References
 
-- [ORB-10332] — Retired the unused review-thread task surface and made legacy sidecars inert.
+- [ORB-10332] — Retire review-thread task surfaces and leave their legacy sidecars inert.
+- [ORB-10466] — Publish new bundles atomically and isolate unrelated reads from malformed bundles.
+- [ORB-11349] — Coordinate full-bundle readers with concurrent lifecycle writers through the per-task lock.
+- [ORB-11364] — Expose the worker/operator image-path portability problem that artifact retrieval addresses.
 - [ORB-11365] — Added the bounded artifact read surface, image presentation classification, and the dashboard image preview.
-- [ORB-10466] — Made new-bundle publication atomic and isolated unrelated operations from malformed bundles.
-- [T20260505-12] — Designed git-orphan-branch task sync and documented the current sync-era task bundle assumptions.
-- [T20260506-11] — Removed knowledge-graph task attribution and documented why old task IDs were only local search keys.
+- [ORB-14345] — Persist artifacts before task documents and history so an artifact refusal leaves metadata unchanged.
+- [ORB-22425] — Bound tracked landing action lock wait tails by waiting on an in-flight bundle writer before index repair.
 
-Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

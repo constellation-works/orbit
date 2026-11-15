@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import fnmatch
 import re
+import select
 import self_test_hang
 import shlex
 import shutil
@@ -17,6 +18,7 @@ import textwrap
 import threading
 import time
 import unittest
+from unittest import mock
 
 from workflow_helper_tests import WorkflowHelperRevisionTests
 from ci_cache_workflow_tests import CiDependencyCacheWorkflowTests
@@ -47,6 +49,9 @@ def evaluate(expression, event, state="", *, cancelled=False, dependency_skipped
     expression = expression.replace("needs.pr-state.outputs.state", repr(state))
     for name, value in (bindings or {}).items():
         expression = expression.replace(name, repr(value))
+    # A cache-save gate also requires a restore miss; model the miss so the
+    # event half of the condition is what this fixture evaluates.
+    expression = re.sub(r"steps\.[A-Za-z0-9_-]+\.outputs\.cache-hit", "'false'", expression)
     expression = expression.replace("success()", str(success))
     expression = expression.replace("cancelled()", str(cancelled)).replace("always()", "True")
     expression = expression.replace("&&", " and ").replace("||", " or ")
@@ -70,6 +75,7 @@ def scope_admits(name, job, mode):
 
 
 DISPATCH_ONLY = "github.event_name == 'workflow_dispatch'"
+FAIL_SOFT_WORKFLOWS = {"ci.yml", "desktop.yml", "website-check.yml"}
 
 
 def event_admits(job, event):
@@ -90,7 +96,7 @@ class PrStateWorkflowTests(unittest.TestCase):
         self.credentials = self.root / "credentials.json"
         self.requests = []
         self.response = {}
-        self.api_failure = False
+        self.api_status = 200
         fixture = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -98,8 +104,10 @@ class PrStateWorkflowTests(unittest.TestCase):
                 fixture.requests.append({"method": self.command, "path": self.path})
                 # A bodyless gateway failure preserves the no-output failure
                 # case; successful malformed payloads are separate controls.
-                body = b"" if fixture.api_failure else json.dumps(fixture.response).encode()
-                self.send_response(503 if fixture.api_failure else 200)
+                body = b"" if fixture.api_status == 503 else json.dumps(fixture.response).encode()
+                self.send_response(fixture.api_status)
+                if fixture.api_status == 403:
+                    self.send_header("X-RateLimit-Remaining", "0")
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(body)
@@ -149,19 +157,25 @@ os.execv(os.environ["FIXTURE_GH"], [os.environ["FIXTURE_GH"], *args])
         legacy = ROOT / "crates/orbit-engine/tests/engine/pr_landing/infrastructure/fixtures/legacy-codeql.yml"
         self.workflows["legacy-codeql"] = yaml.safe_load(legacy.read_text())
 
-    def run_gate(self, gate, response, *, api_failure=False):
+    def run_gate(self, gate, response, *, api_status=200, event_state="open", event_merged=False):
         self.output.write_text("")
         self.response = response
-        self.api_failure = api_failure
+        self.api_status = api_status
         self.requests.clear()
         self.credentials.write_text("{}")
         step = gate["steps"][0]
         bindings = {"${{ github.token }}": "offline-token",
                     "${{ github.event.pull_request.number }}": "42",
+                    "${{ github.event.pull_request.state }}": event_state,
+                    "${{ github.event.pull_request.merged }}": str(event_merged).lower(),
                     "${{ github.repository }}": "fixture/repository"}
+        event = self.root / "event.json"
+        event.write_text(json.dumps({"pull_request": {
+            "number": 42, "state": event_state, "merged": event_merged, "changed_files": 1}}))
         env = dict(PATH=f"{self.root}:{os.environ['PATH']}", LANG="C",
                    HOME=str(self.root), GH_CONFIG_DIR=str(self.root / "gh-config"),
                    GITHUB_REPOSITORY="fixture/repository", GITHUB_OUTPUT=str(self.output),
+                   GITHUB_EVENT_PATH=str(event),
                    **self.fixture_env)
         env.update({key: bindings.get(value, value) for key, value in step["env"].items()})
         script = step["run"]
@@ -175,6 +189,7 @@ os.execv(os.environ["FIXTURE_GH"], [os.environ["FIXTURE_GH"], *args])
                          "each gate must make exactly one read of the bound pull request")
         self.assertEqual(json.loads(self.credentials.read_text()), {"token": "offline-token"})
         outputs = dict(line.split("=", 1) for line in self.output.read_text().splitlines())
+        self.gate_outputs = outputs
         # Follow the actual step-to-job output binding consumed by needs.
         binding = gate["outputs"]["state"]
         match = re.fullmatch(r"\$\{\{ steps\.([\w-]+)\.outputs\.([\w-]+) \}\}", binding)
@@ -224,16 +239,43 @@ os.execv(os.environ["FIXTURE_GH"], [os.environ["FIXTURE_GH"], *args])
                     self.assert_admission(document, event, "", False, cancelled=True)
                     print(f"{name}: {event} -> gate skipped, build jobs admitted")
 
-    def test_api_errors_fail_gate_without_admitting_unknown_state(self):
+    def test_api_errors_keep_fail_soft_jobs_admitted_without_stale_state(self):
         for name, document in self.workflows.items():
-            for response, api_failure in ((RESPONSES["open"], True), ({}, False),
-                                          ({"state": "unexpected", "merged": False}, False)):
-                with self.subTest(workflow=name, response=response, api_failure=api_failure):
-                    result, output = self.run_gate(document["jobs"]["pr-state"], response,
-                                                   api_failure=api_failure)
-                    self.assertNotEqual(result.returncode, 0)
-                    self.assertEqual(output, "")
-                    self.assert_admission(document, "pull_request", output, False)
+            failures = [(RESPONSES["open"], 503), ({"message": "API rate limit exceeded"}, 403),
+                        ({}, 200), ({"state": "unexpected", "merged": False}, 200)]
+            if name in FAIL_SOFT_WORKFLOWS:
+                # gh can project a response body before reporting HTTP failure;
+                # the fallback must discard even a partial open projection.
+                failures.append((dict(RESPONSES["open"], changed_files=1), 502))
+                failures.append((None, 204))
+            for response, status in failures:
+                for event_state, event_merged in (("open", False), ("closed", False), ("closed", True)):
+                    with self.subTest(workflow=name, response=response, status=status,
+                                      event_state=event_state, event_merged=event_merged):
+                        result, output = self.run_gate(document["jobs"]["pr-state"], response,
+                                                       api_status=status, event_state=event_state,
+                                                       event_merged=event_merged)
+                        if name in FAIL_SOFT_WORKFLOWS:
+                            self.assertEqual(result.returncode, 0, result.stderr)
+                            self.assertEqual(output, "unknown", "stale event state must not decide admission")
+                            self.assertEqual(self.gate_outputs.get("changed_files"), "")
+                            self.assert_admission(document, "pull_request", output, True)
+                        else:
+                            self.assertNotEqual(result.returncode, 0)
+                            self.assertEqual(output, "")
+                            self.assert_admission(document, "pull_request", output, False)
+
+    def test_live_read_reuses_only_numeric_changed_file_counts(self):
+        for name in FAIL_SOFT_WORKFLOWS:
+            for count, expected in ((2, "2"), (0, "0"), (None, ""),
+                                    ("1\nstate=closed", ""), ({"state": "closed"}, "")):
+                with self.subTest(workflow=name, count=count):
+                    result, state = self.run_gate(self.workflows[name]["jobs"]["pr-state"],
+                                                  dict(RESPONSES["open"], changed_files=count))
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(state, "open")
+                    self.assertEqual(self.gate_outputs, {"state": "open", "changed_files": expected},
+                                     "the reused count cannot inject a PR-state output binding")
 
 
 @unittest.skipIf(yaml is None, "PyYAML is required to execute workflow controls")
@@ -247,7 +289,8 @@ class CiCacheWorkflowTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.document = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-        self.job = self.document["jobs"]["ci"]
+        # The namespace regression's sccache setup runs in the guardrails job.
+        self.job = self.document["jobs"]["guardrails"]
         self.steps = {step["id"]: step for step in self.job["steps"] if "id" in step}
         self.output = self.root / "output"
         self.envfile = self.root / "env"
@@ -302,7 +345,10 @@ class CiCacheWorkflowTests(unittest.TestCase):
                 for event in ("push", "pull_request", "pull_request_target", "workflow_dispatch", "schedule"):
                     with self.subTest(job=name, event=event):
                         self.assertEqual(evaluate(condition, event), event == "push")
-        self.assertEqual(sorted(set(writers)), ["ci", "msrv", "test-build"])
+        self.assertEqual(set(writers), {"ci", "docs", "guardrails", "test-1", "test-2",
+                                                "test-3", "test-build", "test-extra", "test-partition-2",
+                                                "test-partition-6", "test-partition-7", "test-partition-8",
+                                                "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"})
         self.assertEqual(self.document.get("on", self.document.get(True, {}))["push"]["branches"], ["main", "agent-main"],
                          "push-only saves are trusted only while pushes come from protected branches")
 
@@ -329,6 +375,142 @@ exit "${FIXTURE_VERSION_EXIT:-0}"
                 self.assertRegex(log, r"compiler_cache_setup_seconds=\d+")
                 self.assertEqual(exports["ORBIT_COMPILER_CACHE_BIN"], str(self.root / "home/.orbit/cache/bin/sccache"))
 
+    def _run_bubblewrap_step(self, fake_bwrap):
+        step = next(step for step in self.job["steps"]
+                    if step.get("name", "").startswith("Prepare and probe Bubblewrap"))
+        # The step hardcodes the trusted path; point the test copy at the
+        # fixture binary so the initial probe outcome is host-independent.
+        helper = (ROOT / "scripts/ci-probe-bubblewrap.sh").read_text()
+        self.write(".orbit/tmp/workflow-ci/scripts/ci-probe-bubblewrap.sh",
+                   helper.replace("/usr/bin/bwrap", str(fake_bwrap)))
+        return self_test_hang.run(
+            ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+            step="bubblewrap-probe", cwd=self.root, env=self.env,
+            text=True, capture_output=True)
+
+    def _bubblewrap_timings(self, output):
+        matches = re.findall(
+            r"bubblewrap_setup_seconds=(\d+) package_seconds=(\d+) probe_seconds=(\d+)",
+            output)
+        self.assertTrue(matches, f"setup timing line missing from:\n{output}")
+        return tuple(int(value) for value in matches[-1])
+
+    def test_bubblewrap_apt_failure_reports_elapsed_package_seconds(self):
+        self.write("bin/sudo", "#!/bin/sh\nexec \"$@\"\n", executable=True)
+        # apt_phase recovers dpkg between its two attempts. Without this
+        # fixture the step runs the host's real dpkg through the sudo
+        # fixture (no elevation), which fails at once, and recover_dpkg
+        # retries it until its 60s deadline -- twice in this test, for
+        # about 120s that measures nothing. The retry test below covers
+        # recovery semantics with its own stateful dpkg fixture.
+        self.write("bin/dpkg", """#!/bin/sh
+[ "$*" = '--configure -a' ] || exit 2
+exit 0
+""", executable=True)
+        # A fetch failure is transient, so apt_phase retries once: two
+        # attempts sleeping 2s each consume about 4s of package time.
+        self.write("bin/apt-get",
+                   "#!/bin/sh\nsleep 2\necho 'Failed to fetch fixture archive' >&2\nexit 1\n",
+                   executable=True)
+        fake_bwrap = self.write("fake-bwrap", """#!/bin/sh
+case "$1" in
+  --help) echo 'usage: fake bwrap' ;;
+  --version) echo 'bubblewrap fixture' ;;
+  *) echo 'fake bwrap failure' >&2; exit 1 ;;
+esac
+exit 0
+""", executable=True)
+        result = self._run_bubblewrap_step(fake_bwrap)
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("Bubblewrap unavailable", output)
+        self.assertIn("apt-get update", output)
+        setup_seconds, package_seconds, _ = self._bubblewrap_timings(output)
+        self.assertGreaterEqual(package_seconds, 3,
+                                f"apt failure must report elapsed package time, not 0:\n{output}")
+        self.assertGreaterEqual(setup_seconds, package_seconds)
+        # The same trap must cover a failure in the install phase: update
+        # succeeds instantly, install sleeps 2s per attempt and fails.
+        self.write("bin/apt-get", """#!/bin/sh
+case " $* " in
+  *" install "*) sleep 2; echo 'Failed to fetch fixture archive' >&2; exit 1 ;;
+  *) exit 0 ;;
+esac
+""", executable=True)
+        result = self._run_bubblewrap_step(fake_bwrap)
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("Bubblewrap unavailable", output)
+        self.assertIn("apt-get install", output)
+        _, package_seconds, _ = self._bubblewrap_timings(output)
+        self.assertGreaterEqual(package_seconds, 3,
+                                f"apt install failure must report elapsed package time, not 0:\n{output}")
+
+    def test_bubblewrap_success_without_apt_keeps_package_seconds_zero(self):
+        self.write("bin/sudo", "#!/bin/sh\nexec \"$@\"\n", executable=True)
+        self.write("bin/apt-get",
+                   "#!/bin/sh\necho 'apt must not run when the probe passes' >&2\nexit 9\n",
+                   executable=True)
+        fake_bwrap = self.write("fake-bwrap", """#!/bin/sh
+case "$1" in
+  --help) echo 'usage: fake bwrap --bind-fd' ;;
+  --version) echo 'bubblewrap fixture' ;;
+  *) exit 0 ;;
+esac
+exit 0
+""", executable=True)
+        result = self._run_bubblewrap_step(fake_bwrap)
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
+        self.assertIn("package preparation unnecessary", output)
+        _, package_seconds, _ = self._bubblewrap_timings(output)
+        self.assertEqual(package_seconds, 0)
+
+    def test_bubblewrap_retry_after_timed_out_install_recovers_interrupted_dpkg(self):
+        # A timed-out apt-get install is retried. The killed attempt leaves dpkg
+        # interrupted, and apt refuses every install until `dpkg --configure -a`
+        # finishes the unpack; the retry must recover that state before running.
+        # Runner failure in CI run 42762761224. [ORB-23887]
+        state = self.root / "bubblewrap-state"
+        state.mkdir()
+        self.env["FIXTURE_BUBBLEWRAP_STATE"] = str(state)
+        self.write("bin/sudo", "#!/bin/sh\nexec \"$@\"\n", executable=True)
+        self.write("bin/apt-get", """#!/bin/sh
+case " $* " in
+  *" install "*)
+    if [ -e "$FIXTURE_BUBBLEWRAP_STATE/dpkg-interrupted" ]; then
+      echo 'E: dpkg was interrupted, you must manually run sudo dpkg --configure -a' >&2
+      exit 100
+    fi
+    if [ ! -e "$FIXTURE_BUBBLEWRAP_STATE/install-attempted" ]; then
+      : >"$FIXTURE_BUBBLEWRAP_STATE/install-attempted"
+      : >"$FIXTURE_BUBBLEWRAP_STATE/dpkg-interrupted"
+      exit 124
+    fi
+    : >"$FIXTURE_BUBBLEWRAP_STATE/bwrap-ready"
+    exit 0 ;;
+  *) exit 0 ;;
+esac
+""", executable=True)
+        self.write("bin/dpkg", """#!/bin/sh
+[ "$*" = '--configure -a' ] || exit 2
+rm -f "$FIXTURE_BUBBLEWRAP_STATE/dpkg-interrupted"
+exit 0
+""", executable=True)
+        fake_bwrap = self.write("fake-bwrap", """#!/bin/sh
+case "$1" in
+  --help) echo 'usage: fake bwrap --bind-fd' ;;
+  --version) echo 'bubblewrap fixture' ;;
+  *) [ -e "$FIXTURE_BUBBLEWRAP_STATE/bwrap-ready" ] || {
+       echo 'setting up uid map: Permission denied' >&2; exit 1; } ;;
+esac
+exit 0
+""", executable=True)
+        result = self._run_bubblewrap_step(fake_bwrap)
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
+        self.assertIn("Bubblewrap probe passed without an AppArmor profile", output)
+
     def test_slow_step_past_the_removed_cap_completes(self):
         # Sleep stands in for a correct step that loses the CPU under idle
         # scheduling. 25s is past the removed 10s and 20s caps.
@@ -351,6 +533,40 @@ exit "${FIXTURE_VERSION_EXIT:-0}"
         # Public run() boundary used by the workflow fixtures. The leader must
         # not outlive the hang error, and neither may a child that inherited
         # the output pipes and stayed in the leader's process group.
+        self._run_timeout_fixtures(_stop_owned_processes)
+
+    def test_fallback_cleanup_never_signals_a_reused_pid(self):
+        # The real timeout fixture records real pids; each cleanup call (the
+        # addCleanup registration and the finally block) then runs against a
+        # deterministic model that retires the owned incarnation and reuses
+        # its number at each point after the ownership probe could have run.
+        if not hasattr(os, "pidfd_open"):
+            self.skipTest("pidfd reservation needs Linux 5.3")
+        seen = []
+
+        def stop_under_churn(record, marker):
+            pids = _recorded_pids(record)
+            self.assertTrue(pids, "the fixture must record its processes")
+            for churn in ("none", "before-open", "after-open", "after-probe", "after-alive"):
+                with self.subTest(churn=churn, pids=len(pids)):
+                    model = _PidChurnModel(pids, marker, churn)
+                    model.run(_stop_owned_processes, record)
+                    self.assertEqual(model.unsafe, [], "a replacement must never be signalled")
+                    self.assertEqual(model.open_fds, set(), "every reservation must be closed")
+                    if churn == "none":
+                        self.assertEqual(model.killed_originals, set(pids),
+                                         "every still-owned process must be terminated")
+                    else:
+                        self.assertEqual(model.killed_originals & model.retired_originals, set())
+            seen.append(len(pids))
+
+        # Cleanups run last-registered first, so this check runs after both
+        # fixtures' addCleanup registrations have fired.
+        self.addCleanup(lambda: self.assertEqual(
+            sorted(seen), [1, 1, 2, 2], "both registrations must run for both fixtures"))
+        self._run_timeout_fixtures(stop_under_churn)
+
+    def _run_timeout_fixtures(self, stop):
         if not Path("/proc/self/stat").exists():
             self.skipTest("process liveness is observed through /proc")
         limit = self_test_hang.HANG_PROBE_SECONDS
@@ -386,7 +602,7 @@ exit "${FIXTURE_VERSION_EXIT:-0}"
             with self.subTest(step=step):
                 record = self.root / f"{step}.pids"
                 marker = str(record)
-                self.addCleanup(_stop_owned_processes, record, marker)
+                self.addCleanup(stop, record, marker)
                 try:
                     with self.assertRaises(AssertionError) as caught:
                         self_test_hang.run(
@@ -402,12 +618,90 @@ exit "${FIXTURE_VERSION_EXIT:-0}"
                                if _owned_state(pid, marker) in {"R", "S", "D", "T"}]
                     self.assertEqual(running, [], "run() must terminate fixture processes before returning")
                 finally:
-                    _stop_owned_processes(record, marker)
+                    stop(record, marker)
 
     def test_ready_file_timeout_preserves_group_identity(self):
         assert_hang_group_identity(self, lambda: self_test_hang.run(
             ["fixture"], step="identity fixture", ready_file="empty-ready-file",
             capture_output=True, timeout=1))
+
+
+class _PidChurnModel:
+    """Deterministic /proc and pidfd view of recorded pids that exit and are reused.
+
+    Every recorded pid starts as one live, marked fixture incarnation. At the
+    chosen point the helper's own primitives run, that incarnation retires and
+    an unmarked replacement takes the same number. A pidfd pins the incarnation
+    current when it was opened; signalling it affects only that incarnation,
+    while a numeric `os.kill` is recorded as unsafe.
+    """
+
+    POINTS = {"before-open": "open", "after-open": "opened", "after-probe": "probed",
+              "after-alive": "alive"}
+
+    def __init__(self, pids, marker, churn):
+        self.marker = marker
+        self.churn = churn
+        self.pids = list(pids)
+        self.generation = {pid: 0 for pid in self.pids}
+        self.fds = {}
+        self.open_fds = set()
+        self.next_fd = 1000
+        self.killed_originals = set()
+        self.retired_originals = set()
+        self.unsafe = []
+        self.fired = set()
+
+    def _churn_at(self, point, pid):
+        if self.POINTS.get(self.churn) == point and pid not in self.fired:
+            self.fired.add(pid)
+            self.retired_originals.add(pid)
+            self.generation[pid] += 1
+
+    def read_proc(self, pid):
+        if self.generation[pid] == 0:
+            result = (f"python -c script {self.marker}".encode(), "1 (python) S 0 0")
+        else:
+            result = (b"unrelated replacement", "1 (sleep) S 0 0")
+        self._churn_at("probed", pid)
+        return result
+
+    def pidfd_open(self, pid):
+        self._churn_at("open", pid)
+        fd = self.next_fd
+        self.next_fd += 1
+        self.fds[fd] = (pid, self.generation[pid])
+        self.open_fds.add(fd)
+        self._churn_at("opened", pid)
+        return fd
+
+    def pidfd_is_alive(self, fd):
+        pid, generation = self.fds[fd]
+        alive = self.generation[pid] == generation
+        self._churn_at("alive", pid)
+        return alive
+
+    def pidfd_signal(self, fd, number):
+        pid, generation = self.fds[fd]
+        if self.generation[pid] != generation:
+            raise ProcessLookupError(pid)
+        if generation == 0:
+            self.killed_originals.add(pid)
+        else:
+            self.unsafe.append(("pidfd", pid))
+
+    def pidfd_close(self, fd):
+        self.open_fds.discard(fd)
+
+    def numeric_kill(self, pid, number):
+        self.unsafe.append(("kill", pid))
+
+    def run(self, stop, record):
+        patched = {"_read_proc_identity": self.read_proc, "_pidfd_open": self.pidfd_open,
+                   "_pidfd_is_alive": self.pidfd_is_alive, "_pidfd_signal": self.pidfd_signal,
+                   "_pidfd_close": self.pidfd_close}
+        with mock.patch.dict(globals(), patched), mock.patch.object(os, "kill", self.numeric_kill):
+            stop(record, self.marker)
 
 
 def _recorded_pids(path):
@@ -416,11 +710,20 @@ def _recorded_pids(path):
     return [int(line) for line in path.read_text().split() if line.strip()]
 
 
+def _read_proc_identity(pid):
+    """Return `(cmdline, stat)` for whichever process currently holds `pid`."""
+    return (Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\x00", b" "),
+            Path(f"/proc/{pid}/stat").read_text())
+
+
 def _owned_state(pid, marker):
-    """Return the /proc state when pid is still this fixture, else None."""
+    """Return the /proc state when pid is still this fixture, else None.
+
+    This observes only. It never authorizes a signal: the number can name a
+    different process by the time anyone acts on it (see `_pin_owned_process`).
+    """
     try:
-        command = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\x00", b" ")
-        stat = Path(f"/proc/{pid}/stat").read_text()
+        command, stat = _read_proc_identity(pid)
     except (FileNotFoundError, ProcessLookupError):
         # A process that exits between open and read fails with ESRCH.
         return None
@@ -429,14 +732,68 @@ def _owned_state(pid, marker):
     return stat.rsplit(")", 1)[1].split(None, 1)[0]
 
 
+def _pidfd_open(pid):
+    return os.pidfd_open(pid)
+
+
+def _pidfd_is_alive(fd):
+    """A pidfd becomes readable once the incarnation it pins has exited."""
+    readable, _, _ = select.select([fd], [], [], 0)
+    return not readable
+
+
+def _pidfd_signal(fd, number):
+    signal.pidfd_send_signal(fd, number)
+
+
+def _pidfd_close(fd):
+    os.close(fd)
+
+
+def _pin_owned_process(pid, marker):
+    """Reserve `pid` as a pidfd only when it is verifiably this fixture.
+
+    The pidfd is opened first and pins one incarnation. The ownership probe
+    then runs and the pidfd must still be alive afterwards: a number that was
+    retired and reused before the probe read it leaves the pidfd readable, so
+    the replacement is never mistaken for the fixture. Returns None when the
+    process is gone or not ours.
+    """
+    try:
+        fd = _pidfd_open(pid)
+    except ProcessLookupError:
+        return None
+    try:
+        if _owned_state(pid, marker) is None or not _pidfd_is_alive(fd):
+            _pidfd_close(fd)
+            return None
+    except BaseException:
+        _pidfd_close(fd)
+        raise
+    return fd
+
+
 def _stop_owned_processes(path, marker):
-    for pid in _recorded_pids(path):
-        if _owned_state(pid, marker) is None:
-            continue
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+    """SIGKILL every recorded process that is still a reserved fixture incarnation.
+
+    Reserve every recorded identity before signalling any, and signal only
+    through the pidfds: a saved numeric PID is never signalled, so an exit and
+    PID reuse after the ownership probe cannot redirect the kill.
+    """
+    pinned = []
+    try:
+        for pid in _recorded_pids(path):
+            fd = _pin_owned_process(pid, marker)
+            if fd is not None:
+                pinned.append(fd)
+        for fd in pinned:
+            try:
+                _pidfd_signal(fd, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    finally:
+        for fd in pinned:
+            _pidfd_close(fd)
 
 
 @unittest.skipIf(yaml is None, "PyYAML not installed; the workflow guard skips locally without it")
@@ -505,10 +862,8 @@ class NextestShardWorkflowTests(unittest.TestCase):
         shard_jobs = {job_id: job for job_id, job in jobs.items() if job_id.startswith("test-")
                       and job_id != "test-build"}
         self.assertGreater(shards, 1)
-        # The shards start on the build's last upload step; the partition
-        # guard follows it. A renamed upload step would leave them waiting for
-        # the whole build job, and a step after the awaited one would let
-        # them download before every part exists.
+        # The test jobs `needs:` the whole build job; the partition guard
+        # follows the last upload, so it proves the archive the shards download.
         parts = int(self.document["env"]["NEXTEST_ARCHIVE_PARTS"])
         self.assertGreater(parts, 1)
         build_steps = [step.get("name") for step in jobs["test-build"]["steps"]]
@@ -535,12 +890,64 @@ class NextestShardWorkflowTests(unittest.TestCase):
                 [unpack] = self.run_step(job, "Restore native nextest archive")
                 self.assertEqual(unpack[:2], [pack[0], "unpack"])
                 self.assertEqual(unpack[2:], [pack[3], pack[2], "--parts", str(parts)])
-                download = next(step for step in job["steps"] if step.get("name") == "Download nextest archive")
-                self.assertTrue(download["with"]["merge-multiple"])
+                downloads = [step for step in job["steps"]
+                             if str(step.get("name", "")).startswith("Download nextest archive")]
+                self.assertEqual(
+                    [step["name"] for step in downloads],
+                    ["Download nextest archive",
+                     "Download nextest archive attempt 2",
+                     "Download nextest archive attempt 3"],
+                    "run 42657013708 failed GetSignedArtifactURL with ECONNRESET and had no retry")
                 uploaded = {step["with"]["name"] for other in jobs.values() for step in other["steps"]
                             if step.get("uses", "").startswith("actions/upload-artifact@")}
-                self.assertEqual({name for name in uploaded if fnmatch.fnmatchcase(name, download["with"]["pattern"])},
-                                 names, "every shard downloads every part and nothing else")
+                for download in downloads:
+                    self.assertTrue(download["with"]["merge-multiple"])
+                    self.assertEqual(download["with"]["path"], "${{ runner.temp }}")
+                    self.assertTrue(str(download.get("uses", "")).startswith("actions/download-artifact@"))
+                    self.assertEqual(
+                        {name for name in uploaded if fnmatch.fnmatchcase(name, download["with"]["pattern"])},
+                        names, "every shard downloads every part and nothing else")
+                self.assertEqual({step["uses"] for step in downloads}, {downloads[0]["uses"]})
+                self.assertIs(downloads[0].get("continue-on-error"), True)
+                self.assertIs(downloads[1].get("continue-on-error"), True)
+                self.assertNotIn(
+                    "continue-on-error", downloads[2],
+                    "the last download attempt must fail the job so nextest does not run without the archive")
+                self.assertEqual(downloads[0].get("id"), "nextest-archive-download")
+                self.assertEqual(downloads[1].get("id"), "nextest-archive-download-2")
+                self.assertIn("steps.nextest-archive-download.outcome == 'failure'", downloads[1]["if"])
+                self.assertIn("steps.nextest-archive-download.outcome == 'failure'", downloads[2]["if"])
+                self.assertIn("steps.nextest-archive-download-2.outcome == 'failure'", downloads[2]["if"])
+                # Orbit's emission proof admits one sibling need only behind
+                # the same full scope gate, with the sibling needing exactly
+                # the gate jobs; the deployed engine refuses any other shape.
+                self.assertEqual(job["needs"], ["pr-state", "scope", "test-build"])
+                self.assertEqual(job["if"], jobs["test-build"]["if"])
+                self.assertIn("!cancelled()", job["if"],
+                              "a failed build must fail the shard, not skip a required check")
+                step_names = [step.get("name") for step in job["steps"]]
+                self.assertEqual(step_names[0], "Require a successful test build")
+                self.assertNotIn("Await the nextest archive", step_names, "shards no longer poll for the archive")
+                # Orbit folds the shard's failure onto the build by the
+                # waiter's `ci-await: <job> concluded <conclusion>:` line.
+                require = job["steps"][0]
+                self.assertEqual(require["env"], {"TEST_BUILD_RESULT": "${{ needs.test-build.result }}"})
+                for result, status, stderr in (
+                        ("success", 0, ""),
+                        ("failure", 1, f"ci-await: {jobs['test-build']['name']} concluded failure: "
+                                       "https://github.com/fixture/repository/actions/runs/7\n"),
+                        ("cancelled", 1, f"ci-await: {jobs['test-build']['name']} concluded cancelled: "
+                                         "https://github.com/fixture/repository/actions/runs/7\n")):
+                    completed = self_test_hang.run(
+                        ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", require["run"]],
+                        step=require["name"], cwd=self.root, text=True, capture_output=True,
+                        env={"PATH": os.environ["PATH"], "TEST_BUILD_RESULT": result,
+                             "GITHUB_SERVER_URL": "https://github.com",
+                             "GITHUB_REPOSITORY": "fixture/repository", "GITHUB_RUN_ID": "7"})
+                    self.assertEqual((completed.returncode, completed.stdout, completed.stderr),
+                                     (status, "", stderr))
+                self.assertLess(step_names.index("Download nextest archive attempt 3"),
+                                step_names.index("Restore native nextest archive"))
                 self.assertEqual(nextest[nextest.index("--archive-file") + 1], unpack[3])
                 self.assertEqual(nextest[:4], ["--label", "nextest", "--", "cargo"])
                 self.assertIn("--no-fail-fast", nextest)
@@ -548,37 +955,29 @@ class NextestShardWorkflowTests(unittest.TestCase):
                 partition = nextest[nextest.index("--partition") + 1]
                 self.assertNotIn(partition, partitions, f"{job_id} repeats {partitions.get(partition)}'s shard")
                 partitions[partition] = job["name"]
-                [wait] = self.run_step(job, "Await the nextest archive")
-                self.assertEqual(wait[1:], ["--job", "Test build", "--step", upload])
-        # The test build runs the one partition no shard job runs, from the
-        # archive it built, after the last upload the shards wait for.
-        self.assertLess(build_steps.index(upload),
-                        build_steps.index("Run nextest partition on the test build"))
-        [build_nextest] = self.run_step(jobs["test-build"], "Run nextest partition on the test build")
-        self.assertEqual(build_nextest[:4], ["--label", "nextest", "--", "cargo"])
-        self.assertIn("--no-fail-fast", build_nextest)
-        self.assertNotIn("--run-ignored", build_nextest)
-        self.assertEqual(build_nextest[build_nextest.index("--archive-file") + 1], pack[2],
-                         "the test build runs its partition from the archive it built")
-        build_partition = build_nextest[build_nextest.index("--partition") + 1]
-        self.assertNotIn(build_partition, partitions, "the test build repeats a shard's partition")
-        partitions[build_partition] = jobs["test-build"]["name"]
         self.assertEqual(sorted(partitions),
                          sorted(f"count:{k}/{partition_count}" for k in range(1, partition_count + 1)),
-                         "the shard jobs and the test build must select every count partition "
+                         "the test runners must select every count partition "
                          "of NEXTEST_PARTITIONS")
-        self.assertEqual(sorted(name for name in partitions.values() if name != jobs["test-build"]["name"]),
-                         sorted(f"Test shard {k}/{shards}" for k in range(1, shards + 1)))
+        # The literal shard names are the agent-main ruleset's; the additional
+        # partition jobs run the shard steps under names outside it.
+        self.assertEqual(sorted(partitions.values()),
+                         sorted([f"Test shard {k}/{shards}" for k in range(1, shards + 1)]
+                                + [jobs["test-extra"]["name"], jobs["test-partition-2"]["name"],
+                                   jobs["test-partition-6"]["name"], jobs["test-partition-7"]["name"],
+                                   jobs["test-partition-8"]["name"], *[jobs[f"test-partition-{k}"]["name"] for k in range(9, 13)]]))
         [wait] = self.run_step(jobs["ci"], "Await the test build and nextest shards")
         self.assertEqual(wait[0], "scripts/ci-await-jobs.py")
         awaited = wait[2::2]
         self.assertEqual(wait[1::2], ["--job"] * len(awaited))
-        self.assertEqual(sorted(awaited), sorted(set(partitions.values())),
-                         "the Check job's elapsed time must cover the test build and every shard")
+        required = {*partitions.values(), jobs["test-build"]["name"],
+                    *[job["name"] for name, job in jobs.items() if name.startswith("guardrails")]}
+        self.assertEqual(sorted(awaited), sorted(required),
+                         "the Check job's elapsed time must cover the test build, every shard and the guardrails")
 
     def test_repack_and_shard_failures_remain_failed_workflow_steps(self):
         for job, step in (("test-build", "Pack nextest archive for transfer"),
-                          ("test-build", "Run nextest partition on the test build"),
+                          ("test-partition-2", "Run nextest shard"),
                           ("test-1", "Restore native nextest archive"),
                           ("test-1", "Run nextest shard")):
             with self.subTest(step=step):
@@ -587,8 +986,12 @@ class NextestShardWorkflowTests(unittest.TestCase):
     def test_an_affected_crates_archive_passes_empty_partitions_and_gates_only_orbit_exec(self):
         jobs = self.document["jobs"]
         for job_id, step in (("test-1", "Run nextest shard"), ("test-2", "Run nextest shard"),
-                             ("test-3", "Run nextest shard"),
-                             ("test-build", "Run nextest partition on the test build")):
+                             ("test-3", "Run nextest shard"), ("test-extra", "Run nextest shard"),
+                             ("test-partition-2", "Run nextest shard"),
+                             ("test-partition-6", "Run nextest shard"),
+                             ("test-partition-7", "Run nextest shard"),
+                             ("test-partition-8", "Run nextest shard"),
+                             *[(f"test-partition-{k}", "Run nextest shard") for k in range(9, 13)]):
             with self.subTest(job=job_id):
                 [nextest] = self.run_step(jobs[job_id], step)
                 # The full archive's partition guard fails the test build on an
@@ -597,6 +1000,7 @@ class NextestShardWorkflowTests(unittest.TestCase):
         gate = next(step for step in jobs["test-1"]["steps"]
                     if step.get("name") == "Linux sandbox/policy enforcement gate")
         for shard, mode, runs in (("1", "full", True), ("1", "", True), ("2", "full", False),
+                                  ("extra", "full", False),
                                   ("1", "affected:orbit-cli,orbit-web", False),
                                   ("1", "affected:orbit-cli,orbit-core,orbit-policy,orbit-tools", False),
                                   ("1", "affected:orbit-cli,orbit-exec,orbit-tools", True)):
@@ -624,6 +1028,7 @@ class ChangeScopeTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.routes = self.root / "routes.json"
+        self.requests = self.root / "requests.jsonl"
         self.output = self.root / "output"
         gh = self.root / "bin/gh"
         gh.parent.mkdir()
@@ -632,6 +1037,8 @@ class ChangeScopeTests(unittest.TestCase):
         gh.write_text(f"""#!{sys.executable}
 import json, sys
 args = [arg for arg in sys.argv[1:] if arg not in ("api", "--paginate")]
+with open({str(self.requests)!r}, "a") as requests:
+    requests.write(json.dumps(args) + "\\n")
 routes = json.load(open({str(self.routes)!r}))
 if args and args[0] in routes:
     print(json.dumps(routes[args[0]]))
@@ -658,6 +1065,7 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
 
     def classify(self, event, routes, *, graph=None, **env):
         self.routes.write_text(json.dumps(routes))
+        self.requests.write_text("")
         self.output.write_text("")
         result = self_test_hang.run(
             [str(ROOT / "scripts/ci-change-scope.sh")], step="change-scope", cwd=self.root,
@@ -668,6 +1076,7 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         [line] = self.output.read_text().splitlines()
         self.last_log = result.stdout
+        self.last_requests = [json.loads(line) for line in self.requests.read_text().splitlines()]
         return line.removeprefix("mode=")
 
     def pull_request(self, *paths, count=None, graph=None):
@@ -712,36 +1121,78 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         self.assertEqual(self.pull_request("README.md", "docs/guide.md"), "docs")
         # Markdown compiled into a crate or mirrored into the plugin is code,
         # and orbit-cli's tests read the configuration reference page.
+        # Every selection adds the always-run security and recovery crates.
         self.assertEqual(self.pull_request("docs/guide.md", "crates/orbit-core/assets/skills/x.md"),
-                         "affected:orbit-cli,orbit-cmd,orbit-core,orbit-web")
-        self.assertEqual(self.pull_request("plugin/skills/x.md"), "full")
-        self.assertEqual(self.pull_request("website/src/content/docs/reference/config.md"), "affected:orbit-cli")
+                         "affected:orbit-auth,orbit-cli,orbit-cmd,orbit-core,orbit-exec,orbit-policy,orbit-store,orbit-web")
+        # default_catalog reads setup reference pages in the generated mirror.
+        core_scope = self.pull_request("crates/orbit-core/src/lib.rs")
+        self.assertEqual(self.pull_request("plugin/skills/x.md"), core_scope)
+        self.assertEqual(self.pull_request("plugin/plugin.json"), "full")
+        # A governed tool added to orbit-tools still selects orbit-mcp's
+        # task_route boundary test and orbit-cli's tool goldens.
+        selected = self.pull_request("crates/orbit-tools/src/lib.rs").removeprefix("affected:").split(",")
+        self.assertTrue({"orbit-mcp", "orbit-cli", "orbit-tools"} <= set(selected), selected)
+        self.assertEqual(self.pull_request("website/src/content/docs/reference/config.md"),
+                         "affected:orbit-auth,orbit-cli,orbit-exec,orbit-policy,orbit-store")
+        # A path no crate reads runs the always-run crates alone.
+        self.assertEqual(self.pull_request("scripts/qa-full-sweep-inventory.json"),
+                         "affected:orbit-auth,orbit-exec,orbit-policy,orbit-store")
+        # The unit-test ratchet's baseline is read only by its always-run
+        # guard, and no CI job reads the plugin's eval cases.
+        for path in ("scripts/unit-test-baseline.json", "plugin/evals/README.md",
+                     "plugin/evals/file-task/graders/add-has-acceptance.md"):
+            self.assertEqual(self.pull_request(path), "affected:orbit-auth,orbit-exec,orbit-policy,orbit-store")
+        self.assertEqual(self.pull_request("scripts/unit-test-baseline.json", "crates/orbit-store/src/lib.rs"),
+                         self.pull_request("crates/orbit-store/src/lib.rs"))
+        # The UX rules, their lib helpers, README and Node tests have no
+        # Cargo reader. The sweep script is also read by orbit-core tests.
+        # run.mjs is undeclared and stays a full run.
+        always_run = "affected:orbit-auth,orbit-exec,orbit-policy,orbit-store"
+        self.assertEqual(self.pull_request("scripts/test-qa-full-sweep.py"), core_scope)
+        self.assertEqual(self.pull_request("scripts/ux-rules/cli/mcp-cli-parity.mjs"), always_run)
+        self.assertEqual(self.pull_request("scripts/ux-rules/tests/implementer-detail-browser.test.mjs"),
+                         always_run)
+        self.assertEqual(self.pull_request("scripts/ux-rules/lib/cli-context.mjs"), always_run)
+        self.assertEqual(self.pull_request("scripts/ux-rules/lib/manifest.mjs"), always_run)
+        self.assertEqual(self.pull_request("scripts/ux-rules/lib/ui-context.mjs"), always_run)
+        self.assertEqual(self.pull_request("scripts/ux-rules/ui/cramped-wrap.mjs"), always_run)
+        self.assertEqual(self.pull_request("scripts/ux-rules/run.mjs"), "full")
         # Markdown that a scripts/test-* self-test reads is code too: test-release-promotion.py
-        # executes RELEASING.md's procedures, and test-qa-full-sweep.py digests npm/README.md.
+        # executes RELEASING.md's procedures, test-qa-full-sweep.py digests npm/README.md,
+        # and test-path-leases-listener-sudo.py executes the listener-sudo recipe.
         self.assertEqual(self.pull_request("RELEASING.md"), "full")
         self.assertEqual(self.pull_request("RELEASING.md", "README.md"), "full")
         self.assertEqual(self.pull_request("npm/README.md"), "full")
-        self.assertEqual(self.pull_request("RELEASING.md", "crates/orbit-cli/src/main.rs"), "affected:orbit-cli")
+        self.assertEqual(self.pull_request("docs/dev/qa/path-leases-listener-sudo.md"), "full")
+        self.assertEqual(self.pull_request("docs/dev/qa/path-leases-listener-sudo.md", "README.md"), "full")
+        self.assertEqual(self.pull_request("RELEASING.md", "crates/orbit-cli/src/main.rs"),
+                         "affected:orbit-auth,orbit-cli,orbit-exec,orbit-policy,orbit-store")
         # A listing that disagrees with the reported count is not trusted.
         self.assertEqual(self.pull_request("docs/guide.md", count=2), "full")
         self.assertEqual(self.classify("pull_request", {}, PR="7"), "full", "an API error runs the full gate")
 
     def test_pull_request_test_selection(self):
+        engine_scope = self.pull_request("crates/orbit-engine/src/lib.rs")
         selections = {
-            "leaf crate": (["crates/orbit-cli/src/main.rs", "docs/guide.md"], "affected:orbit-cli"),
-            "mid-graph crate": (["crates/orbit-mcp/src/lib.rs"], "affected:orbit-cli,orbit-cmd,orbit-mcp,orbit-web"),
+            "leaf crate": (["crates/orbit-cli/src/main.rs", "docs/guide.md"],
+                           "affected:orbit-auth,orbit-cli,orbit-exec,orbit-policy,orbit-store"),
+            "mid-graph crate": (["crates/orbit-mcp/src/lib.rs"],
+                                "affected:orbit-auth,orbit-cli,orbit-cmd,orbit-exec,orbit-mcp,orbit-policy,"
+                                "orbit-store,orbit-web"),
             "core crate": (["crates/orbit-types/src/lib.rs"], "full"),
             "workspace-level file": (["crates/orbit-cli/src/main.rs", "Cargo.lock"], "full"),
             "toolchain file": (["crates/orbit-cli/src/main.rs", "rust-toolchain.toml"], "full"),
             "member manifest": (["crates/orbit-cli/Cargo.toml"], "full"),
             "non-crate path": (["crates/orbit-cli/src/main.rs", "scripts/ci-guardrails.sh"], "full"),
-            "workflow": (["crates/orbit-cli/src/main.rs", ".github/workflows/ci.yml"], "full"),
+            "workflow": (["crates/orbit-cli/src/main.rs", ".github/workflows/ci.yml"], engine_scope),
             "path no crate owns": (["crates/orbit-retired/src/lib.rs"], "full"),
             # Read across crates by tests the dependency graph cannot see.
             "cross-crate fixture": (["crates/orbit-web/assets/dashboard/vendor/marked.umd.js"],
-                                    "affected:orbit-cli,orbit-cmd,orbit-mcp,orbit-web"),
+                                    "affected:orbit-auth,orbit-cli,orbit-cmd,orbit-exec,orbit-mcp,orbit-policy,"
+                                    "orbit-store,orbit-web"),
             "cross-crate asset": (["crates/orbit-core/assets/activities/task_pilot.yaml"],
-                                  "affected:orbit-cli,orbit-cmd,orbit-core,orbit-engine,orbit-web"),
+                                  "affected:orbit-auth,orbit-cli,orbit-cmd,orbit-core,orbit-engine,orbit-exec,"
+                                  "orbit-policy,orbit-runtime,orbit-store,orbit-web"),
         }
         for case, (paths, mode) in selections.items():
             with self.subTest(case=case):
@@ -752,6 +1203,17 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         self.assertEqual(self.pull_request("crates/orbit-cli/src/main.rs", graph=str(self.root / "missing.json")),
                          "full", "a selection error runs the full suite")
         self.assertIn("::notice title=Test selection::full", self.last_log)
+
+    def test_reused_live_count_avoids_duplicate_read_and_fails_full(self):
+        files = "repos/o/r/pulls/7/files?per_page=100"
+        routes = {"repos/o/r/pulls/7": {"changed_files": 1}, files: [{"filename": "README.md"}]}
+        for count, expected, requests in (("1", "docs", [[files]]), ("2", "full", [[files]]),
+                                          ("", "full", []), ("unknown", "full", []),
+                                          ("3000", "full", [])):
+            with self.subTest(count=count):
+                self.assertEqual(self.classify("pull_request", routes, PR="7", PR_CHANGED_FILES=count), expected)
+                self.assertEqual(self.last_requests, requests,
+                                 "reusing a live read must not spend another PR-object API request")
 
     def test_push_scope(self):
         self.assertEqual(self.push("crates/orbit-core/src/lib.rs", same_tree=True), "skip")
@@ -768,6 +1230,8 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         self.assertEqual(self.push("RELEASING.md"), "full")
         self.assertEqual(self.push("README.md", "RELEASING.md"), "full")
         self.assertEqual(self.push("npm/README.md"), "full")
+        self.assertEqual(self.push("docs/dev/qa/path-leases-listener-sudo.md"), "full")
+        self.assertEqual(self.push("README.md", "docs/dev/qa/path-leases-listener-sudo.md"), "full")
         self.assertEqual(self.classify("push", {}, SHA=self.SHA, BEFORE=self.BEFORE), "full")
 
     def test_docs_push_after_untested_before_runs_full_gate(self):
@@ -780,7 +1244,9 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
                 self.assertEqual(mode, "full", "a Markdown delta cannot hide untested code in BEFORE")
                 admitted = {name for name, job in jobs.items() if name != "pr-state" and evaluate(
                     job["if"], "push", dependency_skipped=True, bindings={SCOPE: mode})}
-                self.assertEqual(admitted, {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3"})
+                self.assertEqual(admitted, {"scope", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2",
+                                            "test-3", "test-extra", "test-partition-2",
+                                            "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"})
         self.assertEqual(self.push("docs/guide.md", same_tree=True, before_check="cancelled"), "skip",
                          "an exact tree that passed on the PR head is safe independently of BEFORE")
 
@@ -803,9 +1269,9 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         document = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
         jobs = document["jobs"]
         expected = {
-            "full": {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3"},
-            "affected:orbit-cli": {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3"},
-            "": {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3"},
+            "full": {"scope", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"},
+            "affected:orbit-cli": {"scope", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"},
+            "": {"scope", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"},
             "docs": {"scope", "docs"},
             "skip": {"scope"},
         }
@@ -816,6 +1282,93 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
                         job["if"], event, "open", dependency_skipped=event != "pull_request",
                         bindings={SCOPE: mode})}
                     self.assertEqual(actual, admitted)
+
+
+@unittest.skipIf(yaml is None, "PyYAML is required to execute workflow controls")
+class CoverageReportWorkflowTests(unittest.TestCase):
+    """Run the coverage report step with cargo failures under GitHub's bash -e."""
+
+    def setUp(self):
+        scratch = ROOT / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(dir=scratch, prefix="coverage-report-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.calls = self.root / "calls"
+        document = yaml.safe_load((ROOT / ".github/workflows/coverage.yml").read_text())
+        self.step = next(step for step in document["jobs"]["coverage"]["steps"]
+                         if step.get("name") == "Render lcov report")
+        cargo = self.bin / "cargo"
+        cargo.write_text("""#!/bin/sh
+calls=0
+if [ -f "$FIXTURE_CALLS" ]; then
+  calls=$(cat "$FIXTURE_CALLS")
+fi
+calls=$((calls + 1))
+printf '%s\\n' "$calls" > "$FIXTURE_CALLS"
+if [ "$calls" -eq 1 ]; then
+  while IFS= read -r profile; do
+    [ -n "$profile" ] || continue
+    printf 'warning: %s: invalid instrumentation profile data (file header is corrupt)\\n' "$profile" >&2
+  done <<EOF
+$FIXTURE_PROFILES
+EOF
+  exit "$FIRST_STATUS"
+fi
+exit "$RETRY_STATUS"
+""")
+        cargo.chmod(0o755)
+        self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}",
+                        FIXTURE_CALLS=str(self.calls), FIXTURE_PROFILES="",
+                        FIRST_STATUS="23", RETRY_STATUS="0", TMPDIR=str(self.root))
+
+    def run_report(self, profile_count, *, retry_status=0, first_status=23):
+        if self.calls.exists():
+            self.calls.unlink()
+        profiles = []
+        for number in range(profile_count):
+            profile = self.root / f"unreadable {number}.profraw"
+            profile.write_text("truncated")
+            profiles.append(profile)
+        self.env.update(FIXTURE_PROFILES="\n".join(str(profile) for profile in profiles),
+                        FIRST_STATUS=str(first_status), RETRY_STATUS=str(retry_status))
+        result = self_test_hang.run(
+            ["bash", "-e", "-c", self.step["run"]],
+            step="Render lcov report", cwd=self.root, env=self.env,
+            text=True, capture_output=True)
+        calls = int(self.calls.read_text()) if self.calls.exists() else 0
+        return result, calls, profiles
+
+    def test_failed_render_drops_one_through_five_profiles_and_returns_retry_status(self):
+        for count in range(1, 6):
+            with self.subTest(profile_count=count):
+                retry_status = 0 if count < 5 else 29
+                result, calls, profiles = self.run_report(count, retry_status=retry_status)
+                output = result.stdout + result.stderr
+                self.assertEqual(result.returncode, retry_status, output)
+                self.assertEqual(calls, 2, output)
+                self.assertEqual(output.count("::warning::dropping unreadable coverage profile "), count)
+                self.assertNotIn("::error::", output)
+                for profile in profiles:
+                    self.assertFalse(profile.exists(), f"retry must run after removing {profile}")
+
+    def test_failed_render_without_named_profiles_fails_with_first_status(self):
+        result, calls, _ = self.run_report(0)
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 23, output)
+        self.assertEqual(calls, 1, output)
+        self.assertIn("::error::report failed with 0 unreadable profiles named (limit 5); not retrying", output)
+
+    def test_failed_render_with_more_than_five_profiles_fails_without_retry(self):
+        result, calls, profiles = self.run_report(6)
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 23, output)
+        self.assertEqual(calls, 1, output)
+        self.assertIn("::error::report failed with 6 unreadable profiles named (limit 5); not retrying", output)
+        for profile in profiles:
+            self.assertTrue(profile.exists(), f"over-limit files must not be removed: {profile}")
 
 
 if __name__ == "__main__":

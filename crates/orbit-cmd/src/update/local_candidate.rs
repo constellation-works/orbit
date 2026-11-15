@@ -36,7 +36,8 @@ use orbit_common::security::release::normalize_sha256;
 use serde::{Deserialize, Serialize};
 
 use super::admission::{
-    acquire_admissions, acquire_candidate_admissions, handover_of, pin_candidate,
+    acquire_candidate_admissions, acquire_current_admissions, current_of, handover_of,
+    pin_candidate,
 };
 use super::channel::InstallChannel;
 use super::converge::{probe_version, require_admission_contract};
@@ -483,11 +484,18 @@ pub fn run_local_candidate_update(
     if installed_before == candidate.sha256 {
         // The accepted bytes are already installed: the resume of a run whose
         // convergence did not finish, or a replay. Converge, never re-swap;
-        // nothing is renamed, so nothing live can hand over to it.
+        // nothing is renamed, so nothing live hands over to a new image; a
+        // live process already running these bytes is asked to hand over to
+        // them in place, which proves the generation free before the re-pin.
         drop(staged);
         let contract = require_admission_contract(target)?;
-        let admissions = acquire_admissions(&environment.admission_roots)?;
-        let _generations = pin_candidate(
+        let admissions = acquire_current_admissions(
+            &environment.admission_roots,
+            &candidate.sha256,
+            contract.identity.as_ref(),
+        )?;
+        report.same_generation = current_of(&admissions).iter().map(Into::into).collect();
+        let generations = pin_candidate(
             &environment.admission_roots,
             admissions,
             &candidate.sha256,
@@ -499,6 +507,7 @@ pub fn run_local_candidate_update(
             target,
             report,
             UpdateOutcome::AlreadyCurrent,
+            generations,
         ));
     }
 
@@ -579,7 +588,7 @@ pub fn run_local_candidate_update(
         }
     }
 
-    let _generations = match pin_candidate(
+    let generations = match pin_candidate(
         &environment.admission_roots,
         admissions,
         &candidate.sha256,
@@ -600,7 +609,13 @@ pub fn run_local_candidate_update(
             return Ok(report);
         }
     };
-    Ok(finish(environment, target, report, UpdateOutcome::Updated))
+    Ok(finish(
+        environment,
+        target,
+        report,
+        UpdateOutcome::Updated,
+        generations,
+    ))
 }
 
 fn set_installed_after(report: &mut UpdateReport, digest: String) {
@@ -660,6 +675,8 @@ fn local_report(
             retry_command: retry_command(environment, request, expected_commit),
         }),
         handover: Vec::new(),
+        same_generation: Vec::new(),
+        migration_fenced: Vec::new(),
         recovery: None,
     }
 }

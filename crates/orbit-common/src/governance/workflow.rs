@@ -9,7 +9,7 @@ use crate::governance::operation::{
     CliHelp, Effect, EnumValue, NounSpec, OperationSpec, ParamSpec, ParamType, RetiredField,
     ToolOnlyRegistration, UnknownFields, mcp_only, operation_registry, required,
 };
-use orbit_types::tool::McpToolScope;
+use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 operation_registry! {
     noun: WORKFLOW;
@@ -20,8 +20,12 @@ operation_registry! {
     {
         /// `orbit.workflow.auto`.
         Auto => AUTO,
+        /// `orbit.workflow.land`.
+        Land => LAND,
         /// `orbit.workflow.run.list`.
         RunList => RUN_LIST,
+        /// `orbit.workflow.run.observe`.
+        RunObserve => RUN_OBSERVE,
         /// `orbit.workflow.run.resume`.
         RunResume => RUN_RESUME,
         /// `orbit.workflow.run.show`.
@@ -78,12 +82,6 @@ const CLAIM_TOKEN_PARAM: ParamSpec = mcp_only(
     "claim_token",
     ParamType::String,
     "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.",
-);
-
-const MODEL_PARAM: ParamSpec = mcp_only(
-    "model",
-    ParamType::String,
-    "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
 );
 
 const VIEW_PARAM: ParamSpec = mcp_only(
@@ -181,13 +179,33 @@ const AUTO: OperationSpec<WorkflowVerb> = OperationSpec {
             ParamType::String,
             "Exact selector returned by workspace discovery. No implicit destination.",
         )),
-        MODEL_PARAM,
     ]],
     at_least_one_of: &[],
     // The control always refused fields outside its schema, `agent` included.
     retired_fields: &[RetiredField::verbatim("agent", "unknown field 'agent'")],
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
+};
+
+const LAND: OperationSpec<WorkflowVerb> = OperationSpec {
+    verb: WorkflowVerb::Land,
+    cli_path: &[],
+    tool_name: "orbit.workflow.land",
+    tool_description: "Land a task in review: merge its one open delivery pull request at the head whose required checks were just read, then move the task to done. The forge's branch protection decides: nothing bypasses it, and any refusal answers `task_landing_refused` with the reason and changes nothing. A pull request that already merged settles without another merge, so a call whose reply was lost may be repeated. Requires operator capability or a resident cycle holding the `merge` right.",
+    cli_about: "",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[&[required(mcp_only(
+        "task_id",
+        ParamType::String,
+        "The task in review whose delivery pull request lands.",
+    ))]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const RUN_LIST: OperationSpec<WorkflowVerb> = OperationSpec {
@@ -228,6 +246,7 @@ const RUN_LIST: OperationSpec<WorkflowVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 const RUN_RESUME: OperationSpec<WorkflowVerb> = OperationSpec {
@@ -251,6 +270,27 @@ const RUN_RESUME: OperationSpec<WorkflowVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "a run id is host-local: a run executes where it was admitted",
+    ),
+};
+
+const RUN_OBSERVE: OperationSpec<WorkflowVerb> = OperationSpec {
+    verb: WorkflowVerb::RunObserve,
+    cli_path: &[],
+    tool_name: "orbit.workflow.run.observe",
+    tool_description: "Read a stored workflow run without reconciliation or mutation. Requires operator capability; agent sessions are refused.",
+    cli_about: "",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Read,
+    params: &[&[RUN_ID_PARAM]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "a run id is host-local: a run executes where it was admitted",
+    ),
 };
 
 const RUN_SHOW: OperationSpec<WorkflowVerb> = OperationSpec {
@@ -275,6 +315,9 @@ const RUN_SHOW: OperationSpec<WorkflowVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::WorkspaceLocal(
+        "a run id is host-local: a run executes where it was admitted",
+    ),
 };
 
 const SHIP: OperationSpec<WorkflowVerb> = OperationSpec {
@@ -308,12 +351,12 @@ const SHIP: OperationSpec<WorkflowVerb> = OperationSpec {
             "Optional review layer before landing (`before-landing` recommended; `before-pr` deprecated but honoured) this run adds when workspace policy applies none. The layer policy already applies is accepted unchanged; the other layer, a workspace that sets neither workflow.purpose_crews.pre_landing_review nor workflow.purpose_crews.review and local-only delivery are refused before the run starts. It can only add review. Omitted keeps workspace policy.",
         ),
         CLAIM_TOKEN_PARAM,
-        MODEL_PARAM,
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
 };
 
 /// Refuse malformed or incompatible explicit modes before generic optional

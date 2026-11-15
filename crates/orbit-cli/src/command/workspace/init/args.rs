@@ -8,9 +8,8 @@ pub struct WorkspaceInitArgs {
     #[arg(long)]
     pub name: Option<String>,
     /// Base branch for this workspace (default: the checked-out branch, or main)
-    ///
-    /// Kept optional so re-initializing an existing workspace can distinguish
-    /// an omitted value from an explicit request to reset it to `main`.
+    // Kept optional so re-initializing an existing workspace can distinguish
+    // an omitted value from an explicit request to reset it to `main`.
     #[arg(long)]
     pub base_branch: Option<String>,
     /// Ship-pipeline mode for this workspace: `pr` or `local`. When omitted, the
@@ -32,7 +31,7 @@ pub struct WorkspaceInitArgs {
     pub task_id_start: Option<u32>,
     /// Set up MCP client integrations for auto-detected providers. The
     /// registered server is granted OPERATOR authority: governed operations
-    /// such as `orbit.workflow.ship`, workflow run observation/resume, and
+    /// such as `orbit.workflow` ship, `orbit.run` observe/resume, and
     /// `orbit.command.exec` become reachable through it. Bare `orbit mcp
     /// serve` and worker/agent MCP startup remain agent-only.
     #[arg(long)]
@@ -40,7 +39,7 @@ pub struct WorkspaceInitArgs {
     /// Inject (or refresh) an Orbit workflow-rules block in CLAUDE.md and AGENTS.md at the workspace root.
     #[arg(long)]
     pub inject_agent_rules: bool,
-    /// Install the headless browser kit (`orbit browser-kit install`) without
+    /// Install the headless browser kit (`orbit config browser-kit install`) without
     /// asking when the repository has a web UI (a `package.json` or HTML
     /// file). Without it, init asks at a terminal and otherwise only says how.
     #[arg(long)]

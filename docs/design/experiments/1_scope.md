@@ -1,21 +1,21 @@
 ---
 title: "Scope: randomized experiments over agent treatments"
 owner: claude
-last_updated: 2026-10-28
-last_validated: 2026-10-28
+last_updated: 2026-11-07
+last_validated: 2026-11-07
 status: Draft
 stage: building
-next: "Raise a concluded-or-due experiment through the human decision channel (open; decision requests are task-bound today)"
+next: "The horizon decision-channel step remains unfiled"
 feature: experiments
 doc_role: scope
 type: design
-summary: "Scope: operator-defined experiments whose arms overlay instructions, skills, tools, crews or allowlisted config on a task's runs; sticky random assignment at admission, durable SQLite records, per-arm outcome analysis with intervals, and an operator decision that files the promotion"
+summary: "Scope: operator-defined experiments whose arms overlay instructions, skills, tools, crews, allowlisted config or crew memory on a task's runs; sticky random assignment at admission, durable SQLite records, per-arm outcome analysis with intervals, and an operator decision that files the promotion"
 tags: [experiments, admission, tag-instructions, crew-pools, analytics, decisions]
 ---
 
 # Scope: randomized experiments over agent treatments
 
-Status: building. Phase 1 (records and shadow assignment) and the instruction and tool surfaces of phase 2 are implemented: a `live` experiment applies them on owner and claimed runs, and every dispatch it changes records an `activity.experiment_overlay_applied` audit row with the digest of what it received. Removal is refused for the tools the agent handoff contract needs (`orbit.task.show`, `orbit.task.update`, `orbit.task.artifact.put`); a `false` instruction entry leaves Orbit's shipped default tag instructions out of that role. The per-arm readout (`orbit experiment readout`, `orbit.experiment.readout` and `GET /api/diagnostics/experiments/{id}/readout`) computes outcomes, intervals, the sample-ratio and drift checks and the verdict on read. The Analytics › Experiments dashboard page lists each experiment's per-arm progress toward `min_sample` (`GET /api/diagnostics/experiments`) and opens one (`GET /api/diagnostics/experiments/{id}`, plus the readout with its cumulative primary-metric series) to arm cards, a forest plot, the per-complexity table, crew mix, health warnings and the event timeline. An operator concludes from that page, the CLI or `orbit.experiment.conclude`: the conclusion event stores the readout JSON at that moment, assignment stops, and a chosen arm files one proposed promotion task. Concluding changes no configuration or repository file. An operator also defines, edits and starts experiments from that page: **New experiment** opens a form over the whole definition (population, arms with their crew, instruction, tool, skill and config overlays, primary metric, guardrails, sample rules, mode and reason), a draft card offers Edit and Start, and **Save and start** saves then starts after a confirmation naming the arms, weights and population. The routes `POST /api/diagnostics/experiments`, `PATCH /api/diagnostics/experiments/{id}` and `POST /api/diagnostics/experiments/{id}/start` are operator-only and call the same `create_experiment`, `update_experiment` and `change_experiment` as `orbit.experiment.create`, `update` and `start`, so core's validation and refusals apply unchanged and each write records its event with actor `dashboard` and the given reason. Pause, resume, reweight, clone and abandon stay on the CLI and tools.
+Status: building. Phase 1 (records and shadow assignment) and the instruction and tool surfaces of phase 2 are implemented: a `live` experiment applies them on owner and claimed runs, and every dispatch it changes records an `activity.experiment_overlay_applied` audit row with the digest of what it received. Removal is refused for the tools the agent handoff contract needs (`orbit.task.show`, `orbit.task.update`, `orbit.task.artifact` action `put`); a `false` instruction entry leaves Orbit's shipped default tag instructions out of that role. The per-arm readout (`orbit experiment readout`, `orbit.experiment.readout` and `GET /api/diagnostics/experiments/{id}/readout`) computes outcomes, intervals, the sample-ratio and drift checks and the verdict on read. The Analytics › Experiments dashboard page lists each experiment's per-arm progress toward `min_sample` (`GET /api/diagnostics/experiments`) and opens one (`GET /api/diagnostics/experiments/{id}`, plus the readout with its cumulative primary-metric series) to arm cards, a forest plot, the per-complexity table, crew mix, health warnings and the event timeline. An operator concludes from that page, the CLI or `orbit.experiment.conclude`: the conclusion event stores the readout JSON at that moment, assignment stops, and a chosen arm files one proposed promotion task. Concluding changes no configuration or repository file. An operator also defines, edits and starts experiments from that page: **New experiment** opens a form over the whole definition (population, arms with their crew, instruction, tool, skill and config overlays, primary metric, guardrails, sample rules, mode and reason), a draft card offers Edit and Start, and **Save and start** saves then starts after a confirmation naming the arms, weights and population. The routes `POST /api/diagnostics/experiments`, `PATCH /api/diagnostics/experiments/{id}`, `POST /api/diagnostics/experiments/{id}/start`, `POST /api/diagnostics/experiments/{id}/pause` and `POST /api/diagnostics/experiments/{id}/resume` are operator-only and call the same `create_experiment`, `update_experiment` and `change_experiment` as `orbit.experiment.create`, `update`, `start`, `pause` and `resume`, so core's validation and refusals apply unchanged and each write records its event with actor `dashboard` and the given reason. A running experiment's page offers **Pause** and a paused one **Resume**, each behind a confirmation with an optional reason; no other state offers either, and a session without operator authority sees neither. Reweight, clone and abandon stay on the CLI and tools.
 Skills, crew pools and allowlisted config values are also live. Skill replacement currently supports Claude on Unix through an invocation-local discovery root; other providers refuse the overlay. Bundles are pinned to the run base, carried in claimed captures, and recorded with per-bundle digests (see [configuration](../../CONFIG.md#experiments--experiments-over-agent-treatments)).
 
 Bearing: Orbit already has most of the parts an experiment needs, scattered across
@@ -27,15 +27,15 @@ them at the claim base into `AdmissionReceipt::tag_instructions` so a follower a
 text. **Crew pool draws** (`crates/orbit-core/src/application/job/crew_pools/draw.rs`) pick a
 crew by weighted ticket draw and record it as `crew_selection` on the run input and
 `crew_source` on the task; `seeded_crew_ticket` already makes keyed draws reproducible (review
-admission, keyed task creation). [Crew performance](../crew-performance/1_scope.md) scales
-those weights, with a shadow mode that records a factor without applying it. A task's
+admission, keyed task creation). [Crew performance](../_archived/crew-performance/1_scope.md)
+scaled those weights until its removal in [ORB-22804]. A task's
 `required_tools` widens its activity's tool baseline
 (`adapter/engine_host/runtime_host/activity_tools.rs::admit_required_tools`). The analytics side has the shared trend
 ladder (`crates/orbit-web/src/api/diagnostics/trend.rs`) behind the tokens-per-task
 ([ORB-18364]), diff-stats ([ORB-18383]), durations, completions and defects series, and the
 [agent scorecards](../agent-scorecards/2_design.md) count review rejects, recoveries and
-escaped regressions per run. The one cohort comparison Orbit ships,
-`application/job/explore_analytics.rs::explore_comparison` ([ORB-16814]), is observational.
+escaped regressions per run. The former explorer cohort comparison ([ORB-16814]) was observational; it
+was removed with explorer delegation.
 
 ## Problem
 
@@ -49,11 +49,11 @@ The trials run so far show what is missing:
 - **Explorer delegation** was offered in about 300 implement prompts and used zero times
   (2026-10-24). The explore comparison could only split runs by whether the agent *chose* to
   explore, so its cohorts differ in more than the treatment.
-- **The explore-first trial** ([ORB-18032], readout [ORB-18033]) assigns by tag at filing,
-  by hand.
+- **The explore-first trial** ([ORB-18032] added its tag instruction) assigns by tag at
+  filing, by hand. Its readout task [ORB-18033] was rejected.
 - **The explore-brief trial** ([ORB-18363]) designs three arms assigned by task number modulo
   3 at filing, arms defined in workspace config, and a readout assembled by hand from several
-  Analytics series.
+  Analytics series. The explore brief itself was removed in [ORB-22805].
 
 Each trial re-invents the same four things, and each gets one of them wrong in a way that
 weakens the result:
@@ -84,6 +84,41 @@ task received.
 
 With no running experiment, Orbit behaves exactly as today. Tag instructions, crew pools and
 config keep their meaning; an experiment layers on top of them for the tasks it assigns.
+
+### Metric scope
+
+Whole-task primary metrics are `total_tokens`, `cost_usd`, `lead_time`,
+`first_pass_acceptance`, `review_repairs`, `step_recoveries`,
+`final_recoveries`, `failed_checks`, `merge_conflicts`, `delivery_done_rate`,
+`escaped_regressions`, and `lines_changed`. `cost_per_line`
+and `lead_time_per_line` are whole-task too (lower is better) and may be
+the primary; [ORB-20646] added these per-line metrics and their attributed
+denominator. Each is a ratio of sums: the arm's total cost, or its total
+lead time in hours, divided by the arm's total reviewable lines. The
+interval is a paired bootstrap that resamples tasks. It is never the mean
+of per-task ratios. Duration is `lead_time`, not `implement_duration`.
+
+Reviewable lines are the added and deleted lines of that task's own
+commits, excluding paths in `workflow.non_reviewable_paths` and pure
+renames. That exclusion is workspace configuration, distinct from
+`workflow.non_code_paths`, and empty unless the workspace lists lockfiles,
+goldens, snapshots or generated files; docs and config stay reviewable.
+Rows that landed before the denominator was recorded, or whose commits
+cannot be isolated to the task, have an unavailable denominator. They are
+not recomputed from a shared landing range. A readout drops them, and
+drops runs whose reviewable total is zero, and reports each count per arm
+separately.
+
+An experiment whose primary metric is per-line must carry a
+`lines_changed` guardrail. An arm that improves the per-line metric while
+breaching that guardrail is not a winner.
+
+The step-local
+metrics `implement_tokens`, `implement_duration`, `turns_before_first_edit`,
+and `result_bytes_before_first_edit` are exploratory. A treatment can move
+work between steps without improving the task, so these cannot be primary;
+they remain readable and usable as guardrails. A legacy step-local primary
+keeps its data but its verdict is withheld.
 
 ## Shape
 
@@ -138,13 +173,22 @@ activities themselves.
 |---|---|---|---|
 | Instructions | A repository file per role (`implement`, `review`, `recovery`), or `false` to suppress a shipped default | The tag-instruction slot; an experiment's text follows tag-instruction text | File exists at the current base |
 | Skills | Replace a named skill with a bundle directory in the repository | Invocation-local Claude skill root on Unix; control keeps global links, other providers refuse | Bundle exists and parses at the base; provider supports isolated replacement |
-| Tools | Add tools to, or remove optional tools from, the activity baseline | Adding reuses `admit_required_tools`. Removing is **new**: a per-run denial applied after `resolve_activity_tool_grant` | Tools exist and are agent-facing; a tool the activity contract requires cannot be removed |
+| Tools | Add tools to, or remove optional tools from, the activity baseline | Adding reuses `admit_required_tools`; removal applies a per-run denial after `resolve_activity_tool_grant` | Tools exist and are agent-facing; a tool the activity contract requires cannot be removed |
 | Crew | A crew pool (members and weights) for the arm | The admission crew draw, as the run-level `<complexity>_complexity_crews` override does today; the arm's pool skips performance weighting | Crews exist and may run the task's complexity |
-| Config | Values for allowlisted keys only | **New:** no typed list of per-run overridable `workflow.*` keys exists; `orbit-config` gains one, each key opted in by code | Key is on both the code list and the workspace allowlist |
+| Memory | `roles` and `global`: deliver the drawn crew's model memory space (and the reviewed global memory) as data ([crew memory §5](../crew-memory/2_design.md#5-delivery-the-memory-overlay-surface)) | Resolved after the crew draw into the admission capture; a `crew_memory` envelope field plus one fixed precedence sentence | `crew_memory.enabled` is true |
+| Config | Values for allowlisted keys only | `orbit_config::ExperimentConfigKey` admits `workflow.explore.max_calls_per_run` (integer 1–100) and `visual_review.reviewer` (boolean); both are inert and kept so historical experiments still validate | Key is on both the code list and the workspace allowlist |
 
 Each overlay entry names the roles it applies to; the default is `implement` only. Review and
 recovery overlays are allowed but are opt-in per entry, because a reviewer that shares the
-implementer's treatment stops being an independent check of it.
+implementer's treatment stops being an independent check of it. [ORB-19982] added the
+`visual_review.reviewer` key, which controlled visual review's mock comparison reviewer
+regardless of an entry's declared roles; [ORB-22524] documented that exception. Visual
+review was removed in [ORB-22807]: the key is retained only so historical experiments
+still validate, and it has been ignored since.
+
+**Explorer removal:** [ORB-20383] removes the explorer agent, invocation tool
+and live configuration. The legacy experiment config key has no effect;
+historical explorer uptake fields remain readable for concluded experiments.
 
 ### Assignment
 
@@ -156,15 +200,27 @@ implementer's treatment stops being an independent check of it.
    walked over the arms' cumulative weights in the current segment. The draw is deterministic,
    so any readout can recompute it, and no one can choose a task's arm by timing. (The run
    admission crew draw itself uses unseeded `random_crew_ticket`; that stays as is.)
-3. **Sticky.** The assignment row is written before the run starts and is read, never
-   redrawn, for every later run of the task: retries, step and final recovery, review repair,
-   resume, re-admission after a block. A task keeps its arm until it is terminal, even if the
-   experiment concludes meanwhile.
+3. **Historical enrollment and admission authority.** The assignment row is immutable:
+   arm, segment, digest, assignment time and forced flag remain available to analysis. Fresh
+   admission evaluates whether that historical treatment still has execution authority.
+   Concluded and abandoned experiments apply no overlay to a fresh delivery and enroll no
+   new tasks. Paused experiments and retired arms retain their existing-assignment behavior.
+   Already admitted owner runs, same-task children and owner-issued follower receipts retain
+   their captured treatment on resume, even after conclusion. This replaces the earlier rule
+   that kept terminal experiment treatment active until the task itself became terminal;
+   [ORB-21202] implemented this admission-authority change.
 4. **One experiment per surface per task.** A task can be in several experiments only when
    their overlays touch disjoint surfaces. A later experiment that conflicts records the task
    as excluded (`surface_conflict`) rather than assigning it.
-5. **Forced assignment.** An operator can assign an arm by hand. The row records
-   `forced = true` and the analysis leaves it out.
+5. **Operator authority.** An explicit run crew wins for that fresh run. A later explicit
+   task crew supersedes historical crew enrollment, including a forced assignment. A force
+   made after a task pin wins until another audited task crew change; assignment and
+   `crew_assigned` timestamps determine ordering, with force winning an exact tie. An explicit
+   pin with no recoverable timestamp supersedes ordinary enrollment but does not displace
+   a timestamped force. The row still records `forced = true` and analysis leaves it out.
+   A crew override suppresses the entire crew-bearing arm for that admission, avoiding a
+   partial treatment; the frozen capture records `live: false`, and `crew_selection` records
+   the intended overlay digest, actual crew and suppression. Historical rows are untouched.
 6. **Claims.** The owner resolves the overlay (reads instruction files and skill bundles at
    the claim base, computes digests) and captures arm, segment and resolved overlay into the
    admission claim as a new `AdmissionReceipt` field, next to the captured tag instructions,
@@ -195,6 +251,48 @@ overlay digest.
 | Escaped regressions | `regression_from` relations within 14 days of landing, any escape class (the scorecards charge only some classes; the experiment counts them all) |
 | Lines changed | Landed diff stats ([ORB-18383]) |
 
+Each arm also reports `tasks_with_explorer_call`: the number of analysed
+enrolled tasks that recorded at least one explorer-delegation call on an
+implement invocation at or after assignment. A call matches when its stored
+name is `orbit.agent.invoke` or `orbit_agent_invoke`, compared
+case-insensitively as the full name or as the tail after the last `__`, so
+an MCP tool such as `mcp__orbit__orbit_agent_invoke` counts. A task counts
+once. The readout reads those stored tool-call records and does not make a
+delegation call. `orbit experiment readout` JSON and `orbit.experiment.readout`
+both serialize the field; the schema version stays 1. An invocation whose
+provider output outgrew the bounded capture records only the suffix of its tool
+calls and persists `tool_calls_incomplete` ([ORB-20572]). A task whose first
+implement invocation is incomplete has no first-edit score, and a task with no
+recorded explorer call but an incomplete implement invocation at or after
+assignment counts in the arm's `tasks_explorer_unobserved`, not as a confirmed
+absence. The readout adds a `tool_trace_incomplete` warning for the first-edit
+case and an `explorer_trace_incomplete` warning for the explorer case. A later
+truncated invocation leaves a complete first invocation's first edit measured
+([ORB-20590]).
+
+`first_pass_acceptance` and `review_repairs` are review-derived: they read a
+task's typed review gate settlements in its history, decoding settlement
+comments only for records written before that event. `review_repairs` counts
+a task's `accept_with_fixes` settlements, and that count (zero included) is
+measured only for a task with at least one settlement; a terminal task with no review
+gate settlement is `unmeasured` for `review_repairs`, not a measured zero,
+because no review happened. A non-terminal task stays open.
+
+When the primary metric is unmeasured on every
+settled task in every active arm, the readout carries a
+`primary_all_unmeasured` warning naming the metric and the settled-and-
+unmeasured count per arm; for a review-derived metric with no settlement on
+any enrolled task it also states that no enrolled task has a review gate
+settlement. The warning appears in the JSON readout's `warnings` and in the
+human readout. It is absent when at least one active arm has a measured
+primary outcome, and absent while every enrolled task is still open.
+Starting an experiment whose primary metric is review-derived in a workspace whose effective review policy runs no review
+gate (`review.timing = "off"` with no before-landing hosts) prints the same
+reason as a warning naming the metric and the policy, records it in the
+started event's `warnings`, and still starts the experiment: a drain can add
+a review layer for its window (`run auto --review`), so the policy at start
+does not settle it.
+
 `cost_usd` uses each invocation's valid provider-reported dollars first, then
 its token-derived estimate from the shared, versioned configuration data in
 `crates/orbit-common/assets/model_prices.yaml`. Rates are keyed by model and
@@ -211,9 +309,9 @@ For the `cost_usd` metric, each arm's `cost_coverage` reports settled task count
 uses the price table and all are priced, and `unmeasured` otherwise. Reported
 plus estimated equals the metric's measured `n`; unmeasured matches its
 `unmeasured` count. In-flight tasks stay in `open`, outside these counts.
-The CLI prints coverage even with no measured costs, and dashboard arm cards
-show it regardless of the primary metric. Models absent from the shared table
-remain unmeasured until pricing data is available; they are never assumed free.
+The CLI prints coverage even with no measured costs, and the dashboard's Trust
+tab shows it in per-arm evidence regardless of the primary metric. Models absent
+from the shared table remain unmeasured until pricing data is available; they are never assumed free.
 Cost and coverage are recomputed on read from the raw invocation records.
 
 The experiment names one primary metric and any number of guardrails
@@ -227,15 +325,46 @@ segment:
 - **Sample-ratio check.** A chi-square test of observed arm counts against the weights; below
   p = 0.001 the readout shows a warning and gives no verdict, because the assignment itself is
   suspect.
-- **Verdict.** Withheld until every arm reaches `min_sample` or `max_days` passes (fixed
-  horizon, so repeated looks do not inflate false wins). Then: `winner <arm>` when the primary
+- **Treatment delivery.** Intention-to-treat counts a task in its arm whether or not the
+  treatment reached it, so a treatment whose overlaid step fails on every run would be judged
+  on control's work ([ORB-20597]: every explorer call in exp-2b6d910d's treatment arm failed,
+  yet its primary interval excluded zero). Each treatment arm's overlay names its dispatch
+  roles: the roles of its instructions, skills, tools and memory. Crew and config surfaces act at
+  admission or through settings. A crew overlay additionally requires positive evidence from
+  the latest delivery's frozen admission selection: the experiment source and overlay digest,
+  with no crew deviation or suppression. Choosing the same crew explicitly is not treatment.
+  Legacy or remote crew delivery without that evidence is unconfirmed, not counted as delivered.
+  Config-only and empty overlays have no delivery check (`delivery: null`). A task's treatment
+  is **delivered** when,
+  for every dispatch role, a run of the task has an `experiment_overlay_applied` audit row for
+  this experiment's arm in that role whose step's last `step_finished` outcome in the same run
+  is `success`. The evidence is the durable run audit trail, never agent output, and the rule is
+  read from the overlay definition with no per-experiment or per-activity branch. A later
+  admission that suppresses the arm cannot borrow an earlier run's dispatch evidence. A task not
+  delivered and still in flight is `pending`. Each arm reports `delivery` (`roles`, `assigned`,
+  `delivered`, `pending`, `rate` = delivered / (assigned − pending)). When any arm's rate is
+  below 0.9 (fixed since [ORB-22808]), or the horizon is reached with none of
+  its tasks settled, the verdict is `withheld` with the reason
+  ``arm `<arm>` treatment delivered on <n>/<m> runs`` and an `undelivered` warning, from the
+  first settled task on and over any would-be `winner` or `no difference`. At or above the
+  threshold the verdict rules are unchanged. Delivery proves the overlaid step ran and
+  succeeded, not that the agent acted on the instruction; explorer uptake
+  (`tasks_with_explorer_call`) remains the check for that.
+- **Per-protocol view.** Beside the intention-to-treat metrics, `per_protocol` (labelled
+  `per-protocol (delivered runs only)`) reports the primary metric with each checked treatment
+  arm reduced to its delivered tasks; control and unchecked arms keep all theirs. When the two
+  views disagree, the treatment's effect depends on whether it was delivered. The verdict is
+  read on intention-to-treat only.
+- **Verdict.** A treatment arm with a delivered rate below 0.9 gets verdict `withheld` before the horizon, even when its primary comparison
+  would otherwise be `winner` or `no difference`. If no delivery or sample-ratio check withholds
+  the verdict, it remains `collecting` until every arm reaches `min_sample` or `max_days` passes
+  (fixed horizon, so repeated looks do not inflate false wins). Then: `winner <arm>` when the primary
   metric's interval excludes zero in the better direction and no guardrail's point estimate is
   past its threshold; `no difference`; or `inconclusive` when a guardrail interval straddles
   its threshold or the primary comparison lacks an interval (no settled outcomes,
   fewer than two values per arm in a used complexity cell, or no common measured
   cell). Missing evidence cannot establish `no difference`; a treatment with a
-  complete winning comparison can still win. Before the horizon the readout says
-  `collecting`.
+  complete winning comparison can still win.
 - **Lagging metrics.** Escaped regressions settle 14 days after landing; the readout shows how
   many outcomes are still open.
 
@@ -255,8 +384,8 @@ as a side effect of a decision.
 When an experiment reaches its horizon, Orbit should raise it for decision through the
 [human decision channel](../human-decision-channel/1_scope.md) instead of waiting to be
 noticed. Decision requests are task-bound today (`orbit_types::task::DecisionRequest` carries
-a `task_id` and a `DecisionGate` of block triage, pilot admission, proposed approval or review
-approval), so this needs either a subject that is not a task or a tracking task per
+a `task_id`; `DecisionGate::AgentRequest` is the agent-raised human question), so this
+needs either a subject that is not a task or a tracking task per
 experiment (open question).
 
 ### Configuration
@@ -266,15 +395,20 @@ Policy only. Experiment definitions are store records.
 | Key | Default | Meaning |
 |---|---|---|
 | `experiments.enabled` | `false` | Off: no new assignments; running experiments keep their rows and in-flight tasks keep their arms |
-| `experiments.max_running` | `3` | Running experiments per workspace |
 | `experiments.config_keys` | `[]` | Allowlisted config keys arms may override in this workspace; each must also be on the code list |
+
+At most 3 experiments run at once in a workspace. `experiments.max_running` and
+`experiments.min_delivered_rate` set this limit and the 0.9 delivered rate until [ORB-22808]
+fixed them at those defaults.
 
 ### Surfaces
 
 - **Tools and CLI.** `orbit.experiment.{create, update, clone, start, pause, resume, reweight,
-  assign, conclude, abandon, show, list, readout}` and the matching `orbit experiment` verbs.
+  assign, conclude, abandon, delete, show, list, readout}` and the matching `orbit experiment` verbs.
   `update` works only in `draft`. Creating, starting, reweighting, forcing and concluding are
-  operator actions; agents may read.
+  operator actions; agents may read. [ORB-20370] added operator-only deletion: a draft,
+  concluded or abandoned experiment can be deleted only when it has no concluded arm and
+  never assigned a live treatment. Rows, arms, events and assignments are removed together.
 - **Task and run.** `orbit.task.show` gains an `experiments` field (arm, segment, digest);
   `orbit run show` prints one line per applied arm.
 - **Dashboard: Analytics › Experiments.** A list with status, segment and sample progress.
@@ -283,7 +417,13 @@ Policy only. Experiment definitions are store records.
   shared trend ladder, the per-complexity table, health warnings (sample ratio, drift, open
   lagging outcomes), the event timeline, and the conclude action for operators. Operators
   also create a draft, edit a draft and start one there, through the same core lifecycle as
-  `orbit.experiment.create`, `update` and `start`.
+  `orbit.experiment.create`, `update` and `start`. [ORB-22359] organized the detail around a
+  decision band and three tabs: Result holds arm cards and primary/guardrail differences;
+  Trust holds health, delivery, crew mix, cumulative series and the per-complexity table;
+  Setup holds the definition and timeline. [ORB-22445] separated record and readout loading:
+  the header, Setup and Conclude remain usable while Result and Trust load or offer Retry.
+  A failed refresh retains the previous readout with a stale notice and its own Retry in
+  each tab; [ORB-22475] repaired that notice in Result.
 
 ## Non-goals
 
@@ -325,18 +465,27 @@ Policy only. Experiment definitions are store records.
 
 ## Phasing
 
-1. **Records and shadow assignment.** An additive migration (`crates/orbit-store/src/driver/sqlite/migration/experiments.rs`), lifecycle, events, `orbit.experiment.*`
+1. **Records and shadow assignment.** Done ([ORB-18473] built the records, lifecycle and
+   `orbit.experiment.*` tools; [ORB-18474] added sticky shadow assignment at admission,
+   captured into claims). An additive migration (`crates/orbit-store/src/driver/sqlite/migration/experiments.rs`), lifecycle, events, `orbit.experiment.*`
    and CLI, sticky assignment at admission, claim capture of the arm, `task show` and
    `run show` lines. Overlays are recorded but not applied; the first experiment is an A/A
    test whose sample-ratio check must pass.
-2. **Instructions and tools.** Live mode for the two surfaces that reuse the most existing
+2. **Instructions and tools.** Done ([ORB-18475] made instruction and tool overlays live on
+   owner and claimed runs). Live mode for the two surfaces that reuse the most existing
    code: the tag-instruction slot and the tool allowlist, on owner and claimed runs, with
    digests.
-3. **Skills, crew and config keys.** The remaining surfaces, each validated at start.
-4. **Readout.** The analysis endpoint and Analytics › Experiments.
-5. **Decision and promotion.** Conclude stores the readout snapshot and files one promotion
+3. **Skills, crew and config keys.** Done ([ORB-18476] added crew and allowlisted config-key
+   overlays; [ORB-18477] added the per-run skill overlay). The remaining surfaces, each
+   validated at start.
+4. **Readout.** Done ([ORB-18478] built the per-arm readout; [ORB-18479] built the
+   Analytics › Experiments dashboard page; [ORB-19368] added create, edit and start there).
+   The analysis endpoint and Analytics › Experiments.
+5. **Decision and promotion.** Done in part ([ORB-18480] made conclude store the readout
+   snapshot and file one promotion task). Conclude stores the readout snapshot and files one promotion
    task. The decision-channel prompt at the horizon remains open: decision requests are
-   task-bound today. The explore-brief trial becomes the first live experiment.
+   task-bound today. Live rollout is no longer pending: [ORB-19390] repaired enrollment
+   for the first running crew experiments. That rollout does not complete the horizon prompt.
 
 ## Open questions
 
@@ -369,6 +518,9 @@ Policy only. Experiment definitions are store records.
   applied to any run.
 - The readout reports per-arm n, estimates with intervals, differences from control overall and
   per complexity, sample-ratio and drift warnings, and withholds a verdict before the horizon.
+- A treatment arm whose overlaid step did not succeed on at least 0.9
+  of its settled tasks gets a `withheld` verdict naming the arm and its delivered count; the
+  readout also reports each arm's delivered rate and the primary metric per-protocol.
 - Concluding stores the readout snapshot and, with a winner, files one `proposed` promotion
   task; no configuration or repository file is changed by the conclusion itself.
 - With `experiments.enabled = false`, admission and runs are unchanged from today.
@@ -377,9 +529,34 @@ Policy only. Experiment definitions are store records.
 
 - [ORB-16814] — compares implement runs with and without explorer calls (observational)
 - [ORB-18032] — adds the `explore-first` tag instruction for a forced-explorer trial
-- [ORB-18033] — reads out the explore-first trial
+- [ORB-18033] — requested the explore-first readout; the task was rejected
 - [ORB-18363] — designs explore briefs and their three-arm trial
 - [ORB-18364] — charts tokens per task by complexity and tag
 - [ORB-18383] — records landed diff stats per delivery
+- [ORB-18473] — built experiment records, lifecycle and the `orbit.experiment.*` tools (phase 1)
+- [ORB-18474] — added sticky shadow assignment at admission, captured into claims (phase 1)
+- [ORB-18475] — made instruction and tool overlays live on owner and claimed runs (phase 2)
+- [ORB-18476] — added crew and allowlisted config-key overlays (phase 3)
+- [ORB-18477] — added the per-run skill overlay (phase 3)
+- [ORB-18478] — built the per-arm readout with intervals and the sample-ratio check (phase 4)
+- [ORB-18479] — built the Analytics › Experiments dashboard page (phase 4)
+- [ORB-18480] — made conclude store the readout snapshot and file the promotion task (phase 5)
+- [ORB-19368] — added create, edit and start for experiments on the dashboard page (phase 4)
+- [ORB-19390] — enrolls eligible tasks after experiments are enabled while a drain is already running
+- [ORB-19982] — added the live visual-review experiment and its reviewer config overlay
+- [ORB-20370] — added guarded deletion of experiments that never applied a live treatment
+- [ORB-20383] — is approved to remove explorer tooling and reconcile affected experiment surfaces
+- [ORB-20572] — records incomplete tool traces and excludes them from first-edit measurements
+- [ORB-20590] — separates later retry trace warnings from first-invocation first-edit measurement
+- [ORB-20597] — withholds the verdict when a treatment arm's overlay was not delivered, and adds
+  the per-protocol view
+- [ORB-20646] — adds whole-task per-line cost and lead-time metrics with an attributed denominator
+- [ORB-21202] — stops ended experiments overriding fresh admissions and honors later operator pins
+- [ORB-22359] — organizes experiment details around the decision and Result, Trust and Setup tabs
+- [ORB-22445] — loads the experiment record independently and reduces readout cost
+- [ORB-22475] — preserves a stale-readout notice and Retry in each result-bearing tab
+- [ORB-22524] — documents both typed config keys and the visual-review role exception
+- [ORB-22807] — removed visual review: the `visual-review` template, the visual metrics, and the
+  effect of `visual_review.reviewer`, which stays allowlisted for historical experiments
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

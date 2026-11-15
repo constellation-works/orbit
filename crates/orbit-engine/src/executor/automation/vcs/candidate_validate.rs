@@ -77,7 +77,7 @@ use super::claim::{
 use super::commit::attribute_candidate_paths;
 use super::deferred_sandbox::{deferred_replays, with_replays};
 use super::flaky::rerun_failed_tests;
-use super::git::{git_command_success, git_output, git_output_paths};
+use super::git::{git_output, git_output_paths};
 use super::handoff::completed_task_ids_from_input;
 use super::light_delivery::{light_delivery_decision, record_light_delivery};
 use super::validation_log::{FailureLog, rerun_log};
@@ -160,15 +160,10 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
     let candidate = git_output(&workspace_path, &["rev-parse", "HEAD"])?;
     let base_sha = input_string_field(input, "base_sha");
     if let Some(base_sha) = base_sha.as_deref()
-        && !git_command_success(
+        && !crate::executor::automation::vcs::git::is_ancestor(
             &workspace_path,
-            &[
-                "merge-base",
-                "--is-ancestor",
-                "--end-of-options",
-                base_sha,
-                &candidate,
-            ],
+            base_sha,
+            &candidate,
         )?
     {
         return Err(OrbitError::PolicyDenied(format!(
@@ -507,16 +502,11 @@ fn record_known_red<H: RuntimeHost + ?Sized>(
         host.apply_task_automation_update(
             task_id,
             TaskAutomationUpdate {
-                append_history: vec![TaskHistoryEntry {
-                    at: Utc::now(),
-                    by: "system".to_string(),
-                    event: KNOWN_RED_VALIDATION_EVENT.to_string(),
-                    note: Some(note.clone()),
-                    from_status: None,
-                    to_status: None,
-                    operation_id: None,
-                    decision: Some(TaskDecision::KnownRedValidation(known.clone())),
-                }],
+                append_history: vec![
+                    TaskHistoryEntry::new(Utc::now(), "system", KNOWN_RED_VALIDATION_EVENT)
+                        .with_note(Some(note.clone()))
+                        .with_decision(Some(TaskDecision::KnownRedValidation(known.clone()))),
+                ],
                 ..TaskAutomationUpdate::default()
             },
         )?;

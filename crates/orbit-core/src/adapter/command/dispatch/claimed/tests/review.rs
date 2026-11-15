@@ -276,7 +276,7 @@ impl Fixture {
             allowed_tools: Vec::new(),
             tool_deny_policy: Some(ActivityToolDenyPolicy {
                 activity: activity.into(),
-                disallow_list: vec!["orbit.agent.invoke".into(), "orbit.task.update".into()],
+                disallow_list: vec!["orbit.command.exec".into(), "orbit.task.update".into()],
             }),
             caller: BrokeredCaller {
                 worktree: self.worktree.clone(),
@@ -583,10 +583,12 @@ fn the_broker_refuses_what_its_records_do_not_admit_without_reaching_the_owner()
         .runtime
         .list_audit_events(None, None, None, None, 50)
         .unwrap();
+    let brokered: Vec<_> = rows.iter().filter(|row| row.brokered).collect();
     assert!(
-        rows.iter()
-            .filter(|row| row.brokered)
-            .all(|row| row.status != AuditEventStatus::Success),
+        !brokered.is_empty()
+            && brokered
+                .iter()
+                .all(|row| row.status != AuditEventStatus::Success),
         "every refusal is audited as one: {rows:?}"
     );
 }

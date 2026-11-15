@@ -10,9 +10,8 @@ use orbit_common::OrbitError;
 pub(super) use orbit_common::process::identity::process_is_alive;
 #[cfg(unix)]
 use orbit_common::process::identity::{
-    KernelLiveness, PidNamespaceScope, ProbeOutcome, is_stable_token, legacy_lstart_matches,
-    pid_namespace_scope, probe_process_group_liveness, probe_process_start_identity,
-    stable_tokens_match,
+    KernelLiveness, PidNamespaceScope, ProbeOutcome, is_stable_token, pid_namespace_scope,
+    probe_process_group_liveness, probe_process_start_identity, stable_tokens_match,
 };
 use orbit_types::workflow::{JobRun, JobRunState};
 #[cfg(unix)]
@@ -416,7 +415,7 @@ fn process_group_is_alive(pgid: libc::pid_t) -> bool {
 /// Returns true only for Running runs whose owner is conclusively stale
 /// (Mismatch or Missing). Other classifications keep the run live.
 #[cfg(unix)]
-pub(super) fn running_run_owner_is_stale(run: &JobRun) -> bool {
+pub(crate) fn running_run_owner_is_stale(run: &JobRun) -> bool {
     running_run_owner_stale_reason(run).is_some()
 }
 
@@ -514,7 +513,7 @@ pub(super) fn stale_pending_run_message(run: &JobRun, reason: PendingStaleReason
 }
 
 #[cfg(not(unix))]
-pub(super) fn running_run_owner_is_stale(_run: &JobRun) -> bool {
+pub(crate) fn running_run_owner_is_stale(_run: &JobRun) -> bool {
     false
 }
 
@@ -551,14 +550,13 @@ pub(super) fn running_run_owner_stale_reason(_run: &JobRun) -> Option<()> {
 ///
 /// Only `Mismatch` and `Missing` warrant finalizing the run as failed.
 ///
-/// - `Verified` — versioned token (or legacy token re-derived under either
-///   environment) matches the live process: the worker is the original owner.
+/// - `Verified` — versioned token matches the live process: the worker is the
+///   original owner.
 /// - `Mismatch` — versioned persisted token disagrees with the live process's
 ///   current token: a different process is holding the PID. Stale.
-/// - `LegacyLiveUnverified` — a legacy unversioned token cannot
-///   be re-derived under either environment, but `kill(pid, 0)` confirms the
-///   PID is still alive. Stays Running; cancellation still refuses to signal
-///   it (PID-reuse protection).
+/// - `LegacyLiveUnverified` — an unversioned token was persisted, or no token
+///   was persisted, but `kill(pid, 0)` confirms the PID is still alive. Stays
+///   Running; cancellation still refuses to signal it (PID-reuse protection).
 /// - `ProbeUnavailable` — kernel data could not be read or the fallback
 ///   `ps` invocation failed, and `kill(pid, 0)` confirms the PID is still alive.
 ///   A transient probe failure must never terminalize a live worker.
@@ -587,7 +585,6 @@ pub(super) fn classify_run_owner(run: &JobRun) -> OwnerIdentity {
         run.pid_start_time.as_deref(),
         pid_namespace_scope(run.pid_start_time.as_deref()),
         start_identity_probe,
-        |pid| legacy_lstart_matches(pid, run.pid_start_time.as_deref().unwrap_or_default()),
         process_is_alive,
     )
 }
@@ -620,17 +617,15 @@ fn start_identity_probe(pid: u32) -> ProbeOutcome {
 /// function of its inputs: a test asserting genuine-orphan detection must not
 /// change verdict because the test runner itself happens to be sandboxed.
 #[cfg(unix)]
-pub(super) fn classify_run_owner_with_probes<P, L, A>(
+pub(super) fn classify_run_owner_with_probes<P, A>(
     pid: Option<u32>,
     persisted: Option<&str>,
     scope: PidNamespaceScope,
     probe: P,
-    legacy_match: L,
     is_alive: A,
 ) -> OwnerIdentity
 where
     P: FnOnce(u32) -> ProbeOutcome,
-    L: FnOnce(u32) -> bool,
     A: FnOnce(u32) -> bool,
 {
     // [ORB-10594] Ordered ahead of every probe: inside a private PID namespace
@@ -673,9 +668,7 @@ where
             }
         };
     }
-    if legacy_match(pid) {
-        OwnerIdentity::Verified
-    } else if is_alive(pid) {
+    if is_alive(pid) {
         OwnerIdentity::LegacyLiveUnverified
     } else {
         OwnerIdentity::Missing

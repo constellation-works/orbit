@@ -45,7 +45,7 @@ older checkouts stay covered while waiting for the fix.
 
 A plain archive or rejection without `covered_by` suppresses an equivalent
 evidenced cause (and, for compiler errors, the same diagnostic set at later
-checkouts) for `ci_failure.operator_suppression_hours` (default 6) from the
+checkouts) for a fixed 6 hours from the
 recorded status decision. A historical job/step key alone does not establish
 equivalence: a different retained diagnostic can file a new repair. When the
 cause cannot be established, `archive_identity_unavailable` holds filing
@@ -107,6 +107,19 @@ preservation recorded when there is one to resume — and an update with
 `--discard-candidate` still discards the candidate and closes its pull
 requests so the next run implements fresh.
 
+When the finished candidate has a failure-handoff pull request, the operator can
+choose **Approve and land** on its block decision, or use
+`orbit decision answer <request-id> land`. It merges the green handoff and completes
+the task without another run. Agents, drains and automatic corpus rules cannot
+choose this answer. A required pre-landing review must have settled for the exact
+candidate before the answer is offered. At answer time a missing receipt, live run,
+changed specification, closed or draft PR, moved head, failed or pending required
+check, wrong target or conflicting merge refuses it with the request still open
+and nothing changed. A matching `completion.hold` rule is recorded and the human
+approval satisfies it. Requeue keeps its normal meaning. If the operator requeues
+first and then merges that same handoff PR on the forge, external-merge settlement
+also completes the preserved backlog task; it needs no forced status transition.
+
 When a run stops on a rebase conflict, final recovery can repair the conflict
 files and resume. The next conflict recovery adopts those repairs and continues
 the stopped rebase, so don't abort it or stage files by hand. Adoption still
@@ -135,10 +148,9 @@ request of a task with no live run back to its stopped leaf's completion step,
 unless an operator holds the task. When you
 must decide what happens next, follow these steps:
 
-1. **Diagnose with `orbit_agent_invoke`.** Run it on the host that owns the
-   preserved worktree, with `cwd` set to that worktree (`orbit run show
-   <run-id> --json` names it), or `orbit run agent --cwd <worktree>
-   "<prompt>"`. Ask for a verdict:
+1. **Diagnose the preserved worktree.** On the host that owns it (`orbit run
+   show <run-id> --json` names it), read it yourself or run your provider's
+   CLI read-only in it. Reach a verdict:
    - Is the candidate salvageable?
    - Which review findings still hold?
    - What work remains?
@@ -146,13 +158,15 @@ must decide what happens next, follow these steps:
 
    Point it at the candidate head, the kept repair ref and the task's
    `review-report.json`. Record its answer on the task as a comment or as
-   remaining work. The invocation is diagnosis only. It must not commit,
-   push, edit a pull request, or change the task. Say so in the prompt, and
+   remaining work. The diagnosis is read-only. It must not commit, push,
+   edit a pull request, or change the task. Say so to any agent you run, and
    check afterwards that it did not.
 2. **Route by cause.**
    - **Transient** (host restart, provider outage, a killed worker, a forge
      refusal): resume the stopped run with `orbit job resume <run-id>` where
-     it is resumable, or requeue the task.
+     it is resumable, or requeue the task. A completion held on unreadable or
+     throttled check evidence can be resumed this way; it re-observes the
+     existing pull request and checks its head before proceeding.
    - **Defects** (findings that hold, missing work): record them as remaining
      work on the task, then return it to `backlog` and re-ship it. The next
      run resumes the kept candidate and repairs it; it does not re-implement.
@@ -189,13 +203,27 @@ revocation is final. When exactly that handoff's PR merged into its landing
 branch outside Orbit, `orbit task settle-merged <task-id>` settles it: one
 owner store write ends the claim as `revoked` and moves the task to `done`.
 It is refused while an owner landing job still carries the handoff or a merge
-intent is unresolved. When the PR will not merge, recover the claim to
-`blocked` or `backlog` instead. The owner console's authority line names both
+intent is unresolved. When the PR will not merge, recover the claim instead,
+choosing any status the task lifecycle allows from `review` (`blocked`,
+`backlog`, `archived`, `rejected`, or `review` to keep it there). Recovering a
+handed-off claim to `done` is also one write, and keeps the ordinary
+completion gates: the task's execution summary, any owed post-deploy
+measurement and applied mutation proposals; a refused target names the rule.
+The dashboard's Recovery panel offers one **Recover claim** action with a
+status picker of exactly those targets, beside the required reason and a
+confirmation. The owner console's authority line names both
 steps. The command names the reason when the task
 does not settle. The settlement starts no work, so another task's claim on the
 same files does not refuse it. History records it as `external_merge_settled`, with a
 landing note naming the PR and merge commit
 ([stuck job runs](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/stuck-job-runs.md#a-delivery-pull-request-merged-outside-orbit)).
+
+Settling to `done` also closes the task's other open Orbit-authored delivery
+and preservation PRs. Each gets a `superseded by #N` comment naming the landing
+PR and a `pull_request_closed` task-history entry. The branches are kept;
+human PRs and other tasks' PRs stay open. Closure is best effort: if the forge
+fails, settlement still stands and a warning is recorded. Inspect the task
+history and any closure warnings before closing a remaining stale PR by hand.
 
 If a follower's handoff was refused before its PR was recorded, and an operator
 rebased and merged that PR, recover the stopped claim to `blocked` first. Then,
@@ -234,10 +262,15 @@ rather than a start. No work starts, so another run's execution claim on the
 same files does not refuse the write, and you don't need `--force`. Add `plan`
 to that write if the task has none. Operator capability comes from an
 interactive terminal or `ORBIT_OPERATOR=1`; an `ssh host '<command>'`
-invocation has no terminal, so it needs the variable. Don't pass `model`,
-because naming an agent makes the write an agent's. Without the summary, from
+invocation has no terminal, so it needs the variable. Do not set
+`ORBIT_AGENT_*` or pass CLI `--model`: either names an agent and makes the
+write an agent's. Without the summary, from
 an agent, or without operator capability, the write starts work. While a
 claim overlaps, that start is refused with the claim's task and run named.
+The refusal covers the whole write: field edits sent with the start (a
+title, a plan, artifacts) do not persist, so there is nothing to inspect
+or revert afterwards. Send an edit on its own when it should land whether
+or not the start does.
 
 The CLI subcommand also closes without `--force`: run
 `orbit task update <task-id> --status in-progress --execution-summary "<…>"`,
@@ -274,19 +307,44 @@ An operator on the owning host can inspect a published candidate without
 resuming its failed attempt:
 
 ```bash
-orbit tool run orbit.workflow.run.resume --input '{"id":"<source-run>","source_repair":{"action":"inspect","task_id":"<task-id>"}}'
+orbit tool run orbit.run --input '{"action":"resume","id":"<source-run>","source_repair":{"action":"inspect","task_id":"<task-id>"}}'
 ```
+
+Supported order is: make sure a valid execution plan is present when the
+task's status requires one, freshly inspect the exact immutable source
+binding/policy, then submit the unchanged binding with the required acceptance
+evidence and a fresh request key.
 
 Submit the returned `binding` unchanged with `action: "submit"`, the same
 `task_id`, a new bounded `request_key`, and a `diagnosis` naming the observed
-failure and remaining source work. This is an explicit source decision. It
-creates a new attempt with current required commands, configured review,
-`completion: "review"` and `auto_fix: false`. It grants no merge authority.
-Keep the identical key, binding and diagnosis when a submission reply is lost:
-the durable reservation/link returns the same successor, even after it stops.
-Each newly published head needs another explicit inspection and fresh key;
-automatic fixes and explicit generations share the PR repair budget. Generic
-resume still cannot replay an admitted source-repair attempt.
+failure and remaining source work. Submit refuses a missing or placeholder
+plan before creating a reservation when the task's status requires a plan
+before transitioning to `in-progress`. `backlog` and `in-progress` are exempt;
+their managed run authors the plan at start time. When the only correction is
+an empty or placeholder plan on an existing reservation with no admitted run,
+use `action: "reconcile"` with the original key, its inspected
+`reservation_digest`, a fresh binding and otherwise unchanged
+evidence/policy. This is an explicit source decision. It creates a new
+attempt with current required commands, configured review,
+`completion: "review"` and `auto_fix: false`. It grants no completion, merge
+or auto-fix authority, extends no historical deadline, and inherits none from
+the source run. Keep the identical key, binding, diagnosis, `unmet_acceptance`
+and `policy_digest` when a submission reply is lost: the durable
+reservation/link returns the same successor, even after it stops. Each newly
+published head needs another explicit inspection and fresh key; automatic
+fixes and explicit generations share the PR repair budget. Generic resume
+still cannot replay an admitted source-repair attempt.
+
+A successful owner publication whose published candidate leaves acceptance
+unmet takes the same explicit route, not ordinary continuation. Select the
+original publishing `Success` run explicitly and inspect it: inspection
+returns the binding plus `review`, the current `policy_digest`, reservations
+and `reservation_digests`. Submit the exact binding with the diagnosis,
+explicit `unmet_acceptance` evidence identifying the unmet criteria on this
+published candidate, the inspected current `policy_digest`, and a fresh key.
+Green requeue remains the route for carrying an unchanged candidate forward
+without authorizing implementation; successful-publication rework authorizes
+review-only source work on the same PR.
 
 In addition to cancelled publications and failed publications with an applied
 requeue, inspection supports these conclusively stopped failed owner shapes
@@ -308,6 +366,15 @@ after final recovery escalated:
   effects. Dirty worktrees, active or ambiguous lineage and changed heads or
   specifications refuse. Green requeue remains the route for carrying the
   unchanged candidate without authorizing implementation.
+- **Final recovery resumed the publishing run in place and it failed again.**
+  Select that same run. Its checkpoints must hold the host's applied `resume`
+  receipt for this task and run, with no host repair commit, beside the
+  kept-publication receipt above, so final recovery cannot run again. The
+  binding's head is the PR's current head, reached only through the
+  `pr_auto_fix_pushed` ledger entries that run recorded from its original push.
+  Submit with the same `unmet_acceptance` and `policy_digest`. The attempt is
+  review-only, counts against the PR's repair budget, renews no deadline and
+  leaves the receipt, deadlines and auto-fix ledger untouched.
 - **An admitted source repair pushed before `pr_open` failed.** Its original
   system reservation and unique run link, successful branch adoption, host
   commit, prepare, synchronization, review/publication chain and push must
@@ -379,10 +446,19 @@ only an intermediate result. On the owning host:
    actual executable location, and synchronize managed assets through the
    supported mechanism. Do not assume matching version strings mean matching
    binaries, or overwrite operator changes to make a source checkout clean.
-3. Restart only the intended services. Verify their process/executable identity,
+3. Run `orbit doctor` after the upgrade and inspect its `workspace-convergence`
+   and `routine-freshness` rows. `workspace-convergence` names registered
+   workspaces whose managed artifacts still differ from the installed
+   defaults; run `orbit workspace sync --all` on that host to converge them.
+   Sync skips a workspace held by a live drain, so check it again after the
+   drain releases the workspace. A stale `routine-freshness` row can be the
+   first sign that an enabled routine's jobs no longer load or succeed under
+   the new build. Inspect the named routines with `orbit routine list`, then
+   run `orbit clock tick` and confirm the expected jobs load and run.
+4. Restart only the intended services. Verify their process/executable identity,
    sustained health and the repaired behavior; an immediate successful health
    response can miss a server that exits shortly afterward.
-4. Record installed revision/hash, service result, and any remaining mismatch.
+5. Record installed revision/hash, service result, and any remaining mismatch.
    Restore temporarily changed routines/settings unless the user made the
    change permanent.
 

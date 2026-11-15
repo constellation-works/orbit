@@ -19,6 +19,7 @@ use std::path::{Component, Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_common::process::ancestry::{ProcessStartKey, process_start_key};
+use orbit_common::security::token;
 
 /// The broker root, relative to the global root.
 pub(crate) const BROKER_DIR: &str = "state/plugin-broker";
@@ -188,40 +189,33 @@ fn trusted_global_root(global_root: &Path) -> Result<PathBuf, OrbitError> {
 /// Create `state/plugin-broker` one component at a time under `root`, never
 /// writing through an existing link.
 fn create_broker_root(root: &Path) -> Result<PathBuf, OrbitError> {
-    let mut dir = root.to_path_buf();
-    for component in Path::new(BROKER_DIR).components() {
-        dir.push(component);
-        match fs::DirBuilder::new().mode(DIR_MODE).create(&dir) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(path_error("create plugin broker root", &dir, error)),
-        }
-        let metadata = fs::symlink_metadata(&dir)
-            .map_err(|error| path_error("inspect plugin broker root", &dir, error))?;
-        if metadata.file_type().is_symlink() {
-            return Err(OrbitError::PolicyDenied(format!(
+    use orbit_common::fs::io::PrivateDirError;
+
+    let dir = orbit_common::fs::io::create_private_dir_chain(root, Path::new(BROKER_DIR)).map_err(
+        |error| match error {
+            PrivateDirError::Symlink { path } => OrbitError::PolicyDenied(format!(
                 "plugin broker refuses symlinked directory `{}`",
-                dir.display()
-            )));
-        }
-        if !metadata.is_dir() {
-            return Err(OrbitError::PolicyDenied(format!(
+                path.display()
+            )),
+            PrivateDirError::NotDirectory { path } => OrbitError::PolicyDenied(format!(
                 "plugin broker refuses non-directory path `{}`",
-                dir.display()
-            )));
-        }
-    }
+                path.display()
+            )),
+            PrivateDirError::ForeignOwner { path, uid } => {
+                // SAFETY: `geteuid` only reads the calling process's credentials.
+                let euid = unsafe { libc::geteuid() };
+                OrbitError::PolicyDenied(format!(
+                    "plugin broker root `{}` is owned by uid {uid}, not this host (uid {euid})",
+                    path.display()
+                ))
+            }
+            PrivateDirError::Io { path, source } => {
+                path_error("create plugin broker root", &path, source)
+            }
+        },
+    )?;
     let metadata = fs::symlink_metadata(&dir)
         .map_err(|error| path_error("inspect plugin broker root", &dir, error))?;
-    // SAFETY: `geteuid` only reads the calling process's credentials.
-    let euid = unsafe { libc::geteuid() };
-    if metadata.uid() != euid {
-        return Err(OrbitError::PolicyDenied(format!(
-            "plugin broker root `{}` is owned by uid {}, not this host (uid {euid})",
-            dir.display(),
-            metadata.uid()
-        )));
-    }
     if metadata.mode() & 0o777 != DIR_MODE {
         fs::set_permissions(&dir, fs::Permissions::from_mode(DIR_MODE))
             .map_err(|error| path_error("restrict plugin broker root", &dir, error))?;
@@ -250,11 +244,7 @@ fn check_socket_path_length(socket: &Path) -> Result<(), OrbitError> {
 }
 
 fn random_token() -> Result<String, OrbitError> {
-    let mut bytes = [0u8; 8];
-    getrandom::fill(&mut bytes).map_err(|error| {
-        OrbitError::Execution(format!("draw plugin broker socket token: {error}"))
-    })?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    token::random_hex(8)
 }
 
 fn path_error(action: &str, path: &Path, error: io::Error) -> OrbitError {

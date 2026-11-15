@@ -4,9 +4,7 @@ use std::path::{Path, PathBuf};
 use tempfile::tempdir_in;
 
 use orbit_core::OrbitRuntime;
-use orbit_core::application::health::artifact::{
-    ArtifactCondition, ArtifactHealth, ArtifactKind, FIX_RETIRED_ACTIVITY_BACKENDS_CMD,
-};
+use orbit_core::application::health::artifact::{ArtifactCondition, ArtifactHealth, ArtifactKind};
 const MANAGED_ASSET_MANIFEST_FILE: &str = ".orbit-managed-assets.json";
 use orbit_common::security::release::sha256_hex;
 
@@ -106,17 +104,6 @@ fn activity_catalog_health_reports_unreadable_directories() {
                 .contains(blocked.to_str().expect("fixture path"))
         );
         assert!(fault.detail.contains(&source_error), "{fault:?}");
-        assert!(
-            !fault
-                .remediation
-                .contains(FIX_RETIRED_ACTIVITY_BACKENDS_CMD)
-        );
-        let repair = runtime
-            .repair_retired_activity_backends()
-            .expect("repair scan");
-        assert!(repair.repaired.is_empty());
-        assert!(repair.skipped.iter().any(|skip| skip.path == blocked));
-
         drop(restore);
         assert_eq!(
             blocked
@@ -231,6 +218,273 @@ fn activity_catalog_health_matches_runtime_duplicate_admission() {
             );
         }
     }
+}
+
+#[test]
+fn stale_workspace_activity_is_isolated_and_reported() {
+    if !crate::admission_audit::isolate(
+        module_path!(),
+        "stale_workspace_activity_is_isolated_and_reported",
+    ) {
+        return;
+    }
+
+    use orbit_engine::activity_job::{ResolveError, load_job_asset, resolve_job_target_refs};
+
+    let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("fixture root");
+    let (runtime, _, activities) = workspace_runtime(root.path());
+    let stale = activities.join("agent_invoke.yaml");
+    std::fs::write(
+        &stale,
+        agent_loop_yaml("agent_invoke", "  trustedHostExecution: true\n"),
+    )
+    .expect("stale workspace activity");
+    std::fs::write(
+        activities.join("good_activity.yaml"),
+        agent_loop_yaml("good_activity", ""),
+    )
+    .expect("good workspace activity");
+
+    // The stale file must not fail catalog construction for unrelated jobs.
+    let catalog = runtime
+        .v2_activity_catalog()
+        .expect("catalog builds despite the stale workspace-local activity");
+    assert!(catalog.get("good_activity").is_some());
+    assert!(catalog.get("agent_invoke").is_none());
+    let reason = catalog
+        .unavailable_reason("agent_invoke")
+        .expect("stale activity is recorded unavailable");
+    assert!(reason.contains(&stale.display().to_string()), "{reason}");
+    assert!(reason.contains("trustedHostExecution"), "{reason}");
+    assert!(reason.contains("use a task workflow"), "{reason}");
+
+    let job_yaml = |name: &str, activity: &str| {
+        format!(
+            "schemaVersion: 2\nkind: Job\nmetadata:\n  name: {name}\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: run_it\n      target: activity:{activity}\n"
+        )
+    };
+    let mut unrelated =
+        load_job_asset(&job_yaml("unrelated_job", "good_activity")).expect("unrelated job");
+    resolve_job_target_refs(&mut unrelated.spec, &catalog)
+        .expect("a job not referencing the stale activity still resolves");
+
+    let mut referencing =
+        load_job_asset(&job_yaml("referencing_job", "agent_invoke")).expect("referencing job");
+    let error = resolve_job_target_refs(&mut referencing.spec, &catalog)
+        .expect_err("a job referencing the stale activity is refused");
+    assert!(
+        matches!(
+            &error,
+            ResolveError::ActivityUnavailable { name, .. } if name == "agent_invoke"
+        ),
+        "expected ActivityUnavailable for agent_invoke, got {error}"
+    );
+    assert!(
+        error.to_string().contains("trustedHostExecution"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains(&stale.display().to_string()),
+        "{error}"
+    );
+
+    // Doctor names the same file, error and remedy.
+    let report = runtime.inspect_definition_artifacts().expect("doctor scan");
+    let findings = &health_of(&report, ArtifactKind::Activity).findings;
+    let fault = findings
+        .iter()
+        .find(|finding| finding.path == stale)
+        .unwrap_or_else(|| panic!("doctor must report {}: {findings:?}", stale.display()));
+    assert_eq!(fault.condition, ArtifactCondition::Faulty);
+    assert!(
+        fault.detail.contains(&stale.display().to_string()),
+        "{fault:?}"
+    );
+    assert!(fault.detail.contains("trustedHostExecution"), "{fault:?}");
+    assert!(fault.detail.contains("use a task workflow"), "{fault:?}");
+    assert!(fault.remediation.contains("agent_invoke.yaml"), "{fault:?}");
+}
+
+#[test]
+fn stale_activity_with_mismatched_filename_is_reported_by_declared_name() {
+    if !crate::admission_audit::isolate(
+        module_path!(),
+        "stale_activity_with_mismatched_filename_is_reported_by_declared_name",
+    ) {
+        return;
+    }
+
+    use orbit_engine::activity_job::{ResolveError, load_job_asset, resolve_job_target_refs};
+
+    let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("fixture root");
+    let (runtime, _, activities) = workspace_runtime(root.path());
+    let stale = activities.join("different_filename.yaml");
+    std::fs::write(
+        &stale,
+        agent_loop_yaml("probe", "  trustedHostExecution: true\n"),
+    )
+    .expect("stale activity with mismatched filename");
+    std::fs::write(
+        activities.join("good_activity.yaml"),
+        agent_loop_yaml("good_activity", ""),
+    )
+    .expect("good workspace activity");
+    // An invalid file whose declared name cannot be recovered stays
+    // isolated under its file-stem fallback.
+    let unreadable = activities.join("unreadable_identity.yaml");
+    std::fs::write(&unreadable, "schemaVersion: [unclosed\n").expect("unreadable activity");
+
+    let catalog = runtime
+        .v2_activity_catalog()
+        .expect("catalog builds despite the stale workspace-local activities");
+    assert!(catalog.get("good_activity").is_some());
+    assert!(catalog.get("probe").is_none());
+    let reason = catalog
+        .unavailable_reason("probe")
+        .expect("stale activity is recorded unavailable by its declared name");
+    assert!(reason.contains(&stale.display().to_string()), "{reason}");
+    assert!(reason.contains("trustedHostExecution"), "{reason}");
+    assert!(reason.contains("use a task workflow"), "{reason}");
+    assert!(
+        catalog.unavailable_reason("unreadable_identity").is_some(),
+        "unrecoverable identity keeps the file-stem fallback"
+    );
+
+    let job_yaml = |name: &str, activity: &str| {
+        format!(
+            "schemaVersion: 2\nkind: Job\nmetadata:\n  name: {name}\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: run_it\n      target: activity:{activity}\n"
+        )
+    };
+    let mut unrelated =
+        load_job_asset(&job_yaml("unrelated_job", "good_activity")).expect("unrelated job");
+    resolve_job_target_refs(&mut unrelated.spec, &catalog)
+        .expect("a job not referencing the stale activity still resolves");
+
+    let mut referencing =
+        load_job_asset(&job_yaml("referencing_job", "probe")).expect("referencing job");
+    let error = resolve_job_target_refs(&mut referencing.spec, &catalog)
+        .expect_err("a job referencing the declared name is refused");
+    assert!(
+        matches!(&error, ResolveError::ActivityUnavailable { name, .. } if name == "probe"),
+        "expected ActivityUnavailable for probe, got {error}"
+    );
+    assert!(
+        error.to_string().contains("trustedHostExecution"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains(&stale.display().to_string()),
+        "{error}"
+    );
+    assert!(error.to_string().contains("use a task workflow"), "{error}");
+}
+
+#[test]
+fn withdrawn_workspace_activity_stays_refused_over_plugin_layer() {
+    if !crate::admission_audit::isolate(
+        module_path!(),
+        "withdrawn_workspace_activity_stays_refused_over_plugin_layer",
+    ) {
+        return;
+    }
+
+    use orbit_engine::activity_job::{
+        ResolveError, V2ActivityCatalog, load_job_asset, resolve_job_target_refs,
+    };
+
+    let job_yaml = |name: &str, activity: &str| {
+        format!(
+            "schemaVersion: 2\nkind: Job\nmetadata:\n  name: {name}\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: run_it\n      target: activity:{activity}\n"
+        )
+    };
+    let resolve = |catalog: &V2ActivityCatalog, job: &str, activity: &str| {
+        let mut job = load_job_asset(&job_yaml(job, activity)).expect("job asset");
+        resolve_job_target_refs(&mut job.spec, catalog)
+    };
+
+    // Withdrawn workspace-local name colliding with a valid plugin file.
+    let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("fixture root");
+    let workspace = root.path().join("workspace-activities");
+    let plugin = root.path().join("plugin-activities");
+    std::fs::create_dir_all(&workspace).expect("workspace activities");
+    std::fs::create_dir_all(&plugin).expect("plugin activities");
+    let stale = workspace.join("probe.yaml");
+    std::fs::write(
+        &stale,
+        agent_loop_yaml("probe", "  trustedHostExecution: true\n"),
+    )
+    .expect("stale workspace activity");
+    std::fs::write(
+        workspace.join("good_activity.yaml"),
+        agent_loop_yaml("good_activity", ""),
+    )
+    .expect("good workspace activity");
+    let plugin_probe = plugin.join("probe.yaml");
+    std::fs::write(&plugin_probe, agent_loop_yaml("probe", "")).expect("plugin probe");
+    let plugin_only = plugin.join("plugin_only.yaml");
+    std::fs::write(&plugin_only, agent_loop_yaml("plugin_only", "")).expect("plugin-only");
+
+    let mut catalog = V2ActivityCatalog::new();
+    let (_, failures) = catalog
+        .load_dir_skipping_retired_prefer_existing_where_best_effort(&workspace, |_| true)
+        .expect("workspace layer loads best-effort");
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(catalog.get("probe").is_none());
+    assert!(catalog.unavailable_reason("probe").is_some());
+    catalog
+        .load_files_prefer_existing(&[plugin_probe, plugin_only])
+        .expect("plugin layer loads");
+
+    assert!(
+        catalog.get("probe").is_none(),
+        "plugin must not revive a withdrawn workspace activity"
+    );
+    let reason = catalog
+        .unavailable_reason("probe")
+        .expect("withdrawal survives plugin layer");
+    assert!(reason.contains("trustedHostExecution"), "{reason}");
+    assert!(reason.contains(&stale.display().to_string()), "{reason}");
+    assert!(catalog.get("good_activity").is_some());
+    assert!(catalog.get("plugin_only").is_some());
+
+    let error = resolve(&catalog, "referencing_job", "probe")
+        .expect_err("job referencing withdrawn activity is refused over plugin layer");
+    assert!(
+        matches!(&error, ResolveError::ActivityUnavailable { name, .. } if name == "probe"),
+        "expected ActivityUnavailable for probe, got {error}"
+    );
+    assert!(
+        error.to_string().contains("trustedHostExecution"),
+        "{error}"
+    );
+    resolve(&catalog, "unrelated_job", "good_activity").expect("unrelated workspace job resolves");
+    resolve(&catalog, "plugin_job", "plugin_only").expect("unrelated plugin job resolves");
+
+    // An authoritative entry loaded before the stale workspace file retains
+    // precedence: the stale file neither displaces it nor withdraws the name.
+    let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("fixture root");
+    let global = root.path().join("global-activities");
+    let workspace = root.path().join("workspace-activities");
+    std::fs::create_dir_all(&global).expect("global activities");
+    std::fs::create_dir_all(&workspace).expect("workspace activities");
+    let authoritative = global.join("probe.yaml");
+    std::fs::write(&authoritative, agent_loop_yaml("probe", "")).expect("global probe");
+    std::fs::write(
+        workspace.join("probe.yaml"),
+        agent_loop_yaml("probe", "  trustedHostExecution: true\n"),
+    )
+    .expect("stale workspace probe");
+    let mut catalog = V2ActivityCatalog::new();
+    catalog
+        .load_dir_skipping_retired_prefer_existing(&global)
+        .expect("global layer loads");
+    let (_, failures) = catalog
+        .load_dir_skipping_retired_prefer_existing_where_best_effort(&workspace, |_| true)
+        .expect("workspace layer loads best-effort");
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert_eq!(catalog.source("probe"), Some(authoritative.as_path()));
+    assert!(catalog.unavailable_reason("probe").is_none());
+    resolve(&catalog, "authoritative_job", "probe").expect("authoritative probe still resolves");
 }
 
 #[cfg(unix)]
@@ -441,10 +695,10 @@ fn run_isolated_child_fixture(test_name: &str, child_flag: &str) {
 
 #[cfg(unix)]
 #[test]
-fn retired_backend_repair_confines_links_cycles_and_special_files() {
+fn activity_catalog_scan_confines_links_cycles_and_special_files() {
     if !crate::admission_audit::isolate(
         module_path!(),
-        "retired_backend_repair_confines_links_cycles_and_special_files",
+        "activity_catalog_scan_confines_links_cycles_and_special_files",
     ) {
         return;
     }
@@ -452,13 +706,13 @@ fn retired_backend_repair_confines_links_cycles_and_special_files() {
     const CHILD_FLAG: &str = "ORBIT_ACTIVITY_REPAIR_FIXTURE_CHILD";
     if std::env::var_os(CHILD_FLAG).is_none() {
         run_isolated_child_fixture(
-            "retired_backend_repair_confines_links_cycles_and_special_files",
+            "activity_catalog_scan_confines_links_cycles_and_special_files",
             CHILD_FLAG,
         );
         return;
     }
 
-    use std::os::unix::fs::{FileTypeExt, symlink};
+    use std::os::unix::fs::symlink;
 
     let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("fixture root");
     let (runtime, _workspace, activities) = workspace_runtime(root.path());
@@ -503,7 +757,7 @@ fn retired_backend_repair_confines_links_cycles_and_special_files() {
     .expect("write regular");
     std::fs::write(&deep, agent_loop_yaml("deep_loop", "  backend: auto\n")).expect("write deep");
 
-    // A configured root that is itself a link stays a root and is repaired.
+    // A configured root that is itself a link stays a root.
     let linked_catalog = root.path().join("linked_catalog");
     std::fs::create_dir_all(&linked_catalog).expect("linked catalog");
     let global_resources = root.path().join("global/resources");
@@ -514,7 +768,6 @@ fn retired_backend_repair_confines_links_cycles_and_special_files() {
         agent_loop_yaml("global_loop", "  backend: http\n"),
     )
     .expect("write global root activity");
-    let global_loop = global_resources.join("activities/global_loop.yaml");
 
     let refused = [&final_link, &dir_link, &cycle, &fifo];
     let report = runtime
@@ -527,12 +780,6 @@ fn retired_backend_repair_confines_links_cycles_and_special_files() {
             .find(|finding| &finding.path == path)
             .unwrap_or_else(|| panic!("doctor must report {}: {findings:?}", path.display()));
         assert_eq!(finding.condition, ArtifactCondition::Faulty);
-        assert!(
-            !finding
-                .remediation
-                .contains(FIX_RETIRED_ACTIVITY_BACKENDS_CMD),
-            "a refused entry is not offered the automatic repair: {finding:?}"
-        );
     }
     assert!(
         findings
@@ -541,71 +788,6 @@ fn retired_backend_repair_confines_links_cycles_and_special_files() {
         "doctor must not inspect through links: {findings:?}"
     );
 
-    let expected_repaired = {
-        let mut paths = vec![
-            deep.clone(),
-            global_loop.clone(),
-            hard_link.clone(),
-            regular.clone(),
-        ];
-        paths.sort();
-        paths
-    };
-    let mut expected_skipped: Vec<PathBuf> = refused.iter().map(|path| (*path).clone()).collect();
-    expected_skipped.sort();
-    for pass in ["first", "second"] {
-        let repair = runtime
-            .repair_retired_activity_backends()
-            .expect("repair pass");
-        let mut repaired = repair.repaired.clone();
-        repaired.sort();
-        let mut skipped: Vec<PathBuf> = repair
-            .skipped
-            .iter()
-            .map(|skip| skip.path.clone())
-            .collect();
-        skipped.sort();
-        if pass == "first" {
-            assert_eq!(repaired, expected_repaired, "{pass} pass: {repair:?}");
-        } else {
-            assert!(repaired.is_empty(), "repair is idempotent: {repair:?}");
-        }
-        assert_eq!(
-            skipped, expected_skipped,
-            "{pass} pass reports refusals: {repair:?}"
-        );
-
-        assert_eq!(
-            std::fs::read_to_string(&external_final).expect("external final"),
-            external_final_body
-        );
-        assert_eq!(
-            std::fs::read_to_string(&external_nested).expect("external nested"),
-            external_nested_body
-        );
-        assert_eq!(
-            std::fs::read_to_string(&external_hard).expect("external hard link target"),
-            external_hard_body
-        );
-        for link in [&final_link, &dir_link, &cycle] {
-            assert!(
-                link.symlink_metadata()
-                    .expect("link survives")
-                    .file_type()
-                    .is_symlink()
-            );
-        }
-        assert!(
-            fifo.symlink_metadata()
-                .expect("fifo survives")
-                .file_type()
-                .is_fifo()
-        );
-    }
-    for path in &expected_repaired {
-        let after = std::fs::read_to_string(path).expect("read repaired activity");
-        assert!(!after.contains("backend:"), "{}: {after}", path.display());
-    }
     assert!(
         global_resources
             .join("activities")

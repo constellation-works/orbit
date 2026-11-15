@@ -4,8 +4,8 @@ summary: Install a new Orbit release with `orbit update`, then review, apply, an
 tags: [operations, upgrades, migrations, recovery]
 paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-common/src/fs/generation/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/contracts/compat.rs"]
 related_features: [orbit-core]
-related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320, ORB-20262, ORB-20272]
-last_validated: 2026-10-30
+related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320, ORB-20262, ORB-20272, ORB-20980, ORB-24410, ORB-24411]
+last_validated: 2026-11-14
 ---
 
 # Upgrade Orbit Safely
@@ -63,7 +63,14 @@ The check downloads no release archive and does not converge workspace state.
    [`--contract` and `--preflight`](#--contract-and---preflight) and
    [Which update paths hand over](#which-update-paths-hand-over)). An update whose target
    is already installed renames nothing, so it takes this admission before converging
-   and nothing hands over to it.
+   and nothing hands over to a new image. A long-lived process already running exactly
+   the installed executable digest and compatibility identity, with a resume capability,
+   is admitted instead and listed in the report's `same_generation`: the update records a
+   pending refresh, the process hands over in place to the executable it already runs at
+   its next idle boundary (its session continues), and the update re-pins only once it
+   holds the generation exclusively. A shared lock cannot say who holds it, so that
+   exclusive hold is what proves no unregistered client stands behind the registered
+   ones: a hold that outlasts them refuses the re-run as an unregistered client.
 7. Copy the current executable to `<orbit>.previous`, then swap the staged file in with one
    atomic same-directory rename, and confirm the installed binary reports the requested
    version. If it does not, the previous executable is copied into a complete sibling staging
@@ -78,7 +85,27 @@ The check downloads no release archive and does not converge workspace state.
    binary**, in the selected workspace. Orbit passes the resolved root to both subprocesses;
    an explicit `--root` remains authoritative even when `ORBIT_ROOT` names another workspace.
    Only the new binary carries the migrations and managed asset definitions for the version
-   being installed.
+   being installed. When a layout migration is pending, `migrate --confirm` holds admission
+   exclusively on every other authority that has used the workspace (see
+   [The authority that protects a workspace](#the-authority-that-protects-a-workspace)).
+   The update's own pin on such an authority registers no participant, so that fence could
+   not tell it from an unknown client. Immediately before the step the update therefore
+   takes that fence itself on exactly those authorities: it takes admission exclusively
+   (nothing joins from then on), releases its pin and takes the generation lock
+   exclusively, judging every other holder as the migration would. A live long-lived
+   client or a holder that never registered refuses the step before it runs; the pin is
+   restored. The fence is then lent to the `migrate --confirm` child: it inherits both lock
+   descriptors (named in `ORBIT_LENT_GENERATION_FENCE`) and adopts them only once the kernel
+   proves they are that authority's lock files and that they hold the locks exclusively;
+   anything else falls back to an ordinary fence, which refuses against the held admission.
+   Once the child exits, the update confirms it still holds both locks and pins the
+   candidate again before releasing admission, so the authority stays protected through
+   `workspace sync` and `clock repair` too. The report's `migration_fenced` lists those
+   authorities. A pin that cannot be taken again fails the step, since convergence would
+   continue unprotected there. The pin on the authority the migration runs under stays
+   through every step. Descriptor lending is Unix-only; elsewhere the update keeps every
+   pin and the migration refuses against it, so finish it as
+   [Recovery and resumption](#recovery-and-resumption) describes.
 9. Run `orbit clock repair`, again as the newly installed binary. The launchd/systemd sweep
    unit embeds an absolute program path, so an install that lands somewhere else — Homebrew
    to `~/.orbit/bin`, say — leaves the unit invoking a binary that may no longer exist. The
@@ -154,7 +181,13 @@ authority; identical copies trivially do.
 
 The generation authority is chosen from `--root`, `ORBIT_ROOT` or the home directory
 (`~/.orbit`), while the workspace `.orbit` is discovered from the working directory.
-The two can disagree. A process with a fresh home, run from an uninitialized directory
+An explicit root resolves the way the runtime opens it: a directory whose `.orbit/` is
+an initialized workspace (`--root <checkout>`, or `--root ..` from inside `.orbit/`)
+joins that `.orbit/` authority, not the directory itself. An explicit root that is a
+git working tree but neither an Orbit root nor the parent of one is refused before
+anything is written there, naming the `<checkout>/.orbit` to pass instead; any other
+uninitialized directory stays its own authority so `orbit init --root <new>` can create
+it. The two can still disagree. A process with a fresh home, run from an uninitialized directory
 inside a live checkout, joins an empty authority but discovers that checkout. So can a
 process whose `--root` names the workspace data directory itself, or one whose home
 merely registered the same checkout. The workspace layout is the one part of a
@@ -389,6 +422,10 @@ the installed binary for its `update --contract` and, when it speaks
 - `orbit mcp serve` hands over once no request is in flight. The pid, stdio pipes and
   MCP session survive — the client does not re-initialize — because the new image
   receives the initialize parameters and any unread input (`mcp-stdio-v1`).
+  Lifecycle checks also run while the server waits for the client's first
+  initialize request. An idle, not-yet-initialized session can refresh during an
+  already-current recovery without client traffic; the client initializes normally
+  when it is ready.
   A request that arrives while the server stops reading is answered first, and the
   session is then handed over rather than closed.
   Only requests accepted by the MCP transport count as in flight; malformed or
@@ -467,8 +504,11 @@ Orbit process joins behind them, and then treat each live participant by its rol
   While admission waits, a new Orbit process queues behind it, and refuses as an
   upgrade in progress once the update holds the generation.
 - A **long-lived** process — `mcp serve`, `mcp listen`, the dashboard, a drain or pipeline
-  worker — refuses at once, unless the admission names a candidate it will hand over to
-  (below).
+  worker — refuses at once unless it is eligible for the update's handover or in-place
+  refresh path. A compatible `mcp serve` can hand over to a candidate that replaces the
+  executable (below). When the target is already installed, a participant already running
+  that executable's digest and compatibility identity can refresh in place if it supports
+  the resume contract; the report lists it in `same_generation` (see the table below).
 - A holder that **never registered** (an `executable-generation-v1` binary, or a
   sandboxed child that cannot write the root) refuses at once: it cannot be named by
   role or asked to hand over. A registered process keeps its record, renamed to
@@ -478,8 +518,8 @@ Orbit process joins behind them, and then treat each live participant by its rol
 
 Each refusal names every blocker by pid, role and start time with the remedy for its
 role — let a command finish; let a tick finish or `orbit clock pause`; close the MCP
-client of a server that cannot hand over; stop and restart `mcp listen` or the
-dashboard; let a run finish or cancel it — for example:
+client of a server that cannot hand over or refresh in place; stop and restart `mcp listen`
+or the dashboard; let a run finish or cancel it — for example:
 
 ```text
 upgrade admission refused: Orbit clients or commands are still running: pid 3772 (mcp serve,
@@ -490,9 +530,13 @@ one; and any processes that did not register (…); leave the installation and s
 unchanged. …
 ```
 
-That remedy appears where nothing is renamed: a `--preflight` without `--candidate`, or an
-update whose target is already installed. The updates it names admit the server and hand
-it over.
+The quoted no-candidate clause applies when a handover-capable `mcp serve` is refused
+without a handover candidate. A bare `orbit update --preflight` without `--candidate` is
+one such path: it does not request refresh, and no executable is renamed. An update whose
+target is already installed takes a different path: it refreshes a holder already running
+the installed digest and compatibility identity when that holder supports the resume
+contract; incompatible or nonresumable holders are refused. The installing updates above
+admit a compatible server and hand it over to the replacement candidate.
 
 **Candidate-aware preflight.** `orbit update --preflight --candidate <path>` observes the
 admission an update that renames `<path>` over the executable would take. It first asks the
@@ -518,7 +562,7 @@ plain probe, this is an observation that reserves nothing and installs nothing.
 |------|-----------------------------------|
 | `orbit update`, `orbit update --version <v>` installing a different release | Admitted and handed over |
 | `orbit update --local-candidate … --install-target …` installing different bytes | Admitted and handed over |
-| Either of the above when the target is already installed (the convergence re-run) | Refused: nothing is renamed |
+| Either of the above when the target is already installed (the convergence re-run) | Handed over in place when it already runs the installed executable digest and identity and has a resume capability (listed in `same_generation`); otherwise refused: nothing is renamed |
 | `orbit update --preflight` | Refused: nothing is renamed |
 | `orbit update --preflight --candidate <path>` | Named in `handover`; observation only |
 | A raw copy or rename by another installer | Hands over, but without admission, backup, pin or convergence |
@@ -592,10 +636,18 @@ older binary), stops scheduled routines and worktree GC on that host until those
 processes exit. Every such tick says so on stderr (`clock tick refused by upgrade
 admission (N tick(s) in a row since …)`), followed by the refusal, and `orbit doctor`'s
 `clock-unit` row reports an error naming the run of refused ticks and the latest
-refusal until a tick runs again. A claimed worker terminated without a recorded cancellation (an
-external installer or service restart signalling it) is `interrupted` with
-`worker_terminated` whether its supervisor observes SIGTERM or stale-owner
-reconciliation sees the dead process first.
+refusal until a tick runs again. A claimed worker that exits without a
+recorded cancellation has a failure state that depends on which path finalizes
+it. When the supervisor finalizes a running worker's
+non-signal crash exit, the run is `failed` without `worker_terminated`. When
+stale-owner reconciliation finalizes the dead worker first, it records
+`interrupted` with `worker_terminated`. Both states count as failures. A
+recorded terminating signal from `systemd` — a service restart or host
+shutdown — is `held` with `operator_stopped` and is outside the failure query
+when that exit evidence is available before finalization. If reconciliation
+finalizes first, it keeps the interruption even if the supervisor later
+records the `systemd` sender. Unknown senders, signals from other commands,
+and memory or task-limit breaches remain failures.
 
 #### Rollout beside executable-generation-v1 processes
 
@@ -637,6 +689,17 @@ published release names the exact command instead: `orbit update --version <inst
 refuses to reload the rewritten unit; it names the `launchctl`/`systemctl` command to run. When `--root` or `ORBIT_ROOT` selected the workspace, recovery output
 includes that root explicitly, so retrying from a different checkout does not silently switch the
 workspace being repaired.
+
+A re-run at the installed version hands a live process that already runs the installed
+executable digest and compatibility identity over in place, so finishing convergence after a
+standalone `orbit migrate --confirm` needs no session shutdown when every live client is that
+build and understands the in-place refresh (sessions started by a build that predates it keep
+holding, and the re-run refuses after `ORBIT_UPGRADE_QUIESCE_SECS`). A re-run still refuses,
+naming them, while other long-lived processes or unregistered holders are live: stop those
+and retry. When `migrate --confirm` fails because the update could not fence another
+authority that has used the workspace, its detail names that authority and its live
+clients; stop them and re-run the update. Do not delete admission files, records or
+markers to get past a refusal.
 
 The outgoing executable stays at `<orbit>.previous`. Restoring it is safe when the state it
 must open is newer only by additive migrations — it keeps reading and writing — or by
@@ -758,7 +821,10 @@ Then the ordinary update order applies, with the candidate in place of a downloa
    workspace and every authority held through convergence.
 6. Back up to `<orbit>.previous`, swap atomically, confirm the installed digest and
    version, wait for the admitted processes to hand over, pin the candidate's
-   generation, then run the convergence steps as the installed candidate.
+   generation, then run the convergence steps as the installed candidate. Before a
+   pending layout migration the pins on the authorities it fences become its fence, lent
+   to `migrate --confirm` and pinned again after it (`migration_fenced`), as for a release
+   update.
 
 Every refusal before step 6 leaves the executable, its backup, the generation record
 and every store untouched.
@@ -776,7 +842,11 @@ from the installed candidate.
 
 **Replay and recovery.** Re-running the same command once the target already holds the
 accepted digest skips replacement, re-pins and re-runs convergence (`outcome:
-already_current`); that is how an interrupted run finishes. A failure after the swap
+already_current`); that is how an interrupted run finishes. A live session already
+running the accepted bytes and identity, such as one that handed over in the first run or
+started from the installed candidate since, hands over in place to the same bytes, stays
+connected and is listed in `same_generation`; a session of other bytes, one that reports another identity, or a
+holder that never registered still refuses the re-run. A failure after the swap
 exits `4` with `outcome: needs_recovery`; the recovery text and
 `local_candidate.retry_command` carry the exact command, including `--root` when one
 selected the workspace. The report also lists `admission_roots`, the before and after
@@ -784,6 +854,15 @@ installed digests, and `release_source: local candidate (operator_attested, not 
 signed release)`.
 
 ## Understand the version ledgers
+
+Workspace layout version 9 fences older clients because they cannot preserve
+skipped-step checkpoint markers. Older writers drop the marker, and older
+readers restore a skipped step's null as an output on resume, changing
+downstream template behavior. The layout fence protects the workspace; the
+marker field itself is not necessarily rejected by older binaries. Before any
+host opens or migrates a shared workspace to version 9, update every host that
+can access it and keep older clients stopped. Follow the coordinated rollout
+in [Workspaces on multiple hosts](../../crates/orbit-core/assets/skills/orbit-setup/references/multi-host.md#upgrading-a-workspace-together).
 
 Two ledgers guard `.orbit/` state and auto-apply on workspace open:
 
@@ -975,6 +1054,8 @@ orbit migrate --confirm    # open the workspace, auto-apply, and report
 orbit migrate --json       # machine-readable inspection report
 orbit migrate --backfill-diff-stats [--limit N]  # apply, then record landed diff stats
 orbit migrate --backfill-task-crews  # apply, then set task.crew from each task's latest delivery (run or claimed-leaf settlement)
+orbit migrate --backfill-dispatch-effort  # apply, then record the launch effort of agent invocations that predate dispatch identities
+orbit migrate --backfill-claimed-effort  # on a pull follower: apply, then report to the owner the effort and model of claimed leaves it settled without them
 ```
 
 Example dry run on a pre-upgrade workspace:
@@ -1013,6 +1094,45 @@ recorded crew. Terminal tasks are included. Each change records
 `crew_source: backfill:admission` and a `crew_assigned` history entry; the report names the
 workspace, how many tasks had a selection and which changed. Run it on the owner, once,
 after upgrading to a build that writes admission crews back. A rerun changes nothing.
+
+`--backfill-dispatch-effort` applies pending migrations like `--confirm`, then gives each agent
+invocation of the workspace that has no dispatch identity (those that completed before Orbit
+recorded one at dispatch, 2026-10-31) the reasoning effort its launch rendered. It reads the
+effort from the redacted argv of the run's `cli.invocation.started` audit event for the same
+model, launched within a minute of the invocation's end minus its duration: `--effort X`,
+`--reasoning-effort X` or `model_reasoning_effort="X"`, and the provider default when the argv
+carries no effort flag. An invocation with no matching launch, or whose matching launches
+disagree or carry an unreadable effort, leaves its stored identity unrecorded (stays `unknown`
+in the store). On scorecards, effort is never taken from bare crew configuration, but an explicit
+crew label (`<crew>@<effort>`) serves as a final read-time fallback when no recorded identity
+exists. The crew recorded is the run's resolved crew for the run's executor invocation
+and absent otherwise. Each backfilled identity carries a `backfill` provenance (source event
+type, matched event ids, time recorded) in its stored record. Existing identities are never
+changed, so a rerun changes nothing. Run it on any host, owner or follower, against its own
+store; attempts a follower ran have no invocation on the owner.
+
+A run whose invocation never completed has no invocation to carry an identity. The same command records one row per `cli.invocation.started` event of that run, stamped with the event's time, when the launch's causal links name its step (its parent `activity.started`, whose parent is the `step.started`; a run-level activity such as `final_recovery` by its own name) or, without them, exactly one `step.started`/`step.finished` interval contains the launch, and the event names a provider. Each launch is its own row. A dispatch-time row already covering that launch — the same run, step, provider and model, within a minute of the closest launch, including one whose effort cannot be read — is left as it is, so a record written at dispatch is not duplicated. An unreadable launch can own that row and is never given an inferred effort; a later readable launch of the same step is recorded from its own evidence. A rerun records nothing new. The report says how many launch records it wrote and how many launches it left unrecorded because neither causal links nor a single step interval proved them, because the launch named no provider, or because that launch's recorded effort and argv disagreed or its effort could not be read. `orbit migrate --backfill-dispatch-effort --json` prints the same counts. Run it on each host against that host's own store after upgrading.
+
+`--backfill-claimed-effort` runs on a pull follower. It applies pending migrations like
+`--confirm`, then reports to the owner the reasoning effort and implementing model of each
+claimed leaf this host settled, so the owner's agent scorecards stop counting attempts settled
+before followers reported them as `effort unknown` or `model unknown`. It reads each leaf's
+effort, and the model of the same record, from this host's own store by the rule a settlement
+reports: the leaf run's main implementing invocation, else its latest matching launch record. Run `--backfill-dispatch-effort` on the follower first when its
+invocations predate dispatch identities. The owner records a report only for a claim this
+machine ran, for the leaf run bound to it, including a claim that settled before the owner
+kept settlement records, and never overwrites an effort or model it holds: the same value is
+already held, and a different one is refused and counted as a conflict. Nothing
+changes on the follower, and a rerun records nothing new. The report counts each claim by
+outcome (`recorded`, `replayed`, `conflict`, `effort_unknown`, `no_leaf_run`,
+`owner_unsupported`, `refused`, `owner_unreachable`); `--json` prints them under
+`claimed_effort_backfill` with a row per claim, plus `models_recorded`, `models_replayed` and
+`models_owner_unsupported`. An owner on a build without the report refuses it unread
+(`owner_unsupported`): upgrade the owner and run it again. An owner that predates the model
+report records the effort and ignores the model (`models_owner_unsupported`); upgrade it and run
+again. Attempts stay `effort unknown` on the owner when this follower holds no matching
+invocation or launch record of the leaf, no longer holds its run record, or the follower never
+runs this backfill (unless an explicit `<crew>@<effort>` label supplies the effort on scorecards).
 
 Before applying layout v3, pause admissions and stop every older Orbit process
 that can write tasks. Install the new binary, apply or trigger the workspace
@@ -1184,12 +1304,12 @@ active-model file) to reclaim the former model downloads. This does not affect
 task records or the lexical index. No automatic deletion of that global
 directory is performed.
 
-Legacy `[semantic]` configuration and `search.model` are ignored with a warning
-for the removal release; delete them from config.toml. `orbit doctor` names
-the file, and `orbit doctor --fix-retired-config-keys` backs it up and removes
-the key. Config get/set reject
-these retired keys with migration guidance. The runtime no longer honors
-`ORBIT_SEARCH_COMPANION*` environment overrides.
+Legacy `[semantic]` configuration and `search.model` are ordinary unknown
+settings. Loading ignores them with the generic unknown-key warning; delete
+them from config.toml. `orbit doctor` names the file, and `orbit doctor
+--fix-retired-config-keys` backs it up and removes the unknown table with the
+other unknown paths. `orbit config get` and `set` report an unknown key. The
+runtime no longer honors `ORBIT_SEARCH_COMPANION*` environment overrides.
 
 ## Job run state migration (schema v38)
 
@@ -1255,6 +1375,50 @@ it waits for nothing.
 Store schema v43 adds an index over v2 audit event type and timestamp for windowed reads such as
 the policy-denial summary. It is index-only, so older binaries keep reading and writing and it
 waits for nothing.
+
+## Crew memory and audit session model (schemas v87-v88)
+
+Store schemas v87 (`crew_memory`) and v88 (`audit_session_model`) raise the store schema from 86
+to 88 in the v0.48.0 release. Both migrations are classified Additive in the migration registry
+(`crates/orbit-store/src/driver/sqlite/migration/ledger/registry.rs`): v87 adds new crew-memory
+tables no existing row depends on, and v88 adds a nullable MCP session-model column that leaves
+existing rows NULL and is not part of `role`. An older binary that supports schema 86 therefore
+opens schema-88 state for reads *and* writes through the forward-compatibility record
+(`migration.compat`): when every migration above its supported version is Additive,
+`evaluate_newer_database` (`crates/orbit-store/src/driver/sqlite/migration/ledger/compatibility.rs`)
+returns a writable forward-compatible open, and the older binary applies no migration to the newer
+state (see [Additive-newer: reads and writes](#additive-newer-reads-and-writes)). Upgrading the
+store to 88 alone does not force older binaries to refuse it.
+
+The separate, real incompatibility in the same release is the optional `memory` capture on
+`CapturedExperiment` (`crates/orbit-types/src/workflow/experiments.rs`). The struct uses
+`deny_unknown_fields`, and `memory` is `Option<...>` omitted from the wire when `None`
+(`skip_serializing_if`); an older consumer therefore keeps accepting tasks and receipts without
+the field but rejects one carrying a populated memory block. The field need not exist in every
+task or receipt, so memory-free traffic stays compatible across versions.
+
+Keep fleet hosts aligned when memory experiments are in use — that remains sound operational
+advice — but its rationale is the populated-capture rejection above, not an unconditional
+database refusal at schema 88. The frozen v0.48.0 changelog entry overstates the database
+refusal; per the RELEASING.md fix-forward policy it is left untouched, and this runbook is the
+maintained correction.
+
+## Task reservation active-row indexes (schema v89)
+
+Store schema v89 adds two partial indexes on `task_reservations`:
+`(workspace_id, expires_at) WHERE released_at IS NULL` and
+`(workspace_orbit_dir, expires_at) WHERE released_at IS NULL`. Active lock,
+lease and claim reads use them. The migration is index-only, so older binaries
+keep reading and writing and it waits for nothing.
+
+## Execution-claim indexes (schema v90)
+
+Store schema v90 adds partial expression indexes on coordination rows: one by
+claim task, one over claims whose phase still protects a footprint (`claimed`,
+`running`, `handed_off`, `repair_pending`), and three on lifecycle rows (claim
+task, admission run, and bound leaf run). Task writes and footprint checks use
+them. The migration is index-only, so older binaries keep reading and writing
+and it waits for nothing.
 
 ## Verify the upgrade
 

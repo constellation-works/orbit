@@ -3,12 +3,16 @@ type: runbook
 summary: Run local Rust CodeQL once per delivery for code-scanning repairs, security-tagged tasks and CodeQL setup changes, with a verified host toolchain cache, bounded concurrency, threaded evaluation and exact-input reuse, and reject incomplete semantic extraction.
 tags: [rust, codeql, security, validation]
 paths: ["scripts/codeql-rust-local.sh", ".github/codeql/**"]
-last_validated: 2026-10-26
+last_validated: 2026-11-14
 ---
 
 # Run local Rust CodeQL for code-scanning repairs and security changes
 
-Hosted CodeQL analyses `agent-main` pushes (not pull requests). Use this
+Hosted CodeQL analyses `main` pushes and runs daily on `agent-main` (not pull
+requests). A docs-only push whose parent already has a successful completed
+run of that workflow skips the analysis jobs; a non-docs path, a parent
+without that proof, `workflow_dispatch` and the daily schedule still run every
+analysis job. Use this
 procedure before handoff only when the agent guide (`CLAUDE.md`, "Local Rust
 CodeQL") requires it: a code-scanning or CodeQL repair, a task tagged
 `security` or `security-review`, or a change to `.github/codeql/**` or
@@ -349,8 +353,11 @@ evidence in that scratch tree. It never executes the deliberately unsafe Rust
 program or adds its models to production scanning.
 
 The extension schema gate refuses the known ineffective Result-field barrier
-form in repository path models. This guard supplements the opt-in flow test;
-schema validation alone cannot prove barrier behavior.
+form in repository path models. It also rejects double-quoted scalars with
+escapes PyYAML's safe loader rejects, including an unknown `\:`, and reports
+the file and line. Supported double-quoted escapes remain `\n`, `\t`, `\r`,
+`\"` and `\\`. This guard supplements the opt-in flow test; schema validation
+alone cannot prove barrier behavior.
 
 ## Reusing a verified implementer database
 
@@ -381,8 +388,21 @@ sandbox, Landlock and runtime modules, are outside the active cfg on any other
 host. A macOS extractor therefore always skips their semantic analysis, and a
 run there could never pass the extraction checks above. On a host whose
 `uname -s` is not `Linux`, the script exits 3 before preparing anything: no
-toolchain, database or query. On Linux every production module is active, so
-a skipped one is always the refusal above (exit 1), never a platform exclusion.
+toolchain, database or query.
+
+Linux is the coverage host: every production Rust file must be a module the
+Linux build compiles. A file that only another platform compiles triggers the
+refusal above (exit 1) on Linux too, with no platform exclusion. Code that
+runs only on macOS therefore keeps its module compiled on Linux and gates only
+what it cannot build there, such as a macOS system call or the call site
+that starts it. For example, the worker's resource watchdog (`usage/watchdog.rs`)
+and its per-process tree levels compile on Linux, where the worker's systemd
+scope enforces limits instead. Only macOS starts the watchdog, passing it the
+macOS session-tree reader. An item gated on a different platform inside an
+included module does not trigger the refusal; the extractor skips only modules
+it cannot place in the build. Before gating a whole production module on a
+non-Linux `cfg`, keep it compiled on Linux instead, or the next local run
+refuses extraction.
 
 Exit 3 is neither a failed check nor confirmation; the check is owed by a Linux
 run of the same command. Record the exact command as a `required` validation
@@ -392,9 +412,9 @@ this check returns `incomplete` with an `external_evidence` entry of kind
 `codeql`, name `Linux CodeQL (rust)`, that exact command, and the result
 artifact `evidence/codeql-rust-linux.json`. Settlement then holds the review
 for evidence instead of ending it incomplete ([review gate design §4](../design/review-gate/2_design.md)). This repository's hosted `CodeQL / Analyze (rust)`
-job runs only on pushes to `main` and `agent-main` and on the weekly schedule,
-never for a pull request, so it cannot supply evidence for a candidate before
-its PR opens or lands.
+job runs on pushes to `main` and on the daily schedule for `agent-main`, never
+for a pull request, so it cannot supply evidence for a candidate before its PR
+opens or lands.
 
 A claimed leaf does not depend on its reviewer to name the check. The owner
 declares a workspace rule that a Rust change owes it:
@@ -511,7 +531,7 @@ check of the same hold failed for a different reason, the findings are still
 attached, but the hold stays for that decision.
 
 ```bash
-orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"review-evidence-findings.json"}' \
+orbit tool run orbit.task.artifact --input '{"action":"get","id":"<task-id>","path":"review-evidence-findings.json"}' \
   | jq '.content | fromjson | .results[] | {rule, file, line}'
 ```
 

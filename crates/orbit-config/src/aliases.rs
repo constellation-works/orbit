@@ -20,8 +20,8 @@
 //! - `machine.worker_containment_strict` → `machine.worker_containment =
 //!   "strict"`; a boolean `machine.worker_containment` is read by the row's
 //!   own resolver, so the file keeps its spelling and still warns;
-//! - `workflow.validation_env.login_shell` / `.interactive` →
-//!   `workflow.validation_env.shell_probe`.
+//! - `workflow.crew_performance_types` → `workflow.task_types`, the same
+//!   ordered entries under the name type-pool routing reads [ORB-22804].
 //!
 //! The paired switches layered one key at a time, so a workspace file could
 //! state one half and inherit the other. Translating such a file needs the
@@ -40,13 +40,12 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
 
-use crate::layering::{set_value_at_path, value_at_path};
+use crate::config_document;
 use crate::operation::{
     LEGACY_REVIEW_BEFORE_LANDING_KEY, LEGACY_REVIEW_BEFORE_PR_KEY, LEGACY_REVIEW_CREW_KEY,
     REVIEW_CREW_KEY, REVIEW_TIMING_KEY, ReviewTimingSetting, legacy_policy_before_pr,
     translate_legacy_review_minutes,
 };
-use crate::registry::read_optional;
 
 /// The consolidated final-recovery pool.
 pub(crate) const FINAL_RECOVERY_CREWS_KEY: &str = "workflow.purpose_crews.final_recovery";
@@ -64,12 +63,6 @@ pub(crate) const LEGACY_SWEEP_CREWS_KEYS: &[&str] = &[
 pub(crate) const WORKER_CONTAINMENT_KEY: &str = "machine.worker_containment";
 /// The deprecated strict switch, translated to `worker_containment = "strict"`.
 pub(crate) const LEGACY_WORKER_CONTAINMENT_STRICT_KEY: &str = "machine.worker_containment_strict";
-/// Validation-environment shell probe: `off`, `login` or `interactive`.
-pub(crate) const SHELL_PROBE_KEY: &str = "workflow.validation_env.shell_probe";
-/// The deprecated probe switch: `false` never probes.
-pub(crate) const LEGACY_LOGIN_SHELL_KEY: &str = "workflow.validation_env.login_shell";
-/// The deprecated interactive switch: `false` probes only `-l -c`.
-pub(crate) const LEGACY_INTERACTIVE_KEY: &str = "workflow.validation_env.interactive";
 
 /// Every replacement key a translation may write.
 const REPLACEMENT_KEYS: &[&str] = &[
@@ -79,7 +72,7 @@ const REPLACEMENT_KEYS: &[&str] = &[
     REVIEW_TIMING_KEY,
     crate::operation::REVIEW_MINUTES_KEY,
     WORKER_CONTAINMENT_KEY,
-    SHELL_PROBE_KEY,
+    crate::TASK_TYPES_KEY,
 ];
 
 /// Why a document is translated.
@@ -119,7 +112,11 @@ fn translate(
     translate_sweep_pools(document, config_path)?;
     translate_review_timing(document, lower, config_path, purpose)?;
     translate_worker_containment(document, config_path)?;
-    translate_shell_probe(document, lower, config_path)?;
+    rename(
+        document,
+        crate::LEGACY_TASK_TYPES_KEY,
+        crate::TASK_TYPES_KEY,
+    );
     Ok(())
 }
 
@@ -139,7 +136,7 @@ pub fn deprecated_key_rewrites(
     Ok(REPLACEMENT_KEYS
         .iter()
         .filter_map(|key| {
-            let value = value_at_path(&translated, key)?;
+            let value = config_document::config_value_at_path(&translated, key)?;
             let value = match value {
                 toml::Value::Boolean(contained) if *key == WORKER_CONTAINMENT_KEY => {
                     let mode = if *contained {
@@ -151,7 +148,7 @@ pub fn deprecated_key_rewrites(
                 }
                 value => value.clone(),
             };
-            match value_at_path(original, key) {
+            match config_document::config_value_at_path(original, key) {
                 Some(written) if *written == value => None,
                 Some(toml::Value::Boolean(_)) if *key == WORKER_CONTAINMENT_KEY => {
                     Some((*key, value))
@@ -164,21 +161,23 @@ pub fn deprecated_key_rewrites(
 }
 
 fn rename(document: &mut toml::Value, legacy: &str, replacement: &str) {
-    if value_at_path(document, replacement).is_some() {
+    if config_document::config_value_at_path(document, replacement).is_some() {
         return;
     }
-    if let Some(value) = value_at_path(document, legacy).cloned() {
-        set_value_at_path(document, replacement, value);
+    if let Some(value) = config_document::config_value_at_path(document, legacy).cloned() {
+        config_document::set_config_value_at_path(document, replacement, value);
     }
 }
 
 fn translate_sweep_pools(document: &mut toml::Value, config_path: &Path) -> Result<(), OrbitError> {
-    if value_at_path(document, SWEEP_TASKS_CREWS_KEY).is_some() {
+    if config_document::config_value_at_path(document, SWEEP_TASKS_CREWS_KEY).is_some() {
         return Ok(());
     }
     let stated = LEGACY_SWEEP_CREWS_KEYS
         .iter()
-        .filter_map(|key| value_at_path(document, key).map(|value| (*key, value.clone())))
+        .filter_map(|key| {
+            config_document::config_value_at_path(document, key).map(|value| (*key, value.clone()))
+        })
         .collect::<Vec<_>>();
     let Some((_, first)) = stated.first() else {
         return Ok(());
@@ -196,7 +195,7 @@ fn translate_sweep_pools(document: &mut toml::Value, config_path: &Path) -> Resu
         )));
     }
     let first = first.clone();
-    set_value_at_path(document, SWEEP_TASKS_CREWS_KEY, first);
+    config_document::set_config_value_at_path(document, SWEEP_TASKS_CREWS_KEY, first);
     Ok(())
 }
 
@@ -207,18 +206,28 @@ fn review_halves(
     document: &toml::Value,
     config_path: &Path,
 ) -> Result<(Option<bool>, Option<bool>), OrbitError> {
-    if let Some(raw) = read_optional::<String>(document, REVIEW_TIMING_KEY, config_path)? {
+    if let Some(raw) = config_document::read_typed_config_value::<String>(
+        document,
+        REVIEW_TIMING_KEY,
+        config_path,
+    )? {
         let (before_pr, before_landing) =
             ReviewTimingSetting::parse_in_file(&raw, config_path)?.switches();
         return Ok((Some(before_pr), Some(before_landing)));
     }
-    let before_pr = match read_optional::<bool>(document, LEGACY_REVIEW_BEFORE_PR_KEY, config_path)?
-    {
+    let before_pr = match config_document::read_typed_config_value::<bool>(
+        document,
+        LEGACY_REVIEW_BEFORE_PR_KEY,
+        config_path,
+    )? {
         Some(before_pr) => Some(before_pr),
         None => legacy_policy_before_pr(document, config_path)?,
     };
-    let before_landing =
-        read_optional::<bool>(document, LEGACY_REVIEW_BEFORE_LANDING_KEY, config_path)?;
+    let before_landing = config_document::read_typed_config_value::<bool>(
+        document,
+        LEGACY_REVIEW_BEFORE_LANDING_KEY,
+        config_path,
+    )?;
     Ok((before_pr, before_landing))
 }
 
@@ -228,7 +237,7 @@ fn translate_review_timing(
     config_path: &Path,
     purpose: Purpose,
 ) -> Result<(), OrbitError> {
-    if value_at_path(document, REVIEW_TIMING_KEY).is_some() {
+    if config_document::config_value_at_path(document, REVIEW_TIMING_KEY).is_some() {
         return Ok(());
     }
     let (stated_before_pr, stated_before_landing) = review_halves(document, config_path)?;
@@ -265,7 +274,7 @@ fn translate_review_timing(
     if purpose == Purpose::Load && !decided_here && inherited {
         return Ok(());
     }
-    set_value_at_path(
+    config_document::set_config_value_at_path(
         document,
         REVIEW_TIMING_KEY,
         toml::Value::String(timing.as_str().to_string()),
@@ -277,12 +286,15 @@ fn translate_worker_containment(
     document: &mut toml::Value,
     config_path: &Path,
 ) -> Result<(), OrbitError> {
-    let Some(strict) =
-        read_optional::<bool>(document, LEGACY_WORKER_CONTAINMENT_STRICT_KEY, config_path)?
+    let Some(strict) = config_document::read_typed_config_value::<bool>(
+        document,
+        LEGACY_WORKER_CONTAINMENT_STRICT_KEY,
+        config_path,
+    )?
     else {
         return Ok(());
     };
-    let contained = match value_at_path(document, WORKER_CONTAINMENT_KEY) {
+    let contained = match config_document::config_value_at_path(document, WORKER_CONTAINMENT_KEY) {
         // A mode written as the new string wins over the deprecated switch.
         Some(toml::Value::String(_)) => return Ok(()),
         Some(toml::Value::Boolean(contained)) => *contained,
@@ -305,114 +317,12 @@ fn translate_worker_containment(
         (true, false) => "warn",
         (false, false) => "off",
     };
-    set_value_at_path(
+    config_document::set_config_value_at_path(
         document,
         WORKER_CONTAINMENT_KEY,
         toml::Value::String(mode.to_string()),
     );
     Ok(())
-}
-
-/// The probe halves a document states: `shell_probe` decides both when
-/// present (`off` leaves the interactive half at its default); otherwise each
-/// deprecated switch decides its own.
-fn probe_halves(
-    document: &toml::Value,
-    config_path: &Path,
-) -> Result<(Option<bool>, Option<bool>), OrbitError> {
-    if let Some(raw) = read_optional::<String>(document, SHELL_PROBE_KEY, config_path)? {
-        return Ok(match ShellProbeMode::parse(&raw)? {
-            ShellProbeMode::Off => (Some(false), None),
-            ShellProbeMode::Login => (Some(true), Some(false)),
-            ShellProbeMode::Interactive => (Some(true), Some(true)),
-        });
-    }
-    Ok((
-        read_optional::<bool>(document, LEGACY_LOGIN_SHELL_KEY, config_path)?,
-        read_optional::<bool>(document, LEGACY_INTERACTIVE_KEY, config_path)?,
-    ))
-}
-
-fn translate_shell_probe(
-    document: &mut toml::Value,
-    lower: Option<&toml::Value>,
-    config_path: &Path,
-) -> Result<(), OrbitError> {
-    if value_at_path(document, SHELL_PROBE_KEY).is_some() {
-        return Ok(());
-    }
-    let (login_shell, interactive) = probe_halves(document, config_path)?;
-    if login_shell.is_none() && interactive.is_none() {
-        return Ok(());
-    }
-    let (lower_login_shell, lower_interactive) = match lower {
-        Some(lower) => probe_halves(lower, config_path)?,
-        None => (None, None),
-    };
-    let mode = match (
-        login_shell.or(lower_login_shell).unwrap_or(true),
-        interactive.or(lower_interactive).unwrap_or(true),
-    ) {
-        (false, _) => ShellProbeMode::Off,
-        (true, false) => ShellProbeMode::Login,
-        (true, true) => ShellProbeMode::Interactive,
-    };
-    set_value_at_path(
-        document,
-        SHELL_PROBE_KEY,
-        toml::Value::String(mode.as_str().to_string()),
-    );
-    Ok(())
-}
-
-/// `workflow.validation_env.shell_probe`: how required validation resolves
-/// PATH and toolchain locators from the owner's shell.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ShellProbeMode {
-    /// Never probe the shell.
-    Off,
-    /// Probe a login shell (`-l -c`) only.
-    Login,
-    /// Try an interactive login shell (`-i -l -c`), falling back to `-l -c`
-    /// (the default).
-    Interactive,
-}
-
-impl ShellProbeMode {
-    /// Every value `shell_probe` admits.
-    pub const CHOICES: &'static [&'static str] = &["off", "login", "interactive"];
-
-    /// The configured spelling.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Off => "off",
-            Self::Login => "login",
-            Self::Interactive => "interactive",
-        }
-    }
-
-    /// The mode a configured spelling names.
-    pub fn parse(raw: &str) -> Result<Self, OrbitError> {
-        match raw.trim() {
-            "off" => Ok(Self::Off),
-            "login" => Ok(Self::Login),
-            "interactive" => Ok(Self::Interactive),
-            other => Err(OrbitError::InvalidInput(format!(
-                "{SHELL_PROBE_KEY} has invalid value '{other}'; expected one of: {}",
-                Self::CHOICES.join(", ")
-            ))),
-        }
-    }
-
-    /// Whether the shell is probed at all.
-    pub fn probes(self) -> bool {
-        self != Self::Off
-    }
-
-    /// Whether the interactive login shell is tried first.
-    pub fn interactive(self) -> bool {
-        self == Self::Interactive
-    }
 }
 
 /// `machine.worker_containment`: how detached pipeline workers are bounded.
@@ -477,7 +387,7 @@ pub(crate) fn resolve_worker_containment(
 /// boolean.
 pub(crate) fn has_legacy_worker_containment(document: &toml::Value) -> bool {
     matches!(
-        value_at_path(document, WORKER_CONTAINMENT_KEY),
+        config_document::config_value_at_path(document, WORKER_CONTAINMENT_KEY),
         Some(toml::Value::Boolean(_))
     )
 }

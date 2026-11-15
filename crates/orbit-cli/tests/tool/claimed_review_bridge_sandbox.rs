@@ -332,8 +332,11 @@ puts = set()
 def forward():
     for line in sys.stdin.buffer:
         message = json.loads(line)
-        name = str(message.get('params', {{}}).get('name', ''))
-        if message.get('method') == 'tools/call' and 'artifact' in name and 'put' in name:
+        params = message.get('params', {{}})
+        name = str(params.get('name', ''))
+        # A family call names its operation in the `action` argument [ORB-23280].
+        action = str((params.get('arguments') or {{}}).get('action', ''))
+        if message.get('method') == 'tools/call' and 'artifact' in name and ('put' in name or action == 'put'):
             puts.add(message.get('id'))
         child.stdin.write(line)
         child.stdin.flush()
@@ -734,7 +737,7 @@ fn broker_run(
         tool_deny_policy: Some(ActivityToolDenyPolicy {
             activity: activity.to_string(),
             disallow_list: vec![
-                "orbit.agent.invoke".to_string(),
+                "orbit.command.exec".to_string(),
                 "orbit.task.update".to_string(),
             ],
         }),
@@ -790,17 +793,21 @@ fn sandbox_fixture() {
     let follower_machine = follower.machine_id();
 
     // The claim, over the same SSH route a follower drain uses.
-    let route = || {
-        FederatedMcpHost::new(
-            vec![Destination::ssh("isolated-owner", &owner_machine)],
-            Arc::new(SshDestinationProbe::new(
-                follower_machine.clone(),
-                Duration::from_secs(60),
-                Duration::from_secs(60),
-                None,
-                orbit_mcp::McpSessionAuthority::Agent,
-            )),
-        )
+    let route = {
+        let owner_machine = owner_machine.clone();
+        let follower_machine = follower_machine.clone();
+        move || {
+            FederatedMcpHost::new(
+                vec![Destination::ssh("isolated-owner", &owner_machine)],
+                Arc::new(SshDestinationProbe::new(
+                    follower_machine.clone(),
+                    Duration::from_secs(60),
+                    Duration::from_secs(60),
+                    None,
+                    orbit_mcp::McpSessionAuthority::Agent,
+                )),
+            )
+        }
     };
     let drain = |name: &str, mut input: Value| {
         input["workspace"] = json!(selector);
@@ -836,11 +843,14 @@ fn sandbox_fixture() {
     .expect("worker binding");
 
     // The leaf's step runner: the follower runtime bound to the claim, with
-    // the owner route its composition installs.
+    // the owner route its composition installs. Production builds that route
+    // for each call (`FederatedWorkerRoute`), so no routed session stays
+    // parked between calls; one long-lived route here would keep the owner
+    // runtime alive for the pool's idle window after every brokered call.
     let runner = follower
         .runtime()
         .with_automation_machine_identity(Some(follower_machine.clone()))
-        .with_worker_invocation(binding, Arc::new(route()))
+        .with_worker_invocation(binding, Arc::new(PerCallOwnerRoute(route.clone())))
         .expect("bind the leaf");
     let workspace = runner.workspace_id().expect("follower workspace");
 
@@ -890,8 +900,8 @@ fn sandbox_fixture() {
     let attach = |path: &str, bytes: &[u8]| {
         route_worker_host_tool(
             &runner,
-            "orbit.task.artifact.put",
-            json!({"id": task, "artifacts": [{
+            "orbit.task.artifact",
+            json!({"action": "put", "id": task, "artifacts": [{
                 "path": path, "content": bytes, "media_type": "application/json",
             }]}),
         )
@@ -1384,7 +1394,7 @@ fn sandbox_fixture() {
                 TaskStatus::Backlog,
                 "operator",
                 "The claim outlived its reservation.",
-                "claimed-review-revocation",
+                ("operator-recover", "claimed-review-revocation"),
             )
             .expect("the owner revokes the claim");
     }
@@ -1552,6 +1562,26 @@ fn elapse_reservation(owner: &OrbitRuntime, claim_id: &str, base: &Path) -> Valu
     elapsed
 }
 
+/// The leaf's owner route, built for each brokered call as the claimed
+/// worker's production route is. Dropping the route when the call returns
+/// closes its SSH session, so the owner runtime exits before the fixture
+/// opens the owner store.
+struct PerCallOwnerRoute<F>(F);
+
+impl<F> orbit_tools::OwnerCoordinator for PerCallOwnerRoute<F>
+where
+    F: Fn() -> FederatedMcpHost + Send + Sync,
+{
+    fn call(
+        &self,
+        name: &str,
+        input: Value,
+        session: ToolSessionContext,
+    ) -> Result<Value, orbit_common::OrbitError> {
+        orbit_tools::OwnerCoordinator::call(&(self.0)(), name, input, session)
+    }
+}
+
 /// A refused MCP call: an error answer that names `cause`.
 fn mcp_refused(result: &Value, cause: &str) {
     let error = result
@@ -1589,7 +1619,6 @@ fn wait_for(path: &Path, limit: Duration) {
 
 fn manifest(task: &str, attempt_id: &str, candidate: &SourceRevision) -> ReviewManifest {
     ReviewManifest {
-        visual_findings: Vec::new(),
         satisfied_external_evidence: BTreeMap::new(),
         evidence_carried: None,
         mutation_proposals: Vec::new(),
@@ -1796,6 +1825,9 @@ def run(argv, env=None, cwd=None):
 def tool(name, payload, env=None, cwd=None):
     return run([orbit, 'tool', 'run', name, '--input', json.dumps(payload)], env, cwd)
 
+def artifact(action, payload, env=None, cwd=None):
+    return tool('orbit.task.artifact', dict(payload, action=action), env, cwd)
+
 def with_broker(socket_path):
     env = dict(os.environ)
     env['ORBIT_PLUGIN_BROKER'] = socket_path
@@ -1821,7 +1853,11 @@ def mcp(calls, cwd=None, env=None):
     answer(0)
     send({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
     results = []
-    for ident, (name, arguments) in enumerate(calls, 1):
+    for ident, call in enumerate(calls, 1):
+        # A family call names its action: (family, action, arguments).
+        name, arguments = call[0], call[-1]
+        if len(call) == 3:
+            arguments = dict(arguments, action=call[1])
         send({'jsonrpc': '2.0', 'id': ident, 'method': 'tools/call',
               'params': {'name': name, 'arguments': arguments}})
         response = answer(ident)
@@ -1833,6 +1869,9 @@ def mcp(calls, cwd=None, env=None):
     server.stdin.close()
     server.wait(timeout=60)
     return results
+
+def raw_artifact(action, payload):
+    return raw('orbit.task.artifact', dict(payload, action=action))
 
 def raw(tool_name, payload):
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -1870,87 +1909,86 @@ if mode == 'running':
     report['private_key_readable'] = readable(os.path.expanduser('~/.ssh/id_ed25519'))
     report['direct_ssh'] = run(['ssh', '-T', '--', 'isolated-owner', 'orbit mcp serve'])
     get = {'id': task, 'path': MANIFEST}
-    report['stale_manifest'] = tool('orbit.task.artifact.get', get)
+    report['stale_manifest'] = artifact('get', get)
     open(stale_seen, 'w').close()
     wait(pinned)
-    report['cli_get'] = tool('orbit.task.artifact.get', get)
+    report['cli_get'] = artifact('get', get)
     put = {'id': task, 'path': REPORT, 'source_path': os.path.join(scratch, 'report.json')}
     mcp_put = dict(put, source_path=os.path.join(scratch, 'mcp-report.json'))
-    report['mcp_get'], report['mcp_put'] = mcp([('orbit_task_artifact_get', get),
-                                                ('orbit_task_artifact_put', mcp_put)])
+    report['mcp_get'], report['mcp_put'] = mcp([('orbit_task_artifact', 'get', get),
+                                                ('orbit_task_artifact', 'put', mcp_put)])
     # The host checks the owner's bytes before any CLI put replaces them.
     open(mcp_done, 'w').close()
     wait(mcp_checked)
     source = lambda name: dict(put, source_path=os.path.join(scratch, name + '.json'))
     evidence = [REPORT, 'review-report-history.json', 'review-evidence-hold.json',
                 'review-evidence-ci.json', 'review-evidence-ci.log']
-    report['evidence_reads'] = {path: tool('orbit.task.artifact.get', {'id': task, 'path': path})
+    report['evidence_reads'] = {path: artifact('get', {'id': task, 'path': path})
                                 for path in evidence}
     report['evidence_mcp_reads'] = dict(zip(evidence, mcp([
-        ('orbit_task_artifact_get', {'id': task, 'path': path}) for path in evidence])))
+        ('orbit_task_artifact', 'get', {'id': task, 'path': path}) for path in evidence])))
     names = ['wrong_path', 'gate_record', 'cross_task', 'stale_report', 'symlink', 'oversize',
              'task_show', 'unlisted', 'other_owner']
     report['mcp_refusals'] = dict(zip(names, mcp([
-        ('orbit_task_artifact_get', {'id': task, 'path': 'review-evidence-unnamed.log'}),
-        ('orbit_task_artifact_get', {'id': task, 'path': 'review-gate.json'}),
-        ('orbit_task_artifact_get', {'id': 'TSO-999', 'path': MANIFEST}),
-        ('orbit_task_artifact_put', source('stale')),
-        ('orbit_task_artifact_put', source('link')),
-        ('orbit_task_artifact_put', source('oversize')),
+        ('orbit_task_artifact', 'get', {'id': task, 'path': 'review-evidence-unnamed.log'}),
+        ('orbit_task_artifact', 'get', {'id': task, 'path': 'review-gate.json'}),
+        ('orbit_task_artifact', 'get', {'id': 'TSO-999', 'path': MANIFEST}),
+        ('orbit_task_artifact', 'put', source('stale')),
+        ('orbit_task_artifact', 'put', source('link')),
+        ('orbit_task_artifact', 'put', source('oversize')),
         ('orbit_task_show', {'id': task}),
         ('orbit_task_update', {'id': task, 'status': 'done'}),
-        ('orbit_task_artifact_get', dict(get, workspace='another-owner/ws_other')),
+        ('orbit_task_artifact', 'get', dict(get, workspace='another-owner/ws_other')),
     ])))
     # From a subdirectory, naming the owner's selector explicitly.
     named = dict(get, workspace=selector)
-    report['nested_cli_get'] = tool('orbit.task.artifact.get', named, cwd=nested)
-    report['nested_mcp_get'] = mcp([('orbit_task_artifact_get', named)], cwd=nested)[0]
-    report['nested_cli_put'] = tool('orbit.task.artifact.put', dict(put, workspace=selector),
+    report['nested_cli_get'] = artifact('get', named, cwd=nested)
+    report['nested_mcp_get'] = mcp([('orbit_task_artifact', 'get', named)], cwd=nested)[0]
+    report['nested_cli_put'] = artifact('put', dict(put, workspace=selector),
                                     cwd=nested)
-    report['cli_put'] = tool('orbit.task.artifact.put', put)
-    report['cli_put_replay'] = tool('orbit.task.artifact.put', put)
+    report['cli_put'] = artifact('put', put)
+    report['cli_put_replay'] = artifact('put', put)
     open(lose, 'w').close()
-    report['lost_put'] = tool('orbit.task.artifact.put', put)
-    report['retry_put'] = tool('orbit.task.artifact.put', put)
-    report['wrong_path'] = tool('orbit.task.artifact.get', {'id': task, 'path': 'review-evidence-unnamed.log'})
-    report['cross_task'] = tool('orbit.task.artifact.get', {'id': 'TSO-999', 'path': MANIFEST})
-    report['cross_task_evidence'] = tool('orbit.task.artifact.get',
-        {'id': 'TSO-999', 'path': 'review-evidence-ci.json'})
+    report['lost_put'] = artifact('put', put)
+    report['retry_put'] = artifact('put', put)
+    report['wrong_path'] = artifact('get', {'id': task, 'path': 'review-evidence-unnamed.log'})
+    report['cross_task'] = artifact('get', {'id': 'TSO-999', 'path': MANIFEST})
+    report['cross_task_evidence'] = artifact('get', {'id': 'TSO-999', 'path': 'review-evidence-ci.json'})
     for name in ('stale', 'link', 'oversize'):
         key = {'stale': 'stale_report', 'link': 'symlink', 'oversize': 'oversize'}[name]
-        report[key] = tool('orbit.task.artifact.put', dict(put, source_path=os.path.join(scratch, name + '.json')))
+        report[key] = artifact('put', dict(put, source_path=os.path.join(scratch, name + '.json')))
     report['task_show'] = tool('orbit.task.show', {'id': task})
     report['unlisted'] = tool('orbit.task.update', {'id': task, 'status': 'done'})
     content = __import__('base64').b64encode(open(os.path.join(scratch, 'report.json'), 'rb').read()).decode()
     report['forged'] = {
-        'claim_override': raw('orbit.task.artifact.put', {'id': task, 'path': REPORT,
+        'claim_override': raw_artifact('put', {'id': task, 'path': REPORT,
             'content_base64': content, 'claim_id': 'forged-claim'}),
-        'workspace_override': raw('orbit.task.artifact.get', {'id': task, 'path': MANIFEST,
+        'workspace_override': raw_artifact('get', {'id': task, 'path': MANIFEST,
             'workspace': 'another-owner/ws_other'}),
-        'certificate_path': raw('orbit.task.artifact.put', {'id': task,
+        'certificate_path': raw_artifact('put', {'id': task,
             'path': 'review-certificate.json', 'content_base64': content}),
-        'other_task': raw('orbit.task.artifact.put', {'id': 'TSO-999', 'path': REPORT,
+        'other_task': raw_artifact('put', {'id': 'TSO-999', 'path': REPORT,
             'content_base64': content}),
         'unrelated_tool': raw('orbit.task.update', {'id': task, 'status': 'done'}),
-        'source_path': raw('orbit.task.artifact.put', {'id': task, 'path': REPORT,
+        'source_path': raw_artifact('put', {'id': task, 'path': REPORT,
             'source_path': '/etc/passwd'}),
     }
 elif mode == 'calls':
     scratch = sys.argv[4]
     get = {'id': task, 'path': MANIFEST}
     put = {'id': task, 'path': REPORT, 'source_path': os.path.join(scratch, 'report.json')}
-    report['cli_get'] = tool('orbit.task.artifact.get', get)
-    report['cli_put'] = tool('orbit.task.artifact.put', put)
-    report['mcp_get'], report['mcp_put'] = mcp([('orbit_task_artifact_get', get),
-                                                ('orbit_task_artifact_put', put)])
+    report['cli_get'] = artifact('get', get)
+    report['cli_put'] = artifact('put', put)
+    report['mcp_get'], report['mcp_put'] = mcp([('orbit_task_artifact', 'get', get),
+                                                ('orbit_task_artifact', 'put', put)])
 else:
     get = {'id': task, 'path': MANIFEST}
-    report['finished'] = tool('orbit.task.artifact.get', get)
-    report['other_activity'] = tool('orbit.task.artifact.get', get,
+    report['finished'] = artifact('get', get)
+    report['other_activity'] = artifact('get', get,
         with_broker(os.environ['ORBIT_TEST_IMPLEMENTER_BROKER']))
-    report['broker_gone'] = tool('orbit.task.artifact.get', get,
+    report['broker_gone'] = artifact('get', get,
         with_broker(os.environ['ORBIT_TEST_DEAD_BROKER']))
-    report['broker_gone_mcp'] = mcp([('orbit_task_artifact_get', get)],
+    report['broker_gone_mcp'] = mcp([('orbit_task_artifact', 'get', get)],
         env=with_broker(os.environ['ORBIT_TEST_DEAD_BROKER']))[0]
 print(json.dumps(report))
 "#;

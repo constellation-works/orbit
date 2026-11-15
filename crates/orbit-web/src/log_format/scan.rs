@@ -1,8 +1,8 @@
 //! Bounded reverse scans, rotated segments and snapshot tails.
 
 use chrono::{DateTime, Utc};
+use orbit_cmd::log_format::{self, Filters, LevelFilter};
 use orbit_common::fs::reverse_lines::{REVERSE_READ_BLOCK, ReverseLines};
-use orbit_core::OrbitError;
 use serde::Deserialize;
 use serde_json::Value;
 use std::borrow::Cow;
@@ -12,21 +12,6 @@ use std::path::{Path, PathBuf};
 use std::string::FromUtf8Error;
 
 use super::MAX_LOG_RECORD_BYTES;
-use super::filter::{Filters, LevelFilter, event_timestamp, parse_timestamp};
-
-pub(crate) fn resolve_log_path(override_path: Option<&Path>) -> Result<PathBuf, OrbitError> {
-    if let Some(path) = override_path {
-        return Ok(path.to_path_buf());
-    }
-    if let Ok(env) = std::env::var("ORBIT_LOG_PATH")
-        && !env.is_empty()
-    {
-        return Ok(PathBuf::from(env));
-    }
-    orbit_common::observability::logging::global_jsonl_log_path().map_err(|err| {
-        OrbitError::InvalidInput(format!("cannot resolve global JSONL log path: {err}"))
-    })
-}
 
 /// Block size for reverse JSONL scans. A scan stops at `limit` matches or at the
 /// first record older than its window, and only reaches offset 0 without either.
@@ -102,7 +87,7 @@ pub(crate) fn read_recent_matching_events_across_segments_with<R: Read + Seek>(
         let full = scan.events.len() == remaining;
         newest_first.extend(scan.events.into_iter().rev());
         if full {
-            coverage_since = newest_first.last().and_then(event_timestamp);
+            coverage_since = newest_first.last().and_then(log_format::event_timestamp);
             break;
         }
         if scan.reached_window_start {
@@ -114,7 +99,7 @@ pub(crate) fn read_recent_matching_events_across_segments_with<R: Read + Seek>(
         let Some(start) = first_event_timestamp(&mut reader)? else {
             continue;
         };
-        if filters.since.is_some_and(|since| start <= since) {
+        if filters.since().is_some_and(|since| start <= since) {
             coverage_since = None;
             break;
         }
@@ -229,7 +214,9 @@ impl<'a> LineHead<'a> {
     }
 
     fn timestamp(&self) -> Option<DateTime<Utc>> {
-        self.timestamp.as_deref().and_then(parse_timestamp)
+        self.timestamp
+            .as_deref()
+            .and_then(log_format::parse_timestamp)
     }
 }
 
@@ -260,8 +247,8 @@ enum Scanned {
 fn scan_line(raw: &str, filters: &Filters) -> Scanned {
     // Without a window there is no boundary to find, so a line that never
     // mentions the level it needs is skipped unread.
-    if filters.since.is_none()
-        && filters.min_level == Some(LevelFilter::Error)
+    if filters.since().is_none()
+        && filters.min_level() == Some(LevelFilter::Error)
         && !raw
             .as_bytes()
             .windows(5)
@@ -273,7 +260,7 @@ fn scan_line(raw: &str, filters: &Filters) -> Scanned {
         let Some(value) = parse_value(raw) else {
             return Scanned::Skip;
         };
-        if filters.precedes_window(event_timestamp(&value)) {
+        if filters.precedes_window(log_format::event_timestamp(&value)) {
             return Scanned::BeforeWindow;
         }
         return if filters.matches(&value) {

@@ -28,16 +28,22 @@ pub(super) fn dispatch(
                 selection.top(),
             )
         }
-        CodebaseVerb::Analytics => runtime.codebase_analytics(&analytics_query(&input)?),
-        CodebaseVerb::Show => {
-            runtime.codebase_path_detail(&analytics_query(&input)?, &input.required_string("path")?)
-        }
+        CodebaseVerb::Analytics => runtime.codebase_analytics(&analytics_query(runtime, &input)?),
+        CodebaseVerb::Show => runtime.codebase_path_detail(
+            &analytics_query(runtime, &input)?,
+            &input.required_string("path")?,
+        ),
     }
 }
 
 /// Window, minimum support, rollup and regression filters for analytics and
-/// path detail. Related does not use this: those fields are not its parameters.
-fn analytics_query(input: &OperationInput) -> Result<CodebaseQuery, OrbitError> {
+/// path detail; a layer is checked against the workspace's
+/// `workflow.regression_layers`. Related does not use this: those fields are
+/// not its parameters.
+fn analytics_query(
+    runtime: &OrbitRuntime,
+    input: &OperationInput,
+) -> Result<CodebaseQuery, OrbitError> {
     Ok(CodebaseQuery::parse(
         input.optional_string("window")?.as_deref(),
         input.optional_count("min_support")?,
@@ -48,5 +54,6 @@ fn analytics_query(input: &OperationInput) -> Result<CodebaseQuery, OrbitError> 
         input.optional_string("escape")?.as_deref(),
         input.optional_string("layer")?.as_deref(),
         input.optional_string("detected_by")?.as_deref(),
+        runtime.regression_layers(),
     )?))
 }

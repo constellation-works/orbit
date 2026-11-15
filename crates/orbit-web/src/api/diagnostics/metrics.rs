@@ -3,7 +3,6 @@
 use axum::extract::Query;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
-use orbit_cmd::DiagnosticsCommands;
 use orbit_core::{InvocationQuery, InvocationRecord};
 use serde_json::{Value, json};
 
@@ -26,34 +25,14 @@ pub(in crate::api) async fn list_diagnostics_metrics(
         if limit == 0 {
             return Ok(json!([]));
         }
-        let mut entries = Vec::new();
-        for month in runtime.list_metrics_months()? {
-            let (start, end) = month_bounds_utc(&month)?;
-            if range.since.is_some_and(|since| end < since) || start > range.until {
-                continue;
-            }
-            entries.extend(
-                runtime
-                    .read_metrics_entries(&month)?
-                    .into_iter()
-                    .filter(|entry| range.contains(entry.ts)),
-            );
-        }
-        entries.sort_by_key(|entry| std::cmp::Reverse(entry.ts));
-        entries.truncate(limit);
-        if entries.is_empty() {
-            // The SQL limit runs before projection. A host-wide read would
-            // let a newer row from another workspace consume this limit.
-            let records = runtime.workspace_invocation_records(InvocationQuery {
-                since: range.since,
-                until: Some(range.until),
-                limit,
-                ..InvocationQuery::default()
-            })?;
-            Ok(Value::Array(diagnostics_metrics_values(records)))
-        } else {
-            serde_json::to_value(&entries).map_err(|e| orbit_core::OrbitError::Store(e.to_string()))
-        }
+        // Limit within this workspace before projecting invocation rows.
+        let records = runtime.workspace_invocation_records(InvocationQuery {
+            since: range.since,
+            until: Some(range.until),
+            limit,
+            ..InvocationQuery::default()
+        })?;
+        Ok(Value::Array(diagnostics_metrics_values(records)))
     })
     .await
     {
@@ -62,7 +41,7 @@ pub(in crate::api) async fn list_diagnostics_metrics(
     }
 }
 
-/// Legacy month requests remain supported; dashboard requests supply `since`.
+/// Time window selected by `month` or `since` for diagnostics queries.
 pub(super) struct DiagnosticsRange {
     pub(super) key: String,
     pub(super) since: Option<DateTime<Utc>>,

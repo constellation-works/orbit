@@ -236,7 +236,10 @@ fn unregistered_checkout_paths(
 }
 
 fn walk_up_checkout_paths(cwd: &Path) -> Result<(PathBuf, PathBuf), OrbitError> {
-    if cwd.file_name().is_some_and(|name| name == ".orbit") && cwd.is_dir() {
+    if cwd.file_name().is_some_and(|name| name == ".orbit")
+        && cwd.is_dir()
+        && !is_global_orbit_dir(cwd)
+    {
         return Ok((cwd.parent().unwrap_or(cwd).to_path_buf(), cwd.to_path_buf()));
     }
 

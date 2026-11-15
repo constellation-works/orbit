@@ -43,7 +43,7 @@ spec:
       ttl_seconds:
         type: number
         minimum: 1
-        maximum: 14400
+        maximum: 86400
       delivery_job:
         type: string
   output_schema_json:

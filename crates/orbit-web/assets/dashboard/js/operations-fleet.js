@@ -1,12 +1,6 @@
-import { FLEET_CACHE_MS, fetchFleetDrains, fleetDrainLabel, peekFleetDrains, replaceFleetDrains } from './fleet-drains.js';
-import { setDrainReadiness } from './drain-waits.js';
-import { $, operationsState } from './operations-shared.js';
-
-let fleetOperationsCallbacks = null;
-
-export function configureOperationsFleetCallbacks(callbacks) {
-  fleetOperationsCallbacks = callbacks;
-}
+import { el, getHost, getServingHost } from './common.js';
+import { FLEET_CACHE_MS, fetchFleetDrains, peekFleetDrains, replaceFleetDrains } from './fleet-drains.js';
+import { $, operationsState, selectedWorkspace } from './operations-shared.js';
 
 export function loadFleetSnapshot({ refreshWhenStale, onPartial = null }) {
   const seen = peekFleetDrains();
@@ -15,34 +9,62 @@ export function loadFleetSnapshot({ refreshWhenStale, onPartial = null }) {
 }
 
 export function paintAggregateFleet(payload) {
-  setDrainReadiness({});
-  fleetOperationsCallbacks.updateDrainIndicators('fleet', 'Fleet drains');
-  const card = $("auto-drain-panel");
-  if (card) {
-    card.dataset.drainState = 'fleet';
-    const title = card.querySelector('.drain-title');
-    if (title) title.textContent = 'Fleet drains';
-  }
-  const pill = $("auto-drain-phase");
-  if (pill) pill.dataset.drainState = 'fleet';
-  const dot = $("auto-drain-dot");
-  if (dot) dot.className = 'drain-dot';
-  const body = $("auto-drain-body");
+  const body = $("fleet-drains-body");
   if (body) replaceFleetDrains(body, payload, operationsState.context.selectFleetScope);
-  fleetOperationsCallbacks.clearStartCard("auto-drain-quick-start");
-  const label = $("auto-drain-phase-label");
-  if (label) label.textContent = "Fleet";
-  const when = $("auto-drain-when");
-  if (when) when.textContent = "";
-  renderFleetIndicator(payload);
+}
+
+const LIVE_DRAIN_PHASES = ["draining", "pulling", "winding_down"];
+
+function railDrainWords({ phase, used, ceiling, held, liveCount }) {
+  if (liveCount) return { text: `${liveCount} live`, spoken: `${liveCount} ${liveCount === 1 ? "workspace" : "workspaces"} live` };
+  const slots = used != null && ceiling > 0 ? { text: `${used}/${ceiling}`, spoken: `${used} of ${ceiling} slots in use` } : { text: "live", spoken: "" };
+  const words = phase === "pulling" ? { text: "pull", spoken: "pull drain" }
+    : phase === "winding_down" ? { text: "winding down", spoken: "winding down" }
+    : { text: slots.text, spoken: ["draining", slots.spoken].filter(Boolean).join(", ") };
+  return held ? { text: `${words.text} · held`, spoken: `${words.spoken}, new tasks held` } : words;
+}
+
+// The rail's Drain item says whether a drain runs, in dot and words, from any
+// view: the selected workspace's, or how many are live under All workspaces.
+export function paintRailDrainReading({ phase = "idle", used = null, ceiling = null, held = false, liveCount = 0 }) {
+  const state = $("rail-drain-state");
+  const link = $("rail-drain");
+  if (!state || !link) return;
+  const live = Boolean(liveCount) || LIVE_DRAIN_PHASES.includes(phase);
+  state.hidden = !live;
+  state.classList.toggle("held", live && held);
+  if (!live) {
+    state.replaceChildren();
+    delete state.dataset.drainState;
+    link.setAttribute("aria-label", "Drain");
+    link.removeAttribute("title");
+    return;
+  }
+  const { text, spoken } = railDrainWords({ phase, used, ceiling, held, liveCount });
+  state.dataset.drainState = liveCount ? "draining" : phase;
+  state.replaceChildren(el("span", { class: "drain-dot", "aria-hidden": "true" }), text);
+  link.setAttribute("aria-label", `Drain: ${spoken}`);
+  link.title = `Drain: ${spoken}`;
+}
+
+function railDrainReadingFromFleet(payload) {
+  const rows = (payload?.items || []).filter(row => row.workspace_id && !row.error && !row.pending);
+  const workspace = selectedWorkspace();
+  if (!workspace) return { liveCount: rows.filter(row => LIVE_DRAIN_PHASES.includes(row.phase)).length };
+  const host = getHost() || getServingHost()?.name;
+  const row = rows.find(row => row.workspace_id === workspace.id && (row.host_selector == null || row.host_selector === host));
+  return row ? { phase: row.phase, used: row.slots_used, ceiling: row.slots_ceiling, held: Boolean(row.holds?.length) } : null;
+}
+
+// Repaint from the last fleet read when the selection moves, without asking the hosts.
+export function repaintRailDrainFromFleet() {
+  paintRailDrainReading(railDrainReadingFromFleet(peekFleetDrains()?.payload) || {});
 }
 
 function paintFleetSurfaces(payload) {
-  renderFleetIndicator(payload);
-  const card = $("auto-drain-panel");
-  if (card?.dataset.drainState !== "fleet") return;
-  const body = $("auto-drain-body");
-  if (body) replaceFleetDrains(body, payload, operationsState.context.selectFleetScope);
+  const reading = railDrainReadingFromFleet(payload);
+  if (reading) paintRailDrainReading(reading);
+  paintAggregateFleet(payload);
 }
 
 let fleetRefreshStarted = false;
@@ -86,21 +108,4 @@ export function startFleetIndicatorRefresh() {
     paintFleetSurfaces(payload);
     return payload;
   });
-}
-
-export function renderFleetIndicator(payload) {
-  const global = $("global-drain-state");
-  if (!global) return;
-  global.hidden = false;
-  const label = fleetDrainLabel(payload);
-  const active = payload.items.some(row => ['draining', 'pulling'].includes(row.phase));
-  global.dataset.drainState = active ? 'draining' : payload.items.some(row => row.phase === 'winding_down') ? 'winding_down' : 'idle';
-  global.setAttribute('aria-label', `${label}. Open fleet drains`);
-  global.querySelector('.global-drain-label').textContent = label;
-  global.querySelector('.global-drain-running').textContent = '';
-  // Open the fleet through the same scope switch used by its rows.
-  if (!global.dataset.fleetWired) {
-    global.addEventListener('click', () => operationsState.context.selectFleetScope(null, null));
-    global.dataset.fleetWired = 'true';
-  }
 }

@@ -80,13 +80,22 @@ impl RefreshFailure {
 pub(crate) struct WsRejection {
     status: StatusCode,
     message: String,
+    code: Option<&'static str>,
 }
+
+/// Stable code for the environmental refusal when the selected workspace is
+/// not active in the pinned registry snapshot. That state can change between
+/// attempts and this rejection precedes any handler or receipt lookup, so a
+/// retained replay key must not treat it as proof that no dispatch was
+/// recorded. Mirrors the `workspace_unavailable` code in task creation.
+pub(crate) const WORKSPACE_UNAVAILABLE_CODE: &str = "workspace_unavailable";
 
 impl WsRejection {
     pub(super) fn unknown(id: &str) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
             message: format!("unknown workspace: {id}"),
+            code: None,
         }
     }
 
@@ -94,6 +103,7 @@ impl WsRejection {
         Self {
             status: StatusCode::BAD_REQUEST,
             message: format!("workspace '{id}' is inactive; select an active workspace"),
+            code: Some(WORKSPACE_UNAVAILABLE_CODE),
         }
     }
 
@@ -101,6 +111,7 @@ impl WsRejection {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: format!("failed to open workspace '{id}': {err}"),
+            code: None,
         }
     }
 
@@ -108,22 +119,28 @@ impl WsRejection {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: format!("active workspace '{id}' has no runtime binding"),
+            code: None,
         }
     }
 
-    fn no_default() -> Self {
+    pub(super) fn no_default() -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
             message: "no workspace selected and no default is configured; \
                       pass ?workspace=<id>"
                 .to_string(),
+            code: None,
         }
     }
 }
 
 impl IntoResponse for WsRejection {
     fn into_response(self) -> Response {
-        (self.status, Json(json!({ "error": self.message }))).into_response()
+        let mut body = json!({ "error": self.message });
+        if let Some(code) = self.code {
+            body["code"] = json!(code);
+        }
+        (self.status, Json(body)).into_response()
     }
 }
 
@@ -146,6 +163,12 @@ impl FromRequestParts<DashboardState> for Ws {
         // since the last request is honored, and the resolved runtime always
         // matches the pinned binding.
         let requested = parts.uri.query().and_then(workspace_from_query);
+        // A warm request whose runtime is already cached current resolves
+        // inline; anything that might reload or build takes the blocking
+        // path below. See `DashboardState::try_resolve_cached`.
+        if let Some(resolved) = state.try_resolve_cached(requested.as_deref()) {
+            return resolved.map(Ws);
+        }
         let state = state.clone();
         tokio::task::spawn_blocking(move || {
             let pinned = state.pin();
@@ -162,6 +185,7 @@ impl FromRequestParts<DashboardState> for Ws {
         .map_err(|error| WsRejection {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: format!("workspace selection panicked: {error}"),
+            code: None,
         })?
     }
 }
@@ -182,6 +206,12 @@ impl FromRequestParts<DashboardState> for ConfigFileWs {
         state: &DashboardState,
     ) -> Result<Self, Self::Rejection> {
         let requested = parts.uri.query().and_then(workspace_from_query);
+        // Same inline fast path as `Ws`: the stale-tolerant resolver shares
+        // its cached first step, and everything past it (a rebuild, the
+        // stale-runtime fallback) stays on the blocking path below.
+        if let Some(resolved) = state.try_resolve_cached(requested.as_deref()) {
+            return resolved.map(ConfigFileWs);
+        }
         let state = state.clone();
         tokio::task::spawn_blocking(move || {
             let pinned = state.pin();
@@ -198,6 +228,7 @@ impl FromRequestParts<DashboardState> for ConfigFileWs {
         .map_err(|error| WsRejection {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: format!("workspace selection panicked: {error}"),
+            code: None,
         })?
     }
 }

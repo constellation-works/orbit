@@ -1,3 +1,5 @@
+use orbit_types::workflow::activity_job::ScriptOutputSet;
+
 use super::*;
 
 /// Outputs of completed steps keyed by step id (or a fan-in `collect` alias),
@@ -39,7 +41,20 @@ pub(super) struct ExecCtx<'a> {
     /// as `{{ item }}`.
     pub(super) item: Option<Value>,
     pub(super) iteration: Option<u32>,
+    /// [ORB-20158] `Some` in a job with auto-task steps, outside loops and
+    /// fan-outs. Each `parallel:` block checkpoints a succeeded branch, and a
+    /// replay restores every branch recorded here — a target or a compound
+    /// loop, fan-out, or nested parallel — instead of running it again.
+    /// Loops and fan-outs clear the map: their bodies are not separate
+    /// restored branches, and a parent parallel restores a succeeded loop or
+    /// fan-out whole.
+    pub(super) restored_branches: Option<Arc<RestoredBranches>>,
 }
+
+/// Succeeded `parallel:` branches a resumed auto-task job restores, keyed by
+/// the parallel step id and then the branch id.
+pub(super) type RestoredBranches =
+    std::collections::BTreeMap<String, std::collections::BTreeMap<String, Value>>;
 
 impl ExecCtx<'_> {
     /// Resolved task id for the activity input, if any. Threaded onto every
@@ -84,8 +99,6 @@ impl ExecCtx<'_> {
         }
         TemplateContext {
             input,
-            env: Default::default(),
-            workspace_path: None,
             item: self.item.clone(),
             iteration: self.iteration,
             steps,
@@ -102,16 +115,54 @@ pub(super) fn wrap_step_output(raw: Value) -> Value {
     Value::Object(wrapped)
 }
 
+/// The private key under which a wrapped entry keeps the full descriptor of
+/// the script output set behind its `files` view. Templates read `output`,
+/// `state` and `files` only, so this key is never rendered.
+const STEP_OUTPUT_SET_KEY: &str = "script_output_set";
+
+/// [`wrap_step_output`] for a script step that kept an output set: the
+/// entry also carries `files`, the `[{name, path, bytes, media_type,
+/// sha256}]` list templates read as `steps.<id>.files`, and the descriptor
+/// checkpoints persist.
+pub(super) fn wrap_step_output_with_files(raw: Value, set: &ScriptOutputSet) -> Value {
+    let mut wrapped = serde_json::Map::with_capacity(3);
+    wrapped.insert("output".to_string(), raw);
+    wrapped.insert(
+        "files".to_string(),
+        serde_json::to_value(&set.files).unwrap_or(Value::Null),
+    );
+    wrapped.insert(
+        STEP_OUTPUT_SET_KEY.to_string(),
+        serde_json::to_value(set).unwrap_or(Value::Null),
+    );
+    Value::Object(wrapped)
+}
+
 /// Inverse of [`wrap_step_output`]: the raw output a step recorded.
 pub(super) fn unwrap_step_output(wrapped: &Value) -> Value {
     wrapped.get("output").cloned().unwrap_or(Value::Null)
 }
 
-/// Build the shared step map from raw outputs (resume seeding).
-pub(super) fn pipeline_steps_from_raw(raw: HashMap<String, Value>) -> PipelineSteps {
+/// The script output set a wrapped entry carries, if any.
+pub(super) fn step_output_set(wrapped: &Value) -> Option<ScriptOutputSet> {
+    serde_json::from_value(wrapped.get(STEP_OUTPUT_SET_KEY)?.clone()).ok()
+}
+
+/// Build the shared step map from raw outputs and the script output sets
+/// that back some of them (resume seeding).
+pub(super) fn pipeline_steps_from_raw(
+    raw: HashMap<String, Value>,
+    mut sets: HashMap<String, ScriptOutputSet>,
+) -> PipelineSteps {
     Arc::new(
         raw.into_iter()
-            .map(|(k, v)| (k, wrap_step_output(v)))
+            .map(|(k, v)| {
+                let wrapped = match sets.remove(&k) {
+                    Some(set) => wrap_step_output_with_files(v, &set),
+                    None => wrap_step_output(v),
+                };
+                (k, wrapped)
+            })
             .collect(),
     )
 }
@@ -121,6 +172,9 @@ pub(super) struct StepOutcome {
     pub(super) success: bool,
     pub(super) output: Value,
     pub(super) message: Option<String>,
+    /// The typed step-failure code parsed once at ingestion, when the
+    /// failure declared one.
+    pub(super) failure_code: Option<orbit_types::workflow::StepFailureCode>,
 }
 
 /// Record a step output. Mutates the map in place unless a snapshot handed
@@ -129,6 +183,17 @@ pub(super) struct StepOutcome {
 pub(super) fn record_pipeline(ctx: &ExecCtx<'_>, key: &str, v: Value) {
     let mut steps = ctx.pipeline.lock().unwrap_or_else(PoisonError::into_inner);
     Arc::make_mut(&mut steps).insert(key.to_string(), wrap_step_output(v));
+}
+
+/// [`record_pipeline`] for a script step that kept an output set.
+pub(super) fn record_pipeline_with_files(
+    ctx: &ExecCtx<'_>,
+    key: &str,
+    v: Value,
+    set: &ScriptOutputSet,
+) {
+    let mut steps = ctx.pipeline.lock().unwrap_or_else(PoisonError::into_inner);
+    Arc::make_mut(&mut steps).insert(key.to_string(), wrap_step_output_with_files(v, set));
 }
 
 /// Replace the step's allowlisted conflict diagnostics with the evidence from

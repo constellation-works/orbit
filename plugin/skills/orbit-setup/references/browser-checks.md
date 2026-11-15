@@ -8,7 +8,7 @@ under its worktree's `.orbit/tmp/`, which it can then open and look at.
 
 `.orbit/tmp/` is cleared with the worktree, so a worker whose diff changes
 something a user sees hands its screenshots off as task artifacts. Owner mode
-attaches each with `orbit.task.artifact.put`; a claimed implementer returns
+attaches each with `orbit.task.artifact` action `put`; a claimed implementer returns
 each scratch file in `task_artifacts`, setting `path` to its stable
 stored path and `source_path` to its file under `.orbit/tmp/`, for deterministic
 attachment. Capture each changed view in every theme it supports, at a 375px
@@ -19,7 +19,7 @@ a verified kit says so in its handoff instead of claiming visual verification.
 The orbit skill's task-execution reference (Screenshots of a UI change) holds
 the full rule.
 
-`orbit browser-kit` builds that kit once per host. Run it as the user who runs
+`orbit config browser-kit` builds that kit once per host. Run it as the user who runs
 workers, on the host, never inside a worker: on Linux Chromium's system
 libraries can need root, which the sandbox forbids (`no new privileges`), and
 a per-run download is slow and puts each run on a different browser build.
@@ -27,10 +27,10 @@ Node and npm must already be on PATH. Chromium is downloaded from Playwright's
 CDN at install time; Orbit does not bundle it.
 
 ```bash
-orbit browser-kit install    # build, upgrade or adopt the kit, then verify it
-orbit browser-kit status     # version, browser revision, libraries, what workers get
-orbit browser-kit verify     # rerun the loopback screenshot smoke test
-orbit browser-kit remove --confirm
+orbit config browser-kit install    # build, upgrade or adopt the kit, then verify it
+orbit config browser-kit status     # version, browser revision, libraries, what workers get
+orbit config browser-kit verify     # rerun the loopback screenshot smoke test
+orbit config browser-kit remove --confirm
 ```
 
 `orbit workspace init` offers the install when the repository has a web UI (a
@@ -56,6 +56,47 @@ kit's unpacked libraries and fonts: Orbit never puts them on every worker's
 verified kit (none installed, never verified, or changed since its last
 pass), workers receive none of the three.
 
+## Launching Chromium in a worker
+
+Inside a worker, Chromium's own sandbox and zygote cannot start on Linux: the
+executor sandbox grants no unprivileged user namespaces. That is expected, and
+it is not required. The Orbit executor sandbox is the containment, so a worker
+launches Playwright's default Chromium (sandbox off) with the flags below:
+
+```bash
+. "$ORBIT_BROWSER_KIT_ENV" && node --input-type=module -e '
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE);
+const browser = await chromium.launch({
+  args: ["--no-zygote", "--disable-gpu", "--disable-dev-shm-usage"],
+});
+const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+await page.goto("http://127.0.0.1:<port>/");
+// The default Rank view; use ".agents-row" for the Implementers table.
+await page.waitForSelector(".agents-rank-row");
+await page.screenshot({ path: ".orbit/tmp/dashboard.png" });
+await browser.close();
+'
+```
+
+- Keep the default launch. Do not set `chromiumSandbox: true`. A sandboxed
+  launch fails with `No usable sandbox`, and adding `--no-zygote` to it fails
+  with `Zygote cannot be disabled if sandbox is enabled`. Both are expected
+  inside a worker and are not a blocker: use the launch above instead.
+- Drive the kit's Playwright, not a system Chromium binary. A raw
+  `chromium --screenshot` run without `--no-zygote` produces no output in a
+  worker.
+- Do not pass `--virtual-time-budget` to a page that keeps polling. The virtual
+  clock never settles (a dashboard polls continuously, and a run timed out at
+  120 s). Wait for content instead.
+- Wait for rendered content, not the static shell. `waitForSelector` on an
+  element the page fills from its data, before the screenshot: `.agents-row` on
+  the Implementers table of Analytics › Agents, or `.agents-rank-row` on its
+  default Rank table. A static element such as `#agents-panel` or a
+  "connecting..." header is present before data arrives, and a screenshot taken
+  after only those was blank in an earlier run.
+- A `lib*.so`, Skia/FontConfig or `Executable doesn't exist` failure is a host
+  kit defect, not a sandbox expectation: see Diagnose below.
+
 ## Which tasks need it
 
 A task tagged `ui` runs only on a host whose kit is verified. A local drain,
@@ -63,7 +104,7 @@ ship discovery and `orbit run ship` start it only there, and a pull-drain
 owner hands it only to a follower that reports a verified kit. Admission reads
 the kit on every pass, so a kit installed mid-window counts at the next one.
 Elsewhere the task stays in `backlog` as `browser_kit_missing`, with the wait
-(`waits for a host with the browser kit (ui)`, naming `orbit browser-kit
+(`waits for a host with the browser kit (ui)`, naming `orbit config browser-kit
 install`) in readiness, `orbit run show` and the dashboard Drain card. A kit
 that is installed but not verified, or changed since its last pass, does not
 count. On a single host without a kit, install it there; until then `orbit
@@ -136,26 +177,24 @@ headless shell with `ldd` and closes any gap one of three ways:
   It names them; a task whose `os:` tags exclude this host is not counted.
 
 `verify` serves a page on loopback, screenshots it into `verify/smoke.png`,
-decodes that screenshot with the kit's pinned `pngjs` (the pixel-compare
-helper `orbit visual capture` uses), and records the pass in
+decodes that screenshot with the kit's pinned `pngjs` pixel helper, and
+records the pass in
 `orbit-kit.json`. Starting verification clears any
 earlier pass: a timeout, failed spawn or failed smoke test leaves workers
 without the kit until verification succeeds again. A failed smoke test
 prints the likely cause:
 a missing `lib*.so` or a Skia/FontConfig crash is a library or font gap, and
 `Executable doesn't exist` means the module and browser revision are out of
-step (`orbit browser-kit install` repairs both). When a worker's check fails
+step (`orbit config browser-kit install` repairs both). When a worker's check fails
 this way, the cause is the kit, not the code under test. Record it as host
 evidence and fix the kit.
 
 A host pass does not prove the worker path. The decisive check is a sandboxed
 worker run (a disposable task, or the first UI task) that sources
 `"$ORBIT_BROWSER_KIT_ENV"`, runs a browser check and attaches its screenshot.
-`orbit run agent` (MCP `orbit_agent_invoke`, tool `orbit.agent.invoke`) runs on
-the host outside Orbit's executor sandbox, so it is not that proof.
 
 ## Remove
 
-`orbit browser-kit remove --confirm` deletes `~/.local/chromium-deps`.
+`orbit config browser-kit remove --confirm` deletes `~/.local/chromium-deps`.
 Nothing else on the host refers to it, and workers stop receiving its
 variables. Packages `--with-deps` installed system-wide stay installed.

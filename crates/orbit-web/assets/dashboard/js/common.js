@@ -1,22 +1,3 @@
-// Strip credentials before any page module starts requests or updates history.
-// Exchange only against the serving origin, never the selected remote host.
-const sessionFragment = window.location.hash || "";
-if (sessionFragment.startsWith("#orbit-session=")) {
-  window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
-  try {
-    const response = await fetch("/api/session", {
-      method: "POST",
-      credentials: "same-origin",
-      cache: "no-store",
-      headers: { "Content-Type": "text/plain" },
-      body: sessionFragment.slice("#orbit-session=".length),
-    });
-    if (!response.ok) console.warn("Browser session unavailable; open a fresh dashboard URL.");
-  } catch {
-    console.warn("Browser session unavailable; open a fresh dashboard URL.");
-  }
-}
-
 const params = new URLSearchParams(window.location.search);
 
 // ORB-00030: the dashboard can serve multiple workspaces. `currentWorkspace`
@@ -27,10 +8,79 @@ const params = new URLSearchParams(window.location.search);
 // The aggregate choice has no workspace id, so it is written as the reserved
 // `workspace=all` token; without one a reload or shared link would read the
 // missing parameter as "pick the default workspace" and silently change scope.
+// Several `workspaces=` values select that aggregate and narrow it. One value
+// selects that workspace's board, the same as `?workspace=<id>`.
 export const ALL_WORKSPACES_TOKEN = "all";
-const linkedWorkspace = params.get("workspace") || null;
-let aggregateLinked = linkedWorkspace === ALL_WORKSPACES_TOKEN;
-let currentWorkspace = aggregateLinked ? null : linkedWorkspace;
+
+function scopeFromWorkspaceParams(searchParams) {
+  const listed = [...new Set(searchParams.getAll("workspaces").filter(Boolean))].sort();
+  const linked = searchParams.get("workspace") || null;
+  if (listed.length > 1) return { workspace: null, aggregate: true, filter: listed };
+  if (listed.length === 1) return { workspace: listed[0], aggregate: false, filter: [] };
+  if (linked === ALL_WORKSPACES_TOKEN) return { workspace: null, aggregate: true, filter: [] };
+  return { workspace: linked, aggregate: false, filter: [] };
+}
+
+const initialScope = scopeFromWorkspaceParams(params);
+let aggregateLinked = initialScope.aggregate;
+let currentWorkspace = initialScope.workspace;
+// Narrowing for the All workspaces task list. Empty means every workspace.
+// A concrete board does not clear this, so returning to All restores it.
+let selectedWorkspaces = initialScope.filter;
+
+export function getSelectedWorkspaces() {
+  return currentWorkspace ? [currentWorkspace] : [...selectedWorkspaces];
+}
+
+/// The All workspaces task filter, including while a board is open. Empty
+/// means every workspace. A board's own id is not part of this list.
+export function workspaceFilterIds() {
+  return [...selectedWorkspaces];
+}
+
+/// Whether a `/api/workspaces` row is one this host owns. A row with no
+/// recorded role (single-host installs, older registrations and older
+/// hosts) counts as owned; only an explicit `replica` is a follower's
+/// checkout, which has no board on this host.
+export function isOwnedWorkspace(workspace) {
+  return !!workspace && workspace.checkout_role !== "replica";
+}
+
+/// The owned rows of a `/api/workspaces` list, in list order.
+export function ownedWorkspaces(workspaces) {
+  return (Array.isArray(workspaces) ? workspaces : []).filter(isOwnedWorkspace);
+}
+
+// Replica checkouts of the selected host when that host owns no workspace.
+// Tasks names their owner from these rows. Empty when the host owns a board,
+// when its workspace list has not loaded, or after a host switch until the new
+// host's list arrives (its rows name that host's owners, not the previous one's).
+let unownedReplicas = [];
+
+/// Remember replica rows from the selected host's `/api/workspaces` list.
+/// Pass the unfiltered list only when the owned subset is empty; any other
+/// call clears the list. Rows without `checkout_role: "replica"` are dropped.
+export function setUnownedReplicas(rows) {
+  unownedReplicas = (Array.isArray(rows) ? rows : []).filter(
+    (row) => row && row.checkout_role === "replica",
+  );
+}
+
+/// Replica checkouts remembered by `setUnownedReplicas`, in list order.
+export function getUnownedReplicas() {
+  return unownedReplicas;
+}
+
+/// Replace the All workspaces task filter. Does not change the open board.
+/// An empty list means every workspace. Callers that collapse the filter to
+/// one workspace open that board themselves.
+export function setSelectedWorkspaces(ids) {
+  const next = [...new Set((Array.isArray(ids) ? ids : []).filter(Boolean))].sort();
+  if (next.length === selectedWorkspaces.length && next.every((id, index) => id === selectedWorkspaces[index])) return;
+  selectedWorkspaces = next;
+  workspaceRevision += 1;
+  for (const listener of workspaceListeners) listener();
+}
 
 /// True when the address asked for the aggregate view and no concrete
 /// workspace has been chosen since.
@@ -127,10 +177,11 @@ export function setHostWrites(capability) {
 
 /// Why a write to the selected host cannot be sent, or "" when it can. The
 /// forward refuses an unsafe method without the operator session; write
-/// controls show this reason instead of failing on click.
-export function hostWriteRefusal() {
-  if (!currentHost || !hostWrites || hostWrites.authorized !== false) return "";
-  return `Read-only on ${currentHost}: ${hostWrites.reason || "this dashboard session cannot forward writes"}`;
+/// controls show this reason instead of failing on click. Independent cards
+/// may supply their own host and its connection capability.
+export function hostWriteRefusal(host = currentHost, writes = hostWrites) {
+  if (!host || !writes || writes.authorized !== false) return "";
+  return `Read-only on ${host}: ${writes.reason || "this dashboard session cannot forward writes"}`;
 }
 
 /// Switch the host every API call goes to; the serving host's own name or id
@@ -145,6 +196,7 @@ export function setHost(name) {
   hostRevision += 1;
   hostWrites = null;
   hostUnavailable = false;
+  unownedReplicas = [];
   workspaceRevision += 1;
   for (const listener of workspaceListeners) listener();
   return true;
@@ -221,12 +273,71 @@ export function setWorkspace(id) {
 // listeners re-render labels when the list arrives.
 let workspaceNames = new Map();
 const workspaceNameListeners = new Set();
+// Owned rows last given to `setWorkspaceNames`, in that list's order. The
+// Tasks filter and the All workspaces drain select both read this catalog;
+// the task filter does not narrow the drain select.
+let workspaceCatalog = [];
 
 export function setWorkspaceNames(workspaces) {
-  workspaceNames = new Map((Array.isArray(workspaces) ? workspaces : [])
-    .filter((workspace) => workspace && workspace.id && workspace.name)
-    .map((workspace) => [workspace.id, workspace.name]));
+  const list = (Array.isArray(workspaces) ? workspaces : []).filter((workspace) => workspace && workspace.id);
+  workspaceCatalog = list;
+  workspaceNames = new Map(list.filter((workspace) => workspace.name).map((workspace) => [workspace.id, workspace.name]));
+  workspaceOrder = new Map(list.map((workspace, index) => [workspace.id, index]));
+  workspaceColorSlots = assignWorkspaceColorSlots(list.map((workspace) => workspace.id));
   for (const listener of workspaceNameListeners) listener();
+}
+
+/// Owned workspaces last published by `setWorkspaceNames`, in list order.
+export function workspaceCatalogEntries() {
+  return workspaceCatalog;
+}
+
+// Where a workspace sits in the picker (`/api/workspaces` order); the All
+// workspaces task list groups each status section in this order. An id the
+// list does not hold sorts after every listed one.
+let workspaceOrder = new Map();
+
+export function workspacePickerIndex(id) {
+  return workspaceOrder.has(id) ? workspaceOrder.get(id) : Number.MAX_SAFE_INTEGER;
+}
+
+// One colour per workspace from the `--ws-1` … `--ws-12` palette in base.css.
+// A workspace's preferred slot is a hash of its id, so it keeps its colour
+// across reloads and pages. Listed workspaces are placed in id order, and one
+// whose slot is taken moves to the next free slot, so two workspaces share a
+// colour only once all twelve are used.
+const WORKSPACE_COLOR_COUNT = 12;
+let workspaceColorSlots = new Map();
+
+function preferredWorkspaceColorSlot(id) {
+  // FNV-1a: small, stable across browsers, and spreads short ids well.
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < id.length; i += 1) {
+    hash ^= id.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash % WORKSPACE_COLOR_COUNT;
+}
+
+function assignWorkspaceColorSlots(ids) {
+  const slots = new Map();
+  const taken = new Set();
+  for (const id of [...new Set(ids)].sort()) {
+    let slot = preferredWorkspaceColorSlot(id);
+    if (taken.size < WORKSPACE_COLOR_COUNT) {
+      while (taken.has(slot)) slot = (slot + 1) % WORKSPACE_COLOR_COUNT;
+    }
+    taken.add(slot);
+    slots.set(id, slot);
+  }
+  return slots;
+}
+
+/// The palette number (1–12) a workspace's pill and picker entry are drawn in.
+/// The single source both read; base.css maps `data-ws-color` to the tokens.
+export function workspaceColor(id) {
+  const slot = workspaceColorSlots.has(id) ? workspaceColorSlots.get(id) : preferredWorkspaceColorSlot(String(id || ""));
+  return slot + 1;
 }
 
 export function onWorkspaceNamesChange(listener) {
@@ -256,7 +367,7 @@ export function getRememberedWorkspace() {
 
 export function rememberWorkspace() {
   try {
-    window.localStorage.setItem(rememberedWorkspaceKey(), currentWorkspace || ALL_WORKSPACES_TOKEN);
+    window.localStorage.setItem(rememberedWorkspaceKey(), currentWorkspace || (selectedWorkspaces.length ? JSON.stringify(selectedWorkspaces) : ALL_WORKSPACES_TOKEN));
   } catch (_) {
     // Storage refusal only disables remembering the choice.
   }
@@ -344,7 +455,7 @@ export function notifyScopeChange() {
 // popstate).
 function addressScopeKey() {
   const query = new URLSearchParams(window.location.search);
-  return `${query.get("host")}|${query.get("workspace")}|${query.get("window")}`;
+  return `${query.get("host")}|${query.get("workspace")}|${query.getAll("workspaces").join(",")}|${query.get("window")}`;
 }
 
 let addressScope = addressScopeKey();
@@ -355,13 +466,15 @@ export function persistScopeToUrl() {
   const url = new URL(window.location.href);
   if (currentHost) url.searchParams.set("host", currentHost);
   else url.searchParams.delete("host");
+  url.searchParams.delete("workspaces");
+  if (!currentWorkspace) for (const id of selectedWorkspaces) url.searchParams.append("workspaces", id);
   if (currentWorkspace) url.searchParams.set("workspace", currentWorkspace);
   else if (isAggregateView() || isAggregateLinked()) url.searchParams.set("workspace", ALL_WORKSPACES_TOKEN);
   else url.searchParams.delete("workspace");
   if (currentWindow) url.searchParams.set("window", currentWindow);
   else url.searchParams.delete("window");
   if (url.href !== window.location.href) {
-    history.replaceState(null, "", url);
+    history.replaceState(history.state, "", url);
   }
   addressScope = addressScopeKey();
 }
@@ -546,8 +659,10 @@ function panelMessage(bodyId, state) {
   const previousText = note.textContent;
   // Only a cold load and an error need to take up room in the panel. "Updated"
   // and "Refreshing" stay in the live region for assistive tech but are not
-  // painted, so a 30s poll never shifts the rows under the reader.
-  const quiet = !state.error && (state.loaded || !state.pending);
+  // painted, so a 30s poll never shifts the rows under the reader. A message
+  // area (`host !== body`) paints only errors: a refresh, page change or first
+  // load writes its loading note to the live region and nothing above the dock.
+  const quiet = !state.error && (state.loaded || !state.pending || host !== body);
   note.className = state.error
     ? "panel-placeholder action-error"
     : quiet ? "panel-placeholder quiet" : "panel-placeholder";
@@ -557,12 +672,12 @@ function panelMessage(bodyId, state) {
     // instead of the API path and the retry advice.
     const { message, remedy } = state.error.routeMissing
       ? { message: "This host's Orbit does not offer this view yet", remedy: "Upgrade it to see this view." }
-      : { message: state.error.message, remedy: state.error.remedy || "Use Refresh to retry." };
+      : { message: state.error.message, remedy: state.error.remedy || "Reload the page to retry." };
     note.textContent = `${label}: ${message}. ${remedy}`;
   } else if (state.pending) {
     note.textContent = state.loaded ? "Refreshing… showing previous data." : "Loading…";
   } else {
-    note.textContent = "Updated.";
+    note.textContent = state.settledText || "Updated.";
   }
   if (host !== body && !quiet && note.textContent !== previousText) raiseMessageSlot(note);
 }
@@ -621,7 +736,15 @@ export function runPanelPoll(poll, start) {
   }
 }
 
-export async function requestPanel(bodyId, scope, request, render, countId) {
+/// True while a background poll tick starts its panel requests, so a panel can
+/// skip a read that a refresh would make but a tick should not repeat.
+export function isPanelPoll() {
+  return pollingPanels;
+}
+
+// `settledNote(payload)`, when given, is the text the panel status note shows
+// once this request settles, in place of "Updated."; it must not throw.
+export async function requestPanel(bodyId, scope, request, render, countId, settledNote = null) {
   const revision = getWorkspaceRevision();
   const previous = panelRequests.get(bodyId);
   if (!previous || previous.scope !== scope) resetPanel(bodyId, countId);
@@ -634,6 +757,7 @@ export async function requestPanel(bodyId, scope, request, render, countId) {
     if (!current()) return;
     state.loaded = true;
     state.pending = false;
+    state.settledText = settledNote ? settledNote(payload) : null;
     render(payload);
   } catch (error) {
     if (!current()) return;
@@ -645,6 +769,14 @@ export async function requestPanel(bodyId, scope, request, render, countId) {
       panelMessage(bodyId, state);
     }
   }
+}
+
+// Update a retained panel's settled status without hiding pending/error notices.
+export function updatePanelSettledNote(bodyId, text) {
+  const state = panelRequests.get(bodyId);
+  if (!state || !state.loaded || state.settledText === text) return;
+  state.settledText = text;
+  panelMessage(bodyId, state);
 }
 
 // Append the selected workspace to an API path, unless one is already present
@@ -675,6 +807,7 @@ function scopedHref(hash, { host, workspace }) {
   if (host) query.set("host", host);
   if (workspace) query.set("workspace", workspace);
   else if (isAggregateView() || isAggregateLinked()) query.set("workspace", ALL_WORKSPACES_TOKEN);
+  if (!workspace) for (const id of selectedWorkspaces) query.append("workspaces", id);
   query.set("window", currentWindow);
   const search = query.toString();
   return `${search ? `?${search}` : ""}${hash}`;
@@ -691,7 +824,7 @@ export function scopedHashHref(hash) {
 /// `all` token for the aggregate view) and the time window, so a link opened in
 /// a new tab, copied or reloaded shows the same run in the same scope.
 export function runHref(runId, { host = selectedRunHost(), workspace = currentWorkspace } = {}) {
-  return scopedHref(`#runs?run_id=${encodeURIComponent(runId)}`, { host, workspace });
+  return scopedHref(`#runs/${encodeURIComponent(runId)}`, { host, workspace });
 }
 
 /// The dashboard address that selects task `taskId` on the Tasks tab,
@@ -725,13 +858,25 @@ export function restoreScopeFromUrl() {
   // stream, and marks the host's workspaces for reloading. The workspace below
   // is then the one this entry names on that host.
   requestHostSwitch(query.get("host") || null, { fromHistory: true });
+  const listed = [...new Set(query.getAll("workspaces").filter(Boolean))];
   const linked = query.get("workspace");
-  if (linked === ALL_WORKSPACES_TOKEN) {
-    // The workspace count still belongs to the host being left. Keep the
-    // address's intent until discovery decides whether this host can aggregate.
+  // The workspace count still belongs to the host being left. Keep the
+  // address's intent until discovery decides whether this host can aggregate.
+  // Several workspace values open All workspaces with that filter. One value
+  // opens that board. An address with neither leaves the workspace alone.
+  if (listed.length > 1) {
+    aggregateLinked = true;
+    setSelectedWorkspaces(listed);
+    setWorkspace(null);
+  } else if (listed.length === 1) {
+    setSelectedWorkspaces([]);
+    setWorkspace(listed[0]);
+  } else if (linked === ALL_WORKSPACES_TOKEN) {
+    setSelectedWorkspaces([]);
     aggregateLinked = true;
     setWorkspace(null);
   } else if (linked) {
+    setSelectedWorkspaces([]);
     setWorkspace(linked);
   }
   // Scope listeners reset their view state, and one clears the open task from
@@ -746,6 +891,28 @@ export function restoreScopeFromUrl() {
 
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("popstate", restoreScopeFromUrl);
+}
+
+/// Bind a run address while keeping ordinary navigation in this dashboard.
+export function bindRunLink(link, runId, { host = selectedRunHost(), workspace = currentWorkspace } = {}) {
+  link.href = runHref(runId, { host, workspace });
+  link.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    if (host !== selectedRunHost() || (workspace && workspace !== currentWorkspace)) {
+      persistScopeToUrl();
+      if (host !== selectedRunHost()) requestHostSwitch(host, { fromHistory: true });
+      if (workspace) setWorkspace(workspace);
+      syncWorkspaceSelector();
+      history.pushState(null, "", runHref(runId, { host, workspace }));
+      addressScope = addressScopeKey();
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      return;
+    }
+    window.location.hash = `#runs/${encodeURIComponent(runId)}`;
+  });
+  return link;
 }
 
 /// Make `link` open task `taskId` on the Tasks tab. The href is `taskHref`, so
@@ -792,7 +959,14 @@ export function el(tag, opts = {}, children = []) {
   if (opts.title != null) node.title = opts.title;
   if (opts.style) Object.assign(node.style, opts.style);
   for (const [name, value] of Object.entries(opts)) {
-    if (value != null && (name.startsWith("aria-") || name === "role" || name === "type")) {
+    if (
+      value != null &&
+      name !== "id" &&
+      name !== "class" &&
+      name !== "text" &&
+      name !== "title" &&
+      name !== "style"
+    ) {
       node.setAttribute(name, String(value));
     }
   }
@@ -814,6 +988,62 @@ export function infoHint(text, { id = null } = {}) {
   if (id) note.id = id;
   const hint = el("span", { class: "info-hint" }, [note]);
   hint.tabIndex = 0;
+  return hint;
+}
+
+// An infoHint whose bubble is fixed to the viewport, so no scroll box clips it:
+// a 44px target that also opens on tap, even in a browser that does not focus
+// a tapped span, and closes on Escape. Lines in `text` stay separate lines.
+// The bubble flips above the icon when it would run off the bottom. The
+// stylesheet shows it on hover and focus; this only says where it goes. A
+// supplied trigger keeps its own appearance and link navigation, if any.
+let pinnedHintFollowsScroll = false;
+
+function placePinnedInfoHint(hint) {
+  if (!pinnedHintFollowsScroll) {
+    pinnedHintFollowsScroll = true;
+    document.addEventListener("scroll", () => {
+      const open = document.querySelector(".info-hint-pinned:hover, .info-hint-pinned:focus");
+      if (open) placePinnedInfoHint(open);
+    }, { capture: true, passive: true });
+  }
+  const bubble = hint.querySelector(".info-hint-text");
+  if (!bubble) return;
+  const gutter = 12;
+  const width = Math.min(320, window.innerWidth - gutter * 2);
+  const icon = hint.getBoundingClientRect();
+  hint.style.setProperty("--hint-tip-width", `${width}px`);
+  const bubbleWidth = bubble.getBoundingClientRect().width;
+  const left = Math.max(gutter, Math.min(icon.left + icon.width / 2 - bubbleWidth / 2, window.innerWidth - bubbleWidth - gutter));
+  hint.style.setProperty("--hint-tip-left", `${left}px`);
+  const height = bubble.getBoundingClientRect().height;
+  const inset = hint.classList.contains("info-hint") ? 10 : -4;
+  const below = icon.bottom - inset;
+  const top = below + height + gutter > window.innerHeight ? Math.max(gutter, icon.top + inset - height) : below;
+  hint.style.setProperty("--hint-tip-top", `${top}px`);
+}
+
+export function pinnedInfoHint(text, { trigger = null } = {}) {
+  const hint = trigger || infoHint(text);
+  if (trigger) hint.appendChild(el("span", { class: "info-hint-text", text }));
+  hint.classList.add("pinned-hint-trigger");
+  hint.classList.add("info-hint-pinned");
+  const place = () => placePinnedInfoHint(hint);
+  hint.addEventListener("mouseenter", place);
+  hint.addEventListener("focus", place);
+  hint.addEventListener("pinned-hint-refresh", place);
+  hint.addEventListener("click", (event) => {
+    if (hint.tagName !== "A") event.preventDefault();
+    event.stopPropagation();
+    hint.focus();
+    place();
+  });
+  hint.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      hint.blur();
+    }
+  });
   return hint;
 }
 
@@ -975,12 +1205,6 @@ export function incidentClassLabel(key, label) {
   return key === "expected" ? "Expected refusal" : label || key || "failure";
 }
 
-export function priorityCell(p) {
-  const node = el("span", { class: "priority mono", text: p });
-  node.style.color = `var(--priority-${p}, var(--fg-dim))`;
-  return node;
-}
-
 export function stateCell(state) {
   const node = el("span", { class: "state-label", text: state });
   node.dataset.state = state;
@@ -1071,29 +1295,7 @@ export async function fetchJsonPage(path) {
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
     const res = await fetch(withWorkspace(path), { headers: { accept: "application/json" }, signal: controller.signal });
-    if (!res.ok) {
-      const text = await res.text();
-      let message = `${path}: HTTP ${res.status}`;
-      let code = null;
-      // Orbit's own 404s name what is missing. A route this host's Orbit does not
-      // serve answers with no error text (an empty body, or `{"error":""}` from
-      // json_client_error), so it is read as a host without the view.
-      let routeMissing = res.status === 404;
-      try {
-        const body = JSON.parse(text);
-        if (body && body.error) {
-          message = body.error;
-          routeMissing = false;
-        }
-        if (body && typeof body.code === "string") code = body.code;
-      } catch (_) {}
-      const error = new Error(message);
-      error.status = res.status;
-      if (code) error.code = code;
-      if (routeMissing) error.routeMissing = true;
-      throw error;
-    }
-    return { body: await res.json(), header: (name) => res.headers.get(name) };
+    return await dashboardJsonResponse(res, path);
   } catch (error) {
     if (controller.signal.aborted) throw new Error("Request timed out after 30 seconds");
     // Fetch and response-body transport failures are TypeErrors; HTTP and JSON
@@ -1117,7 +1319,8 @@ export function listItems(payload) {
 
 // A supplied visit pins both host and workspace, including the serving host
 // whose unprefixed path must not be rewritten for a later host selection.
-// Expired visits cannot begin another request.
+// Expired visits cannot begin another request. An independent card may also
+// provide writeRefusal for its captured host instead of the rail's host.
 export function requestJson(path, method, body, visit) {
   if (visit && !visit.isCurrent()) {
     const error = new Error("The host or workspace changed before the request began");
@@ -1134,7 +1337,8 @@ export function requestJson(path, method, body, visit) {
     opts.body = JSON.stringify(body);
   }
   const target = visit ? visit.path(path) : withWorkspace(path);
-  const refusal = target.startsWith("/api/on/") && method !== "GET" ? hostWriteRefusal() : "";
+  const refusal = target.startsWith("/api/on/") && method !== "GET"
+    ? (visit?.writeRefusal ? visit.writeRefusal() : hostWriteRefusal()) : "";
   if (refusal) {
     const error = new Error(refusal);
     error.code = "authorization_denied";
@@ -1194,6 +1398,111 @@ export function submissionNoticeLines(result) {
 
 export function patchJson(path, body) {
   return requestJson(path, "PATCH", body);
+}
+
+// Plain words for a `force_overridable` refusal, from its structured
+// `guard` and facts — never from the refusal's message text.
+export function forceOverrideGuardText(body) {
+  if (!body || typeof body !== "object") return "A guard refused this change.";
+  if (body.guard === "run_still_owns_task") {
+    const run = body.run_id ? `Run ${body.run_id}` : "A run";
+    return body.run_state
+      ? `${run} is still ${body.run_state} and owns this task.`
+      : `${run} is still running and owns this task.`;
+  }
+  if (body.guard === "delete_outside_proposed_or_rejected") {
+    return body.task_status
+      ? `This task is in ${body.task_status}; only proposed or rejected tasks can be deleted without forcing.`
+      : "Only proposed or rejected tasks can be deleted without forcing.";
+  }
+  return "A guard refused this change and forcing would override it.";
+}
+
+let forceDialogSequence = 0;
+
+// Keyboard-accessible Force/Cancel confirmation for a force-overridable
+// refusal. Resolves true only on Force; Cancel, Escape and dismissal
+// resolve false. Focus moves into the dialog on open and back to the
+// previously focused control on close.
+export function confirmForceOverride({ heading, guard, effect }) {
+  const fallback = () =>
+    typeof window.confirm === "function"
+      ? window.confirm(`${heading}\n\n${guard}\n\n${effect}`)
+      : false;
+  if (typeof document === "undefined" || typeof document.createElement !== "function") {
+    return Promise.resolve(fallback());
+  }
+  const dialog = document.createElement("dialog");
+  if (!dialog || typeof dialog.showModal !== "function") {
+    return Promise.resolve(fallback());
+  }
+  return new Promise((resolve) => {
+    forceDialogSequence += 1;
+    const headingId = `force-override-heading-${forceDialogSequence}`;
+    const bodyId = `force-override-body-${forceDialogSequence}`;
+    dialog.className = "force-override-dialog";
+    dialog.setAttribute("aria-labelledby", headingId);
+    dialog.setAttribute("aria-describedby", bodyId);
+    const title = el("h3", { text: heading });
+    title.id = headingId;
+    const copy = el("div", {}, [
+      el("p", { text: guard }),
+      el("p", { text: effect }),
+    ]);
+    copy.id = bodyId;
+    const forceButton = el("button", { class: "action force", text: "Force", type: "button" });
+    const cancelButton = el("button", { class: "action cancel", text: "Cancel", type: "button" });
+    const actions = el("div", { class: "force-override-actions" }, [forceButton, cancelButton]);
+    dialog.append(title, copy, actions);
+    const previouslyFocused = document.activeElement;
+    let settled = false;
+    // Escape cancels even when focus has left the dialog (a viewport
+    // resize can drop it to the page), where the dialog's own keydown
+    // and native cancel would never see the key.
+    const onDocumentEscape = (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      settle(false);
+    };
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      document.removeEventListener("keydown", onDocumentEscape, true);
+      if (dialog.open) dialog.close();
+      dialog.remove();
+      if (previouslyFocused && typeof previouslyFocused.focus === "function") {
+        previouslyFocused.focus();
+      }
+      resolve(value);
+    };
+    forceButton.addEventListener("click", () => settle(true));
+    cancelButton.addEventListener("click", () => settle(false));
+    // Escape fires `cancel` then `close` natively; both mean Cancel.
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      settle(false);
+    });
+    dialog.addEventListener("close", () => settle(false));
+    dialog.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        settle(false);
+        return;
+      }
+      if (event.key !== "Tab" || event.altKey || event.ctrlKey || event.metaKey) return;
+      const controls = [forceButton, cancelButton].filter((node) => !node.disabled);
+      if (!controls.length) return;
+      const active = document.activeElement;
+      if (event.shiftKey ? active === controls[0] : active === controls[controls.length - 1]) {
+        event.preventDefault();
+        (event.shiftKey ? controls[controls.length - 1] : controls[0]).focus();
+      }
+    });
+    document.addEventListener("keydown", onDocumentEscape, true);
+    document.body.appendChild(dialog);
+    dialog.showModal();
+    cancelButton.focus();
+  });
 }
 
 // A control keeps its first class through state changes (`config-chip` gains
@@ -1401,6 +1710,14 @@ export function describePullSettlements(entries) {
 export function isHttpUrl(url) {
   const scheme = String(url || "").trimStart().toLowerCase();
   return scheme.startsWith("http://") || scheme.startsWith("https://");
+}
+
+/// Cuts `text` to `max` characters and ends a cut string with an ellipsis.
+/// A missing value is empty.
+export function truncate(text, max) {
+  if (text == null) return "";
+  if (text.length <= max) return text;
+  return text.slice(0, max) + "\u2026";
 }
 
 // ---------------------------------------------------------------------------
@@ -1635,4 +1952,64 @@ export function formatAge(value, now = Date.now()) {
   if (diff < 3600) return `${Math.floor(diff / 60)}m`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
   return `${Math.floor(diff / 86400)}d`;
+}
+
+// Apply the same HTTP/error contract to direct and combined reads.
+async function dashboardJsonResponse(res, path) {
+  if (!res.ok) {
+    const text = await res.text();
+    let message = `${path}: HTTP ${res.status}`;
+    let code = null;
+    // Orbit's own 404s name what is missing. A route this host's Orbit does not
+    // serve answers with no error text (an empty body, or `{"error":""}` from
+    // json_client_error), so it is read as a host without the view.
+    let routeMissing = res.status === 404;
+    try {
+      const body = JSON.parse(text);
+      if (body && body.error) {
+        message = body.error;
+        routeMissing = false;
+      }
+      if (body && typeof body.code === "string") code = body.code;
+    } catch (_) {}
+    const error = new Error(message);
+    error.status = res.status;
+    if (code) error.code = code;
+    if (routeMissing) error.routeMissing = true;
+    throw error;
+  }
+  return { body: await res.json(), header: (name) => res.headers.get(name) };
+}
+
+// Combine only the due chrome reads. No completed-read cache, timers or retry
+// policy lives here: each consumer keeps its existing visit and failure guards.
+export function fetchDashboardChrome({ routines, failures, since }) {
+  const query = new URLSearchParams({ routines: String(routines), failures: String(failures), since });
+  const visit = captureWorkspaceVisit();
+  const envelope = fetchJson(`/api/dashboard/chrome?${query}`).catch(error => {
+    // Older forwarded hosts keep their original direct-read behavior.
+    if (error.routeMissing) return null;
+    throw error;
+  });
+  const component = (name, path) => {
+    const request = envelope.then(payload => {
+      if (payload === null) {
+        if (!visit.isCurrent()) throw new Error("The host or workspace changed before the read began");
+        return fetchJson(path);
+      }
+      const reply = payload[name];
+      return dashboardJsonResponse(new Response(reply.body, { status: reply.status }), path).then(page => page.body);
+    });
+    // A panel already in flight may keep its earlier read. Its unused
+    // component must not become an unhandled rejection; consumers still see
+    // and handle the original promise and error.
+    void request.catch(() => {});
+    return request;
+  };
+  return {
+    notices: component("notices", "/api/notices"),
+    summary: component("summary", `/api/audit/summary?since=${encodeURIComponent(since)}`),
+    routines: routines ? component("routines", "/api/routines") : null,
+    failures: failures ? component("failures", "/api/jobs/failure-streaks") : null,
+  };
 }

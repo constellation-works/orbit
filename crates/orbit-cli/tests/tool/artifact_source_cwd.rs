@@ -69,7 +69,7 @@ fn checkout_relative_source_from_scratch_folder_names_the_absolute_file() {
         .expect("screenshot directory");
     std::fs::write(&file, "png-bytes").expect("screenshot");
     let put = |source: &str| {
-        let input = json!({
+        let input = json!({"action": "put",
             "id": task_id,
             "path": "shots/x.png",
             "source_path": source,
@@ -80,7 +80,7 @@ fn checkout_relative_source_from_scratch_folder_names_the_absolute_file() {
             .args([
                 "tool",
                 "run",
-                "orbit.task.artifact.put",
+                "orbit.task.artifact",
                 "--input",
                 &input,
                 "--format",
@@ -109,9 +109,9 @@ fn checkout_relative_source_from_scratch_folder_names_the_absolute_file() {
         .args([
             "tool",
             "run",
-            "orbit.task.artifact.get",
+            "orbit.task.artifact",
             "--input",
-            &json!({"id": task_id, "path": "shots/x.png"}).to_string(),
+            &json!({"action": "get", "id": task_id, "path": "shots/x.png"}).to_string(),
             "--format",
             "json",
         ])

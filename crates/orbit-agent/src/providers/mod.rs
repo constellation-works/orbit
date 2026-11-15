@@ -11,7 +11,6 @@ pub(crate) mod copilot;
 pub(crate) mod gemini;
 pub(crate) mod grok;
 mod long_prompt;
-pub(crate) mod mock_agent;
 pub(crate) mod muse;
 pub(crate) mod ollama;
 mod usage_window;
@@ -27,27 +26,40 @@ pub use usage_window::provider_usage_windows;
 use std::borrow::Cow;
 
 use crate::types::AgentInvocationSpec;
+use orbit_types::telemetry::{InvocationTrace, ToolCallTrace};
+use orbit_types::workflow::activity_job::Provider;
 use serde_json::Value;
 
 /// Builds the `AgentInvocationSpec` for a provider, combining CLI args and stdin.
-/// All three runtimes share this same structure; only the provider differs.
+/// Every runtime shares this structure; callers set provider-specific env and
+/// prompt-file fields afterward.
 pub(crate) fn build_invocation_spec(
-    runtime_key: &'static str,
     required_env_vars: &'static [&'static str],
     command: String,
     args: Vec<String>,
     stdin: Vec<u8>,
 ) -> AgentInvocationSpec {
     AgentInvocationSpec {
-        runtime_key,
         program: command,
         args,
         stdin,
-        stdout_schema_json: None,
         required_env_vars,
         fixed_env: &[],
         prompt_file_flag: None,
     }
+}
+
+/// Whether the provider's CLI runtime supports resuming a conversation from a
+/// `conversation_ref`.
+pub fn provider_supports_continuity(provider: Provider) -> bool {
+    crate::AgentConfig::from_provider_and_cli_config(
+        provider.as_str(),
+        provider.as_str(),
+        None,
+        &std::collections::HashMap::new(),
+    )
+    .and_then(|config| crate::Agent::new(&config))
+    .is_ok_and(|agent| agent.supports_continuity())
 }
 
 /// Normalize a provider's raw stdout for invocation tracing and diagnostics.
@@ -59,20 +71,63 @@ pub(crate) fn build_invocation_spec(
 /// stricter [`project_cli_response`] boundary afterward.
 /// [ORB-10946] [ORB-10945] [ORB-11295] [ORB-16577]
 ///
-/// `provider` is the resolved canonical provider id. An unrecognized id is
-/// not an error here: normalization is a per-provider accommodation, and the
-/// default of "read stdout as-is" is what every other provider needs.
-pub fn normalize_cli_stdout<'a>(provider: &str, stdout: &'a [u8]) -> Cow<'a, [u8]> {
+/// Normalization is a per-provider accommodation, and "read stdout as-is"
+/// is what every provider without a named arm needs.
+pub fn normalize_cli_stdout<'a>(provider: Provider, stdout: &'a [u8]) -> Cow<'a, [u8]> {
     match provider {
         // [ORB-14696] Claude's message stream reduces to its terminal
         // `result`, the document `--output-format json` printed, so per-message
         // usage is never summed into the run's totals.
-        "claude" => claude::project_claude_response(stdout)
+        Provider::Claude => claude::project_claude_response(stdout)
             .map_or_else(|| Cow::Borrowed(stdout), Cow::Owned),
-        "copilot" => Cow::Owned(copilot::normalize_copilot_stdout(stdout)),
-        "antigravity" | "agy" => Cow::Owned(antigravity::normalize_antigravity_stdout(stdout)),
-        "muse" => Cow::Owned(muse::normalize_muse_stdout(stdout)),
-        _ => Cow::Borrowed(stdout),
+        Provider::Copilot => Cow::Owned(copilot::normalize_copilot_stdout(stdout)),
+        Provider::Antigravity => Cow::Owned(antigravity::normalize_antigravity_stdout(stdout)),
+        Provider::Muse => Cow::Owned(muse::normalize_muse_stdout(stdout)),
+        // A streaming-json capture reduces to the `end` event's spend fields
+        // so per-response `usage` lines are not added to that total. Tool
+        // calls stay on the raw stream; [`assign_recorded_tool_calls`] reads
+        // them. A json wrapper is unchanged.
+        Provider::Grok => {
+            grok::normalize_grok_stdout(stdout).map_or_else(|| Cow::Borrowed(stdout), Cow::Owned)
+        }
+        Provider::Codex
+        | Provider::Gemini
+        | Provider::Ollama
+        | Provider::OpenaiCompat
+        | Provider::Cursor
+        | Provider::Pi
+        | Provider::Opencode => Cow::Borrowed(stdout),
+    }
+}
+
+/// Tool calls the answer and usage reductions drop.
+///
+/// `None` leaves the calls parsed from normalized stdout in place. Codex
+/// `file_change` frames are in that stdout, so Codex returns `None`.
+pub fn recorded_tool_calls(provider: Provider, stdout: &[u8]) -> Option<Vec<ToolCallTrace>> {
+    match provider {
+        Provider::Claude => claude::recorded_claude_tool_calls(stdout),
+        Provider::Muse => muse::recorded_muse_tool_calls(stdout),
+        Provider::Grok => grok::recorded_grok_tool_calls(stdout),
+        Provider::Antigravity | Provider::Gemini => {
+            antigravity::recorded_antigravity_tool_calls(stdout)
+        }
+        Provider::Codex
+        | Provider::Copilot
+        | Provider::Ollama
+        | Provider::OpenaiCompat
+        | Provider::Cursor
+        | Provider::Pi
+        | Provider::Opencode => None,
+    }
+}
+
+/// Replace `trace.tool_calls` when [`recorded_tool_calls`] has a provider
+/// reading. Usage, model and cost on `trace` stay as normalized stdout
+/// parsed them.
+pub fn assign_recorded_tool_calls(provider: Provider, stdout: &[u8], trace: &mut InvocationTrace) {
+    if let Some(calls) = recorded_tool_calls(provider, stdout) {
+        trace.tool_calls = calls;
     }
 }
 
@@ -86,20 +141,27 @@ pub fn normalize_cli_stdout<'a>(provider: &str, stdout: &'a [u8]) -> Cow<'a, [u8
 /// envelope. Other providers retain their existing normalized response
 /// boundary.
 /// [ORB-11348]
-pub fn project_cli_response<'a>(provider: &str, stdout: &'a [u8]) -> Cow<'a, [u8]> {
+pub fn project_cli_response<'a>(provider: Provider, stdout: &'a [u8]) -> Cow<'a, [u8]> {
     match provider {
-        "codex" => {
+        Provider::Codex => {
             codex::project_codex_response(stdout).map_or_else(|| Cow::Borrowed(stdout), Cow::Owned)
         }
-        "copilot" => Cow::Owned(copilot::project_copilot_response(stdout)),
-        "grok" => {
+        Provider::Copilot => Cow::Owned(copilot::project_copilot_response(stdout)),
+        Provider::Grok => {
             grok::project_grok_response(stdout).map_or_else(|| Cow::Borrowed(stdout), Cow::Owned)
         }
         // [ORB-16597] Only a completed terminal's text is Muse's answer; a
         // failed terminal's text is failure prose for diagnostics, never an
         // envelope.
-        "muse" => Cow::Owned(muse::project_muse_response(stdout)),
-        _ => normalize_cli_stdout(provider, stdout),
+        Provider::Muse => Cow::Owned(muse::project_muse_response(stdout)),
+        Provider::Claude
+        | Provider::Gemini
+        | Provider::Ollama
+        | Provider::OpenaiCompat
+        | Provider::Antigravity
+        | Provider::Cursor
+        | Provider::Pi
+        | Provider::Opencode => normalize_cli_stdout(provider, stdout),
     }
 }
 
@@ -112,11 +174,11 @@ pub fn project_cli_response<'a>(provider: &str, stdout: &'a [u8]) -> Cow<'a, [u8
 /// frame wins: an Orbit response envelope (returned verbatim), a `result`
 /// wrapper, or an `assistant` message's text blocks. Output that is not JSON
 /// at all is itself the message. The text is unbounded; callers bound it.
-pub fn latest_assistant_message(provider: &str, stdout: &[u8]) -> Option<String> {
+pub fn latest_assistant_message(provider: Provider, stdout: &[u8]) -> Option<String> {
     // [ORB-14696] Claude's answer projection keeps only the terminal `result`,
     // which a running agent has not written yet; its assistant messages are
     // the newest text until then.
-    let answer = if provider == "claude" {
+    let answer = if provider == Provider::Claude {
         Cow::Borrowed(stdout)
     } else {
         project_cli_response(provider, stdout)

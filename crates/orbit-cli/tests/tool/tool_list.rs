@@ -272,8 +272,8 @@ fn tool_list_json_all_includes_inactive_tools_with_status() {
 
     let mint = tools
         .iter()
-        .find(|tool| tool["name"] == "orbit.auto_task.mint")
-        .expect("mint tool");
+        .find(|tool| tool["name"] == "orbit.auto_task")
+        .expect("auto-task tool, whose actions include mint");
     assert_eq!(mint["status"], "active");
     let reserve = tools
         .iter()
@@ -297,6 +297,40 @@ fn tool_list_json_all_includes_inactive_tools_with_status() {
             && param["param_type"] == "string_list"
             && param["required"] == false
     }));
+}
+/// Regression (ORB-21414): array parameters of structured entries advertise
+/// object items, not a bare array an agent can fill with strings.
+#[test]
+fn structured_array_parameters_advertise_object_items() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    std::fs::create_dir_all(&home).expect("create home");
+    git_repo::init(&work);
+    let output = orbit_at_home(&work, &home)
+        .args(["tool", "list", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let tools: Vec<Value> = serde_json::from_slice(&output).expect("tool list JSON");
+    for (tool, param) in [
+        ("orbit.decision", "options"),
+        ("orbit.task.block_triage", "options"),
+    ] {
+        let tool_json = tools
+            .iter()
+            .find(|candidate| candidate["name"] == tool)
+            .unwrap_or_else(|| panic!("{tool} is listed"));
+        let parameter = tool_json["parameters"]
+            .as_array()
+            .expect("parameters array")
+            .iter()
+            .find(|candidate| candidate["name"] == param)
+            .unwrap_or_else(|| panic!("{tool} has {param}"));
+        assert_eq!(parameter["param_type"], "object_array", "{tool} {param}");
+    }
 }
 
 #[test]
@@ -358,6 +392,40 @@ fn tool_run_rejects_inactive_tools() {
         !refusal.contains("operator"),
         "the refusal must not offer a capability override:\n{refusal}"
     );
+    // The single-record route names the same agent search with the friction ID
+    // as the query; the tool itself stays inactive.
+    let refused_show = orbit_at_home(&work, &home)
+        .args([
+            "tool",
+            "run",
+            "orbit.friction.show",
+            "--input",
+            "{\"id\":\"F2026-01-001\",\"model\":\"codex\"}",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("policy denied"))
+        .get_output()
+        .stderr
+        .clone();
+    let refusal_show = String::from_utf8_lossy(&refused_show);
+    assert!(
+        refusal_show.contains("orbit.search"),
+        "the show refusal must name the supported agent search:\n{refusal_show}"
+    );
+    assert!(
+        refusal_show.contains("kind") && refusal_show.contains("friction"),
+        "the show refusal must name the friction search kind:\n{refusal_show}"
+    );
+    assert!(
+        refusal_show.contains("friction ID"),
+        "the show refusal must say the query selects one record:\n{refusal_show}"
+    );
+    assert!(
+        !refusal_show.contains("operator"),
+        "the show refusal must not offer a capability override:\n{refusal_show}"
+    );
     orbit_at_home(&work, &home)
         .args(["tool", "enable", "orbit.friction.list"])
         .assert()
@@ -372,7 +440,7 @@ fn tool_run_rejects_inactive_tools() {
         .stdout
         .clone();
     let events: Value = serde_json::from_slice(&output).unwrap();
-    for subcommand in ["run", "enable"] {
+    for (subcommand, expected) in [("run", 2), ("enable", 1)] {
         let attempts: Vec<_> = events
             .as_array()
             .unwrap()
@@ -381,13 +449,15 @@ fn tool_run_rejects_inactive_tools() {
             .collect();
         assert_eq!(
             attempts.len(),
-            1,
-            "one row per inactive {subcommand} refusal"
+            expected,
+            "{expected} rows for inactive {subcommand} refusals (list and show)"
         );
-        assert_eq!(
-            attempts[0]["status"], "denied",
-            "inactive {subcommand} is a policy denial"
-        );
+        for attempt in &attempts {
+            assert_eq!(
+                attempt["status"], "denied",
+                "inactive {subcommand} is a policy denial"
+            );
+        }
     }
 
     // The listing the refusal names answers the same agent: a friction filed
@@ -396,9 +466,9 @@ fn tool_run_rejects_inactive_tools() {
         .args([
             "tool",
             "run",
-            "orbit.friction.add",
+            "orbit.friction",
             "--input",
-            "{\"title\":\"Inactive listing probe\",\"body\":\"Filed to check the listing the refusal names.\",\"model\":\"codex\"}",
+            "{\"action\":\"add\",\"title\":\"Inactive listing probe\",\"body\":\"Filed to check the listing the refusal names.\",\"model\":\"codex\"}",
         ])
         .assert()
         .success()
@@ -427,6 +497,32 @@ fn tool_run_rejects_inactive_tools() {
             .iter()
             .any(|hit| hit["id"] == filed["id"]),
         "the search the refusal names must list the friction just filed:\n{listing}"
+    );
+
+    // The single-record route the show refusal names answers the same agent:
+    // a query carrying the filed friction ID selects that record.
+    let filed_id = filed["id"].as_str().expect("filed friction id");
+    let singled = orbit_at_home(&work, &home)
+        .args([
+            "tool",
+            "run",
+            "orbit.search",
+            "--input",
+            &format!("{{\"kind\":\"friction\",\"query\":\"{filed_id}\",\"model\":\"codex\"}}"),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let singled: Value = serde_json::from_slice(&singled).unwrap();
+    assert!(
+        singled["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|hit| hit["id"] == filed["id"]),
+        "the search the show refusal names must select the filed friction by ID:\n{singled}"
     );
 }
 
@@ -588,4 +684,46 @@ fn tool_run_serves_the_owner_local_read_only_drain_surface() {
     let refusal = String::from_utf8_lossy(&refused);
     assert!(refusal.contains("capability denied"), "{refusal}");
     assert!(refusal.contains("agent"), "{refusal}");
+}
+
+/// [ORB-21263] Every tool `orbit tool list` reports belongs to exactly one
+/// MCP toolset, inactive ones included, so every role can be stated in
+/// toolsets. A builtin MCP tool missing from the toolset table reports none.
+#[test]
+fn every_listed_tool_belongs_to_one_mcp_toolset() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    std::fs::create_dir_all(&home).expect("create home");
+    git_repo::init(&work);
+
+    let output = orbit_at_home(&work, &home)
+        .args(["tool", "list", "--json", "--all"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let tools: Vec<serde_json::Value> = serde_json::from_slice(&output).expect("tool list JSON");
+    assert!(!tools.is_empty());
+    let unplaced = tools
+        .iter()
+        .filter(|tool| {
+            tool["mcp_toolset"]
+                .as_str()
+                .is_none_or(|toolset| toolset.parse::<orbit_types::tool::McpToolset>().is_err())
+        })
+        .map(|tool| tool["name"].to_string())
+        .collect::<Vec<_>>();
+    assert!(unplaced.is_empty(), "tools without a toolset: {unplaced:?}");
+    // The always-on core is discovery only; no registry tool joins it.
+    let core = tools
+        .iter()
+        .filter(|tool| tool["mcp_toolset"] == "core")
+        .map(|tool| tool["name"].to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        core.is_empty(),
+        "registry tools in the always-on core: {core:?}"
+    );
 }

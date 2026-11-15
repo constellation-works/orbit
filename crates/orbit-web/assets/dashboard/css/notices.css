@@ -1,0 +1,257 @@
+/* Fleet notices: the banner over every view and the Notices dock tab. */
+.notice-banner {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--hair);
+  background: color-mix(in srgb, var(--state-pending) 12%, var(--bg));
+  padding: 6px 24px;
+}
+.notice-banner[hidden] { display: none; }
+.notice-banner-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.notice-banner-title { font-weight: 600; overflow-wrap: anywhere; }
+.notice-banner-meta { color: var(--fg-mute); }
+.notice-banner-link { color: var(--accent); }
+.notice-chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 11px;
+  color: var(--fg-mute);
+  white-space: nowrap;
+}
+.notice-kind-incident { color: var(--state-pending); }
+.notice-kind-maintenance { color: var(--accent); }
+/* Heading row: the page hint on the left, the Post control on the right.
+   The hint is pinned to the viewport, so the panel can clip and scroll. */
+#notices-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+#notices-panel > header { flex: 0 0 auto; }
+.notice-row:last-child > .notice-row-main:last-child { border-radius: 0 0 var(--radius-panel) var(--radius-panel); }
+.notices-head-title { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.notices-head-actions { display: inline-flex; align-items: center; gap: 6px; }
+.notice-post-toggle { min-height: 32px; }
+/* The closed group follows the open rows under its own heading. */
+.notice-group-heading {
+  margin: 0;
+  padding: 12px 16px 6px;
+  border-top: 1px solid var(--hair);
+  color: var(--fg-mute);
+  font: 600 11px var(--font-sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.notice-group-heading.notice-group-first { border-top: 0; padding-top: 4px; }
+.notice-open-empty {
+  padding: 10px 16px 2px;
+  color: var(--fg-dim);
+  font-size: 12px;
+  font-style: italic;
+}
+.notice-coverage {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--hair);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.notice-coverage-lead { margin: 0; }
+.notice-coverage-reason {
+  margin: 4px 0 0;
+  color: var(--fg-dim);
+  overflow-wrap: anywhere;
+}
+.notice-kind-partial { color: var(--state-pending); }
+.notice-coverage-banner .notice-banner-meta { overflow-wrap: anywhere; }
+
+/* The list: flat rows split by a hairline, on the panel's own edges.
+   The dock is 320–440px, so a row is two lines at every width: the facts,
+   then the title. Scope and time ellipsize; the title wraps. */
+#notices-panel > .body {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  padding: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.notice-row { border-bottom: 1px solid var(--hair); min-width: 0; }
+.notice-row:last-child { border-bottom: 0; }
+/* Opening a row or switching the list rebuilds rows; that is not new data. */
+.notice-row.data-changed, .notice-row.data-new { animation: none; }
+.notice-row-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto 12px;
+  grid-template-areas:
+    "severity scope when close chevron"
+    "title title title title title";
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 2px;
+  min-height: 44px;
+  min-width: 0;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+.notice-row-main:hover { background: var(--bg-hover); }
+.notice-severity {
+  grid-area: severity;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--fg-mute);
+  text-transform: capitalize;
+}
+.notice-severity::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-disabled);
+}
+.notice-severity-incident { color: var(--state-failed); font-weight: 600; }
+.notice-severity-incident::before { background: var(--state-failed); }
+.notice-severity-maintenance { color: var(--state-pending); }
+.notice-severity-maintenance::before { background: var(--state-pending); }
+.notice-row-toggle { grid-area: title; display: block; width: 100%; min-width: 0; }
+.notice-title {
+  display: block;
+  color: var(--fg);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.notice-incident .notice-title { color: var(--fg-strong); font-weight: 600; }
+.notice-ended .notice-title { color: var(--fg-dim); font-weight: 400; }
+.notice-scope {
+  grid-area: scope;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-mute);
+  font-size: 12px;
+}
+.notice-when {
+  grid-area: when;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg-mute);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+/* Close stays quiet until the row is under the pointer: a list to read, not a
+   column of buttons. */
+.notice-close-open {
+  grid-area: close;
+  justify-self: end;
+  min-height: 28px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-mute);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.notice-row-main:hover .notice-close-open { color: var(--fg); }
+.notice-close-open:hover { border-color: var(--border); }
+.notice-close-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; color: var(--fg); }
+.notice-chevron {
+  grid-area: chevron;
+  justify-self: end;
+  width: 7px;
+  height: 7px;
+  margin-right: 2px;
+  border-right: 1.5px solid var(--fg-mute);
+  border-bottom: 1.5px solid var(--fg-mute);
+  transform: translateY(-2px) rotate(45deg);
+}
+.notice-row.is-open .notice-chevron { transform: translateY(2px) rotate(225deg); }
+
+/* The open notice sits under the row, inside the dock's width. */
+.notice-detail { padding: 2px 12px 14px; min-width: 0; }
+.notice-body, .notice-ended-text { margin: 0 0 10px; max-width: 72ch; overflow-wrap: anywhere; }
+.notice-body { white-space: pre-wrap; line-height: 1.5; }
+.notice-ended-text { color: var(--fg-dim); }
+.notice-ended-text::first-letter { text-transform: uppercase; }
+.notice-facts { display: flex; flex-wrap: wrap; gap: 2px 14px; color: var(--fg-mute); font-size: 12px; overflow-wrap: anywhere; }
+.notice-facts a { color: var(--accent); }
+.notice-close-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; max-width: 72ch; }
+.notice-close-actions { display: inline-flex; gap: 6px; }
+.notice-close-reason {
+  flex: 1 1 240px;
+  min-width: 0;
+  box-sizing: border-box;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-control);
+  color: var(--fg);
+  font: inherit;
+}
+.notice-feedback { flex-basis: 100%; margin: 0; color: var(--state-failed); font-size: 12px; overflow-wrap: anywhere; }
+.notice-feedback:empty { display: none; }
+
+/* The post dialog, in the top layer like the task proposal dialog. */
+.notice-post {
+  box-sizing: border-box;
+  width: min(520px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100dvh - 32px);
+  margin: auto;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+  color: var(--fg);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.notice-post::backdrop { background: rgb(0 0 0 / 0.6); }
+.notice-post h3 { margin: 0 0 12px; font-size: 15px; }
+.notice-post form { display: grid; gap: 6px; min-width: 0; }
+.notice-post label, .notice-post legend, .notice-post summary { font-size: 12.5px; color: var(--fg-dim); }
+.notice-post input:not([type="radio"]), .notice-post textarea, .notice-post select {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-control);
+  color: var(--fg);
+  font: inherit;
+}
+.notice-post textarea { resize: vertical; }
+.notice-post-severity { display: flex; flex-wrap: wrap; gap: 4px 16px; min-width: 0; margin: 8px 0; padding: 0; border: 0; }
+.notice-post-severity legend { padding: 0; margin-bottom: 6px; }
+.notice-post-severity label { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; color: var(--fg); cursor: pointer; }
+.notice-post-body { margin-bottom: 4px; }
+.notice-post-options summary { display: list-item; padding: 6px 0; line-height: 1.4; cursor: pointer; }
+#notices-post-summary { margin-left: 6px; color: var(--fg-mute); }
+.notice-post-options[open] #notices-post-summary { display: none; }
+.notice-post-option-fields { display: grid; gap: 6px; margin-top: 6px; }
+.notice-post-actions { display: flex; gap: 8px; margin-top: 8px; }
+
+@media (max-width: 760px) {
+  .notice-banner { padding: 6px 12px; }
+  .notice-close-open { min-width: 44px; min-height: 36px; }
+  .notice-group-heading, .notice-open-empty, .notice-coverage { padding-inline: 12px; }
+}

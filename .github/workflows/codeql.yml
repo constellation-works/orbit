@@ -2,15 +2,21 @@ name: CodeQL
 
 on:
   push:
-    branches: [main, agent-main]
+    branches: [main]
   schedule:
-    - cron: "0 6 * * 1"
+    - cron: "0 6 * * *"
+  workflow_dispatch:
 
-# Analyze pushes to main and agent-main, plus the weekly Monday schedule.
-# A newer push replaces any analysis still pending for the same ref, so the
-# queue stays at one run per ref instead of trailing every merge. Branch pushes
-# let a running analysis finish: agent-main merges faster than an analysis
-# takes, so cancelling in progress would never publish a result.
+# Analyze pushes to main, run daily on agent-main (the repository's default
+# branch), and support manual runs via workflow_dispatch. agent-main push
+# analysis was dropped because merge bursts exhausted the GitHub installation
+# API rate limit ('API rate limit exceeded for installation') and spent 3
+# CodeQL runner jobs per merge. A daily scheduled analysis covers agent-main
+# changes before promotion to main without rate-limit exhaustion. Running
+# analyses are not cancelled in progress so completed results always publish.
+# A docs-only push to main skips the analysis jobs only when BEFORE already has
+# a successful completed Analyze run for actions, javascript-typescript and
+# rust. The daily schedule and workflow_dispatch always run every analysis job.
 concurrency:
   group: codeql-${{ github.ref }}
   cancel-in-progress: false
@@ -21,8 +27,43 @@ permissions:
   actions: read
 
 jobs:
+  # Same classifier as ci.yml. An empty mode fails open, and this job never
+  # fails the workflow, so a classifier error still analyses.
+  scope:
+    name: Change scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    continue-on-error: true
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    outputs:
+      mode: ${{ steps.scope.outputs.mode }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Classify the change
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+          BEFORE: ${{ github.event.before }}
+          DOCS_BEFORE_CHECKS: |
+            Analyze (actions)
+            Analyze (javascript-typescript)
+            Analyze (rust)
+        run: scripts/ci-change-scope.sh
+
   analyze:
     name: Analyze (${{ matrix.language }})
+    needs: scope
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || needs.scope.outputs.mode != 'docs') }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -32,13 +73,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           languages: ${{ matrix.language }}
           build-mode: none
           config-file: ./.github/codeql/codeql-config.yml
 
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           category: "/language:${{ matrix.language }}"
