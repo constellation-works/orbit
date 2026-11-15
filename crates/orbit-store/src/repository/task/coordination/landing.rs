@@ -448,7 +448,7 @@ impl TaskCommitBoundary {
             .push((old, row(ATTEMPT, handoff_id, &attempt)?));
         self.settle_landing_request(handoff_id, LandingStartState::Completed, effects)?;
         let owes =
-            PostDeployRecord::read(history).is_some_and(|record| !record.outstanding().is_empty());
+            PostDeployRecord::read(history)?.is_some_and(|record| !record.outstanding().is_empty());
         params.status = (!owes).then_some(TaskStatus::Done);
         params.status_note = Some(evidence.into());
         params.status_event = Some("landing_completed".into());
@@ -527,7 +527,7 @@ impl TaskCommitBoundary {
                 "the merged pull request is not this handoff's candidate on its landing branch",
             ));
         }
-        if PostDeployRecord::read(history).is_some_and(|record| !record.outstanding().is_empty()) {
+        if PostDeployRecord::read(history)?.is_some_and(|record| !record.outstanding().is_empty()) {
             return Err(invalid("the task owes acceptance criteria after deploy"));
         }
         Ok(())

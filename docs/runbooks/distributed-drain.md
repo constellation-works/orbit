@@ -953,8 +953,8 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   commands on the base and replays each selector on the base, outside the agent
   sandbox in a detached worktree, pinning each passing log beside theirs. A
   failing replay fails the claim with its output (the owner blocks the task); an
-  empty list, a selector outside that grammar, or a run that executes no test or
-  prints a skip is refused. A candidate that also changes the base is refused for
+  empty list, more than 16 selectors, a selector outside that grammar, or a run
+  that executes no test or prints a skip is refused. A candidate that also changes the base is refused for
   this outcome. A supplied report stays authoritative: one that is malformed or
   fails verification is refused, never replaced by the selectors, and a summary
   alone is refused.

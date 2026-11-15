@@ -184,6 +184,7 @@ pub enum JobRunState {
     Success,
     Failed,
     Timeout,
+    /// Execution was skipped; terminal like other completed outcomes.
     Skipped,
     /// Transient state emitted while the engine is sleeping between retry attempts.
     Retrying,
@@ -280,15 +281,16 @@ impl Display for RunEvent {
 impl JobRunState {
     /// Returns true if this state cannot be overwritten by a later finalization.
     pub fn is_terminal(self) -> bool {
-        matches!(
-            self,
+        match self {
             Self::Success
-                | Self::Failed
-                | Self::Timeout
-                | Self::Cancelled
-                | Self::Interrupted
-                | Self::Held
-        )
+            | Self::Failed
+            | Self::Timeout
+            | Self::Skipped
+            | Self::Cancelled
+            | Self::Interrupted
+            | Self::Held => true,
+            Self::Pending | Self::Running | Self::Retrying => false,
+        }
     }
 
     /// Validate and compute the next state for a given event.
@@ -305,6 +307,10 @@ impl JobRunState {
             // claimed after a host reboot) is orphaned exactly like a running
             // run with a dead owner; reconcile finalizes both as interrupted.
             (Self::Pending, RunEvent::Interrupt) => Ok(Self::Interrupted),
+            // Persisted runs sleeping between attempts still have an owner and
+            // must accept operator cancellation and orphan reconciliation.
+            (Self::Retrying, RunEvent::Cancel) => Ok(Self::Cancelled),
+            (Self::Retrying, RunEvent::Interrupt) => Ok(Self::Interrupted),
             (Self::Running, RunEvent::Complete) => Ok(Self::Success),
             (Self::Running, RunEvent::Fail) => Ok(Self::Failed),
             (Self::Running, RunEvent::Timeout) => Ok(Self::Timeout),
