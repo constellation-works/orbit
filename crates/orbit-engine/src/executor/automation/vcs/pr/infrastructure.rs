@@ -26,12 +26,12 @@ pub(super) struct InfrastructureOwner<'a> {
 }
 
 impl InfrastructureOwner<'_> {
-    fn primary_task(&self) -> Result<&str, OrbitError> {
+    fn primary_task(&self, pr: &str) -> Result<&str, OrbitError> {
         self.task_ids
             .iter()
             .min()
             .map(String::as_str)
-            .ok_or_else(|| stopped("", "infrastructure recovery names no owning task"))
+            .ok_or_else(|| stopped(pr, "infrastructure recovery names no owning task"))
     }
 }
 
@@ -46,7 +46,7 @@ fn record<H: RuntimeHost + ?Sized>(
         "auto-fix/{}/infrastructure-{}-{suffix}.json",
         owner.run_id, evidence.run_id
     );
-    let primary = owner.primary_task()?;
+    let primary = owner.primary_task(&evidence.pr_number)?;
     let run_id = host.get_task(primary)?.job_run_id.ok_or_else(|| {
         stopped(
             &evidence.pr_number,
@@ -132,7 +132,7 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
     deadline_ms: u64,
 ) -> Result<InfrastructureStep, OrbitError> {
     let deadline = Deadline(deadline_ms);
-    let history = host.get_task_history(owner.primary_task()?)?;
+    let history = host.get_task_history(owner.primary_task(pr)?)?;
     let reservations =
         pr_infrastructure_reservations(&history).map_err(|reason| stopped(pr, &reason))?;
     if let Some(reservation) = reservations

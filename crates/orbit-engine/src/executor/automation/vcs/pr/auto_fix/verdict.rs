@@ -63,10 +63,21 @@ pub(in crate::executor::automation::vcs::pr) fn stopped(
     pr_number: &str,
     reason: &str,
 ) -> OrbitError {
+    if pr_number.is_empty() {
+        return stopped_without_pr(reason);
+    }
     OrbitError::Execution(format!(
         "auto_fix_stopped: pull request #{pr_number} cannot be repaired automatically \
          ({reason}); no repair agent runs, the pull request stays open and the task stays in \
          review"
+    ))
+}
+
+/// The failure that stops an auto-fix watcher when no pull request is involved.
+pub(in crate::executor::automation::vcs::pr) fn stopped_without_pr(reason: &str) -> OrbitError {
+    OrbitError::Execution(format!(
+        "auto_fix_stopped: cannot be repaired automatically ({reason}); no repair agent runs and \
+         the task stays in review"
     ))
 }
 
