@@ -29,8 +29,9 @@ mod ui_requirement;
 mod work_class;
 pub use error::TaskError;
 pub use resolves::{
-    RESOLVES_SIDE_EFFECT_PENDING_EVENT, RESOLVES_TARGET_NOTE_PREFIX, named_friction_targets,
-    pending_resolves_entries, resolves_relation_targets,
+    RESOLVES_SIDE_EFFECT_PENDING_EVENT, RESOLVES_TARGET_NOTE_PREFIX, ResolvesSideEffectRecord,
+    ResolvesSideEffectState, named_friction_targets, pending_resolves_entries,
+    resolves_relation_targets,
 };
 
 pub use context_creation::{

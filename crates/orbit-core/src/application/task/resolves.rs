@@ -7,9 +7,9 @@
 //! failed. Every transition into done commits a pending entry for each named
 //! target, relation or text alike, so a crash or unreadable history before
 //! these post-commit effects leaves durable retry work. Failures are recorded
-//! as [`RESOLVES_SIDE_EFFECT_FAILED_EVENT`] history entries. Later writes to the
+//! as failed history entries. Later writes to the
 //! done task retry unfinished targets, with the transition's own landing
-//! evidence, until a [`RESOLVES_SIDE_EFFECT_RECOVERED_EVENT`] entry settles them.
+//! evidence, until a recovered entry settles them.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -18,8 +18,9 @@ use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_store::contracts::FrictionLandingOutcome;
 use orbit_types::task::{
-    RESOLVES_SIDE_EFFECT_PENDING_EVENT, RESOLVES_TARGET_NOTE_PREFIX, Task, TaskHistoryEntry,
-    TaskStatus, named_friction_targets, pending_resolves_entries, resolves_relation_targets,
+    RESOLVES_TARGET_NOTE_PREFIX, ResolvesSideEffectRecord, ResolvesSideEffectState, Task,
+    TaskHistoryEntry, TaskStatus, named_friction_targets, pending_resolves_entries,
+    resolves_relation_targets,
 };
 use serde_json::Value;
 
@@ -28,12 +29,6 @@ use crate::OrbitRuntime;
 use crate::application::task::TaskRecords;
 use crate::application::task::final_recovery::FINAL_RECOVERY_COMPLETED_EVENT;
 
-/// Task history event recording that resolving one `resolves` target failed
-/// after the task reached done. Its note's first line is `target=<id>`.
-pub(crate) const RESOLVES_SIDE_EFFECT_FAILED_EVENT: &str = "resolves_side_effect_failed";
-/// Task history event recording that a pending or failed target was settled.
-/// Same note shape as [`RESOLVES_SIDE_EFFECT_FAILED_EVENT`].
-pub(crate) const RESOLVES_SIDE_EFFECT_RECOVERED_EVENT: &str = "resolves_side_effect_recovered";
 const RESOLVES_LANDING_EVENT: &str = "friction_resolved_on_landing";
 
 #[cfg(test)]
@@ -105,7 +100,7 @@ impl OrbitRuntime {
             .filter(|target| pending.contains_key(*target))
             .map(|target| {
                 resolves_history_entry(
-                    RESOLVES_SIDE_EFFECT_RECOVERED_EVENT,
+                    ResolvesSideEffectState::Recovered,
                     target,
                     Some("no landing evidence authorizes a target named only in task text"),
                 )
@@ -120,7 +115,7 @@ impl OrbitRuntime {
                     if pending.get(target) != Some(&UnfinishedResolve::Failed) =>
                 {
                     history.push(resolves_history_entry(
-                        RESOLVES_SIDE_EFFECT_FAILED_EVENT,
+                        ResolvesSideEffectState::Failed,
                         target,
                         Some(reason),
                     ));
@@ -130,7 +125,7 @@ impl OrbitRuntime {
                     if pending.contains_key(target) =>
                 {
                     history.push(resolves_history_entry(
-                        RESOLVES_SIDE_EFFECT_RECOVERED_EVENT,
+                        ResolvesSideEffectState::Recovered,
                         target,
                         None,
                     ))
@@ -140,7 +135,8 @@ impl OrbitRuntime {
             if matches!(outcome, ResolvesSideEffectOutcome::Resolved)
                 && let Some(landing) = &landing
             {
-                let mut entry = resolves_history_entry(RESOLVES_LANDING_EVENT, target, None);
+                let mut entry =
+                    TaskHistoryEntry::new(Utc::now(), SYSTEM_ACTOR_LABEL, RESOLVES_LANDING_EVENT);
                 entry.note = Some(format!(
                     "{RESOLVES_TARGET_NOTE_PREFIX}{target}\ncommit={}\npr={}",
                     landing.commit,
@@ -322,26 +318,20 @@ fn covering_commit_delivery(note: &str) -> Option<&str> {
 /// Targets whose latest side-effect history entry records unfinished work.
 fn pending_resolves_retries(history: &[TaskHistoryEntry]) -> BTreeMap<String, UnfinishedResolve> {
     let mut pending = BTreeMap::new();
-    for entry in history {
-        let Some(target) = entry
-            .note
-            .as_deref()
-            .and_then(|note| note.lines().next())
-            .and_then(|line| line.strip_prefix(RESOLVES_TARGET_NOTE_PREFIX))
-        else {
-            continue;
-        };
-        match entry.event.as_str() {
-            RESOLVES_SIDE_EFFECT_PENDING_EVENT => {
-                pending.insert(target.to_string(), UnfinishedResolve::Pending);
+    for record in history
+        .iter()
+        .filter_map(ResolvesSideEffectRecord::from_history_entry)
+    {
+        match record.state {
+            ResolvesSideEffectState::Pending => {
+                pending.insert(record.target, UnfinishedResolve::Pending);
             }
-            RESOLVES_SIDE_EFFECT_FAILED_EVENT => {
-                pending.insert(target.to_string(), UnfinishedResolve::Failed);
+            ResolvesSideEffectState::Failed => {
+                pending.insert(record.target, UnfinishedResolve::Failed);
             }
-            RESOLVES_SIDE_EFFECT_RECOVERED_EVENT => {
-                pending.remove(target);
+            ResolvesSideEffectState::Recovered => {
+                pending.remove(&record.target);
             }
-            _ => {}
         }
     }
     pending
@@ -353,20 +343,15 @@ pub(super) fn pending_resolves_history(task: &Task) -> Vec<TaskHistoryEntry> {
     pending_resolves_entries(&task_friction_targets(task), SYSTEM_ACTOR_LABEL, Utc::now())
 }
 
-fn resolves_history_entry(event: &str, target: &str, reason: Option<&str>) -> TaskHistoryEntry {
-    let mut note = format!("{RESOLVES_TARGET_NOTE_PREFIX}{target}");
-    if let Some(reason) = reason {
-        note.push_str("\nreason: ");
-        note.push_str(&redact_all(reason));
+fn resolves_history_entry(
+    state: ResolvesSideEffectState,
+    target: &str,
+    reason: Option<&str>,
+) -> TaskHistoryEntry {
+    ResolvesSideEffectRecord {
+        state,
+        target: target.to_string(),
+        detail: reason.map(redact_all),
     }
-    TaskHistoryEntry {
-        at: Utc::now(),
-        by: SYSTEM_ACTOR_LABEL.to_string(),
-        event: event.to_string(),
-        note: Some(note),
-        from_status: None,
-        to_status: None,
-        operation_id: None,
-        decision: None,
-    }
+    .into_history_entry(SYSTEM_ACTOR_LABEL, Utc::now())
 }
