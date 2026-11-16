@@ -52,7 +52,8 @@ pub(crate) struct TaskRecordUpdateParams {
     pub(crate) context_creation: Vec<String>,
     /// [ORB-11305] Forwarded to the store as a compare-and-set on the task's
     /// persisted status. Setting it does not itself constitute a history
-    /// change — it only constrains one.
+    /// change; the record service evaluates it before any part of a
+    /// multi-part write lands, and the history commit re-evaluates it.
     pub(crate) expected_status: Option<Vec<TaskStatus>>,
     /// The update entry point authorized this write as a human operator's
     /// comment-only update; the store admits it under an execution claim

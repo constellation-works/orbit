@@ -286,13 +286,14 @@ pub(crate) struct AnalyzedFinding<'a> {
 /// The latest verdict `history` records, read only from the verification
 /// actor's own entries.
 pub(crate) fn latest_verification(history: &[TaskHistoryEntry]) -> Option<FindingVerification> {
-    history
-        .iter()
-        .rev()
-        .filter(|entry| {
-            entry.event == FINDING_VERIFIED_EVENT && entry.by == FINDING_VERIFICATION_ACTOR
-        })
-        .find_map(|entry| serde_json::from_str(entry.note.as_deref()?).ok())
+    // Only the newest verification entry counts: an unparseable note or an
+    // unsupported schema version there must not silently revive an older,
+    // superseded verdict.
+    let entry = history.iter().rev().find(|entry| {
+        entry.event == FINDING_VERIFIED_EVENT && entry.by == FINDING_VERIFICATION_ACTOR
+    })?;
+    let record: FindingVerification = serde_json::from_str(entry.note.as_deref()?).ok()?;
+    (record.schema_version == FINDING_VERIFICATION_SCHEMA_VERSION).then_some(record)
 }
 
 /// `relations` with every classified `regression_from` link rated at the

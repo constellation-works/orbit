@@ -480,13 +480,23 @@ impl OrbitRuntime {
         run_id: &str,
         mut apply: impl FnMut(&mut PipelineState),
     ) -> Result<(), OrbitError> {
-        self.stores()
+        use orbit_types::workflow::RunStateUpdate;
+
+        match self
+            .stores()
             .jobs()
             .update_run_state(run_id, &mut |_, state| {
                 apply(state);
                 Ok(())
-            })
-            .map(|_| ())
+            })? {
+            RunStateUpdate::Updated => Ok(()),
+            RunStateUpdate::NotFound => Err(OrbitError::Execution(format!(
+                "run {run_id} has no run record to hold a steering watermark"
+            ))),
+            RunStateUpdate::NoState => Err(OrbitError::Execution(format!(
+                "run {run_id} has no pipeline state to hold a steering watermark"
+            ))),
+        }
     }
 }
 

@@ -77,7 +77,7 @@ use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use super::helpers::{self, SYSTEM_ACTOR_LABEL};
 use crate::OrbitRuntime;
 use crate::application::task::{TaskJobPort, TaskRecords};
-use orbit_types::workflow::SourceRepairBinding;
+use orbit_types::workflow::{HeldCandidate, SourceRepairBinding};
 
 /// Status event of an operator's requeue of a blocked task.
 pub(crate) const OPERATOR_REQUEUED_EVENT: &str = "operator_requeued";
@@ -359,7 +359,12 @@ impl OrbitRuntime {
         } else {
             self.authenticate_operator_requeue(&task, receipt.as_ref())?
         };
-        let kept = if discard || resume.is_some() {
+        let held = if discard || resume.is_some() {
+            None
+        } else {
+            self.held_candidate_requeue(&task)?
+        };
+        let kept = if discard || resume.is_some() || held.is_some() {
             None
         } else {
             self.kept_claim_requeue(&task)?
@@ -378,6 +383,19 @@ impl OrbitRuntime {
                     .is_some_and(|origin| Some(origin.machine_id.as_str()) != local)
                     || (local == Some(kept.machine_id.as_str())
                         && task.job_run_id == kept.candidate.source_run_id))
+        });
+        // A candidate its stopped run held is offered by admission on any
+        // host when it reached a durable ref, and on its holding host
+        // otherwise.
+        let held_owner_local = held.as_ref().is_some_and(|held| {
+            held.durable_ref.is_some()
+                || held.machine_id.as_deref() == self.automation_machine_identity()
+        });
+        let held_status_note = held.as_ref().map(|held| {
+            format!(
+                "requeued onto the candidate its stopped run held (head {} on {}): {reason}",
+                held.head_sha, held.branch
+            )
         });
         let task = self.with_task_write_locked(id, || {
             let current = self.get_task(id)?;
@@ -455,6 +473,9 @@ impl OrbitRuntime {
                             Vec::new(),
                         )
                     }
+                    (None, None) if held_status_note.is_some() => {
+                        (held_status_note.clone().unwrap_or_default(), None, Vec::new())
+                    }
                     (None, None) => (format!("requeued: {reason}"), None, Vec::new()),
                 }
             };
@@ -509,6 +530,19 @@ impl OrbitRuntime {
                 "owner_local": owner_local,
                 "host_local": !kept.candidate.durable(),
             })),
+            (None, None) if held.is_some() => held.as_ref().map(|held| {
+                json!({
+                    "source": "held",
+                    "pull_request": null,
+                    "branch": held.branch,
+                    "head_sha": held.head_sha,
+                    "durable_ref": held.durable_ref,
+                    "machine_id": held.machine_id,
+                    "source_run_id": held.run_id,
+                    "owner_local": held_owner_local,
+                    "host_local": held.durable_ref.is_none(),
+                })
+            }),
             (None, None) => None,
         };
         let next_step = match (&resume, &kept) {
@@ -545,6 +579,28 @@ impl OrbitRuntime {
                                 instead of implementing fresh, then validates, reviews and \
                                 lands it afresh."
                 .to_string(),
+            (None, None) if held.is_some() => {
+                let held = held.as_ref();
+                if held.is_some_and(|held| held.durable_ref.is_some()) {
+                    "The next run, claimed or local, continues the candidate its stopped \
+                     run held instead of implementing fresh, then validates, reviews and \
+                     lands it afresh."
+                        .to_string()
+                } else if held_owner_local {
+                    "The next run on this host continues the candidate its stopped run \
+                     held instead of implementing fresh, then validates, reviews and \
+                     lands it afresh."
+                        .to_string()
+                } else {
+                    format!(
+                        "The candidate is only on {}: a run there continues the candidate \
+                         its stopped run held instead of implementing fresh, and a run on \
+                         another host implements fresh.",
+                        held.and_then(|held| held.machine_id.as_deref())
+                            .unwrap_or("the host that held it")
+                    )
+                }
+            }
             (None, None) => {
                 "The next run starts from the backlog; no published or kept candidate was \
                  recorded."
@@ -641,25 +697,61 @@ impl OrbitRuntime {
     /// than the latest claim settlement. The run id matches only together
     /// with the machine, the same linkage admission uses.
     fn stopped_run_holds_candidate(&self, task: &Task) -> Result<bool, OrbitError> {
-        use orbit_types::workflow::{CANDIDATE_HELD_EVENT, HeldCandidate};
+        Ok(self.stopped_run_held_candidate(task)?.is_some())
+    }
+
+    /// The candidate `task`'s stopped run held, while the task is still
+    /// linked to that run. The run id matches only together with the
+    /// machine, the same linkage admission uses.
+    fn stopped_run_held_candidate(
+        &self,
+        task: &Task,
+    ) -> Result<Option<(HeldCandidate, chrono::DateTime<Utc>)>, OrbitError> {
+        use orbit_types::workflow::CANDIDATE_HELD_EVENT;
 
         let history = self.get_task_history(&task.id)?;
-        let Some(held) = history
+        let Some(entry) = history
             .iter()
             .rev()
             .find(|entry| entry.event == CANDIDATE_HELD_EVENT)
-            .and_then(HeldCandidate::from_entry)
         else {
-            return Ok(false);
+            return Ok(None);
+        };
+        let Some(held) = HeldCandidate::from_entry(entry) else {
+            return Ok(None);
         };
         if task.job_run_id.as_deref() != Some(held.run_id.as_str()) {
-            return Ok(false);
+            return Ok(None);
         }
         // Run ids are unique only per machine.
-        Ok(task
+        if !task
             .job_run_machine
             .as_ref()
-            .is_none_or(|origin| held.machine_id.as_deref() == Some(origin.machine_id.as_str())))
+            .is_none_or(|origin| held.machine_id.as_deref() == Some(origin.machine_id.as_str()))
+        {
+            return Ok(None);
+        }
+        Ok(Some((held, entry.at)))
+    }
+
+    /// The held candidate a requeue reports as resumed: the one admission
+    /// offers while the task's specification is unchanged and no operator
+    /// discarded it since it was held. A retired hold resumes nothing, as
+    /// in `held_candidate_offer`.
+    fn held_candidate_requeue(&self, task: &Task) -> Result<Option<HeldCandidate>, OrbitError> {
+        let Some((held, held_at)) = self.stopped_run_held_candidate(task)? else {
+            return Ok(None);
+        };
+        if !task.spec_digest_matches(&held.task_spec_digest) {
+            return Ok(None);
+        }
+        let history = self.get_task_history(&task.id)?;
+        if history.iter().any(|entry| {
+            entry.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT && entry.at >= held_at
+        }) {
+            return Ok(None);
+        }
+        Ok(Some(held))
     }
 
     /// Whether rewriting the specification of blocked `task` to `description`
