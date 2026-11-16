@@ -2,6 +2,7 @@ mod command;
 mod init;
 mod list;
 mod publication;
+mod rebind;
 mod remove;
 mod role;
 mod ship_mode;

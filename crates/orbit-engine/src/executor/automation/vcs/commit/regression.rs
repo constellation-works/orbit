@@ -55,9 +55,9 @@ fn resolve_one<H: RuntimeHost + ?Sized>(
         return Some(RegressionLandedCommit { sha, subject });
     }
     let marker = format!("[{target}]");
-    // Message matches may only quote the marker in another task's Fixes trailer.
-    // A fallback match establishes ownership only in the commit's own subject.
-    commits_matching(workspace, &marker, &["HEAD"])
+    // This fallback requires the marker in the commit's own subject, beyond
+    // the subject/body/trailer ownership used for dependency delivery.
+    commits_matching(workspace, &marker, &["HEAD"], None)
         .ok()?
         .into_iter()
         .find_map(|sha| {

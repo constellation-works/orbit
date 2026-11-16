@@ -653,7 +653,6 @@ fn native_artifact_put_preserves_operator_evidence_and_requeues_once() {
     git(&fixture.repo, &["checkout", "-b", "candidate"]);
     fs::write(fixture.repo.join("candidate.txt"), "after\n").unwrap();
     git(&fixture.repo, &["commit", "-am", "candidate"]);
-    crate::fixture_crew::configure_sol(&fixture.root);
     let config_path = fixture.root.join("config.toml");
     let mut config: toml_edit::DocumentMut =
         fs::read_to_string(&config_path).unwrap().parse().unwrap();

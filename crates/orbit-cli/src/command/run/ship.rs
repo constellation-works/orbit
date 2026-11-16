@@ -33,6 +33,10 @@ impl ShipMode {
     about = "Ship backlog or explicitly selected tasks through the gated task pipeline",
     override_usage = "orbit run ship [<TASK_ID>...] [OPTIONS]",
     after_help = "Examples:\n  orbit run ship\n  orbit run ship T123\n  orbit run ship T123 T456 --mode local\n  orbit run ship T123 --base main\n  orbit run ship T123 --allow-crew sol\n  orbit run ship T123 --complete\n  orbit run ship T123 --review before-landing\n\n\
+                  Named tasks ship even when a drain would wait on them (a pending\n\
+                  scheduled start, unassessed complexity, no context files, or\n\
+                  context locks another in-flight task holds); task history\n\
+                  records which readiness gates and lock holders it overrode.\n\
                   Shipment is asynchronous: prints the run ID and returns before\n\
                   the work completes. Follow it with `orbit run show <RUN_ID>`.\n\
                   Details: the orbit-orchestrate skill, references/orchestration.md."
@@ -66,9 +70,9 @@ pub struct ShipCommand {
     /// Treats machine.worker_containment as strict for this invocation.
     #[arg(long)]
     pub strict_worker_containment: bool,
-    /// Start the named tasks now even if their scheduled start (`not_before`)
-    /// is still ahead. Records a `schedule_overridden` history event.
-    #[arg(long, requires = "task_ids")]
+    /// Accepted for compatibility and has no effect: shipping named tasks
+    /// always starts them, even before their scheduled time.
+    #[arg(long, hide = true, requires = "task_ids")]
     pub ignore_schedule: bool,
     /// Token for this workspace's exclusive claim, when another operator holds
     /// one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.
@@ -106,7 +110,9 @@ impl Execute for ShipCommand {
             trigger: orbit_types::workflow::JobRunTrigger::cli(),
             strict_containment: self.strict_worker_containment,
             review: self.review,
-            ignore_schedule: self.ignore_schedule,
+            // Naming tasks is the operator's override of the drain's
+            // readiness gates; the run's task history records which.
+            operator_override: true,
         })?;
         let run = WorkflowDispatchResult {
             workflow_alias: SHIP_WORKFLOW,

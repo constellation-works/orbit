@@ -212,7 +212,8 @@ pub(super) fn inherited_only_epic_root_exclusion(
 }
 
 /// The one complexity-admission rule, shared by automatic backlog selection,
-/// explicit ship selection, and the readiness diagnostic that reports their
+/// named-task selection (which an operator's explicit ship overrides; see
+/// `operator_override`), and the readiness diagnostic that reports their
 /// exclusions.
 ///
 /// An implementation lane needs a complexity assessment to size the work it is

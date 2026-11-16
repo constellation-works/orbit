@@ -78,7 +78,7 @@ impl OrbitRuntime {
             }
         }
         // A `backlog` task scheduled ahead is started by no dispatcher until
-        // its time, unless an operator's `--ignore-schedule` override names
+        // its time, unless an operator's explicit-ship override names
         // that time. This one check covers explicit ship, the gate's dispatch
         // re-check and worktree admission.
         if honour_schedule && let Some(hold) = self.schedule_hold(&task)? {

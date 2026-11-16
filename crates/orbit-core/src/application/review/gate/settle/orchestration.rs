@@ -24,7 +24,7 @@ use crate::application::review::gate::context::GateContext;
 use crate::application::review::gate::host_gates::admitted_host_gates;
 use crate::application::review::gate::judgement::{Judgement, repair_author_label, write_artifact};
 use crate::application::review::gate::owed::{
-    defers_linux_codeql, owed_evidence, owed_hold_received, split_owner_owed,
+    BubblewrapReach, defers_linux_codeql, owed_evidence, owed_hold_received, split_owner_owed,
 };
 use crate::application::review::gate::release::release_review_attempt;
 
@@ -387,8 +387,19 @@ fn settle(
         None => {
             let mut owed = owed_evidence(runtime, context, reviewed.commits.iter().chain(&repair))?;
             // [ORB-24656] A Bubblewrap deferral in a required pass is owed
-            // host evidence even when the reviewer named none.
-            for synthesized in judgement.synthesized_bubblewrap_requirements(&owed) {
+            // host evidence even when the reviewer named none, [ORB-25096]
+            // unless the candidate cannot reach the deferred test.
+            let reach = if judgement.has_bubblewrap_deferral() {
+                BubblewrapReach::of_candidate(
+                    &context.workspace_path,
+                    &reviewed.base.commit,
+                    &final_candidate.commit,
+                    reviewed.commits.iter().chain(&repair),
+                )?
+            } else {
+                BubblewrapReach::everything()
+            };
+            for synthesized in judgement.synthesized_bubblewrap_requirements(&owed, &reach) {
                 if !owed.iter().any(|required| {
                     required.artifact == synthesized.artifact
                         || (required.kind == synthesized.kind

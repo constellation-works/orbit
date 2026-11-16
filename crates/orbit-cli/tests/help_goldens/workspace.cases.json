@@ -1,0 +1,4 @@
+[
+  {"argv": ["workspace"], "golden": "workspace/root.txt"},
+  {"argv": ["workspace", "rebind"], "golden": "workspace/rebind.txt"}
+]

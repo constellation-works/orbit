@@ -11,7 +11,7 @@ use orbit_types::task::{
     DefectSeverity, RegressionClassification, RegressionEscape, RegressionNature, SeveritySource,
     TaskRelation, TaskRelationType, TaskType,
 };
-use orbit_types::workflow::validate;
+use orbit_types::workflow::{CommitType, compose_subject, validate, validate_subject};
 use serde_json::json;
 
 use super::git_commit;
@@ -343,4 +343,30 @@ fn squash_with_trailers_only_body_keeps_trailer_values_byte_identical() {
         "trailer value byte-identical after prose: {}",
         message.body
     );
+}
+
+#[test]
+fn composed_subject_sanitizes_literal_ellipsis_and_bracketed_lists() {
+    for (summary, expected) in [
+        (
+            "Fix the flaky … retry path",
+            "fix: Fix the flaky ... retry path [ORB-1]",
+        ),
+        (
+            "Handle [alpha, beta] marker cases",
+            "fix: Handle [alpha; beta] marker cases [ORB-1]",
+        ),
+        (
+            "Handle [alpha, [beta], gamma] marker cases",
+            "fix: Handle [alpha; [beta]; gamma] marker cases [ORB-1]",
+        ),
+        (
+            "Fix the ordinary retry path",
+            "fix: Fix the ordinary retry path [ORB-1]",
+        ),
+    ] {
+        let composed = compose_subject(CommitType::Fix, summary, &["ORB-1"], None);
+        assert_eq!(composed.subject, expected);
+        validate_subject(&composed.subject).expect("composed subject meets the standard");
+    }
 }

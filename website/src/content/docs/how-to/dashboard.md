@@ -240,6 +240,27 @@ orbit task requeue "$TASK_ID" --reason "candidate is stale" --discard-candidate
 orbit task settle-merged "$TASK_ID"
 ```
 
+### Waive readiness
+
+A backlog task with readiness gaps (no context files, or unassessed
+complexity) shows **Waive readiness** in Readiness. Confirm it to add the
+`readiness-waived` tag: the drain then admits the task like ready work. A task
+with no context files holds no file lock, so it no longer waits for the pilot
+or for an exclusive slot and may run beside other work; a task with declared
+context files keeps its file lock protection while waiving only the complexity
+gate. Only an operator can add the tag, and a new task cannot be filed with it.
+Task history records `readiness_waived` with who waived it and which gaps.
+
+Readiness then shows who waived it and **Remove waiver**, which removes the tag
+and records `readiness_waiver_removed`; the gaps hold the task again. The
+waiver does not lift waits that are not readiness gaps: host OS, required
+labels, the browser kit for `ui` work, a human-crew assignment, dependencies or
+another task's file lock.
+
+A task waiting only on the empty-context rule reads **Waiting, other ·
+awaiting footprint** while the pilot may still prepare it, or **awaiting
+exclusive slot** while it waits to run alone.
+
 ### Skip pilot in Readiness
 
 A backlog task held by a stale pilot assessment, or by an ordinary pilot

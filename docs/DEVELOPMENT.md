@@ -915,26 +915,33 @@ Detached-worker tests use `tests/support/workflow_gate.rs` to hold a step at a s
 
 A managed lane exports Orbit routing and authority: `ORBIT_REGISTRY_ROOT`, `ORBIT_WORKSPACE`, `ORBIT_ROOT`, `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_TASK_ID` and about two dozen more. Unsetting a few of them, or overriding only `HOME`, still lets a dev binary resolve the live global registry. Run from a run worktree with the real home, a candidate build also opens the host's primary workspace `.orbit` and global store, and opening them applies the candidate's pending layout and schema migrations: a read-only command or `web serve` is enough. Once they advance, the installed binary is refused on that host. Orbit refuses a breaking migration from a build that is not the installed orbit ([upgrades runbook](runbooks/upgrades.md#a-build-that-is-not-the-installed-orbit)), but that guard is a backstop for hosts with an installed binary, not isolation. Run every candidate command, reads and `web serve` included, against a disposable home and its own workspace: clear the whole environment and point `HOME` at a disposable directory.
 
-Workspace selection depends on the working directory, not only on `HOME`. Without an explicit root, `crates/orbit-runtime/src/resolve.rs` can select the main checkout's `.orbit/` from a linked worktree or discover an ancestor workspace by walking up. Changing `HOME` does not stop linked-worktree discovery. A home under a managed checkout's `.orbit/tmp/` therefore does not isolate a command run inside it: even a read-only command can open the primary checkout's live state. An explicit `--root` takes precedence over both discovery paths and selects the registry root too. The wrapper below supplies it to every candidate command, and every command runs from an independent disposable directory outside the checkout. `HOME` also remains disposable for any home-relative files.
+Workspace selection depends on the working directory, not only on `HOME`. Without an explicit root, `crates/orbit-runtime/src/resolve.rs` can select the main checkout's `.orbit/` from a linked worktree or discover an ancestor workspace by walking up. Changing `HOME` does not stop linked-worktree discovery. A home under a managed checkout's `.orbit/tmp/` therefore does not isolate a command run inside it: even a read-only command can open the primary checkout's live state. An explicit `--root` takes precedence over both discovery paths and selects the registry root too. The wrapper below supplies it to every candidate command, and every command runs from an independent disposable directory that is its own Git repository under the run's `.orbit/tmp/`. `HOME` also remains disposable for any home-relative files.
 
 Run the steps below as one shell session, from the managed checkout:
 
 ```bash
 CHECKOUT="$(git rev-parse --show-toplevel)"
 ORBIT_BIN="$CHECKOUT/target/debug/orbit"   # cargo build -p orbit-cli --bin orbit --locked
+mkdir -p "$CHECKOUT/.orbit/tmp"
 QA_BASE="$(mktemp -d "$CHECKOUT/.orbit/tmp/manual-qa.XXXXXX")"
 QA_HOME="$QA_BASE/home"
-QA_REPO="$(mktemp -d /tmp/orbit-qa-repo.XXXXXX)"
-QA_CWD="$(mktemp -d /tmp/orbit-qa-cwd.XXXXXX)"
-mkdir -p "$QA_HOME"
+QA_REPO="$QA_BASE/repo"
+QA_CWD="$QA_BASE/cwd"
+mkdir -p "$QA_HOME" "$QA_REPO" "$QA_CWD"
 qa() { env -i PATH=/usr/bin:/bin HOME="$QA_HOME" "$ORBIT_BIN" --root "$QA_REPO/.orbit" "$@"; }
+
+# Make each scratch directory its own Git repository, so linked-worktree discovery and the
+# uninitialized ancestor walk stop there instead of reaching the checkout (ORB-22643).
+for dir in "$QA_REPO" "$QA_CWD"; do
+  env -i PATH=/usr/bin:/bin HOME="$QA_HOME" git -C "$dir" init -q
+done
 
 # Mint the scratch root's machine identity first: `workspace init` does not create one,
 # and `host list` and the dashboard's /api/hosts refuse until `orbit init` has run.
 # Run it from QA_CWD, outside QA_REPO, so QA_REPO stays free of Orbit state.
 (cd "$QA_CWD" && qa init --non-interactive --machine-name manual-qa --task-prefix MQA)
 
-# Initialize the workspace; no Git repository is required.
+# Initialize the workspace in the scratch repository.
 cd "$QA_REPO"
 qa workspace init --name manual-qa
 
@@ -949,14 +956,15 @@ qa host list --format json
 # Run it in the foreground and stop it with Ctrl-C; it must exit before cleanup.
 qa web serve --port 0 --no-open
 
-# Cleanup, once the server has exited.
+# Cleanup: once the server has exited, see the managed-lane rule below.
 cd "$CHECKOUT"
-rm -rf -- "${QA_BASE:?}" "${QA_REPO:?}" "${QA_CWD:?}"
 ```
 
 With this explicit-root recipe, `global_root`, `shared_root` and `local_root` must all print `$QA_REPO/.orbit`; the real `~/.orbit` must never appear. `host list` must succeed rather than report a missing `[machine]` identity. If any check fails or prints another path, stop before running another command. The workspace must report `$QA_REPO` as its checkout. The scratch registry's workspace list must contain only `manual-qa`, with its checkout under `$QA_REPO`; no live workspace identity may appear. Do not add `--confirm` until those checks match. Preview a destructive command first, then confirm it with the same `qa …` wrapper. Stderr warnings such as "no actor identity resolved" are expected in a cleared environment.
 
-`orbit init` mints the machine identity in the scratch root's global `config.toml` (`$QA_REPO/.orbit` under `--root`); `workspace init` does not. The `qa init` step passes `--non-interactive` with an explicit `--machine-name` and `--task-prefix`, so it never prompts. It runs from `QA_CWD`, not `QA_REPO`: do not run any other Orbit command in `QA_REPO` before `workspace init`. The first such command writes a `.orbit/config.yaml` with a generated workspace identity, and `workspace init` then refuses with an identity conflict. Keep `QA_REPO` outside every checkout; the recipe uses `/tmp` explicitly so an inherited `TMPDIR` inside the checkout cannot redirect it. `QA_BASE` stays under `.orbit/tmp/`, outside Bubblewrap's `/tmp` overlay, as the fixtures' homes are. Every candidate command uses the cleared environment and explicit root in `qa`. Delete `QA_BASE`, `QA_REPO` and `QA_CWD` when the QA is finished, after the server has exited.
+`orbit init` mints the machine identity in the scratch root's global `config.toml` (`$QA_REPO/.orbit` under `--root`); `workspace init` does not. The `qa init` step passes `--non-interactive` with an explicit `--machine-name` and `--task-prefix`, so it never prompts. It runs from `QA_CWD`, not `QA_REPO`: do not run any other Orbit command in `QA_REPO` before `workspace init`. The first such command writes a `.orbit/config.yaml` with a generated workspace identity, and `workspace init` then refuses with an identity conflict. `QA_BASE`, `QA_HOME`, `QA_REPO` and `QA_CWD` all stay under the run's `.orbit/tmp/`, the only scratch location the implement activity allows (never `/tmp`), and outside Bubblewrap's `/tmp` overlay, as the fixtures' homes are. `mktemp` takes that explicit path, so an inherited `TMPDIR` cannot redirect it. Every candidate command uses the cleared environment and explicit root in `qa`. `--root` is resolved before every discovery step, so `qa` commands resolve `$QA_REPO/.orbit` from any working directory. The `QA_REPO` and `QA_CWD` Git repositories also stop the linked-worktree and uninitialized ancestor walks. The initialized-only lookup (`RequireInitialized` in [`resolve.rs`](../crates/orbit-runtime/src/resolve.rs)) walks past a Git boundary, so a command run without `--root` from these directories could reach the checkout's `.orbit/`. The recipe runs none.
+
+Cleanup: once the QA is finished and the server has exited, an operator shell deletes `QA_BASE` with `rm -rf -- "${QA_BASE:?}"`, which removes `QA_REPO` and `QA_CWD` with it. A managed lane must not run `rm -rf`: its cleanup rule forbids raw removal. `QA_BASE` is ignored scratch under the run's `.orbit/tmp/`, which the lane clears with the worktree, so the lane needs no further step.
 
 ## Testing & Coverage
 

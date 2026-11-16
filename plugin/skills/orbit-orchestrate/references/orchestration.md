@@ -42,6 +42,20 @@ An explicit task ID must be in `backlog` or `in-progress`: shipping a `blocked`,
 so return a blocked task to the backlog (`orbit task update <id> --status backlog`)
 before shipping it again.
 
+Readiness gates and lock waits are drain policy. An operator's explicit ship
+of named tasks (`orbit run ship <id>` or the dashboard's Ship) overrides them
+and dispatches: a pending `not_before`, unassessed complexity, no
+`context_files`, and context locks another in-flight task or reservation holds
+(its gate takes a reservation holding no files and edits beside them). Once
+the task is `in-progress`, its own locks hold against the drain as usual. The
+task's history records a `readiness_overridden` event naming the gates and the
+lock holders it overrode. It still refuses a task this host cannot run (host
+OS, `requires_labels`, a `ui` task without a verified browser kit), a
+human-crew task, a task a live run, execution claim or task-pilot preparation
+holds, an inherited-only epic root, a task-pilot finding, and an overlap with
+a pull follower's live execution claim. `orbit.workflow` action `ship` does
+not override readiness.
+
 `run auto` drains backlog leaf tasks for a bounded window of at most 24 hours.
 The window bounds only the *start* of new work — a task already shipping when
 it expires still finishes.
@@ -488,11 +502,12 @@ Two of its answers separate contention from capacity:
   takes the task's own footprint locks, waiting while another task holds them,
   so two writers never share a file.
 - `awaiting_footprint` and `awaiting_exclusive_slot` mean the task declares
-  no `context_files` and has no `no-diff-expected` tag in a run with more than
-  one slot. It would hold no file lock, so it waits for the task pilot, then
-  for a slot with nothing else in flight; `detail` names the
-  deadline and the fix. A `conflict_deferred` whose `provenance` is
-  `unknown_footprint` is blocked by a running task with no footprint, and
+  no `context_files`, has no `no-diff-expected` tag and no operator
+  `readiness-waived` tag, in a run with more than one slot. It would hold no
+  file lock, so it waits for the task pilot, then for a slot with nothing else
+  in flight; `detail` names the deadline and the fix. A `conflict_deferred`
+  whose `provenance` is `unknown_footprint` is blocked by a running task with
+  no footprint, and
   `exclusive_reservation` by such a task waiting to go alone. See
   [Prepare selectors](#prepare-selectors-before-dispatching-under-traffic).
 - `capacity.occupancy` breaks the occupied slots down by what each is doing —
@@ -518,12 +533,15 @@ set selectors, then promote. On 2026-10-10 three tasks filed straight into a
 live four-slot drain's backlog with no selectors were admitted together and
 all edited the website's then-shared stylesheet; two of the runs were cancelled.
 A drain or ship with more than one slot now treats such a task (no
-`context_files`, no `no-diff-expected` tag) as a whole-tree footprint. While
-an enabled task-pilot routine this host owns would still prepare it, the task
-waits (`awaiting_footprint`). After that, or once the pilot has assessed it
-and left it empty, it starts only when no other leaf is in flight
-(`awaiting_exclusive_slot`) and, while it runs, no other editing work is
-admitted. A single-slot drain and `orbit run ship <id>` admit it as before.
+`context_files`, no `no-diff-expected` tag, no operator `readiness-waived` tag)
+as a whole-tree footprint. While an enabled task-pilot routine this host owns
+would still prepare it, the task waits (`awaiting_footprint`). After that, or
+once the pilot has assessed it and left it empty, it starts only when no other
+leaf is in flight (`awaiting_exclusive_slot`) and, while it runs, no other
+editing work is admitted. A single-slot drain and `orbit run ship <id>` admit
+it as before. A task an operator tagged `readiness-waived` skips this: the
+drain admits it like ready work, beside other editing work, with no file lock
+and no whole-tree reservation.
 
 Do **not** fill them inline. Use `orbit run task-pilot`: it audits tasks
 read-only in bounded partitions, and its apply step persists only selectors it

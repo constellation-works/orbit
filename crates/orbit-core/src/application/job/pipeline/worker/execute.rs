@@ -8,6 +8,14 @@ impl OrbitRuntime {
         // [ORB-18166] Before anything can be killed mid-run, so a terminating
         // signal's sender reaches the supervisor's exit record.
         super::exit::capture_terminating_signal_senders();
+        let lifetime =
+            crate::application::job::run::worker_exit::lifecycle::WorkerLifetime::enter(run_id);
+        let outcome = self.execute_pipeline_worker_body(run_id);
+        lifetime.record_return(outcome.as_ref().err());
+        outcome
+    }
+
+    fn execute_pipeline_worker_body(&self, run_id: &str) -> Result<(), OrbitError> {
         // A detached worker can outlive its submitting fixture or removed
         // checkout even while blocked inside a step, not only while polling.
         let _cwd_guard = super::cwd::WorkerCwdGuard::start(run_id)?;

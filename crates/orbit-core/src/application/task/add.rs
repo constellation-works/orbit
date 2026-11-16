@@ -216,6 +216,7 @@ impl OrbitRuntime {
 
         let normalized_tags = normalize_task_tags(params.tags.clone());
         validate_os_tags(&normalized_tags)?;
+        super::readiness_waiver::refuse_filed_readiness_waiver(&normalized_tags)?;
         // A label requirement no registered serving host carries is refused
         // before anything is stored, naming the labels and the known sets.
         let requires_labels =

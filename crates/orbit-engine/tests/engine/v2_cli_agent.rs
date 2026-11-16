@@ -1446,7 +1446,7 @@ fn run_image_dispatch_on_thread(
     activity_name: String,
     marker: PathBuf,
 ) -> Result<ThreadedImageReport, Box<dyn std::error::Error>> {
-    let (tx, rx) = std::sync::mpsc::channel::<ThreadedImageReport>();
+    let (tx, rx) = std::sync::mpsc::channel::<Result<ThreadedImageReport, String>>();
     std::thread::spawn(move || {
         let started = Instant::now();
         let tmp_audit = tempfile::tempdir().expect("audit tempdir");
@@ -1475,7 +1475,15 @@ fn run_image_dispatch_on_thread(
             host: Some(&host),
         });
         let elapsed = started.elapsed();
-        let events = events_snapshot(&store, &run_id).unwrap_or_default();
+        // A failed audit read must not read as "no invocation started": the
+        // FIFO tests assert that none did.
+        let events = match events_snapshot(&store, &run_id) {
+            Ok(events) => events,
+            Err(error) => {
+                let _ = tx.send(Err(format!("audit snapshot for {run_id} failed: {error}")));
+                return;
+            }
+        };
         let invocation_started = events
             .iter()
             .any(|event| event.envelope.event_type == "cli.invocation.started");
@@ -1483,16 +1491,16 @@ fn run_image_dispatch_on_thread(
             Ok(outcome) => (None, outcome.message.clone()),
             Err(error) => (Some(error.to_string()), None),
         };
-        let _ = tx.send(ThreadedImageReport {
+        let _ = tx.send(Ok(ThreadedImageReport {
             error_display,
             outcome_message,
             marker_spawned: marker.exists(),
             invocation_started,
             elapsed,
-        });
+        }));
     });
     match rx.recv_timeout(Duration::from_secs(20)) {
-        Ok(report) => Ok(report),
+        Ok(report) => report.map_err(Into::into),
         Err(_) => Err(
             "image-input staging blocked: no dispatch outcome within 20s (a FIFO must be \
              refused without waiting for a writer)"

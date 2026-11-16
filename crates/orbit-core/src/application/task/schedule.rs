@@ -4,9 +4,9 @@
 //! Every dispatcher reads the hold through [`OrbitRuntime::schedule_hold`] or
 //! [`schedule_hold_in`]: the auto drain's backlog snapshot, the owner's pull
 //! admission, and the workflow-entry check the explicit ship, the gate's
-//! dispatch re-check and worktree admission share. An operator's CLI
-//! `--ignore-schedule` records a `schedule_overridden` history event for the
-//! scheduled time, which every one of them honours.
+//! dispatch re-check and worktree admission share. An operator's explicit
+//! ship (CLI or dashboard) records a `schedule_overridden` history event for
+//! the scheduled time, which every one of them honours.
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;

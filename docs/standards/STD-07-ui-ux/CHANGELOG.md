@@ -39,3 +39,11 @@ removed or changed in meaning.
   does, including consequences the label does not show, and why it is disabled), and R32
   names a button's effect as detail a tooltip may add. From the owner's direction in
   session f09993e5 (F2026-11-304).
+- **v10 (2026-11-15):** adds R42 (a control is as wide as its content: a select fits its
+  longest option, capped by the space its row leaves, and shrinks no further than the part
+  that tells options apart). From the owner's drain-target select question in session
+  f09993e5 (ORB-25074, F2026-11-310).
+- **v11 (2026-11-15):** adds R43 (when side-by-side regions collapse into one column, the
+  page's primary region stays shown; a secondary region replaces it only when the operator
+  navigated to it at that width, and a selection inside it does not count). From the
+  owner's Tasks/Drain collapse correction in session f09993e5 (ORB-25093, F2026-11-311).

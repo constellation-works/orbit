@@ -1,5 +1,5 @@
 //! Unchanged-head CI retries, reserved before external mutation.
-use crate::task::TaskHistoryEntry;
+use crate::task::{TaskDecision, TaskHistoryEntry};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -39,6 +39,75 @@ pub struct CiRerunPlan {
     pub failed_jobs: Vec<Value>,
     /// Source blobs, policy, checks, run and complete listing used for admission.
     pub authentication: Value,
+}
+
+/// Longest `ci_check_rerun_reserved` note, in characters.
+const CI_RERUN_RESERVED_NOTE_MAX_CHARS: usize = 200;
+
+impl CiRerunPlan {
+    /// The one-line note people read on the `ci_check_rerun_reserved`
+    /// event, at most 200 characters. The complete plan rides on the
+    /// entry's [`TaskDecision::CiRerunReserved`].
+    pub fn reservation_note(&self) -> String {
+        let one_line = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut checks: Vec<String> = Vec::new();
+        let mut classes: Vec<String> = Vec::new();
+        for root in &self.roots {
+            let check = format!("'{}'", one_line(&root.check));
+            if !checks.contains(&check) {
+                checks.push(check);
+            }
+            let class = one_line(&root.classification);
+            if !classes.contains(&class) {
+                classes.push(class);
+            }
+        }
+        let tail = format!(
+            " on PR #{} run {} attempt {} ({})",
+            one_line(&self.pr_number),
+            self.run_id,
+            self.run_attempt,
+            classes.join(", ")
+        );
+        let mut note = format!("CI rerun reserved: {}{tail}", checks.join(", "));
+        if note.chars().count() > CI_RERUN_RESERVED_NOTE_MAX_CHARS && checks.len() > 1 {
+            note = format!("CI rerun reserved: {} checks{tail}", checks.len());
+        }
+        if note.chars().count() > CI_RERUN_RESERVED_NOTE_MAX_CHARS {
+            note = note
+                .chars()
+                .take(CI_RERUN_RESERVED_NOTE_MAX_CHARS - 1)
+                .chain(std::iter::once('…'))
+                .collect();
+        }
+        note
+    }
+
+    /// The history entry recording this plan's reservation: a one-line
+    /// note and the complete plan as its typed decision.
+    pub fn reservation_entry(&self, at: chrono::DateTime<chrono::Utc>) -> TaskHistoryEntry {
+        TaskHistoryEntry::new(at, "system", CI_RERUN_RESERVED_EVENT)
+            .with_note(Some(self.reservation_note()))
+            .with_decision(Some(TaskDecision::CiRerunReserved(Box::new(self.clone()))))
+    }
+
+    /// The plan a `ci_check_rerun_reserved` entry reserved. Reads the typed
+    /// decision; an entry with no decision was written before it and is read
+    /// from its JSON note. `None` for another event, a foreign decision or an
+    /// unreadable legacy note.
+    pub fn from_reservation_entry(entry: &TaskHistoryEntry) -> Option<Self> {
+        if entry.event != CI_RERUN_RESERVED_EVENT {
+            return None;
+        }
+        match &entry.decision {
+            Some(TaskDecision::CiRerunReserved(plan)) => Some(plan.as_ref().clone()),
+            Some(_) => None,
+            None => entry
+                .note
+                .as_deref()
+                .and_then(|note| serde_json::from_str::<Self>(note).ok()),
+        }
+    }
 }
 
 /// A durable hold before another infrastructure retry is admitted.
@@ -631,11 +700,7 @@ pub fn decide_ci_rerun_with_policy(
     let mut legacy_spent = false;
     for entry in history {
         if entry.event == CI_RERUN_RESERVED_EVENT {
-            let prior = entry
-                .note
-                .as_deref()
-                .and_then(|note| serde_json::from_str::<CiRerunPlan>(note).ok());
-            let Some(prior) = prior else {
+            let Some(prior) = CiRerunPlan::from_reservation_entry(entry) else {
                 return CiRerunAdmission::Refused("unreadable CI retry reservation".into());
             };
             if prior.schema_version != 1 {

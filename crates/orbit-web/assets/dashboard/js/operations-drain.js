@@ -159,9 +159,9 @@ function hostFleetFailure(row) {
   return Boolean(row?.host && row.error && !row.workspace_id && !row.pending);
 }
 // One option per workspace-host pair, so a pair with no replica cannot be
-// formed. A select shows the head of its text and clips the tail, so the
-// workspace name is the part shortened (the group label and the title carry it
-// in full) and the host and role stay visible.
+// formed. The workspace name is the part shortened (the group label and the
+// title carry it in full), and the select clips the head of its text, so the
+// host and role stay visible.
 const DRAIN_TARGET_SEPARATOR = "\u001f";
 const DRAIN_TARGET_NAME_CHARS = 18;
 function drainTargetValue(workspaceId, host) {
@@ -171,9 +171,81 @@ function parseDrainTarget(value) {
   const at = String(value || "").indexOf(DRAIN_TARGET_SEPARATOR);
   return at < 0 ? null : { workspaceId: value.slice(0, at), host: value.slice(at + 1) };
 }
+// A name that starts with a digit or punctuation needs a leading left-to-right
+// mark, or the bidi algorithm in the right-to-left select moves those characters
+// to the visual end (in the option text and in the group label). A letter already
+// reads correctly, and a leading mark stops type-ahead from matching the first
+// character, so only the names that need it get one.
+function drainTargetName(name) {
+  return /^\p{L}/u.test(name) ? name : "\u200E" + name;
+}
 function drainTargetText(name, host, role) {
   const short = name.length > DRAIN_TARGET_NAME_CHARS ? `${name.slice(0, DRAIN_TARGET_NAME_CHARS - 1)}…` : name;
-  return `${short} · ${host} (${role})`;
+  // The closing mark keeps the right-to-left select from moving the ")" when
+  // the head of the text is clipped.
+  return `${drainTargetName(short)} · ${host} (${role})\u200E`;
+}
+// The header row keeps every member at full size while it fits (STD-07 R39).
+// A fixed breakpoint cannot tell fitting from overflowing rows, so the row's
+// natural width (title, phase with its word, select at its floor) is measured
+// against the header: first the phase reduces to its dot, then the title goes.
+// The select has already given up its spare width by then.
+let drainHeadFitWired = false;
+function drainTargetFloorWidth(select) {
+  let tail = 0;
+  const style = getComputedStyle(select);
+  const canvas = drainTargetFloorWidth.canvas || (drainTargetFloorWidth.canvas = document.createElement("canvas"));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.font = style.font;
+  for (const option of select.options) {
+    const { host, role } = option.dataset;
+    if (host) tail = Math.max(tail, ctx.measureText(`\u2026${host} (${role})`).width);
+  }
+  if (!tail) return null;
+  const chrome = ["paddingLeft", "paddingRight", "borderLeftWidth", "borderRightWidth"]
+    .reduce((sum, key) => sum + (parseFloat(style[key]) || 0), 0);
+  return Math.ceil(tail + chrome);
+}
+function setDrainTargetFloor(select) {
+  const floor = drainTargetFloorWidth(select);
+  if (floor) select.style.setProperty("--drain-target-floor", `${floor}px`);
+  else select.style.removeProperty("--drain-target-floor");
+}
+function drainHeadNaturalWidth(header) {
+  const gap = parseFloat(getComputedStyle(header).columnGap) || 0;
+  const members = [...header.children].filter(node => node.id !== "auto-drain-target" && node.offsetWidth > 1);
+  const select = $("auto-drain-target");
+  let width = members.reduce((sum, node) => sum + node.offsetWidth, 0);
+  let count = members.length;
+  if (select) { width += parseFloat(getComputedStyle(select).minWidth) || 0; count += 1; }
+  return width + gap * Math.max(0, count - 1);
+}
+function fitDrainHeader() {
+  const header = document.querySelector("#auto-drain-panel > header");
+  if (!header || !header.clientWidth) return;
+  const style = getComputedStyle(header);
+  const room = header.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
+  header.classList.remove("drain-head-dot", "drain-head-notitle", "drain-head-tight");
+  if (drainHeadNaturalWidth(header) <= room) return;
+  header.classList.add("drain-head-dot");
+  if (drainHeadNaturalWidth(header) <= room) return;
+  header.classList.add("drain-head-notitle");
+  if (drainHeadNaturalWidth(header) > room) header.classList.add("drain-head-tight");
+}
+function wireDrainHeaderFit() {
+  if (drainHeadFitWired) return;
+  const header = document.querySelector("#auto-drain-panel > header");
+  if (!header) return;
+  drainHeadFitWired = true;
+  new ResizeObserver(fitDrainHeader).observe(header);
+  // The floor is measured in the select's font, so it is taken again once the
+  // web font has loaded.
+  document.fonts?.ready.then(() => {
+    const select = $("auto-drain-target");
+    if (select) setDrainTargetFloor(select);
+    fitDrainHeader();
+  });
 }
 // The Drain target select shared by All workspaces (every owned workspace, as
 // groups) and an owner's concrete board (its one workspace). One listener
@@ -197,22 +269,26 @@ function paintDrainTargetSelect(groups, selected) {
   if (select.dataset.targets !== signature) {
     select.replaceChildren(...shown.map(group => {
       const node = el("optgroup");
-      node.label = group.name;
+      node.label = drainTargetName(group.name);
       node.append(...group.hosts.map(({ host, role }) => {
         const option = el("option", { text: drainTargetText(group.name, host, role) });
         option.value = drainTargetValue(group.id, host);
         option.dataset.role = role;
+        option.dataset.host = host;
         option.title = `${group.name} · ${host} (${role})`;
         return option;
       }));
       return node;
     }));
     select.dataset.targets = signature;
+    setDrainTargetFloor(select);
   }
   select.value = selected ? drainTargetValue(selected.workspaceId, selected.host) : "";
   const option = select.selectedOptions[0];
   select.dataset.host = selected?.host || "";
   select.title = option?.value ? `Drain target: ${option.title}` : "Drain target";
+  wireDrainHeaderFit();
+  fitDrainHeader();
 }
 function onDrainTargetChanged({ workspaceId, host }, role) {
   if (isAggregateView()) {
@@ -273,6 +349,7 @@ function paintConcreteHostSelect(fleet, workspace) {
   const ordered = (entries || []).map(entry => entry.host);
   if (!ordered.length) {
     $("auto-drain-target")?.remove();
+    fitDrainHeader();
     return null;
   }
   const own = boardHostName();
@@ -325,6 +402,8 @@ function renderAutoDrainHead(payload) {
     header.title = summary;
     if (pill && phaseText) { pill.setAttribute("aria-label", phaseText); pill.title = phaseText; }
   }
+  wireDrainHeaderFit();
+  fitDrainHeader();
   const stateKey = `${phase}:${phase === "winding_down" ? running : ""}`;
   if (announcedDrainState !== null && announcedDrainState !== stateKey && !holdDrainAnnouncement
       && !$('auto-drain-operation-feedback')?.matches(".pending, .success, .error")) {

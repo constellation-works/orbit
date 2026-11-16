@@ -129,8 +129,8 @@ an earliest start, not an exact time, and it doesn't approve proposed work or
 bypass dependencies. Dispatchers enforce the hold themselves, so it works
 without the scheduler clock.
 
-To start a held task early, run `orbit run ship <id> --ignore-schedule`. The
-override is recorded in the task's history. See the
+To start a held task early, ship it explicitly: `orbit run ship <id>` or the
+dashboard's Ship. The override is recorded in the task's history. See the
 [CLI reference](/reference/cli/#scheduled-tasks) for the schedule filters.
 
 ## Which to use

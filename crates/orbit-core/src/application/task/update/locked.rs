@@ -433,6 +433,14 @@ impl OrbitRuntime {
         if let Some(skip) = self.pilot_skip_history(&task, &params, &effective_label)? {
             append_history.push(skip);
         }
+        // Field validation admitted only an operator's waiver [ORB-25084].
+        if let Some(waiver) = super::super::readiness_waiver::readiness_waiver_history(
+            &task,
+            &params,
+            &effective_label,
+        ) {
+            append_history.push(waiver);
+        }
         if let Some(preserved) = backlog_preservation {
             // The `requeued` decision is written only with its preservation
             // record, exactly as `write_candidate_requeue` writes it.

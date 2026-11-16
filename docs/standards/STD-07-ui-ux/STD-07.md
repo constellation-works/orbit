@@ -4,7 +4,7 @@ title: UI and UX — consistent spacing, shared edges, one type scale, minimal w
 summary: Normative rules for every operator-facing screen (dashboards, web apps, sites, panels): sibling spacing and shared edges, layouts that never shift, one type scale, contrast and one meaning per colour, minimal words with helper text behind an info icon, tooltips only where they add something, no redundant or inert elements, answer-first data with honest charts, visible live state, responsive use of width, and turning each owner correction into a rule; follow it in any project that renders a UI.
 status: draft
 tags: [standard, ui, ux, design]
-version: 9
+version: 11
 created: 2026-11-09
 updated: 2026-11-15
 last_validated: 2026-11-15
@@ -202,6 +202,21 @@ gate that enforces it, [`exemplars.md`](exemplars.md) worked examples in Orbit, 
   measured from its content or derived from its real full-size width, never at a fixed
   breakpoint that also catches widths where it fits. The row never wraps and never scrolls
   sideways. A row of controls (chips, filters, buttons) follows R38 instead.
+- **R42.** A control's width MUST come from its content, not a fixed size. A select is as
+  wide as its longest option plus its arrow, and a button or chip as wide as its label. It
+  never grows past the space its row leaves once the other members have their full size.
+  Where the row does not fit, it shrinks as R39 says, but never so far that it clips the
+  part of its value that tells the options apart (such as the host in "workspace · host").
+  A select's width follows its whole option set, not the selected option, so changing the
+  selection moves nothing (R5). A field meant to fill its row, such as a search box, is
+  exempt.
+- **R43.** When regions shown side by side collapse into one column, the page's primary
+  region (the one its nav entry names, such as the task list on Tasks) MUST stay shown. A
+  secondary region (a dock, side panel or detail pane) replaces it only when the operator
+  navigated to that region at the collapsed width, through its nav entry or a link to it.
+  Choosing a tab or item inside a secondary region while both are visible is not such a
+  navigation. The secondary region keeps its selection for when it is reached, and widening
+  again shows both regions.
 
 ### Process
 

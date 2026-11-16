@@ -132,20 +132,26 @@ reduced to `at`, `by` and `message`. Drop the receipt ids (`operation_id`)
 that `orbit.task.show` adds to comments; a comment with any extra field is
 refused. `criteria_evidence` is an array of non-empty strings, one per
 acceptance criterion in order, never objects. Each `validation[]` entry
-flattens `command`, `outcome`, `role` and `log_artifact` as siblings; every
-required command's entry carries `outcome: "passed"` and `role: "required"`.
+flattens `command`, `outcome`, `role` and `log_artifact` as siblings.
 The role vocabulary is `required`, `expected_failure`, `excluded`,
 `superseded` and `diagnostic`; other values such as `acceptance` or `gate` are
 refused. The outcome vocabulary is `passed`, `failed`, `denied` and `not_run`;
 an `expected_failure` entry carries `outcome: "failed"`, never the role name as
 the outcome.
-The already-landed verifier requires exactly one passed `required` entry per
-`required_commands` command and refuses extra required commands. It also accepts
-additional `expected_failure` and `diagnostic` entries, without counting them
-as required coverage. Every accepted entry must reference a JSON log carrying
+The already-landed verifier takes the required commands from the workspace
+(`workflow.required_validation_commands`, or the owner's captured gates on a
+claimed leaf), not from the report's `required_commands`. When that set is
+empty, a report with an empty `required_commands` list and concrete evidence
+for every acceptance criterion is accepted. A command in the set is covered by
+any validation entry for that exact command whose outcome is `passed` and whose
+log exits 0, including an entry labelled `diagnostic`. A missing command is
+refused by name. Blanks or duplicates in `required_commands` are refused; an
+empty list is not. Every accepted entry must reference a JSON log carrying
 the report's exact `run_id`, `tested_head`, and `command`, an integer `exit_code`,
-and string `output`. Required checks must exit zero; expected failures must exit
-nonzero. Diagnostic outcomes and exit status do not determine acceptance.
+and string `output`. An entry labelled `required`, and any entry covering a
+workspace-required command, must exit zero; expected failures must exit
+nonzero. A diagnostic that does not cover a required command may record any
+integer exit and does not by itself decide acceptance.
 `excluded` and `superseded` entries are not accepted in already-landed evidence.
 If a required check or covering evidence is unavailable, record the blocker;
 do not claim a verified already-landed result.

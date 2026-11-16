@@ -64,6 +64,7 @@ pub(crate) use activity_tool_requirements::{
     unliftable_required_tool_error,
 };
 pub(in crate::application) use admission_port::JobAdmissionPort;
+pub(crate) use admission_port::OPERATOR_READINESS_OVERRIDE_INPUT;
 pub use agent::{AgentInvokeResult, agent_invoke_result};
 pub(in crate::application) use auto_concurrency_port::JobAutoConcurrencyPort;
 pub(in crate::application) use automation_port::JobAutomationPort;

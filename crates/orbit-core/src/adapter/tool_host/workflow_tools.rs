@@ -107,8 +107,9 @@ fn ship(
         // Strict worker containment is a CLI-only flag.
         strict_containment: false,
         review,
-        // The schedule override is a CLI-only operator flag.
-        ignore_schedule: false,
+        // Agents ship through this tool; only an operator's CLI or dashboard
+        // ship overrides the drain's readiness gates.
+        operator_override: false,
     })?;
     let mut shipped = json!({
         "workflow": "ship",

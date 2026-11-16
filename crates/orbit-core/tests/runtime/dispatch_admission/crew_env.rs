@@ -1,4 +1,5 @@
 use super::*;
+use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 
 const SOURCE: &str = "FIXTURE_CREW_READINESS_UNSET_SOURCE";
 
@@ -506,4 +507,102 @@ env = ["OPENAI_API_KEY={SOURCE}"]
             "mixed and recovered pull windows reach the owner"
         );
     }
+}
+
+#[test]
+fn quota_window_exclusion_of_pool_crews_files_no_env_repair_friction() {
+    if !isolated(
+        "dispatch_admission::crew_env::quota_window_exclusion_of_pool_crews_files_no_env_repair_friction",
+    ) {
+        return;
+    }
+    let config = r#"
+[workflow]
+default_crew = "sol"
+medium_complexity_crews = ["sol", "quota-alpha", "quota-beta"]
+[crews.sol]
+provider = "codex"
+model = "fixture-shared"
+[crews.quota-alpha]
+provider = "claude"
+model = "fixture-alpha"
+[crews.quota-beta]
+provider = "claude"
+model = "fixture-beta"
+"#;
+    let (_root, runtime, _) = configured_runtime(config, &["src/fixture.rs"]);
+    // One provider quota, exhausted until a known reset, limits both claude crews.
+    runtime
+        .record_provider_limit(&ProviderLimitObservation {
+            provider: "claude".into(),
+            account: None,
+            model: None,
+            window: Some("weekly".into()),
+            exhausted: true,
+            source: ProviderLimitSource::Event,
+            resets_at: Some(Utc::now() + chrono::Duration::days(1)),
+            used_percent: Some(98.0),
+            window_minutes: Some(10_080),
+            gating: true,
+            partial: false,
+            observed_at: Utc::now(),
+            run_id: None,
+            crew: None,
+            detail: String::new(),
+        })
+        .unwrap();
+    runtime
+        .add_task(TaskAddParams {
+            title: "Quota window exclusion fixture".into(),
+            description: "Reproduce a provider quota window excluding pool crews".into(),
+            acceptance_criteria: vec!["No env-repair friction is filed for the quota".into()],
+            plan: "Observe admission".into(),
+            complexity: TaskComplexity::Medium,
+            context_files: vec!["file:src/fixture.rs".into()],
+            crew: Some("quota-alpha".into()),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .unwrap();
+    let drain = running_run(
+        &runtime,
+        "workspace_auto_pipeline",
+        json!({"auto_crew_pools": runtime.workspace_complexity_crew_pools().unwrap()}),
+    );
+    classify(&runtime, &drain);
+    // Backdate the first observation so both streaks are sustained, without sleeping.
+    let mut state = runtime.read_run_state(&drain).unwrap().unwrap();
+    for streak in state.pull_drain.crew_pool_exclusions.values_mut() {
+        streak.since -= chrono::Duration::seconds(121);
+    }
+    runtime.write_run_state(&drain, &state).unwrap();
+    classify(&runtime, &drain);
+    let state = runtime.read_run_state(&drain).unwrap().unwrap();
+    for crew in ["quota-alpha", "quota-beta"] {
+        assert_eq!(
+            state.pull_drain.crew_pool_exclusions[crew].passes, 2,
+            "the quota window excludes {crew} on both passes"
+        );
+    }
+    assert_eq!(
+        state.pull_drain.pool_crew_exclusion_warnings().len(),
+        2,
+        "the run still reports both sustained quota exclusions"
+    );
+    let frictions = orbit_store::friction_store::FrictionStore::open(
+        runtime.sqlite_store().unwrap(),
+        runtime.workspace_id().unwrap(),
+        runtime.data_root().join("frictions"),
+    )
+    .unwrap();
+    let filed: Vec<String> = frictions
+        .list(&orbit_store::contracts::FrictionListFilter::default())
+        .unwrap()
+        .into_iter()
+        .map(|row| row.record.body)
+        .collect();
+    assert!(
+        filed.is_empty(),
+        "a provider quota window lifts at its reset, so it files no friction: {filed:?}"
+    );
 }

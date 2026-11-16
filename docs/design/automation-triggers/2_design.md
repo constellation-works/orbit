@@ -730,13 +730,19 @@ one slot waits for an enabled task-pilot routine this host owns to prepare
 such a task (`awaiting_footprint`, bounded by the trigger's
 `max_wait_minutes + deadline_minutes` from the task's last change), then runs
 it only alone (`awaiting_exclusive_slot`) [ORB-15191]. A pilot assessment that
-leaves the task without selectors ends the wait. A live pilot's preparation
+leaves the task without selectors ends the wait. An operator's `readiness-waived` tag
+waives the rule and the complexity gate: the task is admitted like ready work
+without the whole-tree reservation, holding no file lock unless it declares selectors, and counts as editing
+work in its wave ([decision](4_decisions.md#readiness-waived-is-an-operator-waiver-of-readiness-gaps))
+[ORB-25084]. A live pilot's preparation
 reservation or successful checkpoint still holds its tasks until that run
 settles.
 Local automatic admission rejects any
 still-unassessed task, including urgent security work, except
 one tagged exactly `no-diff-expected`, which is admitted without an assessment
-because an implementation lane sizes no diff for it [ORB-12118]; missing
+because an implementation lane sizes no diff for it [ORB-12118], and a backlog
+task an operator tagged `readiness-waived`, which is admitted with its
+configured or default crew [ORB-25084]; missing
 validation permission is a readiness blocker rather than a complexity or
 priority inference. The low/medium/hard examples in the activity contract are
 deterministic policy fixtures, not a claim about live-model accuracy.
@@ -892,6 +898,7 @@ to change; implementation scope and defaults still require approval.
   current head and recomputes freshness. An unavailable source comparison can
   still follow ordinary-failure handling.
 - [ORB-15191] — bounds how long multi-slot admission waits for a task pilot to prepare empty-context backlog work.
+- [ORB-25084] — lets an operator waive a backlog task's readiness gaps with the `readiness-waived` tag.
 - [ORB-11314] — designed the operation-mode presets for automated preparation and delivery; the mode concept was later removed.
 - [ORB-11316] — extended the operation-mode design with review timing and repair policy; the mode concept was later removed.
 - [ORB-21238] — let an operator skip a stale pilot with the `no-pilot` tag, which admission honors even when a receipt exists.

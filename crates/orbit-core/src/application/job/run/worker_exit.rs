@@ -18,15 +18,24 @@
 //! that row attributes to the host manager (`systemd`), with no recorded
 //! memory or task-limit breach, is a hold (`operator_stopped`) rather than
 //! `worker_terminated`.
+//!
+//! `lifecycle` also preserves entry, application return and reaping in the
+//! worker log independently of the store. Reconciliation quotes matching log
+//! receipts when the observer or its audit is lost, without treating those
+//! diagnostic receipts as settlement or timing authority.
+
+use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{AuditEventFilter, AuditEventStoreBackend};
-use orbit_types::workflow::{JobRun, JobRunState};
+use orbit_types::workflow::{JobRun, JobRunState, WORKER_PROVENANCE_SEPARATOR};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::worker_scope::WorkerScopeCgroup;
+
+pub(crate) mod lifecycle;
 
 /// The audit row a supervisor writes when it reaps its worker.
 pub(crate) const WORKER_EXIT_AUDIT: &str = "pipeline.worker.exited";
@@ -270,10 +279,21 @@ fn audit_arguments(
 pub(crate) fn reconciled_worker_exit_clause(
     audit_events: &dyn AuditEventStoreBackend,
     run: &JobRun,
+    logs_dir: &Path,
 ) -> Option<String> {
     let pid = run.pid?;
-    let clause = match recorded_worker_exit(audit_events, &run.run_id, pid) {
+    let provenance = lifecycle::worker_log_provenance(logs_dir, run);
+    let recorded_exit = recorded_worker_exit(audit_events, &run.run_id, pid);
+    let recovered_from_log = !matches!(&recorded_exit, Ok(Some(_)));
+    let clause = match recorded_exit {
         Ok(Some(exit)) => exit.describe(),
+        Ok(None) | Err(_)
+            if provenance
+                .as_ref()
+                .is_some_and(|record| record.reaped.is_some()) =>
+        {
+            "supervisor exit audit unavailable; reaped status retained in worker log".to_string()
+        }
         Ok(None) => {
             let scope = match recorded_worker_scope(audit_events, &run.run_id, pid) {
                 Ok(Some(scope)) => ScopeEvidence::read(&scope, true).describe(),
@@ -284,5 +304,19 @@ pub(crate) fn reconciled_worker_exit_clause(
         }
         Err(error) => format!("{NO_EXIT_OBSERVED}: exit records unreadable: {error}"),
     };
-    Some(format!("worker exit: {clause}"))
+    Some(match provenance {
+        Some(mut record) => {
+            if recovered_from_log && let Some(exit) = record.reaped {
+                record.description.push_str(&format!(
+                    "; {} (recovered from worker log; exit audit unavailable)",
+                    exit.describe()
+                ));
+            }
+            format!(
+                "worker exit: {clause}{WORKER_PROVENANCE_SEPARATOR}{}",
+                record.description
+            )
+        }
+        None => format!("worker exit: {clause}"),
+    })
 }

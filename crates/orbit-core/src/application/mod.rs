@@ -1,14 +1,23 @@
-//! Command implementations for all Orbit CLI subcommands.
+//! Domain operations the runtime exposes over one workspace and its host.
 //!
-//! Each sub-module (task, job, activity, skill, audit, tool, init)
-//! provides the data types and logic for one command group. Commands are
-//! executed via the `Execute` trait, which receives an `&OrbitRuntime` and
-//! produces an `OrbitError` on failure.
+//! Each submodule owns one operation group. [`crate::OrbitRuntime`] opens
+//! them; CLI, web, and command adapters call that surface. Process entry
+//! and root bootstrap live outside this module.
 //!
-//! The `init` module is special: it also provides `execute_without_runtime`
-//! for bootstrapping a new Orbit root before a runtime can be constructed.
-//! Default YAML assets (e.g., sample skills, config templates) are embedded
-//! at compile time via `include_str!` and seeded to disk on first `orbit init`.
+//! - Tasks, jobs, and delivery: `task`, `task_bundle`, `job`, `workflow`,
+//!   `landing`, `review`, `attention`, `notice`, `operator_input`.
+//! - Automation: `auto_tasks`, `routines`, `automation`, `workspace_auto`,
+//!   `sweep_filing`, `seeding_policy`.
+//! - Agents and runs: `agents`, `executor`, `agent_corpus`, `crew_memory`,
+//!   `evolution`, `experiment`, `resident`, `vision_probe`, `statistics`.
+//! - Plugins and skills: `plugin`, `skill`, `tool_name_migration`.
+//! - Workspace and host: `workspace`, `codebase`, `config`, `distributed`,
+//!   `pull_drain`, `host_labels`, `health`, `gc`, `change_watch`,
+//!   `managed_assets`.
+//! - Policy, search, and audit: `application_authority`, `audit_event`,
+//!   `contracts`, `admission`, `search`, `backlog_forecast`,
+//!   `tag_instructions`.
+//! - `test_support` is compiled only for tests.
 
 /// Audit identity used for system-initiated (non-agent) mutations.
 /// `pub` because the direct v2 activity runner moved to `orbit-cmd`

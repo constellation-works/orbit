@@ -649,6 +649,19 @@ finalizes first, it keeps the interruption even if the supervisor later
 records the `systemd` sender. Unknown senders, signals from other commands,
 and memory or task-limit breaches remain failures.
 
+Workers also write bounded, redacted lifecycle receipts to their existing
+`.worker.log`: entry time, process and parent start identities, entry scope,
+and application return or unwind (including a returned error). The supervisor
+writes its reaped status there before attempting the exit audit. Reconciliation
+reads bounded head and tail windows of that log and appends matching receipts
+and captured signal-sender evidence under `worker provenance:`. This keeps
+diagnostics available when the submitting process has exited or the audit write
+failed. Log evidence is diagnostic only; it does not change settlement state,
+failure accounting, or the finish-time rule. An application return is not a
+process exit. With neither a reap nor a caught signal, an abrupt kill or host
+loss still has no observed exit status; the entry receipt identifies the worker
+and its parent without inventing a cause.
+
 #### Rollout beside executable-generation-v1 processes
 
 Processes from builds that predate this contract admit by executable digest alone,

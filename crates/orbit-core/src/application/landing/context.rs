@@ -227,6 +227,7 @@ impl OrbitRuntime {
                 handoff_id: handoff_id.to_string(),
                 event: event.to_string(),
                 note: note.to_string(),
+                decision: None,
             },
         )?;
         Ok(())

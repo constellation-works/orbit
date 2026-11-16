@@ -333,6 +333,10 @@ impl RegisteredRuntimeFactory {
                 Some(inputs) if inputs.global_root == roots.global_root => inputs,
                 _ => RuntimeOpenInputs::read(&roots.global_root)?,
             };
+            crate::workspace_rebind::refuse_pending_checkout_rebind(
+                &roots.global_root,
+                &roots.shared_root,
+            )?;
             let selection = select_workspace_for_cwd_and_roots(&cwd, &roots, &inputs.registry)?;
             if host_fallback && selection.is_none() {
                 // A plugin inspection without a registered checkout has no
@@ -479,6 +483,10 @@ impl RegisteredRuntimeFactory {
     }
 
     pub fn open_resolved_roots(roots: OrbitRuntimeRoots) -> Result<OrbitRuntime, OrbitError> {
+        crate::workspace_rebind::refuse_pending_checkout_rebind(
+            &roots.global_root,
+            &roots.shared_root,
+        )?;
         let inputs = RuntimeOpenInputs::read(&roots.global_root)?;
         let registered = registered_checkout_for_shared_root(
             &inputs.registry,
@@ -588,6 +596,7 @@ impl RegisteredRuntimeFactory {
         identity: &MachineIdentityState,
         registry: Option<&WorkspaceRegistry>,
     ) -> Result<OrbitRuntime, OrbitError> {
+        crate::workspace_rebind::refuse_pending_checkout_rebind(global_root, &checkout.orbit_dir)?;
         verify_workspace_layout_authority(global_root, &checkout.orbit_dir)?;
         let binding = workspace_runtime_binding(workspace, checkout)?;
         OrbitRuntime::from_resolved_roots_with_binding_for_task_prefix(
@@ -659,6 +668,7 @@ impl RegisteredRuntimeFactory {
         identity: &MachineIdentityState,
         registry: Option<&WorkspaceRegistry>,
     ) -> Result<OrbitRuntime, OrbitError> {
+        crate::workspace_rebind::refuse_pending_checkout_rebind(global_root, &checkout.orbit_dir)?;
         let binding = workspace_runtime_binding(workspace, checkout)?;
         OrbitRuntime::from_resolved_roots_read_only_with_binding(
             global_root,
@@ -685,6 +695,7 @@ impl RegisteredRuntimeFactory {
         binding: WorkspaceRuntimeBinding,
         host_lifetime: HostLifetime,
     ) -> Result<OrbitRuntime, OrbitError> {
+        crate::workspace_rebind::refuse_pending_checkout_rebind(global_root, shared_root)?;
         let identity = inspect_machine_identity(global_root)?;
         let replica_owner = replica_owner_for_binding(&binding);
         OrbitRuntime::from_resolved_roots_with_binding_for_task_prefix(

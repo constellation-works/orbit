@@ -37,7 +37,8 @@ use serde_json::{Value, json};
 /// check needs the platform sandbox; the policy half runs everywhere.
 #[test]
 fn pipeline_step_dispatches_its_catalog_activity_to_policy_and_broker() {
-    let kind = platform_sandbox();
+    let kind =
+        platform_sandbox("pipeline_step_dispatches_its_catalog_activity_to_policy_and_broker");
     // Bubblewrap mounts a private tmpfs over /tmp, so the provider's results
     // must live on disk elsewhere.
     let dir = match kind {
@@ -175,23 +176,23 @@ fn pipeline_step_dispatches_its_catalog_activity_to_policy_and_broker() {
     assert_eq!(started, ["review"], "activity events keep the step id");
 }
 
-/// The agent sandbox this host can apply, or `None` after naming why the
-/// broker half is skipped (no Bubblewrap user namespaces, e.g. inside a
-/// sandbox).
-fn platform_sandbox() -> Option<ExecutorSandboxKind> {
+/// The agent sandbox this host can apply, or `None` after recording a
+/// deferral under `test` (no Bubblewrap user namespaces, e.g. inside a
+/// sandbox). `test` names the caller whose sandboxed half is skipped, so each
+/// deferral is listed under the test that deferred.
+fn platform_sandbox(test: &str) -> Option<ExecutorSandboxKind> {
     #[cfg(target_os = "linux")]
     {
         let probe = orbit_exec::probe_bwrap();
         if !probe.available {
-            orbit_exec::report_bwrap_deferral("v2 CLI plugin broker check", &probe.detail);
+            orbit_exec::report_bwrap_deferral(test, &probe.detail);
             return None;
         }
         Some(ExecutorSandboxKind::LinuxBwrap)
     }
     #[cfg(not(target_os = "linux"))]
     {
-        orbit_exec::macos_sandbox_test_guard("v2 CLI plugin broker check")
-            .then_some(ExecutorSandboxKind::MacosSandboxExec)
+        orbit_exec::macos_sandbox_test_guard(test).then_some(ExecutorSandboxKind::MacosSandboxExec)
     }
 }
 
@@ -286,7 +287,17 @@ impl orbit_engine::test_support::NullRuntimeHost for RecordingHost {
 fn missing_macos_wrapper_preserves_provider_confinement_and_honest_audit() {
     if orbit_exec::sandbox_exec_available() {
         // This regression exercises a missing trusted wrapper, not the macOS
-        // kernel's enforced path. Never remove a host binary to force it.
+        // kernel's enforced path. Never remove a host binary to force it. Say
+        // so on stderr, past capture, so the run is judged as deferred rather
+        // than as having exercised the bare-fallback and refused-admission
+        // audit guarantees (a Linux host exercises them).
+        use std::io::Write;
+        let _ = writeln!(
+            std::io::stderr(),
+            "{} missing_macos_wrapper_preserves_provider_confinement_and_honest_audit: \
+             a trusted sandbox-exec exists on this host, so the missing-wrapper path is not exercised",
+            orbit_types::workflow::HOST_TEST_DEFERRED_PREFIX,
+        );
         return;
     }
 
@@ -484,7 +495,8 @@ impl orbit_engine::test_support::NullRuntimeHost for MissingWrapperHost {
 fn auth_probe_obeys_leaf_sandbox_and_requires_a_successful_model_response() {
     use orbit_engine::activity_job::cli_runner::run_auth_probe;
     use orbit_types::workflow::{AuthProbe, AuthProbeSuccess};
-    let kind = platform_sandbox();
+    let kind =
+        platform_sandbox("auth_probe_obeys_leaf_sandbox_and_requires_a_successful_model_response");
     let scratch = orbit_common::fs::path::ensure_orbit_scratch_dir(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."),
     )

@@ -4,7 +4,7 @@
 //! ```text
 //! <type>: <summary> [ID]… (#PR)
 //!
-//! <full title, only when the subject cut it>
+//! <full title, when the subject cut or rewrote it>
 //!
 //! <execution summary; for bundles one `- ID: summary` line per task>
 //!
@@ -14,9 +14,12 @@
 //! ```
 //!
 //! The subject is at most [`COMMIT_SUBJECT_BUDGET`] characters, PR number
-//! included, cut at a word boundary and never with an ellipsis. `type` comes
-//! from the task type ([`CommitType::for_task_type`]). Trailers form exactly
-//! one final paragraph, keyed from [`TrailerKey`] in its declaration order.
+//! included, cut at a word boundary and never with an ellipsis. A literal `…`
+//! in the title becomes `...`, and commas inside brackets become semicolons;
+//! when the subject cuts or rewrites the title, the full title leads the body.
+//! `type` comes from the task type ([`CommitType::for_task_type`]). Trailers
+//! form exactly one final paragraph, keyed from [`TrailerKey`] in its
+//! declaration order.
 //! [`validate`] checks a rendered message against all of that.
 
 use std::fmt;
@@ -378,22 +381,41 @@ impl From<&CommitMessage> for MergeMessage {
 pub struct ComposedSubject {
     /// `<type>: <summary> [ID]… (#PR)`.
     pub subject: String,
-    /// The summary lost words, so the body should carry it whole.
+    /// The summary was shortened or altered, so the body should carry it whole.
     pub summary_cut: bool,
 }
 
 /// Compose `<type>: <summary> [ID]… (#PR)` within [`COMMIT_SUBJECT_BUDGET`]
 /// characters. The summary is cut at a word boundary (trailing punctuation
 /// dropped, no ellipsis); a single word longer than the room is cut at a
-/// character. When ids alone leave the summary less than a minimum, trailing
-/// ids leave the subject: callers carry every id in `Orbit-Task` trailers.
+/// character. Literal ellipses and bracketed comma lists are rewritten to
+/// comply with subject validation. When ids alone leave the summary less than
+/// a minimum, trailing ids leave the subject: callers carry every id in `Orbit-Task` trailers.
 pub fn compose_subject(
     commit_type: CommitType,
     summary: &str,
     task_ids: &[&str],
     pr_number: Option<u64>,
 ) -> ComposedSubject {
-    let summary = single_line(summary);
+    let original = single_line(summary);
+    let mut bracket_depth = 0usize;
+    let mut summary = String::with_capacity(original.len());
+    for character in original.chars() {
+        match character {
+            '[' => {
+                bracket_depth += 1;
+                summary.push('[');
+            }
+            ']' => {
+                bracket_depth = bracket_depth.saturating_sub(1);
+                summary.push(']');
+            }
+            '…' => summary.push_str("..."),
+            ',' if bracket_depth > 0 => summary.push(';'),
+            character => summary.push(character),
+        }
+    }
+    let altered = summary != original;
     let prefix = format!("{}: ", commit_type.as_str());
     let pr = pr_number
         .map(|number| format!(" (#{number})"))
@@ -419,7 +441,7 @@ pub fn compose_subject(
     let (kept, summary_cut) = shorten_at_word(&summary, room);
     ComposedSubject {
         subject: format!("{prefix}{kept}{suffix}"),
-        summary_cut,
+        summary_cut: summary_cut || altered,
     }
 }
 

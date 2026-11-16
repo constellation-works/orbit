@@ -55,8 +55,9 @@ pub const PR_AUTO_FIX_BASE_RED_EVENT: &str = "pr_auto_fix_base_red";
 /// A failed head whose repair is held until the base proves it fixed.
 ///
 /// Only `failed_head` supplies hold authority. The optional fields retain the
-/// rich base-tip evidence or the minimal poll reason without changing the
-/// historical note. New history entries also carry this record in a decision.
+/// rich base-tip evidence or the minimal poll reason. New history entries
+/// carry this record in their decision and a one-line [`Self::history_note`];
+/// entries written before the decision hold it as their JSON note.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrAutoFixBaseRed {
     pub failed_head: String,
@@ -95,6 +96,65 @@ impl PrAutoFixBaseRed {
     pub fn from_base_tip_evidence(evidence: &serde_json::Value) -> Option<Self> {
         let record: Self = serde_json::from_value(evidence.clone()).ok()?;
         (record.path.as_deref() == Some("known_red_base")).then_some(record)
+    }
+
+    /// Names of the failing checks the base-tip evidence retained, sorted and
+    /// without repeats. Empty for a minimal poll hold.
+    #[must_use]
+    pub fn failing_check_names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self
+            .checks
+            .iter()
+            .flatten()
+            .filter_map(|check| check["failed_job"]["name"].as_str())
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        names
+    }
+
+    /// Whether `other` records the same hold: the same failed head, landed
+    /// base and failing checks. A hold with no named checks is told apart by
+    /// its reason. Evidence payloads (job objects, log excerpts) do not
+    /// count, so a re-read of the same red base is a repeat.
+    #[must_use]
+    pub fn same_hold(&self, other: &Self) -> bool {
+        let names = self.failing_check_names();
+        self.failed_head == other.failed_head
+            && self.landed_base == other.landed_base
+            && names == other.failing_check_names()
+            && (!names.is_empty() || self.reason == other.reason)
+    }
+
+    /// The one-line history note: what is held, why and what releases it.
+    /// The full record lives in the entry's decision.
+    #[must_use]
+    pub fn history_note(&self) -> String {
+        const RELEASE: &str = "; waits for a green base";
+        let names = self.failing_check_names();
+        let body = if let Some(base) = &self.landed_base
+            && !names.is_empty()
+        {
+            let quoted = names
+                .iter()
+                .map(|name| format!("'{name}'"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "{} also red on base {}",
+                clip_chars(&quoted, 120),
+                short_sha(base)
+            )
+        } else if let Some(reason) = &self.reason {
+            let reason = reason.lines().next().unwrap_or_default();
+            clip_chars(reason.strip_prefix("base_red: ").unwrap_or(reason), 120)
+        } else {
+            format!(
+                "head {} fails as its base does",
+                short_sha(&self.failed_head)
+            )
+        };
+        format!("auto-fix held: {body}{RELEASE}")
     }
 
     /// Read a hold once at the task-history boundary. A typed decision wins
@@ -284,9 +344,10 @@ pub enum PrAutoFixReadReset {
 
 /// One bounded wait for a throttled pull-request log read.
 ///
-/// The history note stays this record's JSON. New entries also store it as
-/// [`TaskDecision::PrAutoFixReadDeferred`]. A note written before that
-/// decision still parses through [`Self::from_entry`].
+/// New entries store this record as [`TaskDecision::PrAutoFixReadDeferred`]
+/// beside a one-line [`Self::history_note`]. A note written before that
+/// decision, holding the record's JSON, still parses through
+/// [`Self::from_entry`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrAutoFixReadDeferral {
     pub execution: String,
@@ -341,6 +402,20 @@ impl PrAutoFixReadDeferral {
         self.diagnostic.as_deref().unwrap_or("a throttled log read")
     }
 
+    /// The one-line history note: what waits, and until when. The full
+    /// record lives in the entry's decision.
+    #[must_use]
+    pub fn history_note(&self) -> String {
+        let until = match self.not_before_ms {
+            Some(ms) => format!("retries at {ms} ms"),
+            None => "retries when the throttle lifts".to_owned(),
+        };
+        format!(
+            "auto-fix waiting: log read for job {} throttled (attempt {}); {until}",
+            self.job_id, self.attempt
+        )
+    }
+
     /// The deferral a `pr_auto_fix_read_deferred` entry records.
     ///
     /// A matching decision is authoritative, including when its note
@@ -363,6 +438,19 @@ impl PrAutoFixReadDeferral {
     fn from_legacy_note(note: &str) -> Option<Self> {
         serde_json::from_str(note).ok()
     }
+}
+
+fn short_sha(sha: &str) -> &str {
+    sha.get(..7).unwrap_or(sha)
+}
+
+/// `text` cut to at most `max` characters, ending in `...` when cut.
+fn clip_chars(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let kept: String = text.chars().take(max.saturating_sub(3)).collect();
+    format!("{kept}...")
 }
 
 /// Whether a step failure is the watcher's handoff of an admitted check

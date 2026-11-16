@@ -7,6 +7,7 @@
 //! action the dead cycle completed.
 
 mod assignment_lifecycle;
+mod checkpoint_history;
 mod control_admission;
 mod deadline_expiry;
 mod landing;
@@ -1897,7 +1898,7 @@ fn brief_reconstructs_mandate_authority_checkpoints_requests_wake_and_notices_wi
     fx.grant(&mandate, &["dispatch", "promote"]);
     let now = Utc::now();
 
-    // Run 6 cycles so the brief carries the newest 5 checkpoints and 1 older checkpoint note.
+    // Run more cycles than the bounded checkpoint window.
     for index in 1..=6 {
         let step_time = now + Duration::minutes(index * 15);
         if index > 1 {
@@ -2006,15 +2007,23 @@ fn brief_reconstructs_mandate_authority_checkpoints_requests_wake_and_notices_wi
     assert_eq!(brief["authority"]["rights"], json!(["dispatch", "promote"]));
 
     let checkpoints = brief["checkpoints"].as_array().unwrap();
-    assert_eq!(
-        checkpoints.len(),
-        orbit_types::workflow::RESIDENT_BRIEF_CHECKPOINTS
-    );
+    assert_eq!(checkpoints.len(), 1);
     assert_eq!(checkpoints[0]["notes"], "Note from cycle 6.");
-    assert_eq!(checkpoints[4]["notes"], "Note from cycle 2.");
-    let older = brief["older_checkpoint_notes"].as_array().unwrap();
-    assert_eq!(older.len(), 1);
-    assert_eq!(older[0]["notes"], "Note from cycle 1.");
+    assert!(checkpoints[0].get("actions").is_some());
+    let summaries = brief["earlier_checkpoint_summaries"].as_array().unwrap();
+    assert_eq!(
+        summaries.len(),
+        orbit_types::workflow::RESIDENT_BRIEF_CHECKPOINTS - 1
+    );
+    assert_eq!(summaries[0]["notes"], "Note from cycle 5.");
+    assert_eq!(summaries.last().unwrap()["notes"], "Note from cycle 2.");
+    assert_eq!(summaries[0]["outcome"], "idle");
+    assert!(
+        summaries
+            .iter()
+            .all(|summary| summary.as_object().unwrap().len() == 3)
+    );
+    assert!(brief.get("older_checkpoint_notes").is_none());
 
     let requests = brief["open_requests"].as_array().unwrap();
     assert_eq!(requests.len(), 2, "{requests:?}");

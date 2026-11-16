@@ -31,6 +31,7 @@ mod external_merge;
 mod proposed;
 pub use proposed::ProposedTaskInput;
 mod provider_hold;
+mod readiness_waiver;
 pub(crate) use provider_hold::AdmissionProviderPass;
 pub(crate) mod provider_limit;
 pub(crate) use desktop::HandoffPullRequest;

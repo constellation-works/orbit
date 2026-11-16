@@ -41,6 +41,7 @@ pub use registry::{routines as registry_routines, runtime as registry_runtime};
 pub use task::{owner as task_owner, store as task_store};
 pub mod update;
 mod workspace_catalog;
+pub mod workspace_rebind;
 pub mod workspace_removal;
 
 #[cfg(test)]

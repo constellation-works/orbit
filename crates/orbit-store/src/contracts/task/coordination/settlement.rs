@@ -462,6 +462,10 @@ pub enum ClaimMutation {
         handoff_id: String,
         event: String,
         note: String,
+        /// The typed decision the entry carries. Only a
+        /// `ci_check_rerun_reserved` entry carries one: its plan.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        decision: Option<orbit_types::task::TaskDecision>,
     },
     /// [ORB-24233] Record a `completion_held` hold on the task of a live
     /// landing attempt: the history entry carrying the hold decision and one

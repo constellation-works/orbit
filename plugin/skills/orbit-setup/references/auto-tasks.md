@@ -243,6 +243,25 @@ rewrite is logged to `.orbit/state/tool-name-migrations.jsonl` (plugin
 rewrites to `~/.orbit/state/`), and a task gets a
 `tool_names_migrated` history entry.
 
+Plugin rewrites preserve exact consent. Before changing a matching installed
+manifest, Orbit durably retains its original bytes under
+`~/.orbit/state/plugin-tool-name-originals/`, keyed by the original SHA-256.
+If the rewritten file lands but its digest record and rollback do not, a
+later ordinary open verifies the retained original against the recorded digest
+and accepts only its exact tool-name rewrite. This works for mixed legacy and
+canonical names, including repeated items. The loader takes its snapshot
+before migration, so the following open loads the repaired plugin.
+
+For interrupted writes from older versions without a retained original,
+Orbit checks the all-legacy spelling and mixed spellings of up to ten
+convertible list items (at most 1,024 candidates). Each candidate must match
+the recorded digest and reproduce the entire on-disk manifest exactly when
+rewritten. Larger ambiguous old lists require reinstalling the reviewed
+plugin with `orbit plugin add --force` and enabling it with the intended
+grants. An unrelated manifest edit never gains consent through recovery.
+The plugin migration has its own versioned completion marker, so installs
+marked complete by the older pass receive this repair once.
+
 The dashboard's **Automation › Auto-tasks** row has an **edit** link on the
 trigger that changes only the schedule (cron, a fixed interval or
 `deliveries_landed`). It runs the schedule half of `update`, with the same

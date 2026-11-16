@@ -112,6 +112,9 @@ impl OrbitError {
                 LOCK_BUSY_ERROR_CODE
             }
             OrbitError::WorkspaceError(_) => "workspace_error",
+            OrbitError::WorkspaceRebindHostStoreRequired { .. } => {
+                "workspace_rebind_host_store_required"
+            }
             OrbitError::Io(_) => "io_error",
             OrbitError::Migration(_) => "migration_failed",
             OrbitError::StorageAccessDenied { .. } => "storage_access_denied",
@@ -133,6 +136,9 @@ impl OrbitError {
     /// Structured error details shared by Orbit error surfaces.
     pub fn wire_details(&self) -> serde_json::Map<String, serde_json::Value> {
         let mut fields = serde_json::Map::new();
+        if let Self::WorkspaceRebindHostStoreRequired { path } = self {
+            fields.insert("path".to_string(), serde_json::json!(path));
+        }
         if let Some((host, path, _)) = self.host_configuration_details() {
             fields.insert("host".to_string(), serde_json::json!(host));
             fields.insert("path".to_string(), serde_json::json!(path));

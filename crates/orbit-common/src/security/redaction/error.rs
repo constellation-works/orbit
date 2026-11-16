@@ -350,6 +350,11 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
         OrbitError::JobRunControlConflict(m) => OrbitError::JobRunControlConflict(redact(&m)),
         OrbitError::Io(m) => OrbitError::Io(redact(&m)),
         OrbitError::WorkspaceError(m) => OrbitError::WorkspaceError(redact(&m)),
+        OrbitError::WorkspaceRebindHostStoreRequired { path } => {
+            OrbitError::WorkspaceRebindHostStoreRequired {
+                path: redact(&path.to_string_lossy()).into(),
+            }
+        }
         OrbitError::Migration(m) => OrbitError::Migration(redact(&m)),
         OrbitError::StorageAccessDenied { layer, message } => OrbitError::StorageAccessDenied {
             layer,
