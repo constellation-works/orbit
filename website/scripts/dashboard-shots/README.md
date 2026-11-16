@@ -20,7 +20,7 @@ NODE_PATH="$PWD/.orbit/tmp/orbit-playwright/node_modules" \
 workspace can be `ws_demo` even when the local server has no such workspace,
 and the host file the pages show is an isolated demo registry: `local-demo`
 is local and `build-box` uses `build-box.invalid`, an intentionally
-unreachable example target, so the Hosts view shows its real error reporting.
+unreachable example target, so Fleet shows its unreachable-host state.
 The page clock is pinned to 2026-10-08 07:26:47 PDT, so relative times and the
 refresh clock come out the same on every capture. For the Drain shot only, the
 fixture holds admissions on a CPU throttle, so the Tasks dock shows its throttle
@@ -54,7 +54,8 @@ node website/scripts/dashboard-shots/capture.mjs \
 ```
 
 `PLAYWRIGHT_MODULE` selects the kit's Playwright module and bundled Chromium.
-`--hosts-only` captures only Settings › Hosts from the live host file.
+`--hosts-only` captures only the Fleet host registry from the selected live
+dashboard's host file.
 
 Run the browser regression with the same Playwright/browser setup:
 
@@ -73,8 +74,8 @@ This regression does not replace the rendered-pixel inspection below.
 The browser viewport is 1440 × 900 CSS pixels at device scale factor 2, and
 taller for Automation (1100), the task list and run detail (1600), and the
 Tasks dock (1800) so their panels fit. Every crop stops above the log ticker
-along the bottom edge, which prints host paths. The Hosts crop also excludes
-the scope strip and trailing SSH error detail, which can contain host paths.
+along the bottom edge, which prints host paths. The Fleet crop includes the
+page heading and host cards; per-host diagnostics stay in the details dialog.
 Before committing, look at
 each image for anything that shouldn't be public, including production task,
 friction or run identifiers, a task title or a user name. Inspect the rendered
@@ -87,14 +88,14 @@ pixels even when the capture script sanitizes text.
 | `dashboard-run-detail.png` | 2396 × 1892 | A synthetic successful `task_pr_pipeline` run, its Jobs › History back link, and 21-step timeline | First Task |
 | `dashboard-drain-card.png` | 720 × 1854 | The Tasks dock with its throttle status and 1–24 hour Start a window controls | Delivery Workflows, Use the Dashboard |
 | `dashboard-automation.png` | 2880 × 2092 | Automation → Routines with the sweep clock, filter, Next hour, Active group and collapsed Paused group | Use the Dashboard, Schedule Recurring Work |
-| `dashboard-hosts.png` | 2348 × 498 | Settings → Hosts add control and host table with local health and unreachable-host status | Use the Dashboard |
+| `dashboard-hosts.png` | 2384 × 772 | Fleet heading and host cards with local health and an unreachable remote | Use the Dashboard |
 
-All six images were checked against the current dashboard on 2026-11-08. The
-Tasks, approval, Drain, Automation and Hosts images were regenerated with
-`--fixture-core`, which intercepts dashboard API reads and uses synthetic
-workspace and host data. The run-detail image is a synthetic successful
-`task_pr_pipeline` sample with demo task and host labels; its dates and timing
-are illustrative. For live run-detail captures, the script replaces
-identifier-shaped task, friction and run labels in the capture DOM. Inspect
+The Fleet image was checked against the current dashboard on 2026-11-15 with
+synthetic workspace and host data. The Tasks, approval, Drain and Automation
+images were regenerated with `--fixture-core`, which intercepts dashboard API
+reads and uses synthetic workspace and host data. The run-detail image is a
+synthetic successful `task_pr_pipeline` sample with demo task and host labels;
+its dates and timing are illustrative. For live run-detail captures, the script
+replaces identifier-shaped task, friction and run labels in the capture DOM. Inspect
 the rendered pixels for task titles, user names, host names and paths before
 publishing a live capture.

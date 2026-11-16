@@ -254,13 +254,14 @@ async function tall(height, fn) {
 }
 
 async function hostsShot() {
-  await open("config/hosts", ".host-list .host-row");
-  // Omit the scope strip and trailing error detail, which can print host paths.
+  await open("fleet", "#fleet-body .fleet-host-card");
+  // Show the Fleet heading and host cards, but leave per-host diagnostics in
+  // the dialog, which can contain paths and other machine-local details.
   const targets = [
-    page.locator(".host-head"),
-    ...await page.locator(".host-row > .host-grid").all(),
+    page.locator("#fleet-controls h1"),
+    ...await page.locator("#fleet-body .fleet-host-card").all(),
   ];
-  const add = page.locator(".host-add");
+  const add = page.locator("#fleet-controls .host-add-open");
   if (await add.count()) targets.unshift(add);
   await shot("dashboard-hosts", targets, 0);
 }
