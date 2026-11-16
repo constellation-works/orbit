@@ -43,6 +43,28 @@ impl Store {
         })
     }
 
+    /// Compare-and-swap form of [`Self::routine_breaker_transition`]: the
+    /// row is re-read inside the immediate transaction and the write lands
+    /// only when it still equals `expected`. A concurrent operator reset or
+    /// bypass commits a different row, so the stale write is refused
+    /// (`Ok(false)`) instead of overwriting it.
+    pub fn routine_breaker_transition_if_current(
+        &self,
+        expected: Option<&RoutineBreakerRecord>,
+        breaker: &RoutineBreakerRecord,
+        event: &RoutineBreakerEvent,
+    ) -> Result<bool, OrbitError> {
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let current = select_breaker(&tx.tx, &breaker.routine_name)?;
+            if current.as_ref() != expected {
+                return Ok(false);
+            }
+            upsert_breaker(&tx.tx, breaker)?;
+            insert_event(&tx.tx, event)?;
+            Ok(true)
+        })
+    }
+
     /// Close `routine_name`'s breaker now and record the reset. Fires before
     /// now no longer count toward a trip. Returns `false` when it was not open.
     pub fn routine_breaker_reset(

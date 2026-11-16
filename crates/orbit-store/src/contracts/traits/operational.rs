@@ -137,6 +137,22 @@ pub trait RoutineStoreBackend: Send + Sync {
         breaker: &RoutineBreakerRecord,
         event: &RoutineBreakerEvent,
     ) -> Result<(), OrbitError>;
+    /// Write `breaker` and append `event` only when the stored row still
+    /// equals `expected` (`None` means no row). Returns whether the write
+    /// landed; `false` means a concurrent write (for example an operator
+    /// reset or bypass) changed the row after `expected` was read, and
+    /// neither the row nor the event was written. Backends that cannot
+    /// compare fall back to the unconditional transition.
+    fn routine_breaker_transition_if_current(
+        &self,
+        expected: Option<&RoutineBreakerRecord>,
+        breaker: &RoutineBreakerRecord,
+        event: &RoutineBreakerEvent,
+    ) -> Result<bool, OrbitError> {
+        let _ = expected;
+        self.routine_breaker_transition(breaker, event)?;
+        Ok(true)
+    }
     /// Close an open breaker now; `false` when it was not open.
     fn routine_breaker_reset(&self, routine_name: &str, actor: &str) -> Result<bool, OrbitError>;
     /// Let one fire through an open breaker on the next sweep; `false` when

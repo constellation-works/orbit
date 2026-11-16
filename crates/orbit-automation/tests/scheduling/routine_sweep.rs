@@ -1101,3 +1101,191 @@ fn bypass_fires_an_hourly_routine_between_slots_without_consuming_a_slot() {
         Some(at(60).to_rfc3339().as_str())
     );
 }
+
+/// Operator action a sweep pass must not overwrite, committed from inside
+/// `host_orbit_build` — which the gate calls after `run_sweep_core` has
+/// taken its breaker snapshot and before it writes its transition. That
+/// call is the deterministic interleave point between snapshot and write.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InterleavedOperatorAction {
+    Reset,
+    Bypass,
+}
+
+struct InterleavingDispatch {
+    delegate: FakeDispatch,
+    store: std::rc::Rc<Store>,
+    action: InterleavedOperatorAction,
+    done: Cell<bool>,
+}
+
+impl RoutineDispatch for InterleavingDispatch {
+    fn submit(&self, dir: &Path, job: &str, actor: &str, slot: &str) -> Result<String, OrbitError> {
+        self.delegate.submit(dir, job, actor, slot)
+    }
+    fn run_state(&self, dir: &Path, run_id: &str) -> Option<JobRunState> {
+        self.delegate.run_state(dir, run_id)
+    }
+    fn run_owner_liveness(&self, dir: &Path, run_id: &str) -> RunOwnerLiveness {
+        self.delegate.run_owner_liveness(dir, run_id)
+    }
+    fn host_orbit_build(&self) -> Option<String> {
+        if !self.done.get() {
+            self.done.set(true);
+            let acted = match self.action {
+                InterleavedOperatorAction::Reset => self
+                    .store
+                    .routine_breaker_reset("hourly", "human:test")
+                    .expect("operator reset"),
+                InterleavedOperatorAction::Bypass => self
+                    .store
+                    .routine_breaker_bypass("hourly", "human:test")
+                    .expect("operator bypass"),
+            };
+            assert!(acted, "operator action applies to the open breaker");
+        }
+        Some("1.0.0".into())
+    }
+}
+
+fn interleaving_fixture(
+    action: InterleavedOperatorAction,
+) -> (
+    std::rc::Rc<Store>,
+    RoutineCollection,
+    InterleavingDispatch,
+    DateTime<Utc>,
+) {
+    use orbit_store::contracts::{RoutineBreakerEvent, RoutineBreakerRecord, RoutineBreakerState};
+
+    let store = std::rc::Rc::new(Store::open_in_memory().expect("in-memory store"));
+    let coll = collection(vec![routine_spec(
+        "hourly",
+        "0 * * * *",
+        "skip",
+        "forbid",
+        "noop",
+        (0, 1),
+        120,
+    )]);
+    let base = (Utc::now() - Duration::hours(3))
+        .with_minute(0)
+        .and_then(|at| at.with_second(0))
+        .and_then(|at| at.with_nanosecond(0))
+        .expect("hour boundary");
+    store
+        .routine_record_baseline("hourly", &base.to_rfc3339())
+        .expect("baseline");
+    store
+        .routine_breaker_transition(
+            &RoutineBreakerRecord {
+                routine_name: "hourly".into(),
+                source_workspace: "polaris".into(),
+                state: RoutineBreakerState::Open,
+                error_class: Some("dispatch_failed".into()),
+                last_run_id: None,
+                tripped_at: Some(base.to_rfc3339()),
+                trips: 1,
+                next_trial_at: Some((base + Duration::minutes(15)).to_rfc3339()),
+                orbit_build: Some("1.0.0".into()),
+                trial_started_at: None,
+                trial_reason: None,
+                bypass_requested_at: None,
+                floor_at: None,
+                updated_at: base.to_rfc3339(),
+            },
+            &RoutineBreakerEvent {
+                routine_name: "hourly".into(),
+                event: "tripped".into(),
+                actor: "sweep".into(),
+                detail: Some("dispatch_failed".into()),
+                run_id: None,
+                at: base.to_rfc3339(),
+            },
+        )
+        .expect("seed open breaker");
+    let dispatch = InterleavingDispatch {
+        delegate: FakeDispatch::default(),
+        store: store.clone(),
+        action,
+        done: Cell::new(false),
+    };
+    (store, coll, dispatch, base)
+}
+
+fn breaker_events(store: &Store) -> Vec<String> {
+    store
+        .routine_breaker_events("hourly", 10)
+        .expect("breaker events")
+        .into_iter()
+        .rev()
+        .map(|event| event.event)
+        .collect()
+}
+
+/// A reset committed after the sweep snapshot but before its backoff-trial
+/// transition must survive: the stale pass must not re-open the breaker or
+/// lose the reset floor.
+#[test]
+fn operator_reset_committed_mid_sweep_is_not_undone_by_the_stale_pass() {
+    use orbit_store::contracts::RoutineBreakerState;
+
+    let (store, coll, dispatch, base) = interleaving_fixture(InterleavedOperatorAction::Reset);
+    let reports = run_sweep_core(
+        &*store,
+        &coll,
+        &dispatch,
+        SweepOptions::default(),
+        base + Duration::minutes(31),
+    )
+    .expect("sweep");
+    assert!(dispatch.done.get(), "the interleave actually happened");
+    assert_eq!(reports[0].reason.as_deref(), Some("not_due"));
+    assert_eq!(dispatch.delegate.submit_count(), 0);
+    let breaker = &store.routine_breakers().expect("breakers")["hourly"];
+    assert_eq!(
+        breaker.state,
+        RoutineBreakerState::Closed,
+        "the reset stays closed instead of being re-opened from the stale snapshot"
+    );
+    assert_eq!(breaker.trips, 0);
+    assert!(
+        breaker.floor_at.is_some(),
+        "the reset floor survives: {breaker:?}"
+    );
+    assert_eq!(breaker.trial_started_at, None);
+    assert_eq!(breaker_events(&store), ["tripped", "reset"]);
+}
+
+/// A bypass committed after the sweep snapshot but before its backoff-trial
+/// transition must survive: the pass must fire the cron routine once now as
+/// a bypass trial instead of arming a backoff trial and erasing the request.
+#[test]
+fn operator_bypass_committed_mid_sweep_still_fires_once_now() {
+    let (store, coll, dispatch, base) = interleaving_fixture(InterleavedOperatorAction::Bypass);
+    let reports = run_sweep_core(
+        &*store,
+        &coll,
+        &dispatch,
+        SweepOptions::default(),
+        base + Duration::minutes(31),
+    )
+    .expect("sweep");
+    assert!(dispatch.done.get(), "the interleave actually happened");
+    assert_eq!(reports[0].action, "fired");
+    assert_eq!(reports[0].reason.as_deref(), Some("breaker_bypass"));
+    assert_eq!(dispatch.delegate.submit_count(), 1);
+    assert_eq!(
+        store
+            .routine_cursor("hourly")
+            .expect("cursor")
+            .expect("cursor row")
+            .last_slot,
+        None,
+        "the bypass fire consumes no scheduled slot"
+    );
+    let breaker = &store.routine_breakers().expect("breakers")["hourly"];
+    assert_eq!(breaker.trial_reason.as_deref(), Some("bypass"));
+    assert!(breaker.trial_started_at.is_some(), "{breaker:?}");
+    assert_eq!(breaker_events(&store), ["tripped", "bypass", "trial"]);
+}

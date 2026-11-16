@@ -138,6 +138,15 @@ impl crate::contracts::RoutineStoreBackend for Store {
         Self::routine_breaker_transition(self, breaker, event)
     }
 
+    fn routine_breaker_transition_if_current(
+        &self,
+        expected: Option<&RoutineBreakerRecord>,
+        breaker: &RoutineBreakerRecord,
+        event: &RoutineBreakerEvent,
+    ) -> Result<bool, OrbitError> {
+        Self::routine_breaker_transition_if_current(self, expected, breaker, event)
+    }
+
     fn routine_breaker_reset(&self, routine_name: &str, actor: &str) -> Result<bool, OrbitError> {
         Self::routine_breaker_reset(self, routine_name, actor)
     }
