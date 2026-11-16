@@ -397,7 +397,13 @@ choice inside the Tasks page, not a navigation, so it is remembered as the dock'
 but leaves `dock=` out of the address, and narrowing the window, reloading or stepping
 Back at one column shows the list. A `#tasks?dock=…` link followed with both columns
 showing likewise selects that tab but normalizes the address without `dock=`, so
-narrowing or reloading at one column leaves the list. Choosing a tab in the one-column
+narrowing or reloading at one column leaves the list. When that link is followed
+above 1315px and the dock was collapsed, the dock is shown again and the collapsed
+choice is remembered as shown. That covers the status bar **Open log**, `#notices`,
+`#operations/residents`, the host detail **Open Tasks dock** link and any
+`#tasks?dock=<mode>` route. A Tasks route with no dock target leaves the collapsed
+choice unchanged. Following the link at one column, where the dock already replaces
+the list, does not change that choice. Choosing a tab in the one-column
 dock route keeps `dock=`. Widening shows both columns. The rail marks Drain rather than Tasks while the Drain dock route stands in for the
 list. A Log or Notices dock route keeps Tasks marked. The dock route is how a phone drives a drain: its tabs and drain controls
 are 44px targets, Stop and Start stick to the foot of the scrolling pane, and a
