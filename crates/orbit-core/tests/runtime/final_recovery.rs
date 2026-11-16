@@ -1094,6 +1094,96 @@ fn backstop_requeue_of_an_unpreservable_published_episode_stays_blocked() {
     assert_eq!(fixture.status(&task), "backlog");
 }
 
+/// ORB-25266: a stopped delivery holding only a `pr_failure_handoff`
+/// `no_candidate` checkpoint — a worktree-step failure with no checkout that
+/// pushed nothing and opened no pull request — is unpublished, so a backstop
+/// `requeue` still requeues. A failure-handoff checkpoint with any other
+/// decision stays fail-closed and escalates.
+fn backstop_requeue_with_no_candidate_failure_receipt_still_requeues() {
+    let fixture = fixture("[\"sol\"]");
+    let fault = [
+        ("fault", json!("implementer")),
+        (
+            "fault_evidence",
+            json!("fixture: the worktree step failed before any publication"),
+        ),
+    ];
+    let requeue_fields = || {
+        let mut fields: Vec<(&str, Value)> = vec![
+            ("decision", json!("requeue")),
+            ("reason", json!("the worktree failure is fixed")),
+        ];
+        fields.extend(fault.iter().map(|(name, value)| (*name, value.clone())));
+        fields
+    };
+
+    // `no_candidate` with no `push`/`pr_open` and no task pull request:
+    // the backstop must not treat the receipt as a publication.
+    let (task, publisher, recovery, episode) = fixture.blocked_backstop_episode(false);
+    let mut state = fixture.state(&publisher);
+    state.record_failure_activity(
+        "pr_failure_handoff".to_string(),
+        "worktree".to_string(),
+        json!({
+            "phase": "failure_handoff",
+            "decision": "no_candidate",
+            "failed_step_id": "worktree",
+        }),
+    );
+    fixture.jobs.write_run_state(&publisher, &state).unwrap();
+    let applied = fixture.apply_backstop(&recovery, &episode, backstop_result(&requeue_fields()));
+    assert_eq!(applied["outcome"], "requeued", "{applied}");
+    assert_eq!(fixture.status(&task), "backlog");
+    assert!(
+        !fixture
+            .comments_text(&task)
+            .contains("backstop requeue refused"),
+        "a no_candidate receipt is not an unpreservable publication: {}",
+        fixture.comments_text(&task)
+    );
+
+    // A failure-handoff publication with no `push`/`pr_open` still escalates.
+    let (task, publisher, recovery, episode) = fixture.blocked_backstop_episode(false);
+    let mut state = fixture.state(&publisher);
+    state.record_failure_activity(
+        "pr_failure_handoff".to_string(),
+        "complete_pr".to_string(),
+        json!({
+            "phase": "failure_handoff",
+            "decision": "blocked_failure_pr",
+            "failed_step_id": "complete_pr",
+        }),
+    );
+    fixture.jobs.write_run_state(&publisher, &state).unwrap();
+    let applied = fixture.apply_backstop(&recovery, &episode, backstop_result(&requeue_fields()));
+    assert_eq!(applied["outcome"], "escalated", "{applied}");
+    assert_eq!(fixture.status(&task), "blocked");
+    assert!(
+        fixture
+            .comments_text(&task)
+            .contains("backstop requeue refused")
+            && fixture.comments_text(&task).contains(&publisher),
+        "a failure-handoff publication stays refused: {}",
+        fixture.comments_text(&task)
+    );
+
+    // An unknown failure-handoff decision stays fail-closed and escalates.
+    let (task, publisher, recovery, episode) = fixture.blocked_backstop_episode(false);
+    let mut state = fixture.state(&publisher);
+    state.record_failure_activity(
+        "pr_failure_handoff".to_string(),
+        "worktree".to_string(),
+        json!({
+            "phase": "failure_handoff",
+            "failed_step_id": "worktree",
+        }),
+    );
+    fixture.jobs.write_run_state(&publisher, &state).unwrap();
+    let applied = fixture.apply_backstop(&recovery, &episode, backstop_result(&requeue_fields()));
+    assert_eq!(applied["outcome"], "escalated", "{applied}");
+    assert_eq!(fixture.status(&task), "blocked");
+}
+
 /// The agent-step envelope `decision_result` extracts a decision from.
 fn backstop_result(fields: &[(&str, Value)]) -> Value {
     let mut result = json!({
@@ -1148,4 +1238,5 @@ crate::scenario_table!(
 crate::scenario_table!(
     backstop_requeue_of_an_unpreservable_published_episode_scenarios,
     backstop_requeue_of_an_unpreservable_published_episode_stays_blocked,
+    backstop_requeue_with_no_candidate_failure_receipt_still_requeues,
 );
