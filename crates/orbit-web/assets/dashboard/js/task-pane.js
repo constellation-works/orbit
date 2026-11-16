@@ -15,7 +15,7 @@ import { buildRelationRow, drainDependencyIds, relationTargets } from './task-re
 import * as taskReadiness from './task-readiness.js';
 import * as taskComments from './task-comments.js';
 import * as taskFields from './task-fields.js';
-import { retainDecisionNotes, retireClosedDecisionCards } from './task-decision.js';
+import { decisionAnswerSignature, refreshDecisionAnswerFeedback, retainDecisionNotes, retireClosedDecisionCards } from './task-decision.js';
 
 // A detail kept for an open draft can refresh its read-only readiness and
 // selector displays without touching the editor holding that draft.
@@ -31,6 +31,7 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
   refreshFixPrControls(wrap, task, context);
   taskFields.refreshFieldCells(wrap, readinessTask);
   taskReadiness.refreshOperatorRecordFeedback(wrap, task);
+  refreshDecisionAnswerFeedback(wrap, task, context);
   if (Array.isArray(readinessTask.context_files)) {
     const count = wrap.querySelector(`#detail-${task.id}-tab-context_files .detail-tab-count`);
     if (count) count.textContent = String(readinessTask.context_files.length);
@@ -149,7 +150,7 @@ function buildPinnedTask(ptask, context) {
   const wrap = el("div", { class: "pinned-task-wrap" }, [row, detail]);
   wrap.teardown = () => taskComments.disconnectCommentCards(wrap);
   wrap.dataset.key = `pinned-${taskShared.taskDispatchIdentity(ptask)}`;
-  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${taskDrainSignature(drain)}-${detailFeedbackSignature(ptask)}-${fixPrSignature(ptask)}-${taskReadiness.operatorRecordSignature(ptask)}`;
+  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${taskDrainSignature(drain)}-${detailFeedbackSignature(ptask)}-${fixPrSignature(ptask)}-${taskReadiness.operatorRecordSignature(ptask)}-${decisionAnswerSignature(ptask)}`;
   return wrap;
 }
 /* ORB-11655: a comment or reject form, or an open field editor (ORB-12235),
@@ -244,7 +245,7 @@ function buildListTaskDetail(t, drafts, existing, context) {
   // its read state instead; a detail rendered from the cached projection must
   // not be rebuilt just because a refresh has a read in flight.
   const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
-  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t)}-${taskState.shipInFlightTaskIds.has(taskShared.taskDispatchIdentity(t))}-${pilotSignature(t)}-${triageSignature(t)}-${recoverySignature(t)}-${taskReadiness.operatorRecordSignature(t)}-${fixPrSignature(t)}-${hostWriteRefusal()}`;
+  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t)}-${taskState.shipInFlightTaskIds.has(taskShared.taskDispatchIdentity(t))}-${pilotSignature(t)}-${triageSignature(t)}-${recoverySignature(t)}-${taskReadiness.operatorRecordSignature(t)}-${decisionAnswerSignature(state.task || t)}-${fixPrSignature(t)}-${hostWriteRefusal()}`;
   const detailHash = `${baseHash}-${taskDrainSignature(drain)}`;
   const existingDetail = existing.get(key);
   if (existingDetail && existingDetail.dataset.hash === detailHash) return existingDetail;

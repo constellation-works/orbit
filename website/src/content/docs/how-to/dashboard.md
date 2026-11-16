@@ -326,7 +326,9 @@ work** filter, under **More**, shows only your human crew's open tasks.
 An open decision on a task is a card with a note field and one button per
 option, the recommended one first. Clicking an option shows its consequence,
 asks you to confirm, and records the answer with your note, as
-`orbit decision answer` does. A blocked task's
+`orbit decision answer` does. A refused answer changes nothing and leaves
+the decision open. The card shows the refusal's code and message until you
+dismiss it or it expires, including after the task detail refreshes. A blocked task's
 [final-recovery decision](/how-to/continuous-delivery/#7-recover-from-a-failed-delivery)
 sits in its block callout, and a pilot-warning decision in the pilot-hold
 callout. Every other open decision lists under **Decision needed**; see
