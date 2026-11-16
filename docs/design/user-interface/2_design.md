@@ -376,9 +376,9 @@ The two-column desktop layout stacks below 900px, and routine/clock metadata col
 The **Tasks dock** is the home of **Drain** and **Log**.
 Under **All workspaces** it inserts **Fleet** immediately after **Drain**, with
 `fleet` supported in the remembered dock mode and `#tasks?dock=fleet`.
-It stays beside the task list and gives way to an open task. Below 1000px the
+It stays beside the task list and gives way to an open task. Below 1316px the
 list keeps the full width, so the dock is not beside it. An explicit dock route
-(`#tasks?dock=…`, from the rail's **Drain** item below 1000px, a Drain, Log or
+(`#tasks?dock=…`, from the rail's **Drain** item at 1315px and below, a Drain, Log or
 Notices link, `#notices`, or the bottom log bar) shows the dock in place of the list at that width:
 its tabs sit directly under the top nav. The rail's **Tasks** item returns to
 the list, dropping only `dock=` from the hash and keeping the list's filters.
@@ -437,8 +437,8 @@ its notices show again when the list returns. Static group hints stay with their
 cards, and the create composer's feedback stays in the composer. Host
 readings live only in the rail's Host block.
 
-The rail's **Drain** item sits under Tasks only at 1000px and narrower, where the
-dock stands in for the list. Above 1000px it is hidden, because the dock beside
+The rail's **Drain** item sits under Tasks only at 1315px and narrower, where the
+dock stands in for the list. Above 1315px it is hidden, because the dock beside
 the list already holds Drain. The item links to `#tasks?dock=drain` without
 changing the host or workspace. An idle drain shows no reading; a live one shows
 a dot and words on every view at those widths: `3/5` slots in use,

@@ -231,8 +231,9 @@ export function residentsDockShown() {
   return shownDockMode() === "residents";
 }
 
-// The one-column Tasks layout: the list or the dock, never both (tasks.css).
-const TASKS_ONE_COLUMN_QUERY = "(max-width: 1000px)";
+// The Tasks dock gives way to the rail at 1315px so the list keeps its width.
+// CSS media queries mirror this named breakpoint in shell.css and tasks.css.
+const TASKS_ONE_COLUMN_QUERY = "(max-width: 1315px)";
 
 function tasksOneColumn() {
   return typeof window.matchMedia === "function" && window.matchMedia(TASKS_ONE_COLUMN_QUERY).matches;
