@@ -267,7 +267,8 @@ impl OrbitRuntime {
     /// Such a run does not edit the working tree before it adopts the
     /// existing branch and pull request, so admission does not hold it behind
     /// other tasks' context locks; any agent edit it makes later takes the
-    /// footprint locks first (`acquire_deferred_footprint`). The full
+    /// footprint locks first (`acquire_deferred_footprint`), unless an
+    /// operator's explicit ship un-defers them at the gate. The full
     /// authentication — branch, remote and pull-request heads — still runs
     /// when the next run adopts, and refuses what this cannot see.
     pub(crate) fn published_resume(

@@ -1285,19 +1285,25 @@ locks. In a PR-mode workspace, `orbit run readiness` and the dashboard show
 the task as eligible and `resuming published delivery (PR #N)`
 (`published_delivery` in JSON), even while another task holds one of its
 files. Its gate takes a reservation that holds no files
-(`footprint_deferred: true`, naming the holders it did not wait on). The run
-then re-applies the unchanged published patch, which is not an edit. Before
-the first agent that may edit, the run takes the task's footprint locks and
-waits while another task holds them. Those agents are an implementer
-repairing a conflicting re-application, a reviewer fix, and step, conflict or
-check repair. Read-only reviewers and the final-recovery decision do not wait.
-If the locks stay held for the gate's wait (`max_wait_seconds`, default one
-hour), the agent is refused with `footprint_unavailable`, naming the holders.
-That refusal is a hold, not a failure: no editor started, so the run ends
-`held` under the `footprint_unavailable` code, the published branch and pull
-request are untouched, and the task returns to the backlog
+(`footprint_deferred: true`, naming the holders it did not wait on), unless
+the run carries an operator's explicit ship (`operator_readiness_override`):
+the gate then un-defers that footprint (`footprint_deferred: false`) and
+records a `readiness_overridden` event naming the holders it overrode. The
+run then re-applies the unchanged published patch, which is not an edit.
+Before the first agent that may edit, a run without that mark takes the
+task's footprint locks and waits while another task holds them. Those agents
+are an implementer repairing a conflicting re-application, a reviewer fix,
+and step, conflict or check repair. Read-only reviewers and the
+final-recovery decision do not wait. If the locks stay held for the gate's
+wait (`max_wait_seconds`, default one hour), the agent is refused with
+`footprint_unavailable`, naming the holders. That refusal is a hold, not a
+failure: no editor started, so the run ends `held` under the
+`footprint_unavailable` code, the published branch and pull request are
+untouched, and the task returns to the backlog
 (`footprint_unavailable_requeued`) for a later admission once the holders
-release. The task stays bound to the held run; admission and the next run's
+release. A shipped run skips that wait and the `footprint_unavailable` hold:
+its `acquire_deferred_footprint` returns immediately and its editing agents
+work beside the local holders. The task stays bound to the held run; admission and the next run's
 adoption look through it to the publication it adopted, so readiness still
 reports `published_delivery` and the next run reuses the same branch and pull
 request. Nothing needs an operator unless the same holders keep the locks
