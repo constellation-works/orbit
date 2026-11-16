@@ -874,6 +874,27 @@ main.tasks-layout.filter-spans:not(.task-pane-open) > .tasks-dock { grid-row: 2;
    only its message area stays, floating at the foot of the view (see below). */
 main.tasks-layout.task-pane-open > .tasks-dock { display: contents; }
 main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
+/* Collapsed (dock-toggle.js): the list takes the full width and only the
+   dock's message area stays, floating at the foot of the view as with an open
+   task. The dock slides out (`dock-leaving`) before the column goes, and the
+   column comes back before it slides in (`dock-entering`), so the dock's tab
+   compaction settles once rather than every frame. The show button ends the
+   filter bar. The one-column layout below already moves the dock to a route
+   of its own, so the collapse applies only above it. */
+#dock-expand { display: none; }
+@media (min-width: 1316px) {
+  #side-dock { transition: transform 180ms ease, opacity 180ms ease; }
+  main.tasks-layout:is(.dock-leaving, .dock-entering) > .tasks-dock > #side-dock {
+    transform: translateX(32px);
+    opacity: 0;
+    pointer-events: none;
+  }
+  main.tasks-layout.dock-collapsed { grid-template-columns: minmax(0, 1fr); }
+  main.tasks-layout.dock-collapsed > .tasks-dock { display: contents; }
+  main.tasks-layout.dock-collapsed > .tasks-dock > #side-dock { display: none; }
+  main.tasks-layout.dock-collapsed:not(.task-pane-open):not(.task-page-mode) > .controls > #dock-expand { display: inline-flex; margin: 2px 0 0 auto; }
+}
+@media (prefers-reduced-motion: reduce) { #side-dock { transition: none; } }
 /* Keep this cutoff aligned with TASKS_ONE_COLUMN_QUERY in log-tail.js. */
 @media (max-width: 1315px) {
   /* Stacked: the bar, then the list (or the dock on the dock route), each
@@ -902,6 +923,8 @@ main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
   main.tasks-layout.dock-route > .col-tasks { display: none !important; }
   main.tasks-layout.dock-route > .controls { display: none; }
   main.tasks-layout.dock-route > .tasks-dock > #side-dock { display: flex; }
+  /* Collapsing applies only beside the list (dock-toggle.js). */
+  #dock-collapse { display: none; }
   main.tasks-layout.dock-route #dock-pane-log .log-stream { max-height: 70svh; }
   main.tasks-layout.dock-route :is(#dock-pane-notices, #dock-pane-residents) { max-height: 70svh; }
   /* The dock route is what a phone drives a drain with: 44px targets, Stop and
@@ -979,6 +1002,22 @@ main.tasks-layout.task-pane-open > .tasks-dock > .tasks-messages {
 }
 main.tasks-layout.task-pane-open > .tasks-dock > .tasks-messages > :not(#tasks-notices),
 main.tasks-layout.task-pane-open #tasks-notices > * { pointer-events: auto; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
+/* A collapsed dock (above) leaves its message area floating the same way. */
+@media (min-width: 1316px) {
+  main.tasks-layout.dock-collapsed > .tasks-dock > .tasks-messages {
+    position: absolute;
+    left: 20px;
+    bottom: 16px;
+    z-index: 150;
+    width: min(360px, calc(100% - 40px));
+    height: auto;
+    max-height: 40%;
+    padding-bottom: 0;
+    pointer-events: none;
+  }
+  main.tasks-layout.dock-collapsed > .tasks-dock > .tasks-messages > :not(#tasks-notices),
+  main.tasks-layout.dock-collapsed #tasks-notices > * { pointer-events: auto; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
+}
 @media (max-width: 1315px) {
   .tasks-dock > .tasks-messages {
     position: absolute;
