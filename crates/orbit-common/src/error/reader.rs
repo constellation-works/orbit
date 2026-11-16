@@ -137,8 +137,12 @@ fn next_step(raw: &str) -> &'static str {
     if cause.contains("specification changed") || cause.contains("no longer implements") {
         return "Discard the candidate to rerun fresh.";
     }
+    // A still-running cause without a cancel command is a terminal record whose
+    // worker is not gone: cancel reports already terminal, so only discard can
+    // succeed. A non-terminal cause names its cancel command, which the reader
+    // keeps as the single next step (`cause_already_guides`).
     if cause.contains("still running") || cause.contains("still live") {
-        return "Cancel the run, then repair it.";
+        return "Discard the candidate to rerun fresh.";
     }
     // The requeue resumes only an open pull request, so a closed one names that
     // precondition rather than the checks alone.
