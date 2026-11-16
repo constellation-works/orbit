@@ -414,9 +414,27 @@ pub enum DispatchError {
     AuditFailed(String),
 }
 
-fn worktree_dispatch_message(code: &str, diagnostic: &str) -> &'static str {
+fn worktree_dispatch_message(code: &str, diagnostic: &str) -> String {
     let value = serde_json::from_str(diagnostic).unwrap_or(Value::Null);
-    orbit_types::workflow::activity_job::worktree_failure_message(code, &value)
+    let message = orbit_types::workflow::activity_job::worktree_failure_message(code, &value);
+    match stored_output_cite(&value) {
+        Some(cite) => format!("{message} ({cite})"),
+        None => message.to_string(),
+    }
+}
+
+/// The provider output blobs a post-run check cited into the diagnostic. The
+/// step error names them as plain text so the stored output stays reachable
+/// without printing the diagnostic JSON.
+fn stored_output_cite(value: &Value) -> Option<String> {
+    let stdout = value.get("stdout_blob_ref")?.as_str()?;
+    let stderr = value.get("stderr_blob_ref")?.as_str()?;
+    if stdout.is_empty() || stderr.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "stdout_blob_ref={stdout}, stderr_blob_ref={stderr}"
+    ))
 }
 
 impl DispatchError {

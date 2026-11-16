@@ -19,13 +19,18 @@ pub fn worktree_failure_message(code: &str, diagnostic: &Value) -> &'static str 
             "Run failed because no repo root was declared for its worktree. Declare matching workspace and repo roots, then retry."
         }
         "worktree_mismatch" if reason.contains("different Git checkouts") => {
-            "Run failed because its workspace and repo roots name different checkouts. Declare matching roots, then retry."
+            "Run failed because its workspace and repo roots resolve to different Git checkouts. Declare matching roots, then retry."
+        }
+        "worktree_mismatch" if reason.contains("exact Git checkout root") => {
+            "Run failed because a declared root is not the exact Git checkout root. Declare the checkout root itself, then retry."
+        }
+        // Checked before the primary-checkout arm: a collapsed pair also names
+        // the registered primary checkout, and its cause is the collapse.
+        "worktree_mismatch" if reason.contains("collapses") => {
+            "Run failed because its worktree collapses to the registered primary checkout. Assign a separate worktree, then retry."
         }
         "worktree_mismatch" if reason.contains("registered primary checkout") => {
             "Run failed because its primary checkout could not be verified. Check the workspace registration, then retry."
-        }
-        "worktree_mismatch" if reason.contains("collapses") => {
-            "Run failed because its worktree is the primary checkout. Assign a separate worktree, then retry."
         }
         "worktree_mismatch" => {
             "Run failed because its worktree declaration could not be verified. Check the declared workspace and repo roots, then retry."
