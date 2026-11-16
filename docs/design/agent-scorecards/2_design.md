@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: Implemented Agents dashboard view under Analytics; covers problem attribution, the shared score, per-role terms, the API, CLI and MCP contract, scan budget and delivery tracks.
 tags: [agent-scorecards, dashboard, analytics]
-paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-web/src/runtime_memo.rs", "crates/orbit-common/src/governance/agents.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-core/src/application/codebase/pilot.rs", "crates/orbit-core/src/application/codebase/lock_waits.rs", "crates/orbit-core/src/application/codebase/facts/**", "crates/orbit-web/assets/dashboard/**"]
+paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-web/src/runtime_memo.rs", "crates/orbit-common/src/governance/agents.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-core/src/application/codebase/pilot/**", "crates/orbit-core/src/application/codebase/lock_waits.rs", "crates/orbit-core/src/application/codebase/facts/**", "crates/orbit-web/assets/dashboard/**"]
 related_features: [user-interface, review-gate, finding-verification]
 related_artifacts: []
 ---
@@ -174,7 +174,7 @@ A problem counts against the run responsible for it, not the task's latest crew,
 - **Implementation run**: the activity job run that produced the candidate. A problem recorded on a task is charged to the implementation run whose span (the run's start to the next status change, as `run_spans` computes it today) contains the problem's timestamp. If none does, it goes to the most recent run before it.
 - **Final implementation run**: the run whose candidate landed. Landed credit and `no_test` regressions go to it.
 - **Review run**: the review gate's settlement for the attempt, read from its typed `review_settled` history event (the settlement comment for records written before that event). Its reviewer names that review's crew, provider and model — one settlement identity, not the row's aggregated contributing crews. The row's recorded effort comes from the matching review invocation (§2's main-invocation rule), never from the comment; a review with no matching invocation takes the effort of its run's matching launch record under §2's launch-record fallback, and stays effort unknown only when no launch record matches either. A re-review round settles through the same gate with the same comment lead, so a settlement matches the gate's own step or any `re_review*` step, narrowed to the invocations that ended after the previous settlement and by its own settlement time. The gate runs inside the implementation pipeline, so the charge names the implementation run whose span contains the settlement. A replayed settlement for the same attempt counts once.
-- **Pilot run**: `pilot_run_id` on the newest task-pilot receipt. Older receipts without that field are matched as §5.4 describes (`codebase/pilot.rs`).
+- **Pilot run**: `pilot_run_id` on the newest task-pilot receipt. Older receipts without that field are matched as §5.4 describes (`codebase/pilot/`).
 
 ### 3.3 The attribution strip
 
@@ -764,7 +764,7 @@ Tests follow the repository rules: behavior at public boundaries, no copy-matchi
 | C | Agents destination, routing and shared dashboard renderer | Landed [ORB-16953] | `crates/orbit-web/assets/dashboard/js/agents.js`, `crates/orbit-web/assets/dashboard/css/agents.css` |
 | D | Implementers role | Landed [ORB-16954]; original cost/tier panel removed by [ORB-17736] | `crates/orbit-core/src/application/agents/roles/implementers/` |
 | E | Reviewers role, false rejects, provisional banner and outcome panel | Landed [ORB-16955] | `crates/orbit-core/src/application/agents/roles/reviewers.rs`, `crates/orbit-web/assets/dashboard/js/agents-reviewers.js` |
-| F | Pilots role, pilot evidence and calibration panel | Landed [ORB-16956] | `crates/orbit-core/src/application/agents/roles/pilots.rs`, `crates/orbit-core/src/application/codebase/pilot.rs`, `crates/orbit-web/assets/dashboard/js/agents-pilots.js` |
+| F | Pilots role, pilot evidence and calibration panel | Landed [ORB-16956] | `crates/orbit-core/src/application/agents/roles/pilots.rs`, `crates/orbit-core/src/application/codebase/pilot/**`, `crates/orbit-web/assets/dashboard/js/agents-pilots.js` |
 | G | CLI and MCP scorecards | Landed [ORB-16957]; orchestrator aliases later removed by [ORB-23582] | `crates/orbit-cli/src/command/agents.rs`, `crates/orbit-tools/src/builtin/orbit/agents.rs` |
 
 ```

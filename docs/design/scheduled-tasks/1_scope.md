@@ -183,7 +183,7 @@ A new admission exclusion, `Scheduled`, beside `ProviderBackoff`:
     and acknowledged superseded sources (`in-progress`, `blocked`, or
     `backlog`) can be eligible outside review. The hold
     applies to backlog, not blocked tasks. Claim recovery
-    (`recover_claim_as_operator` in `application/review/handoff.rs`) and
+    (`recover_claim_as_operator` in `application/review/handoff/console.rs`) and
     requeue (`application/task/requeue.rs`) only move a task to `blocked`
     or `backlog`; the hold applies only to backlog.
   - **Outside admission.** A human `orbit task update --status in-progress`

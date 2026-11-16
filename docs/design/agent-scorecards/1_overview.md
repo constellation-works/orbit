@@ -11,7 +11,7 @@ doc_role: overview
 type: design
 summary: One scorecard per agent role (implementers, reviewers, task pilots), ranked by model and recorded effort, where each problem counts against exactly one role.
 tags: [agent-scorecards, dashboard, analytics]
-paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-core/src/application/codebase/pilot.rs", "crates/orbit-web/assets/dashboard/js/agents.js"]
+paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-core/src/application/codebase/pilot/**", "crates/orbit-web/assets/dashboard/js/agents.js"]
 related_features: [user-interface, review-gate, finding-verification]
 related_artifacts: []
 ---

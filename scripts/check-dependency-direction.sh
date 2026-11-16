@@ -718,7 +718,7 @@ PY
 # adapter's blocks, so a new adapter method is covered without being listed.
 # Same-named methods on receivers that are not `OrbitRuntime`: the skill catalog's
 # `doctor` and the plugin store's `list_plugins`. Exact lines only.
-adapter_upcall_allowed='^health/artifact_diagnosis\.rs:[0-9]+:.*runtime\.skill_catalog\(\)\.doctor\(|^skill\.rs:[0-9]+:.*self\.skill_catalog\(\)\.doctor\(|^plugin/inspect/summary\.rs:[0-9]+:\s+\.list_plugins\(\)\?$|^plugin/secrets\.rs:[0-9]+:.*stores\(\)\.plugins\(\)\.list_plugins\(|^tool_name_migration\.rs:[0-9]+:.*stores\(\)\.plugins\(\)\.list_plugins\('
+adapter_upcall_allowed='^health/artifact_diagnosis\.rs:[0-9]+:.*runtime\.skill_catalog\(\)\.doctor\(|^skill\.rs:[0-9]+:.*self\.skill_catalog\(\)\.doctor\(|^plugin/inspect/summary\.rs:[0-9]+:\s+\.list_plugins\(\)\?$|^plugin/secrets\.rs:[0-9]+:.*stores\(\)\.plugins\(\)\.list_plugins\(|^tool_name_migration/plugin_manifest\.rs:[0-9]+:.*stores\(\)\.plugins\(\)\.list_plugins\('
 if ! inherent_calls_into "$app_src" "" "" "$adapter_upcall_allowed" '' "$repo_root/crates/orbit-core/src/adapter"; then
   echo "orbit-core application must not call inherent OrbitRuntime methods defined under adapter; reach them through an application-owned port [ORB-22004]"
   fail=1
@@ -990,7 +990,7 @@ fi
 # dispatch only through its own ReviewLandingDispatchPort. Refuse paths,
 # grouped trees, relative chains and calls into landing's inherent methods.
 # These exact lines read the task store, whose method shares a runtime name.
-landing_store_reads_allowed='^task/external_merge/candidate\.rs:[0-9]+:\s+\.landing_attempts\(\)$|^task/external_merge/rescued\.rs:[0-9]+:\s+if tasks\.landing_attempts\(\)\?\.iter\(\)\.any\(\|attempt\| \{$|^review/handoff\.rs:[0-9]+:\s+self\.stores\(\)\.tasks\(\)\.landing_attempts\(\)\?$'
+landing_store_reads_allowed='^task/external_merge/candidate\.rs:[0-9]+:\s+\.landing_attempts\(\)$|^task/external_merge/rescued\.rs:[0-9]+:\s+if tasks\.landing_attempts\(\)\?\.iter\(\)\.any\(\|attempt\| \{$|^review/handoff/console\.rs:[0-9]+:\s+self\.stores\(\)\.tasks\(\)\.landing_attempts\(\)\?$'
 for lower_module in task job review distributed; do
   if dependency_matches -n 'crate::application::landing\b' \
     "$app_src/$lower_module" -g '*.rs' -g '!**/tests/**' ||

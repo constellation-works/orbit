@@ -2,7 +2,7 @@
 //! [ORB-17179].
 //!
 //! The persisted exit-record format and its readers live with the run
-//! (`job/run/worker_exit.rs`), which reconciliation reads. This module is the
+//! (`job/run/worker_exit/`), which reconciliation reads. This module is the
 //! writing side. Only the worker's parent, the supervisor that launched it,
 //! can reap its exit status. When the supervisor is gone, init or the user
 //! manager reaps the worker and its status is lost. So:
