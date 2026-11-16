@@ -235,9 +235,23 @@ permissions:
 `write_files` uses the same path templates and `fs` consent as directory writes,
 and grants no sibling file. Each entry must be:
 
-- an existing file, not a symbolic link or a directory;
-- owned by the current user, with one hard link and no group or other write access;
-- free of `*` and `?` in its path.
+- an existing regular file, not a directory: owned by the current user, with
+  one hard link and no write access for others. Group write is accepted, so a
+  checkout made under umask 0002 works; a group-writable ancestor must be owned
+  by the user or sticky, and any other-writable ancestor must be sticky.
+- free of `*` and `?` in any path component, including ancestors: macOS reads
+  those characters as wildcards.
+- reached without symbolic links, except for the workspace leaf below. Missing
+  files, directories, and paths through an unsafe directory are refused.
+
+The leaf alone may be a symbolic link when the call has a workspace: the link
+must sit inside the workspace and resolve to an existing regular file inside
+the same workspace, outside `.git` and `.orbit` (for example `AGENTS.md` ->
+`CLAUDE.md`). The target must pass the same ownership, hard-link, and
+other-write checks, and the sandbox grants the target, so the write goes
+through the link and the link stays. A link without a workspace, or whose
+target is missing, leaves the workspace, is a chain of links, or lands in
+`.git` or `.orbit`, is refused.
 
 A scoped `fs=<root>` grant must cover the file or an ancestor directory. A new
 entry, or a templated entry that now points elsewhere, needs consent again.
