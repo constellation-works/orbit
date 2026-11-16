@@ -2809,6 +2809,85 @@ fn task_artifact_get_is_global_by_default_across_tool_run_task_cli_and_mcp() {
     }
 }
 
+/// The run/task confusion and missing-delivery refusals give executable
+/// recovery steps on each public surface, preserving their error codes.
+#[test]
+fn task_and_delivery_refusals_use_the_calling_surface_syntax() {
+    let workspace = McpWorkspace::init();
+    let task_id = author_task(&workspace, "Surface-specific task recovery");
+    for (args, code, remedy) in [
+        (
+            vec!["run", "show", &task_id],
+            "job_run_not_found",
+            format!("orbit task show {task_id} --fields delivery"),
+        ),
+        (
+            vec!["task", "show", &task_id, "--fields", "delivery"],
+            "invalid_input",
+            format!("orbit task show {task_id}"),
+        ),
+        (
+            vec!["task", "show", "TST-99999"],
+            "task_not_found",
+            "orbit task list".to_string(),
+        ),
+    ] {
+        let output = workspace.run(&args);
+        let message = stderr(&output);
+        assert_eq!(output.status.code(), Some(1), "{message}");
+        assert!(message.contains(&remedy), "{message}");
+        assert!(
+            !message.contains("orbit.task.") && !message.contains("orbit_task_"),
+            "CLI recovery must use CLI syntax: {message}"
+        );
+        let mut json_args = args;
+        json_args.push("--json");
+        let output = workspace.run(&json_args);
+        assert_eq!(output.status.code(), Some(1));
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["code"], code, "{error}");
+        assert!(error["error"].as_str().unwrap().contains(&remedy));
+    }
+    // Execute both CLI recovery steps instead of merely checking their text.
+    workspace.run_ok(&["task", "show", &task_id]);
+    workspace.run_ok(&["task", "list"]);
+
+    let mut client = workspace.serve_with_args(&["--operator", "--role", "operator"]);
+    let listed = client.tools_list();
+    find_tool(tools_array(&listed), "orbit_task_list");
+    find_tool(tools_array(&listed), "orbit_task_show");
+    find_tool(tools_array(&listed), "orbit_run");
+    let missing_run = client.assert_tool_error(
+        "orbit_run",
+        json!({"action": "show", "id": task_id}),
+        "not_found",
+    );
+    assert_message_parts(
+        &missing_run,
+        &["orbit_run {\"action\":\"list\"}", "orbit_task_show"],
+    );
+    assert!(!message_contains(&missing_run, "orbit run "));
+    assert!(!message_contains(&missing_run, "orbit.task."));
+    client.call_tool_ok("orbit_run", json!({"action": "list"}));
+    let missing =
+        client.assert_tool_error("orbit_task_show", json!({"id": "TST-99999"}), "not_found");
+    assert_message_parts(&missing, &["orbit_task_list"]);
+    assert!(!message_contains(&missing, "orbit task "));
+    assert!(!message_contains(&missing, "orbit.task."));
+    client.call_tool_ok("orbit_task_list", json!({}));
+
+    let no_delivery = client.assert_tool_error(
+        "orbit_task_show",
+        json!({"id": task_id, "field": "delivery"}),
+        "invalid_input",
+    );
+    let remedy = format!("orbit_task_show {}", json!({"id": task_id}));
+    assert_message_parts(&no_delivery, &[&remedy]);
+    assert!(!message_contains(&no_delivery, "orbit task "));
+    assert!(!message_contains(&no_delivery, "orbit.task."));
+    client.call_tool_ok("orbit_task_show", json!({"id": task_id}));
+}
+
 /// [ORB-17648] A missing artifact path refuses with the listing remedy in the
 /// caller's own surface syntax: the CLI names `orbit task show --fields
 /// artifacts`, while MCP keeps the `orbit.task.show` tool-call spelling.
@@ -2853,7 +2932,7 @@ fn missing_artifact_names_the_listing_in_each_surface_syntax() {
     );
     assert_eq!(
         missing_task,
-        json!({ "code": "not_found", "message": format!("task not found: {unknown}; see `orbit task list` or `orbit.task.list` for valid task IDs") }),
+        json!({ "code": "not_found", "message": format!("task not found: {unknown}; see `orbit_task_list {{}}` for valid task IDs") }),
         "a missing task is not reported as a missing artifact"
     );
     assert_eq!(refused["code"], "not_found", "{refused}");

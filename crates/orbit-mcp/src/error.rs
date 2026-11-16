@@ -11,7 +11,7 @@ fn error_payload(err: &OrbitError) -> Value {
     if let OrbitError::RemoteTool { payload, .. } = err {
         return payload.clone();
     }
-    let stored = err.to_string();
+    let stored = err.mcp_error_message();
     let reader = orbit_common::source_repair_reader_text(&stored);
     let shown = reader
         .as_ref()
