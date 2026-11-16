@@ -13,6 +13,7 @@ mod deadline_expiry;
 mod landing;
 #[cfg(unix)]
 mod launch;
+mod wake_scope;
 
 use std::path::PathBuf;
 use std::sync::Arc;

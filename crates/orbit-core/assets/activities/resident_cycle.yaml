@@ -143,6 +143,12 @@ spec:
     Keep standing state in `requests[]` and `decisions[]`, carried forward
     without retelling it in notes. Put operator asks in `requests[]` and
     notices when supported, never in a "FOR DANIEL" notes paragraph.
+    Set `next_wake.not_before` to when you next need to look without a
+    new event (a run you started should have finished, a review is due):
+    Orbit starts the next cycle then, never before the mandate's cadence
+    floor and never later than its heartbeat, unless a change you act on
+    (a watched task blocking, finishing or entering review, an answered
+    request, a notice, a comment) wakes you first.
     Use `outcome: idle` when you woke and had nothing to do; when
     `brief.status_request` is true the manager asked for status, so say in
     the structured fields where the mandate stands and keep `notes` delta-only. When the exit
