@@ -74,7 +74,12 @@
 #   (`pr_auto_fix_pushed`), and refuses a branch moved any other way. Such a
 #   run is admitted without waiting on other tasks' context locks
 #   (`footprint_deferred`), and takes them before its first agent that may
-#   edit; re-applying the unchanged published patch is not an edit.
+#   edit; re-applying the unchanged published patch is not an edit. An
+#   operator's explicit ship (`operator_readiness_override`) un-defers that
+#   footprint at the gate (`footprint_deferred: false`, recording
+#   `readiness_overridden` naming the holders), so the leaf edits beside
+#   them with no footprint wait and no `footprint_unavailable` hold; runs
+#   without that mark still wait.
 #
 schemaVersion: 2
 kind: Job
