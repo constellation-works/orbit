@@ -940,6 +940,87 @@ names, `NEXTEST_PARTITIONS`, the partition proof and the ruleset are
 unchanged. The hosted after column is the operator's `scripts/ci-p90.py` run
 once the latest 20 completed PR runs carry this workflow.
 
+### Transfer packing reuses its first staging range (2026-11-16)
+
+ORB-25272 profiles base `5bc27a8b91244d6954550f5e5a60cb1889947f97` against
+ORB-25269's frozen 20-PR cohort: 16 executed Checks (14 success, two failure),
+four skipped, none cancelled or missing; nearest-rank p90 **577 s**, maximum
+**611 s**. Failed runs 43813288222 and 43805666690 remain in that denominator.
+The cold outlier 43806023942 (AMD EPYC 9V74, four CPUs, workspace cache miss)
+spent 368 s in list-build, 11 s archiving and 14.188 s packing before its last
+partition's 111.458 s nextest run. The warm p90 run 43807148127 (Intel Xeon
+6975P-C, four CPUs, 6,270 unchanged inputs and eight changed) spent 132/8/10.810 s
+in those build phases; its last shard ran nextest for 203.966 s with 47.9%
+whole-host I/O wait. This distinguishes the cold build and warm shard tail;
+it does not identify a defective test. Pre-Check scheduling/dependency delay
+was 18–81 s, separate from elapsed Check time. The task's
+`ci-path/pre-edit-profile.md` and `ci-path/cohort.json` retain the source pins,
+guardrail phases, transfer observations, all failed/outlier identities and
+queue limitations.
+
+The bounded change removes one redundant transfer copy. Previously the
+packer encoded a complete staging file, then copied all four byte ranges
+into four more staging files. It now copies ranges 2–4 first and truncates
+its own encoded staging file to range 1. The input archive is never truncated.
+Compression, balanced part sizes, file bytes, no-replace link publication,
+rollback and extraction are unchanged. For the measured 620,798,455-byte
+transfer, split-copy reads and writes each fall from 620,798,455 to
+465,598,841 bytes: **155,199,614 bytes (25%) avoided in each direction**.
+Staging files fall from five to four. A one-part transfer needs no split copy.
+
+The controlled fixture is one full-workspace archive built at the base:
+837,086,237 compressed bytes, 53 binaries and 362 files. The build took
+223 s for list-build and 4 s for archiving; those are fixture preparation,
+not a build-speed comparison. Every packing arm uses those identical input
+bytes, Python 3.14.4, zstd 1.5.7 `-3 --long=29 -T0`, four parts, and CPUs 0–3
+on one shared 32-thread Ryzen AI MAX+ 395 Linux host. Cargo used four jobs,
+Rust 1.98.1, nextest 0.9.136, incremental/debug off, symbol stripping and no
+compiler-object cache. The CI profile's six nextest slots are unchanged;
+packing runs no tests. OS caches stay warm without eviction; each arm runs
+alone. This is a local transfer fixture, not a hosted runner or cold-cache
+comparison. Whole CLI wall includes Python startup; cProfile attributes the
+split phase. All measurements, including warmups and controls, are retained:
+
+| Sequential sample | Base CLI / split wall (s) | Candidate CLI / split wall (s) |
+|---|---:|---:|
+| Warmup | 6.519 / 0.2121 | 6.205 / 0.2022 |
+| Pair 1 | 6.413 / 0.2243 | 7.165 / 0.1920 |
+| Pair 2 | 7.976 / 0.2245 | 7.031 / 0.2134 |
+| Pair 3 | 8.319 / 0.2272 | 6.080 / 0.1926 |
+| Repeated unchanged base controls | 6.971 / 0.2237; 7.087 / 0.2232 | — |
+
+The three paired split reductions are 0.0323/0.0111/0.0346 s; split medians
+are 0.2245 → 0.1926 s, with spreads 0.0029/0.0214 s. Whole-packer medians
+are 7.976/7.031 s but spreads are 1.906/1.085 s and pair 1 is slower on the
+candidate. The unchanged controls differ by 0.116 s overall and 0.0005 s in
+the split. Thus the operation reduction and small split-phase saving are
+measured; a whole-packer or hosted saving of that median difference is not
+established. `ci-path/measurements.json` and `ci-path/measure.py` retain every
+sample, command, exit status, script hash and per-part byte hash.
+
+No tests or negative cases are removed or added. The existing transfer
+boundary carriers retain repeated-binary compression, every member's bytes
+and execute bits, missing/truncated parts, unavailable/failed codecs, unsafe
+paths/links and no-replace failures. Manual CLI QA also verifies late
+publication collision rollback and the zero-copy one-part case. All 362
+extracted files match the original archive, all four part hashes match the
+base, and the twelve-way exact-once proof passes. Workflow carriers retain
+all required jobs, failure propagation and sandbox/Landlock gates; the cache
+changed-input guard and protected-SSH requirement are unchanged.
+
+**This does not close the 177 s p90 deficit.** The next remaining lanes are
+cold compilation and the warm shard I/O tail. The already-landed extraction
+repair and ineffective core self-dependency/lint experiments are not repeated.
+Runner class, cost and setup overlap remain unchanged. After publication,
+once the latest 20 completed PR `ci.yml` runs carry this candidate, the
+operator should run `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400`
+under the [hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff).
+Retain full heads, run IDs and job timestamps; report full-job nearest-rank
+p90, median, maximum, failures and skipped/cancelled/missing Checks, plus
+pre-Check delay and awaited-job queue delay separately. Preserve unavailable
+queue timestamps as uncertainty. Hosted compliance is **not run, owed after
+publication**, not established by this fixture.
+
 ## Why
 
 On 2026-10-03, unit tests under `crates/*/src/**` were about 295k lines and 7,675 test functions, more lines than the production code they covered. Crate-root integration tests were 37k lines. Most unit tests pinned internals, so a refactor that kept behaviour unchanged still broke dozens of them, and each break cost an agent tokens to repair a test rather than find a bug. A review of all of them kept 180 (2.3%).
