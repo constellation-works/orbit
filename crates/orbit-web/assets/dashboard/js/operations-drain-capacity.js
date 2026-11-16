@@ -127,9 +127,16 @@ export function autoDrainPhase(payload) {
 }
 
 export function autoDrainCapacity(capacity, counts, blocked, { pull = false, approvalSummary = null } = {}) {
-  const busy = autoDrainNumber(capacity.active_leaf_runs ?? capacity.occupancy?.active_leaf_runs);
-  const limit = autoDrainNumber(capacity.max_active_leaf_runs);
+  const workspaceBusy = autoDrainNumber(capacity.active_leaf_runs ?? capacity.occupancy?.active_leaf_runs);
+  const workspaceLimit = autoDrainNumber(capacity.max_active_leaf_runs);
+  const drainBusy = autoDrainNumber(capacity.drain_running_tasks);
+  const drainLimit = autoDrainNumber(capacity.drain_concurrency);
+  const drainRunning = !pull && (capacity.drain_phase === "draining" || capacity.drain_phase === "winding_down")
+    && Number.isFinite(drainBusy) && Number.isFinite(drainLimit) && drainLimit > 0;
+  const busy = drainRunning ? drainBusy : workspaceBusy;
+  const limit = drainRunning ? drainLimit : workspaceLimit;
   const free = autoDrainNumber(capacity.free_slots);
+  const workspaceKnown = Number.isFinite(workspaceBusy) && Number.isFinite(workspaceLimit) && workspaceLimit > 0;
   const known = Number.isFinite(busy) && Number.isFinite(limit) && limit > 0;
   // Each message is short enough for one line at the 336px dock and the 375px
   // phone dock. Detail the short wording drops is `detail`: it shows as focusable
@@ -141,8 +148,8 @@ export function autoDrainCapacity(capacity, counts, blocked, { pull = false, app
   if (hold) {
     summary = hold.summary;
     detail = hold.detail;
-  } else if (Number.isFinite(free) && free <= 0 && known && busy >= limit) {
-    const toClear = busy - limit + 1;
+  } else if (Number.isFinite(free) && free <= 0 && workspaceKnown && workspaceBusy >= workspaceLimit) {
+    const toClear = workspaceBusy - workspaceLimit + 1;
     summary = `Leaf limit: ${autoDrainPlural(toClear, "slot")} must clear.`;
     detail = `The workspace leaf limit is reached; ${autoDrainPlural(toClear, "occupied slot")} must clear before another task can start.`;
   } else if (Number.isFinite(free) && free <= 0) {
@@ -156,7 +163,11 @@ export function autoDrainCapacity(capacity, counts, blocked, { pull = false, app
       : "Backlog is empty.";
     }
   }
-  const label = known ? `Workspace: ${busy} of ${limit} leaf slots in use` : "Workspace: capacity unknown";
+  const label = known
+    ? drainRunning
+      ? `Drain: ${busy} of ${limit} task slots in use`
+      : `Workspace: ${busy} of ${limit} leaf slots in use`
+    : drainRunning ? "Drain: task capacity unknown" : "Workspace: capacity unknown";
   const full = Number.isFinite(free) && free <= 0;
   const bar = el("div", { class: "drain-capacity-bar" });
   bar.setAttribute("role", "img");
@@ -190,7 +201,10 @@ export function autoDrainCapacity(capacity, counts, blocked, { pull = false, app
   // the operator's own choice and does not.
   const held = full && capacity.admissions_stopped !== true;
   // The slot bar opens the free-slot and per-pipeline breakdown on hover, focus and tap.
-  const breakdown = pinnedInfoHint([label, Number.isFinite(free) ? `${Math.max(0, free)} free` : "", ...byPipeline].filter(Boolean).join("\n"));
+  const workspaceBreakdown = drainRunning && Number.isFinite(workspaceBusy) && Number.isFinite(workspaceLimit)
+    ? `Workspace: ${workspaceBusy} of ${workspaceLimit} leaf slots in use${Number.isFinite(free) ? ` (${Math.max(0, free)} free)` : ""}`
+    : Number.isFinite(free) ? `${Math.max(0, free)} free` : "";
+  const breakdown = pinnedInfoHint([label, workspaceBreakdown, ...byPipeline].filter(Boolean).join("\n"));
   breakdown.classList.add("drain-capacity-hint");
   breakdown.prepend(bar);
   const result = el("div", { class: "drain-capacity" }, [breakdown]);

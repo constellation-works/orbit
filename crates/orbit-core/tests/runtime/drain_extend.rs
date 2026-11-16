@@ -11,7 +11,7 @@ use orbit_engine::RuntimeHost;
 use orbit_store::contracts::{AuditEventFilter, JobRunStoreBackend};
 use orbit_tools::ToolContext;
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::workflow::{JobRunState, PipelineState};
+use orbit_types::workflow::{ChildDispatch, JobRunState, PipelineState};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::{Duration as StdDuration, Instant};
@@ -275,6 +275,37 @@ fn concurrency_given_with_an_extension_retunes_the_drain_like_run_concurrency() 
         assert_eq!(again.outcome, DrainWindowExtensionOutcome::Unchanged);
         assert_eq!(again.worker_limit.unwrap().max_active_leaf_runs, 1);
     }
+}
+
+fn readiness_exposes_running_drain_task_slots_separately_from_leaf_capacity() {
+    let drains = Drains::new();
+    let drain = drains.running(OWNER, 3600, Utc::now() + Duration::minutes(10), |state| {
+        let worker = drains
+            .jobs
+            .insert_job_run("task_auto_pipeline", 1, Utc::now(), None, None)
+            .unwrap();
+        drains
+            .jobs
+            .mark_job_run_running(&worker.run_id, Utc::now(), std::process::id())
+            .unwrap();
+        state.record_child_dispatch(ChildDispatch::submitted(
+            worker.run_id,
+            "task_auto_pipeline".into(),
+            "invoke_detached".into(),
+            false,
+            false,
+            Utc::now(),
+        ));
+    });
+
+    let readiness = drains
+        .runtime
+        .workspace_auto_readiness(&[], Some(15), 10, &[])
+        .unwrap();
+    assert_eq!(readiness["capacity"]["drain_run_id"], drain);
+    assert_eq!(readiness["capacity"]["max_active_leaf_runs"], 15);
+    assert_eq!(readiness["capacity"]["drain_concurrency"], 2);
+    assert_eq!(readiness["capacity"]["drain_running_tasks"], 1);
 }
 
 fn stopped_cancelling_single_pass_and_ineligible_runs_refuse_the_extension_and_stay_closed() {
@@ -643,6 +674,7 @@ crate::scenario_table!(
     extending_a_pull_or_owner_drain_moves_the_deadline_its_window_reads_and_never_shortens_it,
     a_pull_drain_in_its_settling_tail_resumes_requesting_while_a_closed_owner_drain_refuses,
     concurrency_given_with_an_extension_retunes_the_drain_like_run_concurrency,
+    readiness_exposes_running_drain_task_slots_separately_from_leaf_capacity,
     stopped_cancelling_single_pass_and_ineligible_runs_refuse_the_extension_and_stay_closed,
     invalid_concurrency_given_with_an_extension_fails_and_leaves_state_unchanged,
     a_claim_taken_during_a_combined_extension_leaves_no_partial_change,

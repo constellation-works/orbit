@@ -590,6 +590,16 @@ fn readiness_snapshot_with_detail(
         "total": total,
         "tasks": tasks,
     });
+    // The Auto-drain card visualizes coordinator task slots. Keep its scale
+    // and fill separate from workspace leaf-run occupancy, where one admitted
+    // task can hold several pipeline runs.
+    payload["capacity"]["drain_concurrency"] = json!(
+        active_drain
+            .as_ref()
+            .map(|drain| u64::from(drain.effective_max_active_leaf_runs()))
+    );
+    payload["capacity"]["drain_running_tasks"] =
+        json!(active_drain.as_ref().map(|_| running_admitted_workers));
     // No block means the older/off response shape remains unchanged.
     if let Some(forecast) = forecast_view {
         payload["capacity"]["admission_forecast"] = forecast;
