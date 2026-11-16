@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: attention item kinds with their source of truth, the item and response schema, severity derivation and the next action"
-last_validated: 2026-11-08
+last_validated: 2026-11-16
 title: Spec — Attention item
 owner: claude
 status: Draft
@@ -9,7 +9,7 @@ feature: operator-attention
 tags: [operator-attention, spec]
 related_features: [operator-attention, human-decision-channel, distributed-drain]
 related_artifacts: [ORB-21164]
-last_updated: 2026-11-14
+last_updated: 2026-11-16
 ---
 
 # Spec: Attention item
@@ -68,9 +68,14 @@ Notes that bind implementations:
   proposed tasks; listing them would drown the rest. See [3_vision.md §1](../3_vision.md#1-open-questions).
 - **Runtime kinds respect the caller's read rights.** `run_*`, `claim_stale` and
   `host_unhealthy` read sources that require the Operator capability
-  (`orbit.run` action `list`, `orbit.drain.claims`). A session without it gets the task-level
-  kinds, and each skipped kind appears in `degraded` with code `capability` rather than
-  silently missing ([4_decisions.md](../4_decisions.md#a-derived-view-never-widens-who-may-read-its-sources)).
+  (`orbit.run` action `list`, `orbit.drain.claims`), with one workspace-scoped `degraded` entry
+  per selected unreadable kind otherwise. A live resident cycle (the trusted run binding
+  names a `resident_cycle_pipeline` run holding its mandate's live grant) reads the runtime
+  kinds and host health, read-only, for the workspaces its mandate covers [ORB-25254]; a
+  workspace outside the mandate and any other agent session keep the `capability` entries in
+  `degraded` rather than silently missing
+  ([4_decisions.md](../4_decisions.md#a-derived-view-never-widens-who-may-read-its-sources)).
+  The session gains no write capability.
 - **Network sources degrade, they do not fail.** `ci_red` needs provider authentication
   (`github.auth.status`); with none, or on timeout, it yields `degraded` code
   `source_unavailable`. On the workspace owner, a workspace with no recognisable remote
