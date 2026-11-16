@@ -16,7 +16,7 @@ use orbit_common::OrbitError;
 use orbit_common::fs::path_filter::PathFilter;
 use orbit_types::task::{
     GuardOutcome, LIGHT_DELIVERY_PATHS_KEY, LightDeliveryDecision, LightDeliveryJudgement,
-    ReviewSkipProfile, TaskHistoryEntry,
+    RecordedLightDeliveryDecision, ReviewSkipProfile,
 };
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -276,24 +276,22 @@ pub(super) fn record_light_delivery<H: RuntimeHost + ?Sized>(
     if host.worker_invocation().is_some() {
         return Ok(());
     }
-    let event = decision.event();
-    let note = decision.note();
+    let record = RecordedLightDeliveryDecision::from_decision(decision);
+    let key = record.replay_key();
     for task_id in task_ids {
         let recorded = host
             .get_task_history(task_id)?
             .iter()
             .rev()
-            .any(|entry| entry.event == event && entry.note.as_deref() == Some(note.as_str()));
+            .filter_map(RecordedLightDeliveryDecision::decode)
+            .any(|recorded| recorded.replay_key() == key);
         if recorded {
             continue;
         }
         host.apply_task_automation_update(
             task_id,
             TaskAutomationUpdate {
-                append_history: vec![
-                    TaskHistoryEntry::new(Utc::now(), "system", event)
-                        .with_note(Some(note.clone())),
-                ],
+                append_history: vec![record.history_entry(Utc::now(), "system")],
                 ..Default::default()
             },
         )?;

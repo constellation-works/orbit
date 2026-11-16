@@ -202,12 +202,8 @@ impl TaskCommitBoundary {
         // light-delivery judgement of the candidate is recorded here.
         for decision in &observation.light_delivery {
             params.append_history.push(
-                orbit_types::task::TaskHistoryEntry::new(
-                    Utc::now(),
-                    params.actor.clone(),
-                    decision.event(),
-                )
-                .with_note(Some(decision.note())),
+                orbit_types::task::RecordedLightDeliveryDecision::from_decision(decision)
+                    .history_entry(Utc::now(), params.actor.clone()),
             );
         }
         // [ORB-15427] The owner established each known-red command against

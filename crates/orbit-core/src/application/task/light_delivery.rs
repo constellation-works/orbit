@@ -12,7 +12,10 @@ use std::path::Path;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
-use orbit_types::task::{LIGHT_DELIVERY_TAGS, LightDeliveryDecision, Task, TaskHistoryEntry};
+use orbit_types::task::{
+    LIGHT_DELIVERY_TAGS, LightDeliveryDecision, LightDeliveryReplayKey,
+    RecordedLightDeliveryDecision, Task, TaskHistoryEntry,
+};
 use orbit_types::workflow::handoff::HandoffCandidate;
 
 use crate::OrbitRuntime;
@@ -79,16 +82,7 @@ pub(crate) fn carries(task: &Task, tag: &str) -> bool {
 
 /// The history entry recording `decision`.
 pub(crate) fn light_delivery_history_entry(decision: &LightDeliveryDecision) -> TaskHistoryEntry {
-    TaskHistoryEntry {
-        at: Utc::now(),
-        by: "system".into(),
-        event: decision.event().to_string(),
-        note: Some(decision.note()),
-        from_status: None,
-        to_status: None,
-        operation_id: None,
-        decision: None,
-    }
+    RecordedLightDeliveryDecision::from_decision(decision).history_entry(Utc::now(), "system")
 }
 
 /// Whether `history` already records `decision`.
@@ -96,10 +90,12 @@ pub(crate) fn records_light_delivery(
     history: &[TaskHistoryEntry],
     decision: &LightDeliveryDecision,
 ) -> bool {
-    let note = decision.note();
-    history.iter().rev().any(|entry| {
-        entry.event == decision.event() && entry.note.as_deref() == Some(note.as_str())
-    })
+    let key = LightDeliveryReplayKey::from_decision(decision);
+    history
+        .iter()
+        .rev()
+        .filter_map(RecordedLightDeliveryDecision::decode)
+        .any(|recorded| recorded.replay_key() == &key)
 }
 
 /// Record `decision` once in each of `task_ids`' history. A claimed leaf
