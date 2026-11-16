@@ -63,11 +63,81 @@ export function detailFeedbackSignature(task) {
   }
   return parts.join("|");
 }
+function parseOpeningFence(line) {
+  let i = 0;
+  while (i < line.length && i < 3 && line[i] === " ") i++;
+  if (i === line.length) return null;
+  const char = line[i];
+  if (char !== "`" && char !== "~") return null;
+  let count = 0;
+  while (i < line.length && line[i] === char) {
+    count++;
+    i++;
+  }
+  if (count < 3) return null;
+  const info = line.slice(i);
+  if (char === "`" && info.includes("`")) return null;
+  return { fenceChar: char, fenceLength: count, indent: i - count };
+}
+
+function isClosingFence(line, fenceChar, fenceLength) {
+  let i = 0;
+  while (i < line.length && i < 3 && line[i] === " ") i++;
+  if (i === line.length || line[i] !== fenceChar) return false;
+  let count = 0;
+  while (i < line.length && line[i] === fenceChar) {
+    count++;
+    i++;
+  }
+  if (count < fenceLength) return false;
+  while (i < line.length && line[i] === " ") i++;
+  return i === line.length;
+}
+
+function stripFenceIndent(line, indent) {
+  if (!indent) return line;
+  let i = 0;
+  while (i < line.length && i < indent && line[i] === " ") i++;
+  return line.slice(i);
+}
+
 // Fenced commands in a task description, in order.
 export function humanTaskCommands(text) {
   const out = [];
-  const re = /```[^\n]*\n([\s\S]*?)```/g;
-  let m; while ((m = re.exec(String(text || "")))) { const c = m[1].replace(/\n$/, ""); if (c.trim()) out.push(c); }
+  const lines = String(text || "").split(/\r?\n/);
+  let inFence = false;
+  let fenceChar = "";
+  let fenceLength = 0;
+  let fenceIndent = 0;
+  let blockLines = [];
+
+  for (const line of lines) {
+    if (!inFence) {
+      const open = parseOpeningFence(line);
+      if (open) {
+        inFence = true;
+        fenceChar = open.fenceChar;
+        fenceLength = open.fenceLength;
+        fenceIndent = open.indent;
+        blockLines = [];
+      }
+    } else {
+      if (isClosingFence(line, fenceChar, fenceLength)) {
+        inFence = false;
+        const c = blockLines.join("\n");
+        if (c.trim()) out.push(c);
+        blockLines = [];
+      } else {
+        blockLines.push(stripFenceIndent(line, fenceIndent));
+      }
+    }
+  }
+
+  if (inFence) {
+    const c = blockLines.join("\n");
+    if (c.trim()) out.push(c);
+  }
+
   return out;
 }
 export function humanTaskSteps(text) {
