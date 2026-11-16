@@ -16,7 +16,10 @@
 //!   agent that may edit — an implementer repairing a conflicting
 //!   re-application, a reviewer fix, a step, conflict or check repair —
 //!   and waits while other tasks hold it
-//!   ([`OrbitRuntime::acquire_deferred_footprint`]).
+//!   ([`OrbitRuntime::acquire_deferred_footprint`]), unless an operator's
+//!   explicit ship marked the run: its gate then un-defers the footprint and
+//!   records the local holders it overrode, so the leaf edits beside them.
+//!   Publication authentication and execution-claim refusals are unaffected.
 //!
 //! Two resumed runs that deferred behind the same holder both hold their
 //! context by status while neither holds a file, so neither counts the other as
