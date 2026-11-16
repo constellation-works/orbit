@@ -648,9 +648,13 @@ on its other records. A host whose kernel refuses user namespaces would
 never produce the run, so such a delivery no longer ends in an evidence hold
 that final recovery escalates to an operator. The review does not count on a
 later pull request run to execute the test: CI scope decides that. A docs-only
-pull request runs no test job, one confined to `crates/` runs tests for the
-affected and always-run crates, and any other pull request runs every test
-(`scripts/ci-change-scope.sh`). Any other changed path —
+pull request runs no test job; one confined to `crates/` normally runs tests
+for the affected and always-run crates, but runs every test for a member
+manifest (`crates/<crate>/Cargo.toml`), a `crates/` path no member owns, or a
+selection covering the whole workspace; any other pull request runs every
+test unless a `FILE_READERS`-declared reader selects affected crates
+(`scripts/ci-change-scope.sh`, via `scripts/ci-test-affected.py
+pull_request_scope`). Any other changed path —
 production code, a manifest, a build script, configuration, a script or an
 asset — or a workspace `[[review.host_evidence]]` rule that owes the same
 check keeps the run owed, and the review holds for real execution evidence
