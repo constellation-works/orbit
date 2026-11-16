@@ -80,6 +80,30 @@ fn control_fences_admission_but_allows_an_admitted_cycle_to_finish() {
         let run = fx.cycle_run(&mandate, "control-after-admission");
         let brief = fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
         assert_eq!(brief["cycle_count"], 1);
+        let post_status = |at, title: &str| {
+            orbit_core::test_support::with_notice_post_time(at, || {
+                fx.as_cycle_agent(&run, || {
+                    call(
+                        &fx.runtime,
+                        "orbit.notice.post",
+                        json!({"kind": "info", "title": title, "body": "Cycle status",
+                               "dedupe_key": orbit_types::record::resident_status_notice_key(&mandate)}),
+                        McpCapability::Agent,
+                    )
+                    .unwrap()
+                })
+            })
+        };
+        let now = Utc::now();
+        let first = post_status(now, "Watching work");
+        let refreshed = post_status(now + Duration::minutes(1), "All quiet");
+        assert_eq!(refreshed["notice"]["id"], first["notice"]["id"]);
+        assert_eq!(refreshed["notice"]["title"], "All quiet");
+        assert_eq!(
+            refreshed["notice"]["expires_at"],
+            json!(now + Duration::minutes(1 + 2 * 120)),
+            "an active cycle refreshes the status with twice its heartbeat"
+        );
         let controlled = call(
             &fx.runtime,
             "orbit.resident.control",
@@ -91,6 +115,22 @@ fn control_fences_admission_but_allows_an_admitted_cycle_to_finish() {
         if action == "stop" {
             assert_eq!(controlled["handoff"], "cycle_live");
         }
+        let final_status =
+            fx.runtime.show_resident_mandate(&mandate).unwrap()["status_line"].clone();
+        assert_eq!(final_status["notice_id"], first["notice"]["id"]);
+        let control_posted: DateTime<Utc> =
+            serde_json::from_value(final_status["posted_at"].clone()).unwrap();
+        assert_eq!(
+            final_status["expires_at"],
+            json!(control_posted + Duration::days(7)),
+            "{action}: the final control line lasts seven days"
+        );
+        let posted = post_status(now + Duration::minutes(2), "Cycle finished quietly");
+        assert_eq!(
+            posted["notice"]["title"], final_status["title"],
+            "{action}: the admitted cycle must leave the control line intact"
+        );
+        assert_eq!(posted["notice"]["expires_at"], final_status["expires_at"]);
         fx.checkpoint(&brief, &run);
         let finished = fx.runtime.finish_resident_cycle(&run).unwrap();
         assert_eq!(finished["finalized"], true, "{action}: {finished}");
@@ -100,6 +140,7 @@ fn control_fences_admission_but_allows_an_admitted_cycle_to_finish() {
         }
         let shown = fx.runtime.show_resident_mandate(&mandate).unwrap();
         assert!(shown["live_cycle"].is_null(), "{action}: {shown}");
+        assert_eq!(shown["status_line"], final_status, "{action}: {shown}");
         let next_run = fx.cycle_run(&mandate, "control-holds-next-admission");
         let next = fx
             .runtime

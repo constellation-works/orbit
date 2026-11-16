@@ -4,6 +4,7 @@ use orbit_types::task::TaskComment;
 
 pub(super) fn comment_presentation(comment: &TaskComment) -> String {
     comment
-        .pilot_assessment_summary()
+        .pilot_comment_view()
+        .map(|view| view.summary)
         .unwrap_or_else(|| comment.message.clone())
 }
