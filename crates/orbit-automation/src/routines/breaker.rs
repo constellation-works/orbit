@@ -86,9 +86,22 @@ pub fn breaker_backoff(trips: u32) -> Duration {
     Duration::minutes(minutes)
 }
 
+/// Outcome of one gate attempt against a breaker snapshot.
+enum GateAttempt {
+    /// The gate is decided.
+    Done(BreakerGate),
+    /// The snapshot changed before the transition landed (a concurrent
+    /// operator reset or bypass); re-decide from the fresh row.
+    Conflict,
+}
+
 /// Decide whether `routine` may be evaluated this pass, tripping, arming,
 /// closing or re-opening its breaker as the observed fires require. A dry
 /// run writes nothing: it reports an open breaker and never trips one.
+/// Transitions are compare-and-swap on the snapshot they decided from: a
+/// concurrent operator reset or bypass refuses the stale write and the
+/// gate re-decides from the row that is actually stored, so the operator
+/// action is never overwritten by this pass.
 pub(crate) fn breaker_gate(
     store: &dyn RoutineStoreBackend,
     breakers: &BTreeMap<String, RoutineBreakerRecord>,
@@ -98,19 +111,35 @@ pub(crate) fn breaker_gate(
     now_utc: DateTime<Utc>,
 ) -> Result<BreakerGate, OrbitError> {
     let name = &routine.definition.name;
-    let breaker = breakers.get(name);
-    match breaker {
-        Some(breaker) if breaker.state == RoutineBreakerState::Open => {
-            open_gate(store, breaker, routine, dispatch, dry_run, now_utc)
-        }
-        _ => {
-            if !dry_run {
-                maybe_trip(store, breaker, routine, dispatch, now_utc)
-            } else {
-                Ok(BreakerGate::Proceed)
+    let mut current = breakers.get(name).cloned();
+    for _ in 0..3 {
+        let attempt = match current.as_ref() {
+            Some(breaker) if breaker.state == RoutineBreakerState::Open => {
+                open_gate(store, breaker, routine, dispatch, dry_run, now_utc)?
+            }
+            breaker => {
+                if !dry_run {
+                    maybe_trip(store, breaker, routine, dispatch, now_utc)?
+                } else {
+                    GateAttempt::Done(BreakerGate::Proceed)
+                }
+            }
+        };
+        match attempt {
+            GateAttempt::Done(gate) => return Ok(gate),
+            GateAttempt::Conflict => {
+                current = store.routine_breakers()?.remove(name);
             }
         }
     }
+    // Repeated conflicts: hold an open breaker, let a closed one proceed;
+    // the next pass decides from a fresh snapshot either way.
+    Ok(match current.as_ref() {
+        Some(breaker) if breaker.state == RoutineBreakerState::Open => {
+            BreakerGate::Skip(BREAKER_OPEN_REASON.into())
+        }
+        _ => BreakerGate::Proceed,
+    })
 }
 
 fn maybe_trip(
@@ -119,7 +148,7 @@ fn maybe_trip(
     routine: &LoadedRoutine,
     dispatch: &dyn RoutineDispatch,
     now_utc: DateTime<Utc>,
-) -> Result<BreakerGate, OrbitError> {
+) -> Result<GateAttempt, OrbitError> {
     let floor = breaker
         .and_then(|breaker| breaker.floor_at.as_deref())
         .map(parse_rfc3339)
@@ -136,16 +165,16 @@ fn maybe_trip(
         .take(BREAKER_TRIP_THRESHOLD)
         .collect();
     if failures.len() < BREAKER_TRIP_THRESHOLD {
-        return Ok(BreakerGate::Proceed);
+        return Ok(GateAttempt::Done(BreakerGate::Proceed));
     }
     let mut classes = failures
         .iter()
         .map(|fire| failure_class(fire, routine, dispatch));
     let Some(class) = classes.next() else {
-        return Ok(BreakerGate::Proceed);
+        return Ok(GateAttempt::Done(BreakerGate::Proceed));
     };
     if !classes.all(|other| other == class) {
-        return Ok(BreakerGate::Proceed);
+        return Ok(GateAttempt::Done(BreakerGate::Proceed));
     }
     let last_run_id = failures.iter().find_map(|fire| fire.run_id.clone());
     let opened = opened_breaker(
@@ -157,7 +186,8 @@ fn maybe_trip(
         dispatch,
         now_utc,
     );
-    store.routine_breaker_transition(
+    if !store.routine_breaker_transition_if_current(
+        breaker,
         &opened,
         &sweep_event(
             routine,
@@ -166,14 +196,18 @@ fn maybe_trip(
             last_run_id,
             now_utc,
         ),
-    )?;
+    )? {
+        return Ok(GateAttempt::Conflict);
+    }
     tracing::warn!(
         target: "orbit.core.routines",
         routine = %routine.definition.name,
         error_class = %class,
         "routine circuit breaker tripped after repeated identical failures",
     );
-    Ok(BreakerGate::Skip(BREAKER_OPEN_REASON.into()))
+    Ok(GateAttempt::Done(BreakerGate::Skip(
+        BREAKER_OPEN_REASON.into(),
+    )))
 }
 
 fn open_gate(
@@ -183,7 +217,7 @@ fn open_gate(
     dispatch: &dyn RoutineDispatch,
     dry_run: bool,
     now_utc: DateTime<Utc>,
-) -> Result<BreakerGate, OrbitError> {
+) -> Result<GateAttempt, OrbitError> {
     if let Some(trial_started_at) = breaker.trial_started_at.as_deref() {
         let trial_started_at = parse_rfc3339(trial_started_at)?;
         let fires = observed_fires(store, routine, dispatch)?;
@@ -196,20 +230,22 @@ fn open_gate(
         let Some(trial) = trial else {
             // Nothing has fired yet: the trial stays admitted, and a bypass
             // trial keeps asking for its immediate fire.
-            return Ok(admitted_gate(breaker.trial_reason.as_deref()));
+            return Ok(GateAttempt::Done(admitted_gate(
+                breaker.trial_reason.as_deref(),
+            )));
         };
         if dry_run {
-            return Ok(match trial.outcome {
+            return Ok(GateAttempt::Done(match trial.outcome {
                 ObservedOutcome::InFlight => {
                     BreakerGate::Skip(BREAKER_TRIAL_IN_FLIGHT_REASON.into())
                 }
                 _ => BreakerGate::Proceed,
-            });
+            }));
         }
         return match &trial.outcome {
-            ObservedOutcome::InFlight => {
-                Ok(BreakerGate::Skip(BREAKER_TRIAL_IN_FLIGHT_REASON.into()))
-            }
+            ObservedOutcome::InFlight => Ok(GateAttempt::Done(BreakerGate::Skip(
+                BREAKER_TRIAL_IN_FLIGHT_REASON.into(),
+            ))),
             ObservedOutcome::Succeeded => {
                 let closed = RoutineBreakerRecord {
                     state: RoutineBreakerState::Closed,
@@ -223,7 +259,8 @@ fn open_gate(
                     source_workspace: routine.source_workspace.clone(),
                     ..breaker.clone()
                 };
-                store.routine_breaker_transition(
+                if !store.routine_breaker_transition_if_current(
+                    Some(breaker),
                     &closed,
                     &sweep_event(
                         routine,
@@ -232,8 +269,10 @@ fn open_gate(
                         trial.run_id.clone(),
                         now_utc,
                     ),
-                )?;
-                Ok(BreakerGate::Proceed)
+                )? {
+                    return Ok(GateAttempt::Conflict);
+                }
+                Ok(GateAttempt::Done(BreakerGate::Proceed))
             }
             ObservedOutcome::Failed(_) => {
                 let class = failure_class(trial, routine, dispatch);
@@ -247,7 +286,8 @@ fn open_gate(
                     dispatch,
                     now_utc,
                 );
-                store.routine_breaker_transition(
+                if !store.routine_breaker_transition_if_current(
+                    Some(breaker),
                     &reopened,
                     &sweep_event(
                         routine,
@@ -256,18 +296,24 @@ fn open_gate(
                         trial.run_id.clone(),
                         now_utc,
                     ),
-                )?;
-                Ok(BreakerGate::Skip(BREAKER_OPEN_REASON.into()))
+                )? {
+                    return Ok(GateAttempt::Conflict);
+                }
+                Ok(GateAttempt::Done(BreakerGate::Skip(
+                    BREAKER_OPEN_REASON.into(),
+                )))
             }
-            ObservedOutcome::Ignored => Ok(BreakerGate::Proceed),
+            ObservedOutcome::Ignored => Ok(GateAttempt::Done(BreakerGate::Proceed)),
         };
     }
 
     let Some(reason) = trial_reason(breaker, dispatch, now_utc)? else {
-        return Ok(BreakerGate::Skip(BREAKER_OPEN_REASON.into()));
+        return Ok(GateAttempt::Done(BreakerGate::Skip(
+            BREAKER_OPEN_REASON.into(),
+        )));
     };
     if dry_run {
-        return Ok(admitted_gate(Some(reason)));
+        return Ok(GateAttempt::Done(admitted_gate(Some(reason))));
     }
     let armed = RoutineBreakerRecord {
         trial_started_at: Some(fire_clock_now()),
@@ -277,11 +323,14 @@ fn open_gate(
         source_workspace: routine.source_workspace.clone(),
         ..breaker.clone()
     };
-    store.routine_breaker_transition(
+    if !store.routine_breaker_transition_if_current(
+        Some(breaker),
         &armed,
         &sweep_event(routine, "trial", Some(reason.into()), None, now_utc),
-    )?;
-    Ok(admitted_gate(Some(reason)))
+    )? {
+        return Ok(GateAttempt::Conflict);
+    }
+    Ok(GateAttempt::Done(admitted_gate(Some(reason))))
 }
 
 /// The gate of an admitted trial that has not fired yet.
