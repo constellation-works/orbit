@@ -21,6 +21,7 @@ const RENAMES: &[(&str, &str)] = &[
 ];
 
 const MIGRATION_MARKER: &str = "tool-family-names-v1.migrated";
+const PLUGIN_MIGRATION_MARKER: &str = "plugin-tool-family-names-v2.migrated";
 const MIGRATION_LEDGER: &str = "tool-name-migrations.jsonl";
 const MANAGED_MANIFEST: &str = ".orbit-managed-assets.json";
 
@@ -54,8 +55,12 @@ impl Fixture {
 
     /// Forget the upgrade pass, as a store 0.46 wrote never ran it.
     fn forget_migration(&self) {
-        for state in [self.global.join("state"), self.workspace.join("state")] {
-            let marker = state.join(MIGRATION_MARKER);
+        for (root, name) in [
+            (&self.global, PLUGIN_MIGRATION_MARKER),
+            (&self.global, MIGRATION_MARKER),
+            (&self.workspace, MIGRATION_MARKER),
+        ] {
+            let marker = root.join("state").join(name);
             if marker.exists() {
                 std::fs::remove_file(marker).unwrap();
             }
@@ -579,7 +584,11 @@ fn a_failed_plugin_digest_record_does_not_refuse_the_plugin() {
     );
     assert_callback_loads(&runtime, CALLBACK_MANIFEST);
     assert!(
-        !fixture.global.join("state").join(MIGRATION_MARKER).exists(),
+        !fixture
+            .global
+            .join("state")
+            .join(PLUGIN_MIGRATION_MARKER)
+            .exists(),
         "the failed pass must retry on the next open"
     );
     drop(runtime);
@@ -643,6 +652,131 @@ fn edited_recorded_manifest() -> String {
         )
 }
 
+#[test]
+fn mixed_plugin_tool_rewrites_recover_without_accepting_unrelated_edits() {
+    if !super::dispatch_admission::isolated(
+        "pre_family_tool_names::mixed_plugin_tool_rewrites_recover_without_accepting_unrelated_edits",
+    ) {
+        return;
+    }
+    for retained_original in [false, true] {
+        let fixture = Fixture::new();
+        std::fs::create_dir_all(fixture.global.join("state")).unwrap();
+        std::fs::create_dir_all(fixture.workspace.join("state")).unwrap();
+        drop(fixture.open());
+        let install = fixture.global.join("plugins/callback/1.0.0");
+        install_callback_tree(&install);
+        let tools = if retained_original {
+            // More ambiguous occurrences than compatibility recovery tries:
+            // only the exact retained original can recover this torn pair.
+            format!(
+                "orbit.task.artifact.get, {}",
+                ["orbit.decision:raise"; 12].join(", ")
+            )
+        } else {
+            "orbit.task.artifact.get, orbit.decision:raise".to_string()
+        };
+        let original = CALLBACK_MANIFEST.replace(
+            "orbit.task.show, orbit.task.artifact.get, orbit.workflow.run.list, orbit.decision.raise",
+            &tools,
+        );
+        let healed = original.replace("orbit.task.artifact.get", "orbit.task.artifact:get");
+        std::fs::write(install.join("plugin.yaml"), &original).unwrap();
+        let runtime = fixture.open();
+        record_callback(&runtime, &install, &original);
+        drop(runtime);
+        fixture.forget_migration();
+        if retained_original {
+            // Let the real forward rewrite land, fail its digest record and
+            // suppress rollback deterministically, as an interruption would.
+            orbit_core::test_support::with_plugin_manifest_publish_hook(
+                || {
+                    orbit_core::test_support::fail_next_plugin_digest_upsert();
+                    orbit_core::test_support::fail_next_plugin_manifest_restore();
+                },
+                || drop(fixture.open()),
+            );
+            let digest = orbit_tools::plugin::manifest_digest(original.as_bytes());
+            assert_eq!(
+                std::fs::read_to_string(
+                    fixture
+                        .global
+                        .join(format!("state/plugin-tool-name-originals/{digest}.yaml"))
+                )
+                .unwrap(),
+                original,
+                "the original must survive before the torn pair is published"
+            );
+            assert_eq!(
+                std::fs::read_to_string(install.join("plugin.yaml")).unwrap(),
+                healed
+            );
+            let connection = rusqlite::Connection::open(fixture.global.join("orbit.db")).unwrap();
+            let stored_digest: String = connection
+                .query_row(
+                    "SELECT manifest_digest FROM plugins WHERE name = 'callback'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(stored_digest, digest, "the digest record did not land");
+            assert!(
+                !fixture
+                    .global
+                    .join("state")
+                    .join(PLUGIN_MIGRATION_MARKER)
+                    .exists()
+            );
+        } else {
+            // An older binary left no original, and incorrectly marked its
+            // pass complete. Ordinary opens must revisit that v1 marker.
+            std::fs::write(install.join("plugin.yaml"), &healed).unwrap();
+            std::fs::write(
+                fixture.global.join("state").join(MIGRATION_MARKER),
+                "old pass\n",
+            )
+            .unwrap();
+        }
+        drop(fixture.open());
+        let runtime = fixture.open();
+        assert_callback_loads(&runtime, &healed);
+        assert!(
+            fixture
+                .global
+                .join("state")
+                .join(PLUGIN_MIGRATION_MARKER)
+                .is_file()
+        );
+
+        // Even with a retained original, an unrelated edit must not gain
+        // consent. Reset only the row to emulate the same torn pair again.
+        record_callback(&runtime, &install, &original);
+        drop(runtime);
+        let edited = healed.replace("Callback fixture.", "Unconsented description.");
+        std::fs::write(install.join("plugin.yaml"), &edited).unwrap();
+        fixture.forget_migration();
+        drop(fixture.open());
+        let runtime = fixture.open();
+        let plugin = callback_plugin(&runtime);
+        assert_eq!(plugin.status, orbit_types::plugin::PluginStatus::Inactive);
+        assert!(
+            plugin
+                .diagnostic
+                .unwrap_or_default()
+                .contains("does not match the stored digest")
+        );
+        assert_eq!(
+            std::fs::read_to_string(install.join("plugin.yaml")).unwrap(),
+            edited
+        );
+        assert_eq!(
+            plugin.manifest_digest,
+            orbit_tools::plugin::manifest_digest(original.as_bytes()),
+            "an unrelated edit must not acquire consent during recovery"
+        );
+    }
+}
+
 fn edited_unconsented_manifest() -> String {
     edited_recorded_manifest().replace(
         "description: Edited fixture.",
@@ -699,7 +833,7 @@ fn a_competing_plugin_migration_survives_a_failed_digest_write() {
         || drop(fixture.open()),
     );
 
-    let marker = fixture.global.join("state").join(MIGRATION_MARKER);
+    let marker = fixture.global.join("state").join(PLUGIN_MIGRATION_MARKER);
     assert!(
         marker.is_file(),
         "the completed competing pass keeps the marker"

@@ -126,6 +126,8 @@ pub mod test_support {
     };
     /// Fail this thread's next plugin-manifest digest record as a store error.
     pub use crate::application::tool_name_migration::plugin_manifest_publish_hook::fail_next_plugin_digest_upsert;
+    /// Fail this thread's next rollback after a plugin digest record fails.
+    pub use crate::application::tool_name_migration::plugin_manifest_publish_hook::fail_next_plugin_manifest_restore;
     /// Run a competing plugin migration before this thread publishes a manifest.
     pub use crate::application::tool_name_migration::plugin_manifest_publish_hook::with_plugin_manifest_publish_hook;
     /// Fail the next drain pass's release of its unadmitted gap-fit reservations.
