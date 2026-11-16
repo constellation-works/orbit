@@ -3453,16 +3453,19 @@ fn inherited_failure_case(row: &std::path::Path, case: &str) {
                         Some(TaskDecision::PrAutoFixBaseRed(_))
                     ));
                     assert_eq!(
-                        serde_json::from_str::<Value>(entry.note.as_deref().unwrap()).unwrap(),
-                        serde_json::to_value(&record).unwrap(),
-                        "new notes retain the historical payload"
+                        entry.note.as_deref(),
+                        Some(record.history_note().as_str()),
+                        "new notes are the one-line summary of the decision"
                     );
                     match storage_on_wait.as_str() {
                         "legacy_rich" => {
                             entry.note = Some(legacy_rich.clone());
                             entry.decision = None;
                         }
-                        "legacy_minimal" => entry.decision = None,
+                        "legacy_minimal" => {
+                            entry.note = Some(serde_json::to_string(&record).unwrap());
+                            entry.decision = None;
+                        }
                         "typed_conflicting_note" => {
                             entry.note = Some(
                                 json!({"failed_head": "other-head", "reason": "diagnostic only"})
@@ -3504,23 +3507,20 @@ fn inherited_failure_case(row: &std::path::Path, case: &str) {
             "{storage}: only the recorded head is held"
         );
         if storage == "typed" {
-            assert!(matches!(
-                entry.decision,
-                Some(TaskDecision::PrAutoFixBaseRed(_))
-            ));
-            // These are the original json! layouts, including insertion
-            // order: serde_json uses preserve_order in this workspace.
-            let legacy_note = if let Some(reason) = &record.reason {
-                json!({"failed_head": record.failed_head, "reason": reason})
-            } else {
-                json!({"failed_head": record.failed_head, "landed_base": record.landed_base,
-                    "base_branch": record.base_branch, "source": record.source,
-                    "checks": record.checks, "path": record.path})
-            };
             assert_eq!(
-                entry.note.as_deref().unwrap(),
-                legacy_note.to_string(),
-                "the additive decision leaves note bytes and dedupe unchanged"
+                entry.decision,
+                Some(TaskDecision::PrAutoFixBaseRed(record.clone())),
+                "the decision is the full record"
+            );
+            let note = entry.note.as_deref().unwrap();
+            assert_eq!(note, record.history_note());
+            assert!(
+                !note.contains('\n') && note.chars().count() <= 200,
+                "the note is one short line, not the evidence: {note}"
+            );
+            assert!(
+                serde_json::from_str::<Value>(note).is_err(),
+                "the note does not restate the record as JSON: {note}"
             );
         }
     }
@@ -4502,39 +4502,17 @@ fn nested_base_log_throttle_defers_the_bound_prerequisite_read() {
     );
 }
 
-/// A wait this run recorded carries the typed decision, and its note is
-/// still the pre-decision JSON of that same record.
+/// A wait this run recorded carries the typed decision, and its note is the
+/// one-line summary of that record, not its JSON.
 fn assert_produced_deferral(entry: &TaskHistoryEntry) {
     let Some(TaskDecision::PrAutoFixReadDeferred(typed)) = &entry.decision else {
         panic!("a new read deferral is a typed decision: {entry:?}");
     };
-    let legacy_shape = json!({
-        "execution": typed.execution,
-        "pr": typed.pr,
-        "head_sha": typed.head_sha,
-        "repository": typed.repository,
-        "run_id": typed.run_id,
-        "job_id": typed.job_id,
-        "run_attempt": typed.run_attempt,
-        "attempt": typed.attempt,
-        "observed_at_ms": typed.observed_at_ms,
-        "not_before_ms": typed.not_before_ms,
-        "deadline_ms": typed.deadline_ms,
-        "reset": match typed.reset {
-            PrAutoFixReadReset::Provider => "provider",
-            PrAutoFixReadReset::Unknown => "unknown",
-        },
-        "retry_after_seconds": typed.retry_after_seconds,
-        "reset_epoch_seconds": typed.reset_epoch_seconds,
-        "resource": typed.resource,
-        "principal": typed.principal,
-        "request_id": typed.request_id,
-        "diagnostic": typed.diagnostic,
-    });
-    assert_eq!(
-        entry.note.as_deref(),
-        Some(serde_json::to_string(&legacy_shape).unwrap().as_str()),
-        "the note stays the pre-decision JSON shape"
+    let note = entry.note.as_deref().expect("note");
+    assert_eq!(note, typed.history_note());
+    assert!(
+        !note.contains('\n') && note.chars().count() <= 200,
+        "the note is one short line: {note}"
     );
     assert!(
         typed.run_attempt.is_none(),
@@ -4775,7 +4753,10 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
         .collect();
     let deferrals: Vec<Value> = deferral_entries
         .iter()
-        .map(|entry| serde_json::from_str(entry.note.as_deref().unwrap()).unwrap())
+        .map(|entry| match PrAutoFixReadDeferral::from_entry(entry) {
+            Some(record) if entry.decision.is_some() => serde_json::to_value(record).unwrap(),
+            _ => serde_json::from_str(entry.note.as_deref().unwrap()).unwrap(),
+        })
         .collect();
     let polls = fx.status_reads() - reads_before;
     match case {
@@ -5117,7 +5098,9 @@ fn moved_base_log_throttle_retains_its_deadline_and_exact_read_identity() {
                 .collect();
             let deferrals: Vec<Value> = deferral_entries
                 .iter()
-                .map(|entry| serde_json::from_str(entry.note.as_deref().unwrap()).unwrap())
+                .map(|entry| {
+                    serde_json::to_value(PrAutoFixReadDeferral::from_entry(entry).unwrap()).unwrap()
+                })
                 .collect();
             if case == "deadline" {
                 assert!(

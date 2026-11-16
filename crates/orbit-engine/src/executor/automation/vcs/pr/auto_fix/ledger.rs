@@ -6,7 +6,6 @@ use orbit_types::workflow::{
     PR_AUTO_FIX_BASE_RED_EVENT, PR_AUTO_FIX_READ_DEFERRED_EVENT, PrAutoFixBaseRed,
     PrAutoFixBlocker, PrAutoFixReadDeferral,
 };
-use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -127,12 +126,16 @@ pub(in crate::executor::automation::vcs::pr) fn record_base_path<H: RuntimeHost 
     event: &str,
     evidence: &Value,
 ) -> Result<(), OrbitError> {
-    append_history_note(host, auto_fix, event, &history_note(evidence)?, None)
+    let note = serde_json::to_string(evidence)
+        .map_err(|error| OrbitError::Execution(error.to_string()))?;
+    append_history_note(host, auto_fix, event, &note, None, &|entry| {
+        entry.note.as_deref() == Some(note.as_str())
+    })
 }
 
-/// Persist the inherited-failure hold beside its unchanged diagnostic note.
-/// The record's field order preserves historical note bytes and exact
-/// note-based deduplication, including against decision-less entries.
+/// Persist the inherited-failure hold: a one-line note and the full record as
+/// the decision. A hold already recorded for the same failed head, landed
+/// base and failing checks, in any storage shape, is not recorded again.
 pub(in crate::executor::automation::vcs::pr) fn record_base_red<H: RuntimeHost + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
@@ -142,14 +145,15 @@ pub(in crate::executor::automation::vcs::pr) fn record_base_red<H: RuntimeHost +
         host,
         auto_fix,
         PR_AUTO_FIX_BASE_RED_EVENT,
-        &history_note(record)?,
+        &record.history_note(),
         Some(TaskDecision::PrAutoFixBaseRed(record.clone())),
+        &|entry| PrAutoFixBaseRed::from_entry(entry).is_some_and(|held| held.same_hold(record)),
     )
 }
 
-/// Record one throttled-read wait. The note stays the record's JSON; the
-/// decision is that record. An identical note is not written again, so a
-/// resume does not rewrite a decision-less history entry.
+/// Record one throttled-read wait: a one-line note and the record as the
+/// decision. An identical record is not written again, so a resume does not
+/// rewrite a decision-less history entry.
 pub(in crate::executor::automation::vcs::pr) fn record_read_deferral<H: RuntimeHost + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
@@ -159,13 +163,10 @@ pub(in crate::executor::automation::vcs::pr) fn record_read_deferral<H: RuntimeH
         host,
         auto_fix,
         PR_AUTO_FIX_READ_DEFERRED_EVENT,
-        &history_note(deferral)?,
+        &deferral.history_note(),
         Some(TaskDecision::PrAutoFixReadDeferred(deferral.clone())),
+        &|entry| PrAutoFixReadDeferral::from_entry(entry).is_some_and(|seen| seen == *deferral),
     )
-}
-
-fn history_note(value: &impl Serialize) -> Result<String, OrbitError> {
-    serde_json::to_string(value).map_err(|error| OrbitError::Execution(error.to_string()))
 }
 
 fn append_history_note<H: RuntimeHost + ?Sized>(
@@ -174,12 +175,13 @@ fn append_history_note<H: RuntimeHost + ?Sized>(
     event: &str,
     note: &str,
     decision: Option<TaskDecision>,
+    already_recorded: &dyn Fn(&orbit_types::task::TaskHistoryEntry) -> bool,
 ) -> Result<(), OrbitError> {
     for task in &auto_fix.task_ids {
         if host
             .get_task_history(task)?
             .iter()
-            .any(|entry| entry.event == event && entry.note.as_deref() == Some(note))
+            .any(|entry| entry.event == event && already_recorded(entry))
         {
             continue;
         }
