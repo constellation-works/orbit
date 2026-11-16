@@ -105,7 +105,9 @@ after the wrapper signals that its queue interval earned the capped credit.
 
 ### `v2_worktree_lifecycle::worktree_contracts_2`
 
+- `worktree_setup_uses_the_branch_not_a_same_named_tag`
 - `worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched`
+- `worktree_setup_names_a_templated_branch_stably_and_refuses_an_unsafe_render`
 - `worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits`
 - `local_landing_precheck_uses_the_normalized_base_checkout`
 - `local_landing_preserves_unrelated_untracked_files`
@@ -117,6 +119,7 @@ after the wrapper signals that its queue interval earned the capped credit.
 - `a_validated_candidate_is_resumed_on_the_new_base_without_implementation`
 - `a_candidate_held_for_an_upgrade_refusal_is_resumed_by_the_next_run`
 - `a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run`
+- `a_candidate_held_for_owner_signoff_is_resumed_for_implementation_repair`
 - `a_conflicting_candidate_is_handed_to_the_implementer_with_its_conflict`
 
 ### `v2_worktree_lifecycle::worktree_contracts_4`
@@ -160,6 +163,7 @@ certifies the repaired head as both the original head and publication lease.
 - `conflict_recovery_still_refuses_unresolved_conflicts_beside_companion_edits`
 - `agent_changed_paths_widen_selectors_with_their_step_as_the_agent_exits`
 - `provider_primary_source_edit_fails_closed_and_preserves_both_checkouts`
+- `dispatch_whose_checkout_vanishes_during_the_run_names_the_missing_worktree`
 
 ### `v2_worktree_lifecycle::worktree_contracts_8`
 
@@ -172,6 +176,8 @@ certifies the repaired head as both the original head and publication lease.
 ### `v2_worktree_lifecycle::worktree_contracts_9`
 
 - `repeated_dirty_integrity_failures_keep_current_content_and_prune_old_attempts`
+- `primary_returned_to_the_base_branch_mid_run_is_not_drift`
+- `primary_moves_off_the_base_branch_still_fail_closed`
 
 ### `v2_worktree_lifecycle::preparation::preparation_contracts`
 
@@ -837,7 +843,7 @@ remain pipeline-owned; full CI is separately run on the PR.
 
 ## Worktree lifecycle shared setup
 
-All 43 `v2_worktree_lifecycle::worktree_contracts_N` rows keep their scenario
+All 48 `v2_worktree_lifecycle::worktree_contracts_N` rows keep their scenario
 functions, names, `cfg(unix)` gates and assertions. The rows now share the
 fixture steps they used to repeat: checkout setup (`setup_checkout`,
 `gc_checkout`, `landing_checkout`), GC reports, Git queries (`head`, `status`,

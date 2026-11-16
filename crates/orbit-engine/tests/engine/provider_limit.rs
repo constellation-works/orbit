@@ -285,14 +285,15 @@ fn usage_limits_are_typed_only_from_text_the_failed_provider_wrote() {
             continue;
         }
         assert!(!success, "{label}");
-        let provider = failed_provider(message.as_deref().unwrap())
-            .expect("the failure names its provider")
-            .to_string();
-        let limit = typed_limit(message.as_deref(), &provider);
+        // Pin the provider from the case table. Deriving it from the failure
+        // text would make `typed_limit`'s provider check, and the observation
+        // comparison below, agree with a misattributed name.
+        let provider = case.provider.as_str();
+        let limit = typed_limit(message.as_deref(), provider);
         let [observation] = limits.as_slice() else {
             panic!("{label}: one observation per limit failure: {limits:?}");
         };
-        assert_eq!(observation.provider, provider, "{label}");
+        assert_eq!(observation.provider.as_str(), provider, "{label}");
         assert!(observation.exhausted, "{label}");
         assert_eq!(observation.source, ProviderLimitSource::Error, "{label}");
         assert_eq!(observation.resets_at, limit.resets_at, "{label}");
