@@ -67,9 +67,13 @@
 .task-attention-slot:empty,
 .delivery-progress-slot:empty { display: none; }
 .task-attention {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  /* The icon belongs to the title row only: the title sits beside it while
+     every row under it spans the full width, so body rows share the same
+     left and right inset (STD-07 R1). */
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  column-gap: 10px;
+  align-items: start;
   padding: 14px 16px;
   border: 1px solid var(--danger-line);
   border-radius: var(--radius);
@@ -82,7 +86,8 @@
   --attention-fg: var(--warn-fg);
 }
 .task-attention-icon {
-  flex: none;
+  grid-column: 1;
+  grid-row: 1;
   width: 18px;
   height: 18px;
   margin-top: 1px;
@@ -90,14 +95,19 @@
   -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3.5l9 16H3z'/%3E%3Cpath d='M12 10v4M12 17h.01'/%3E%3C/svg%3E") center / contain no-repeat;
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3.5l9 16H3z'/%3E%3Cpath d='M12 10v4M12 17h.01'/%3E%3C/svg%3E") center / contain no-repeat;
 }
-.task-attention-content { min-width: 0; }
+.task-attention-content { display: contents; }
+.task-attention-content > * { min-width: 0; }
 .task-attention-title {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: start;
   margin: 0;
   font-size: 14px;
   font-weight: 600;
   line-height: 1.4;
   color: var(--attention-fg);
 }
+.task-attention-content > :not(.task-attention-title) { grid-column: 1 / -1; }
 .task-attention-body {
   margin: 4px 0 0;
   font-size: 13px;
@@ -1915,7 +1925,7 @@ input.field-editor-input {
   padding: 4px 8px; font-size: 12px; width: 100%; box-sizing: border-box;
 }
 .decision-note::placeholder { color: var(--fg-mute); opacity: 1; }
-.decision-card .decision-note { max-width: 640px; }
+.decision-card .decision-note { max-width: none; }
 .decision-answers { display: grid; gap: 8px; }
 .decision-consequence { flex: 1 1 200px; min-width: 0; color: var(--fg-dim); font-size: 12px; overflow-wrap: anywhere; }
 .decision-pending { color: var(--fg-mute); font-size: 12px; }
@@ -1948,7 +1958,10 @@ input.field-editor-input {
   white-space: normal; overflow-wrap: anywhere; text-align: left; line-height: 1.35;
 }
 .decision-recommended { color: var(--attention-fg, var(--warn-fg)); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
-.decision-option .decision-consequence { flex: none; grid-column: 2; }
+/* The answer label sits inside the bordered `.action` button (12px inline
+   padding plus its 1px border), so the consequence text carries the same
+   13px inset from the card's right border (STD-07 R1). */
+.decision-option .decision-consequence { flex: none; grid-column: 2; padding-right: 13px; }
 .task-block-details { margin-top: 12px; font-size: 12px; color: var(--fg-mute); }
 .task-block-details > summary { cursor: pointer; color: var(--fg-dim); }
 .task-block-diagnosis { margin: 6px 0 0; color: var(--fg-soft); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16em; overflow: auto; }
