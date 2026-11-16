@@ -5,13 +5,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use chrono::{DateTime, Utc};
 use orbit_common::fs::selector::Selector;
 use orbit_types::task::{
-    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, Task, TaskHistoryEntry, TaskRelationType,
-    TaskStatus, is_no_diff_expected,
+    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, LegacyContextPruningRecord, Task,
+    TaskHistoryEntry, TaskRelationType, TaskStatus, is_no_diff_expected,
 };
 use serde_json::{Value, json};
 
 use crate::application::statistics::SplitMix64;
-use crate::application::task::{CONTEXT_FILES_PRUNED_EVENT, pruned_selectors_from_note};
 
 use super::correction::{self, Correction};
 use super::model::{self, Delivery, Draw, Item, Script};
@@ -403,18 +402,18 @@ pub(super) fn recorded_fix_footprint(
 ) -> Vec<String> {
     let mut selectors: Vec<String> = Vec::new();
     for entry in history {
-        let recorded = if entry.event == CONTEXT_FILES_PRUNED_EVENT {
-            entry
-                .note
-                .as_deref()
-                .map(pruned_selectors_from_note)
-                .unwrap_or_default()
-        } else if entry.event == CONTEXT_FILES_WIDENED_EVENT && entry.at <= done {
-            ContextFilesWidening::from_entry(entry)
-                .map(|widening| widening.selectors)
-                .unwrap_or_default()
+        let recorded = if entry.event == CONTEXT_FILES_WIDENED_EVENT {
+            if entry.at <= done {
+                ContextFilesWidening::from_entry(entry)
+                    .map(|widening| widening.selectors)
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            }
         } else {
-            Vec::new()
+            LegacyContextPruningRecord::from_entry(entry)
+                .map(|record| record.selectors)
+                .unwrap_or_default()
         };
         for selector in recorded {
             if !selectors.contains(&selector) {
