@@ -629,8 +629,8 @@ free named tasks. Apply settles each held task as `superseded` with reason
 `piloted_elsewhere`; if every named task is held, the run succeeds without
 agent work. Inspect or resume the owning run for that task's assessment.
 
-The dashboard's **Run pilot** action on a `proposed` task in the task details
-panel makes this same single-task submission (`POST /api/tasks/<id>/pilot`,
+The dashboard's **Run pilot** action on a `proposed` or `backlog` task in the
+task details panel makes this same single-task submission (`POST /api/tasks/<id>/pilot`,
 operator session required). It is refused, with a typed reason and no run, when
 a pilot run already holds the task, a delivery run carries it, it is not
 `proposed`/`backlog`, or the checkout is a replica. On success the panel shows
