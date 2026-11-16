@@ -236,9 +236,10 @@ function taskMutationTemplates(sources) {
       const argument = args[1];
       let suffixes = argument ? extractLiterals(argument) : [''];
       if (argument && suffixes.length === 0) {
-        const identifier = argument.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const assignments = new RegExp(`\\b${identifier}\\s*=\\s*(${literalPattern})`, 'g');
-        suffixes = [...source.matchAll(assignments)].flatMap((match) => extractLiterals(match[1]));
+        const assignments = new RegExp(`\\b([\\w$]+)\\s*=\\s*(${literalPattern})`, 'g');
+        suffixes = [...source.matchAll(assignments)]
+          .filter((match) => match[1] === argument)
+          .flatMap((match) => extractLiterals(match[2]));
       }
       if (suffixes.length === 0) throw new Error(`cannot resolve taskMutationPath suffix ${argument}`);
       for (const suffix of suffixes) {
