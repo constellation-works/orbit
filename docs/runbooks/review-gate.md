@@ -645,9 +645,12 @@ after the change), cannot: the notice is cleared with a `not owed` note, a
 reviewer-named Linux run covering only that notice leaves the named
 evidence (its `not_run` record becomes `excluded`), and the review settles
 on its other records. A host whose kernel refuses user namespaces would
-never produce the run, and the pull request's required checks still execute
-the test before landing, so such a delivery no longer ends in an evidence
-hold that final recovery escalates to an operator. Any other changed path —
+never produce the run, so such a delivery no longer ends in an evidence hold
+that final recovery escalates to an operator. The review does not count on a
+later pull request run to execute the test: CI scope decides that. A docs-only
+pull request runs no test job, one confined to `crates/` runs tests for the
+affected and always-run crates, and any other pull request runs every test
+(`scripts/ci-change-scope.sh`). Any other changed path —
 production code, a manifest, a build script, configuration, a script or an
 asset — or a workspace `[[review.host_evidence]]` rule that owes the same
 check keeps the run owed, and the review holds for real execution evidence
