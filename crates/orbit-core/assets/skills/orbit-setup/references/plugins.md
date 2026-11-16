@@ -342,11 +342,33 @@ permissions:
 ```
 
 Each entry must render to an absolute physical path of an existing regular file that the
-current user owns, with one hard link and no group or other write bits. Spell it physically:
-on macOS, `/private/tmp/...` rather than the `/tmp` alias. Symbolic links,
-missing files, directories, and paths that pass through a symbolic link or an unsafe
-directory are refused. Orbit never creates such a file or widens its grant: creating,
-replacing a file by rename needs a `fs.write` directory grant. A scoped `fs=<root>` grant
+current user owns, with one hard link and no write bit for others (the one exception is a
+`{{workspace}}` link to such a file, below). A group write bit is
+accepted, so a checkout made under umask 0002 works; so is a group-writable parent
+directory the user owns. Spell it physically: on macOS, `/private/tmp/...` rather than the
+`/tmp` alias. Missing files, directories, and paths that pass through a symbolic link or an
+unsafe directory are refused.
+
+To rewrite one file at the workspace root, such as `AGENTS.md`, grant it by template:
+
+```yaml
+permissions:
+  fs:
+    write_files: ["{{workspace}}/AGENTS.md"]
+```
+
+`{{workspace}}` renders to the workspace the call comes from; for an agent in a managed
+run that is the task's worktree. The file itself may be a symbolic link, as long as the
+link is inside the workspace and its target is a regular file inside the same workspace,
+outside `.git` and `.orbit` (for example `AGENTS.md` -> `CLAUDE.md`). The sandbox then
+grants the target, so the backend writes through the link and the link stays. Write the
+file in place (truncate and write); replacing it by rename needs a directory grant. The
+grant never reaches `.git/`, `.orbit/`, any other file at the root, or a file outside the
+workspace, and a link whose target is outside the workspace, missing, or inside `.git` or
+`.orbit` is refused. Without a workspace, a symbolic link is always refused.
+`orbit plugin test` creates each such file, empty, in its scratch workspace before the
+cases run, so the grant can be tested there. Outside `orbit plugin test`, Orbit never creates such a
+file or widens its grant: creating or replacing a file by rename needs a `fs.write` directory grant. A scoped `fs=<root>` grant
 covers a `write_files` entry only when it names that file or one of its ancestor
 directories. Adding an entry, or changing where a config value resolves, needs consent
 again. Linux binds the existing inode, and macOS uses a file-rooted `subpath` rule.

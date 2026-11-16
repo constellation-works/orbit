@@ -110,6 +110,7 @@ pub fn test_plugin_dir(
         Some(Arc::clone(&fixture_secrets) as Arc<dyn PluginSecretSource>),
     );
     refuse_covering_fs_write_roots(backend.spec(), None).map_err(manifest_refusal)?;
+    create_workspace_write_files(backend.spec(), &workspace_root)?;
     // The profile a call from the conformance workspace compiles, so consent
     // reads the same rendered, resolved write set the sandbox will open. It
     // also repeats the protected-path refusal against the real workspace.
@@ -187,6 +188,57 @@ pub fn test_plugin_dir(
         gate::write_validation_summary(gate, &report)?;
     }
     Ok(report)
+}
+
+/// An exact-file grant admits only a file that exists, and the conformance
+/// workspace starts empty. Create each manifest `fs.write_files` entry that
+/// renders inside that scratch workspace as an empty owner-only file, so a
+/// grant such as `{{workspace}}/AGENTS.md` is exercised rather than refused.
+/// Nothing is created outside the scratch workspace, through `..`, inside
+/// `.git` or `.orbit`, or over an existing entry; the profile admission that follows still checks each file.
+fn create_workspace_write_files(
+    spec: &orbit_tools::plugin::PluginBackendSpec,
+    workspace_root: &Path,
+) -> Result<(), OrbitError> {
+    use std::path::Component;
+    for file in spec.rendered_manifest_write_files(Some(workspace_root))? {
+        let Ok(relative) = file.strip_prefix(workspace_root) else {
+            continue;
+        };
+        if relative.as_os_str().is_empty()
+            || !relative
+                .components()
+                .all(|component| matches!(component, Component::Normal(name) if name != ".git" && name != ".orbit"))
+        {
+            continue;
+        }
+        if let Some(parent) = file.parent() {
+            orbit_common::fs::io::create_private_dir_all(parent).map_err(|error| {
+                OrbitError::Io(format!(
+                    "create the conformance fixture directory {}: {error}",
+                    parent.display()
+                ))
+            })?;
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&file) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(OrbitError::Io(format!(
+                    "create the conformance fixture file {}: {error}",
+                    file.display()
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Only manifest defaults and an explicitly named fixture section reach the
