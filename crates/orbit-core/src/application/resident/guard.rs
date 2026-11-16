@@ -221,8 +221,9 @@ impl OrbitRuntime {
     /// attention for: its mandate's own workspace and the ones its frozen
     /// grant covers. `None` for any session that is not the live cycle of a
     /// mandate: no run binding, another job's run, a stale or expired cycle,
-    /// or a lookup that fails. The answer widens no write: it only lets
-    /// `orbit.attention` read the runtime kinds for these workspaces.
+    /// a pending task commit, or a lookup that fails. The answer widens no
+    /// write: it only lets `orbit.attention` read the runtime kinds for these
+    /// workspaces.
     pub(crate) fn resident_cycle_attention_scope(
         &self,
         run_id: Option<&str>,
@@ -232,6 +233,10 @@ impl OrbitRuntime {
         if run.job_id != RESIDENT_CYCLE_JOB {
             return None;
         }
+        // History reads recover interrupted task commits. Attention is
+        // observational, so fail closed when non-repairing inspection cannot
+        // verify that the home partition is settled before reading the grant.
+        self.inspect_live_execution_claims().ok()?;
         let task_id = self.resident_cycle_mandate_of_run(run_id).ok()?;
         let history = self.get_task_history(&task_id).ok()?;
         let grant = live_cycle_from_history(&history)

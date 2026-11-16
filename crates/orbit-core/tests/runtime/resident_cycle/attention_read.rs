@@ -178,6 +178,126 @@ fn a_live_cycle_reads_runtime_attention_for_its_covered_workspace() {
 }
 
 #[test]
+fn a_live_cycle_attention_read_preserves_a_pending_task_commit() {
+    let fx = {
+        if !super::super::dispatch_admission::isolated(
+            "resident_cycle::attention_read::a_live_cycle_attention_read_preserves_a_pending_task_commit",
+        ) {
+            return;
+        }
+        fixture()
+    };
+    let watched = fx.task("Watched");
+    let mandate = fx.mandate(&watched);
+    fx.grant(&mandate, &["dispatch"]);
+    let run = fx.cycle_run(&mandate, "resident-cycle-attention-pending");
+    fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+    failed_run(&fx, &watched);
+    let workspace = fx.runtime.workspace_id().unwrap();
+    let tasks_before = fx.runtime.observe_task_metadata().unwrap();
+    let claims_before = fx.runtime.inspect_execution_claims().unwrap();
+    let connection = rusqlite::Connection::open(fx.global.join("orbit.db")).unwrap();
+    // A dead committer's prepared row must await an ordinary operational
+    // read. Insert it only after the live cycle and its grant are recorded.
+    connection
+        .execute(
+            "INSERT INTO task_commit_journal \
+                 (journal_id, workspace_id, task_id, state, intent_json, created_at) \
+             VALUES (?1, ?2, ?3, 'prepared', '{}', ?4)",
+            rusqlite::params![
+                "resident-attention-pending",
+                workspace,
+                mandate,
+                Utc::now().to_rfc3339()
+            ],
+        )
+        .unwrap();
+    let journal_state = || -> String {
+        connection
+            .query_row(
+                "SELECT state FROM task_commit_journal WHERE journal_id = ?1",
+                ["resident-attention-pending"],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+    // Inspect raw coordination rows because the public claim inspection
+    // correctly refuses to expose claims while the partition is pending.
+    let coordination_rows = || {
+        connection
+            .prepare(
+                "SELECT kind, row_id, payload_json, journal_id, created_at \
+                 FROM task_coordination_rows WHERE workspace_id = ?1 ORDER BY kind, row_id",
+            )
+            .unwrap()
+            .query_map([&workspace], |row| {
+                (0..5)
+                    .map(|column| row.get::<_, String>(column))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    let coordination_before = coordination_rows();
+
+    // Scope derivation runs even without runtime kinds in the selection.
+    for input in [
+        json!({"kind": "pilot_hold"}),
+        json!({"kind": RUNTIME_KINDS}),
+    ] {
+        let response = fx.as_cycle_agent(&run, || attention(&fx, input.clone()));
+        assert_eq!(
+            journal_state(),
+            "prepared",
+            "resident attention must not settle the pending commit: {response}"
+        );
+        assert_eq!(fx.runtime.observe_task_metadata().unwrap(), tasks_before);
+        assert_eq!(coordination_rows(), coordination_before);
+        assert!(fx.runtime.inspect_execution_claims().is_err());
+        assert!(
+            response["items"].as_array().unwrap().is_empty(),
+            "{response}"
+        );
+        if input["kind"].is_array() {
+            assert_eq!(
+                capability_degraded(&response).len(),
+                RUNTIME_KINDS.len(),
+                "{response}"
+            );
+        } else {
+            assert!(
+                response["degraded"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|entry| {
+                        entry["kind"] == "pilot_hold" && entry["code"] == "source_unavailable"
+                    }),
+                "{response}"
+            );
+        }
+    }
+
+    // Ordinary reads still recover; the live cycle can then read the same
+    // runtime sources without capability degradation.
+    fx.runtime.get_task_history(&mandate).unwrap();
+    assert_eq!(journal_state(), "aborted");
+    assert_eq!(
+        fx.runtime.inspect_execution_claims().unwrap(),
+        claims_before
+    );
+    let response = fx.as_cycle_agent(&run, || attention(&fx, json!({"kind": RUNTIME_KINDS})));
+    assert!(capability_degraded(&response).is_empty(), "{response}");
+    assert!(
+        response["items"].as_array().unwrap().iter().any(|item| {
+            item["kind"] == "run_failed" && item["refs"]["task_id"] == watched.as_str()
+        }),
+        "{response}"
+    );
+}
+
+#[test]
 fn runtime_attention_stays_withheld_outside_the_mandate() {
     let mut fx = {
         if !super::super::dispatch_admission::isolated(
