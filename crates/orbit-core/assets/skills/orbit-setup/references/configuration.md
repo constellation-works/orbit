@@ -591,22 +591,25 @@ with a deprecation warning, are ignored, and stop being recognised after
 Fleet notices are short, expiring, attributed announcements. Their limits
 are fixed; no key changes them:
 
-- Default expiry: 72 hours for an incident, 12 for maintenance, 168 for
-  info. A managed agent's notice defaults to, and is capped at, 24 hours.
-- Longest expiry: 720 hours for an operator; 168 (incident), 72
-  (maintenance) and 168 (info) for an orchestrator.
+- Default expiry: 72 hours for a warn or incident, 12 for maintenance, 168
+  for info. A managed agent's notice defaults to, and is capped at, 24 hours.
+  A resident mandate's warn defaults to 72 hours (at most 168 hours), and its
+  status line expires at twice the mandate's heartbeat (or 168 hours for a
+  control line left when paused, taken over, or stopped).
+- Longest expiry: 720 hours for an operator; 168 (warn, incident, info) and 72
+  (maintenance) for an orchestrator; 168 for a resident mandate's warn.
 - Size: titles up to 120 characters, bodies up to 4096 UTF-8 bytes, at most
   8 evidence references.
 - Open notices: 20 per workspace, 10 global per owner host, 2 per managed
-  task.
+  task, 10 per resident mandate.
 - Post rates: 5 per managed task in 24 hours (corroborations included), 30
-  per orchestrator crew per hour.
+  per orchestrator crew per hour, 30 per resident mandate per hour.
 - Retention: closed and expired notices stay listable for 30 days.
 - Agents: managed agents always may post and close their own notices
   through their bound task.
-- Brief: opted-in managed activities always receive up to 5 open notices,
-  each body cut to 600 characters; a read that takes over 2000 ms gives an
-  unavailable brief.
+- Brief: opted-in managed activities always receive up to 5 open notices
+  (warn notices and residents' status lines are excluded), each body cut to
+  600 characters; a read that takes over 2000 ms gives an unavailable brief.
 
 The former `notice.*` keys load with a deprecation warning, are ignored, and
 stop being recognised after 2026-12-08. Delete the `[notice]` table.
