@@ -891,7 +891,9 @@ The blocked-task backstop is stricter: its decision is recorded under the
 recovery run, not the publishing run, so it can never preserve the failed
 episode's publication. When that episode still holds a published candidate —
 the publisher's own `push`/`pr_open` checkpoints, a failure-handoff
-publication, or a pull request recorded for its pipeline run — a backstop
+checkpoint with any decision other than `no_candidate` (an unknown or missing
+decision stays fail-closed as a possibly published candidate), or a pull
+request recorded for its pipeline run — a backstop
 `requeue`, and a backstop `rerun_ci` that would requeue, are refused before
 any forge rerun. The task stays `blocked`, no publication-preservation or
 requeued record is written, and the escalation names the publishing run and
@@ -899,7 +901,9 @@ the supported route: an operator requeue (`orbit task requeue <task-id>`),
 which preserves the publication under the publisher's own binding, or
 explicit source repair (`orbit run` action `resume` with `source_repair` for
 the publishing run), with `--discard-candidate` only to implement fresh. A
-backstop requeue of an episode that published nothing is unchanged, as is
+backstop requeue of an episode that published nothing — including a stopped
+delivery whose failure handoff recorded `no_candidate` with no `push`/`pr_open`
+or task pull request — is unchanged, as is
 in-run final recovery of the publishing run itself.
 
 ### An escalated run that published its own pull request

@@ -8,8 +8,8 @@ use orbit_common::fs::git::{GIT_CHECKOUT_TIMEOUT, run_git, run_git_within};
 use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
-    FAULT_JUDGED_BY_FIELD, FinalRecoveryDecision, JobRun, JobRunState, JobRunTrigger,
-    MAX_DECISION_TEXT_CHARS, RecoveryFault, TASK_PR_PIPELINE_JOB,
+    FAULT_JUDGED_BY_FIELD, FailureHandoffDecision, FinalRecoveryDecision, JobRun, JobRunState,
+    JobRunTrigger, MAX_DECISION_TEXT_CHARS, RecoveryFault, TASK_PR_PIPELINE_JOB,
 };
 use serde_json::{Value, json};
 
@@ -448,7 +448,11 @@ impl OrbitRuntime {
     /// preserve its candidate, when that episode retains a published
     /// candidate. `None` when nothing was published. Publication is the
     /// publisher's own `push`/`pr_open` checkpoints, a failure-handoff
-    /// publication, or a pull request recorded for its pipeline run.
+    /// checkpoint that does not record `no_candidate`, or a pull request
+    /// recorded for its pipeline run. A `no_candidate` receipt explicitly
+    /// records that nothing was published, so it is not publication; an
+    /// unknown or missing failure-handoff decision stays fail-closed as a
+    /// possibly published candidate.
     fn backstop_unpreservable_publisher(
         &self,
         input: &BlockedRecoveryInput,
@@ -480,7 +484,7 @@ impl OrbitRuntime {
                     .pipeline
                     .get(key)
                     .is_some_and(|value| !value.is_null())
-            }) || state.failure_activity_checkpoint.is_some()
+            }) || failure_handoff_published(state.failure_activity_checkpoint.as_ref())
         }) || (run.job_id == TASK_PR_PIPELINE_JOB
             && task.github_pr_number().is_some());
         if !published {
@@ -636,6 +640,23 @@ impl OrbitRuntime {
         self.apply_blocked_task_recovery(&input, &run.run_id, &base_ref, Some(&escalation))?;
         Ok(true)
     }
+}
+
+/// Whether a failure-activity checkpoint records a publication the backstop
+/// must not requeue past. A `no_candidate` receipt explicitly records that
+/// the failed run published nothing, so it is not publication. Any other
+/// checkpoint — a known publishing or preserving decision, or an unknown or
+/// missing decision — stays fail-closed as a possibly published candidate.
+fn failure_handoff_published(
+    checkpoint: Option<&orbit_types::workflow::FailureActivityCheckpoint>,
+) -> bool {
+    let Some(checkpoint) = checkpoint else {
+        return false;
+    };
+    !matches!(
+        FailureHandoffDecision::from_output(&checkpoint.output),
+        Some(FailureHandoffDecision::NoCandidate)
+    )
 }
 
 /// `decision` with `resume` replaced by an escalation naming the failed run.
