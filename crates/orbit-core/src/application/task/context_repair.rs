@@ -2,7 +2,7 @@
 //!
 //! Filesystem-existence pruning used to delete a declared selector as soon as
 //! its target stopped existing, recording what it dropped in a
-//! [`LegacyContextPruningRecord`] history entry. Pruning is retired
+//! `context_files_pruned` history entry. Pruning is retired
 //! ([ORB-12490]), but the tasks it already narrowed still carry the shrunken
 //! declaration, and admission now treats a declaration as the task's real
 //! footprint.
