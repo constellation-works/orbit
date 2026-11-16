@@ -226,10 +226,18 @@ fn source_repair_reader_line_names_one_next_step_and_keeps_the_diagnostic() {
         shown.line,
         "source repair refused: the spec changed after PR #9722 was published. Discard the candidate to rerun fresh."
     );
-    assert!(!shown.line.contains('\n'), "reader line is one line: {}", shown.line);
+    assert!(
+        !shown.line.contains('\n'),
+        "reader line is one line: {}",
+        shown.line
+    );
     assert_eq!(shown.detail, essay);
     assert!(shown.detail.contains("settle-merged"), "{}", shown.detail);
-    assert!(shown.detail.contains("--discard-candidate"), "{}", shown.detail);
+    assert!(
+        shown.detail.contains("--discard-candidate"),
+        "{}",
+        shown.detail
+    );
     assert!(shown.detail.contains("dashboard"), "{}", shown.detail);
 
     let checks = "source repair refused: required checks failed on the recorded head: Check. \
@@ -241,7 +249,11 @@ fn source_repair_reader_line_names_one_next_step_and_keeps_the_diagnostic() {
         checks_line.line,
         "source repair refused: required checks failed on the recorded head: Check. Requeue when the required checks pass."
     );
-    assert!(checks_line.detail.contains("settle-merged"), "{}", checks_line.detail);
+    assert!(
+        checks_line.detail.contains("settle-merged"),
+        "{}",
+        checks_line.detail
+    );
 
     let running = "job validation failed: source repair refused: delivery `jrun-1` is still \
          running, so it cannot be repaired. Cancel it with `orbit run cancel jrun-1 --confirm`. \
@@ -258,7 +270,8 @@ fn source_repair_reader_line_names_one_next_step_and_keeps_the_diagnostic() {
         running_line.detail
     );
 
-    let short = OrbitError::JobValidation("source repair refused: source checkpoints missing".into());
+    let short =
+        OrbitError::JobValidation("source repair refused: source checkpoints missing".into());
     let short_text = short.to_string();
     let short_line = short
         .source_repair_reader_text()
@@ -268,8 +281,40 @@ fn source_repair_reader_line_names_one_next_step_and_keeps_the_diagnostic() {
         "source repair refused: source checkpoints missing. Inspect the source again before retrying."
     );
     assert_eq!(short_line.detail, short_text);
-    assert!(short_text.contains("source repair refused: "), "{short_text}");
+    assert!(
+        short_text.contains("source repair refused: "),
+        "{short_text}"
+    );
 
-    assert!(orbit_common::source_repair_reader_text("published candidate refused: binding changed").is_none());
-    assert!(orbit_common::source_repair_reader_text("invalid input: the task specification changed").is_none());
+    assert!(
+        orbit_common::source_repair_reader_text("published candidate refused: binding changed")
+            .is_none()
+    );
+    assert!(
+        orbit_common::source_repair_reader_text("invalid input: the task specification changed")
+            .is_none()
+    );
+}
+
+/// The next step follows the cause it names. A discard the operator already
+/// made is not offered again, and a closed pull request is not told to requeue
+/// on checks alone: the requeue resumes only an open pull request.
+#[test]
+fn source_repair_reader_next_step_follows_the_cause_it_names() {
+    let discarded = "source repair refused: an operator discarded this run's candidate. Nothing was \
+         changed. To discard the candidate with `orbit task update T --status backlog \
+         --discard-candidate`.";
+    let shown = orbit_common::source_repair_reader_text(discarded).expect("refusal has a line");
+    assert_eq!(
+        shown.line,
+        "source repair refused: an operator discarded this run's candidate. Inspect the source again before retrying."
+    );
+    assert_eq!(shown.detail, discarded);
+
+    let closed = "source repair refused: pull request #12 is not open, or the forge cannot report its required checks";
+    let shown = orbit_common::source_repair_reader_text(closed).expect("refusal has a line");
+    assert_eq!(
+        shown.line,
+        "source repair refused: pull request #12 is not open, or the forge cannot report its required checks. Requeue when the pull request is open and its required checks pass."
+    );
 }

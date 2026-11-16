@@ -140,12 +140,16 @@ fn next_step(raw: &str) -> &'static str {
     if cause.contains("still running") || cause.contains("still live") {
         return "Cancel the run, then repair it.";
     }
+    // The requeue resumes only an open pull request, so a closed one names that
+    // precondition rather than the checks alone.
+    if cause.contains("is not open") {
+        return "Requeue when the pull request is open and its required checks pass.";
+    }
     if cause.contains("required checks failed")
         || cause.contains("have not finished")
         || cause.contains("no required check")
         || cause.contains("describe head")
         || cause.contains("required checks unreadable")
-        || cause.contains("is not open")
     {
         return "Requeue when the required checks pass.";
     }
@@ -158,7 +162,8 @@ fn next_step(raw: &str) -> &'static str {
     if cause.contains("explicit source repair") || cause.contains("stop any newer") {
         return "Inspect the source again before retrying.";
     }
-    if cause.contains("discard") {
+    // A past-tense discard is a fact the operator already acted on, not a step.
+    if cause.contains("discard") && !cause.contains("discarded") {
         return "Discard the candidate to rerun fresh.";
     }
     "Inspect the source again before retrying."
