@@ -791,10 +791,14 @@ fn terminal_findings_preserve_messages_commands_and_one_line_rows() {
     for message in [ERROR_MESSAGE, WARNING_MESSAGE] {
         has(&collapsed, message);
     }
-    has(findings, "Fix: orbit index refresh");
+    has(findings, "  Fix: orbit index refresh");
     has(
         findings,
-        "Fix: orbit auto-task recover\n  delivery-code-review",
+        "  Fix: orbit auto-task recover\n    delivery-code-review",
+    );
+    assert!(
+        !findings.lines().any(|l| l.starts_with("Fix:")),
+        "Fix must share the finding's indent, not column 0: {findings}"
     );
     assert!(!findings.contains("database"), "{findings}");
     for line in findings.lines().filter(|l| !l.starts_with("Table details")) {
@@ -803,12 +807,12 @@ fn terminal_findings_preserve_messages_commands_and_one_line_rows() {
     has(&collapsed, "--format plain or --json");
     let narrow = render_fixture("narrow");
     assert!(
-        !narrow.lines().any(|l| l == format!("Fix: {FIX}")),
+        !narrow.lines().any(|l| l == format!("  Fix: {FIX}")),
         "over-width action must wrap: {narrow}"
     );
     has(
         &narrow,
-        "Fix: orbit auto-task recover\n  delivery-code-review",
+        "  Fix: orbit auto-task recover\n    delivery-code-review",
     );
     for line in narrow
         .lines()
@@ -822,7 +826,7 @@ fn terminal_findings_preserve_messages_commands_and_one_line_rows() {
     let wide = render_fixture("wide");
     has(&wide, ERROR_MESSAGE);
     assert!(
-        wide.lines().any(|l| l == format!("Fix: {FIX}")),
+        wide.lines().any(|l| l == format!("  Fix: {FIX}")),
         "sufficient width keeps action on one line: {wide}"
     );
     assert!(!wide.contains("Table details shortened"), "{wide}");

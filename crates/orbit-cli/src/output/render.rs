@@ -284,15 +284,19 @@ fn wrap_finding_message(message: &str, width: u16) -> String {
         .join("\n")
 }
 
-/// Wrap repair action text, wrapping long actions onto indented continuation lines.
+/// Wrap repair action text at the finding's two-space indent, with wrapped
+/// lines on a four-space hanging indent so the remedy reads as part of its
+/// finding.
 fn wrap_action(fix: &str, width: u16) -> String {
-    let single_line = format!("Fix: {fix}");
+    let indent = "  ";
+    let hanging = "    ";
+    let prefix = format!("{indent}Fix: ");
+    let single_line = format!("{indent}Fix: {fix}");
     if width == 0 || single_line.chars().count() <= width as usize {
         return single_line;
     }
-    let indent = "  ";
-    let first_available = width.saturating_sub(5).max(1) as usize;
-    let rest_available = width.saturating_sub(indent.len() as u16).max(1) as usize;
+    let first_available = width.saturating_sub(prefix.chars().count() as u16).max(1) as usize;
+    let rest_available = width.saturating_sub(hanging.len() as u16).max(1) as usize;
 
     let mut lines = Vec::new();
     let mut current_line = String::new();
@@ -317,15 +321,15 @@ fn wrap_action(fix: &str, width: u16) -> String {
     let mut out = String::new();
     let mut iter = lines.into_iter();
     if let Some(first) = iter.next() {
-        if format!("Fix: {first}").chars().count() <= width as usize {
-            out.push_str(&format!("Fix: {first}"));
+        if format!("{indent}Fix: {first}").chars().count() <= width as usize {
+            out.push_str(&format!("{indent}Fix: {first}"));
         } else {
-            out.push_str(&format!("Fix:\n{indent}{first}"));
+            out.push_str(&format!("{indent}Fix:\n{hanging}{first}"));
         }
     }
     for line in iter {
         out.push('\n');
-        out.push_str(indent);
+        out.push_str(hanging);
         out.push_str(&line);
     }
     out
