@@ -312,6 +312,51 @@ spec:
         diagnostic exposed in that focused form, not as a full-workspace replay.
     - A genuine assertion or product failure is never external evidence. Never
       accept a run that reported incomplete analysis.
+    - Deferred host checks, worked example (names are illustrative: copy the
+      real test paths from the notices). Suppose `cargo test -p orbit-exec
+      --test sandbox` passed and printed two `DEFERRED:` notices. Keep one broad
+      record with each exact notice in `deferred`:
+        validation: {"id":"V1","command":"cargo test -p orbit-exec --test sandbox","outcome":"passed","role":"required","deferred":["DEFERRED: bubblewrap unavailable: bwrap_child_gets_only_the_supplied_environment: No permissions to create new namespace","DEFERRED: bubblewrap unavailable: bwrap_child_cannot_read_host_secrets: No permissions to create new namespace"]}
+      Give each deferred test its own focused requirement and its own record,
+      with the same command text in both:
+        validation: {"id":"V2","command":"cargo test -p orbit-exec --test sandbox bwrap_child_gets_only_the_supplied_environment","outcome":"not_run","role":"required","note":"Confined path deferred by V1; the Linux host runs it at the candidate tree."}
+        validation: {"id":"V3","command":"cargo test -p orbit-exec --test sandbox bwrap_child_cannot_read_host_secrets","outcome":"not_run","role":"required","note":"Confined path deferred by V1; the Linux host runs it at the candidate tree."}
+        external_evidence: {"kind":"host_sandbox_test","name":"bwrap_child_gets_only_the_supplied_environment","command":"cargo test -p orbit-exec --test sandbox bwrap_child_gets_only_the_supplied_environment","artifact":"host-checks/bwrap-child-environment.json","os":"linux"}
+        external_evidence: {"kind":"host_sandbox_test","name":"bwrap_child_cannot_read_host_secrets","command":"cargo test -p orbit-exec --test sandbox bwrap_child_cannot_read_host_secrets","artifact":"host-checks/bwrap-child-secrets.json","os":"linux"}
+      Report `incomplete` with no open finding and an `escalation` that names
+      the two checks for a host run at this tree.
+    - Artifacts and logs. Each `artifact` is its own `.json` path: never a
+      `review-*` name, never shared. When two requirements share an artifact or
+      a derived `<stem>.log.json` path, the whole requirement set is refused as
+      evidence: no hold forms and no host run starts. The host writes the
+      structured result at `artifact` after it runs the command natively at the
+      candidate tree. You never write it, and nothing you attach counts as it.
+      macOS notices (`SKIP: sandbox-exec cannot apply a profile:`,
+      `DEFERRED: ps denied:`) use `os: macos` the same way.
+    - Captured reviewer log versus host result. A log of your own sandbox run,
+      attached for diagnosis (for example `host-checks/broad-run.txt`), is a
+      reviewer log: it has no writer stamp, is never evidence, and must not reuse
+      a path named above. A host result is the structured JSON the host writes at
+      `artifact`, carrying the kind, name, command, outcome, os, candidate tree
+      and log.
+    - Records. A focused check is `not_run` until its host result arrives; never
+      write it `passed`. Use `failed` when your focused run fails, and `denied`
+      only when your own sandbox refused that run (quote the refusal in `note`).
+      A filter that matches no test is refused as `no_tests_ran`, so it cannot
+      pass. The filter is the full test path the notice prints: a module prefix
+      or substring covers nothing, and each `command` must be identical in its
+      record and its `external_evidence` entry.
+    - Prose labels. A notice names its test by the text between its prefix and
+      the first `: `, and only a single whitespace-free token counts. Check that
+      token against the real test list: `cargo test -p <crate> --test <target>
+      -- --list` (or `--lib -- --list`) prints names and runs no test. Use the
+      token only when it is exactly a listed name without the trailing `: test`.
+      A prose label such as `sandbox boundary` is not a test path, so no
+      requirement can cover its notice. Do not guess a name or invent a mapping:
+      leave the notice in `deferred`, state the ambiguity in `summary`, and return
+      `incomplete` with an `escalation` asking the owner to make the test print
+      its own test path. None of this relaxes settlement: a failed, zero-test or
+      unrecorded focused check still blocks.
 
     Verdict
 
