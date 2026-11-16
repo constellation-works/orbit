@@ -132,12 +132,18 @@ def extract(zstd, sources, destination):
         feeder.join()
 
 
-def split(source, destinations, temporaries):
-    """Copy `source` into consecutive byte ranges, one new temporary per destination."""
+def split_transfer_in_place(source, destinations, temporaries):
+    """Keep the first range in the run-owned staging file, copying only the rest.
+
+    `source` is the encoder's temporary, already first in `temporaries`, never
+    the input archive. Truncate it only after staging every remaining range.
+    The balanced byte ranges and their publication are unchanged.
+    """
     size = source.stat().st_size
     each = -(-size // len(destinations))
-    with source.open("rb") as whole:
-        for destination in destinations:
+    with source.open("r+b") as whole:
+        whole.seek(each)
+        for destination in destinations[1:]:
             temporary = temporary_in(destination.parent)
             temporaries.append(temporary)
             with temporary.open("wb") as part:
@@ -148,6 +154,8 @@ def split(source, destinations, temporaries):
                         break
                     part.write(chunk)
                     remaining -= len(chunk)
+        whole.truncate(min(each, size))
+    return max(0, size - each)
 
 
 def main():
@@ -193,8 +201,8 @@ def main():
         temporaries.append(whole)
         with whole.open("wb") as output:
             recode(zstd, sources, output, options)
-        split(whole, destinations, temporaries)
-        staged = temporaries[1:]
+        copied_bytes = split_transfer_in_place(whole, destinations, temporaries)
+        staged = temporaries
         # link publishes without overwriting a destination created since the
         # initial check. Every temporary is on its destination's filesystem.
         for temporary, destination in zip(staged, destinations):
@@ -203,6 +211,7 @@ def main():
         print(f"nextest-repack: mode={args.mode} parts={args.parts} "
               f"input_bytes={sum(source.stat().st_size for source in sources)} "
               f"output_bytes={sum(destination.stat().st_size for destination in destinations)} "
+              f"split_copied_bytes={copied_bytes} "
               f"wall_seconds={time.monotonic() - started:.3f}")
         published = []
     finally:
