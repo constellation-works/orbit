@@ -113,7 +113,7 @@ fn newest_delivery_uses_submitted_task_bindings() {
     let fixture = Fixture::new();
     assert!(matches!(
         fixture.runtime.observe_task_delivery(&fixture.task, None),
-        Err(OrbitError::InvalidInput(_))
+        Err(OrbitError::TaskDeliveryUnavailable(_))
     ));
     fixture.run(
         "older",

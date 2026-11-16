@@ -520,7 +520,5 @@ impl OrbitRuntime {
 }
 
 fn no_task_delivery_run(task_id: &str) -> OrbitError {
-    OrbitError::InvalidInput(format!(
-        "no task delivery run in this workspace was submitted with task '{task_id}'; delivery evidence exists only for tasks submitted by a delivery run in this workspace — call orbit.task.show without field \"delivery\" instead"
-    ))
+    OrbitError::TaskDeliveryUnavailable(task_id.to_string())
 }

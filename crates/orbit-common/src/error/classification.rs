@@ -58,6 +58,7 @@ impl OrbitError {
             }
             OrbitError::ForceOverridable(_) => "force_overridable",
             OrbitError::InvalidInput(_)
+            | OrbitError::TaskDeliveryUnavailable(_)
             | OrbitError::InvalidInputDiagnostic { .. }
             | OrbitError::ClaimRefused { .. } => const { RemoteToolCode::InvalidInput.as_str() },
             OrbitError::TaskCompletionLiveRun { .. } => "task_completion_live_run",

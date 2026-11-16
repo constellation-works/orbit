@@ -297,6 +297,12 @@ fn missing_values_name_their_listing_commands() {
         plain_failure(&args, &output, 1);
         let message = String::from_utf8_lossy(&output.stderr);
         assert!(message.contains(listing), "{}", describe(&args, &output));
+        if args[0] == "task" || args[0] == "run" {
+            assert!(
+                !message.contains("orbit.task.") && !message.contains("orbit_task_"),
+                "CLI recovery must use runnable CLI syntax: {message}"
+            );
+        }
         assert!(
             !message.starts_with("error: request_not_found:"),
             "{message}"

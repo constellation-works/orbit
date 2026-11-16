@@ -80,6 +80,9 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             OrbitError::CallbackWorkspaceOutsideSandbox(redact(&m))
         }
         OrbitError::NoJobRuns => OrbitError::NoJobRuns,
+        OrbitError::TaskDeliveryUnavailable(task_id) => {
+            OrbitError::TaskDeliveryUnavailable(redact(&task_id))
+        }
         OrbitError::NotFound { kind, id, guidance } => OrbitError::NotFound {
             kind,
             id: redact(&id),

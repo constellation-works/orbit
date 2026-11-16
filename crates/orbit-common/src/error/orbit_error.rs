@@ -461,6 +461,12 @@ pub enum OrbitError {
         reason: SourceRepairRunStateRefusal,
         message: String,
     },
+    /// No delivery run submitted this task in the selected workspace.
+    /// Retains the invalid-input wire contract while surfaces render their
+    /// own task-read remedy from the task ID.
+    #[error("invalid input: {}", task_delivery_unavailable_message(.0, &format!("orbit task show {}", .0)))]
+    #[serde(untagged, serialize_with = "serialize_task_delivery_unavailable")]
+    TaskDeliveryUnavailable(String),
 }
 
 const _: () = assert!(
@@ -479,10 +485,12 @@ fn not_found_message(kind: NotFoundKind, id: &str, guidance: Option<&str>) -> St
 
     // Explicit guidance (for example a spelling suggestion or an artifact's
     // owning task) is more specific than the default listing.
+    let default_guidance;
     let guidance = guidance.unwrap_or(match kind {
-        NotFoundKind::Task => "; see `orbit task list` or `orbit.task.list` for valid task IDs",
+        NotFoundKind::Task => "; see `orbit task list` for valid task IDs",
         NotFoundKind::JobRun => {
-            "; see `orbit run history` for valid run IDs, or use `orbit.task.show` with `field: \"delivery\"` for a task's delivery run"
+            default_guidance = format!("; see `orbit run history` for valid run IDs, or use `orbit task show {id} --fields delivery` for a task's delivery run");
+            &default_guidance
         }
         NotFoundKind::Job => "; see `orbit job list` for valid job IDs",
         NotFoundKind::Tool => "; see `orbit tool list` or MCP `tools/list` for valid tool names",
@@ -490,6 +498,63 @@ fn not_found_message(kind: NotFoundKind, id: &str, guidance: Option<&str>) -> St
         _ => "",
     });
     format!("{kind} not found: {id}{guidance}")
+}
+
+impl OrbitError {
+    /// Render task/run remedies using the advertised MCP tool names and JSON
+    /// arguments. Explicit not-found guidance still takes precedence.
+    pub fn mcp_error_message(&self) -> String {
+        match self {
+            Self::NotFound {
+                kind: NotFoundKind::Task,
+                id,
+                guidance: None,
+            } => not_found_message(
+                NotFoundKind::Task,
+                id,
+                Some("; see `orbit_task_list {}` for valid task IDs"),
+            ),
+            Self::NotFound {
+                kind: NotFoundKind::JobRun,
+                id,
+                guidance: None,
+            } => {
+                let input = serde_json::json!({"id": id, "field": "delivery"});
+                not_found_message(
+                    NotFoundKind::JobRun,
+                    id,
+                    Some(&format!(
+                        "; see `orbit_run {{\"action\":\"list\"}}` for valid run IDs, or use `orbit_task_show {input}` for a task's delivery run"
+                    )),
+                )
+            }
+            Self::TaskDeliveryUnavailable(task_id) => {
+                let input = serde_json::json!({"id": task_id});
+                format!(
+                    "invalid input: {}",
+                    task_delivery_unavailable_message(task_id, &format!("orbit_task_show {input}"))
+                )
+            }
+            _ => self.to_string(),
+        }
+    }
+}
+
+fn task_delivery_unavailable_message(task_id: &str, remedy: &str) -> String {
+    format!(
+        "no task delivery run in this workspace was submitted with task '{task_id}'; delivery evidence exists only for tasks submitted by a delivery run in this workspace — use `{remedy}` instead"
+    )
+}
+
+fn serialize_task_delivery_unavailable<S: serde::Serializer>(
+    task_id: &str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    OrbitError::InvalidInput(task_delivery_unavailable_message(
+        task_id,
+        &format!("orbit task show {task_id}"),
+    ))
+    .serialize(serializer)
 }
 
 fn serialize_footprint_unavailable<S: serde::Serializer>(
