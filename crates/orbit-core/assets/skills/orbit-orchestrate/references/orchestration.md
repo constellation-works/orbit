@@ -500,7 +500,10 @@ Two of its answers separate contention from capacity:
   admitted past other tasks' context locks rather than waiting on
   `context_lock_conflict`. Before any agent of that run that may edit, the run
   takes the task's own footprint locks, waiting while another task holds them,
-  so two writers never share a file.
+  so two writers never share a file. An operator's explicit ship
+  (`orbit run ship`) is the exception: the gate un-defers those locks and
+  records a `readiness_overridden` event naming the holders, so the run edits
+  beside them without waiting.
 - `awaiting_footprint` and `awaiting_exclusive_slot` mean the task declares
   no `context_files`, has no `no-diff-expected` tag and no operator
   `readiness-waived` tag, in a run with more than one slot. It would hold no
