@@ -343,20 +343,26 @@ spec:
       write it `passed`. Use `failed` when your focused run fails, and `denied`
       only when your own sandbox refused that run (quote the refusal in `note`).
       A filter that matches no test is refused as `no_tests_ran`, so it cannot
-      pass. The filter is the full test path the notice prints: a module prefix
+      pass. The filter is the exact token the notice prints: a module prefix
       or substring covers nothing, and each `command` must be identical in its
       record and its `external_evidence` entry.
     - Prose labels. A notice names its test by the text between its prefix and
-      the first `: `, and only a single whitespace-free token counts. Check that
-      token against the real test list: `cargo test -p <crate> --test <target>
-      -- --list` (or `--lib -- --list`) prints names and runs no test. Use the
-      token only when it is exactly a listed name without the trailing `: test`.
-      A prose label such as `sandbox boundary` is not a test path, so no
-      requirement can cover its notice. Do not guess a name or invent a mapping:
-      leave the notice in `deferred`, state the ambiguity in `summary`, and return
-      `incomplete` with an `escalation` asking the owner to make the test print
-      its own test path. None of this relaxes settlement: a failed, zero-test or
-      unrecorded focused check still blocks.
+      the first `: `, and only a single whitespace-free token counts.
+      Settlement coverage is token identity: a `host_sandbox_test` requirement
+      covers the notice only when its cargo filter equals that exact printed
+      token. Bare function-name tokens are valid as printed: use the token
+      verbatim as both filter and requirement name, as the worked example does.
+      `cargo test -p <crate> --test <target> -- --list` (or `--lib -- --list`)
+      prints names and runs no test; it only helps confirm a token names a real
+      test. Never rewrite the token to a listed full path (for example expanding
+      a bare name to its `module::test` form): the rewritten filter no longer
+      equals the notice token, so the notice stays uncovered. A prose label such
+      as `sandbox boundary` is not a test token, so no requirement can cover its
+      notice. Do not guess a name or invent a mapping: leave the notice in
+      `deferred`, state the ambiguity in `summary`, and return `incomplete` with
+      an `escalation` asking the owner to make the test print its own test path.
+      None of this relaxes settlement: a failed, zero-test or unrecorded focused
+      check still blocks.
 
     Verdict
 
