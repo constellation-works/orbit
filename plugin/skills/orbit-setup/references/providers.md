@@ -134,7 +134,10 @@ activities, so it cannot silently use another account.
 Verify the actual launcher, not just an SSH login shell. Run
 `orbit config get execution.env.pass`, `orbit config get crews.sol.env`
 (substitute the intended crew) and `orbit doctor --check env-pass --json`.
-Dashboard runs inherit the web service; clock runs can read admitted names
+Doctor's `env-pass` row also counts a `pass` name that a non-empty
+`clock.env` value supplies as held, so its `ok` for such a name covers
+timer-started runs, not a manual drain from this shell. Dashboard runs inherit
+the web service; clock runs can read admitted names
 and crew sources from owner-only `~/.orbit/clock.env`, which does not supply
 the web service. A service started with `bash -lc` reads login exports at
 startup, but an already running process does not receive later profile edits.
