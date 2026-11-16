@@ -285,7 +285,7 @@ fn a_nested_seatbelt_conformance_deferral_settles_on_its_host_replay() {
         .filter(|line| line.starts_with(prefix))
         .map(str::to_owned)
         .collect::<Vec<_>>();
-    assert_eq!(deferred.len(), 2, "both conformance rows defer: {stderr}");
+    assert_eq!(deferred.len(), 3, "every conformance row defers: {stderr}");
     assert!(
         deferred
             .iter()
@@ -295,6 +295,8 @@ fn a_nested_seatbelt_conformance_deferral_settles_on_its_host_replay() {
     assert!(
         !stderr.contains(
             "qa-scenario-pass: a_config_templated_write_root_outside_scratch_needs_fs_consent"
+        ) && !stderr.contains(
+            "qa-scenario-pass: a_workspace_exact_file_grant_passes_conformance_on_a_created_file"
         ) && !stderr.contains(
             "qa-scenario-pass: goldens_supply_fixture_secrets_and_the_host_store_is_never_read"
         ),
