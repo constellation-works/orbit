@@ -144,7 +144,14 @@ fn execute_admitted(
             agent_detail_surface(session_context),
         ),
         OrbitBuiltinAction::Attention(_) => {
-            crate::application::attention::attention_query(runtime, input, session_context)
+            let resident_scope =
+                runtime.resident_cycle_attention_scope(task_scope.run_id.as_deref());
+            crate::application::attention::attention_query(
+                runtime,
+                input,
+                session_context,
+                resident_scope.as_ref(),
+            )
         }
         OrbitBuiltinAction::Codebase(verb) => super::codebase_tools::dispatch(runtime, verb, input),
         OrbitBuiltinAction::Automation(verb) => {

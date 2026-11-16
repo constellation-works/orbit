@@ -217,6 +217,34 @@ impl OrbitRuntime {
         ids
     }
 
+    /// The workspaces (ids and names) a live resident cycle may read runtime
+    /// attention for: its mandate's own workspace and the ones its frozen
+    /// grant covers. `None` for any session that is not the live cycle of a
+    /// mandate: no run binding, another job's run, a stale or expired cycle,
+    /// or a lookup that fails. The answer widens no write: it only lets
+    /// `orbit.attention` read the runtime kinds for these workspaces.
+    pub(crate) fn resident_cycle_attention_scope(
+        &self,
+        run_id: Option<&str>,
+    ) -> Option<BTreeSet<String>> {
+        let run_id = run_id.map(str::trim).filter(|id| !id.is_empty())?;
+        let run = self.show_job_run_observed(run_id).ok()?;
+        if run.job_id != RESIDENT_CYCLE_JOB {
+            return None;
+        }
+        let task_id = self.resident_cycle_mandate_of_run(run_id).ok()?;
+        let history = self.get_task_history(&task_id).ok()?;
+        let grant = live_cycle_from_history(&history)
+            .ok()?
+            .filter(|live| live.run_id == run_id && live.expires_at > Utc::now())
+            .and_then(|live| cycle_grant(&history, &live.cycle))?;
+        let mut covered = BTreeSet::from([self.workspace_id().ok()?, self.workspace_label()]);
+        for selector in &grant.workspaces {
+            covered.extend(self.resident_workspace_ids(selector));
+        }
+        Some(covered)
+    }
+
     /// Admit one tool call made under the trusted `run_id`, before it runs.
     pub(crate) fn admit_resident_cycle_call(
         &self,
