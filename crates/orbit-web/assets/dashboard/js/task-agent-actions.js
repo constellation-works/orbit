@@ -64,15 +64,19 @@ function pilotDisabledReason(task, mutable, running) {
   return "";
 }
 
-// Run pilot on a proposed task: one explicit task-pilot run for this task. It
-// refreshes the task's selectors and complexity; it never approves or ships it.
+// Run pilot on a proposed or backlog task: one explicit task-pilot run for this
+// task. It refreshes the task's selectors and complexity; it never approves or
+// ships it.
 export function appendPilotControls(actions, task, detail, context, mutable) {
   const running = pilotRunsByTask.get(taskShared.taskDispatchIdentity(task));
   const reason = pilotDisabledReason(task, mutable, running);
+  const help = task.status === "backlog"
+    ? "Re-check this task's selectors and complexity with a task-pilot run; it never dispatches the task"
+    : "Assess this task with a task-pilot run: it re-checks selectors and complexity and never approves or dispatches the task";
   const btn = el("button", {
     class: "action pilot",
     text: running ? "piloting…" : "run pilot",
-    title: reason || "Assess this task with a task-pilot run: it re-checks selectors and complexity and never approves or dispatches the task",
+    title: reason || help,
   });
   btn.disabled = Boolean(reason);
   btn.addEventListener("click", (e) => {
