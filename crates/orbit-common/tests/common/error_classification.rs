@@ -318,3 +318,34 @@ fn source_repair_reader_next_step_follows_the_cause_it_names() {
         "source repair refused: pull request #12 is not open, or the forge cannot report its required checks. Requeue when the pull request is open and its required checks pass."
     );
 }
+
+/// A terminal record whose worker is not conclusively gone refuses with
+/// "still running" and no cancel command (ORB-25168). Cancel reports already
+/// terminal and does not stop that worker, so the line must not tell the
+/// operator to cancel; discard is the route that can succeed.
+#[test]
+fn source_repair_reader_terminal_still_running_refusal_offers_discard_not_cancel() {
+    let bare =
+        "source repair refused: delivery `jrun-1` is still running, so it cannot be repaired";
+    let shown = orbit_common::source_repair_reader_text(bare).expect("refusal has a line");
+    assert_eq!(
+        shown.line,
+        "source repair refused: delivery `jrun-1` is still running, so it cannot be repaired. Discard the candidate to rerun fresh."
+    );
+    assert_eq!(shown.detail, bare);
+
+    let wrapped = "job validation failed: source repair refused: delivery `jrun-1` is still \
+         running, so it cannot be repaired. Nothing was changed. To discard the candidate with \
+         `orbit task update T --status backlog --discard-candidate`.";
+    let shown = orbit_common::source_repair_reader_text(wrapped).expect("wrapped refusal");
+    assert_eq!(
+        shown.line,
+        "source repair refused: delivery `jrun-1` is still running, so it cannot be repaired. Discard the candidate to rerun fresh."
+    );
+    assert!(
+        !shown.line.contains("Cancel"),
+        "a terminal record cannot be cancelled: {}",
+        shown.line
+    );
+    assert_eq!(shown.detail, wrapped);
+}
