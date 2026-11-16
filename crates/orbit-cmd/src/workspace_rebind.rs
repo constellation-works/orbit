@@ -142,7 +142,14 @@ pub fn rebind_checkout_directory(
         })?;
     validate_target_git(&target, workspace.git_remote.as_deref())?;
     let orbit_dir = target.join(".orbit");
-    if orbit_dir.canonicalize()? != orbit_dir {
+    let canonical_orbit_dir = orbit_dir.canonicalize().map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            refused("target has no .orbit checkout identity; use the original moved checkout")
+        } else {
+            OrbitError::from(error)
+        }
+    })?;
+    if canonical_orbit_dir != orbit_dir {
         return Err(refused(
             "the target .orbit must be a checkout-local directory, not a symlink",
         ));
