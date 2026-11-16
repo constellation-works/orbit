@@ -52,7 +52,7 @@ about missing predicates or edge state describe the motivation, not current gaps
   It visits each registered owner checkout on the host
   (`crates/orbit-automation/src/routines/loader.rs`) and evaluates routines and
   auto-tasks under a 5-minute `TICK_DEADLINE`
-  (`crates/orbit-automation/src/routines/sweep.rs`).
+  (`crates/orbit-automation/src/routines/sweep/mod.rs`).
 - **Fenced checkpoints.** Consumer state is committed with a generation
   compare-and-swap. A losing writer defers with `ConcurrentEvaluation`
   (`crates/orbit-automation/src/checkpoint.rs`).
