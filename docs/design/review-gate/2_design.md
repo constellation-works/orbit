@@ -871,9 +871,13 @@ diff cannot reach — rather than reading hosted check runs into settlement or
 routing the delivery to a capable host: a host without user namespaces can
 never fulfil the hold, and the candidate does not reach the test, so the review
 releases it without relying on a later pull request run. CI scope decides
-whether such a run executes the test (`scripts/ci-change-scope.sh`: a docs-only
-pull request runs no test job, one confined to `crates/` runs tests for the
-affected and always-run crates, and any other pull request runs every test),
+whether such a run executes the test (`scripts/ci-change-scope.sh`, via
+`scripts/ci-test-affected.py pull_request_scope`: a docs-only pull request
+runs no test job; one confined to `crates/` normally runs tests for the
+affected and always-run crates, but runs every test for a member manifest
+(`crates/<crate>/Cargo.toml`), a `crates/` path no member owns, or a
+selection covering the whole workspace; and any other pull request runs every
+test unless a `FILE_READERS`-declared reader selects affected crates),
 so no execution is claimed. A diff that touches sandbox code keeps requiring
 real execution evidence.
 
