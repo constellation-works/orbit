@@ -2928,7 +2928,7 @@ Fleet notices have no settings [ORB-22808]. Their limits are fixed:
 - **Open notices.** 20 per workspace, 10 global per owner host, 2 per managed task, 10 per resident mandate.
 - **Post rates.** 5 per managed task in 24 hours, corroborations included; 30 per orchestrator crew per hour; 30 per resident mandate per hour.
 - **Retention.** Closed and expired notices stay listable for 30 days, then are purged.
-- **Agents and briefs.** Managed agents always may post and close their own notices through their bound task. An opted-in activity's prompt quotes at most 5 open notices, each body cut to 600 characters; a notice read that takes over 2000 ms gives an `unavailable` brief instead of delaying dispatch.
+- **Agents and briefs.** Managed agents always may post and close their own notices through their bound task. An opted-in activity's prompt quotes at most 5 open notices (warn notices and residents' status lines are excluded), each body cut to 600 characters; a notice read that takes over 2000 ms gives an `unavailable` brief instead of delaying dispatch.
 
 The former `notice.*` keys are deprecated and ignored ([validation and errors](#validation-and-errors) lists them).
 

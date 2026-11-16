@@ -81,9 +81,12 @@ on until they close. For those it reacts only to a change of state: a task
 blocking, entering review, getting a review decision, finishing or being
 rejected, or one of its decision requests being answered or expiring. Edits,
 retried runs and moves between proposed, backlog and in-progress do not wake
-it. An incident or maintenance notice opening or clearing, an answered
-request on the assignment, a comment on the assignment and a mandate or
-authority change also wake it. Info notices do not.
+it. Any non-info notice (`warn`, `incident` or `maintenance`) opening or
+clearing, an answered request on the assignment, a comment on the assignment and
+a mandate or authority change also wake it. Info notices do not wake it.
+Notices under a `resident:` key (such as status lines) and notices authored by
+the mandate's own assignment task are excluded from wake evaluation so a cycle's
+own reports do not trigger immediate re-wakes.
 
 Each cycle's checkpoint plans the next wake in `next_wake.not_before`. Without
 a change that wakes it sooner, the next cycle starts then, but never sooner

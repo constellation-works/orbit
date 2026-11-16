@@ -44,13 +44,13 @@ orbit notice list --status all   # or closed, expired
 
 | Option | Effect |
 | --- | --- |
-| `--kind` | Required. `incident`, `maintenance` or `info`. |
+| `--kind` | Required. `warn`, `incident`, `maintenance` or `info`. |
 | `--title` | Required. One line, at most 120 characters. |
 | `--body`, `--body-file` | Plain text, at most 4096 UTF-8 bytes, inline or read from a file. |
 | `--scope` | `workspace` (default) reaches the workspace you post from. `global` reaches every workspace whose readers can reach the same owner, not every independent owner. |
-| `--expires-in`, `--expires-at` | Hours from now, or an RFC 3339 instant at least five minutes ahead. Give one, not both. Defaults: 72 hours for an incident, 12 for maintenance, 168 for info. A request over [your cap](#who-can-post-and-close) is refused. |
+| `--expires-in`, `--expires-at` | Hours from now, or an RFC 3339 instant at least five minutes ahead. Give one, not both. Defaults: 72 hours for a warn or incident, 12 for maintenance, 168 for info. A request over [your cap](#who-can-post-and-close) is refused. |
 | `--link <task-id>` | The task the notice is about, usually its fix. The task must belong to the same owner. The notice closes when the task is done, unless you pass `--keep-after-done`. |
-| `--evidence TYPE=VALUE` | A reference of type `task`, `run`, `friction`, `pull_request`, `url` or `commit`. Repeatable. References are stored and shown, never followed. |
+| `--evidence TYPE=VALUE` | A reference of type `task`, `run`, `friction`, `pull_request`, `decision`, `url` or `commit`. Repeatable. References are stored and shown, never followed. |
 | `--host` | Machine ID that a maintenance notice concerns. Repeatable. |
 | `--dedupe-key` | Names the subject: 1–128 characters of lowercase letters, digits, `.`, `_`, `:`, `/` and `-`. Defaults to `task:<linked_task>` when linked, else a slug of the kind and title. |
 
@@ -72,8 +72,9 @@ Orbit takes the poster class from the session, not from a field in the post.
 | Operator | Any notice | Any notice | 720 hours |
 | Orchestrator | Any notice | Its own crew's notices, and notices that orchestrators or agents posted | 168 hours; 72 for maintenance |
 | Managed agent | `incident` or `info`, in its own workspace, with a linked task or evidence | Its own task's notices | 24 hours, also its default |
+| Resident mandate | `warn`, `incident` or `info`, in its own workspace, with a linked task or evidence | Its own task's notices | 168 hours for `warn` (72 default); 24 hours for others; status lines expire at twice the heartbeat |
 
-A managed task can hold at most 2 open notices and make 5 posts in 24 hours.
+A managed task can hold at most 2 open notices and make 5 posts in 24 hours. A resident mandate may hold at most 10 open notices (its status line plus one warn per blocker) and make 30 posts per hour.
 
 ## Where a notice is listed
 
@@ -81,7 +82,8 @@ The workspace you post from is the notice's home, and that workspace's owner
 holds the record.
 
 - `orbit notice list` shows the workspace's open notices and the global
-  notices homed elsewhere on the same owner.
+  notices homed elsewhere on the same owner, ordered by kind (`warn`,
+  `incident`, `maintenance`, `info`), then newest update time.
 - A federated list with no workspace merges every reachable owner. Check its
   `degraded` result for owners that could not be read.
 - `orbit notice show` prints the full body in any state, and the history for
@@ -98,9 +100,11 @@ include it: start it with `orbit mcp serve --toolset notice`, or choose a
 **Activity briefs.** An `agent_loop` activity receives open notices in its
 prompt only when its YAML asks, with `fleet_notices: read` or `post` or a
 non-empty `notice_instruction`. The brief holds up to 5 open notices, marked
-as untrusted data. Posting guidance, from `fleet_notices: post` or
-`notice_posting_instruction`, applies whenever the activity may call
-`orbit.notice.post`, even when no brief is delivered. None of these grants
-authority. See the
+as untrusted data (`warn` notices and residents' status lines are excluded: an
+operator ask and a resident's own status report give a working agent nothing to
+act on, and would crowd incidents out of the brief). Posting guidance, from
+`fleet_notices: post` or `notice_posting_instruction`, applies whenever the
+activity may call `orbit.notice.post`, even when no brief is delivered. None of
+these grants authority. See the
 [fleet notice instructions](/reference/activity-job-yaml/#fleet-notice-instructions)
 reference for each level and its built-in text.
