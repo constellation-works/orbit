@@ -35,6 +35,7 @@ mod forge_hold;
 mod git_fixture;
 mod handoff_landing;
 mod history_note;
+mod local_completion_push;
 mod pr_landing;
 #[cfg(unix)]
 mod pre_push_probe;
