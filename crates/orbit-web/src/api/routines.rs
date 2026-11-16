@@ -16,8 +16,8 @@ use orbit_cmd::registry_routines::{
 };
 use orbit_common::governance::authorization::{
     AuthorizationDenial, CallerCapabilities, CallerEnvelope, DASHBOARD_CLOCK_CADENCE,
-    DASHBOARD_CLOCK_SERVICE, DASHBOARD_JOB_RUN, DASHBOARD_ROUTINE_TOGGLE,
-    DASHBOARD_ROUTINE_TRIGGER, GovernedOperation, authorize,
+    DASHBOARD_CLOCK_SERVICE, DASHBOARD_JOB_RUN, DASHBOARD_ROUTINE_BREAKER,
+    DASHBOARD_ROUTINE_TOGGLE, DASHBOARD_ROUTINE_TRIGGER, GovernedOperation, authorize,
 };
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_core::application::routines::{
@@ -493,6 +493,7 @@ pub(super) fn report_json(
         "capabilities": {
             "routine_toggle": action_capability(&DASHBOARD_ROUTINE_TOGGLE, operator_session),
             "routine_trigger": action_capability(&DASHBOARD_ROUTINE_TRIGGER, operator_session),
+            "routine_breaker": action_capability(&DASHBOARD_ROUTINE_BREAKER, operator_session),
             "job_run": action_capability(&DASHBOARD_JOB_RUN, operator_session),
             "clock_service": action_capability(&DASHBOARD_CLOCK_SERVICE, operator_session),
             "clock_cadence": action_capability(&DASHBOARD_CLOCK_CADENCE, operator_session),
@@ -557,6 +558,8 @@ const ROUTINE_COLUMNS: &[(&str, RoutineField)] = &[
     ("last_fire", RoutineField::LastFire(FIRE_COLUMNS)),
     ("recent_fires", RoutineField::RecentFires(FIRE_COLUMNS)),
     ("failure_streak", RoutineField::FailureStreak),
+    ("state", RoutineField::State),
+    ("breaker", RoutineField::Breaker),
 ];
 
 /// The zone cron triggers are evaluated in: the host's local zone, as the

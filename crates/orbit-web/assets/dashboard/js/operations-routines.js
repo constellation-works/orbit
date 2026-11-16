@@ -7,6 +7,7 @@ import { closeRoutineEditors, routineEditButton, routineEditorElement } from './
 
 import {
   $,
+  actionReason,
   cadenceText,
   clockHm,
   clockServiceText,
@@ -90,6 +91,48 @@ function routineButton(payload, routine) {
       }),
       refresh: () => routinesFetchOperations(),
       success: (result) => `${result.message}: ${routine.name} → ${routine.target}.`,
+    });
+  });
+  return explainUnavailable(button, reason);
+}
+
+// The routine's open circuit breaker, or null [ORB-25103]: the scheduler has
+// stopped firing it after repeated identical failures.
+function trippedBreaker(routine) {
+  return routine.breaker?.tripped ? routine.breaker : null;
+}
+
+function trippedText(breaker) {
+  const next = breaker.next_trial_at ? ` · next trial ${relativeTime(breaker.next_trial_at) || time(breaker.next_trial_at)}` : "";
+  return `Tripped after repeated ${breaker.error_class || "failed"} failures${next}`;
+}
+
+function routineBreakerButton(payload, routine, action) {
+  const selection = selectionSnapshot();
+  const key = `routine-breaker:${selection.workspace}:${routine.name}`;
+  const reason = actionReason(payload, "routine_breaker") || "";
+  const pending = pendingOperations.has(key);
+  const reset = action === "reset";
+  const button = el("button", {
+    class: `operation-button ${reset ? "primary" : "secondary"}`,
+    text: pending ? "Pending…" : reset ? "Reset breaker" : "Fire once",
+    title: reason || (reset
+      ? `Close the breaker: ${routine.name} fires as scheduled again`
+      : `Let ${routine.name} fire once on the next scheduler tick`),
+  });
+  button.type = "button";
+  button.disabled = Boolean(reason) || pending;
+  button.addEventListener("click", () => {
+    if (reason || !selection.current() || pendingOperations.has(key)) return;
+    return runOperation({
+      selection, key, feedbackId: "routine-operation-feedback",
+      pending: `${reset ? "Resetting" : "Bypassing"} the breaker of ${routine.name}…`, failure: "Breaker change failed",
+      render: () => { if (operationsState.lastOperations && routinesRenderOperations) routinesRenderOperations(operationsState.lastOperations); },
+      request: () => postJson("/api/routines/breaker", {
+        name: routine.name, source: routine.source, action, machine_name: payload.machine_name,
+      }),
+      refresh: () => routinesFetchOperations(),
+      success: (result) => `${result.message}: ${routine.name}.`,
     });
   });
   return explainUnavailable(button, reason);
@@ -302,13 +345,26 @@ function routineTimeline(routines, now = Date.now()) {
 }
 
 function routineFailureText(routine) {
+  const breaker = trippedBreaker(routine);
+  if (breaker) return trippedText(breaker);
   const streak = routine.failure_streak;
   if (!streak?.count) return "";
   return `Failing ${streak.truncated ? "at least " : ""}${streak.count} fire${streak.count === 1 ? "" : "s"} in a row since ${time(streak.since)}${streak.truncated ? " or earlier" : ""}`;
 }
 
+// Failing repeatedly but still firing: a tripped routine is reported as
+// tripped instead.
 function failingRoutines(routines) {
-  return routines.filter(routine => routine.failure_streak?.count >= 3);
+  return routines.filter(routine => !trippedBreaker(routine) && routine.failure_streak?.count >= 3);
+}
+
+function trippedRoutines(routines) {
+  return routines.filter(routine => trippedBreaker(routine));
+}
+
+// Everything the Health rail warns about: tripped and failing routines.
+function routinesNeedingAttention(routines) {
+  return [...trippedRoutines(routines), ...failingRoutines(routines)];
 }
 
 export function scopedRoutines(payload) {
@@ -341,7 +397,7 @@ function paintRoutineFailureBadge(failures, { unavailable = false } = {}) {
 // A successful payload (or a scope reset): paint it and remember it.
 export function updateRoutineFailureBadge(routines) {
   routineFailureRequest += 1;
-  knownFailingRoutines = failingRoutines(routines);
+  knownFailingRoutines = routinesNeedingAttention(routines);
   paintRoutineFailureBadge(knownFailingRoutines);
 }
 
@@ -395,23 +451,30 @@ function routineFireStrip(routine, workspaceId) {
 }
 
 function routineFailureSummary(routines) {
+  const tripped = trippedRoutines(routines);
   const failures = failingRoutines(routines);
-  if (!failures.length) return null;
+  if (!tripped.length && !failures.length) return null;
+  const heading = [
+    tripped.length ? `${tripped.length} routine${tripped.length === 1 ? "" : "s"} tripped` : null,
+    failures.length ? `${failures.length} routine${failures.length === 1 ? "" : "s"} failing repeatedly` : null,
+  ].filter(Boolean).join(" · ");
   return el("aside", { class: "routine-failures", role: "status" }, [
-    el("strong", { text: `${failures.length} routine${failures.length === 1 ? "" : "s"} failing repeatedly` }),
-    ...failures.map(routine => el("div", { text: `${routine.name} · ${routineFailureText(routine)}` })),
+    el("strong", { text: heading }),
+    ...[...tripped, ...failures].map(routine => el("div", { text: `${routine.name} · ${routineFailureText(routine)}` })),
   ]);
 }
 
 function routineRow(payload, routine, workspaceId) {
   const fire = routine.last_fire;
   const state = routineState(routine);
+  const breaker = trippedBreaker(routine);
   const detailsKey = `routine:${routine.name}`;
   const nextAt = routineNextAt(routine);
   const card = el("article", { class: `operation-card operation-row routine-card ${state}` });
   const identity = el("div", { class: "operation-identity" }, [
     el("strong", { text: routine.name }),
     state === "blocked" ? el("span", { class: "operation-state blocked", text: "blocked" }) : null,
+    breaker ? el("span", { class: "operation-state blocked", text: "tripped", title: trippedText(breaker) }) : null,
     routine.automation?.condition?.stall ? el("span", { class: "operation-state blocked", text: "stalled" }) : null,
   ]);
   const condition = routine.automation?.condition;
@@ -440,7 +503,7 @@ function routineRow(payload, routine, workspaceId) {
     ]
     : [el("span", { class: "operation-cell-main muted", text: "Never" })];
   lastRun.push(routineFireStrip(routine, workspaceId));
-  if (routine.failure_streak?.count) {
+  if (breaker || routine.failure_streak?.count) {
     lastRun.push(el("span", { class: "operation-cell-sub routine-failure-streak", text: routineFailureText(routine) }));
   }
   card.append(
@@ -451,7 +514,12 @@ function routineRow(payload, routine, workspaceId) {
         el("span", { class: "operation-cell-sub" }, [el("span", { text: "runs " }), jobLink(routine.target)]),
       ], "operation-cell-identity"),
       operationCell("Cadence", [...cadence, routineEditButton({ payload, routine, onOpened: () => { if (routinesRenderOperations) routinesRenderOperations(operationsState.lastOperations || payload, { force: true }); } })]),
-      routine.enabled
+      breaker && routine.enabled
+        ? operationCell("Next trial", [
+          el("span", { class: "operation-cell-main", text: breaker.next_trial_at ? `trial ${relativeTime(breaker.next_trial_at) || time(breaker.next_trial_at)}` : "trial pending", title: breaker.next_trial_at ? time(breaker.next_trial_at) : "" }),
+          el("span", { class: "operation-cell-sub", text: breaker.next_trial_at ? `${clockHm(breaker.next_trial_at)} · tripped` : "tripped" }),
+        ])
+        : routine.enabled
         ? whenCell("Next fire", nextAt, { fallback: nextEvaluationText(routine.next_evaluation, routine.next_due, routine.trigger) })
         : operationCell("Next fire", [el("span", { class: "operation-cell-main muted", text: nextAt ? `would be ${clockHm(nextAt)}` : "Paused" })]),
       operationCell("Last run", lastRun),
@@ -465,7 +533,13 @@ function routineRow(payload, routine, workspaceId) {
         field("Next evaluation", nextEvaluationText(routine.next_evaluation, routine.next_due, routine.trigger)),
         field("Last fire", fire ? time(fire.finished_at || fire.started_at) : "Never"),
         field("Linked run / outcome", fire ? `${fire.run_id || "No run"} · ${fire.state}` : "No fire recorded"),
-      ]),
+        breaker ? field("Circuit breaker", `Tripped ${time(breaker.tripped_at)} · ${breaker.error_class || "failed"} · trip ${breaker.trips}${breaker.last_run_id ? ` · run ${breaker.last_run_id}` : ""}`) : null,
+        breaker ? field("Next trial", breaker.next_trial_at ? time(breaker.next_trial_at) : "Pending") : null,
+      ].filter(Boolean)),
+      breaker ? el("div", { class: "operation-actions routine-breaker-actions" }, [
+        routineBreakerButton(payload, routine, "reset"),
+        routineBreakerButton(payload, routine, "bypass"),
+      ]) : null,
       renderAutomation(routine.automation, `${detailsKey}:automation`, { kind: "routine", name: routine.name, workspace: workspaceId }),
       routine.description ? el("p", { class: "operation-description", text: routine.description }) : null,
     ]),

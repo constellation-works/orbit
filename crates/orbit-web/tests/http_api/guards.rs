@@ -159,6 +159,9 @@ fn body(path: &str) -> Value {
             "expected_trigger":{"cron":"0 * * * *","missed_run":"skip"},
             "trigger":{"cron":"0 * * * *","missed_run":"skip"},
         }),
+        "/routines/breaker" => json!({
+            "name":"missing", "source":"fixture", "action":"reset", "machine_name":"fixture",
+        }),
         "/auto-tasks/toggle" => json!({"name":"missing","expected_enabled":true,"enabled":false}),
         "/auto-tasks/delete" => json!({"name":"missing"}),
         "/auto-tasks/schedule" => json!({

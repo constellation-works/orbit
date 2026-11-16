@@ -628,6 +628,19 @@
   },
   {
     "surface": "dashboard",
+    "operation": "routine.breaker",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
     "operation": "routine.set_trigger",
     "required_any": [
       "operator"

@@ -1,12 +1,13 @@
 //! Deterministic routine evaluation, retry and overlap coordination.
 
+use super::breaker::{BreakerGate, ObservedFire, breaker_gate};
 use super::due::{
     DueDecision, MISSED_SLOT_SKIP_DETAIL, MissedSlotWalk, due_decision_with_grace,
     missed_slots_through, natural_slot_grace_for_cadence, parse_cron,
 };
 use super::loader::{LoadedRoutine, RoutineCollection, RoutineLoadError};
 use crate::condition::GuardVerdict;
-use chrono::{DateTime, Duration, Local, Utc};
+use chrono::{DateTime, Duration, Local, SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
     RoutineFireIntentParams, RoutineFireRecord, RoutineFireState, RoutineStoreBackend,
@@ -92,6 +93,29 @@ pub trait RoutineDispatch {
     /// marked `interrupted`, which carries no teardown and so is not evidence
     /// that the work stopped.
     fn run_owner_liveness(&self, source_orbit_dir: &Path, run_id: &str) -> RunOwnerLiveness;
+
+    /// Newest runs a state-, delivery- or condition-triggered routine's
+    /// automation admitted, newest first, as the circuit breaker observes
+    /// them. Hosts that cannot list them report none.
+    fn routine_runs(
+        &self,
+        _routine: &LoadedRoutine,
+        _limit: usize,
+    ) -> Result<Vec<ObservedFire>, OrbitError> {
+        Ok(Vec::new())
+    }
+
+    /// Error class of a failed run: its failed step's recorded failure code,
+    /// else its terminal state. `None` when the run cannot be read.
+    fn run_failure_class(&self, _source_orbit_dir: &Path, _run_id: &str) -> Option<String> {
+        None
+    }
+
+    /// Identity of the Orbit build running this sweep. A breaker tripped
+    /// under another build admits a trial at once.
+    fn host_orbit_build(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Options for one sweep pass.
@@ -228,6 +252,7 @@ pub fn run_sweep_core(
     };
 
     let pauses = store.routine_pauses()?;
+    let breakers = store.routine_breakers()?;
 
     let mut reports = Vec::new();
     for routine in &collection.routines {
@@ -243,8 +268,28 @@ pub fn run_sweep_core(
             reports.push(failure_report(routine, reason.clone()));
             continue;
         }
-        let report = sweep_routine(store, routine, dispatch, &pauses, options, now_utc)
-            .unwrap_or_else(|error| failure_report(routine, error.to_string()));
+        // [ORB-25103] An open circuit breaker holds every trigger kind,
+        // before any evaluation or retry, except for its one trial pass.
+        let gate = breaker_gate(
+            store,
+            &breakers,
+            routine,
+            dispatch,
+            options.dry_run,
+            now_utc,
+        );
+        let report = match gate {
+            Ok(BreakerGate::Skip(reason)) => skipped(routine, &reason),
+            Ok(BreakerGate::Proceed) => {
+                sweep_routine(store, routine, dispatch, &pauses, options, now_utc)
+                    .unwrap_or_else(|error| failure_report(routine, error.to_string()))
+            }
+            Ok(BreakerGate::BypassFire) => {
+                bypass_fire(store, routine, dispatch, &pauses, options, now_utc)
+                    .unwrap_or_else(|error| failure_report(routine, error.to_string()))
+            }
+            Err(error) => failure_report(routine, error.to_string()),
+        };
         reports.push(report);
     }
 
@@ -281,6 +326,52 @@ fn ownership_conflicts(left: &LoadedRoutine, right: &LoadedRoutine) -> bool {
         (None, None) => false,
         _ => true,
     }
+}
+
+/// Report reason of a fire an operator's breaker bypass dispatched.
+const BREAKER_BYPASS_FIRE_REASON: &str = "breaker_bypass";
+
+/// [ORB-25103] The trial an operator's breaker bypass admitted. A cron
+/// routine fires once now, due slot or not, under an unscheduled slot key:
+/// its cursor and scheduled slots stay untouched, so they fire or skip by
+/// the usual rules once the breaker closes. Other trigger kinds wait for no
+/// slot and are evaluated as usual.
+fn bypass_fire(
+    store: &dyn RoutineStoreBackend,
+    routine: &LoadedRoutine,
+    dispatch: &dyn RoutineDispatch,
+    pauses: &BTreeMap<String, orbit_store::contracts::RoutinePauseRecord>,
+    options: SweepOptions,
+    now_utc: DateTime<Utc>,
+) -> Result<RoutineSweepReport, OrbitError> {
+    let definition = &routine.definition;
+    let trigger = &definition.trigger;
+    if trigger.deliveries_landed.is_some() || trigger.state.is_some() || trigger.condition.is_some()
+    {
+        return sweep_routine(store, routine, dispatch, pauses, options, now_utc);
+    }
+    if !definition.enabled {
+        return Ok(skipped(routine, "disabled_in_definition"));
+    }
+    if pauses.contains_key(&definition.name) {
+        return Ok(skipped(routine, "paused_locally"));
+    }
+    // Nanosecond precision keeps the key distinct from every whole-minute
+    // cron slot, even when the sweep runs exactly on one.
+    let slot = now_utc.to_rfc3339_opts(SecondsFormat::Nanos, false);
+    fire(
+        store,
+        routine,
+        dispatch,
+        FireRequest {
+            slot: &slot,
+            attempt: 1,
+            fired_action: "fired",
+            unscheduled: true,
+            options,
+            now_utc,
+        },
+    )
 }
 
 fn sweep_routine(
@@ -432,6 +523,7 @@ fn sweep_routine(
                     slot: &slot_utc,
                     attempt: 1,
                     fired_action: "fired",
+                    unscheduled: false,
                     options,
                     now_utc,
                 },
@@ -456,6 +548,7 @@ fn sweep_routine(
                             slot: &retry.slot,
                             attempt: next_retry_attempt(store, &retry)?,
                             fired_action: "retry_fired",
+                            unscheduled: false,
                             options,
                             now_utc,
                         },
@@ -491,6 +584,7 @@ fn sweep_routine(
                         slot: &retry.slot,
                         attempt: next_retry_attempt(store, &retry)?,
                         fired_action: "retry_fired",
+                        unscheduled: false,
                         options,
                         now_utc,
                     },
@@ -648,6 +742,9 @@ struct FireRequest<'a> {
     slot: &'a str,
     attempt: u32,
     fired_action: &'static str,
+    /// A breaker-bypass fire: it claims no scheduled slot, so it neither
+    /// advances the cursor nor consumes the slot on a guard miss.
+    unscheduled: bool,
     options: SweepOptions,
     now_utc: DateTime<Utc>,
 }
@@ -662,6 +759,7 @@ fn fire(
         slot,
         attempt,
         fired_action,
+        unscheduled,
         options,
         now_utc,
     } = request;
@@ -682,7 +780,8 @@ fn fire(
 
     if let GuardVerdict::Closed { reason, detail } = dispatch.evaluate_guard(routine, now_utc) {
         let consume = definition.trigger.guard_miss == Some(ConditionGuardMiss::Skip)
-            && fired_action == "fired";
+            && fired_action == "fired"
+            && !unscheduled;
         if consume && !options.dry_run {
             // `guard_miss: skip` consumes the slot as a recorded skip.
             let claimed = store.routine_record_fire_intent(&RoutineFireIntentParams {
@@ -714,12 +813,17 @@ fn fire(
         });
     }
 
-    let claimed = store.routine_record_fire_intent(&RoutineFireIntentParams {
+    let intent = RoutineFireIntentParams {
         routine_name: name.clone(),
         slot: slot.to_string(),
         attempt,
         source_workspace: routine.source_workspace.clone(),
-    })?;
+    };
+    let claimed = if unscheduled {
+        store.routine_record_unscheduled_fire_intent(&intent)?
+    } else {
+        store.routine_record_fire_intent(&intent)?
+    };
     if !claimed {
         return Ok(RoutineSweepReport {
             slot: Some(slot.to_string()),
@@ -741,7 +845,7 @@ fn fire(
                 source: routine.source_workspace.clone(),
                 origin: routine.origin.as_str(),
                 action: fired_action,
-                reason: None,
+                reason: unscheduled.then(|| BREAKER_BYPASS_FIRE_REASON.to_string()),
                 slot: Some(slot.to_string()),
                 run_id: Some(run_id),
                 batch: Vec::new(),

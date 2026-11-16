@@ -101,7 +101,7 @@ use resource_minutes::{
     apply_worker_cpu_accounting,
 };
 use retention_analytics::apply_retention_analytics;
-use routine::apply_routine_scheduler_schema;
+use routine::{apply_routine_breakers, apply_routine_scheduler_schema};
 use scripts::apply_script_grants;
 use task_commit_journal::{apply_task_commit_journal, apply_task_coordination_claim_indexes};
 use task_reservations::{

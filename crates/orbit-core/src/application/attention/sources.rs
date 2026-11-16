@@ -665,6 +665,23 @@ pub(super) fn read_attention_sources(
             "This source belongs to a later attention slice and is not implemented on this host",
         ));
     }
+    // routine_tripped reads this host's scheduler store, never task records,
+    // so a pending task commit does not hold it.
+    if filter.selected(K::RoutineTripped) {
+        let started = Instant::now();
+        match super::routine_sources::routine_tripped_items(runtime, workspace, host, now) {
+            Ok(items) => result.items.extend(items),
+            Err(error) => result.degraded.push(workspace_degraded(
+                workspace,
+                K::RoutineTripped.as_str(),
+                "source_unavailable",
+                error.to_string(),
+            )),
+        }
+        result
+            .timings
+            .insert("routine_tripped".into(), started.elapsed().as_micros());
+    }
     // A pending task commit makes every task-backed source unreadable
     // without recovery: degrade them instead of letting selection or
     // hydration settle the journal. Notice, resident and task-level

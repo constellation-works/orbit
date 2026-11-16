@@ -793,3 +793,311 @@ fn temporal_and_same_kind_state_routines_on_one_target_still_skip_as_duplicates(
         }
     }
 }
+
+/// A dispatch whose submissions fail until told otherwise, on a host whose
+/// Orbit build the test can change [ORB-25103].
+#[derive(Default)]
+struct FlakyDispatch {
+    delegate: FakeDispatch,
+    failing: Cell<bool>,
+    build: RefCell<String>,
+    attempts: Cell<u32>,
+}
+
+impl RoutineDispatch for FlakyDispatch {
+    fn submit(&self, dir: &Path, job: &str, actor: &str, slot: &str) -> Result<String, OrbitError> {
+        self.attempts.set(self.attempts.get() + 1);
+        if self.failing.get() {
+            return Err(OrbitError::Execution("worktree mismatch".into()));
+        }
+        self.delegate.submit(dir, job, actor, slot)
+    }
+    fn run_state(&self, dir: &Path, run_id: &str) -> Option<JobRunState> {
+        self.delegate.run_state(dir, run_id)
+    }
+    fn run_owner_liveness(&self, dir: &Path, run_id: &str) -> RunOwnerLiveness {
+        self.delegate.run_owner_liveness(dir, run_id)
+    }
+    fn host_orbit_build(&self) -> Option<String> {
+        Some(self.build.borrow().clone())
+    }
+}
+
+/// [ORB-25103] resident-cycle-orbit failed at launch on every fire for days
+/// because nothing stopped the sweep. Three identical failures trip the
+/// breaker; it holds through its backoff, a failed trial re-opens it with a
+/// longer backoff, a new Orbit build admits a trial at once, and a
+/// successful trial closes it.
+#[test]
+fn repeated_identical_failures_open_the_routine_breaker_until_a_trial_succeeds() {
+    use orbit_automation::routines::breaker::BREAKER_OPEN_REASON;
+    use orbit_store::contracts::RoutineBreakerState;
+
+    let store = Store::open_in_memory().expect("in-memory store");
+    let coll = collection(vec![routine("job", "forbid")]);
+    let dispatch = FlakyDispatch::default();
+    dispatch.failing.set(true);
+    *dispatch.build.borrow_mut() = "1.0.0".into();
+    // Fire rows are stamped with the real clock; a sweep `now` in their past
+    // keeps a dispatched trial inside its policy timeout.
+    let base = (Utc::now() - Duration::hours(1))
+        .with_second(0)
+        .and_then(|at| at.with_nanosecond(0))
+        .expect("minute boundary");
+    store
+        .routine_record_baseline("job", &base.to_rfc3339())
+        .unwrap();
+    let at = |minutes: i64| base + Duration::minutes(minutes);
+    let sweep = |minutes: i64| {
+        let reports = run_sweep_core(
+            &store,
+            &coll,
+            &dispatch,
+            SweepOptions::default(),
+            at(minutes),
+        )
+        .expect("sweep");
+        reports.into_iter().next().expect("one routine row")
+    };
+    let breaker = || store.routine_breakers().unwrap().remove("job");
+
+    for minute in 1..=3 {
+        assert_eq!(
+            sweep(minute).action,
+            "error",
+            "minute {minute} fires and fails"
+        );
+    }
+    let held = sweep(4);
+    assert_eq!(held.reason.as_deref(), Some(BREAKER_OPEN_REASON));
+    let tripped = breaker().expect("trip recorded");
+    assert_eq!(tripped.state, RoutineBreakerState::Open);
+    assert_eq!(tripped.error_class.as_deref(), Some("dispatch_failed"));
+    assert_eq!(tripped.trips, 1);
+    assert_eq!(sweep(10).reason.as_deref(), Some(BREAKER_OPEN_REASON));
+    assert_eq!(dispatch.attempts.get(), 3, "an open breaker fires nothing");
+
+    // The 15-minute backoff admits one trial; it fails and re-opens longer.
+    assert_eq!(sweep(19).action, "error", "trial fire");
+    assert_eq!(sweep(20).reason.as_deref(), Some(BREAKER_OPEN_REASON));
+    let reopened = breaker().expect("re-open recorded");
+    assert_eq!(reopened.trips, 2);
+    assert_eq!(
+        reopened.next_trial_at.as_deref(),
+        Some(at(50).to_rfc3339().as_str()),
+        "the second backoff doubles to 30 minutes"
+    );
+    assert_eq!(sweep(21).reason.as_deref(), Some(BREAKER_OPEN_REASON));
+    assert_eq!(dispatch.attempts.get(), 4);
+
+    // A deploy admits a trial before the backoff; its success closes it.
+    *dispatch.build.borrow_mut() = "1.0.1".into();
+    dispatch.failing.set(false);
+    let trial = sweep(22);
+    assert_eq!(trial.action, "fired", "version-change trial");
+    let run_id = trial.run_id.expect("trial run");
+    assert_eq!(sweep(23).reason.as_deref(), Some("breaker_trial_in_flight"));
+    dispatch
+        .delegate
+        .states
+        .borrow_mut()
+        .insert(run_id, JobRunState::Success);
+    assert_eq!(sweep(24).action, "fired", "closed breaker fires as usual");
+    assert_eq!(
+        breaker().expect("row kept").state,
+        RoutineBreakerState::Closed
+    );
+    let events: Vec<String> = store
+        .routine_breaker_events("job", 10)
+        .unwrap()
+        .into_iter()
+        .rev()
+        .map(|event| event.event)
+        .collect();
+    assert_eq!(
+        events,
+        ["tripped", "trial", "reopened", "trial", "closed"],
+        "one recorded event per transition, not one per fire"
+    );
+}
+
+/// A pending newer fire has not failed yet and must stop the failure streak
+/// from tripping a breaker on older failures.
+#[test]
+fn in_flight_fire_prevents_trip_until_its_outcome_is_known() {
+    let store = Store::open_in_memory().expect("in-memory store");
+    let coll = collection(vec![routine("job", "allow")]);
+    let dispatch = FakeDispatch::default();
+    let now = Utc::now();
+    store
+        .routine_record_baseline("job", &(now - Duration::hours(1)).to_rfc3339())
+        .expect("baseline");
+
+    for minute in 1..=3 {
+        let slot = (now - Duration::minutes(10 - minute)).to_rfc3339();
+        store
+            .routine_record_fire_intent(&RoutineFireIntentParams {
+                routine_name: "job".into(),
+                slot: slot.clone(),
+                attempt: 1,
+                source_workspace: "polaris".into(),
+            })
+            .expect("failure intent");
+        store
+            .routine_mark_fire_outcome(
+                "job",
+                &slot,
+                1,
+                RoutineFireState::Failed,
+                Some("dispatch failed"),
+            )
+            .expect("failure outcome");
+    }
+
+    let in_flight_slot = (now - Duration::minutes(1)).to_rfc3339();
+    store
+        .routine_record_fire_intent(&RoutineFireIntentParams {
+            routine_name: "job".into(),
+            slot: in_flight_slot.clone(),
+            attempt: 1,
+            source_workspace: "polaris".into(),
+        })
+        .expect("in-flight intent");
+    store
+        .routine_mark_fire_dispatched("job", &in_flight_slot, 1, "in-flight")
+        .expect("in-flight dispatch");
+    dispatch
+        .states
+        .borrow_mut()
+        .insert("in-flight".into(), JobRunState::Running);
+    dispatch
+        .liveness
+        .borrow_mut()
+        .insert("in-flight".into(), RunOwnerLiveness::Alive);
+
+    run_sweep_core(&store, &coll, &dispatch, SweepOptions::default(), now).expect("sweep");
+
+    assert!(
+        store.routine_breakers().expect("breaker rows").is_empty(),
+        "a newer unresolved fire prevents older failures from counting as consecutive"
+    );
+}
+
+/// [ORB-25103] review F2: a bypass only armed the trial, so an hourly routine
+/// bypassed between slots waited for its next slot. The next sweep must fire
+/// it once now, and leave its cursor and scheduled slots to fire as usual.
+#[test]
+fn bypass_fires_an_hourly_routine_between_slots_without_consuming_a_slot() {
+    use orbit_automation::routines::breaker::BREAKER_OPEN_REASON;
+    use orbit_store::contracts::{RoutineBreakerEvent, RoutineBreakerRecord, RoutineBreakerState};
+
+    let store = Store::open_in_memory().expect("in-memory store");
+    let coll = collection(vec![routine_spec(
+        "hourly",
+        "0 * * * *",
+        "skip",
+        "forbid",
+        "noop",
+        (0, 1),
+        120,
+    )]);
+    let dispatch = FakeDispatch::default();
+    // Fire rows carry the real clock; a sweep `now` in their past keeps the
+    // bypass fire inside its policy timeout.
+    let base = (Utc::now() - Duration::hours(3))
+        .with_minute(0)
+        .and_then(|at| at.with_second(0))
+        .and_then(|at| at.with_nanosecond(0))
+        .expect("hour boundary");
+    let at = |minutes: i64| base + Duration::minutes(minutes);
+    store
+        .routine_record_baseline("hourly", &base.to_rfc3339())
+        .expect("baseline");
+    store
+        .routine_breaker_transition(
+            &RoutineBreakerRecord {
+                routine_name: "hourly".into(),
+                source_workspace: "polaris".into(),
+                state: RoutineBreakerState::Open,
+                error_class: Some("dispatch_failed".into()),
+                last_run_id: None,
+                tripped_at: Some(base.to_rfc3339()),
+                trips: 1,
+                next_trial_at: Some((base + Duration::days(1)).to_rfc3339()),
+                orbit_build: None,
+                trial_started_at: None,
+                trial_reason: None,
+                bypass_requested_at: None,
+                floor_at: None,
+                updated_at: base.to_rfc3339(),
+            },
+            &RoutineBreakerEvent {
+                routine_name: "hourly".into(),
+                event: "tripped".into(),
+                actor: "sweep".into(),
+                detail: Some("dispatch_failed".into()),
+                run_id: None,
+                at: base.to_rfc3339(),
+            },
+        )
+        .expect("seed open breaker");
+    let sweep = |minutes: i64| {
+        run_sweep_core(
+            &store,
+            &coll,
+            &dispatch,
+            SweepOptions::default(),
+            at(minutes),
+        )
+        .expect("sweep")
+        .into_iter()
+        .next()
+        .expect("one routine row")
+    };
+
+    assert_eq!(sweep(30).reason.as_deref(), Some(BREAKER_OPEN_REASON));
+    assert!(
+        store
+            .routine_breaker_bypass("hourly", "human:test")
+            .expect("bypass")
+    );
+
+    let bypass = sweep(31);
+    assert_eq!(bypass.action, "fired", "bypass fires between hourly slots");
+    assert_eq!(bypass.reason.as_deref(), Some("breaker_bypass"));
+    let run_id = bypass.run_id.expect("bypass run");
+    assert_eq!(dispatch.submit_count(), 1);
+    assert_eq!(
+        store
+            .routine_cursor("hourly")
+            .expect("cursor")
+            .expect("cursor row")
+            .last_slot,
+        None,
+        "the bypass fire consumes no scheduled slot"
+    );
+    let fires = store.routine_recent_fires("hourly", 10).expect("fires");
+    assert_eq!(fires.len(), 1, "no slot is recorded as skipped: {fires:?}");
+
+    dispatch
+        .states
+        .borrow_mut()
+        .insert(run_id, JobRunState::Success);
+    assert_eq!(sweep(32).reason.as_deref(), Some("not_due"));
+    assert_eq!(
+        store.routine_breakers().unwrap()["hourly"].state,
+        RoutineBreakerState::Closed,
+        "the successful bypass trial closes the breaker"
+    );
+    assert_eq!(dispatch.submit_count(), 1, "no second fire before the slot");
+
+    let scheduled = sweep(60);
+    assert_eq!(
+        scheduled.action, "fired",
+        "the next hourly slot still fires"
+    );
+    assert_eq!(
+        scheduled.slot.as_deref(),
+        Some(at(60).to_rfc3339().as_str())
+    );
+}

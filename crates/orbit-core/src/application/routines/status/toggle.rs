@@ -185,3 +185,37 @@ pub fn resume_routine(global_root: &Path, name: &str) -> Result<bool, OrbitError
     let store = super::super::open_routine_store(global_root)?;
     store.routine_resume(name)
 }
+
+/// Close a routine's open circuit breaker now, recording the reset under
+/// `actor`. Returns `false` when it was not open.
+pub fn reset_routine_breaker(
+    global_root: &Path,
+    name: &str,
+    actor: &str,
+) -> Result<bool, OrbitError> {
+    let store = super::super::open_routine_store(global_root)?;
+    store.routine_breaker_reset(name, actor)
+}
+
+/// Let one fire of a routine through its open circuit breaker on the next
+/// sweep, recording the bypass under `actor`. Returns `false` when it was not
+/// open.
+pub fn bypass_routine_breaker(
+    global_root: &Path,
+    name: &str,
+    actor: &str,
+) -> Result<bool, OrbitError> {
+    let store = super::super::open_routine_store(global_root)?;
+    store.routine_breaker_bypass(name, actor)
+}
+
+/// Newest circuit-breaker events of one routine on this host, newest first
+/// (for `routine show`). Read-only, like [`super::recent_fires`].
+pub fn routine_breaker_events(
+    global_root: &Path,
+    name: &str,
+    limit: usize,
+) -> Result<Vec<orbit_store::contracts::RoutineBreakerEvent>, OrbitError> {
+    let store = super::super::open_existing_routine_store(global_root)?;
+    store.routine_breaker_events(name, limit)
+}

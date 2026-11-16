@@ -569,3 +569,9 @@ v92 job_run_host_id_indexes
 + ["index","idx_job_run_allocations_host_run_id","job_run_id_allocations","CREATE INDEX idx_job_run_allocations_host_run_id\n         ON job_run_id_allocations(run_id)"]
 + ["index","idx_job_runs_host_run_id","job_runs","CREATE INDEX idx_job_runs_host_run_id ON job_runs(run_id)"]
 
+v93 routine_breakers
++ ["index","idx_routine_breaker_events_name","routine_breaker_events","CREATE INDEX idx_routine_breaker_events_name\n            ON routine_breaker_events(routine_name, id DESC)"]
++ ["index","sqlite_autoindex_routine_breakers_1","routine_breakers",null]
++ ["table","routine_breaker_events","routine_breaker_events","CREATE TABLE routine_breaker_events (\n                id INTEGER PRIMARY KEY AUTOINCREMENT,\n                routine_name TEXT NOT NULL,\n                event TEXT NOT NULL,\n                actor TEXT NOT NULL,\n                detail TEXT,\n                run_id TEXT,\n                at TEXT NOT NULL\n            )"]
++ ["table","routine_breakers","routine_breakers","CREATE TABLE routine_breakers (\n                routine_name TEXT PRIMARY KEY,\n                source_workspace TEXT NOT NULL,\n                state TEXT NOT NULL,\n                error_class TEXT,\n                last_run_id TEXT,\n                tripped_at TEXT,\n                trips INTEGER NOT NULL DEFAULT 0,\n                next_trial_at TEXT,\n                orbit_build TEXT,\n                trial_started_at TEXT,\n                trial_reason TEXT,\n                bypass_requested_at TEXT,\n                floor_at TEXT,\n                updated_at TEXT NOT NULL\n            )"]
+
