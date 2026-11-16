@@ -79,7 +79,7 @@ gates.
 | `Read-only on <host>: <reason>` | Writes to another host need an [operator session](#authorization) on the serving dashboard. |
 
 To add, rename, or remove hosts, and to compare their load, use
-[Settings › Hosts](#hosts).
+[Observe › Fleet](#fleet).
 
 ## Workspace scope
 
@@ -114,7 +114,8 @@ Confirm the selected workspace before you act.
 | **[Automation](#automation)** | **Routines** (with the host scheduler clock), **Auto-tasks**, and **Scripts**. |
 | **Knowledge** | **Frictions** (friction records) and **Memory** (crew memory). |
 | **[Plugins](#plugins)** | Installed plugins and the panels they add. |
-| **[Settings](#settings)** | Workflow, Execution, Review, Crews, Machine, Hosts, and Other. |
+| **[Fleet](#fleet)** | Registered hosts with their health, drains, and provider capacity. |
+| **[Settings](#settings)** | Workflow, Execution, Review, Crews, Machine, and Other. |
 
 The rail also carries counts. **Jobs** counts the job runs pending or running
 now, plus an **N failing** pill for jobs whose recent runs failed in a row.
@@ -793,6 +794,41 @@ state and prints the error on the card:
   `orbit plugin sync` when the checkout pins it, or
   `orbit plugin add <source>` when it does not.
 
+## Fleet
+
+**Observe › Fleet** (`#fleet`) shows the serving machine's registry from
+[`hosts.toml`](/reference/config/#host-registry), with each host's health,
+drains, and provider capacity. Through `orbit web connect`, that is the remote
+machine's registry. The workspace selection does not filter Fleet.
+
+Each host is a card with its machine ID, SSH target, task prefix, and Orbit
+version, and with CPU, memory, disk, and I/O readings. An unreachable host
+shows its error instead of readings. **Drains** lists active and queued drains
+across the hosts. **Provider capacity** lists the usage windows each host
+reports for its accounts.
+
+Select a card to open that host's dialog, which shows probe failure details,
+drain diagnostics, and health details. Opening the page and **Reload** probe
+every host. **Reload** also rereads the registry.
+
+- **Add host** takes an SSH target and an optional name. Saving probes the
+  host and registers its identity, as `orbit host add` does. It writes
+  nothing on the remote.
+- **Rename** and **Remove** appear in the dialog of each remote host. Rename
+  changes only the name in the registry entry. **Remove** asks for
+  confirmation. A `host_in_use` refusal lists the replica checkouts and pull
+  drains that depend on the host and offers a separate force confirmation,
+  which removes their route.
+- **Show** in the dialog switches the dashboard to that host.
+
+Add host, Rename and Remove need an [operator session](#authorization).
+Without one, the page is read-only.
+
+The local host cannot be removed or renamed here. If `hosts.toml` fails
+validation, a banner shows the error and the last valid list stays visible
+until you repair the file. For host setup and error codes, see
+[Run Orbit across hosts](/how-to/multi-host/).
+
 ## Settings
 
 **Settings** groups configuration by topic:
@@ -804,7 +840,6 @@ state and prints the error on the card:
 | **Review** | Review layers, `review.timing`, reviewer pools, and before-landing settings. |
 | **[Crews](#crews)** | The crew table. |
 | **Machine** | Machine identity, auto-concurrency, resource throttle, and `tasks.id_start`. Edits write `~/.orbit/config.toml` only. |
-| **[Hosts](#hosts)** | The serving machine's registered SSH hosts. |
 | **Other** | Keys no other Settings page shows, workspace cleanup, and the raw TOML files. |
 
 Every page starts with one bar that holds its controls and **Reload**. On
@@ -854,34 +889,6 @@ refusals:
   `workflow.default_crew` within itself. Adding the first crew to a file with
   no default crew is refused.
 
-### Hosts
-
-**Settings › Hosts** manages the serving machine's
-[`hosts.toml`](/reference/config/#host-registry). Through
-`orbit web connect`, that is the remote machine's registry.
-
-![Settings › Hosts: Add host, a local demo host with its workspace and health readings, and an unreachable remote with its error status, Rename and Remove controls.](../../../assets/dashboard/dashboard-hosts.png)
-
-The screenshot shows a demo registry. `build-box.invalid` is an intentionally
-unreachable example.
-
-Each remote row shows its SSH target, reachability, Orbit version, and
-current load, memory, disk, and drain state. An unreachable host shows its
-error instead. Opening the view and **Reload** probe every host.
-
-- **Add host** takes an SSH target and an optional name. Saving probes the
-  host and registers its identity, as `orbit host add` does. It writes
-  nothing on the remote.
-- **Remove** asks for confirmation. A `host_in_use` refusal lists the replica
-  checkouts and pull drains that depend on the host and offers a separate
-  force confirmation, which removes their route.
-- **Show** switches the dashboard to that host.
-
-The local host cannot be removed or renamed here. If `hosts.toml` fails
-validation, a banner shows the error and the last valid list stays visible
-until you repair the file. For host setup and error codes, see
-[Run Orbit across hosts](/how-to/multi-host/).
-
 ## Authorization
 
 The dashboard has no login. Anyone who can reach its port, including a
@@ -892,7 +899,8 @@ Two gates apply to writes:
 
 1. **Workspace scope.** **All workspaces** and inactive workspaces are
    read-only, even for an operator. The exceptions are task actions on rows
-   that name their owner, the Drain tab, and **Settings › Hosts**.
+   that name their owner, the Drain tab, and the registry actions on
+   [Observe › Fleet](#fleet).
 2. **Operator capability.** The server has it only when started with
    `orbit web serve --operator`. `orbit web connect` passes `--operator` when
    it starts a remote server, unless you pass `--no-operator`. A local
