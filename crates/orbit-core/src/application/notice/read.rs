@@ -166,6 +166,36 @@ impl OrbitRuntime {
         Ok(NoticeView { notice, history })
     }
 
+    /// The status line of the resident mandate on `mandate_task_id`: the
+    /// newest notice under its status key in this workspace, in whatever
+    /// state it is in. An expired one is the mandate's last word before it
+    /// went silent.
+    pub(crate) fn resident_status_line(
+        &self,
+        mandate_task_id: &str,
+    ) -> Result<Option<Notice>, OrbitError> {
+        let key = orbit_types::record::resident_status_notice_key(mandate_task_id);
+        let workspace_id = self.workspace_id()?;
+        let store = self.sqlite_store()?;
+        let now = Utc::now();
+        let mut newest: Option<Notice> = None;
+        for row in store
+            .notice_rows(Some(std::slice::from_ref(&workspace_id)), false)?
+            .iter()
+            .filter(|row| row.dedupe_key == key)
+        {
+            let mut notice = parse_notice_row(row)?;
+            notice.resolve_effective_status(now, None);
+            if newest
+                .as_ref()
+                .is_none_or(|kept| notice.updated_at > kept.updated_at)
+            {
+                newest = Some(notice);
+            }
+        }
+        Ok(newest)
+    }
+
     fn fill_linked_status(&self, notice: &mut Notice) {
         if let Some(linked) = notice.linked_task.as_mut() {
             linked.status = Some(

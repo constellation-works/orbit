@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: who may post, update and close fleet notices (operator, orchestrator, managed agent), and the size, rate and open-count limits"
-last_validated: 2026-11-14
+last_validated: 2026-11-15
 title: Spec — Notice authority and limits
 owner: claude
 status: Draft
@@ -9,7 +9,7 @@ feature: fleet-notices
 tags: [fleet-notices, spec, security]
 related_features: [fleet-notices, policy-sandbox, federated-mcp]
 related_artifacts: [ORB-21207]
-last_updated: 2026-11-05
+last_updated: 2026-11-15
 ---
 
 # Spec: Notice authority and limits
@@ -60,6 +60,7 @@ could exercise without lasting harm (everything expires within the orchestrator 
 | Post `scope: global` | yes | yes | no (`notice_scope_refused`) |
 | Post `kind: incident` / `info` | yes | yes | yes |
 | Post `kind: maintenance` | yes | yes | no (`notice_kind_refused`) |
+| Post `kind: warn` | yes | yes | only a resident cycle ([below](#resident-mandates)) |
 | Expiry cap | [notice-record](./notice-record.md#expiry) | same | same (24 h) |
 | Must carry `linked_task` or ≥1 `evidence` | no | no | yes (`notice_evidence_required`) |
 | Update an open notice it authored | yes | yes | yes, same bound task |
@@ -71,6 +72,37 @@ could exercise without lasting harm (everything expires within the orchestrator 
 An agent's `linked_task` may be its own bound task or any task held by the same owner host,
 typically the fix it found or filed; its `evidence` may cite its run. An agent may not post on behalf
 of another task, and the input has no field to name one.
+
+## Resident mandates
+
+A resident cycle posts as the `agent` of its mandate's assignment task, so every cycle of one
+mandate is the same author and may replace and close what an earlier cycle posted. The trusted
+run binding (a resident cycle run naming that assignment) marks the poster as a resident, never
+input. A resident differs from other managed agents in these ways only:
+
+- **Status line.** The key `resident:<mandate id, lowercase>:status` holds the mandate's one live
+  `info` notice. Each cycle posts it again and the post replaces it in place. Orbit sets its
+  expiry to twice the mandate's heartbeat from that post, and refuses an expiry in the request,
+  so a mandate that stops cycling lapses instead of looking alive. A control action replaces the
+  line too: `pause`, `takeover` and `stop` (a deadline stop included) leave a line saying so that
+  lasts 7 days, and `resume` and `release` leave one that lapses like a cycle's.
+- **Warn.** A resident may post `warn`, one per blocker. Without a `dedupe_key` the key is
+  `resident:<mandate>:` followed by the usual derived key (`task:<linked task>` or the slugged
+  title). It lasts 72 hours from each post, at most 7 days, and the cycle closes it when the
+  blocker clears. A choice between options is raised as a decision request and cited as
+  `decision` evidence.
+- **Reserved keys.** Keys under `resident:` may be written only by the mandate they name; any
+  other poster is refused with `notice_invalid_field`.
+- **Limits.** No linked task or evidence is required. The per-task agent limits are replaced by
+  10 open notices and 30 posts an hour per mandate.
+- **Close.** The cycle guard admits `orbit.notice.close`; the close still admits only notices the
+  mandate's own cycles posted, and no agent can post `maintenance`, so a cycle cannot lift the
+  maintenance notice that narrows it.
+
+The resident wake digest leaves out every notice under `resident:` and every notice the mandate's
+own cycles posted. A status line changes every cycle and lapses by design, and a cycle's own warn
+is not news to it; counting either would wake the mandate at its cadence floor. An answered
+decision request still wakes it.
 
 ## Re-posting an open subject
 

@@ -119,7 +119,7 @@
 .resident-row {
   display: grid; align-items: center; gap: 4px 8px; min-width: 0;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas: "goal state" "activity wake" "needs needs";
+  grid-template-areas: "goal state" "status status" "activity wake" "needs needs";
   padding: 8px 10px; border-bottom: 1px solid var(--hair); font-size: 12px; cursor: pointer;
 }
 .resident-row:hover { background: var(--bg-hover); }
@@ -128,6 +128,16 @@
 .resident-row > span { min-width: 0; overflow-wrap: anywhere; }
 .resident-row-goal { grid-area: goal; display: flex; flex-direction: column; gap: 2px; }
 .resident-row-state { grid-area: state; }
+/* The status line keeps one line at every width, so a longer or shorter
+   line never moves the rows below; its full text is in the detail. */
+.resident-row-status {
+  grid-area: status; color: var(--fg);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.resident-row > .resident-row-status { overflow-wrap: normal; }
+.resident-row-status.empty { color: var(--fg-mute); }
+.resident-row-status.stale { color: var(--warn-fg); }
+.resident-status-detail.stale h4 { color: var(--warn-fg); }
 .resident-row-activity { grid-area: activity; }
 .resident-row-wake { grid-area: wake; text-align: right; }
 .resident-goal { overflow-wrap: anywhere; color: var(--fg); font-size: 13px; }

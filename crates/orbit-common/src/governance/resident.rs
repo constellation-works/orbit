@@ -141,7 +141,7 @@ const SHOW: OperationSpec<ResidentVerb> = OperationSpec {
     verb: ResidentVerb::Show,
     cli_path: &["show"],
     tool_name: "orbit.resident.show",
-    tool_description: "Show one resident mandate: the mandate artifact (or why it is missing or invalid), the effective authority (rights and the workspaces both the authority and the mandate cover), the authority record with its grant and narrowing history, open grant requests, the latest parsed checkpoint and live cycle, and the mandate's state (active, handed_off, ended or invalid). Read-only.",
+    tool_description: "Show one resident mandate: the mandate artifact (or why it is missing or invalid), the effective authority (rights and the workspaces both the authority and the mandate cover), the authority record with its grant and narrowing history, open grant requests, the latest parsed checkpoint and live cycle, the status line (the mandate's one info notice: title, body, when it was posted and lapses, and stale once it has lapsed), and the mandate's state (active, handed_off, ended or invalid). Read-only.",
     cli_about: "Show a resident mandate with its authority and grant history",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,

@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: orbit.notice.post, close, list and show; the CLI; and the opt-in notice MCP toolset with machine.mcp.toolsets"
-last_validated: 2026-11-05
+last_validated: 2026-11-15
 title: Spec — Notice tools and the notice toolset
 owner: claude
 status: Draft
@@ -9,7 +9,7 @@ feature: fleet-notices
 tags: [fleet-notices, spec, mcp]
 related_features: [fleet-notices, operations-as-data, federated-mcp]
 related_artifacts: [ORB-21207]
-last_updated: 2026-11-05
+last_updated: 2026-11-15
 ---
 
 # Spec: Notice tools and the notice toolset
@@ -56,7 +56,7 @@ corroborator.
 |---|---|---|
 | `workspace` | selector | Home workspace. Falls back to the session binding; for an `agent` caller it must equal the bound task's workspace. |
 | `scope` | `workspace` \| `global` | Default `workspace`. |
-| `kind` | `incident` \| `maintenance` \| `info` | Required. |
+| `kind` | `warn` \| `incident` \| `maintenance` \| `info` | Required. |
 | `title` | string | Required. |
 | `body` | string | Optional. |
 | `dedupe_key` | string | Optional; derived when omitted ([notice-record](./notice-record.md#dedupe)). |
@@ -116,7 +116,7 @@ the answering server reaches, [notice-federation](./notice-federation.md#reads))
 | `host` | machine id or name | — | `maintenance` notices whose `hosts` include it. |
 | `limit` | 1–200 | 50 | |
 
-Order: `incident`, `maintenance`, `info`; then `updated_at` descending. Output:
+Order: `warn`, `incident`, `maintenance`, `info`; then `updated_at` descending. Output:
 `{notices: [...], degraded: [...]}`; `degraded` names any home that could not be read
 (unreachable owner, a replica with no route), so an empty list never claims "no notices" when a
 home was not read.

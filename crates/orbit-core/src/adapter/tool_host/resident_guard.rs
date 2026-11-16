@@ -170,10 +170,11 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
         },
         OrbitBuiltinAction::Notice(verb) => match verb {
             NoticeVerb::List | NoticeVerb::Show => Read,
-            NoticeVerb::Post => Open,
-            // Closing a maintenance notice would lift the cycle's own
-            // observe-only narrowing.
-            NoticeVerb::Close => Refused,
+            // A cycle closes the warn it raised once its blocker clears. The
+            // close itself admits only notices the mandate's own cycles
+            // posted, and a managed agent can post no maintenance notice,
+            // so a cycle still cannot lift its own observe-only narrowing.
+            NoticeVerb::Post | NoticeVerb::Close => Open,
         },
         OrbitBuiltinAction::Resident(verb) => match verb {
             ResidentVerb::Show

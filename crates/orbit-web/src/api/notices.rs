@@ -255,6 +255,13 @@ pub(super) async fn list_notices(
         Ok((notices, degraded)) => {
             let now = Utc::now();
             let cutoff = now - Duration::hours(24);
+            // A resident's status line is read on its row in the Residents
+            // panel. Here it would only push the notices that ask something
+            // down, and a lapsed one would fill "Recently closed" each cycle.
+            let notices: Vec<Notice> = notices
+                .into_iter()
+                .filter(|notice| !notice.is_resident_status_line())
+                .collect();
             let mut open: Vec<&Notice> = notices
                 .iter()
                 .filter(|notice| notice.status == EffectiveStatus::Open)
@@ -271,7 +278,10 @@ pub(super) async fn list_notices(
             let banner: Vec<Value> = open
                 .iter()
                 .filter(|notice| {
-                    matches!(notice.kind, NoticeKind::Incident | NoticeKind::Maintenance)
+                    matches!(
+                        notice.kind,
+                        NoticeKind::Warn | NoticeKind::Incident | NoticeKind::Maintenance
+                    )
                 })
                 .map(|notice| notice_json(notice))
                 .collect();

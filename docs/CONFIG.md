@@ -2923,10 +2923,10 @@ Agent relay output goes to `orbit-agent.jsonl` with its own 200 MiB archive budg
 
 Fleet notices have no settings [ORB-22808]. Their limits are fixed:
 
-- **Expiry.** A post that names none lasts 72 hours (incident), 12 (maintenance) or 168 (info). The longest expiry is 720 hours for an operator, 168/72/168 for an orchestrator, and 24 for a managed agent, which is also an agent notice's default.
+- **Expiry.** A post that names none lasts 72 hours (warn, incident), 12 (maintenance) or 168 (info). The longest expiry is 720 hours for an operator, 168/168/72/168 for an orchestrator, and 24 for a managed agent, which is also an agent notice's default. A resident cycle's warn lasts 72 hours from each post (at most 168), and its status line twice the mandate's heartbeat; the line Orbit leaves for a paused, taken-over or stopped mandate lasts 168 hours.
 - **Size.** Titles up to 120 characters, bodies up to 4096 UTF-8 bytes, at most 8 evidence references.
-- **Open notices.** 20 per workspace, 10 global per owner host, 2 per managed task.
-- **Post rates.** 5 per managed task in 24 hours, corroborations included; 30 per orchestrator crew per hour.
+- **Open notices.** 20 per workspace, 10 global per owner host, 2 per managed task, 10 per resident mandate.
+- **Post rates.** 5 per managed task in 24 hours, corroborations included; 30 per orchestrator crew per hour; 30 per resident mandate per hour.
 - **Retention.** Closed and expired notices stay listable for 30 days, then are purged.
 - **Agents and briefs.** Managed agents always may post and close their own notices through their bound task. An opted-in activity's prompt quotes at most 5 open notices, each body cut to 600 characters; a notice read that takes over 2000 ms gives an `unavailable` brief instead of delaying dispatch.
 

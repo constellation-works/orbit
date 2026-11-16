@@ -7,8 +7,10 @@
 // body, reason and label is inserted with `el()` / textContent, never as
 // HTML, so a notice that contains markup reads as text.
 //
-// The list lives in the Tasks dock, after Log: open notices first, then
-// recently closed ones under a "Recently closed" heading. A row scans as
+// The list lives in the Tasks dock, after Log: open notices first, led by
+// warnings (operator asks), then recently closed ones under a "Recently
+// closed" heading. The server leaves residents' status lines out of this
+// payload; the Residents tab shows each on its mandate's row. A row scans as
 // severity, title, scope and age or expiry; its body opens from the row,
 // and Close asks for its reason only once chosen. Posting is a modal dialog
 // with title, severity and body up front. `#notices` opens this tab.
@@ -175,8 +177,8 @@ export async function fetchAndRenderNoticeBanner({ shareRecent = false, read = n
 
 const OPERATOR_REQUIRED = "An operator session is required to post or close notices.";
 const WORKSPACE_REQUIRED = "Select one workspace to post or close notices.";
-const PAGE_HINT = `Fleet notices in the shown workspaces: open ones, and those closed or expired in the last 24 hours. ${OPERATOR_REQUIRED}`;
-const SEVERITY_ORDER = ["incident", "maintenance", "info"];
+const PAGE_HINT = `Fleet notices in the shown workspaces: open ones, and those closed or expired in the last 24 hours. Warnings, which ask something of you, come first. A resident's status line is on its row under Residents. ${OPERATOR_REQUIRED}`;
+const SEVERITY_ORDER = ["warn", "incident", "maintenance", "info"];
 
 // What the operator has done on this page. Rows are rebuilt from the last
 // payload, so opening a row or choosing Close needs no read and a refresh
@@ -240,7 +242,7 @@ function coverageNote(reasons, hasNotices) {
   return node;
 }
 
-// Incidents first in either list; within a severity the server's order stands.
+// Warnings first in either list, then incidents; within a severity the server's order stands.
 function severityRank(notice) {
   const rank = SEVERITY_ORDER.indexOf(text(notice?.kind));
   return rank < 0 ? SEVERITY_ORDER.length : rank;

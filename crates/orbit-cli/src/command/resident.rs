@@ -238,6 +238,20 @@ fn show_text(value: &Value) -> String {
     if let Some(reason) = value["stalled_reason"].as_str() {
         let _ = writeln!(out, "Stalled: {reason}");
     }
+    if !value["status_line"].is_null() {
+        let line = &value["status_line"];
+        let _ = writeln!(
+            out,
+            "Status{}: {} (posted {})",
+            if line["stale"].as_bool() == Some(true) {
+                " (silent since it lapsed)"
+            } else {
+                ""
+            },
+            text(&line["title"]),
+            text(&line["posted_at"]),
+        );
+    }
     if !value["latest_checkpoint"].is_null() {
         let checkpoint = &value["latest_checkpoint"];
         let _ = writeln!(

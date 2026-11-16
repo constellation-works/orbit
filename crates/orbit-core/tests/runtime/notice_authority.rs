@@ -1152,7 +1152,7 @@ fn post_parse_refusals_come_from_core() {
     for (input, message) in [
         (
             json!({"kind": "bogus", "title": "Bad kind"}),
-            "`kind` must be incident, maintenance or info",
+            "`kind` must be warn, incident, maintenance or info",
         ),
         (
             json!({"kind": "info", "title": "Bad scope", "scope": "bogus"}),

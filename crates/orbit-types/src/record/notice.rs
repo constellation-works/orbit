@@ -36,6 +36,8 @@ impl NoticeScope {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NoticeKind {
+    /// The operator is needed: a decision, a credential, a merge.
+    Warn,
     /// Something is broken now.
     Incident,
     /// Planned work others should hold off or plan around.
@@ -45,11 +47,12 @@ pub enum NoticeKind {
 }
 
 impl NoticeKind {
-    pub const ALL: [Self; 3] = [Self::Incident, Self::Maintenance, Self::Info];
-    pub const NAMES: &'static str = "incident, maintenance or info";
+    pub const ALL: [Self; 4] = [Self::Warn, Self::Incident, Self::Maintenance, Self::Info];
+    pub const NAMES: &'static str = "warn, incident, maintenance or info";
 
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Warn => "warn",
             Self::Incident => "incident",
             Self::Maintenance => "maintenance",
             Self::Info => "info",
@@ -197,8 +200,15 @@ pub struct NoticeEvidence {
 }
 
 impl NoticeEvidence {
-    pub const TYPES: [&'static str; 6] =
-        ["task", "run", "friction", "pull_request", "url", "commit"];
+    pub const TYPES: [&'static str; 7] = [
+        "task",
+        "run",
+        "friction",
+        "pull_request",
+        "decision",
+        "url",
+        "commit",
+    ];
 }
 
 /// Posts that matched a notice while it was open, including the first.
@@ -250,7 +260,7 @@ pub struct Notice {
 }
 
 /// The fields that place a notice in a listing. Its `Ord` is the notice
-/// list order every surface uses: known kind (incident, maintenance, info),
+/// list order every surface uses: known kind (warn, incident, maintenance, info),
 /// then the newest readable `updated_at` first, then id. Missing or unknown
 /// kinds and unreadable timestamps stay explicit for federated wire values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,7 +291,40 @@ impl PartialOrd for NoticeListOrderKey<'_> {
     }
 }
 
+/// The dedupe-key prefix reserved for resident mandates: `resident:<mandate
+/// task id, lowercase>:`. Only that mandate's cycles and its control record
+/// write keys under it.
+pub const RESIDENT_NOTICE_KEY_PREFIX: &str = "resident:";
+
+/// The dedupe key of a resident mandate's one live status line.
+pub fn resident_status_notice_key(mandate_task_id: &str) -> String {
+    format!(
+        "{RESIDENT_NOTICE_KEY_PREFIX}{}:status",
+        mandate_task_id.to_ascii_lowercase()
+    )
+}
+
+/// The reserved key prefix of one resident mandate's notices.
+pub fn resident_notice_key_prefix(mandate_task_id: &str) -> String {
+    format!(
+        "{RESIDENT_NOTICE_KEY_PREFIX}{}:",
+        mandate_task_id.to_ascii_lowercase()
+    )
+}
+
 impl Notice {
+    /// Whether this is a resident mandate's status line: the one info
+    /// notice each cycle replaces. Status lines are shown with their
+    /// resident, not among the notices that ask something of a reader.
+    pub fn is_resident_status_line(&self) -> bool {
+        self.kind == NoticeKind::Info
+            && self
+                .dedupe_key
+                .strip_prefix(RESIDENT_NOTICE_KEY_PREFIX)
+                .and_then(|rest| rest.strip_suffix(":status"))
+                .is_some_and(|mandate| !mandate.is_empty() && !mandate.contains(':'))
+    }
+
     /// This notice's place in the notice list order.
     pub fn list_order_key(&self) -> NoticeListOrderKey<'_> {
         NoticeListOrderKey {

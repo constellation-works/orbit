@@ -219,7 +219,7 @@ authenticated role.
 | Experiments | `orbit.experiment.show`, `orbit.experiment.list` and `orbit.experiment.readout` (read only; an agent may see an experiment's arms, event log and per-arm outcomes, never change it) | `orbit experiment show <id>`, `orbit experiment list` and `orbit experiment readout <id> [--metric <name>]` (read). `create`, `update`, `clone`, `start`, `pause`, `resume`, `reweight`, `conclude` and `abandon` are operator-only, as is the CLI-only `orbit experiment delete`, which removes a finished experiment that applied no live treatment. `conclude` stores the readout at that moment on the conclusion event and, when an arm is chosen, files one proposed task that names the experiment, arm, verdict and overlay. It changes no configuration or repository file. |
 | Condition explain | `orbit.automation.explain` (read only; `definition`, optional `subject`) | `orbit automation explain <definition> [--subject <key>] [--json]`: a routine's or auto-task's condition over live state with its scope, store prefilter and literal cross-reads, ownership verdict, up to 20 matches (with arm state and remaining hold) and up to 20 closest misses (subjects failing exactly one top-level clause), one subject's top-level `&&`/`||` clause tree with clause and operand values (unreadable values are unknown, never false), and its durable tracking: arm states and holds, stall, last pass and skip, recent fires with their upstream chain, and `self`. Writes nothing. `job:<name>` shows a job's auto-task steps instead: outer bound, revision pin, each step's resolved target auto-task (resolution, digest, enabled, own condition guard) and its waits (`when`, `wait_until`, `expire_when`, `reuse_when`, `require_result`) and step reads; it evaluates no wait. An enabled job's executions run detached and park while a step waits. |
 | Condition stall clear | `orbit.automation.clear_stall` is operator-only; agents report a stalled condition instead | `orbit automation clear-stall <definition> --reason <text>`: clears `match_storm`, `too_many_matches`, `loop_suspected` or `oscillating` on the workspace owner, audited. |
-| Fleet notices | `orbit.notice.post`, `.close`, `.list` and `.show` on a server that enables the opt-in `notice` toolset; always through `orbit tool run` | `orbit notice post\|close\|list\|show`. Short, expiring, attributed announcements (incident, maintenance, info) for the whole fleet; see [Fleet notices](#fleet-notices) |
+| Fleet notices | `orbit.notice.post`, `.close`, `.list` and `.show` on a server that enables the opt-in `notice` toolset; always through `orbit tool run` | `orbit notice post\|close\|list\|show`. Short, expiring, attributed announcements (warn, incident, maintenance, info) for the whole fleet; see [Fleet notices](#fleet-notices) |
 | Host commands | `orbit_command_exec` when advertised and authorized | Explicit argv and an absolute working directory inside the selected workspace checkout (or a linked worktree under `.orbit/state/worktrees/`); never a shell string. The child environment is an allowlist (baseline process context, git identity, and Orbit's execution envelope), not the server's full environment |
 | Distributed drain | Internal runtime protocol; no ordinary MCP tools | `orbit run auto --pull` uses a launch-selected owner route for probe, receipt lookup, task admission, bind, settle and a follower's late effort report for leaves it already settled (`orbit migrate --backfill-claimed-effort`). These six operations have no public schemas, and public calls refuse both canonical and formerly advertised names; client names or initialize metadata cannot enable the route. Matching internal protocol support is required on both endpoints, with no public fallback. Use owner-side `orbit tool run orbit.drain.probe`, `orbit.drain.receipt.lookup` and `orbit.drain.claims` for supported diagnostics under the required identified/operator authority. Do not call pull, bind, settle or the effort report by hand: admission and claim mutations retain machine/run fences. Handoff approval is an owner-dashboard action with no CLI verb or tool. Handoff revocation and claim recovery are operator-only: `orbit task revoke-handoff` and `orbit task recover-claim`, with the tools `orbit.task.recover` action `revoke_handoff` and `orbit.task.recover` action `recover_claim`, which managed runs cannot call. See [distributed-drain.md](setup/distributed-drain.md). |
 | Setup and maintenance | Discover any server extensions; do not guess | config, doctor, search reindex, audit, GC, filesystem profiles, skill, routine, sweep, job/activity catalogs, workspace role/sync/publication |
@@ -747,8 +747,9 @@ it returns a new linked run; preserve both IDs.
 ## Fleet notices
 
 A fleet notice is a short note every agent and operator in its scope should see
-until it stops being true: an `incident` (something is broken now),
-`maintenance` (planned work to hold off or plan around) or `info`. A notice never
+until it stops being true: a `warn` (the operator is needed: it names the exact
+ask), an `incident` (something is broken now), `maintenance` (planned work to
+hold off or plan around) or `info`. A notice never
 grants authority, and no delivery gate reads it. An open `maintenance` notice does
 narrow resident cycles in its scope to observe-only, as does a failure to read
 the notices in scope; a notice never widens a resident's rights (see
@@ -759,7 +760,7 @@ holds it.
 optionally `body`, `scope` (`workspace`, the default, or `global`),
 `dedupe_key`, `linked_task`, `close_on_linked_done` (default true with a link),
 `evidence` (up to 8 `{type, value}`, type `task`, `run`, `friction`,
-`pull_request`, `url` or `commit`), `hosts` (maintenance only), and
+`pull_request`, `decision`, `url` or `commit`), `hosts` (maintenance only), and
 `expires_in_hours` or `expires_at`. It returns `{notice, outcome}`:
 
 - **created** when no open notice of the workspace holds the dedupe key. An
@@ -774,11 +775,21 @@ Who you post as comes from your session, never from input:
 | Class | Who | May post | Expiry cap |
 |---|---|---|---|
 | operator | operator capability | anything; closes anything | 720 h |
-| orchestrator | an agent session with orchestrator attribution naming a configured crew (`--orchestrator` or a per-call `orchestrator`) | any scope and kind; edits and closes orchestrator- and agent-authored notices, never the operator's | 168 h incident and info, 72 h maintenance |
+| orchestrator | an agent session with orchestrator attribution naming a configured crew (`--orchestrator` or a per-call `orchestrator`) | any scope and kind; edits and closes orchestrator- and agent-authored notices, never the operator's | 168 h warn, incident and info, 72 h maintenance |
 | agent | a managed run (worker binding or run-stamped `orbit tool run`) | `workspace` scope, `incident` or `info`, with `linked_task` or evidence; edits and closes only its own task's notices | 24 h (also the default) |
 
+A resident cycle posts as the agent of its mandate's assignment, with its own
+terms: it may also post `warn`, needs no linked task or evidence, and keeps one
+`info` status line under `resident:<mandate>:status` whose expiry Orbit sets to
+twice the mandate's heartbeat (naming an expiry there is refused). Each post of
+a resident's notice renews it: a warn lasts 72 h from the post, at most 168 h.
+An omitted key on a resident's warn is `resident:<mandate>:` plus the usual
+derived key. Keys under `resident:` are refused for every other poster. Its
+limits are 10 open notices and 30 posts an hour per mandate. See
+[Resident cycle](resident-cycle.md#6-status-line-and-warns).
+
 Anyone else is refused `notice_poster_unidentified`. Defaults when no expiry is
-named: incident 72 h, maintenance 12 h, info 168 h. A request beyond the cap is
+named: warn and incident 72 h, maintenance 12 h, info 168 h. A request beyond the cap is
 refused (`notice_expiry_exceeds_cap`), never clamped; one less than five
 minutes ahead is `notice_expiry_invalid`. Limits refuse with
 `notice_limit_exceeded` naming the limit: 20 open per workspace, 10 open global
@@ -806,7 +817,7 @@ already closed or expired comes back with `already_inactive: true`. A notice
 whose linked task reaches `done` closes itself. `orbit.notice.list` filters by
 `status` (`open` by default, `closed`, `expired` or `all`), `include_global`,
 `scope`, `kind`, `linked_task`, `author_class`, `host` and `limit` (1–200, default 50), and orders
-incident, maintenance, info, newest first. Called without a workspace in a
+warn, incident, maintenance, info, newest first. Called without a workspace in a
 federated session (or as `orbit notice list` outside any workspace on a host
 with registered hosts) it merges every reachable owner's notices, deduplicated
 by id and limited once after the merge, with each unreachable owner named in

@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: how open notices reach managed agents (a bounded fleet_notices brief block quoted as untrusted data), the dashboard and orbit attention"
-last_validated: 2026-11-05
+last_validated: 2026-11-15
 title: Spec — Notice delivery
 owner: claude
 status: Draft
@@ -9,7 +9,7 @@ feature: fleet-notices
 tags: [fleet-notices, spec, security]
 related_features: [fleet-notices, mid-run-steering, operator-attention, user-interface]
 related_artifacts: [ORB-21207, ORB-21164]
-last_updated: 2026-11-02
+last_updated: 2026-11-15
 ---
 
 # Spec: Notice delivery
@@ -52,7 +52,8 @@ For a run of a task whose workspace is *W*, built on the owner of *W* (or read f
 - effective-open notices homed in *W*, any scope; and
 - effective-open `global` notices homed in any workspace the same owner host holds.
 
-At most 5, ordered `incident`, `maintenance`, `info`, then
+`warn` notices and residents' status lines are left out: an operator ask and a resident's own
+report give a working agent nothing to act on. At most 5, ordered `incident`, `maintenance`, `info`, then
 `reports.count` descending, then `updated_at` descending. When more are open the block says how
 many were omitted. A global notice homed on a *different* owner host does not reach this brief
 ([notice-federation](./notice-federation.md#scope)).
@@ -162,7 +163,7 @@ open notice in scope the block is omitted entirely.
 
 Slice 5 added:
 
-- a banner at the top of every dashboard view while an `incident` or `maintenance` notice is open in
+- a banner at the top of every dashboard view while a `warn`, `incident` or `maintenance` notice is open in
   the workspaces the dashboard shows (title, scope, age, time to expiry, link to the notice);
 - a **Notices** view: open notices first, then the last 24 h of closed and expired ones with how
   they ended (`closed by …`, `linked task done`, `expired at …`), and operator post/close forms that
@@ -178,8 +179,10 @@ edits rebuild that workspace on the next notice read. Unavailable workspaces are
 `degraded` while healthy workspaces remain visible; a later read retries resolution, so repairing
 a broken config restores its notices without visiting another view. The operator forms write through
 `POST /api/notices` and `POST /api/notices/<id>/close`, which call the same core post and close as the tools and require an
-operator session. The banner shows while an incident or maintenance notice is in that read, on
-every view, with title, scope, age and time to expiry and a link to the Notices view.
+operator session. The banner shows while a warn, incident or maintenance notice is in that read, on
+every view, with title, scope, age and time to expiry and a link to the Notices view. The read
+leaves out residents' status lines, so the list is led by warnings; each status line is shown on
+its mandate's row in the Residents tab, marked silent once it has lapsed.
 The banner and Notices view share an in-flight read. Scheduled polls may reuse a completed read for
 up to 15 seconds to stay within the dashboard request budget; a non-poll refresh starts a
 fresh read.
@@ -191,9 +194,9 @@ kind, `notice_open`, derived from effective-open notices on the owner:
 
 | | |
 |---|---|
-| Source | the notice store's effective-open read |
+| Source | the notice store's effective-open read, without residents' status lines |
 | `since` | `opened_at` |
-| Severity | `incident` high, `maintenance` medium, `info` low; one step higher when the linked task is terminal but not `done`, or when the notice expires within 2 h |
+| Severity | `warn` and `incident` high, `maintenance` medium, `info` low; one step higher when the linked task is terminal but not `done`, or when the notice expires within 2 h |
 | `refs` | `notice_id`, `task_id` (linked task) |
 | `reason` | the title |
 | `next` | `orbit.notice.show`; `also`: `orbit.notice.close` |

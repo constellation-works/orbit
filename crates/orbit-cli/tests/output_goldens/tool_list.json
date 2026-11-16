@@ -1666,7 +1666,7 @@
   },
   {
     "name": "orbit.notice.close",
-    "description": "Close a fleet notice by id or dedupe_key with a reason. The operator may close any notice; an orchestrator may close its own crew's notices and any orchestrator- or agent-authored notice; a managed agent may close only its own task's notices. Closing a notice that is already closed or expired returns it unchanged with already_inactive: true.",
+    "description": "Close a fleet notice by id or dedupe_key with a reason. The operator may close any notice; an orchestrator may close its own crew's notices and any orchestrator- or agent-authored notice; a managed agent, a resident cycle included, may close only its own task's notices. Closing a notice that is already closed or expired returns it unchanged with already_inactive: true.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1701,7 +1701,7 @@
   },
   {
     "name": "orbit.notice.list",
-    "description": "List fleet notices, open ones unless status says otherwise. With a workspace, that workspace's notices plus global notices homed elsewhere on its owner; with all: true, every workspace homed on this owner; without a workspace in a federated session, every reachable owner's notices merged, deduplicated by id and limited once after the merge. Each notice carries its kind, scope, title, body, author class, linked task and its status, expiry, report count and effective status (open, closed or expired, derived when read). Ordered incident, maintenance, info, newest update first. Output {notices, degraded}; degraded names any owner or home that could not be read, so a shorter list never silently hides an unreachable owner. Read-only.",
+    "description": "List fleet notices, open ones unless status says otherwise. With a workspace, that workspace's notices plus global notices homed elsewhere on its owner; with all: true, every workspace homed on this owner; without a workspace in a federated session, every reachable owner's notices merged, deduplicated by id and limited once after the merge. Each notice carries its kind, scope, title, body, author class, linked task and its status, expiry, report count and effective status (open, closed or expired, derived when read). Ordered warn, incident, maintenance, info, newest update first. Output {notices, degraded}; degraded names any owner or home that could not be read, so a shorter list never silently hides an unreachable owner. Read-only.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1772,7 +1772,7 @@
   },
   {
     "name": "orbit.notice.post",
-    "description": "Post a fleet notice: a short, scoped note every agent and operator in its scope should see until it stops being true (an incident, planned maintenance, or other information). Not a lease notice: lease notices are events on one path lease. The notice is held by this workspace's owner, expires (defaults by kind, capped by poster class), closes when its linked task is done, and is deduplicated by dedupe_key: posting a key an open notice already holds updates it when you may edit it, or corroborates it (bumps its report count) when you may not. The response is {notice, outcome} with outcome created, updated or corroborated; a lost reply is safe to retry. Who you post as (operator, orchestrator or agent) comes from your session, never from input; a managed agent may post only incident or info notices about its own workspace, for at most 24 hours, with a linked task or evidence. A notice informs; it grants nothing.",
+    "description": "Post a fleet notice: a short, scoped note every agent and operator in its scope should see until it stops being true (an ask of the operator, an incident, planned maintenance, or other information). Not a lease notice: lease notices are events on one path lease. The notice is held by this workspace's owner, expires (defaults by kind, capped by poster class), closes when its linked task is done, and is deduplicated by dedupe_key: posting a key an open notice already holds updates it when you may edit it, or corroborates it (bumps its report count) when you may not. The response is {notice, outcome} with outcome created, updated or corroborated; a lost reply is safe to retry. Who you post as (operator, orchestrator or agent) comes from your session, never from input; a managed agent may post only incident or info notices about its own workspace, for at most 24 hours, with a linked task or evidence. A resident cycle may also post warn notices and keeps one info status line under the key resident:<mandate>:status, whose expiry Orbit sets to twice the mandate's heartbeat. A notice informs; it grants nothing.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1780,7 +1780,7 @@
     "parameters": [
       {
         "name": "kind",
-        "description": "incident (something is broken now), maintenance (planned work others should hold off or plan around) or info (anything else worth knowing).",
+        "description": "warn (the operator is needed: name the exact ask), incident (something is broken now), maintenance (planned work others should hold off or plan around) or info (anything else worth knowing).",
         "param_type": "string",
         "required": true
       },
@@ -1822,7 +1822,7 @@
       },
       {
         "name": "evidence",
-        "description": "Up to 8 references as {type, value} objects; type is task, run, friction, pull_request, url or commit, and value is at most 256 characters. Stored and shown, never dereferenced.",
+        "description": "Up to 8 references as {type, value} objects; type is task, run, friction, pull_request, decision, url or commit, and value is at most 256 characters. Stored and shown, never dereferenced.",
         "param_type": "object_array",
         "required": false
       },
@@ -1834,7 +1834,7 @@
       },
       {
         "name": "expires_in_hours",
-        "description": "Hours until the notice expires. Defaults by kind (incident 72, maintenance 12, info 168); capped by poster class, and a longer request is refused rather than clamped. Mutually exclusive with expires_at.",
+        "description": "Hours until the notice expires. Defaults by kind (warn 72, incident 72, maintenance 12, info 168); capped by poster class, and a longer request is refused rather than clamped. Mutually exclusive with expires_at.",
         "param_type": "integer",
         "required": false
       },
@@ -2217,7 +2217,7 @@
   },
   {
     "name": "orbit.resident.show",
-    "description": "Show one resident mandate: the mandate artifact (or why it is missing or invalid), the effective authority (rights and the workspaces both the authority and the mandate cover), the authority record with its grant and narrowing history, open grant requests, the latest parsed checkpoint and live cycle, and the mandate's state (active, handed_off, ended or invalid). Read-only.",
+    "description": "Show one resident mandate: the mandate artifact (or why it is missing or invalid), the effective authority (rights and the workspaces both the authority and the mandate cover), the authority record with its grant and narrowing history, open grant requests, the latest parsed checkpoint and live cycle, the status line (the mandate's one info notice: title, body, when it was posted and lapses, and stale once it has lapsed), and the mandate's state (active, handed_off, ended or invalid). Read-only.",
     "enabled": true,
     "active": true,
     "status": "active",

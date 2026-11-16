@@ -357,8 +357,18 @@ impl OrbitRuntime {
                 .map(|task| json!([task.id, task.status, task.updated_at]))
                 .collect::<Vec<_>>(),
             "decisions": decisions,
+            // Residents' own notices are left out: a status line changes
+            // every cycle and lapses by design, and a cycle's own warn is
+            // not news to it, so counting either would wake the mandate at
+            // its cadence floor forever.
             "notices": notices
                 .iter()
+                .filter(|notice| {
+                    !notice
+                        .dedupe_key
+                        .starts_with(orbit_types::record::RESIDENT_NOTICE_KEY_PREFIX)
+                        && notice.author.task_id.as_deref() != Some(task.id.as_ref())
+                })
                 .map(|notice| json!([notice.id, notice.revision, notice.status]))
                 .collect::<Vec<_>>(),
             "notice_error": notice_error,

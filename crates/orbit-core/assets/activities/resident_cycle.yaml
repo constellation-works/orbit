@@ -122,6 +122,23 @@ spec:
     each write in `actions[]` with that key, its kind, its subject task and
     its result (`ok`, `refused`, `failed` or `already_done`).
 
+    Before the checkpoint, post your notices with `orbit.notice.post`:
+    - One status line every cycle, even when nothing changed:
+      `{"kind":"info","dedupe_key":"resident:<brief.task_id, lowercase>:status",
+      "title":"<where the mandate stands now, at most 120 characters>"}`.
+      It replaces the previous cycle's line in place. Name no expiry: it
+      lapses at twice the heartbeat, so a resident that stops cycling goes
+      silent. Never post a second info notice.
+    - One `kind: "warn"` notice for each blocker only the operator can
+      clear, its title naming the exact ask (decide, fix a credential, merge
+      #N). Key it by the blocker: give `linked_task`, or `dedupe_key`
+      `resident:<brief.task_id, lowercase>:warn:<blocker>`, so a repeat
+      cycle updates it instead of opening another. When the ask is a choice
+      between options, raise the decision first and cite it as evidence
+      `{"type":"decision","value":"<decision request id>"}`. Re-post a
+      standing warn when its ask changes and at least once a day, and close
+      it with `orbit.notice.close` in the cycle that sees the blocker cleared.
+
     End the cycle with exactly one `orbit.resident.checkpoint` call:
     `{"task_id":"<brief.task_id>","record":{"kind":"resident.checkpoint",
     "schema":1,"mandate":"<brief.task_id>","cycle":"<brief.cycle>",
@@ -141,8 +158,8 @@ spec:
     conversation the next cycle resumes, and omitting it breaks the
     continuity chain so the next cycle rebuilds instead of resuming.
     Keep standing state in `requests[]` and `decisions[]`, carried forward
-    without retelling it in notes. Put operator asks in `requests[]` and
-    notices when supported, never in a "FOR DANIEL" notes paragraph.
+    without retelling it in notes. Put operator asks in `requests[]` and a
+    warn notice, never in a "FOR DANIEL" notes paragraph.
     Use `outcome: idle` when you woke and had nothing to do; when
     `brief.status_request` is true the manager asked for status, so say in
     the structured fields where the mandate stands and keep `notes` delta-only. When the exit

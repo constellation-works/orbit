@@ -218,11 +218,11 @@ fn post_notice_refusals_carry_the_core_invalid_field_code() {
             let cases: Vec<(Value, &str)> = vec![
                 (
                     json!({"title": "no kind"}),
-                    "`kind` must be incident, maintenance or info",
+                    "`kind` must be warn, incident, maintenance or info",
                 ),
                 (
                     json!({"kind": "bogus", "title": "bad kind"}),
-                    "`kind` must be incident, maintenance or info",
+                    "`kind` must be warn, incident, maintenance or info",
                 ),
                 (
                     json!({"kind": "info", "title": "bad scope", "scope": "bogus"}),
