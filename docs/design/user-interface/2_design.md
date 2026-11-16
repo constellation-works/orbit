@@ -498,7 +498,8 @@ Both cards project `GET /api/workflows/auto/readiness`. The status header
 carries the phase (Idle, Draining, Winding down, Pull drain or Read-only). The
 live window shows live pilots, recovery agents and reviewers from readiness
 `live_agents` (the row is omitted when that field is absent). When available,
-its deadline follows the figures in the same row; when counts are absent, the
+its deadline follows the figures in the same row when that row fits, and
+wraps under the figures without clipping when it does not; when counts are absent, the
 deadline can appear on its own. Workspace leaf occupancy has a slot meter
 (continuous past 24, hatched past its limit), an accessible used/ceiling label, a binding-constraint
 explanation and the per-pipeline split. The per-reason approval-hold line shares

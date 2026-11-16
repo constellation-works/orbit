@@ -82,19 +82,21 @@
 /* The live window: one row of figures, number then word. One line at every
    card width: shrinks, then drops pilots, then reviewers. Recovery stays.
    A dropped figure stays in the row's name and title. */
-.drain-window-summary { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-/* The deadline shares the row (ORB-25031), so below ~360px the figures alone
-   need the inner width: the row wraps and the deadline takes the line under
-   the figures, without its divider dot, instead of clipping a figure. */
-@container drain-card (max-width: 360px) {
-  .drain-window-summary { flex-wrap: wrap; row-gap: 2px; }
-  .drain-window-summary .drain-when::before { content: none; }
-}
-.drain-window-stats { flex: 0 1 auto; min-width: 0; position: relative; display: flex; flex-wrap: nowrap; align-items: baseline; gap: 4px 12px; margin: 0; overflow: hidden; white-space: nowrap; min-height: 24px; }
+.drain-window-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; }
+/* The deadline shares the row (ORB-25031) when the figures and deadline fit
+   the available width. Fitting depends on that width and the figures' own
+   width, not a fixed card threshold: at any width where the row does not
+   fit, the deadline wraps to the line under the figures instead of letting
+   the shrinking stats box clip a figure, and the figures themselves wrap
+   rather than clip when even they alone are too wide. A wrapped deadline
+   in the dock's 320-440px range drops its divider dot (the 440px rule
+   below); a deadline on its own still drops it via :only-child above. */
+.drain-window-stats { flex: 0 1 auto; min-width: 0; position: relative; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 0; white-space: nowrap; min-height: 24px; }
 .drain-window-stat { display: flex; align-items: baseline; gap: 5px; min-width: 0; flex: 0 0 auto; }
 .drain-window-stat dd { order: 1; margin: 0; color: var(--fg-strong); font: 600 20px var(--font-sans); line-height: 1.2; font-variant-numeric: tabular-nums; }
 .drain-window-stat dt { order: 2; color: var(--fg-dim); font: 400 12.5px var(--font-sans); white-space: nowrap; }
 @container drain-card (max-width: 440px) {
+  .drain-window-summary .drain-when::before { content: none; }
   .drain-window-stats { gap: 4px 8px; }
   .drain-window-stat { gap: 4px; }
   .drain-window-stat dd { font-size: 16px; }
