@@ -54,7 +54,6 @@ mod notice_port;
 mod os_readout;
 mod params;
 mod paths;
-pub(in crate::application) use paths::{CONTEXT_FILES_PRUNED_EVENT, pruned_selectors_from_note};
 pub(crate) mod pilot;
 mod post_deploy;
 mod pr_closure;

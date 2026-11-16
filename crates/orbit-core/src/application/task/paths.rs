@@ -4,8 +4,8 @@ use orbit_common::fs::selector::{
     anchor_path, canonical_selector_in_workspace, canonicalize_existing_prefix, exists_in_workspace,
 };
 use orbit_types::task::{
-    ContextCreationState, MAX_CONTEXT_CREATION_SELECTORS, ReadinessGapCode, Task, TaskHistoryEntry,
-    task_readiness,
+    CONTEXT_FILES_PRUNED_EVENT, ContextCreationState, MAX_CONTEXT_CREATION_SELECTORS,
+    ReadinessGapCode, Task, TaskHistoryEntry, task_readiness,
 };
 use orbit_types::workspace::WorkspacePaths;
 use std::path::{Path, PathBuf};
@@ -21,42 +21,9 @@ pub(crate) fn context_workspace_root(repo_root: &Path, workspace_path: Option<&s
         .unwrap_or_else(|| repo_root.to_path_buf())
 }
 
-/// History event written by the retired filesystem-existence pruning path.
-///
-/// Nothing emits it any more — a declared selector whose target is missing is
-/// kept ([ORB-12490]) — but stored histories still carry these entries, and
-/// they are the only authoritative record of what a task declared before its
-/// scope was pruned. `context_repair` reads them so a restoration cites
-/// evidence instead of inventing scope.
-pub(in crate::application) const CONTEXT_FILES_PRUNED_EVENT: &str = "context_files_pruned";
-
 /// History event written when pruned declarations are restored from
 /// [`CONTEXT_FILES_PRUNED_EVENT`] evidence.
 pub(super) const CONTEXT_FILES_RESTORED_EVENT: &str = "context_files_restored";
-
-/// Prefix and suffix of a [`CONTEXT_FILES_PRUNED_EVENT`] note, which is
-/// `dropped: <selector>, <selector> (selector anchor not found in workspace)`.
-const PRUNED_NOTE_PREFIX: &str = "dropped: ";
-const PRUNED_NOTE_SUFFIX: &str = " (selector anchor not found in workspace)";
-
-/// Recover the selectors one pruning history entry recorded as dropped.
-///
-/// A note that does not match the recorded shape yields nothing: an
-/// unparseable entry is missing evidence, and guessing at its contents is the
-/// scope invention this repair path exists to avoid.
-pub(in crate::application) fn pruned_selectors_from_note(note: &str) -> Vec<String> {
-    let Some(listed) = note.trim().strip_prefix(PRUNED_NOTE_PREFIX) else {
-        return Vec::new();
-    };
-    listed
-        .strip_suffix(PRUNED_NOTE_SUFFIX)
-        .unwrap_or(listed)
-        .split(',')
-        .map(str::trim)
-        .filter(|selector| !selector.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
-}
 
 /// Build the history entry recording an explicit, evidence-backed restoration.
 pub(super) fn context_files_restored_history_entry(

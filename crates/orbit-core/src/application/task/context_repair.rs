@@ -2,7 +2,7 @@
 //!
 //! Filesystem-existence pruning used to delete a declared selector as soon as
 //! its target stopped existing, recording what it dropped in a
-//! [`CONTEXT_FILES_PRUNED_EVENT`] history entry. Pruning is retired
+//! `context_files_pruned` history entry. Pruning is retired
 //! ([ORB-12490]), but the tasks it already narrowed still carry the shrunken
 //! declaration, and admission now treats a declaration as the task's real
 //! footprint.
@@ -13,13 +13,10 @@
 //! operator repair rather than handed a guessed or inherited scope.
 
 use orbit_common::OrbitError;
-use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{LegacyContextPruningRecord, Task, TaskHistoryEntry, TaskStatus};
 
 use super::TaskRecordUpdateParams;
-use super::paths::{
-    CONTEXT_FILES_PRUNED_EVENT, context_files_restored_history_entry, context_workspace_root,
-    pruned_selectors_from_note,
-};
+use super::paths::{context_files_restored_history_entry, context_workspace_root};
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecords;
 use crate::runtime::task::{DeclaredContextFiles, declared_context_files};
@@ -199,9 +196,8 @@ impl OrbitRuntime {
         let mut unrestorable: Vec<String> = Vec::new();
         for selector in history
             .iter()
-            .filter(|entry| entry.event == CONTEXT_FILES_PRUNED_EVENT)
-            .filter_map(|entry| entry.note.as_deref())
-            .flat_map(pruned_selectors_from_note)
+            .filter_map(LegacyContextPruningRecord::from_entry)
+            .flat_map(|record| record.selectors)
         {
             let recovered =
                 declared_context_files(std::slice::from_ref(&selector), &workspace_root);
