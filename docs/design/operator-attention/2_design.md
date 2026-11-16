@@ -189,11 +189,12 @@ Slice 1 also measures per-source cost on the real workspace so explicit polling 
   `run_failed` uses the newest submission per job and subject task, so a newer successful,
   pending or running attempt supersedes a failure. `run_window_hours` bounds failure history;
   active rows remain eligible for `run_stuck` beyond that window. Blocked items fold their
-  referenced runs before runtime filtering. Runtime kinds require Operator capability, with
-  one workspace-scoped `degraded` entry per selected unreadable kind otherwise. A live resident
-  cycle (the trusted run binding names a `resident_cycle_pipeline` run holding its mandate's live
-  grant) reads them read-only for the workspaces its grant covers, and host health likewise; a
-  workspace outside the mandate and any other agent session keep the `capability` entries.
+  referenced runs before runtime filtering. Run and claim kinds require Operator capability, with
+  one workspace-scoped `degraded` entry per selected unreadable kind otherwise; `host_unhealthy`
+  gets a single host-scoped entry instead. A live resident cycle (the trusted run binding
+  names a `resident_cycle_pipeline` run holding its mandate's live grant) reads them read-only
+  for the workspaces its grant covers, and host health likewise; a workspace outside the mandate
+  and any other agent session keep the `capability` entries.
   The session gains no write capability [ORB-25254].
 - **`run_stuck` has no heartbeat.** `run_owner_liveness` compares the persisted pid/start token
   through the existing job owner classifier. Linux obtains stable process start identity from
