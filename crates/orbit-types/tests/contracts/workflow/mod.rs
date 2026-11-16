@@ -7,6 +7,7 @@ mod host_evidence;
 mod job;
 mod job_v2;
 mod pipeline;
+mod pr_auto_fix_base_red;
 mod review_history;
 mod review_report;
 mod tool_allowlist;
