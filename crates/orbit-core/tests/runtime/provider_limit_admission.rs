@@ -700,8 +700,9 @@ fn live_provider_policy_reloads_and_keeps_the_last_good_config() {
 /// usage-gated is durably reassigned to a non-gated complexity-pool crew
 /// before dispatch, with a visible warning naming the original crew, its
 /// provider and limit, and the replacement. The `<provider>:off` override,
-/// an all-gated pool, a non-auto-task explicit crew, an operator crew
-/// change after the warning, and a running task are all left alone.
+/// an all-gated pool, a non-auto-task explicit crew, and an operator crew
+/// change after the warning are left alone. A running task gets no warning
+/// but still records the admitted crew (`redraw:provider_limit`) [ORB-19416].
 fn an_auto_task_explicit_crew_is_reassigned_when_its_provider_is_limited() {
     substitute_worker();
     let fx = Fixture::new(&config(r#"["opus", "sol"]"#, ""));

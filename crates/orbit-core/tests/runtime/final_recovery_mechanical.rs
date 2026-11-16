@@ -144,15 +144,14 @@ fn run_isolated_test(test_name: &str) -> bool {
     orbit_common::test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
     });
-    let output = command
+    command
         .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
         .env(CHILD, test_name)
         .env("ORBIT_TEST_TASK_FIXTURE_CHILD", test_name)
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
-        .current_dir(home.path())
-        .output()
-        .unwrap();
+        .current_dir(home.path());
+    let output = orbit_common::test_env::run_child_test(&mut command, test_name, home.path());
     orbit_common::test_env::assert_child_test_passed(
         test_name,
         output.status,
