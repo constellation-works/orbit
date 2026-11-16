@@ -502,11 +502,21 @@ Findings:
   - Changed: added the length check and a test (src/reader.rs, tests/reader.rs)
 - `F2` [low, disposed: intended behaviour] Log level
 
+Accepted with the reviewer's fixes as a separate commit; … Full certificate: `review-gate.json`.
 - Reviewer: crew `reviewers` (…)
-- Implementation: `<sha>` on base `<sha>` (1 commit(s), unchanged by review)
-- Reviewer commit: `<sha>` `fix: … [<task>]` by orbit[<model>] <reviewer@orbit.invalid>
-…
+- Implementation: `<sha12>` on base `<sha12>` (1 commit(s), unchanged by review)
+- Reviewer commit: `<sha12>` `fix: … [<task>]` by orbit[<model>] <reviewer@orbit.invalid>
+- Validation on final candidate: … record(s) […], complete: …
+- Reviewer runtime: …s of … min
 ```
+
+The lead line keeps its form. Evidence lines appear only when they carry
+information: the reviewer commit, the final candidate when it differs from the
+implementation, widened selectors, owner-required checks when any are
+configured, failed diagnostics, retained checks and an escalation. Commits are
+shortened to 12 characters. The full certificate is the `review-gate.json`
+artifact, and the typed settlement on the task history carries the full commit
+ids.
 
 Caller-supplied artifacts on task updates, including updates that start a task,
 cannot write the reserved `review-*` namespace. The exception is a

@@ -398,6 +398,64 @@ fn review_pool_admission_records_pressure_after_independence_filtering() {
     );
 }
 
+/// The 12-character display form of a commit id, as the verdict comment writes it.
+fn display_commit(commit: &str) -> String {
+    commit[..12].to_string()
+}
+
+/// What a new verdict comment decodes to without the typed record. The gate,
+/// attempt, verdict, reviewer, runtime and findings match the typed record. Each
+/// commit id is its 12-character prefix, and `final_commit` is `None` when the
+/// comment omits the Final candidate line because it equals the implementation.
+fn assert_display_comment_decodes_lossy(
+    typed: &orbit_types::task::RecordedReviewSettlement,
+    decoded: &orbit_types::task::RecordedReviewSettlement,
+) {
+    let expected_final = match (&typed.final_commit, &typed.reviewed_commit) {
+        (Some(final_commit), Some(reviewed)) if final_commit == reviewed => None,
+        (final_commit, _) => final_commit.as_deref().map(display_commit),
+    };
+    assert_eq!(decoded.gate, typed.gate);
+    assert_eq!(decoded.attempt_id, typed.attempt_id);
+    assert_eq!(decoded.verdict, typed.verdict);
+    assert_eq!(decoded.reviewer_crew, typed.reviewer_crew);
+    assert_eq!(decoded.reviewer_model, typed.reviewer_model);
+    assert_eq!(decoded.runtime_seconds, typed.runtime_seconds);
+    assert_eq!(decoded.findings, typed.findings);
+    assert_eq!(
+        decoded.reviewed_commit,
+        typed.reviewed_commit.as_deref().map(display_commit),
+        "the comment shortens the implementation commit to 12 characters"
+    );
+    assert_eq!(
+        decoded.final_commit, expected_final,
+        "the comment omits the Final candidate line only when it equals the implementation"
+    );
+}
+
+/// A comment in the earlier full-fidelity shape: full commit ids and a Final
+/// candidate line, so comment-only decoding reproduces the typed record exactly.
+fn full_fidelity_comment(record: &orbit_types::task::RecordedReviewSettlement) -> String {
+    let gate = match record.gate {
+        orbit_types::task::ReviewSettlementGate::BeforePr => "before-PR",
+        orbit_types::task::ReviewSettlementGate::BeforeLanding => "before-landing",
+    };
+    format!(
+        "{gate} review settled attempt `{}`: verdict **{}**.\n\
+         - Reviewer: crew `{}` (anthropic / {})\n\
+         - Implementation: `{}` (1 commit(s), unchanged by review)\n\
+         - Final candidate: `{}`\n\
+         - Reviewer runtime: {}s of 30 min",
+        record.attempt_id,
+        record.verdict.as_str(),
+        record.reviewer_crew.as_deref().unwrap_or_default(),
+        record.reviewer_model.as_deref().unwrap_or_default(),
+        record.reviewed_commit.as_deref().unwrap_or_default(),
+        record.final_commit.as_deref().unwrap_or_default(),
+        record.runtime_seconds.unwrap_or_default(),
+    )
+}
+
 fn settled_negative_verdicts_are_successful_calls_with_decision_detail() {
     // The persisted legacy spelling is still accepted and projected using
     // the current verdict contract.
@@ -429,7 +487,17 @@ fn settled_negative_verdicts_are_successful_calls_with_decision_detail() {
         let typed = orbit_types::task::recorded_review_settlements(&history, &comments);
         let legacy = orbit_types::task::recorded_review_settlements(&[], &comments);
         assert_eq!(typed.len(), 1);
-        assert_eq!(typed, legacy, "old comment-only records retain their facts");
+        assert_eq!(legacy.len(), 1);
+        // This gate's comment is the display form, so comment-only decoding is lossy
+        // in its commit ids only; the typed record and the certificate stay exact.
+        assert_display_comment_decodes_lossy(&typed[0].1, &legacy[0].1);
+        let mut full_fidelity = comments.clone();
+        full_fidelity[0].message = full_fidelity_comment(&typed[0].1);
+        assert_eq!(
+            orbit_types::task::recorded_review_settlements(&[], &full_fidelity),
+            typed,
+            "old comment-only records retain their facts"
+        );
         let old_shape = json!({"at": comments[0].at, "by": "system", "event": "updated"});
         let old_history: orbit_types::task::TaskHistoryEntry =
             serde_json::from_value(old_shape).unwrap();
