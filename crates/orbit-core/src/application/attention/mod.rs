@@ -6,6 +6,7 @@ mod host;
 mod notice_sources;
 mod provider_sources;
 mod query;
+mod routine_sources;
 mod runtime_sources;
 mod sources;
 

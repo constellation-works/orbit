@@ -4,7 +4,7 @@ use chrono::{DateTime, Local, SecondsFormat};
 use clap::Args;
 use comfy_table::Cell;
 use orbit_cmd::registry_routines::{routine_statuses, routine_statuses_for_workspace};
-use orbit_core::application::routines::{FireField, RetiredRoutine, RoutineField};
+use orbit_core::application::routines::{FireField, RetiredRoutine, RoutineField, RoutineStatus};
 use serde_json::json;
 
 use crate::command::{CommandOut, Payload};
@@ -20,6 +20,7 @@ const ROUTINE_COLUMNS: &[(&str, RoutineField)] = &[
     ("effective", RoutineField::Effective),
     ("cron", RoutineField::Cron),
     ("next_due", RoutineField::NextDue),
+    ("breaker", RoutineField::Breaker),
     (
         "last_fire",
         RoutineField::LastFire(&[
@@ -107,14 +108,23 @@ impl RoutineListArgs {
                 } else {
                     "no"
                 }),
-                Cell::new(
+                // A tripped routine fires again only for a trial.
+                Cell::new(if status.tripped().is_some() {
+                    "tripped".to_string()
+                } else {
                     status
                         .next_due
                         .as_deref()
-                        .map_or_else(|| "—".to_string(), host_local),
-                ),
+                        .map_or_else(|| "—".to_string(), host_local)
+                }),
                 Cell::new(last_fire),
             ]);
+        }
+        // A tripped routine names its error class and next trial.
+        for status in &report.statuses {
+            if let Some(notice) = tripped_notice(status) {
+                table = table.trailing_notice(notice);
+            }
         }
         // A condition routine also names its state and its last skip.
         for status in &report.statuses {
@@ -212,6 +222,21 @@ fn host_local(raw: &str) -> String {
                 .to_rfc3339_opts(SecondsFormat::Secs, false)
         },
     )
+}
+
+/// One line for a routine whose circuit breaker is open: its error class,
+/// next trial and the reset command. Shared with `routine show`.
+pub(super) fn tripped_notice(status: &RoutineStatus) -> Option<String> {
+    let breaker = status.tripped()?;
+    let name = &status.routine.definition.name;
+    let next_trial = status
+        .next_trial_at()
+        .map_or_else(|| "unknown".to_string(), |at| host_local(&at));
+    Some(format!(
+        "tripped [{name}]: stopped after repeated {} failures; next trial {next_trial} \
+         (orbit routine breaker reset {name})",
+        breaker.error_class.as_deref().unwrap_or("failed"),
+    ))
 }
 
 /// One line for a condition routine: its arm counts, any stall, and the last

@@ -50,7 +50,8 @@ pub use loader::{
 pub(crate) use status::rewrite_enabled_line;
 pub use status::{
     FireField, RoutineField, RoutineStatus, RoutineStatusReport, ScheduleDisplayState,
-    pause_routine, project_fire, recent_fires, resume_routine, routine_statuses_with_providers,
+    breaker_json, bypass_routine_breaker, pause_routine, project_fire, recent_fires,
+    reset_routine_breaker, resume_routine, routine_breaker_events, routine_statuses_with_providers,
     select_listed_routine, set_routine_enabled, toggle_listed_routine,
 };
 pub use sweep::{
@@ -78,6 +79,22 @@ fn open_routine_store(global_root: &Path) -> Result<Arc<dyn RoutineStoreBackend>
     let database =
         orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::global_only(global_root))?;
     orbit_store::compose::routine_store(&database)
+}
+
+/// This host's routine circuit breakers, keyed by routine name. Read-only;
+/// a host without a scheduler store has none.
+pub(crate) fn host_routine_breakers(
+    global_root: &Path,
+) -> Result<
+    std::collections::BTreeMap<String, orbit_store::contracts::RoutineBreakerRecord>,
+    OrbitError,
+> {
+    let database =
+        orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::global_only(global_root))?;
+    if !database.exists() {
+        return Ok(std::collections::BTreeMap::new());
+    }
+    open_existing_routine_store(global_root)?.routine_breakers()
 }
 
 /// Create and migrate the machine's scheduler store when it is absent. `orbit

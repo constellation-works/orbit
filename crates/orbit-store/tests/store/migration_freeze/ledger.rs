@@ -554,6 +554,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0092".to_string(),
                 "job_run_host_id_indexes".to_string()
             ),
+            (
+                "migration.v0093".to_string(),
+                "routine_breakers".to_string()
+            ),
         ]
     );
 }
