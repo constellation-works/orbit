@@ -887,6 +887,21 @@ identity refusals end with the same reason code, except
 `local_identity_missing`, which keeps the retained `source repair refused:
 local identity missing` refusal.
 
+The blocked-task backstop is stricter: its decision is recorded under the
+recovery run, not the publishing run, so it can never preserve the failed
+episode's publication. When that episode still holds a published candidate —
+the publisher's own `push`/`pr_open` checkpoints, a failure-handoff
+publication, or a pull request recorded for its pipeline run — a backstop
+`requeue`, and a backstop `rerun_ci` that would requeue, are refused before
+any forge rerun. The task stays `blocked`, no publication-preservation or
+requeued record is written, and the escalation names the publishing run and
+the supported route: an operator requeue (`orbit task requeue <task-id>`),
+which preserves the publication under the publisher's own binding, or
+explicit source repair (`orbit run` action `resume` with `source_repair` for
+the publishing run), with `--discard-candidate` only to implement fresh. A
+backstop requeue of an episode that published nothing is unchanged, as is
+in-run final recovery of the publishing run itself.
+
 ### An escalated run that published its own pull request
 
 A run can push and open its pull request through its own `push` and `pr_open`
