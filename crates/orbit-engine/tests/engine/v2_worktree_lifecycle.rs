@@ -4395,7 +4395,9 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
     /// reservation superseded; evidence that does not describe the reserved
     /// workspace, original HEAD and pinned base; and different evidence for an
     /// attempt already certified. The copy needs the run to be Running with a
-    /// durable run state: neither is created here.
+    /// durable run state: neither is created here. As in the runtime, the
+    /// certificate is recorded before the copy is checked, so a refused copy
+    /// leaves the certificate in place for `verify_rebase_recovery`.
     fn checkpoint_rebase_recovery(
         &self,
         run_id: &str,
@@ -4415,21 +4417,6 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
                 "persist rebase recovery checkpoint (run {run_id}, step `{step_id}`): {reason}"
             ))
         };
-        // Refuse before recording anything: a refused certificate must not stay
-        // in the store `verify_rebase_recovery` reads.
-        let running = self
-            .runs
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|run| run.run_id == run_id && run.state == JobRunState::Running);
-        if !running {
-            return Err(persist("rebase recovery run is no longer running"));
-        }
-        let no_run_state = || persist("rebase recovery has no durable run state");
-        if !self.run_states.lock().unwrap().contains_key(run_id) {
-            return Err(no_run_state());
-        }
         {
             let mut certified = self.checkpoints.lock().unwrap();
             let recorded = certified
@@ -4451,6 +4438,23 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
                 }
                 None => certified.push((run_id.to_string(), step_id.to_string(), output.clone())),
             }
+        }
+        // Certify first, as the runtime does: the run-state copy below is
+        // refused for a run that is not Running or has no durable state, and
+        // the certificate recorded above stays in the store
+        // `verify_rebase_recovery` reads.
+        let running = self
+            .runs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|run| run.run_id == run_id && run.state == JobRunState::Running);
+        if !running {
+            return Err(persist("rebase recovery run is no longer running"));
+        }
+        let no_run_state = || persist("rebase recovery has no durable run state");
+        if !self.run_states.lock().unwrap().contains_key(run_id) {
+            return Err(no_run_state());
         }
         self.run_states
             .lock()
