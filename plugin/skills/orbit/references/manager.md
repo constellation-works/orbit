@@ -84,8 +84,9 @@ wakes it sooner.
 A resident wakes early only on a change it acts on: any change to a task in
 `watch`, or a state change (blocked, review, review decision, done,
 rejected, a settled decision request) of a task its cycles acted on; a
-warn, incident or maintenance notice opening or clearing (residents' status
-lines and notices authored by the assignment excluded); an answer, comment or
+warn, incident or maintenance notice opening or clearing (every `resident:`-keyed
+notice, any resident's status line or warn, and notices authored by the assignment
+excluded); an answer, comment or
 mandate or authority change on the assignment. Edits, run retries and moves
 between active states do not wake it.
 
