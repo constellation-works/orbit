@@ -164,7 +164,7 @@ const QUERY: OperationSpec<AttentionVerb> = OperationSpec {
         mcp_only(
             "wait_grant",
             ParamType::Boolean,
-            "Also mint a short-lived token that lets this session's own shell run `orbit attention wait` for the workspaces read; export it as ORBIT_ATTENTION_WAIT_TOKEN. Needs a session with a capability grant; not combinable with host.",
+            "Also mint a shell token for `orbit attention wait`.",
         ),
         mcp_only(
             "candidate_read",

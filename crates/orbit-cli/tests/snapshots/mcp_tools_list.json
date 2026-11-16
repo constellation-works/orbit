@@ -130,7 +130,7 @@
         },
         "wait_grant": {
           "type": "boolean",
-          "description": "Also mint a short-lived token that lets this session's own shell run `orbit attention wait` for the workspaces read."
+          "description": "Also mint a shell token for `orbit attention wait`."
         },
         "candidate_read": {
           "type": "boolean",
