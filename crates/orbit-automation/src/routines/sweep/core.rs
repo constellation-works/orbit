@@ -111,7 +111,7 @@ pub fn duplicate_ownership_skipped(routines: &[LoadedRoutine], routine: &LoadedR
 /// conflict only on the same trigger kind, since each kind selects its own
 /// consumer and member set [ORB-17918]. Two routines with no state trigger never
 /// conflict.
-pub(super) fn ownership_conflicts(left: &LoadedRoutine, right: &LoadedRoutine) -> bool {
+fn ownership_conflicts(left: &LoadedRoutine, right: &LoadedRoutine) -> bool {
     match (
         &left.definition.trigger.state,
         &right.definition.trigger.state,
@@ -130,7 +130,7 @@ pub(super) const BREAKER_BYPASS_FIRE_REASON: &str = "breaker_bypass";
 /// its cursor and scheduled slots stay untouched, so they fire or skip by
 /// the usual rules once the breaker closes. Other trigger kinds wait for no
 /// slot and are evaluated as usual.
-pub(super) fn bypass_fire(
+fn bypass_fire(
     store: &dyn RoutineStoreBackend,
     routine: &LoadedRoutine,
     dispatch: &dyn RoutineDispatch,
@@ -168,7 +168,7 @@ pub(super) fn bypass_fire(
     )
 }
 
-pub(super) fn sweep_routine(
+fn sweep_routine(
     store: &dyn RoutineStoreBackend,
     routine: &LoadedRoutine,
     dispatch: &dyn RoutineDispatch,

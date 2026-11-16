@@ -10,7 +10,7 @@ use super::report::skipped;
 /// How many missed `skip` slots one tick records. Due math stays O(1); the
 /// cursor must not jump past a slot this pass did not record, so a longer
 /// gap continues on the next tick before a newer natural slot can fire.
-pub(super) const MISSED_SLOT_RECORD_LIMIT: usize = 64;
+const MISSED_SLOT_RECORD_LIMIT: usize = 64;
 
 /// Bounds for one `missed_run: skip` recording pass.
 pub(super) struct SkipWindow<'a> {
