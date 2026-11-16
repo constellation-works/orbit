@@ -342,6 +342,55 @@ fn doctor_warns_for_an_unset_pass_listed_variable_and_is_ok_when_all_are_set() {
     assert_eq!(ok["status"], "ok", "{ok}");
 }
 
+/// `clock.env` counts as held for `env-pass` [ORB-25291]: evaluated without the
+/// variable in-process while `clock.env` names it, doctor no longer reports it;
+/// a name absent from both is still reported. Values never reach the output.
+#[cfg(unix)]
+#[test]
+fn doctor_treats_clock_env_supplied_names_as_held() {
+    let fixture = Fixture::new();
+    fixture.clock_env(&format!("{UNSET}={SECRET}\n"), 0o600);
+
+    // UNSET is absent from this process but held in clock.env, so clock-started
+    // runs receive it. An `ok` here is also no `host_unhealthy` item for
+    // attention, which only reports `warning`/`error` rows.
+    let row = fixture.doctor_row(&[(SET, SECRET)]);
+    assert_eq!(row["status"], "ok", "clock.env supplies {UNSET}: {row}");
+    let message = row["message"].as_str().unwrap_or_default();
+    let remediation = row["remediation"].as_str().unwrap_or_default();
+    assert!(
+        !message.contains(UNSET),
+        "a clock-supplied name is not reported as unset: {row}"
+    );
+    assert!(
+        !message.contains(SECRET) && !remediation.contains(SECRET),
+        "a clock.env value reached the row: {row}"
+    );
+
+    // A name absent from both the process and clock.env is still reported.
+    fixture.pass_list(&["HOME", "PATH", UNSET, SET, EMPTY]);
+    let row = fixture.doctor_row(&[(SET, SECRET)]);
+    assert_eq!(
+        row["status"], "warning",
+        "a name missing everywhere warns: {row}"
+    );
+    let message = row["message"].as_str().unwrap_or_default();
+    let remediation = row["remediation"].as_str().unwrap_or_default();
+    assert!(message.contains(EMPTY), "{row}");
+    assert!(
+        !message.contains(UNSET),
+        "the clock-supplied name stays held while the missing one warns: {row}"
+    );
+    assert!(
+        !message.contains(SECRET) && !remediation.contains(SECRET),
+        "a clock.env value reached the row: {row}"
+    );
+    assert!(
+        remediation.contains("clock.env") && remediation.contains("evaluating process"),
+        "the remediation names the judged environment: {row}"
+    );
+}
+
 /// A crew whose `env` source the launching shell does not hold is named
 /// (crew and source, never a value) at a job start and on the run, a drain's
 /// window excludes it, and `orbit doctor` reports it until the source is set.
