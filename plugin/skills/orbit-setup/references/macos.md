@@ -83,4 +83,8 @@ the installed clock has no token in `clock.env` that the same `pass` admits (a
 the row names it). A routed Claude crew that maps its own credential through
 `env` needs neither: the row instead warns when an installed clock's
 `clock.env` lacks that crew's source. `env-pass` separately reports
-pass-listed names and crew `env` sources the current shell does not hold.
+pass-listed names that neither the shell running `orbit doctor` nor a
+non-empty `clock.env` value supplies, and crew `env` sources that shell does
+not hold; `clock.env` does not clear the crew-source check. A manual drain or
+job start judges only its own launching environment, so it can still warn for
+a name `clock.env` holds.

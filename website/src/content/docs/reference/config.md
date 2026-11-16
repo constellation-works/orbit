@@ -151,9 +151,11 @@ orbit doctor --check env-pass --json
 ```
 
 **If a variable is missing.** A `pass` name the launching shell does not set
-reaches no agent. The run still starts, with a warning, and the provider may
-fall back to a saved login. A missing per-crew source, or an unusable `file:`
-source, excludes that crew from drains and refuses its activities.
+reaches no agent, unless a timer-started run reads it from
+[clock.env](#scheduled-credentials-clockenv). The run still starts, with a
+warning, and the provider may fall back to a saved login. A missing per-crew
+source, or an unusable `file:` source, excludes that crew from drains and
+refuses its activities.
 
 **Where the value comes from.** Terminal runs read your shell, so start drains
 from a login shell. Dashboard runs inherit the web service's environment:
@@ -206,9 +208,14 @@ GITHUB_TOKEN=<github-token>
   read the file, and `orbit clock tick --dry-run` loads nothing.
 
 To confirm what loaded, `orbit clock tick --json` lists the names as
-`clock_env_loaded`. `orbit doctor` names `pass` variables unset in its own
-environment in the `env-pass` row and, on macOS, a missing Claude credential
-or crew source in the `claude-worker-token` row.
+`clock_env_loaded`. The `env-pass` row of `orbit doctor` counts a `pass` name as
+held when its own environment or a non-empty `clock.env` value supplies it, so
+it reports `ok` for a name only `clock.env` holds. A manual drain, ship or job
+start judges only its launching shell and still warns for that name. Crew `env`
+sources have their own checks: the shell check reads only doctor's environment,
+and the managed-service check counts `clock.env` for the sweep service alone.
+On macOS, the `claude-worker-token` row reports a missing Claude credential or
+crew source.
 
 ## Unknown settings
 
