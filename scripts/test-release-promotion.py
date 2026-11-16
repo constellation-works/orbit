@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Run the documented release promotion and hotfix back-merge against isolated Git repositories.
+"""Run the documented release promotion and hotfix back-port against isolated Git repositories.
 
-Promotion fixtures tag a release, land a later development commit on agent-main,
-and diverge main with a hotfix. Recovery fixtures have a stale local main and a
-newer remote hotfix. Each test executes the documented shell block and checks
-history and file contents.
+The fixture origin takes changes to `main` only through a simulated pull request
+merge, as the repository ruleset does, and refuses non-fast-forward updates. Each
+test executes the documented shell block from RELEASING.md and checks history and
+file contents.
 """
 
+import contextlib
 import os
 from pathlib import Path
 import re
@@ -54,48 +55,39 @@ def command_lines(block):
     return lines
 
 
-def back_merge_script(text):
-    """Return the hotfix back-merge shell block to execute.
-
-    The block is the fenced shell under the hotfix flow that merges and pushes
-    agent-main. Callers assert repository state, not the block's wording.
-    """
+def fenced_block(body, marker, label):
+    """Return the one shell block in `body` whose command lines contain `marker`."""
     chosen = []
-    for match in SHELL_FENCE.finditer(hotfix_section(text)):
+    for match in SHELL_FENCE.finditer(body):
         block = match.group(2)
-        lines = command_lines(block)
-        merges = any(line.split()[:2] == ["git", "merge"] for line in lines)
-        pushes = any(
-            line.split()[:3] == ["git", "push", "origin"] and "agent-main" in line.split()
-            for line in lines
-        )
-        if merges and pushes:
+        if any(marker in line for line in command_lines(block)):
             chosen.append(textwrap.dedent(block).strip() + "\n")
     if len(chosen) != 1:
-        raise AssertionError(
-            f"expected one hotfix back-merge shell block, found {len(chosen)}"
-        )
+        raise AssertionError(f"expected one {label} shell block, found {len(chosen)}")
     return chosen[0]
 
 
 def promotion_script(text, version):
-    """Return the 10b promotion shell block with the release version filled in.
+    """Return the 10b gate block with the release version filled in.
 
-    The block is the fenced shell under the promote section that pushes to
-    refs/heads/main. Callers assert repository state, not the block's wording.
+    The block is the fenced shell under the promote section that pushes the
+    promotion branch. Callers assert repository state, not the block's wording.
     """
-    chosen = []
-    for match in SHELL_FENCE.finditer(section(text, "### 10b. Promote to `main`", 3)):
-        block = match.group(2)
-        pushes = any(
-            line.split()[:3] == ["git", "push", "origin"] and "refs/heads/main" in line
-            for line in command_lines(block)
-        )
-        if pushes:
-            chosen.append(textwrap.dedent(block).strip().replace("<X.Y.Z>", version) + "\n")
-    if len(chosen) != 1:
-        raise AssertionError(f"expected one promotion shell block, found {len(chosen)}")
-    return chosen[0]
+    body = section(text, "### 10b. Promote to `main`", 3)
+    return fenced_block(body, "refs/heads/promote/", "promotion gate").replace("<X.Y.Z>", version)
+
+
+def postcheck_script(text, version):
+    """Return the 10c check block with the release version filled in."""
+    body = section(text, "### 10c. Confirm `main` and `agent-main` agree", 3)
+    return fenced_block(body, "origin/main^2", "post-promotion check").replace("<X.Y.Z>", version)
+
+
+def backport_script(text, slug):
+    """Return the hotfix back-port block with the hotfix slug filled in."""
+    return fenced_block(
+        hotfix_section(text), "git merge --squash origin/main", "hotfix back-port"
+    ).replace("<slug>", slug)
 
 
 class GitFixtureCase(unittest.TestCase):
@@ -184,148 +176,54 @@ class GitFixtureCase(unittest.TestCase):
         return self.push_log_path.read_text().splitlines()
 
     def write_hook(self, origin):
+        """Log every ref update; refuse non-fast-forward updates and direct updates to main.
+
+        Main accepts updates only while the `allow-main` marker exists, which
+        stands for the pull request merge that the release operator performs.
+        """
         hook = origin / "hooks" / "pre-receive"
         log = shlex.quote(str(self.push_log_path))
+        allow = shlex.quote(str(origin / "allow-main"))
         hook.write_text(
             "#!/bin/sh\n"
             "set -eu\n"
             f"log={log}\n"
+            f"allow={allow}\n"
             "while read -r old new ref; do\n"
             "  printf '%s %s %s\\n' \"$old\" \"$new\" \"$ref\" >> \"$log\"\n"
-            f"  if [ \"$old\" != {ZERO!r} ]; then\n"
-            "    git merge-base --is-ancestor \"$old\" \"$new\" || exit 1\n"
-            "  fi\ndone\n"
+            "  if [ \"$ref\" = refs/heads/main ] && [ ! -e \"$allow\" ]; then\n"
+            "    echo 'main takes changes only through pull requests' >&2\n"
+            "    exit 1\n"
+            "  fi\n"
+            "done\n"
         )
         hook.chmod(0o755)
         self.git(origin, "config", "receive.denyNonFastForwards", "true")
         self.git(origin, "config", "core.logAllRefUpdates", "true")
+
+    @contextlib.contextmanager
+    def main_accepts_pull_requests(self):
+        marker = self.origin / "allow-main"
+        marker.touch()
+        try:
+            yield
+        finally:
+            marker.unlink()
 
     def commit_file(self, repo, name, content, message):
         (repo / name).write_text(content)
         self.git(repo, "add", "--", name)
         self.git(repo, "commit", "-m", message)
 
-
-class ReleasePromotionRecoveryTests(GitFixtureCase):
-    def test_skipped_hotfix_recovery_includes_remote_main(self):
-        origin = self.root / "origin.git"
-        origin.mkdir()
-        self.git(origin, "init", "--bare", "--initial-branch=main")
-        self.write_hook(origin)
-
-        seed = self.root / "seed"
-        seed.mkdir()
-        self.git(seed, "init", "--initial-branch=main")
-        self.commit_file(seed, "base.txt", "base\n", "base")
-        base = self.rev(seed, "HEAD")
-        self.git(seed, "branch", "agent-main")
-        self.git(seed, "remote", "add", "origin", str(origin))
-        self.git(seed, "push", "origin", "main", "agent-main")
-
-        operator = self.root / "operator"
-        self.run_git("clone", str(origin), str(operator))
-        self.git(operator, "checkout", "-b", "agent-main", "--track", "origin/agent-main")
-        self.commit_file(operator, "dev.txt", DEVELOPMENT, "development")
-        dev = self.rev(operator, "HEAD")
-        self.git(operator, "push", "origin", "agent-main")
-        self.assertEqual(self.rev(operator, "main"), base)
-
-        other = self.root / "other"
-        self.run_git("clone", str(origin), str(other))
-        self.commit_file(other, "hotfix.txt", HOTFIX, "hotfix")
-        hotfix = self.rev(other, "HEAD")
-        self.git(other, "push", "origin", "main")
-        self.assertNotEqual(hotfix, base)
-        self.assertEqual(self.rev(origin, "main"), hotfix)
-        self.assertEqual(self.rev(operator, "main"), base)
-        self.assertEqual(self.rev(operator, "origin/main"), base)
-
-        fetched = self.git(operator, "fetch", "origin", check=False)
-        self.assertEqual(fetched.returncode, 0, fetched.stderr)
-        precheck = self.git(
-            operator, "merge-base", "--is-ancestor", "origin/main", "origin/agent-main", check=False
-        )
-        self.assertEqual(
-            precheck.returncode,
-            1,
-            "promotion ancestry must fail while agent-main lacks the remote hotfix\n"
-            f"{precheck.stderr}",
-        )
-        self.assertEqual(self.rev(operator, "main"), base, "fetch must leave local main stale")
-        self.assertEqual(self.rev(operator, "origin/main"), hotfix)
-
-        # The precheck fetch refreshed origin/main. Restore the stale
-        # remote-tracking ref so the recovery has to refresh it itself.
-        # Merging that ref, or the untouched local main, drops the hotfix.
-        self.git(operator, "update-ref", "refs/remotes/origin/main", base)
-        self.assertEqual(self.rev(operator, "origin/main"), base)
-        self.assertEqual(self.rev(origin, "main"), hotfix)
-
-        before_log = self.push_log()
-        script = back_merge_script(RELEASING.read_text(encoding="utf-8"))
-        recovered = self_test_hang.run(
-            ["bash", "-e", "-o", "pipefail", "-c", script],
-            step="hotfix back-merge",
-            cwd=operator,
-            env=self.env,
-            text=True,
-            capture_output=True,
-        )
-        self.assertEqual(
-            recovered.returncode,
-            0,
-            f"documented recovery failed\nstdout:\n{recovered.stdout}\nstderr:\n{recovered.stderr}",
-        )
-
-        fetched = self.git(operator, "fetch", "origin", check=False)
-        self.assertEqual(fetched.returncode, 0, fetched.stderr)
-        ancestry = self.git(
-            operator, "merge-base", "--is-ancestor", "origin/main", "origin/agent-main", check=False
-        )
-        self.assertEqual(
-            ancestry.returncode,
-            0,
-            "promotion ancestry must succeed after recovery\n" + ancestry.stderr,
-        )
-        self.assertEqual(self.show(origin, "agent-main:hotfix.txt"), self.show(origin, "main:hotfix.txt"))
-        self.assertEqual(self.show(origin, "main:hotfix.txt"), HOTFIX)
-        self.assertEqual(self.show(origin, "agent-main:dev.txt"), DEVELOPMENT)
-        self.assertEqual(
-            self.git(origin, "merge-base", "--is-ancestor", dev, "agent-main", check=False).returncode,
-            0,
-            "development commits must remain on agent-main",
-        )
-        self.assertEqual(
-            self.git(origin, "merge-base", "--is-ancestor", hotfix, "agent-main", check=False).returncode,
-            0,
-            "the remote hotfix commit must be on agent-main",
-        )
-
-        tip, *parents = self.git(origin, "rev-list", "--parents", "-n", "1", "agent-main").stdout.split()
-        self.assertEqual(tip, self.rev(origin, "agent-main"))
-        self.assertIn(hotfix, parents, "recovery must merge the fetched remote hotfix")
-        self.assertIn(dev, parents, "recovery must keep the previous agent-main tip as a parent")
-        self.assertNotIn(base, parents, "recovery must not merge the stale local main commit")
-
-        updates = [
-            line.split()
-            for line in self.push_log()[len(before_log):]
-            if line.endswith(" refs/heads/agent-main")
-        ]
-        self.assertEqual(len(updates), 1, self.push_log()[len(before_log):])
-        old, new, ref = updates[0]
-        self.assertEqual(ref, "refs/heads/agent-main")
-        self.assertEqual(old, dev)
-        self.assertEqual(new, self.rev(origin, "agent-main"))
-        fast_forward = self.git(origin, "merge-base", "--is-ancestor", old, new, check=False)
-        self.assertEqual(fast_forward.returncode, 0, "agent-main push must be a fast-forward")
+    def describe(self, result):
+        return f"returncode {result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
 
 
-class ReleasePromotionTests(GitFixtureCase):
+class PromotionFixture(GitFixtureCase):
     VERSION = "1.0.0"
 
     def build(self):
-        """Create origin (main=B, agent-main=B), an operator clone and a second clone."""
+        """Create origin (main=base, agent-main=base), an operator clone and a second clone."""
         self.origin = self.root / "origin.git"
         self.origin.mkdir()
         self.git(self.origin, "init", "--bare", "--initial-branch=main")
@@ -338,7 +236,8 @@ class ReleasePromotionTests(GitFixtureCase):
         self.base = self.rev(seed, "HEAD")
         self.git(seed, "branch", "agent-main")
         self.git(seed, "remote", "add", "origin", str(self.origin))
-        self.git(seed, "push", "origin", "main", "agent-main")
+        with self.main_accepts_pull_requests():
+            self.git(seed, "push", "origin", "main", "agent-main")
 
         self.operator = self.root / "operator"
         self.run_git("clone", str(self.origin), str(self.operator))
@@ -347,16 +246,27 @@ class ReleasePromotionTests(GitFixtureCase):
         self.run_git("clone", str(self.origin), str(self.other))
         self.git(self.other, "checkout", "-b", "agent-main", "--track", "origin/agent-main")
 
-    def tag_release(self):
-        """Commit and annotated-tag the release on agent-main, then push both."""
-        self.commit_file(self.operator, "release.txt", "release\n", "release")
+    def pr_branch(self, version=None):
+        return f"promote/v{version or self.VERSION}"
+
+    def sync_agent_main(self):
+        self.git(self.operator, "fetch", "origin")
+        self.git(self.operator, "checkout", "agent-main")
+        self.git(self.operator, "merge", "--ff-only", "origin/agent-main")
+
+    def tag_release(self, version=None):
+        """Commit a release on agent-main, annotate its tag, and push both."""
+        version = version or self.VERSION
+        self.sync_agent_main()
+        self.commit_file(self.operator, "version.txt", f"{version}\n", f"release {version}")
         self.release = self.rev(self.operator, "HEAD")
-        self.git(self.operator, "tag", "-a", f"v{self.VERSION}", "-m", "release")
+        self.git(self.operator, "tag", "-a", f"v{version}", "-m", "release")
         self.assertNotEqual(
-            self.rev(self.operator, f"v{self.VERSION}"), self.release, "tag must be annotated"
+            self.rev(self.operator, f"v{version}"), self.release, "tag must be annotated"
         )
         self.git(self.operator, "push", "origin", "agent-main")
-        self.git(self.operator, "push", "origin", f"v{self.VERSION}")
+        self.git(self.operator, "push", "origin", f"v{version}")
+        return self.release
 
     def land_development_after_tag(self):
         self.git(self.other, "pull", "--ff-only", "origin", "agent-main")
@@ -364,15 +274,28 @@ class ReleasePromotionTests(GitFixtureCase):
         self.development = self.rev(self.other, "HEAD")
         self.git(self.other, "push", "origin", "agent-main")
 
-    def land_hotfix_on_main(self):
-        self.git(self.other, "checkout", "main")
-        self.commit_file(self.other, "hotfix.txt", HOTFIX, "hotfix")
-        self.hotfix = self.rev(self.other, "HEAD")
-        self.git(self.other, "push", "origin", "main")
-        self.git(self.other, "checkout", "agent-main")
+    def land_hotfix_pull_request(self, path="hotfix.txt", content=HOTFIX):
+        """Merge a hotfix branch cut from main into main with a merge commit."""
+        self.hotfixes = getattr(self, "hotfixes", 0) + 1
+        branch = f"hotfix/test-{self.hotfixes}"
+        self.git(self.other, "fetch", "origin")
+        self.git(self.other, "checkout", "-B", "hotfix", "origin/main")
+        self.commit_file(self.other, path, content, "hotfix")
+        self.git(self.other, "push", "origin", f"HEAD:refs/heads/{branch}")
+        self.merge_pull_request(branch)
+        return self.rev(self.origin, "main^2")
 
-    def promote(self):
-        script = promotion_script(RELEASING.read_text(encoding="utf-8"), self.VERSION)
+    def merge_pull_request(self, branch):
+        """Merge origin/<branch> into main with a merge commit, as the operator does on GitHub."""
+        self.git(self.operator, "fetch", "origin")
+        self.git(self.operator, "checkout", "-B", "pull-request", "origin/main")
+        self.git(self.operator, "merge", "--no-ff", "--no-edit", f"origin/{branch}")
+        with self.main_accepts_pull_requests():
+            self.git(self.operator, "push", "origin", "HEAD:refs/heads/main")
+        return self.rev(self.origin, "main")
+
+    def promote(self, version=None):
+        script = promotion_script(RELEASING.read_text(encoding="utf-8"), version or self.VERSION)
         self.log_before = len(self.push_log())
         # No `-e`: the documented block must stop itself, not rely on the shell.
         return self_test_hang.run(
@@ -384,80 +307,119 @@ class ReleasePromotionTests(GitFixtureCase):
             capture_output=True,
         )
 
+    def postcheck(self, version=None):
+        script = postcheck_script(RELEASING.read_text(encoding="utf-8"), version or self.VERSION)
+        return self_test_hang.run(
+            ["bash", "-o", "pipefail", "-c", script],
+            step="post-promotion check",
+            cwd=self.operator,
+            env=self.env,
+            text=True,
+            capture_output=True,
+        )
+
+    def backport(self, slug="hotfix-test"):
+        script = backport_script(RELEASING.read_text(encoding="utf-8"), slug)
+        self.log_before = len(self.push_log())
+        return self_test_hang.run(
+            ["bash", "-e", "-o", "pipefail", "-c", script],
+            step="hotfix back-port",
+            cwd=self.operator,
+            env=self.env,
+            text=True,
+            capture_output=True,
+        )
+
+    def pushes_since_promote(self, ref):
+        """Pushes to `ref` received since the last block started."""
+        return [line for line in self.push_log()[self.log_before:] if line.endswith(f" {ref}")]
+
     def main_updates(self):
-        """Pushes to main received since promote() started."""
-        return [
-            line for line in self.push_log()[self.log_before:] if line.endswith(" refs/heads/main")
-        ]
+        return self.pushes_since_promote("refs/heads/main")
 
     def is_ancestor(self, ancestor, descendant):
         return self.git(
             self.origin, "merge-base", "--is-ancestor", ancestor, descendant, check=False
         ).returncode == 0
 
-    def assert_refused(self, result, expected_main):
-        self.assertNotEqual(
-            result.returncode, 0, f"promotion must fail\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-        )
-        self.assertEqual(self.rev(self.origin, "main"), expected_main, "remote main must not move")
-        self.assertEqual(self.main_updates(), [], "promotion must not push to main")
+    def ref_exists(self, ref):
+        return self.git(
+            self.origin, "rev-parse", "--verify", "--quiet", ref, check=False
+        ).returncode == 0
 
+    def tree_gate_passes(self, branch):
+        """The gate's tree test: merging origin/main into `branch` adds nothing `branch` lacks."""
+        merged = self.git(self.operator, "merge-tree", "--write-tree", "origin/main", branch, check=False)
+        tree = self.git(self.operator, "rev-parse", f"{branch}^{{tree}}").stdout.strip()
+        return merged.stdout.splitlines()[:1] == [tree]
+
+    def assert_refused(self, result, branch, main_sha):
+        self.assertNotEqual(result.returncode, 0, self.describe(result))
+        self.assertEqual(self.rev(self.origin, "main"), main_sha, "remote main must not move")
+        self.assertEqual(self.main_updates(), [], "promotion must not push to main")
+        self.assertFalse(self.ref_exists(f"refs/heads/{branch}"), f"promotion must not push {branch}")
+
+
+class ReleasePromotionTests(PromotionFixture):
     def test_later_development_commit_is_not_promoted(self):
         self.build()
         self.tag_release()
         self.land_development_after_tag()
-        self.assertEqual(self.rev(self.origin, "agent-main"), self.development)
 
         result = self.promote()
-        self.assertEqual(
-            result.returncode, 0, f"promotion failed\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-        )
+        self.assertEqual(result.returncode, 0, self.describe(result))
+        self.assertEqual(self.rev(self.origin, self.pr_branch()), self.release)
+        self.assertFalse(self.is_ancestor(self.development, self.pr_branch()), "later development was promoted")
+        self.assertEqual(self.main_updates(), [], "the gate must not push main")
+        self.assertEqual(self.rev(self.origin, "main"), self.base)
 
-        self.assertEqual(self.rev(self.origin, "main"), self.release)
+        self.merge_pull_request(self.pr_branch())
+        check = self.postcheck()
+        self.assertEqual(check.returncode, 0, self.describe(check))
+        self.assertIn(f"promoted {self.release}", check.stdout)
+        self.assertEqual(self.rev(self.origin, "main^2"), self.release)
+        self.assertEqual(self.show(self.origin, "main:version.txt"), f"{self.VERSION}\n")
+        self.assertTrue(self.is_ancestor(f"v{self.VERSION}", "main"), "tag must stay reachable from main")
         self.assertFalse(self.is_ancestor(self.development, "main"), "later development reached main")
         self.assertEqual(self.rev(self.origin, "agent-main"), self.development)
         self.assertEqual(self.rev(self.origin, f"v{self.VERSION}^{{commit}}"), self.release)
-        self.assertTrue(self.is_ancestor(f"v{self.VERSION}", "main"), "tag must stay reachable from main")
-        updates = self.main_updates()
-        self.assertEqual(len(updates), 1, updates)
-        old, new, _ = updates[0].split()
-        self.assertEqual((old, new), (self.base, self.release))
 
-        # Confirmation (10c) must still hold with agent-main ahead of main.
-        self.git(self.operator, "fetch", "origin")
-        self.git(self.operator, "merge-base", "--is-ancestor", "origin/main", "origin/agent-main")
-
-    def test_promotion_without_later_commits_fast_forwards(self):
+    def test_promotion_without_later_commits_passes_the_check(self):
         self.build()
         self.tag_release()
-        result = self.promote()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.rev(self.origin, "main"), self.release)
 
-    def test_divergent_main_hotfix_is_not_overwritten(self):
+        result = self.promote()
+        self.assertEqual(result.returncode, 0, self.describe(result))
+        self.assertEqual(self.rev(self.origin, self.pr_branch()), self.release)
+        self.merge_pull_request(self.pr_branch())
+        check = self.postcheck()
+        self.assertEqual(check.returncode, 0, self.describe(check))
+        self.assertEqual(self.rev(self.origin, "main^2"), self.release)
+
+    def test_divergent_main_hotfix_refuses_promotion(self):
         self.build()
         self.tag_release()
         self.land_development_after_tag()
-        self.land_hotfix_on_main()
+        hotfix = self.land_hotfix_pull_request()
+        main_before = self.rev(self.origin, "main")
 
         result = self.promote()
 
-        self.assert_refused(result, self.hotfix)
-        self.assertFalse(self.is_ancestor(self.release, "main"))
+        self.assert_refused(result, self.pr_branch(), main_before)
         self.assertEqual(self.show(self.origin, "main:hotfix.txt"), HOTFIX)
+        self.assertTrue(self.is_ancestor(hotfix, "main"))
 
     def test_release_missing_from_agent_main_is_not_promoted(self):
         self.build()
         # The tagged commit exists on origin only through the tag.
-        self.commit_file(self.operator, "release.txt", "release\n", "release")
+        self.commit_file(self.operator, "version.txt", f"{self.VERSION}\n", "release")
         self.git(self.operator, "tag", "-a", f"v{self.VERSION}", "-m", "release")
         self.git(self.operator, "push", "origin", f"v{self.VERSION}")
-        release = self.rev(self.operator, "HEAD")
-        self.assertFalse(self.is_ancestor(release, "agent-main"))
+        self.assertFalse(self.is_ancestor(self.rev(self.operator, "HEAD"), "agent-main"))
 
         result = self.promote()
 
-        self.assert_refused(result, self.base)
+        self.assert_refused(result, self.pr_branch(), self.base)
 
     def test_missing_tag_is_not_promoted(self):
         self.build()
@@ -467,7 +429,83 @@ class ReleasePromotionTests(GitFixtureCase):
 
         result = self.promote()
 
-        self.assert_refused(result, self.base)
+        self.assert_refused(result, self.pr_branch(), self.base)
+
+    def test_postcheck_refuses_main_with_a_commit_the_release_lacks(self):
+        self.build()
+        self.tag_release()
+        self.assertEqual(self.promote().returncode, 0)
+        self.merge_pull_request(self.pr_branch())
+        self.land_hotfix_pull_request()
+
+        check = self.postcheck()
+
+        self.assertNotEqual(check.returncode, 0, self.describe(check))
+        self.assertNotIn("promoted ", check.stdout)
+
+
+class HotfixBackportTests(PromotionFixture):
+    def test_backport_fetches_remote_main_and_lands_on_agent_main(self):
+        self.build()
+        self.tag_release()
+        self.land_development_after_tag()
+        hotfix = self.land_hotfix_pull_request()
+        self.git(self.operator, "fetch", "origin")
+        self.assertFalse(self.tree_gate_passes("origin/agent-main"), "gate must refuse before the back-port")
+        # A stale remote-tracking main, as a clone from before the hotfix would have.
+        self.git(self.operator, "update-ref", "refs/remotes/origin/main", self.base)
+
+        result = self.backport()
+
+        self.assertEqual(result.returncode, 0, self.describe(result))
+        self.assertEqual(self.show(self.origin, "backport/hotfix-test:hotfix.txt"), HOTFIX)
+        self.assertEqual(self.show(self.origin, "backport/hotfix-test:dev.txt"), DEVELOPMENT)
+        self.assertEqual(self.main_updates(), [], "the back-port must not push main")
+        self.assertEqual(self.pushes_since_promote("refs/heads/agent-main"), [], "the back-port must not push agent-main")
+        self.assertTrue(self.is_ancestor(hotfix, "main"))
+
+        # Landing the back-port as a PR merge is a fast-forward of agent-main.
+        self.git(self.operator, "push", "origin", "backport/hotfix-test:refs/heads/agent-main")
+        self.git(self.operator, "fetch", "origin")
+        self.assertEqual(self.show(self.origin, "agent-main:hotfix.txt"), HOTFIX)
+        self.assertTrue(self.tree_gate_passes("origin/agent-main"), "gate must pass once the back-port lands")
+
+    def test_next_promotion_after_backport_passes_gate_and_check(self):
+        self.build()
+        self.tag_release("1.0.0")
+        self.assertEqual(self.promote("1.0.0").returncode, 0)
+        self.merge_pull_request(self.pr_branch("1.0.0"))
+        hotfix = self.land_hotfix_pull_request()
+        self.assertEqual(self.backport().returncode, 0)
+        self.git(self.operator, "push", "origin", "backport/hotfix-test:refs/heads/agent-main")
+
+        release = self.tag_release("1.0.1")
+        result = self.promote("1.0.1")
+        self.assertEqual(result.returncode, 0, self.describe(result))
+        self.assertEqual(self.rev(self.origin, self.pr_branch("1.0.1")), release)
+        self.merge_pull_request(self.pr_branch("1.0.1"))
+        check = self.postcheck("1.0.1")
+        self.assertEqual(check.returncode, 0, self.describe(check))
+        self.assertIn(f"promoted {release}", check.stdout)
+        self.assertEqual(self.show(self.origin, "main:hotfix.txt"), HOTFIX)
+        self.assertTrue(self.is_ancestor(hotfix, "main"))
+        self.assertEqual(self.show(self.origin, "main:version.txt"), "1.0.1\n")
+
+    def test_hotfix_version_bump_conflicting_with_next_release_stops_promotion(self):
+        self.build()
+        self.tag_release("1.0.0")
+        self.assertEqual(self.promote("1.0.0").returncode, 0)
+        self.merge_pull_request(self.pr_branch("1.0.0"))
+        # The hotfix release bumps the same version line that the next release bumps.
+        self.land_hotfix_pull_request(path="version.txt", content="1.0.1\n")
+        self.assertEqual(self.backport().returncode, 0)
+        self.git(self.operator, "push", "origin", "backport/hotfix-test:refs/heads/agent-main")
+        self.tag_release("1.0.2")
+        main_before = self.rev(self.origin, "main")
+
+        result = self.promote("1.0.2")
+
+        self.assert_refused(result, self.pr_branch("1.0.2"), main_before)
 
 
 if __name__ == "__main__":
