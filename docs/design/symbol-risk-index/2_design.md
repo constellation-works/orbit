@@ -235,7 +235,7 @@ stops blocking `overlap: forbid` and is recorded as timed out (`RoutinePolicy` i
 `crates/orbit-types/src/workflow/routine.rs`); the sweep reclassifies the fire record past
 that horizon even when the run's owner is still alive or cannot be probed, and the dispatch
 seam (`submit`, `run_state`, `run_owner_liveness` in
-`crates/orbit-automation/src/routines/sweep.rs`) has no cancellation operation, so nothing
+`crates/orbit-automation/src/routines/sweep/contract.rs`) has no cancellation operation, so nothing
 kills or proves stopped a build that passes the horizon. Only a run that itself reaches the
 `Cancelled` state is known stopped, because cancellation signals the owner and verifies
 termination. A timed-out fire is also no longer a blocking fire (only `intent` and
