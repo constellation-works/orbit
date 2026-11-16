@@ -398,7 +398,7 @@ impl OrbitRuntime {
         if !poster.may_post_kind(kind) {
             return Err(refuse(
                 NoticeRefusalCode::KindRefused,
-                "a managed agent may post only incident or info notices",
+                "a managed agent may post only incident or info notices (a resident cycle may also post warn)",
             ));
         }
         let title = title.trim().to_string();

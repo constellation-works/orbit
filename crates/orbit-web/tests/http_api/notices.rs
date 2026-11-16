@@ -366,7 +366,7 @@ fn aggregate_notices_report_broken_config_and_recover_without_warming() {
 }
 
 /// The dashboard's open list uses the shared notice list order: kind
-/// (incident, maintenance, info), then newest update (ORB-24017).
+/// (warn, incident, maintenance, info), then newest update (ORB-24017).
 #[test]
 fn open_notices_follow_the_shared_list_order() {
     isolated("notices::open_notices_follow_the_shared_list_order", || {
