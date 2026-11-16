@@ -422,16 +422,16 @@ pub(super) fn script_spend(script: &Script) -> Draw {
 /// Apply the cohort correction to the script as a whole.
 ///
 /// The fit's residuals are per full task: `base_p50`, `center` and the
-/// actual are all full-script totals (see [`script_spend`]). Applying the
-/// map to each step instead would correct a different unit: the sum of
-/// corrected steps would not be the correction of the summed script the
-/// residuals were trained on. So the
-/// map is applied once per metric to the script's uncorrected total, and
-/// the steps are scaled by `corrected_total / total` so their corrected
-/// sum equals that corrected total (within floating-point rounding).
+/// actual are all full-script totals (see [`script_spend`]), so the map is
+/// applied to that same unit. Model 20 uses a uniform per-metric multiplier;
+/// applying it to each finite positive step value would give the same sum,
+/// up to floating-point rounding. With the former nonzero spread correction, the
+/// nonlinear map could make per-step and full-script correction differ; that
+/// historical rationale no longer applies. The steps are scaled by
+/// `corrected_total / total` so their corrected sum equals that total, and a
+/// step with a missing metric stays missing.
 /// A single-step script therefore keeps its previous behaviour, and a
-/// step with a missing metric stays missing: the total for a metric is
-/// the sum of the steps that carry it.
+/// metric's total is the sum of the steps that carry it.
 pub(super) fn apply_script(correction: &Correction, complexity: &str, script: &mut Script) {
     if script.steps.is_empty() {
         return;

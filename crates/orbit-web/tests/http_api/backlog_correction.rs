@@ -47,8 +47,9 @@ fn stored_task(id: &str, complexity: &str, p50: f64, base: bool) -> Value {
     })
 }
 
-/// A stored task whose base carries spread: p90 is twice p50 for every
-/// metric, so the fitted `spread` is non-zero.
+/// A stored task whose base distribution has nonzero width: p90 is twice p50
+/// for every metric. Model 20 keeps that input width separate from the fitted
+/// correction `spread`, which remains zero.
 fn stored_task_spread(id: &str, complexity: &str) -> Value {
     let quantiles = json!({
         "work_hours": {"p50": 1.0, "p90": 2.0},
