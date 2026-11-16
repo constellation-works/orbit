@@ -107,7 +107,7 @@ Confirm the selected workspace before you act.
 | Rail | Shows |
 |---|---|
 | **[Tasks](#tasks)** | Tasks, with the ones waiting on you first. The right dock holds **Drain**, a live **Log**, **[Notices](#notices)**, and **[Residents](#residents)**. |
-| **Drain** | Only in windows 1000px wide or narrower, where it opens the dock's Drain tab in place of the task list. |
+| **Drain** | Only in windows 1315px wide or narrower, where it opens the dock's Drain tab in place of the task list. |
 | **[Jobs](#runs-and-errors)** | **Live** (runs pending or running now), **History** (every run, with run detail), and **Catalogue** (jobs you can run by hand). |
 | **Health** | What is broken now: **Incidents** (grouped failures, with **Events** and **Errors** tabs) and **Doctor**. |
 | **[Analytics](#analytics)** | How delivery is trending: **Metrics**, **Reliability**, **Codebase**, **Resources**, **Forecast**, **Cost**, **[Agents](#agents)**, and **Experiments**. |

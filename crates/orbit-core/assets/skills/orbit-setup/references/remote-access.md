@@ -231,7 +231,7 @@ single workspace removes it.
 The Tasks dock's **Drain** pane holds the **Auto-drain** card and, beside it, the
 quick-start card headed **Start a window**. When the target is a replica checkout,
 the heading and the toggle read **Start pulling on** followed by the host name. On
-narrow layouts (1000px wide or less), a live window folds the quick-start card
+narrow layouts (1315px wide or less), a live window folds the quick-start card
 behind **Start another window**, which expands the form. Under **All workspaces**,
 pick the target in the Auto-drain panel's **Drain target** select, whose options
 are workspace-host pairs such as `site · owner-host (owner)` and
