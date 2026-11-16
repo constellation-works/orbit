@@ -192,6 +192,7 @@ export function buildOpenDecisions(task, detail, context) {
 // One answer per request may be in flight: a second, contradictory POST
 // would race the first and let arrival order pick the recorded answer.
 const decisionAnswersInFlight = new Set();
+const decisionRefusalTimers = new Map();
 
 function decisionRefusalKey(task, requestId) {
   return `${taskShared.taskDispatchIdentity(task)}:${requestId}`;
@@ -213,18 +214,28 @@ export function decisionAnswerSignature(task) {
 
 function dismissDecisionRefusal(key, context) {
   if (!taskShared.taskState.decisionAnswerRefusals.has(key)) return;
+  cancelDecisionRefusalExpiry(key);
   taskShared.taskState.decisionAnswerRefusals.delete(key);
   if (taskShared.taskState.decisionAnswerFocus === key) taskShared.taskState.decisionAnswerFocus = null;
   taskShared.rerender(context);
 }
 
+function cancelDecisionRefusalExpiry(key) {
+  clearTimeout(decisionRefusalTimers.get(key));
+  decisionRefusalTimers.delete(key);
+}
+
 function scheduleDecisionAnswerRefusalExpiry(key, message, context) {
-  setTimeout(() => {
+  cancelDecisionRefusalExpiry(key);
+  const timer = setTimeout(() => {
+    if (decisionRefusalTimers.get(key) !== timer) return;
+    decisionRefusalTimers.delete(key);
     if (taskShared.taskState.decisionAnswerRefusals.get(key) !== message) return;
     taskShared.taskState.decisionAnswerRefusals.delete(key);
     if (taskShared.taskState.decisionAnswerFocus === key) taskShared.taskState.decisionAnswerFocus = null;
     taskShared.rerender(context);
   }, DECISION_ANSWER_REFUSAL_MS);
+  decisionRefusalTimers.set(key, timer);
 }
 
 // The full refusal, on the card the operator just used. It is not truncated:
@@ -281,6 +292,7 @@ async function answerDecision(task, detail, requestId, answer, note, btnNode, co
   const requestPath = visit.path(
     taskShared.taskWorkspacePath(task, `/api/decisions/${encodeURIComponent(requestId)}/answer`),
   );
+  cancelDecisionRefusalExpiry(flightKey);
   taskShared.taskState.decisionAnswerRefusals.delete(flightKey);
   // Disable every option on this card (and its note), not just the clicked
   // one, for the whole flight — the pattern the detail's other actions use.
