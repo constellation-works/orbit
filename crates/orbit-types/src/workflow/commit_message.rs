@@ -4,7 +4,7 @@
 //! ```text
 //! <type>: <summary> [ID]… (#PR)
 //!
-//! <full title, only when the subject cut it>
+//! <full title, when the subject cut or rewrote it>
 //!
 //! <execution summary; for bundles one `- ID: summary` line per task>
 //!
@@ -14,9 +14,12 @@
 //! ```
 //!
 //! The subject is at most [`COMMIT_SUBJECT_BUDGET`] characters, PR number
-//! included, cut at a word boundary and never with an ellipsis. `type` comes
-//! from the task type ([`CommitType::for_task_type`]). Trailers form exactly
-//! one final paragraph, keyed from [`TrailerKey`] in its declaration order.
+//! included, cut at a word boundary and never with an ellipsis. A literal `…`
+//! in the title becomes `...`, and commas inside brackets become semicolons;
+//! when the subject cuts or rewrites the title, the full title leads the body.
+//! `type` comes from the task type ([`CommitType::for_task_type`]). Trailers
+//! form exactly one final paragraph, keyed from [`TrailerKey`] in its
+//! declaration order.
 //! [`validate`] checks a rendered message against all of that.
 
 use std::fmt;
