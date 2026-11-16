@@ -63,9 +63,55 @@ export function detailFeedbackSignature(task) {
   }
   return parts.join("|");
 }
-function parseOpeningFence(line) {
+function detabLeading(line) {
+  let col = 0;
   let i = 0;
-  while (i < line.length && i < 3 && line[i] === " ") i++;
+  while (i < line.length && (line[i] === " " || line[i] === "\t")) {
+    col += line[i] === "\t" ? 4 - (col % 4) : 1;
+    i++;
+  }
+  return i ? " ".repeat(col) + line.slice(i) : line;
+}
+
+function leadingSpaces(line) {
+  let i = 0;
+  while (i < line.length && line[i] === " ") i++;
+  return i;
+}
+
+function stripBlockquotePrefix(line) {
+  let rest = line;
+  let quoted = false;
+  for (;;) {
+    const match = /^ {0,3}> ?/.exec(rest);
+    if (!match) return { line: rest, quoted };
+    quoted = true;
+    rest = rest.slice(match[0].length);
+  }
+}
+
+// A list item's marker column and the column its content starts at, or null.
+// Content indent follows CommonMark: marker width plus the spaces after it
+// (more than four spaces counts as one).
+function parseListItem(line) {
+  const match = /^([ ]*)([-*+]|\d{1,9}[.)])(?:([ ]+)(.*)|[ ]*)$/.exec(line);
+  if (!match) return null;
+  const markerIndent = match[1].length;
+  const markerWidth = match[2].length;
+  if (match[3] === undefined) {
+    return { markerIndent, contentIndent: markerIndent + markerWidth + 1 };
+  }
+  const spaces = match[3].length;
+  return {
+    markerIndent,
+    contentIndent: markerIndent + markerWidth + (spaces > 4 ? 1 : spaces),
+  };
+}
+
+function parseOpeningFence(line, baseIndent = 0) {
+  const indent = leadingSpaces(line);
+  if (indent < baseIndent || indent - baseIndent > 3) return null;
+  let i = indent;
   if (i === line.length) return null;
   const char = line[i];
   if (char !== "`" && char !== "~") return null;
@@ -77,12 +123,13 @@ function parseOpeningFence(line) {
   if (count < 3) return null;
   const info = line.slice(i);
   if (char === "`" && info.includes("`")) return null;
-  return { fenceChar: char, fenceLength: count, indent: i - count };
+  return { fenceChar: char, fenceLength: count, indent };
 }
 
-function isClosingFence(line, fenceChar, fenceLength) {
-  let i = 0;
-  while (i < line.length && i < 3 && line[i] === " ") i++;
+function isClosingFence(line, fenceChar, fenceLength, baseIndent = 0) {
+  const indent = leadingSpaces(line);
+  if (indent < baseIndent || indent - baseIndent > 3) return false;
+  let i = indent;
   if (i === line.length || line[i] !== fenceChar) return false;
   let count = 0;
   while (i < line.length && line[i] === fenceChar) {
@@ -109,20 +156,22 @@ export function humanTaskCommands(text) {
   let fenceChar = "";
   let fenceLength = 0;
   let fenceIndent = 0;
+  let fenceBaseIndent = 0;
+  let fenceInBlockquote = false;
   let blockLines = [];
+  // Open list items, outermost first. A fence indented to an item's content
+  // indent (plus up to three columns) is a fenced block inside that item —
+  // the way `marked` renders it — while the same indent at the top level is
+  // an indented code block and yields no command.
+  let listStack = [];
 
-  for (const line of lines) {
-    if (!inFence) {
-      const open = parseOpeningFence(line);
-      if (open) {
-        inFence = true;
-        fenceChar = open.fenceChar;
-        fenceLength = open.fenceLength;
-        fenceIndent = open.indent;
-        blockLines = [];
-      }
-    } else {
-      if (isClosingFence(line, fenceChar, fenceLength)) {
+  for (const rawLine of lines) {
+    const expanded = detabLeading(rawLine);
+    if (inFence) {
+      const line = fenceInBlockquote
+        ? stripBlockquotePrefix(expanded).line
+        : expanded;
+      if (isClosingFence(line, fenceChar, fenceLength, fenceBaseIndent)) {
         inFence = false;
         const c = blockLines.join("\n");
         if (c.trim()) out.push(c);
@@ -130,6 +179,49 @@ export function humanTaskCommands(text) {
       } else {
         blockLines.push(stripFenceIndent(line, fenceIndent));
       }
+      continue;
+    }
+
+    const { line, quoted } = stripBlockquotePrefix(expanded);
+    if (!line.trim()) continue;
+    const indent = leadingSpaces(line);
+    const item = parseListItem(line);
+    // Close the items this line sits outside of. A sibling item closes the
+    // previous item at its marker column; any other dedented line closes
+    // every item whose content indent it falls short of. Blank lines (above)
+    // close nothing, so a loose item still owns a later indented fence.
+    while (listStack.length) {
+      const top = listStack[listStack.length - 1];
+      if (item && item.markerIndent === top.markerIndent) {
+        listStack.pop();
+        break;
+      }
+      if (indent >= top.contentIndent) break;
+      listStack.pop();
+    }
+    if (item) {
+      // An item marker indented past the top level with no item around it
+      // is indented code, not a list; an item that dedents past its parent
+      // after the sibling pop likewise starts nothing.
+      const parent = listStack[listStack.length - 1];
+      if (parent ? indent >= parent.contentIndent : item.markerIndent <= 3) {
+        listStack.push(item);
+        continue;
+      }
+    }
+
+    const containerIndent = listStack.length
+      ? listStack[listStack.length - 1].contentIndent
+      : 0;
+    const open = parseOpeningFence(line, containerIndent);
+    if (open) {
+      inFence = true;
+      fenceChar = open.fenceChar;
+      fenceLength = open.fenceLength;
+      fenceIndent = open.indent;
+      fenceBaseIndent = containerIndent;
+      fenceInBlockquote = quoted;
+      blockLines = [];
     }
   }
 
