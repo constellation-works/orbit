@@ -5,7 +5,7 @@ tags: [operations, review-gate, delivery]
 paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure/handoff.rs"]
 related_features: [review-gate]
 related_artifacts: ["ORB-13989", "ORB-13992", "ORB-14194", "ORB-14849", "ORB-22808"]
-last_validated: 2026-11-14
+last_validated: 2026-11-16
 ---
 
 # Operate the Review Gate
@@ -633,7 +633,12 @@ carries `--lib` or another target selector stays uncovered.
 Record each requirement as its own `required`, `not_run` record too. A host
 result for each requirement then establishes the broader record. A notice no
 requirement names exactly leaves the record `not_run`, and the review blocks
-instead of holding
+instead of holding. A prose label such as `sandbox boundary` is not a test
+path, so no requirement can cover its notice. Give each requirement its own
+`.json` `artifact`: when two requirements share an artifact or its derived
+`.log.json` path, the whole set is refused as evidence (no hold forms, no host
+run starts), and a `review-*` name is reserved. A reviewer's own captured log
+is never a host result
 ([design](../design/review-gate/2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545)).
 
 One exception: when the reviewer accepted with no open findings, settlement
