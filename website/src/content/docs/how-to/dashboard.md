@@ -801,6 +801,11 @@ state and prints the error on the card:
 drains, and provider capacity. Through `orbit web connect`, that is the remote
 machine's registry. The workspace selection does not filter Fleet.
 
+![Fleet: a local demo host and an unreachable remote shown as cards with health readings.](../../../assets/dashboard/dashboard-hosts.png)
+
+The screenshot shows a demo registry. `build-box.invalid` is an intentionally
+unreachable example.
+
 Each host is a card with its machine ID, SSH target, task prefix, and Orbit
 version, and with CPU, memory, disk, and I/O readings. An unreachable host
 shows its error instead of readings. **Drains** lists active and queued drains
