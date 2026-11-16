@@ -319,9 +319,10 @@ export function humanTaskCommands(text) {
     if (item) {
       // An item marker indented past the top level with no item around it
       // is indented code, not a list; an item that dedents past its parent
-      // after the sibling pop likewise starts nothing.
+      // after the sibling pop likewise starts nothing. Within a parent,
+      // four or more extra columns make the marker indented code.
       const parent = listStack[listStack.length - 1];
-      if (parent ? indent >= parent.contentIndent : item.markerIndent <= 3) {
+      if (parent ? indent >= parent.contentIndent && indent - parent.contentIndent <= 3 : item.markerIndent <= 3) {
         listStack.push({ ...item, quoteDepth: depth });
         continue;
       }
