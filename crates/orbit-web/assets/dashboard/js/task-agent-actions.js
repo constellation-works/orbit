@@ -27,7 +27,21 @@ const TRIAGE_REFUSAL_MS = 20000;
 // Recovery (requeue / settle-merged): a refused recovery's typed code and
 // message, kept with the action like a refused Triage.
 export const recoveryRefusals = new Map();
+// The stored diagnostic behind a recovery refusal's one-line note, keyed the
+// same way. Cleared with the note.
+export const recoveryRefusalDetails = new Map();
 const RECOVERY_REFUSAL_MS = 20000;
+
+function rememberRecoveryRefusal(key, message, detail) {
+  recoveryRefusals.set(key, message);
+  if (detail) recoveryRefusalDetails.set(key, detail);
+  else recoveryRefusalDetails.delete(key);
+}
+
+function forgetRecoveryRefusal(key) {
+  recoveryRefusals.delete(key);
+  recoveryRefusalDetails.delete(key);
+}
 // Fix PR: whether the server would start an out-of-run auto-fix of a review
 // task's pull request, keyed like the ship guard. Read once when the panel
 // shows the task and again after FIX_PR_READINESS_MS or a start, so a list
@@ -308,9 +322,10 @@ export function appendRecoveryControls(actions, task, detail, context, mutable) 
     settle.addEventListener("click", (e) => { e.stopPropagation(); runRecovery(task, detail, settle, context, "settle"); });
     actions.appendChild(settle);
   }
-  const refusal = recoveryRefusals.get(taskShared.taskDispatchIdentity(task));
+  const refusalKey = taskShared.taskDispatchIdentity(task);
+  const refusal = recoveryRefusals.get(refusalKey);
   if (refusal) {
-    const note = actionErrorNode(refusal);
+    const note = actionErrorNode(refusal, undefined, recoveryRefusalDetails.get(refusalKey));
     note.style.flexBasis = "100%";
     actions.appendChild(note);
   }
@@ -345,11 +360,11 @@ async function runRecovery(task, detail, btnNode, context, kind) {
     if (reason === null) return;
     if (!reason.trim()) {
       const message = "[requeue_reason_required] requeue needs a reason; it is recorded with the decision";
-      recoveryRefusals.set(key, message);
+      rememberRecoveryRefusal(key, message);
       rerender(context);
       setTimeout(() => {
         if (recoveryRefusals.get(key) !== message) return;
-        recoveryRefusals.delete(key);
+        forgetRecoveryRefusal(key);
         rerender(context);
       }, RECOVERY_REFUSAL_MS);
       return;
@@ -359,7 +374,7 @@ async function runRecovery(task, detail, btnNode, context, kind) {
     successText = discard ? `${task.id}: requeued to implement fresh` : `${task.id}: requeued onto its published candidate`;
   }
   const requestPath = visit.path(taskMutationPath(task, suffix));
-  recoveryRefusals.delete(key);
+  forgetRecoveryRefusal(key);
   const prior = detail.querySelector(".action-error");
   if (prior) prior.remove();
   for (const b of detail.querySelectorAll(".action")) b.disabled = true;
@@ -370,11 +385,12 @@ async function runRecovery(task, detail, btnNode, context, kind) {
     if (!visit.isCurrent()) return;
     const code = error && error.code ? error.code : "recovery_refused";
     const message = `[${code}] ${error.message || String(error)}`;
-    recoveryRefusals.set(key, message);
+    const detail = error && error.body && typeof error.body.detail === "string" ? error.body.detail : "";
+    rememberRecoveryRefusal(key, message, detail);
     rerender(context);
     setTimeout(() => {
       if (recoveryRefusals.get(key) !== message) return;
-      recoveryRefusals.delete(key);
+      forgetRecoveryRefusal(key);
       rerender(context);
     }, RECOVERY_REFUSAL_MS);
     return;

@@ -110,7 +110,13 @@ pub(super) fn print_error(
         {
             eprintln!("error: {message}");
         }
-        _ => eprintln!("error: {error}"),
+        _ => {
+            let stored = error.to_string();
+            let line = orbit_common::source_repair_reader_text(&stored)
+                .map(|text| text.line)
+                .unwrap_or(stored);
+            eprintln!("error: {line}");
+        }
     }
 }
 

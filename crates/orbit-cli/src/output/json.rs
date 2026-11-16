@@ -18,9 +18,18 @@ pub fn error_payload(error: &OrbitError) -> Value {
     if let OrbitError::RemoteTool { payload, .. } = error {
         return payload.clone();
     }
+    let stored = error.to_string();
+    let reader = orbit_common::source_repair_reader_text(&stored);
+    let shown = reader
+        .as_ref()
+        .map(|text| text.line.as_str())
+        .unwrap_or(stored.as_str());
     let mut fields = error.wire_details();
-    fields.insert("error".into(), json!(error.to_string()));
+    fields.insert("error".into(), json!(shown));
     fields.insert("code".into(), json!(error_code(error)));
+    if let Some(text) = reader.filter(|text| text.line != text.detail) {
+        fields.insert("detail".into(), json!(text.detail));
+    }
     Value::Object(fields)
 }
 

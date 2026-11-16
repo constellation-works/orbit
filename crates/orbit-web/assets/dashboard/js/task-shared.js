@@ -229,10 +229,36 @@ export function pullRequestLink(task) {
 
 // A failed action is announced when it appears: the row's own controls are the
 // only thing the operator is looking at, and a plain div is never read out.
-export function actionErrorNode(text, remedy) {
+// `detail`, when it says more than `text`, stays behind Show full. The line
+// itself keeps the action, so the operator never has to open it to know the
+// next step.
+export function actionErrorNode(text, remedy, detail) {
   const node = el("div", { class: "action-error", text });
   node.setAttribute("role", "alert");
   if (remedy) node.appendChild(el("div", { class: "action-error-remedy", text: remedy }));
+  const extra = typeof detail === "string" ? detail.trim() : "";
+  if (extra && extra !== text) {
+    const full = el("div", { class: "action-error-detail", hidden: true, text: extra });
+    const toggle = el("button", {
+      class: "action-error-toggle",
+      type: "button",
+      text: "Show full",
+      title: "Show the full refusal, including the other ways to recover",
+    });
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const open = full.hidden;
+      full.hidden = !open;
+      toggle.setAttribute("aria-expanded", String(open));
+      toggle.textContent = open ? "Show less" : "Show full";
+      toggle.title = open
+        ? "Hide the full refusal"
+        : "Show the full refusal, including the other ways to recover";
+    });
+    node.appendChild(toggle);
+    node.appendChild(full);
+  }
   return node;
 }
 
