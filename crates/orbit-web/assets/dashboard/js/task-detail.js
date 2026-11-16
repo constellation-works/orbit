@@ -244,6 +244,21 @@ export function humanTaskCommands(text) {
     blockLines = [];
   };
 
+  // `lead` is the opening fence's indent in command bytes (spaces, or the
+  // fence line's own whitespace when the fence is a later line). `baseIndent`
+  // is the enclosing list item's content column, or 0 at the top level.
+  const beginFence = (open, lead, baseIndent, quote) => {
+    inFence = true;
+    fenceChar = open.fenceChar;
+    fenceLength = open.fenceLength;
+    fenceLead = lead;
+    fenceBaseIndent = baseIndent;
+    fenceInBlockquote = quote.quoted;
+    fenceQuoteDepth = quote.depth;
+    fenceInList = listStack.length > 0;
+    blockLines = [];
+  };
+
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
     const rawLine = lines[lineIndex];
     // Expanded text measures list and fence structure. Command bytes stay on
@@ -324,6 +339,21 @@ export function humanTaskCommands(text) {
       const parent = listStack[listStack.length - 1];
       if (parent ? indent >= parent.contentIndent && indent - parent.contentIndent <= 3 : item.markerIndent <= 3) {
         listStack.push({ ...item, quoteDepth: depth });
+        // The marker and its padding are not content. A fence opening in
+        // that content, on this same line, is the item's code block: `marked`
+        // renders it, and continuation lines are indented to the content
+        // column. Skipping the line here dropped the command.
+        const content = line.slice(item.contentIndent);
+        const open = parseOpeningFence(content, 0);
+        if (open) {
+          const quote = { quoted, depth };
+          beginFence(
+            open,
+            " ".repeat(item.contentIndent + open.indent),
+            item.contentIndent,
+            quote,
+          );
+        }
         continue;
       }
     }
@@ -334,15 +364,7 @@ export function humanTaskCommands(text) {
     const open = parseOpeningFence(line, containerIndent);
     if (open) {
       const rawStructural = quoted ? stripBlockquotePrefixes(rawLine, depth) : rawLine;
-      inFence = true;
-      fenceChar = open.fenceChar;
-      fenceLength = open.fenceLength;
-      fenceLead = leadingWhitespace(rawStructural);
-      fenceBaseIndent = containerIndent;
-      fenceInBlockquote = quoted;
-      fenceQuoteDepth = depth;
-      fenceInList = listStack.length > 0;
-      blockLines = [];
+      beginFence(open, leadingWhitespace(rawStructural), containerIndent, { quoted, depth });
     }
   }
 
