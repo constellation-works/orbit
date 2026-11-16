@@ -339,7 +339,7 @@ pub enum OrbitError {
     #[error(
         "task '{task_id}' is scheduled: not before {not_before}; it starts on the first \
          admission pass after that time. An operator can start it now with \
-         `orbit run ship {task_id} --ignore-schedule`"
+         `orbit run ship {task_id}` or the dashboard's Ship"
     )]
     TaskScheduled { task_id: String, not_before: String },
     /// GitHub has not finished calculating whether an open pull request can

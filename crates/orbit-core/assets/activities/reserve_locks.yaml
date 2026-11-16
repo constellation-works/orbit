@@ -32,6 +32,12 @@ spec:
     holders it did not wait on in `deferred_conflicts` and the run and pull
     request it resumes in `published_delivery`. Its leaf takes the footprint
     before its first editing agent. `footprint_deferred` is otherwise false.
+    With `operator_readiness_override: true`, which only an operator's
+    explicit ship forwards, a reservation refused on context-lock conflicts
+    is granted holding no files instead, `footprint_deferred: false`, with the
+    holders it overrode in `deferred_conflicts`; each task's history records a
+    `readiness_overridden` event naming them. Dependency waits and failures
+    are unchanged.
   input_schema_json:
     type: object
     required: [task_ids]
@@ -46,6 +52,8 @@ spec:
         maximum: 86400
       delivery_job:
         type: string
+      operator_readiness_override:
+        type: boolean
   output_schema_json:
     type: object
     required: [reserved]

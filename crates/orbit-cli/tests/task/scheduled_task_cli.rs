@@ -59,7 +59,7 @@ fn refusal(fixture: &Fixture, args: &[&str]) -> String {
 }
 
 #[test]
-fn a_local_schedule_is_converted_echoed_cleared_and_refused_by_ship() {
+fn a_local_schedule_is_converted_echoed_cleared_and_overridden_by_ship() {
     let fixture = Fixture::new();
     let listed = json(&fixture, &["task", "list", "--json"]);
     let untouched = listed[0]["id"].as_str().unwrap().to_string();
@@ -109,18 +109,14 @@ fn a_local_schedule_is_converted_echoed_cleared_and_refused_by_ship() {
     assert!(both.contains("--clear-not-before"), "{both}");
 
     json(&fixture, &["task", "update", &id, "--approve", "--json"]);
+    // An explicit operator ship overrides the not_before hold (ORB-25082). The
+    // fixture has no Git remote, so the ship stops later, at PR delivery, and
+    // never with the schedule refusal.
     let ship = run(&fixture, &["run", "ship", &id, "--json"]);
     assert!(!ship.status.success(), "{ship:?}");
     let error: Value = serde_json::from_slice(&ship.stderr)
         .unwrap_or_else(|_| panic!("one JSON error: {}", String::from_utf8_lossy(&ship.stderr)));
-    assert_eq!(error["code"], "task_scheduled", "{error}");
-    assert!(
-        error["error"]
-            .as_str()
-            .unwrap()
-            .contains("not before 2099-01-01T09:00:00Z"),
-        "{error}"
-    );
+    assert_eq!(error["code"], "pr_forge_remote_missing", "{error}");
 
     let updated = run(
         &fixture,

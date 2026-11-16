@@ -42,6 +42,20 @@ An explicit task ID must be in `backlog` or `in-progress`: shipping a `blocked`,
 so return a blocked task to the backlog (`orbit task update <id> --status backlog`)
 before shipping it again.
 
+Readiness gates and lock waits are drain policy. An operator's explicit ship
+of named tasks (`orbit run ship <id>` or the dashboard's Ship) overrides them
+and dispatches: a pending `not_before`, unassessed complexity, no
+`context_files`, and context locks another in-flight task or reservation holds
+(its gate takes a reservation holding no files and edits beside them). Once
+the task is `in-progress`, its own locks hold against the drain as usual. The
+task's history records a `readiness_overridden` event naming the gates and the
+lock holders it overrode. It still refuses a task this host cannot run (host
+OS, `requires_labels`, a `ui` task without a verified browser kit), a
+human-crew task, a task a live run, execution claim or task-pilot preparation
+holds, an inherited-only epic root, a task-pilot finding, and an overlap with
+a pull follower's live execution claim. `orbit.workflow` action `ship` does
+not override readiness.
+
 `run auto` drains backlog leaf tasks for a bounded window of at most 24 hours.
 The window bounds only the *start* of new work — a task already shipping when
 it expires still finishes.

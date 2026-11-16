@@ -124,6 +124,11 @@ spec:
     # which is the behavior of every caller that does not pass it. Forwarded
     # unchanged so the leaf jobs this run admits inherit the same window.
     allowed_crews: []
+    # ORB-25082: forwarded by an operator's explicit ship only. The reserve
+    # step then grants a reservation holding no files instead of waiting on
+    # another in-flight task's context locks, recording the holders it
+    # overrode in the task's history.
+    operator_readiness_override: false
     max_wait_seconds: 3600
     poll_interval_seconds: 30
     ttl_seconds: 46800
@@ -149,6 +154,7 @@ spec:
               task_ids: "{{ input.task_ids }}"
               ttl_seconds: "{{ input.ttl_seconds }}"
               delivery_job: "{{ steps.delivery.output.job_name }}"
+              operator_readiness_override: "{{ input.operator_readiness_override }}"
 
     - id: starvation_check
       target: activity:gate_starvation_defer

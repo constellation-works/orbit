@@ -345,13 +345,12 @@ pagination for a projection.
   string (CLI `--clear-not-before`) clears it; `null` leaves it unchanged, as
   for any field. Until then a `backlog` task waits `scheduled`, with the time
   in `detail`, in drain listings, `orbit run readiness` and `run show`. No
-  local or pull drain starts it, and `orbit run ship <id>` and
-  `orbit.workflow` action `ship` refuse it with `task_scheduled`. The hold lifts by
-  itself on the first admission pass after that time, which can be later
-  than the time itself. Only an operator's
-  `orbit run ship <id> --ignore-schedule` starts it early, recording a
-  `schedule_overridden` history event; changing `not_before` reinstates the
-  hold. Other statuses ignore it.
+  local or pull drain starts it, and `orbit.workflow` action `ship` refuses it
+  with `task_scheduled`. The hold lifts by itself on the first admission pass
+  after that time, which can be later than the time itself. Only an
+  operator's explicit ship (`orbit run ship <id>` or the dashboard's Ship)
+  starts it early, recording `schedule_overridden` and `readiness_overridden`
+  history events; changing `not_before` reinstates the hold. Other statuses ignore it.
 - `origin` records why the task was filed, from a closed set:
   `operator_request` (a human operator asked for the work),
   `orchestrator_initiative` (the orchestrator judged it necessary on its own)
