@@ -245,13 +245,14 @@ and grants no sibling file. Each entry must be:
   files, directories, and paths through an unsafe directory are refused.
 
 The leaf alone may be a symbolic link when the call has a workspace: the link
-must sit inside the workspace and resolve to an existing regular file inside
-the same workspace, outside `.git` and `.orbit` (for example `AGENTS.md` ->
-`CLAUDE.md`). The target must pass the same ownership, hard-link, and
-other-write checks, and the sandbox grants the target, so the write goes
-through the link and the link stays. A link without a workspace, or whose
-target is missing, leaves the workspace, is a chain of links, or lands in
-`.git` or `.orbit`, is refused.
+must sit inside the workspace and resolve, through any further symbolic links,
+to an existing regular file whose canonical path stays inside the same
+workspace and outside `.git` and `.orbit` (for example `AGENTS.md` ->
+`middle.md` -> `CLAUDE.md`). The canonical target must pass the same ownership,
+hard-link, and other-write checks, and the sandbox grants that target, so
+writes follow the link and the link stays. A link without a workspace, or
+whose target is missing, leaves the workspace, or lands in `.git` or `.orbit`,
+is refused.
 
 A scoped `fs=<root>` grant must cover the file or an ancestor directory. A new
 entry, or a templated entry that now points elsewhere, needs consent again.
