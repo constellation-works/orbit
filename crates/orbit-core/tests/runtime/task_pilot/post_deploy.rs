@@ -309,6 +309,56 @@ fn a_reused_candidate_keeps_its_previous_runs_post_deploy_obligation() {
     );
 }
 
+fn unreadable_newest_post_deploy_history_refuses_completion_and_show() {
+    let workspace = Workspace::new();
+    let task = backlog_task(&workspace);
+    in_review(&workspace, &task);
+    let history = [
+        r#"{"run_id":"old","criteria":[]}"#,
+        r#"{"run_id":"new","criteria":[],"future":true}"#,
+    ]
+    .into_iter()
+    .map(|note| {
+        orbit_types::task::TaskHistoryEntry::new(
+            Utc::now(),
+            "system",
+            orbit_types::workflow::POST_DEPLOY_OWED_EVENT,
+        )
+        .with_note(Some(note.into()))
+    })
+    .collect();
+    RuntimeHost::apply_task_automation_update(
+        &workspace.runtime,
+        &task.id,
+        TaskAutomationUpdate {
+            append_history: history,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    for result in [
+        attempt_completion(&workspace, &task, CompletionBoundary::Automation),
+        workspace
+            .runtime
+            .run_tool("orbit.task.show", json!({"id": task.id}))
+            .map(|_| ()),
+        record(&workspace, &task, "post-deploy: met 1\nMeasured."),
+    ] {
+        let error = result
+            .expect_err("unreadable newest history must never use the old all-met declaration");
+        assert!(
+            error
+                .to_string()
+                .contains("newest post-deploy owed declaration"),
+            "{error}"
+        );
+    }
+    assert_eq!(
+        workspace.runtime.get_task(&task.id).unwrap().status,
+        TaskStatus::Review
+    );
+}
+
 fn post_deploy_operator_measurements_do_not_hold_candidate_admission() {
     let workspace = Workspace::new();
     let task = backlog_task(&workspace);
@@ -713,5 +763,6 @@ crate::scenario_table!(
     a_post_deploy_finding_is_recorded_without_holding_admission,
     an_owed_post_deploy_criterion_settles_in_review_until_an_operator_records_it,
     a_reused_candidate_keeps_its_previous_runs_post_deploy_obligation,
-    post_deploy_operator_measurements_do_not_hold_candidate_admission
+    post_deploy_operator_measurements_do_not_hold_candidate_admission,
+    unreadable_newest_post_deploy_history_refuses_completion_and_show
 );

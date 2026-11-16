@@ -259,7 +259,7 @@ pub(super) fn job_run_filter_sql(
     }
     if query.terminal_only {
         conditions.push(
-            "state IN ('success', 'failed', 'timeout', 'cancelled', 'interrupted', 'held')"
+            "state IN ('success', 'failed', 'timeout', 'skipped', 'cancelled', 'interrupted', 'held')"
                 .to_string(),
         );
     }

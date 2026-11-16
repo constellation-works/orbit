@@ -256,22 +256,22 @@ pub fn orbit_identity(role: CommitRole, model: Option<&str>) -> (String, String)
     (name, email)
 }
 
-/// The role a historical Orbit address stood for, for identities written
-/// before the one scheme: `agent@orbit.invalid` and family addresses
-/// (`claude@orbit.local`) were implementers, `<family>-reviewer@orbit.local`
-/// reviewers, `orbit-recovery@orbit.local` recoveries and
-/// `orbit@orbit.local` Orbit. Current addresses map to their own role.
-/// `None` for an address Orbit never wrote.
+/// Recognize the four current role addresses at `orbit.invalid` and the
+/// historical `orbit.local` scheme: family addresses were implementers,
+/// `<family>-reviewer` reviewers, `orbit-recovery` recoveries and `orbit` Orbit.
+/// Other addresses, including other `orbit.invalid` local parts, return `None`
+/// so their original identity is preserved.
 pub fn orbit_role_for_email(email: &str) -> Option<CommitRole> {
     let email = email.trim().to_ascii_lowercase();
     let (local, domain) = email.rsplit_once('@')?;
     match domain {
-        "orbit.invalid" => Some(match local {
-            "reviewer" => CommitRole::Reviewer,
-            "recovery" => CommitRole::Recovery,
-            "orbit" => CommitRole::Orbit,
-            _ => CommitRole::Implementer,
-        }),
+        "orbit.invalid" => match local {
+            "implementer" => Some(CommitRole::Implementer),
+            "reviewer" => Some(CommitRole::Reviewer),
+            "recovery" => Some(CommitRole::Recovery),
+            "orbit" => Some(CommitRole::Orbit),
+            _ => None,
+        },
         "orbit.local" => Some(if local == "orbit" {
             CommitRole::Orbit
         } else if local == "orbit-recovery" {

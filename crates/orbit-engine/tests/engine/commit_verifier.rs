@@ -1699,6 +1699,18 @@ fn owner_empty_candidates_require_reports_and_claimed_selectors_settle() {
             *host.state.lock().unwrap() = None;
         }
 
+        if claimed {
+            let mut over_limit = input.clone();
+            over_limit["implementation"]["already_resolved"]["selectors"] = json!(
+                (0..=orbit_types::workflow::handoff::AlreadyResolved::MAX_SELECTORS)
+                    .map(|index| format!("cargo test -p orbit-engine --test engine case_{index}"))
+                    .collect::<Vec<_>>()
+            );
+            let error = action(&host, &over_limit)
+                .expect_err("excess host replays must refuse at commit admission");
+            assert!(error.to_string().contains("at most"), "{error}");
+        }
+
         // A summary alone names no check that could show the base resolves
         // the task. No implementation output also keeps the empty-stage error.
         for implementation in [

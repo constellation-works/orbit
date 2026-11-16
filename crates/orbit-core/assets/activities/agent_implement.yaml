@@ -196,6 +196,7 @@ spec:
         properties:
           selectors:
             type: array
+            description: "At most 16 selectors; a longer list is refused."
             items:
               type: string
               description: "`cargo test -p <crate> --test <target> [<filter>]` or `cargo test -p <crate> --lib [<filter>]`"

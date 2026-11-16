@@ -110,9 +110,13 @@ fn criterion_not_owed(task_id: &str, criterion: usize) -> OrbitError {
 /// The `owed_criteria` section of a task record: each criterion the current
 /// delivery owes after deploy, with its state (`owed`, `met` or `failed`).
 /// `None` when the task has never owed one.
-pub(crate) fn owed_criteria_json(history: &[TaskHistoryEntry]) -> Option<Value> {
-    let record = OwedRecord::read(history)?;
-    Some(Value::Array(
+pub(crate) fn owed_criteria_json(
+    history: &[TaskHistoryEntry],
+) -> Result<Option<Value>, OrbitError> {
+    let Some(record) = OwedRecord::read(history)? else {
+        return Ok(None);
+    };
+    Ok(Some(Value::Array(
         record
             .owed
             .criteria
@@ -140,7 +144,7 @@ pub(crate) fn owed_criteria_json(history: &[TaskHistoryEntry]) -> Option<Value> 
                 entry
             })
             .collect(),
-    ))
+    )))
 }
 
 impl OrbitRuntime {
@@ -232,7 +236,7 @@ impl OrbitRuntime {
         run_id: Option<&str>,
     ) -> Result<Vec<usize>, OrbitError> {
         let history = self.get_task_history(task_id)?;
-        Ok(OwedRecord::read(&history)
+        Ok(OwedRecord::read(&history)?
             .filter(|record| run_id.is_none_or(|run_id| record.owed.run_id == run_id))
             .map(|record| record.outstanding())
             .unwrap_or_default())
@@ -274,7 +278,7 @@ impl OrbitRuntime {
         };
         let record = record?;
         let history = self.get_task_history(&task.id)?;
-        let owes = OwedRecord::read(&history).is_some_and(|owed| {
+        let owes = OwedRecord::read(&history)?.is_some_and(|owed| {
             owed.owed
                 .criteria
                 .iter()

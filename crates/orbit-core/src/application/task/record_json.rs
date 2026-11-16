@@ -168,7 +168,7 @@ pub fn task_show_json(
             serde_json::to_value(hold).map_err(serialize_error("completion_hold"))?,
         );
     }
-    if let Some(owed) = super::owed_criteria_json(&row.history) {
+    if let Some(owed) = super::owed_criteria_json(&row.history)? {
         object.insert("owed_criteria".to_string(), owed);
     }
     if row

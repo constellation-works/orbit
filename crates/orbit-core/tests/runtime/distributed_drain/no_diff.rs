@@ -2040,7 +2040,11 @@ fn an_already_resolved_claim_that_runs_no_named_test_is_refused() {
     ) {
         return;
     }
+    let excessive = (0..=orbit_types::workflow::handoff::AlreadyResolved::MAX_SELECTORS)
+        .map(|index| format!("cargo test -p orbit-cli --test process case_{index}"))
+        .collect::<Vec<_>>();
     for (selectors, refusal) in [
+        (excessive.iter().map(String::as_str).collect(), "at most"),
         (vec![], "names no test selectors"),
         (vec!["make ci-test-affected"], "command_not_allowed"),
         (
