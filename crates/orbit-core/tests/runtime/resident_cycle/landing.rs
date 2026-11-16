@@ -34,6 +34,8 @@ struct ForgeState {
     pending_checks: Vec<String>,
     /// Fail every read of an open pull request, as an outage would.
     unreachable: bool,
+    /// A structured remote failure returned after a merge request is admitted.
+    merge_failure: Option<Value>,
     /// Every merge request the forge received, with its head pin.
     merge_requests: Vec<(u64, String)>,
 }
@@ -104,6 +106,13 @@ impl TaskPrForge for LandingForge {
     ) -> Result<PullRequestMergeOutcome, OrbitError> {
         let mut state = self.0.lock().unwrap();
         state.merge_requests.push((number, head_sha.to_string()));
+        if let Some(payload) = state.merge_failure.clone() {
+            return Err(OrbitError::RemoteTool {
+                code: "forge_unavailable".into(),
+                message: "The remote forge did not confirm the merge.".into(),
+                payload,
+            });
+        }
         if let Some(reason) = state.refusal.clone() {
             return Ok(PullRequestMergeOutcome::Refused { reason });
         }
@@ -188,12 +197,20 @@ fn review_task(fx: &Fixture, prs: &[u64]) -> String {
 }
 
 fn land(fx: &Fixture, task: &str) -> Result<Value, String> {
-    call(
-        &fx.runtime,
-        "orbit.workflow.land",
-        json!({"task_id": task, "workspace": fx.runtime.workspace_id().unwrap(), "model": "codex"}),
-        McpCapability::Agent,
-    )
+    landing_reply(fx, task).map_err(|error| error.to_string())
+}
+
+fn landing_reply(fx: &Fixture, task: &str) -> Result<Value, OrbitError> {
+    fx.runtime
+        .execute_tool_command_dispatch_with_session_context(
+            "orbit.workflow",
+            json!({"action": "land", "task_id": task, "workspace": fx.runtime.workspace_id().unwrap(), "model": "codex"}),
+            None,
+            None,
+            ToolEntryPoint::Mcp,
+            session(McpCapability::Agent),
+        )
+        .map(|outcome| outcome.value)
 }
 
 fn mark_done(fx: &Fixture, task: &str) -> Result<Value, String> {
@@ -260,6 +277,79 @@ fn a_cycle_with_the_merge_right_lands_a_delivery_through_one_audited_call() {
 }
 
 #[test]
+fn a_remote_landing_failure_returns_its_stored_action_key() {
+    if !super::super::dispatch_admission::isolated(
+        "resident_cycle::landing::a_remote_landing_failure_returns_its_stored_action_key",
+    ) {
+        return;
+    }
+    // A RemoteTool-producing forge exercises the existing compatible detail
+    // carrier. The production gh HTTP 502 route is Execution at this boundary,
+    // as the_github_forge_tells_a_refused_merge_from_an_unknown_outcome checks;
+    // only the outer broker turns that into plugin_broker_call_failed/RemoteTool.
+    for (detail, retryable) in [
+        (None, false),
+        (Some(Value::Null), true),
+        (
+            Some(json!({"http_status": 502, "request_id": "fixture"})),
+            false,
+        ),
+        (Some(json!(["HTTP 502", "outcome unknown"])), true),
+    ] {
+        let mut fx = fixture();
+        let forge = Arc::new(LandingForge::default());
+        let (mandate, run) = live_cycle(&mut fx, &forge, &["merge"]);
+        let task = review_task(&fx, &[PR]);
+        forge.open(PR, &task);
+        let mut original = json!({
+            "code": "forge_unavailable",
+            "message": "The remote forge did not confirm the merge.",
+            "retryable": retryable,
+        });
+        if let Some(detail) = &detail {
+            original["detail"] = detail.clone();
+        }
+        forge.0.lock().unwrap().merge_failure = Some(original.clone());
+
+        let error = fx
+            .as_cycle_agent(&run, || landing_reply(&fx, &task))
+            .expect_err("the admitted merge has an unknown outcome");
+        let OrbitError::RemoteTool {
+            code,
+            message,
+            payload,
+        } = error
+        else {
+            panic!("the remote error identity must survive: {error:?}");
+        };
+        assert_eq!(code.as_str(), "forge_unavailable");
+        assert_eq!(message, "The remote forge did not confirm the merge.");
+        for field in ["code", "message", "retryable"] {
+            assert_eq!(payload[field], original[field], "{payload}");
+        }
+        let rows = action_rows(&fx, &mandate, "orbit.workflow.land");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].phase, ResidentActionPhase::Failed);
+        assert_eq!(payload["detail"]["resident_action_key"], rows[0].key);
+        assert_eq!(rows[0].subject.as_deref(), Some(task.as_str()));
+        if let Some(detail) = detail.filter(|detail| !detail.is_null()) {
+            if detail.is_object() {
+                let mut returned_detail = payload["detail"].as_object().unwrap().clone();
+                returned_detail.remove("resident_action_key");
+                assert_eq!(Value::Object(returned_detail), detail);
+            } else {
+                assert_eq!(payload["detail"]["remote_detail"], detail);
+            }
+        }
+        assert_eq!(status(&fx, &task), TaskStatus::Review);
+        assert_eq!(
+            forge.0.lock().unwrap().merge_requests,
+            vec![(PR, HEAD.into())]
+        );
+    }
+}
+
+#[test]
 fn a_branch_protection_refusal_is_recorded_and_leaves_the_task_in_review() {
     if !super::super::dispatch_admission::isolated(
         "resident_cycle::landing::a_branch_protection_refusal_is_recorded_and_leaves_the_task_in_review",
@@ -274,9 +364,11 @@ fn a_branch_protection_refusal_is_recorded_and_leaves_the_task_in_review() {
     forge.0.lock().unwrap().refusal = Some("Required review is missing".to_string());
 
     let error = fx
-        .as_cycle_agent(&run, || land(&fx, &task))
+        .as_cycle_agent(&run, || landing_reply(&fx, &task))
         .expect_err("branch protection refuses");
 
+    assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error:?}");
+    let error = error.to_string();
     assert!(error.contains("task_landing_refused"), "{error}");
     assert!(error.contains("Required review is missing"), "{error}");
     assert_eq!(status(&fx, &task), TaskStatus::Review);
@@ -308,7 +400,7 @@ fn landing_needs_the_merge_right_and_a_cycle() {
     }
     let mut fx = fixture();
     let forge = Arc::new(LandingForge::default());
-    let (_, run) = live_cycle(&mut fx, &forge, &["dispatch"]);
+    let (mandate, run) = live_cycle(&mut fx, &forge, &["dispatch"]);
     let task = review_task(&fx, &[PR]);
     forge.open(PR, &task);
 
@@ -321,6 +413,7 @@ fn landing_needs_the_merge_right_and_a_cycle() {
     let error = land(&fx, &task).expect_err("an agent session is no operator");
     assert!(error.contains("capability"), "{error}");
 
+    assert!(action_rows(&fx, &mandate, "orbit.workflow.land").is_empty());
     assert!(forge.0.lock().unwrap().merge_requests.is_empty());
     assert_eq!(status(&fx, &task), TaskStatus::Review);
 }
@@ -461,7 +554,10 @@ esac
     );
 
     let outage = merge("echo 'gh: Server Error (HTTP 502)' >&2; exit 1");
-    assert!(outage.is_err(), "{outage:?}");
+    assert!(
+        matches!(outage, Err(OrbitError::Execution(_))),
+        "HTTP 502 is Execution before broker framing, not RemoteTool: {outage:?}"
+    );
     let throttled = merge("echo 'gh: rate limited (HTTP 429)' >&2; exit 1");
     assert!(throttled.is_err(), "{throttled:?}");
 }
