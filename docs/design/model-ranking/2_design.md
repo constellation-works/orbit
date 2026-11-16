@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: "Design: per-model implementer ranking from six attributed measures, each compared with the same-mix fleet expectation and divided by a frozen noise scale, shrunk, bootstrapped into tie bands and ordered by score within a band, with cost used for exact score ties."
 tags: [model-ranking, agent-scorecards]
-paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-types/src/workflow/final_recovery.rs", "crates/orbit-engine/src/executor/automation/vcs/landing/checks/**"]
+paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-types/src/workflow/final_recovery.rs", "crates/orbit-engine/src/executor/automation/vcs/checks/**"]
 related_features: [agent-scorecards, task-pilot, granted-tools]
 related_artifacts: [ORB-23297, ORB-23066, ORB-23277, ORB-21789, ORB-17779]
 ---

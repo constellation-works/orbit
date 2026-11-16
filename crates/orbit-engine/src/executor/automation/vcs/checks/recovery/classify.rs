@@ -12,7 +12,7 @@ use orbit_types::workflow::{CiBaseSuspectLegacy, CiBaseSuspectRecord};
 
 use crate::context::{HandoffLandingContext, RuntimeHost};
 
-use super::super::super::super::operations::{CiCommitJobEvidence, CiJobEvent};
+use super::super::super::operations::{CiCommitJobEvidence, CiJobEvent};
 
 use super::super::annotations::unanswered_required;
 use super::super::head::classify_logged_job;

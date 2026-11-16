@@ -8,9 +8,9 @@ use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery};
 
 use crate::context::{HandoffLandingContext, RuntimeHost};
 
+use super::super::checks::verify_published_base_update;
 use super::super::git::{fetch_remote_base, git_command_success, git_output};
 use super::super::pr::{DeliveryPin, PullRequestStatus};
-use super::checks::verify_published_base_update;
 use super::intent::LandingView;
 use super::record::stop;
 use super::run::LandingPass;

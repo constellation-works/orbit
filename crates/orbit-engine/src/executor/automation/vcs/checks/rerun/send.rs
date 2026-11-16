@@ -1,6 +1,6 @@
 //! Sending a reserved failed-jobs retry, and the retry history it records.
 
-use super::super::super::super::operations;
+use super::super::super::operations;
 use crate::context::RuntimeHost;
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
@@ -24,7 +24,7 @@ pub(super) fn send_reserved_rerun<H: RuntimeHost + ?Sized>(
 ) -> Result<bool, OrbitError> {
     // The exact set and budget are durable now. A lost/error reply is
     // ambiguous; never retransmit. The next poll reads actual checks.
-    if !matches!(host.admit_ci_rerun(tasks,handoff,plan,super::super::super::super::completion_deadline::now_ms()?)?,CiRerunAdmission::Observe(previous) if *previous==*plan)
+    if !matches!(host.admit_ci_rerun(tasks,handoff,plan,super::super::super::completion_deadline::now_ms()?)?,CiRerunAdmission::Observe(previous) if *previous==*plan)
     {
         return Ok(false);
     }
@@ -117,7 +117,7 @@ pub(super) fn record_cancellation_exhausted<H: RuntimeHost + ?Sized>(
 
 /// Read only the durable ledger while backing off; do not re-fetch completed
 /// jobs, logs or provider authentication on every completion poll.
-pub(in crate::executor::automation::vcs::landing::checks) fn infrastructure_backoff<
+pub(in crate::executor::automation::vcs::checks) fn infrastructure_backoff<
     H: RuntimeHost + ?Sized,
 >(
     host: &H,
@@ -129,7 +129,7 @@ pub(in crate::executor::automation::vcs::landing::checks) fn infrastructure_back
         return Ok(None);
     };
     let history = host.get_task_history(task)?;
-    let now = super::super::super::super::completion_deadline::now_ms()?;
+    let now = super::super::super::completion_deadline::now_ms()?;
     for entry in history
         .iter()
         .rev()

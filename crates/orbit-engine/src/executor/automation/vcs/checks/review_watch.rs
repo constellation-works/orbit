@@ -14,7 +14,7 @@ use std::path::Path;
 
 use crate::context::RuntimeHost;
 
-use super::super::super::completion_deadline::now_ms;
+use super::super::completion_deadline::now_ms;
 use super::head::classify_logged_job;
 use super::jobs::{answers, commit_jobs, describe, excerpt, job_label, unsuccessful};
 use super::log::job_log;

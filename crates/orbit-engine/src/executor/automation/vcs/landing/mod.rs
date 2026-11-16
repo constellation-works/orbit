@@ -24,7 +24,7 @@
 //!    or merges around a gate. A stop on a conflicting or stale base is
 //!    recorded as repairable, and the owner store hands that candidate to one
 //!    automatic repair leaf that does exactly that [ORB-14261]. A failed
-//!    hosted check is classified first ([`checks`]): a failure
+//!    hosted check is classified first ([`checks`](super::checks)): a failure
 //!    inherited from the base updates the branch onto the current base once,
 //!    and one that still fails there on a base tip where the same job passes
 //!    stops for the one automatic repair [ORB-16322]; a transient one is
@@ -48,7 +48,6 @@
 //! recheck of the current authorization and the digest-pinned validation
 //! evidence. This activity only supplies the merge evidence that permits it.
 
-pub(super) mod checks;
 mod intent;
 mod local;
 mod observe;

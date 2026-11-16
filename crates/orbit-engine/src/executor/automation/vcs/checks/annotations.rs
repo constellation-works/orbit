@@ -18,9 +18,9 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use super::super::super::git::{git_output, git_output_paths};
-use super::super::super::operations;
-use super::super::super::pr::{RequiredChecks, read_required_checks_observed};
+use super::super::git::{git_output, git_output_paths};
+use super::super::operations;
+use super::super::pr::{RequiredChecks, read_required_checks_observed};
 use crate::context::{HandoffLandingContext, RuntimeHost};
 
 /// Annotations an evidence text lists before it summarizes the rest.

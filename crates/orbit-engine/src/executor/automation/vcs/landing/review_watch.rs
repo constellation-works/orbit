@@ -29,13 +29,13 @@ use crate::context::{RuntimeHost, TaskAutomationUpdate};
 
 use super::super::super::ci::bounded_u64;
 use super::super::super::input::input_string_field;
+use super::super::checks::{classify_watched_failures, failed_checks};
 use super::super::completion_deadline::now_ms;
 use super::super::git;
 use super::super::pr::{
     CheckState, PrMergeState, PullRequestStatus, classify_pr_state, read_pr_status_before,
 };
 use super::super::remote_probe::fixed_wait;
-use super::checks::{classify_watched_failures, failed_checks};
 
 const DEFAULT_MAX_WAIT_SECONDS: u64 = 3600;
 const MAX_WAIT_SECONDS: u64 = 6 * 60 * 60;

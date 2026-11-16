@@ -4,8 +4,8 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 
-use super::super::super::git::{git_command_success, git_output};
-use super::super::super::pr::PullRequestStatus;
+use super::super::git::{git_command_success, git_output};
+use super::super::pr::PullRequestStatus;
 
 pub(super) fn contains(workspace: &Path, ancestor: &str, descendant: &str) -> bool {
     crate::executor::automation::vcs::git::is_ancestor(workspace, ancestor, descendant)
@@ -71,7 +71,7 @@ pub(in crate::executor::automation::vcs) fn verify_published_base_update(
     else {
         return Err(refuse("published delivery required".into()));
     };
-    super::super::super::pr::DeliveryPin::pinned(
+    super::super::pr::DeliveryPin::pinned(
         &candidate.source_branch,
         &candidate.base_branch,
         &candidate.candidate.commit,
@@ -96,13 +96,13 @@ pub(in crate::executor::automation::vcs) fn verify_published_base_update(
         ));
     }
     let remote = git_command_success(workspace, &["remote", "get-url", "origin"])?;
-    let landing = if remote {
-        super::super::super::git::fetch_remote_base(workspace, &candidate.landing_branch)?;
+    let landing_ref = if remote {
+        super::super::git::fetch_remote_base(workspace, &candidate.landing_branch)?;
         format!("origin/{}", candidate.landing_branch)
     } else {
         candidate.landing_branch.clone()
     };
-    if !contains(workspace, &candidate.base.commit, &landing) {
+    if !contains(workspace, &candidate.base.commit, &landing_ref) {
         return Err(refuse("landing base rewound or unrelated".into()));
     }
     if remote && !contains(workspace, head, head) {
@@ -131,7 +131,8 @@ pub(in crate::executor::automation::vcs) fn verify_published_base_update(
             );
         }
     }
-    verified_base_update(workspace, &candidate.candidate.commit, head, &landing).map_err(refuse)?;
+    verified_base_update(workspace, &candidate.candidate.commit, head, &landing_ref)
+        .map_err(refuse)?;
     if head != candidate.candidate.commit {
         let parents = git_output(workspace, &["rev-list", "--parents", "-n", "1", head])?;
         let base_side = parents
@@ -147,8 +148,8 @@ pub(in crate::executor::automation::vcs) fn verify_published_base_update(
         }
     }
     if matches!(
-        super::super::super::pr::classify_pr_state(status),
-        super::super::super::pr::PrMergeState::Merged
+        super::super::pr::classify_pr_state(status),
+        super::super::pr::PrMergeState::Merged
     ) {
         let merge = status
             .merge_commit
@@ -159,7 +160,7 @@ pub(in crate::executor::automation::vcs) fn verify_published_base_update(
                 "provider merge is not an exact commit identity".into(),
             ));
         }
-        if !contains(workspace, merge, &landing) {
+        if !contains(workspace, merge, &landing_ref) {
             return Err(refuse(
                 "reported merge is absent from the fetched landing base".into(),
             ));

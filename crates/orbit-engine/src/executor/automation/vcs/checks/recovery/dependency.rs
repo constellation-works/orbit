@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::context::{HandoffLandingContext, RuntimeHost};
 
-use super::super::super::super::operations;
+use super::super::super::operations;
 
 use super::{CheckFailureClass, FailedJob};
 
@@ -216,7 +216,7 @@ fn authenticated_dependency_ids<H: RuntimeHost + ?Sized>(
 }
 
 /// The unclassified reason for logs that could not be read, one job at a time.
-pub(in crate::executor::automation::vcs::landing::checks) fn unreadable_job_text(
+pub(in crate::executor::automation::vcs::checks) fn unreadable_job_text(
     jobs: &[FailedJob],
 ) -> String {
     let text = jobs

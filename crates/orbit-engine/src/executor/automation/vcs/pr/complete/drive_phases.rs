@@ -81,7 +81,7 @@ pub(super) struct PollDriver<'a, H: RuntimeHost + ?Sized> {
     pub(super) task_ids: &'a [String],
     pub(super) auto_fix: Option<&'a AutoFix>,
     pub(super) diagnostic:
-        &'a mut Option<super::super::super::landing::checks::rerun_diagnostic::CiRerunDiagnostic>,
+        &'a mut Option<super::super::super::checks::rerun_diagnostic::CiRerunDiagnostic>,
     pub(super) max_wait_seconds: u64,
     pub(super) poll_interval_seconds: u64,
     pub(super) completion_started_ms: u64,
@@ -153,7 +153,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
     pub(super) fn repoll_after_throttled_read(
         &self,
         auto_fix: &AutoFix,
-        deferred: &super::super::super::landing::checks::DeferredLogRead,
+        deferred: &super::super::super::checks::DeferredLogRead,
     ) -> Result<(), OrbitError> {
         let wait_ms = defer_throttled_read(
             self.host,
@@ -287,7 +287,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
             )
         }
         .map_err(observed)?;
-        let has_failures = !super::super::super::landing::checks::failed_checks(&status).is_empty();
+        let has_failures = !super::super::super::checks::failed_checks(&status).is_empty();
         if self
             .diagnostic
             .as_ref()
@@ -296,7 +296,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
             *self.diagnostic = None;
         }
         if let Some(auto_fix) = auto_fix {
-            super::super::super::landing::checks::rerun_diagnostic::observe_ci_rerun_head(
+            super::super::super::checks::rerun_diagnostic::observe_ci_rerun_head(
                 host,
                 &auto_fix.task_ids,
                 &auto_fix.run_id,
@@ -472,7 +472,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         if matches!(state, PrMergeState::Conflict)
             && let Some(auto_fix) = auto_fix
         {
-            let failed = super::super::super::landing::checks::failed_checks(&status);
+            let failed = super::super::super::checks::failed_checks(&status);
             if !failed.is_empty() {
                 match self.red_base_step(auto_fix, &status, &failed)? {
                     RedBaseStep::Deferred => return Ok(ObserveFlow::ContinuePoll),

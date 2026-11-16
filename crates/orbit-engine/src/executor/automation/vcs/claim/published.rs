@@ -105,7 +105,7 @@ pub fn verify_handoff_pull_request_head(
     candidate: &HandoffCandidate,
     status: &PullRequestStatus,
 ) -> Result<(), OrbitError> {
-    super::super::landing::checks::verify_published_base_update(workspace, candidate, status)?;
+    super::super::checks::verify_published_base_update(workspace, candidate, status)?;
     observe_accepted_revision(
         workspace,
         &candidate.candidate,
@@ -160,11 +160,7 @@ fn observe_published<H: RuntimeHost + ?Sized>(
         &submitted.candidate.commit,
     );
     if accepted && status.head_sha.as_deref() != Some(&submitted.candidate.commit) {
-        super::super::landing::checks::verify_published_base_update(
-            workspace_path,
-            submitted,
-            &status,
-        )?;
+        super::super::checks::verify_published_base_update(workspace_path, submitted, &status)?;
         pin.adopt_refreshed_candidate(status.head_sha.as_deref());
     }
     pin.ensure_pinned_candidate(&status, &pr_number)?;

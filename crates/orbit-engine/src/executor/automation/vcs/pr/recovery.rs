@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
 
-use super::super::landing::checks::{HeadCheckEvidence, head_check_evidence};
+use super::super::checks::{HeadCheckEvidence, head_check_evidence};
 use super::answers::{CheckState, read_required_checks};
 
 /// Whether current checks authorize a complete recovery diagnosis.

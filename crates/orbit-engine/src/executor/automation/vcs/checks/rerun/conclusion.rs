@@ -1,7 +1,7 @@
 //! Failure sets whose conclusions or failed-step names are the
 //! classification, read without the failed jobs' logs.
 
-use super::super::super::super::operations::{CiCommitJobEvidence, CiJobConclusion};
+use super::super::super::operations::{CiCommitJobEvidence, CiJobConclusion};
 use super::super::rerun_diagnostic::{CiRerunDiagnostic, CiRerunStage};
 use super::super::{
     jobs::{answers, job_label, unsuccessful},
@@ -75,7 +75,7 @@ pub(super) fn try_conclusion_transient<H: RuntimeHost + ?Sized>(
         let Some(signal) = super::super::jobs::exclusive_awaited_stop(&log) else {
             return Ok(None);
         };
-        let signature = super::super::super::super::super::ci::log_signature::error_signature(
+        let signature = super::super::super::super::ci::log_signature::error_signature(
             &log,
             super::super::jobs::failed_step(job),
         );

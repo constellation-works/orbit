@@ -8,9 +8,9 @@ use serde_json::Value;
 
 use crate::context::RuntimeHost;
 
-use super::super::super::super::ci::log_signature::error_signature;
-use super::super::super::operations::{CiCommitJobEvidence, CiJobConclusion};
-use super::super::super::pr::RequiredChecks;
+use super::super::super::ci::log_signature::error_signature;
+use super::super::operations::{CiCommitJobEvidence, CiJobConclusion};
+use super::super::pr::RequiredChecks;
 
 use super::annotations::source_annotations;
 use super::base_update::contains;
@@ -101,7 +101,7 @@ pub(super) fn prerequisite_log<H: RuntimeHost + ?Sized>(
 impl DeferredLogRead {
     pub(super) fn error(&self) -> OrbitError {
         OrbitError::PrivateVcs(Box::new(orbit_common::PrivateVcsFailure {
-            operation: super::super::super::operations::CI_JOB_LOG.into(),
+            operation: super::super::operations::CI_JOB_LOG.into(),
             class: orbit_common::PrivateVcsFailureClass::Other,
             message: self.reason.clone(),
             read_throttle: Some(self.throttle.clone()),
@@ -354,7 +354,7 @@ fn dependency_repair_excerpt<H: RuntimeHost + ?Sized>(
         return None;
     }
     let deadline = deadline_ms.or_else(|| {
-        super::super::super::completion_deadline::now_ms()
+        super::super::completion_deadline::now_ms()
             .ok()?
             .checked_add(15_000)
     })?;
@@ -370,10 +370,7 @@ fn dependency_repair_excerpt<H: RuntimeHost + ?Sized>(
         deadline_ms: deadline,
     };
     let answer = host
-        .run_private_vcs_operation(
-            super::super::super::operations::CI_RERUN_PLAN,
-            request.to_input(),
-        )
+        .run_private_vcs_operation(super::super::operations::CI_RERUN_PLAN, request.to_input())
         .ok()?;
     let plan = &answer["plan"];
     let records = plan["authentication"]["dependencies"].as_array()?;

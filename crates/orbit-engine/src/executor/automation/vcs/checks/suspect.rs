@@ -12,12 +12,12 @@ use orbit_types::workflow::{
     CiCheckRerunRecord,
 };
 
-use super::super::super::super::ci::log_signature;
-use super::super::super::operations::{
+use super::super::super::ci::log_signature;
+use super::super::operations::{
     CiCommitJobEvidence, CiCommitJobsAnswer, CiJobConclusion, CiJobEvent, CiJobObservation,
     CiJobStatus,
 };
-use super::super::super::{
+use super::super::{
     git::{git_output, git_output_paths},
     operations,
 };

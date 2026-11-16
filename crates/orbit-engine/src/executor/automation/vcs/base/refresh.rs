@@ -68,7 +68,7 @@ pub(in crate::executor::automation::vcs) fn recover<H: RuntimeHost + ?Sized>(
             }
             return Ok(RefreshStep::Changed);
         }
-        super::super::landing::checks::verify_published_base_update(workspace, candidate, status)?;
+        super::super::checks::verify_published_base_update(workspace, candidate, status)?;
         let parents = super::super::git::git_output(
             workspace,
             &[
@@ -208,7 +208,7 @@ pub(in crate::executor::automation::vcs) fn recover<H: RuntimeHost + ?Sized>(
             // Even an error may be an applied write with a lost response.
             let observed = read_pr_status_before(host, workspace, &number, deadline_ms)?;
             if observed.head_sha.as_deref() != Some(&request.head_sha) {
-                super::super::landing::checks::verify_published_base_update(
+                super::super::checks::verify_published_base_update(
                     workspace, candidate, &observed,
                 )?;
                 return Ok(RefreshStep::Changed);

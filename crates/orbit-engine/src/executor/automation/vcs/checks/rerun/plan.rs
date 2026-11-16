@@ -1,6 +1,6 @@
 //! Planning and admitting the unchanged-head failed-jobs retry.
 
-use super::super::super::super::pr::PullRequestStatus;
+use super::super::super::pr::PullRequestStatus;
 use super::super::rerun_diagnostic::{self, CiRerunDiagnostic, CiRerunStage};
 use super::super::{
     head::classify_logged_job,
@@ -192,10 +192,10 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
             };
             diagnostic.stage = CiRerunStage::Classification;
             let emitted_record =
-                super::super::super::super::super::ci::log_signature::classify_log_lines(&log)
+                super::super::super::super::ci::log_signature::classify_log_lines(&log)
                     .into_iter()
                     .any(|(kind, line)| {
-                        use super::super::super::super::super::ci::log_signature::{
+                        use super::super::super::super::ci::log_signature::{
                             LineKind, log_payload,
                         };
                         !matches!(
@@ -391,7 +391,7 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
         tasks,
         handoff,
         &plan,
-        super::super::super::super::completion_deadline::now_ms()?,
+        super::super::super::completion_deadline::now_ms()?,
     )? {
         CiRerunAdmission::Backoff { not_before_ms } => {
             let reason = format!("infrastructure CI retry backs off until {not_before_ms} ms");

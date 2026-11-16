@@ -9,10 +9,10 @@ use serde_json::Value;
 use crate::context::RuntimeHost;
 
 use super::super::super::super::input::input_string_field;
-use super::super::super::git::{self, git_output};
-use super::super::super::landing::checks::{
+use super::super::super::checks::{
     CheckReadGap, DeferredLogRead, HeadCheckEvidence, head_check_evidence, unmoved_red_base,
 };
+use super::super::super::git::{self, git_output};
 use super::super::answers::{CheckState, PullRequestStatus, RequiredChecks, read_required_checks};
 use super::{admission, ledger, verdict};
 
@@ -114,9 +114,7 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
     pr_number: &str,
     status: &PullRequestStatus,
     deadline_ms: u64,
-    observation: &mut Option<
-        super::super::super::landing::checks::rerun_diagnostic::CiRerunDiagnostic,
-    >,
+    observation: &mut Option<super::super::super::checks::rerun_diagnostic::CiRerunDiagnostic>,
 ) -> Result<CiRerunRecovery, OrbitError> {
     let Some(head) = status.head_sha.as_deref() else {
         return Ok(CiRerunRecovery::NotEligible);
@@ -129,7 +127,7 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
     if status.head_branch.is_none() {
         return Ok(CiRerunRecovery::NotEligible);
     }
-    let failed = super::super::super::landing::checks::failed_checks(status);
+    let failed = super::super::super::checks::failed_checks(status);
     if failed.is_empty() {
         return Ok(CiRerunRecovery::NotEligible);
     }
@@ -147,7 +145,7 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
     // ambiguous send reply) and stops only on a later authenticated failed
     // attempt.
     if no_edit_repair_recorded(host, auto_fix, pr_number, head) {
-        match super::super::super::landing::checks::request_no_edit_repair_rerun(
+        match super::super::super::checks::request_no_edit_repair_rerun(
             host,
             workspace,
             &auto_fix.task_ids,
@@ -157,23 +155,23 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
             &branch,
             deadline_ms,
         )? {
-            super::super::super::landing::checks::CiRerunStep::Backoff(reason) => {
+            super::super::super::checks::CiRerunStep::Backoff(reason) => {
                 return Ok(CiRerunRecovery::BackingOff(reason));
             }
-            super::super::super::landing::checks::CiRerunStep::Wait(reason)
-            | super::super::super::landing::checks::CiRerunStep::Unreadable(reason) => {
+            super::super::super::checks::CiRerunStep::Wait(reason)
+            | super::super::super::checks::CiRerunStep::Unreadable(reason) => {
                 return Ok(CiRerunRecovery::Waiting(reason));
             }
-            super::super::super::landing::checks::CiRerunStep::Acted(_) => {
+            super::super::super::checks::CiRerunStep::Acted(_) => {
                 return Ok(CiRerunRecovery::Retried);
             }
-            super::super::super::landing::checks::CiRerunStep::BudgetSpent(reason) => {
+            super::super::super::checks::CiRerunStep::BudgetSpent(reason) => {
                 return Ok(CiRerunRecovery::Stopped(reason));
             }
-            super::super::super::landing::checks::CiRerunStep::NotEligible => {}
+            super::super::super::checks::CiRerunStep::NotEligible => {}
         }
     }
-    match super::super::super::landing::checks::plan_ci_rerun(
+    match super::super::super::checks::plan_ci_rerun(
         host,
         workspace,
         &auto_fix.task_ids,
@@ -188,20 +186,18 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
         &auto_fix.run_id,
         observation,
     )? {
-        super::super::super::landing::checks::CiRerunStep::Backoff(reason) => {
+        super::super::super::checks::CiRerunStep::Backoff(reason) => {
             Ok(CiRerunRecovery::BackingOff(reason))
         }
-        super::super::super::landing::checks::CiRerunStep::NotEligible => {
-            Ok(CiRerunRecovery::NotEligible)
-        }
-        super::super::super::landing::checks::CiRerunStep::Wait(reason)
-        | super::super::super::landing::checks::CiRerunStep::Unreadable(reason) => {
+        super::super::super::checks::CiRerunStep::NotEligible => Ok(CiRerunRecovery::NotEligible),
+        super::super::super::checks::CiRerunStep::Wait(reason)
+        | super::super::super::checks::CiRerunStep::Unreadable(reason) => {
             // The shared bounded journal retains this observation; the caller
             // records the hold on the task and bounds it.
             Ok(CiRerunRecovery::Waiting(reason))
         }
-        super::super::super::landing::checks::CiRerunStep::Acted(_) => Ok(CiRerunRecovery::Retried),
-        super::super::super::landing::checks::CiRerunStep::BudgetSpent(reason) => {
+        super::super::super::checks::CiRerunStep::Acted(_) => Ok(CiRerunRecovery::Retried),
+        super::super::super::checks::CiRerunStep::BudgetSpent(reason) => {
             Ok(CiRerunRecovery::Stopped(reason))
         }
     }
@@ -382,7 +378,7 @@ pub(in crate::executor::automation::vcs::pr) fn base_tip_checks<H: RuntimeHost +
     let Ok((_, branch, tip)) = git::resolve_pr_base(workspace, input, &base, None) else {
         return Ok(None);
     };
-    super::super::super::landing::checks::base_tip_check_evidence(
+    super::super::super::checks::base_tip_check_evidence(
         host,
         workspace,
         head,

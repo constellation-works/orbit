@@ -5,8 +5,8 @@ use std::path::Path;
 use orbit_common::{OrbitError, PrivateVcsFailure, PrivateVcsFailureClass};
 use serde_json::json;
 
-use super::super::super::operations;
-use super::super::super::operations::{
+use super::super::operations;
+use super::super::operations::{
     CiCommitJobEvidence, CiJobLogAnswer, CiLogReadThrottle, CiLogSource,
 };
 use super::log_cache::{self, JobLogKey};
@@ -174,9 +174,7 @@ fn bound_failure_regions<'a>(
 
 /// Whether a currently failed workflow job has a readable, attributable log.
 /// This only wakes the landing: classification and recovery still run there.
-pub(in crate::executor::automation::vcs::landing) fn failed_job_logs_readable<
-    H: RuntimeHost + ?Sized,
->(
+pub(in crate::executor::automation::vcs) fn failed_job_logs_readable<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
     head: &str,

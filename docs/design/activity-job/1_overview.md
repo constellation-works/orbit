@@ -3,7 +3,7 @@ summary: "Activity / Job — Overview"
 type: design
 title: "Activity / Job — Overview"
 owner: codex
-last_updated: 2026-11-14
+last_updated: 2026-11-16
 last_validated: 2026-11-14
 status: Draft
 stage: shipped
@@ -124,6 +124,7 @@ workspace auto run still treats a required child workflow failure as a parent fa
 | `fsProfile` enforcement | `crates/orbit-policy`, `tool_context_for_activity`, CLI describe/get surfaces | [T20260419-0503] |
 | Delivery-leaf job ids and membership predicates (one owner for store, runtime, engine and core) | `crates/orbit-types/src/workflow/job.rs` | [ORB-24042] |
 | Shared task projections for delivery conventions, PR rendering, commit and handoff admission (owned by the lower conventions module) | `crates/orbit-engine/src/executor/automation/vcs/conventions.rs` | [ORB-24097] |
+| Shared hosted-check evidence, classification, rerun planning and recovery for landing, PR auto-fix/completion, base refresh and claim | `crates/orbit-engine/src/executor/automation/vcs/checks/` | [ORB-25310] |
 | Seeded reference activities and pipeline jobs | `crates/orbit-core/assets/activities/`, `crates/orbit-core/assets/jobs/` | [T20260419-2347], [T20260419-0622-3], [T20260419-0623] |
 
 ---
@@ -132,6 +133,7 @@ workspace auto run still treats a required child workflow failure as a parent fa
 
 - **[ORB-24042]** — Give the delivery-leaf job ids one owner in `orbit-types`.
 - **[ORB-24097]** — Cut delivery conventions' dependency on PR rendering: `vcs::conventions` owns the shared task projections; PR rendering, commit admission and handoff admission consume that owner.
+- **[ORB-25310]** — Lift shared hosted-check handling out of landing into `vcs::checks`: landing, PR, base and claim consume it directly. The remaining `checks → pr` read-model dependency is a separate follow-up; no compatibility shim is needed after migrating all callers.
 - **[T20260418-2010]** — Add the first v2 activity runtime scaffolding.
 - **[T20260418-2018]** — Add `JobV2` DAG constructs (`parallel`, `fan_out`, `loop`, `retry`, `when`).
 - **[T20260418-2019]** — Add v2 activity name resolution and pipeline skeleton assets.
