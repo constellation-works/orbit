@@ -385,12 +385,7 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
             .iter()
             .filter(|entry| entry.event == orbit_types::workflow::CI_RERUN_RESERVED_EVENT)
             .map(|entry| {
-                entry
-                    .note
-                    .as_deref()
-                    .and_then(|note| {
-                        serde_json::from_str::<orbit_types::workflow::CiRerunPlan>(note).ok()
-                    })
+                orbit_types::workflow::CiRerunPlan::from_reservation_entry(entry)
                     .filter(|plan| plan.schema_version == 1)
             })
             .collect::<Option<Vec<_>>>();

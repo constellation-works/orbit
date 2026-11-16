@@ -195,17 +195,17 @@ pub(super) fn failed_again_on_rerun(
         return false;
     };
     history.iter().any(|entry| {
-        let Some(note) = entry.note.as_deref() else {
-            return false;
-        };
         if entry.event == CI_RERUN_RESERVED_EVENT {
-            serde_json::from_str::<CiRerunPlan>(note).is_ok_and(|plan| {
+            CiRerunPlan::from_reservation_entry(entry).is_some_and(|plan| {
                 plan.head_sha == head
                     && plan.run_id == run
                     && plan.run_attempt < attempt
                     && plan.roots.iter().any(|root| root.check == check)
             })
         } else if entry.event == CI_CHECK_RERUN_EVENT {
+            let Some(note) = entry.note.as_deref() else {
+                return false;
+            };
             CiCheckRerunRecord::from_history_note(Some(note)).is_some_and(|receipt| {
                 receipt.head.as_deref() == Some(head)
                     && receipt.run_id == Some(run)
@@ -225,18 +225,13 @@ pub(super) fn failed_again_on_rerun(
 /// Whether this head already has a rerun reserved or sent: a second result
 /// exists or is on its way, so no classification rerun is owed.
 pub(super) fn head_was_rerun(history: &[orbit_types::task::TaskHistoryEntry], head: &str) -> bool {
-    history.iter().any(|entry| {
-        let Some(note) = entry.note.as_deref() else {
-            return false;
-        };
-        match entry.event.as_str() {
-            CI_RERUN_RESERVED_EVENT => {
-                serde_json::from_str::<CiRerunPlan>(note).is_ok_and(|plan| plan.head_sha == head)
-            }
-            CI_CHECK_RERUN_EVENT => CiCheckRerunRecord::from_history_note(Some(note))
-                .is_some_and(|receipt| receipt.head.as_deref() == Some(head)),
-            _ => false,
+    history.iter().any(|entry| match entry.event.as_str() {
+        CI_RERUN_RESERVED_EVENT => {
+            CiRerunPlan::from_reservation_entry(entry).is_some_and(|plan| plan.head_sha == head)
         }
+        CI_CHECK_RERUN_EVENT => CiCheckRerunRecord::from_history_note(entry.note.as_deref())
+            .is_some_and(|receipt| receipt.head.as_deref() == Some(head)),
+        _ => false,
     })
 }
 

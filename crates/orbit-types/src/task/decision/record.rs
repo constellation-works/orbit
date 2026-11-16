@@ -171,6 +171,12 @@ pub enum TaskDecision {
     /// [`RecordedCrewAssignment::from_entry`], which decodes entries written
     /// before it from their note.
     CrewAssignment(RecordedCrewAssignment),
+    /// The complete failed-jobs retry plan a CI rerun reservation admitted,
+    /// recorded on the `ci_check_rerun_reserved` event; its note is one line
+    /// for people. Read it through
+    /// [`CiRerunPlan::from_reservation_entry`](crate::workflow::CiRerunPlan::from_reservation_entry),
+    /// which decodes entries written before it from their note.
+    CiRerunReserved(Box<crate::workflow::CiRerunPlan>),
 }
 
 /// Creation receipt of a task an auto-task job step minted.

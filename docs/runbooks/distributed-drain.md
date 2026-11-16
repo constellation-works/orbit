@@ -1955,7 +1955,10 @@ one. From then on:
   Transient, flaky and unattributed classification reruns share one durable rerun
   budget per head across owner completion and claimed landing. Inspect `ci_check_rerun_reserved`
   first: it stores the complete exact failed-job authorization before sending
-  `gh run rerun <run> --failed`. A later `ci_check_rerun` means the request
+  `gh run rerun <run> --failed`. Its note is one line naming the checks, PR, run
+  and attempt; the complete plan, provider authentication included, is the
+  entry's `decision` (`kind: ci_rerun_reserved`) in `orbit task show --json`
+  history. Entries written before that carry the plan as a JSON note instead. A later `ci_check_rerun` means the request
   received a definite accepted reply. An absent reply record is ambiguous,
   not permission to resend. Restart and concurrent observations consume the
   same reservation without another request, repair charge or worker.
