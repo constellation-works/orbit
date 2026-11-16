@@ -22,7 +22,8 @@
 //!   this rewrite, in which case the healed file stays. The read, rewrite,
 //!   record, rollback and completion marker share one advisory lock. A file
 //!   left as that rewrite is finished on the next pass by recording the
-//!   digest it already has.
+//!   digest it already has. Exact originals are retained durably before
+//!   publication, so mixed legacy/canonical lists recover without inversion.
 //!
 //! The mapping is [`orbit_types::tool::family_action_tool_names`]. Every
 //! rewrite runs once on upgrade (the first writable runtime open) and again
@@ -38,7 +39,7 @@ use orbit_common::fs::io::{atomic_write_text, create_private_dir_all, with_exclu
 use orbit_common::protocol::yaml::parse_auto_task_yaml;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::task::Task;
-use orbit_types::tool::{family_action_tool_names, is_tool_family_operation, pre_family_tool_name};
+use orbit_types::tool::{family_action_tool_names, is_tool_family_operation};
 use serde::Serialize;
 
 use crate::OrbitRuntime;
@@ -48,6 +49,8 @@ use crate::application::managed_assets::{
     MANAGED_ASSET_MANIFEST_FILE, ManagedAssetLayout, load_managed_asset_manifest,
     restore_managed_asset,
 };
+
+mod plugin_recovery;
 
 /// The actor a migration's task history event names.
 pub(crate) const TOOL_NAMES_MIGRATION_ACTOR: &str = "system:tool-names-migration";
@@ -59,6 +62,9 @@ pub(crate) const TOOL_NAME_MIGRATION_LEDGER: &str = "tool-name-migrations.jsonl"
 /// The marker, under a root's `state/` directory, that records the upgrade
 /// pass completed for that root.
 const TOOL_NAME_MIGRATION_MARKER: &str = "tool-family-names-v1.migrated";
+
+/// Revisit plugin pairs the old pass could incorrectly mark complete.
+const PLUGIN_TOOL_NAME_MIGRATION_MARKER: &str = "plugin-tool-family-names-v2.migrated";
 
 /// How many task envelopes the upgrade pass reads at a time.
 const TASK_ENVELOPE_BATCH: usize = 256;
@@ -95,15 +101,11 @@ fn rewrite_yaml_list_tool_names(raw: &str, key: &str) -> String {
     rewrite_yaml_keyed_list(raw, key, rewrite_line_tool_names)
 }
 
-/// The inverse of [`rewrite_yaml_list_tool_names`] for the same list: family
-/// actions standing as list items become the operation names they were stored
-/// as. Other bytes stay put, so the result matches the consented manifest
-/// when `raw` is that function's rewrite of it.
-fn reverse_yaml_list_tool_names(raw: &str, key: &str) -> String {
-    rewrite_yaml_keyed_list(raw, key, reverse_line_tool_names)
-}
-
-fn rewrite_yaml_keyed_list(raw: &str, key: &str, rewrite_line: fn(&str) -> String) -> String {
+fn rewrite_yaml_keyed_list(
+    raw: &str,
+    key: &str,
+    mut rewrite_line: impl FnMut(&str) -> String,
+) -> String {
     let mut rewritten = String::with_capacity(raw.len());
     let mut list_indent: Option<usize> = None;
     for line in raw.split_inclusive('\n') {
@@ -159,51 +161,6 @@ fn rewrite_line_tool_names(line: &str) -> String {
             .is_none_or(|next| matches!(next, ',' | ']' | '#' | '\n' | '\r'));
         if opened && closed && is_tool_family_operation(token) {
             rewritten.push_str(&orbit_types::tool::tool_requirement_name(token));
-        } else {
-            rewritten.push_str(token);
-        }
-        rest = after;
-    }
-    rewritten.push_str(rest);
-    rewritten
-}
-
-/// Replace each family action on `line` that stands as a whole list item
-/// with the operation name it was stored as. Boundaries match
-/// [`rewrite_line_tool_names`].
-fn reverse_line_tool_names(line: &str) -> String {
-    let is_name_char = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '.';
-    let is_action_char = |c: char| c.is_ascii_alphanumeric() || c == '_';
-    let mut rewritten = String::with_capacity(line.len());
-    let mut rest = line;
-    while let Some(start) = rest.find(is_name_char) {
-        let (before, tail) = rest.split_at(start);
-        let name_end = tail.find(|c: char| !is_name_char(c)).unwrap_or(tail.len());
-        let mut end = name_end;
-        if tail[name_end..].starts_with(':') {
-            let action = &tail[name_end + 1..];
-            let action_len = action
-                .find(|c: char| !is_action_char(c))
-                .unwrap_or(action.len());
-            if action_len > 0 {
-                end = name_end + 1 + action_len;
-            }
-        }
-        let (token, after) = tail.split_at(end);
-        rewritten.push_str(before);
-        let opened = rewritten
-            .trim_end()
-            .trim_end_matches(['"', '\''])
-            .trim_end()
-            .ends_with(['-', '[', ',']);
-        let closed = after
-            .trim_start_matches(['"', '\''])
-            .trim_start()
-            .chars()
-            .next()
-            .is_none_or(|next| matches!(next, ',' | ']' | '#' | '\n' | '\r'));
-        if opened && closed {
-            rewritten.push_str(pre_family_tool_name(token));
         } else {
             rewritten.push_str(token);
         }
@@ -543,7 +500,9 @@ impl OrbitRuntime {
     /// row already names this rewrite, a competing pass finished it and the
     /// healed file is kept. A file already holding that rewrite — the record
     /// failed and the restore did not land — has its digest recorded on the
-    /// next pass without another edit. The caller holds the pass's advisory
+    /// next pass without another edit, using the digest-verified original
+    /// retained before publication. Older writes without retained originals
+    /// use bounded exact-digest recognition. The caller holds the pass's advisory
     /// lock across this work and the completion marker.
     pub(crate) fn migrate_plugin_manifest_tool_names(
         &self,
@@ -566,7 +525,8 @@ impl OrbitRuntime {
                 // The file is already the consented rewrite and only the
                 // stored digest is behind (the record failed after the
                 // rewrite, and restoring the old bytes did not land).
-                if let Some(rewrite) = consented_plugin_tool_rewrite(
+                if let Some(rewrite) = plugin_recovery::consented_plugin_tool_rewrite(
+                    &global_root,
                     &path,
                     &installed.name,
                     &raw,
@@ -603,6 +563,10 @@ impl OrbitRuntime {
             };
             let healed_digest = orbit_tools::plugin::manifest_digest(healed.as_bytes());
             let consented_digest = installed.manifest_digest.clone();
+            // Commit the recovery evidence before either side of the pair
+            // changes. A crash cannot strand a mixed-format manifest whose
+            // original spelling is impossible to infer from the rewrite.
+            plugin_recovery::retain_plugin_tool_original(&global_root, &raw)?;
             // Before this pass publishes, so a competing opener still reads
             // the consented bytes and can finish the rewrite itself.
             #[cfg(any(test, feature = "test-support"))]
@@ -696,6 +660,10 @@ impl OrbitRuntime {
             return Ok(());
         }
         if recorded.as_deref() == Some(consented_digest) {
+            #[cfg(any(test, feature = "test-support"))]
+            if plugin_manifest_publish_hook::take_restore_failure() {
+                return Err(error);
+            }
             if let Err(restore) = atomic_write_text(path, consented) {
                 tracing::warn!(
                     target: "orbit.core.tool_names",
@@ -728,13 +696,18 @@ impl OrbitRuntime {
             self.migrate_plugin_manifest_tool_names().map(|_| ())
         });
         let workspace_state = self.paths().state_dir.clone();
-        run_once(&workspace_state, "workspace definitions and tasks", || {
-            self.heal_local_auto_task_tool_names()?;
-            if self.ensure_coordination_task_write_permitted().is_ok() {
-                self.migrate_stored_task_tool_names()?;
-            }
-            Ok(())
-        });
+        run_once(
+            &workspace_state,
+            TOOL_NAME_MIGRATION_MARKER,
+            "workspace definitions and tasks",
+            || {
+                self.heal_local_auto_task_tool_names()?;
+                if self.ensure_coordination_task_write_permitted().is_ok() {
+                    self.migrate_stored_task_tool_names()?;
+                }
+                Ok(())
+            },
+        );
     }
 }
 
@@ -762,20 +735,22 @@ fn run_plugin_manifest_migration_once(
 ) {
     const SCOPE: &str = "plugin manifests";
     if !std::fs::symlink_metadata(state_dir).is_ok_and(|meta| meta.is_dir()) {
-        run_once(state_dir, SCOPE, pass);
+        run_once(state_dir, PLUGIN_TOOL_NAME_MIGRATION_MARKER, SCOPE, pass);
         return;
     }
-    let marker = state_dir.join(TOOL_NAME_MIGRATION_MARKER);
-    // Published under this lock, so a marker that is already present is a
-    // finished pair. The check is repeated inside the lock.
+    let marker = state_dir.join(PLUGIN_TOOL_NAME_MIGRATION_MARKER);
+    // Keep the v1 lock path so overlapping binaries still serialize.
+    // The v2 marker re-runs the repair even if v1 marked a torn pair done.
+    // A v2 marker records that this pass completed. Its check is repeated
+    // inside the lock before any eligible rewrite.
     if marker.exists() {
         return;
     }
     if let Err(error) = with_exclusive_file_lock(
-        &marker,
+        &state_dir.join(TOOL_NAME_MIGRATION_MARKER),
         "plugin manifest tool-name migration",
         || -> std::io::Result<()> {
-            run_once(state_dir, SCOPE, pass);
+            run_once(state_dir, PLUGIN_TOOL_NAME_MIGRATION_MARKER, SCOPE, pass);
             Ok(())
         },
     ) {
@@ -788,8 +763,13 @@ fn run_plugin_manifest_migration_once(
     }
 }
 
-fn run_once(state_dir: &Path, scope: &str, pass: impl FnOnce() -> Result<(), OrbitError>) {
-    let marker = state_dir.join(TOOL_NAME_MIGRATION_MARKER);
+fn run_once(
+    state_dir: &Path,
+    marker_name: &str,
+    scope: &str,
+    pass: impl FnOnce() -> Result<(), OrbitError>,
+) {
+    let marker = state_dir.join(marker_name);
     if marker.exists() {
         return;
     }
@@ -810,24 +790,6 @@ fn run_once(state_dir: &Path, scope: &str, pass: impl FnOnce() -> Result<(), Orb
             "pre-family tool name migration did not complete; it retries on the next open"
         );
     }
-}
-
-/// `raw` is the in-place family-action rewrite of the manifest whose digest
-/// is `stored_digest`. Any other edit is `None`, so an unconsented change
-/// stays refused.
-fn consented_plugin_tool_rewrite(
-    path: &Path,
-    name: &str,
-    raw: &str,
-    stored_digest: &str,
-) -> Option<ToolNameRewrite> {
-    let reversed = reverse_yaml_list_tool_names(raw, "orbit_tools");
-    if reversed == raw || orbit_tools::plugin::manifest_digest(reversed.as_bytes()) != stored_digest
-    {
-        return None;
-    }
-    let (healed, rewrite) = plugin_manifest_tool_rewrite(path, name, &reversed)?;
-    (healed == raw).then_some(rewrite)
 }
 
 /// Return the consent-preserving in-place rewrite of a plugin manifest when
@@ -918,6 +880,7 @@ pub(crate) mod plugin_manifest_publish_hook {
     thread_local! {
         static HOOK: RefCell<Option<PublishHook>> = const { RefCell::new(None) };
         static FAIL_DIGEST_UPSERT: Cell<bool> = const { Cell::new(false) };
+        static FAIL_RESTORE: Cell<bool> = const { Cell::new(false) };
     }
 
     struct RestoreHook(Option<PublishHook>);
@@ -928,6 +891,7 @@ pub(crate) mod plugin_manifest_publish_hook {
                 *slot.borrow_mut() = self.0.take();
             });
             FAIL_DIGEST_UPSERT.with(|flag| flag.set(false));
+            FAIL_RESTORE.with(|flag| flag.set(false));
         }
     }
 
@@ -952,6 +916,17 @@ pub(crate) mod plugin_manifest_publish_hook {
     #[cfg(feature = "test-support")]
     pub fn fail_next_plugin_digest_upsert() {
         FAIL_DIGEST_UPSERT.with(|flag| flag.set(true));
+    }
+
+    /// Leave the rewritten file in place when the next digest record fails,
+    /// as an interrupted or failed rollback would. Scoped to this thread.
+    #[cfg(feature = "test-support")]
+    pub fn fail_next_plugin_manifest_restore() {
+        FAIL_RESTORE.with(|flag| flag.set(true));
+    }
+
+    pub(super) fn take_restore_failure() -> bool {
+        FAIL_RESTORE.with(|flag| flag.replace(false))
     }
 
     pub(super) fn before_publish() {
