@@ -83,6 +83,13 @@
    card width: shrinks, then drops pilots, then reviewers. Recovery stays.
    A dropped figure stays in the row's name and title. */
 .drain-window-summary { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+/* The deadline shares the row (ORB-25031), so below ~360px the figures alone
+   need the inner width: the row wraps and the deadline takes the line under
+   the figures, without its divider dot, instead of clipping a figure. */
+@container drain-card (max-width: 360px) {
+  .drain-window-summary { flex-wrap: wrap; row-gap: 2px; }
+  .drain-window-summary .drain-when::before { content: none; }
+}
 .drain-window-stats { flex: 0 1 auto; min-width: 0; position: relative; display: flex; flex-wrap: nowrap; align-items: baseline; gap: 4px 12px; margin: 0; overflow: hidden; white-space: nowrap; min-height: 24px; }
 .drain-window-stat { display: flex; align-items: baseline; gap: 5px; min-width: 0; flex: 0 0 auto; }
 .drain-window-stat dd { order: 1; margin: 0; color: var(--fg-strong); font: 600 20px var(--font-sans); line-height: 1.2; font-variant-numeric: tabular-nums; }

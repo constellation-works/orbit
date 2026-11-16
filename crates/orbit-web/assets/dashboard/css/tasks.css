@@ -846,9 +846,21 @@ main.tasks-layout > .controls {
    and below the Tasks dock breakpoint (`TASKS_ONE_COLUMN_QUERY` in log-tail.js),
    the task list takes the full width. shell.css separately stacks other main
    grids at 1000px. */
-/* Keep the drain title and a workspace-host target readable side by side. */
+/* The dock keeps the layout's share, not a fixed width: 28% between a floor
+   the Drain card's content sets and a cap past which a wider dock only
+   stretches the card. The 320px floor is the card's real minimum: the header
+   select keeps its measured "…host (role)" tail (operations-drain.js sets
+   --drain-target-floor from the longest option, then the header drops the
+   phase word, the title, and finally the select floor via drain-head-tight),
+   the counts row shrinks its figures and then drops pilots and reviewers in
+   the drain-card container stages, the slot message ellipsizes, the forecast
+   figures shrink to min-width 0 beside their meters, and the Start controls
+   keep only their fixed stepper and switch widths while their labels wrap.
+   28% clears the floor for every layout wider than ~1143px, so between the
+   one-column breakpoint below and ~1571px the dock narrows and widens with
+   the viewport instead of pinning. */
 main.tasks-layout {
-  grid-template-columns: minmax(0, 1fr) clamp(440px, 32%, 520px);
+  grid-template-columns: minmax(0, 1fr) clamp(320px, 28%, 440px);
   grid-template-rows: auto minmax(0, 1fr);
   row-gap: 0;
 }
