@@ -356,22 +356,27 @@ impl OrbitRuntime {
             retry_source_run_id,
         });
 
+        let dispatch_result =
+            execute_job_with_resume(&asset.spec, input, &run_id, writer.clone(), self, resume);
+        let error_diagnostic = dispatch_result
+            .as_ref()
+            .err()
+            .and_then(orbit_engine::DispatchError::error_diagnostic);
         let outcome_res: Result<JobOutcome, OrbitError> =
-            execute_job_with_resume(&asset.spec, input, &run_id, writer.clone(), self, resume)
-                .map_err(|err| match err {
-                    orbit_engine::DispatchError::ProtocolSkew(message) => {
-                        OrbitError::ProtocolSkew(message)
-                    }
-                    refusal @ orbit_engine::DispatchError::DeliveryRefused { .. } => {
-                        dispatch_error_to_orbit(refusal)
-                    }
-                    // Keep the typed footprint code so finalization holds
-                    // the run instead of failing it.
-                    hold @ orbit_engine::DispatchError::FootprintUnavailable(_) => {
-                        dispatch_error_to_orbit(hold)
-                    }
-                    other => OrbitError::Execution(format!("v2 job dispatch: {other}")),
-                });
+            dispatch_result.map_err(|err| match err {
+                orbit_engine::DispatchError::ProtocolSkew(message) => {
+                    OrbitError::ProtocolSkew(message)
+                }
+                refusal @ orbit_engine::DispatchError::DeliveryRefused { .. } => {
+                    dispatch_error_to_orbit(refusal)
+                }
+                // Keep the typed footprint code so finalization holds
+                // the run instead of failing it.
+                hold @ orbit_engine::DispatchError::FootprintUnavailable(_) => {
+                    dispatch_error_to_orbit(hold)
+                }
+                other => OrbitError::Execution(format!("v2 job dispatch: {other}")),
+            });
 
         let (outcome_str, error_message) = super::audit_terminal_outcome(&asset.name, &outcome_res);
         // A parked run has not finished: the worker that resumes it records
@@ -380,6 +385,7 @@ impl OrbitRuntime {
             writer.emit_lossy(V2AuditEventKind::RunFinished {
                 outcome: outcome_str.to_string(),
                 error_message,
+                error_diagnostic,
             });
             self.record_event(OrbitEvent::ActivityRunCompleted {
                 id: asset.name.clone(),

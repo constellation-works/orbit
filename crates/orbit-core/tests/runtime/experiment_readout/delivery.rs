@@ -157,6 +157,7 @@ fn expired_instruction_experiment(root: &std::path::Path, step_outcome: &str) ->
                 step_id: "implement".into(),
                 lock_wait_ms: None,
                 outcome: step_outcome.into(),
+                error_diagnostic: None,
                 error_message: None,
             },
         );

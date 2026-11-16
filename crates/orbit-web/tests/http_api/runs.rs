@@ -1,3 +1,6 @@
+#[path = "runs/failure_diagnostic.rs"]
+mod failure_diagnostic;
+
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};

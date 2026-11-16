@@ -83,6 +83,7 @@ pub(super) fn emit_job_tracing(job_run_id: &str, task_id: Option<&str>, kind: &V
             outcome,
             error_message,
             lock_wait_ms,
+            ..
         } => {
             let success = outcome == "success";
             let lock_wait_ms = lock_wait_ms.unwrap_or_default();

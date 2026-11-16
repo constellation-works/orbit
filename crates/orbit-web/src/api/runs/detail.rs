@@ -16,9 +16,9 @@ use serde_json::{Value, json};
 ///
 /// The view is computed at most once: whichever half asks first pays for
 /// the scan, and a failure is cached too, so an unreadable trail is not
-/// scanned twice. A run whose record steps are already activity-level
-/// never triggers the steps half, so it pays only for the scan the
-/// provider-process half needs. Nothing is cached across requests, so
+/// scanned twice. Successful activity-level record steps need no audit
+/// enrichment; failed steps share the scan for their structured diagnostic.
+/// The terminal diagnostic also comes from this view. Nothing is cached across requests, so
 /// provider-process liveness is still probed on every fetch.
 struct LazyRunAuditView<'a> {
     runtime: &'a OrbitRuntime,
@@ -121,7 +121,13 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
     // healthy long-running ship-pipeline implementation agent is
     // indistinguishable from a dead child without shell access to the host.
     let provider_processes = match audit_view.load_run_audit_view() {
-        Ok(view) => view.provider_processes,
+        Ok(view) => {
+            if let Some(diagnostic) = view.error_diagnostic {
+                full["error_diagnostic"] =
+                    orbit_common::security::redaction::redact_all_json(diagnostic);
+            }
+            view.provider_processes
+        }
         Err(error) => {
             tracing::warn!(run_id, section = "provider processes", %error, "run detail omitted a section");
             Vec::new()

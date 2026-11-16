@@ -10,6 +10,7 @@
 //! semantics through `execute_job_with_resume`, and shipped `review` step retry/recovery.
 //! Runs under `cargo nextest run -p orbit-engine --test engine -E 'test(/^v2_runtime::/)'`.
 mod gate_deadline;
+mod worktree_failure;
 use orbit_agent::loop_engine::InMemorySink;
 use orbit_common::OrbitError;
 use orbit_engine::activity_job::{V2ActivityCatalog, load_job_asset};

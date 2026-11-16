@@ -99,6 +99,10 @@ pub(super) fn run_admitted_step(
             step_id: step.id.clone(),
             outcome: outcome_str.to_string(),
             error_message,
+            error_diagnostic: result
+                .as_ref()
+                .err()
+                .and_then(DispatchError::error_diagnostic),
         },
     );
 
