@@ -1634,15 +1634,26 @@ fn unavailable_nextest_rows_report_the_capability_and_take_no_pass_credit() {
     .expect("prepend the cargo shim to PATH");
     let module = module_path!().split_once("::").expect("test module").1;
     let table = format!("{module}::{NEXTEST_TABLE}");
+    let logs = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("nextest row child logs");
     let mut combined_stdout = String::new();
     let mut combined_stderr = String::new();
     for row in NEXTEST_ROWS {
-        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        let mut command =
+            std::process::Command::new(std::env::current_exe().expect("test executable"));
+        command
             .args(["--exact", &table, "--nocapture", "--test-threads=1"])
             .env(SCENARIO_ROW_ENV, row)
-            .env("PATH", &path)
-            .output()
-            .expect("run the nextest row without cargo-nextest");
+            .env("PATH", &path);
+        // Hang-guarded: a hung row is killed and fails here with the child's
+        // output, instead of stalling until nextest's external termination.
+        let output = orbit_common::test_env::run_child_test(&mut command, &table, logs.path());
+        orbit_common::test_env::assert_child_test_passed(
+            &table,
+            output.status,
+            &output.stdout,
+            &output.stderr,
+        );
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
@@ -1678,12 +1689,20 @@ fn assert_qa_boundary_withholds_nextest_credit(stdout: &str, stderr: &str) {
     )
     .expect("write row names");
     std::fs::write(dir.path().join("check.py"), QA_BOUNDARY_CHECK).expect("write qa check");
-    let output = std::process::Command::new("python3")
+    let mut command = std::process::Command::new("python3");
+    command
         .arg(dir.path().join("check.py"))
         .arg(&script)
-        .arg(dir.path())
-        .output()
-        .expect("run the qa command boundary");
+        .arg(dir.path());
+    // Same hang guard as the re-executed rows: bounded, kills and reports
+    // the child's output on timeout instead of stalling indefinitely.
+    let output = orbit_common::test_env::run_child_test_within(
+        &mut command,
+        "qa_boundary_check",
+        dir.path(),
+        orbit_common::test_env::FIXTURE_STEP_DEADLINE,
+        orbit_common::test_env::FIXTURE_STEP_DEADLINE,
+    );
     let report_text = String::from_utf8_lossy(&output.stdout);
     let errors = String::from_utf8_lossy(&output.stderr);
     assert!(

@@ -3,7 +3,7 @@ use crate::fixture_template::TreeTemplate;
 use chrono::Utc;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::WorkspaceRuntimeBinding;
-use orbit_core::{OrbitRuntime, ShipMode, TaskComplexity, TaskStatus};
+use orbit_core::{OrbitRuntime, PipelineWaitStatus, ShipMode, TaskComplexity, TaskStatus};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate, execute_deterministic_action};
 use orbit_store::contracts::JobRunStepParams;
 use orbit_types::task::{ExecutionLocation, ExternalRef};
@@ -626,9 +626,27 @@ impl Fixture {
         input
     }
     pub(super) fn wait(&self, id: &str) {
-        self.runtime
+        let waited = self
+            .runtime
             .wait_pipeline_runs(&[id.into()], 10, 1, Some("test"))
             .unwrap();
+        assert_eq!(
+            waited.results.len(),
+            1,
+            "pipeline wait for {id} must report exactly one entry: {:?}",
+            waited.results
+        );
+        for entry in &waited.results {
+            assert!(
+                entry.status != PipelineWaitStatus::Timeout && entry.status.is_settled(),
+                "pipeline run {} did not settle before the wait returned: \
+                 status={} error={:?}; a timed-out or unsettled substitute worker \
+                 must not proceed to start_actions as if it had exited and been joined",
+                entry.run_id,
+                entry.status,
+                entry.error
+            );
+        }
     }
     /// The substitute worker has exited and been joined. The harness now
     /// drives this admitted run's host actions in-process as its worker.
