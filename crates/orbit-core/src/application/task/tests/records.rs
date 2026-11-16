@@ -96,16 +96,20 @@ fn concurrent_status_change_cannot_split_a_cas_guarded_write() {
             title: "Original title".into(),
             description: "A task whose status a concurrent writer moves.".into(),
             acceptance_criteria: vec!["The CAS write applies whole or not at all.".into()],
+            status: Some(TaskStatus::InProgress),
             ..Default::default()
         })
         .expect("add task");
-    let backlog = runtime.get_task(&task.id).expect("task").status;
 
+    // The cfg(test) hook only orders the interleaving: it fires between the
+    // guarded write's document commit and its history commit, starting a
+    // concurrent public status change and giving it the chance to land
+    // before the history commit re-checks the CAS. Both writes themselves
+    // go through the public activity entry point, with its production
+    // authority (system actor, internal status authority) and input shape
+    // (`TaskActivityUpdate` carrying `expected_status`).
     let (go_tx, go_rx) = mpsc::channel::<()>();
     let (done_tx, done_rx) = mpsc::channel();
-    // Between the write's companion commits and its history commit, start a
-    // concurrent status change on another thread and give it the chance to
-    // land before the history commit re-checks the CAS.
     let raced_inside = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let raced = raced_inside.clone();
     super::super::records::BEFORE_HISTORY_COMMIT.with(|slot| {
@@ -122,56 +126,63 @@ fn concurrent_status_change_cannot_split_a_cas_guarded_write() {
         let runtime = &runtime;
         let racer = scope.spawn(move || {
             go_rx.recv().expect("racer signal");
-            let moved = runtime.stores().task_records().update(
+            let moved = runtime.update_task_from_activity(
                 task_id,
-                TaskRecordUpdateParams {
-                    actor: "racer".into(),
-                    status: Some(TaskStatus::Blocked),
-                    ..Default::default()
+                orbit_engine::TaskActivityUpdate {
+                    status: TaskStatus::Blocked,
+                    expected_status: TaskStatus::InProgress,
+                    execution_summary: None,
+                    comment: None,
+                    note: Some("racer".into()),
+                    agent: None,
+                    model: None,
+                    calling_run_id: None,
                 },
             );
             let _ = done_tx.send(());
             moved
         });
-        let result = runtime.stores().task_records().update(
+        let result = runtime.update_task_from_activity(
             &task.id,
-            TaskRecordUpdateParams {
-                actor: "test".into(),
-                title: Some("Changed title".into()),
-                status_note: Some("guarded write".into()),
-                upsert_artifacts: vec![TaskArtifact::from_text("cas-evidence.txt", "evidence")],
-                expected_status: Some(vec![backlog]),
-                ..Default::default()
+            orbit_engine::TaskActivityUpdate {
+                status: TaskStatus::Review,
+                expected_status: TaskStatus::InProgress,
+                execution_summary: Some("guarded summary".into()),
+                comment: Some("guarded comment".into()),
+                note: Some("guarded write".into()),
+                agent: None,
+                model: None,
+                calling_run_id: None,
             },
         );
-        racer.join().expect("racer thread").expect("racer write");
+        let _ = racer.join().expect("racer thread");
         result
     });
 
     let after = runtime.get_task(&task.id).expect("task");
-    let artifact = runtime
-        .get_task_artifact(&task.id, "cas-evidence.txt")
-        .expect("artifact read");
+    let comments = runtime.get_task_comments(&task.id).expect("comments");
     match &result {
         Ok(_) => {
-            assert_eq!(after.title, "Changed title");
-            assert!(artifact.is_some(), "a successful write keeps its artifact");
+            assert_eq!(after.status, TaskStatus::Review);
+            assert_eq!(after.execution_summary, "guarded summary");
+            assert!(
+                comments.iter().any(|c| c.message == "guarded comment"),
+                "a successful write keeps its comment"
+            );
         }
         Err(_) => {
             assert_eq!(
-                after.title, "Original title",
-                "CAS failure left a document edit"
+                after.execution_summary, "",
+                "CAS failure left a document edit: {after:?}"
             );
-            assert!(artifact.is_none(), "CAS failure left an artifact behind");
+            assert!(
+                !comments.iter().any(|c| c.message == "guarded comment"),
+                "CAS failure left a comment behind"
+            );
         }
     }
     assert!(
         !raced_inside.load(std::sync::atomic::Ordering::SeqCst),
         "a status change landed between the CAS pre-check and the history commit: {result:?}"
-    );
-    assert_eq!(
-        after.status,
-        TaskStatus::Blocked,
-        "the racer serialized after"
     );
 }
