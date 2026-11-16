@@ -342,7 +342,8 @@ permissions:
 ```
 
 Each entry must render to an absolute physical path of an existing regular file that the
-current user owns, with one hard link and no write bit for others. A group write bit is
+current user owns, with one hard link and no write bit for others (the one exception is a
+`{{workspace}}` link to such a file, below). A group write bit is
 accepted, so a checkout made under umask 0002 works; so is a group-writable parent
 directory the user owns. Spell it physically: on macOS, `/private/tmp/...` rather than the
 `/tmp` alias. Missing files, directories, and paths that pass through a symbolic link or an
@@ -366,8 +367,8 @@ grant never reaches `.git/`, `.orbit/`, any other file at the root, or a file ou
 workspace, and a link whose target is outside the workspace, missing, or inside `.git` or
 `.orbit` is refused. Without a workspace, a symbolic link is always refused.
 `orbit plugin test` creates each such file, empty, in its scratch workspace before the
-cases run, so the grant can be tested there. Orbit never creates such a file or widens its grant: creating,
-replacing a file by rename needs a `fs.write` directory grant. A scoped `fs=<root>` grant
+cases run, so the grant can be tested there. Outside `orbit plugin test`, Orbit never creates such a
+file or widens its grant: creating or replacing a file by rename needs a `fs.write` directory grant. A scoped `fs=<root>` grant
 covers a `write_files` entry only when it names that file or one of its ancestor
 directories. Adding an entry, or changing where a config value resolves, needs consent
 again. Linux binds the existing inode, and macOS uses a file-rooted `subpath` rule.

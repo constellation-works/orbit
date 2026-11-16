@@ -607,8 +607,10 @@ test` creates each `fs.write_files` entry that renders inside its scratch worksp
 (outside `.git` and `.orbit`) as an empty owner-only file before admission. We chose
 this over a `{{workspace}}` directory grant that carves out `.git` and `.orbit`:
 that grant would also open every other root file and every file or directory
-created at the root later, where the task asks for one named file. [ORB-25145] Protected install, Orbit state and workspace
-metadata boundaries apply to exact files too. A scoped grant covers a requested file
+created at the root later, where the need is one named file. Following the final link is a
+deliberate departure from STD-05@1 §R7, recorded in [4_decisions.md](./4_decisions.md). [ORB-25145]
+
+Protected install, Orbit state and workspace metadata boundaries apply to exact files too. A scoped grant covers a requested file
 only when it names that file or an ancestor directory; a descendant never grants a
 directory beneath the file. File replacement/creation and atomic rename require a
 separate directory capability. macOS emits a `subpath` rule rooted at the file itself,
