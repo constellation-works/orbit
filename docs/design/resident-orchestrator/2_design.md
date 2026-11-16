@@ -152,12 +152,14 @@ trigger kind, `resident_due`. Its observation rule, deterministic and model-free
 `preparation_eligible`, evaluates every active mandate whose assignment task lives in that
 workspace and marks it due when:
 
-- its **wake digest** differs from the digest in its last checkpoint; or
-- its **heartbeat** has elapsed since the last checkpoint (default 2 h); or
+- an item its **wake digest** covers changed in a way the mandate acts on since its last
+  checkpoint's observation ([§5.1](#51-slice-3-as-implemented)); or
+- its last checkpoint's **planned next wake** came, clamped between the floor and the heartbeat; or
+- its **heartbeat** has elapsed since the last cycle started; or
 - a control action asks for a cycle (`wake`, `resume`, `release`);
 
-and in every case only when the **cadence floor** has elapsed since the last cycle started (default
-10 min, minimum 5 min) and no cycle is live.
+and in every case only when the **cadence floor** has elapsed since the last cycle started (default:
+the heartbeat; minimum 5 min) and no cycle is live.
 
 The wake digest is a hash over the facts that can change what a cycle should do:
 
@@ -185,10 +187,17 @@ observation rule, not an expression. Workspaces may still add condition-triggere
 
 ### 4.3 Cadence floor
 
-The floor bounds cost: at the default 10 min a resident runs at most 144 cycles a day, and in
-practice far fewer, because cycles start only on change or heartbeat. The floor cannot go below the
-clock cadence or 5 min. A busy mandate whose digest changes on every tick runs once per floor
+The floor bounds cost when there is something to react to. It defaults to the heartbeat
+([ORB-25105]), so an unprompted mandate runs once per heartbeat whatever happens, and a manager sets
+a lower floor only when the operator asks for faster reaction. The floor cannot go below the clock
+cadence or 5 min. A busy mandate whose qualifying changes arrive on every tick runs once per floor
 interval and sees all accumulated changes together.
+
+Expected cycles per hour at steady state (STD-08 R1): a mandate with a 20-minute heartbeat and no
+qualifying change runs 3 cycles an hour (60 / heartbeat), however busy the workspace is, because
+drain churn on the tasks it acted on is not a qualifying change; a planned next wake can bring the
+next cycle forward to the floor, so with an explicit 5-minute floor the ceiling is 12 an hour, and
+only while the resident keeps planning early wakes or qualifying changes keep arriving.
 
 ### 4.4 Ending
 
@@ -309,18 +318,41 @@ like every state routine) uses the `resident_due` state kind with `batch_size: 1
 any other size). Each tick it reads every `resident`-tagged task in `proposed`, `backlog`,
 `in-progress` or `blocked` whose mandate is `active`, and computes:
 
-- the **wake digest**: a sha256 over the mandate, the authority revision, each watched task's id,
-  status and `updated_at`, the decision requests on the assignment and watched tasks (id and state),
-  the in-scope notices (id, revision, status) and the wake comments. Wake comments are every
-  `resident.answer`, and every other non-resident comment except, while a cycle is live, those
-  written by the cycle itself (only `human*` writers count inside a live window);
-- the **reasons**: `first_cycle`, `digest_changed` (against the last checkpoint's digest),
-  `heartbeat` (since the last cycle *start*, or task creation), `deadline` (once, when the deadline
-  passed after the last cycle started) and `recovery:<cycle>` (a dead live cycle);
+- the **wake items** ([ORB-25105]), one keyed state each: `mandate` (its hash), `authority` (the
+  revision), `assignment` (the assignment's settled decision requests), `watch` (one hash over the
+  tasks `watch` names by id or tag: status, review decision, `updated_at` and settled decision
+  requests, so any change to them wakes), `task:<id>` for each task the resident acted on,
+  `notice:<id>` for each open incident or maintenance notice in scope, and `comments` (a hash over
+  the wake comments). Tasks the resident acted on are the subjects of the last checkpoint's actions
+  plus the still-open ones the previous baseline carried; with the `watch` tasks they are capped at
+  200. Their state is a class (`active` for proposed, backlog and in-progress; otherwise the
+  status), the review decision and the settled (non-open) decision requests, never `updated_at`.
+  Wake comments are every `resident.answer`, and every other non-resident comment except, while a
+  cycle is live, those written by the cycle itself (only `human*` writers count inside a live
+  window). The **wake digest** is a sha256 over the items;
+- the **baseline**: observe records the items in the cycle's grant (`wake_items`), and finalize
+  appends a `resident_wake_settled` history entry with the items of the tasks the finished cycle
+  acted on (outside `watch`), which replace the observed ones, so the resident's own actions on
+  them do not wake it again. Size (STD-08 R1): about 300 bytes of fixed items plus about 40 bytes
+  per open task the resident acted on and per open notice, on each grant and settled entry, so a
+  resident tending 20 open tasks adds about 1.1 KB to the assignment's history per cycle, 26 KB over
+  24 cycles. Only the due check reads it (a person sees it as a history note); neither the
+  brief nor the agent sees it;
+- the **reasons**: `first_cycle`; `digest_changed` when, against the baseline of the last
+  checkpoint's cycle, an item present in both changed, a new item needs attention (a task the
+  resident acted on that is `blocked` or in `review`, a notice opening, any other new key), or an
+  item other than such a task is gone (a notice cleared), while a task that only joined or left the
+  tasks the resident acted on does not count (a grant without `wake_items`, written before
+  [ORB-25105], compares the digests instead); `heartbeat` (since the last cycle *start*, or task creation);
+  `next_wake` (the last checkpoint's `next_wake.not_before`, clamped between floor and heartbeat
+  after the last cycle start, ignored when that checkpoint is not the last cycle's or ended
+  `incomplete`); `deadline` (once, when the deadline passed after the last cycle started) and
+  `recovery:<cycle>` (a dead live cycle);
 - **withheld**: `cycle_live` (a live cycle that is not dead) or `cadence_floor` (the floor since the
   last cycle start has not elapsed).
 
-A due mandate becomes a member whose fingerprint is `after:<last cycle>|<digest or heartbeat>`, with
+A due mandate becomes a member whose fingerprint is `after:<last cycle>|<why>` (`wake:<at>`,
+`heartbeat`, `next_wake`, `changed`, or else the digest), with
 its debounce clock at the last cycle start, so it is admitted on the first tick the floor allows.
 Admission re-evaluates with the observation's clock and retires a member whose reason changed. A
 cycle run settles its member once it stops: applied if it started its cycle, failed (and retried)
@@ -382,8 +414,11 @@ left `started` is refused as `resident_action_in_doubt` for the agent to check b
 
 - Wake reasons are coarse: `digest_changed` does not say which fact changed; the brief carries the
   facts and the agent compares.
-- PR and CI state are seen only through watched task revisions (`updated_at`), not read from the PR
-  or CI evidence directly.
+- PR and CI state are seen only through a task's status and review decision (and `updated_at` for
+  tasks `watch` names), not read from the PR or CI evidence directly: a red check wakes the
+  resident when the pipeline blocks the task or files a repair task it watches.
+- Info notices and a notice's edits that keep its status do not wake (§7 says any notice change
+  does); they still reach the brief.
 - Writes from a resident run that this workspace's runtime does not hold (a cycle run in another
   catalog workspace) are refused as `resident_scope_refused`: cross-workspace writes through another
   workspace's MCP server are not supported in this slice.
@@ -497,7 +532,8 @@ cycle. The resident design adds rules on top; the notice record and poster class
   replaced finishes on the old process and checkpoints. The next one, if it is a recovery cycle,
   reads that checkpoint under the new binary's schema, so the checkpoint record follows the
   state-compatibility rules (additive fields, versioned schema).
-- **Notices as wake events.** Any notice opened, changed or closed in scope changes the wake digest.
+- **Notices as wake events.** An incident or maintenance notice opened or cleared in scope wakes the
+  resident ([§5.1](#51-slice-3-as-implemented)).
   An `incident` notice about a watched task's failure is the usual reason for an early cycle.
 
 ## 8. Escalation
@@ -795,8 +831,9 @@ Slices 1–9 have landed (slice 3 as [§5.1](#51-slice-3-as-implemented) describ
   any agent context still resolves as the operator; that is the existing caller model
   ([notice-authority](../fleet-notices/specs/notice-authority.md) records the same limit).
 - **The wake digest can miss a relevant change.** Anything outside the watched set (an unrelated task
-  that starts touching the same files, say) shows up only at the heartbeat. A short heartbeat costs
-  cycles; a long one costs latency. Workspaces can add condition-triggered wakes.
+  that starts touching the same files, say), and any change that keeps a task it acted on in the same
+  state class, shows up only at the planned wake or the heartbeat. A short heartbeat costs cycles; a
+  long one costs latency. Workspaces can add condition-triggered wakes.
 - **The escalation rubric is a heuristic.** Its numbers are guesses until the pilot measures them. The
   fixed classes carry the safety; the rubric only trades question load against rework.
 - **Self-reported costs.** Cost events are what the agent says it spent. The pass ranks by recurrence
@@ -833,5 +870,6 @@ Slices 1–9 have landed (slice 3 as [§5.1](#51-slice-3-as-implemented) describ
 - [ORB-21649] — the dashboard Residents view and how a dashboard widening is authorized
 - [ORB-21642] — fixed `orbit resident metrics --baseline` failing on a baseline task in another workspace
 - [ORB-22844] — removed the evolution pass routine, job and proposal filing; the ledger and manager digest stay
+- [ORB-25105] — wake only on changes the mandate acts on, honour the planned next wake, default the floor to the heartbeat
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

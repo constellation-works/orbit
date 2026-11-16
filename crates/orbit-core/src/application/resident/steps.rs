@@ -248,6 +248,7 @@ impl OrbitRuntime {
             recovery_of,
             digest: due.digest.clone(),
             reasons: grant_reasons,
+            wake_items: Some(due.wake_items.clone()),
         };
         self.append_resident_history(
             &task_id,
@@ -590,6 +591,11 @@ impl OrbitRuntime {
             None,
         )?;
         self.set_resident_live_cycle(&task_id, Some(&live.cycle), None)?;
+        // Best-effort: without it the next due check compares against what
+        // observe saw, so the cycle's own actions may wake it once more.
+        if let Err(error) = self.record_resident_wake_settled(&task_id, &live.cycle) {
+            tracing::warn!(task_id = %task_id, cycle = %live.cycle, %error, "resident wake items not settled");
+        }
         // The agent handed off, or the mandate was stopped while this cycle ran.
         let handoff = match self.settle_resident_handoff(&task_id)? {
             Some(handoff) => handoff,
