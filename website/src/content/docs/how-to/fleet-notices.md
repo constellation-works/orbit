@@ -72,7 +72,7 @@ Orbit takes the poster class from the session, not from a field in the post.
 | Operator | Any notice | Any notice | 720 hours |
 | Orchestrator | Any notice | Its own crew's notices, and notices that orchestrators or agents posted | 168 hours; 72 for maintenance |
 | Managed agent | `incident` or `info`, in its own workspace, with a linked task or evidence | Its own task's notices | 24 hours, also its default |
-| Resident mandate | `warn`, `incident` or `info`, in its own workspace, with a linked task or evidence | Its own task's notices | 168 hours for `warn` (72 default); 24 hours for others; status lines expire at twice the heartbeat |
+| Resident mandate | `warn`, `incident` or `info`, in its own workspace, with a linked task or evidence | Its own task's notices | 168 hours for `warn` (72 default); 24 hours for others; status lines expire at twice the heartbeat (168 hours for a line left after pause, takeover or stop) |
 
 A managed task can hold at most 2 open notices and make 5 posts in 24 hours. A resident mandate may hold at most 10 open notices (its status line plus one warn per blocker) and make 30 posts per hour.
 
