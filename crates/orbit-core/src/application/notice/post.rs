@@ -13,7 +13,8 @@ use orbit_store::contracts::{
 };
 use orbit_types::record::{
     AuthorClass, EffectiveStatus, Notice, NoticeEvidence, NoticeKind, NoticeLinkedTask,
-    NoticeReports, NoticeScope, NoticeWorkspace, PostOutcome,
+    NoticeReports, NoticeScope, NoticeWorkspace, PostOutcome, resident_notice_key_prefix,
+    resident_status_notice_key,
 };
 
 use super::authority::{NoticeCaller, NoticePoster};
@@ -204,6 +205,8 @@ struct ValidatedPost {
     body: String,
     scope: Option<NoticeScope>,
     dedupe_key: String,
+    /// The post writes its resident poster's status line.
+    status_line: bool,
     linked_task: Option<NoticeLinkedTask>,
     close_on_linked_done: bool,
     evidence: Vec<NoticeEvidence>,
@@ -247,12 +250,74 @@ impl OrbitRuntime {
     ) -> Result<(NoticePostResult, bool), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let poster = self.resolve_notice_poster(caller)?;
+        self.post_notice_as(&poster, request, audit)
+    }
+
+    /// Replace a resident mandate's status line with the line a control
+    /// action leaves (`paused`, `stopped`, ...), so the notice says the
+    /// mandate no longer cycles instead of keeping its last cycle's words.
+    /// It is written as the mandate's own assignment: the next cycle's line
+    /// replaces it in place.
+    pub(crate) fn post_resident_control_line(
+        &self,
+        task_id: &str,
+        title: &str,
+        body: &str,
+        lasting: bool,
+    ) -> Result<NoticePostResult, OrbitError> {
+        let single_line = |text: &str, max_chars: usize| -> String {
+            text.split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .chars()
+                .filter(|ch| !ch.is_control())
+                .take(max_chars)
+                .collect()
+        };
+        let request = NoticePostRequest {
+            kind: NoticeKind::Info,
+            title: single_line(title, limits::MAX_TITLE_CHARS as usize),
+            body: Some(single_line(body, 1000)),
+            scope: None,
+            dedupe_key: Some(resident_status_notice_key(task_id)),
+            linked_task: None,
+            close_on_linked_done: None,
+            evidence: Vec::new(),
+            hosts: Vec::new(),
+            expires_in_hours: None,
+            expires_at: None,
+        };
+        let mut audit = NoticeAudit::new("post", None);
+        audit.detail = serde_json::json!({
+            "kind": request.kind.as_str(),
+            "dedupe_key": request.dedupe_key,
+            "cause": "resident_control",
+        });
+        let result = self
+            .ensure_coordination_task_write_permitted()
+            .and_then(|()| self.resident_control_line_poster(task_id, lasting))
+            .and_then(|poster| self.post_notice_as(&poster, request, &mut audit));
+        if !result.as_ref().is_ok_and(|(_, repeated)| *repeated) {
+            audit.record(
+                self,
+                &result.as_ref().map(|(posted, _)| posted.notice.id.clone()),
+            );
+        }
+        result.map(|(posted, _)| posted)
+    }
+
+    fn post_notice_as(
+        &self,
+        poster: &NoticePoster,
+        request: NoticePostRequest,
+        audit: &mut NoticeAudit,
+    ) -> Result<(NoticePostResult, bool), OrbitError> {
         audit.poster = Some(poster.class);
         #[cfg(feature = "test-support")]
         let now = super::test_support::notice_post_time();
         #[cfg(not(feature = "test-support"))]
         let now = Utc::now();
-        let post = self.validate_notice_post(&poster, request)?;
+        let post = self.validate_notice_post(poster, request)?;
         audit.detail["dedupe_key"] = serde_json::Value::String(post.dedupe_key.clone());
         let workspace_id = self.workspace_id()?;
         let workspace = NoticeWorkspace {
@@ -264,6 +329,8 @@ impl OrbitRuntime {
             &store.notice_rows(Some(std::slice::from_ref(&workspace.id)), true)?,
         );
         let events_since = match poster.class {
+            // A resident's rate is hourly, like an orchestrator's.
+            AuthorClass::Agent if poster.resident.is_some() => now - Duration::hours(1),
             AuthorClass::Agent => now - Duration::hours(24),
             AuthorClass::Orchestrator => now - Duration::hours(1),
             AuthorClass::Operator | AuthorClass::System => now,
@@ -286,7 +353,7 @@ impl OrbitRuntime {
         let repeated = std::cell::Cell::new(false);
         let decide = |snapshot: &NoticePostSnapshot| -> Result<NoticePostPlan, OrbitError> {
             let (plan, decided) =
-                decide_post(&poster, &workspace, &post, snapshot, &linked_done, now)?;
+                decide_post(poster, &workspace, &post, snapshot, &linked_done, now)?;
             outcome.set(decided);
             repeated.set(matches!(plan, NoticePostPlan::Unchanged { .. }));
             Ok(plan)
@@ -297,7 +364,7 @@ impl OrbitRuntime {
         let outcome = outcome.get();
         audit.detail["outcome"] = serde_json::Value::String(outcome.as_str().to_string());
         audit.detail["request_fingerprint"] =
-            serde_json::json!(post.request_fingerprint(&poster, notice.scope));
+            serde_json::json!(post.request_fingerprint(poster, notice.scope));
         Ok((NoticePostResult { notice, outcome }, repeated.get()))
     }
 
@@ -331,7 +398,7 @@ impl OrbitRuntime {
         if !poster.may_post_kind(kind) {
             return Err(refuse(
                 NoticeRefusalCode::KindRefused,
-                "a managed agent may post only incident or info notices",
+                "a managed agent may post only incident or info notices (a resident cycle may also post warn)",
             ));
         }
         let title = title.trim().to_string();
@@ -447,7 +514,13 @@ impl OrbitRuntime {
             }
             None => None,
         };
-        if poster.class == AuthorClass::Agent && linked_task.is_none() && evidence.is_empty() {
+        // A resident's notices are attributed to its mandate, which is the
+        // evidence: its status line has nothing else to cite.
+        if poster.class == AuthorClass::Agent
+            && poster.resident.is_none()
+            && linked_task.is_none()
+            && evidence.is_empty()
+        {
             return Err(refuse(
                 NoticeRefusalCode::EvidenceRequired,
                 "a managed agent's notice needs a linked task or at least one evidence reference",
@@ -469,16 +542,43 @@ impl OrbitRuntime {
                 }
                 key.to_string()
             }
-            None => derive_dedupe_key(
-                kind,
-                &title,
-                linked_task.as_ref().map(|task| task.id.as_str()),
-            ),
+            None => {
+                let derived = derive_dedupe_key(
+                    kind,
+                    &title,
+                    linked_task.as_ref().map(|task| task.id.as_str()),
+                );
+                // A resident's warn is keyed under its own mandate, so it
+                // can always replace and close it: `resident:<mandate>:`
+                // then the blocker (`task:<id>`, or the slugged title).
+                match (kind, &poster.resident, poster.task_id.as_deref()) {
+                    (NoticeKind::Warn, Some(_), Some(mandate)) => {
+                        format!("{}{derived}", resident_notice_key_prefix(mandate))
+                            .chars()
+                            .take(MAX_DEDUPE_KEY_CHARS)
+                            .collect()
+                    }
+                    _ => derived,
+                }
+            }
         };
         if dedupe_key.is_empty() {
             return Err(refuse(
                 NoticeRefusalCode::InvalidField,
                 "no dedupe key could be derived; pass `dedupe_key`",
+            ));
+        }
+        if !poster.may_post_key(&dedupe_key) {
+            return Err(refuse(
+                NoticeRefusalCode::InvalidField,
+                "`dedupe_key` values under `resident:` are reserved for that resident mandate's own cycles",
+            ));
+        }
+        let status_line = poster.resident_status_key().as_deref() == Some(dedupe_key.as_str());
+        if status_line && kind != NoticeKind::Info {
+            return Err(refuse(
+                NoticeRefusalCode::KindRefused,
+                "a resident's status line is an info notice; post an operator ask as a warn under its own key",
             ));
         }
         let close_on_linked_done = linked_task.is_some() && close_on_linked_done.unwrap_or(true);
@@ -495,6 +595,7 @@ impl OrbitRuntime {
             body,
             scope,
             dedupe_key,
+            status_line,
             close_on_linked_done,
             linked_task,
             evidence,
@@ -526,10 +627,30 @@ impl ValidatedPost {
     ) -> Result<Option<DateTime<Utc>>, OrbitError> {
         let cap = poster.expiry_cap_hours(self.kind);
         let earliest = now + Duration::minutes(MIN_EXPIRY_MINUTES);
-        match (
+        let requested = (
             self.fingerprint_request.expires_in_hours,
             self.fingerprint_request.expires_at,
-        ) {
+        );
+        if let Some(resident) = &poster.resident {
+            // Every post of a resident's notice renews it, so one that is
+            // no longer re-posted lapses: the status line after twice the
+            // heartbeat, anything else after its kind's default.
+            if self.status_line {
+                if requested != (None, None) {
+                    return Err(refuse(
+                        NoticeRefusalCode::ExpiryInvalid,
+                        "a resident's status line expires at twice the mandate's heartbeat; omit `expires_in_hours` and `expires_at`",
+                    ));
+                }
+                return Ok(Some(now + resident.status_line_ttl));
+            }
+            if requested == (None, None) {
+                return Ok(Some(
+                    now + Duration::hours(i64::from(poster.default_expiry_hours(self.kind))),
+                ));
+            }
+        }
+        match requested {
             (Some(_), Some(_)) => Err(refuse(
                 NoticeRefusalCode::InvalidField,
                 "pass `expires_in_hours` or `expires_at`, not both",
@@ -644,7 +765,18 @@ fn decide_post(
     let expires_at = post.resolve_expiry(poster, now)?;
     match poster.class {
         AuthorClass::Agent
-            if snapshot.poster_events.len() >= limits::AGENT_POSTS_PER_TASK_PER_DAY as usize =>
+            if poster.resident.is_some()
+                && snapshot.poster_events.len() >= limits::RESIDENT_POSTS_PER_HOUR as usize =>
+        {
+            return Err(limit(
+                "resident_posts_per_hour",
+                limits::RESIDENT_POSTS_PER_HOUR,
+            ));
+        }
+        AuthorClass::Agent
+            if poster.resident.is_none()
+                && snapshot.poster_events.len()
+                    >= limits::AGENT_POSTS_PER_TASK_PER_DAY as usize =>
         {
             return Err(limit(
                 "agent_posts_per_task_per_day",
@@ -699,11 +831,12 @@ fn decide_post(
                 .iter()
                 .filter(|row| row.author_task_id.is_some() && row.author_task_id == poster.task_id)
                 .count();
-            if task_open >= limits::MAX_OPEN_PER_AGENT_TASK as usize {
-                return Err(limit(
-                    "max_open_per_agent_task",
-                    limits::MAX_OPEN_PER_AGENT_TASK,
-                ));
+            let (name, cap) = match poster.resident {
+                Some(_) => ("max_open_per_resident", limits::MAX_OPEN_PER_RESIDENT),
+                None => ("max_open_per_agent_task", limits::MAX_OPEN_PER_AGENT_TASK),
+            };
+            if task_open >= cap as usize {
+                return Err(limit(name, cap));
             }
         }
         let notice = Notice {

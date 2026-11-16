@@ -19,7 +19,7 @@ use super::sources::{
 fn notice_attention_severity(notice: &Notice, now: DateTime<Utc>) -> AttentionSeverity {
     use AttentionSeverity as S;
     let base = match notice.kind {
-        NoticeKind::Incident => S::High,
+        NoticeKind::Warn | NoticeKind::Incident => S::High,
         NoticeKind::Maintenance => S::Medium,
         NoticeKind::Info => S::Low,
     };
@@ -63,7 +63,9 @@ pub(super) fn notice_attention_items(
     })?;
     let mut items = Vec::new();
     for notice in &listing.notices {
-        if notice.status != EffectiveStatus::Open {
+        // A resident's status line asks nothing of anyone, and lapsing is
+        // how it works: it is read with its resident, not as an item.
+        if notice.status != EffectiveStatus::Open || notice.is_resident_status_line() {
             continue;
         }
         let severity = notice_attention_severity(notice, now);

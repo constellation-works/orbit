@@ -26,6 +26,7 @@
   color: var(--fg-mute);
   white-space: nowrap;
 }
+.notice-kind-warn { color: var(--warn-fg); font-weight: 600; }
 .notice-kind-incident { color: var(--state-pending); }
 .notice-kind-maintenance { color: var(--accent); }
 /* Heading row: the page hint on the left, the Post control on the right.
@@ -120,6 +121,8 @@
   border-radius: 50%;
   background: var(--fg-disabled);
 }
+.notice-severity-warn { color: var(--warn-fg); font-weight: 600; }
+.notice-severity-warn::before { background: var(--warn-fg); }
 .notice-severity-incident { color: var(--state-failed); font-weight: 600; }
 .notice-severity-incident::before { background: var(--state-failed); }
 .notice-severity-maintenance { color: var(--state-pending); }
@@ -131,7 +134,7 @@
   white-space: normal;
   overflow-wrap: anywhere;
 }
-.notice-incident .notice-title { color: var(--fg-strong); font-weight: 600; }
+.notice-warn .notice-title, .notice-incident .notice-title { color: var(--fg-strong); font-weight: 600; }
 .notice-ended .notice-title { color: var(--fg-dim); font-weight: 400; }
 .notice-scope {
   grid-area: scope;

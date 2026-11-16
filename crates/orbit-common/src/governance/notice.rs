@@ -1,5 +1,5 @@
 //! Fleet notices: post, close, list and show short-lived, scoped, authored
-//! coordination notes (incident, maintenance, info) held by the home
+//! coordination notes (warn, incident, maintenance, info) held by the home
 //! workspace's owner.
 //!
 //! On MCP the noun registers in the opt-in `notice` toolset; `orbit tool
@@ -48,6 +48,7 @@ pub const NOTICE: NounSpec<NoticeVerb> = NounSpec {
 
 const SCOPES: &[EnumValue] = &[EnumValue::plain("workspace"), EnumValue::plain("global")];
 const KINDS: &[EnumValue] = &[
+    EnumValue::plain("warn"),
     EnumValue::plain("incident"),
     EnumValue::plain("maintenance"),
     EnumValue::plain("info"),
@@ -74,9 +75,9 @@ const POST_PARAMS: &[ParamSpec] = &[
     required(both(
         "kind",
         ParamType::Enum(KINDS),
-        "incident (something is broken now), maintenance (planned work others should hold off or plan around) or info (anything else worth knowing).",
+        "warn (the operator is needed: name the exact ask), incident (something is broken now), maintenance (planned work others should hold off or plan around) or info (anything else worth knowing).",
         CliArgKind::flag("kind"),
-        "incident, maintenance or info",
+        "warn, incident, maintenance or info",
     )),
     required(free_text(both(
         "title",
@@ -133,7 +134,7 @@ const POST_PARAMS: &[ParamSpec] = &[
     mcp_only(
         "evidence",
         ParamType::Array,
-        "Up to 8 references as {type, value} objects; type is task, run, friction, pull_request, url or commit, and value is at most 256 characters. Stored and shown, never dereferenced.",
+        "Up to 8 references as {type, value} objects; type is task, run, friction, pull_request, decision, url or commit, and value is at most 256 characters. Stored and shown, never dereferenced.",
     ),
     cli_only(
         "evidence_refs",
@@ -146,7 +147,7 @@ const POST_PARAMS: &[ParamSpec] = &[
             value_name: Some("TYPE=VALUE"),
             multiple: false,
         },
-        "Evidence reference (task, run, friction, pull_request, url or commit), repeatable",
+        "Evidence reference (task, run, friction, pull_request, decision, url or commit), repeatable",
     ),
     both(
         "hosts",
@@ -158,7 +159,7 @@ const POST_PARAMS: &[ParamSpec] = &[
     both(
         "expires_in_hours",
         ParamType::Integer,
-        "Hours until the notice expires. Defaults by kind (incident 72, maintenance 12, info 168); capped by poster class, and a longer request is refused rather than clamped. Mutually exclusive with expires_at.",
+        "Hours until the notice expires. Defaults by kind (warn 72, incident 72, maintenance 12, info 168); capped by poster class, and a longer request is refused rather than clamped. Mutually exclusive with expires_at.",
         CliArgKind::flag("expires-in"),
         "Hours until the notice expires",
     ),
@@ -175,7 +176,7 @@ const POST: OperationSpec<NoticeVerb> = OperationSpec {
     verb: NoticeVerb::Post,
     cli_path: &["post"],
     tool_name: "orbit.notice.post",
-    tool_description: "Post a fleet notice: a short, scoped note every agent and operator in its scope should see until it stops being true (an incident, planned maintenance, or other information). Not a lease notice: lease notices are events on one path lease. The notice is held by this workspace's owner, expires (defaults by kind, capped by poster class), closes when its linked task is done, and is deduplicated by dedupe_key: posting a key an open notice already holds updates it when you may edit it, or corroborates it (bumps its report count) when you may not. The response is {notice, outcome} with outcome created, updated or corroborated; a lost reply is safe to retry. Who you post as (operator, orchestrator or agent) comes from your session, never from input; a managed agent may post only incident or info notices about its own workspace, for at most 24 hours, with a linked task or evidence. A notice informs; it grants nothing.",
+    tool_description: "Post a fleet notice: a short, scoped note every agent and operator in its scope should see until it stops being true (an ask of the operator, an incident, planned maintenance, or other information). Not a lease notice: lease notices are events on one path lease. The notice is held by this workspace's owner, expires (defaults by kind, capped by poster class), closes when its linked task is done, and is deduplicated by dedupe_key: posting a key an open notice already holds updates it when you may edit it, or corroborates it (bumps its report count) when you may not. The response is {notice, outcome} with outcome created, updated or corroborated; a lost reply is safe to retry. Who you post as (operator, orchestrator or agent) comes from your session, never from input; a managed agent may post only incident or info notices about its own workspace, for at most 24 hours, with a linked task or evidence. A resident cycle may also post warn notices and keeps one info status line under the key resident:<mandate>:status, whose expiry Orbit sets to twice the mandate's heartbeat. A notice informs; it grants nothing.",
     cli_about: "Post a fleet notice, or update or corroborate the open one with its key",
     cli_help: CliHelp {
         long_about: None,
@@ -223,7 +224,7 @@ const CLOSE: OperationSpec<NoticeVerb> = OperationSpec {
     verb: NoticeVerb::Close,
     cli_path: &["close"],
     tool_name: "orbit.notice.close",
-    tool_description: "Close a fleet notice by id or dedupe_key with a reason. The operator may close any notice; an orchestrator may close its own crew's notices and any orchestrator- or agent-authored notice; a managed agent may close only its own task's notices. Closing a notice that is already closed or expired returns it unchanged with already_inactive: true.",
+    tool_description: "Close a fleet notice by id or dedupe_key with a reason. The operator may close any notice; an orchestrator may close its own crew's notices and any orchestrator- or agent-authored notice; a managed agent, a resident cycle included, may close only its own task's notices. Closing a notice that is already closed or expired returns it unchanged with already_inactive: true.",
     cli_about: "Close a fleet notice",
     cli_help: CliHelp {
         long_about: None,
@@ -340,7 +341,7 @@ const LIST: OperationSpec<NoticeVerb> = OperationSpec {
     verb: NoticeVerb::List,
     cli_path: &["list"],
     tool_name: "orbit.notice.list",
-    tool_description: "List fleet notices, open ones unless status says otherwise. With a workspace, that workspace's notices plus global notices homed elsewhere on its owner; with all: true, every workspace homed on this owner; without a workspace in a federated session, every reachable owner's notices merged, deduplicated by id and limited once after the merge. Each notice carries its kind, scope, title, body, author class, linked task and its status, expiry, report count and effective status (open, closed or expired, derived when read). Ordered incident, maintenance, info, newest update first. Output {notices, degraded}; degraded names any owner or home that could not be read, so a shorter list never silently hides an unreachable owner. Read-only.",
+    tool_description: "List fleet notices, open ones unless status says otherwise. With a workspace, that workspace's notices plus global notices homed elsewhere on its owner; with all: true, every workspace homed on this owner; without a workspace in a federated session, every reachable owner's notices merged, deduplicated by id and limited once after the merge. Each notice carries its kind, scope, title, body, author class, linked task and its status, expiry, report count and effective status (open, closed or expired, derived when read). Ordered warn, incident, maintenance, info, newest update first. Output {notices, degraded}; degraded names any owner or home that could not be read, so a shorter list never silently hides an unreachable owner. Read-only.",
     cli_about: "List fleet notices",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,

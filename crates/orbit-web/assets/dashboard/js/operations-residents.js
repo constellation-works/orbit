@@ -393,6 +393,33 @@ function lastActivity(mandate) {
   return { text: "No cycle yet", title: "" };
 }
 
+// "12m ago", "3h ago": how long since a status line was posted.
+function ago(value) {
+  const at = Date.parse(value);
+  if (Number.isNaN(at)) return "";
+  const minutes = Math.max(0, Math.round((Date.now() - at) / 60000));
+  if (minutes < 1) return "just now";
+  return `${minutes < 60 ? `${minutes}m` : minutes < 2880 ? `${Math.round(minutes / 60)}h` : `${Math.round(minutes / 1440)}d`} ago`;
+}
+
+// The mandate's status line: the one info notice its cycle replaces each
+// time. A line past its expiry (twice the heartbeat) is marked silent, so a
+// resident that stopped cycling does not read as alive behind its last words.
+function statusLine(mandate) {
+  const line = mandate.status_line;
+  if (!line?.title) return { text: "No status line yet", title: "", stale: false, empty: true };
+  const posted = ago(line.posted_at);
+  const lapsed = Date.parse(line.expires_at) <= Date.now();
+  const stale = mandate.state !== "ended" && (line.stale === true || lapsed);
+  const detail = [line.body, `Posted ${when(line.posted_at)}`, stale ? `Lapsed ${when(line.expires_at)}` : null].filter(Boolean).join("\n");
+  return {
+    text: stale ? `Silent · last status ${posted}: ${line.title}` : `${line.title}${posted ? ` · ${posted}` : ""}`,
+    title: detail,
+    stale,
+    empty: false,
+  };
+}
+
 function nextWake(payload, mandate) {
   if (mandate.state !== "active") return { text: "-", title: "" };
   if (mandate.live_cycle) return { text: "Now", title: "" };
@@ -413,6 +440,7 @@ function mandateRow(payload, mandate) {
   const needs = needsOperator(mandate);
   const activity = lastActivity(mandate);
   const wake = nextWake(payload, mandate);
+  const status = statusLine(mandate);
   const row = el("div", {
     class: `resident-row${selected ? " selected" : ""}${mandate.state === "ended" ? " ended" : ""}`,
     "aria-label": `Resident mandate ${mandate.task_id}`,
@@ -422,6 +450,11 @@ function mandateRow(payload, mandate) {
       el("span", { class: "resident-id", text: mandate.task_id }),
     ]),
     el("span", { class: "resident-row-state" }, [stateLabel(mandate)]),
+    el("span", {
+      class: `resident-row-status${status.stale ? " stale" : ""}${status.empty ? " empty" : ""}`,
+      text: status.text,
+      title: status.title,
+    }),
     el("span", { class: "resident-row-activity", text: activity.text, title: activity.title }),
     el("span", { class: "resident-row-wake", text: wake.text, title: wake.title }),
     el("span", { class: `resident-row-needs${needs ? " needs" : ""}`, text: needs || "-" }),
@@ -674,6 +707,8 @@ function mandateDetail(payload, mandate) {
     fact("Deadline", when(body.deadline || mandate.authority?.deadline)),
     fact("Live cycle", live ? `${live.cycle} (run ${live.run_id}) until ${when(live.expires_at)}` : "none"),
   ];
+  const line = mandate.status_line;
+  const status = statusLine(mandate);
   const id = mandate.task_id;
   // detailsPanel keeps each disclosure's open state across refreshes.
   let authority = null;
@@ -695,6 +730,12 @@ function mandateDetail(payload, mandate) {
   return el("section", { class: "resident-detail", "aria-label": `Detail for ${id}` }, [
     mandate.state_reason ? el("p", { class: "resident-muted", text: mandate.state_reason }) : null,
     ...warnings.map(text => el("p", { class: "resident-stalled", text })),
+    line?.title ? el("div", { class: `resident-status-detail${status.stale ? " stale" : ""}` }, [
+      el("h4", { text: status.stale ? "Last status (silent since it lapsed)" : "Status" }),
+      el("p", { class: "resident-notes", text: line.title }),
+      line.body ? el("p", { class: "resident-muted", text: line.body }) : null,
+      el("p", { class: "resident-muted", text: `Posted ${when(line.posted_at)} · ${status.stale ? "lapsed" : "lapses"} ${when(line.expires_at)}` }),
+    ]) : null,
     requestRows(payload, mandate),
     controlRow(payload, mandate),
     el("div", { class: "resident-detail-grid" }, [

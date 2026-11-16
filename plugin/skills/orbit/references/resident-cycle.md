@@ -67,7 +67,7 @@ died without a checkpoint. Its actions are in the ledger under
 ### 3. Act within authority
 
 Rights gate writes; reads, comments, filing `proposed` tasks, friction,
-escalations and your checkpoint need no right.
+escalations, your notices and your checkpoint need no right.
 
 | Right | What it permits in covered workspaces |
 |---|---|
@@ -135,7 +135,9 @@ carrying that JSON record) indexing the question, so the assignment's thread
 shows it without opening the human-crew task. List the
 request in your checkpoint's `requests[]` too, naming the decision request,
 the task, and whether it blocks. Escalations are non-blocking by default: an
-unanswered question stops only the work that depends on its answer.
+unanswered question stops only the work that depends on its answer. Every
+escalation that needs the operator also gets a warn notice
+([Status line and warns](#6-status-line-and-warns)).
 
 ### 5. Record costs
 
@@ -148,7 +150,51 @@ cannot see. Something that broke or contradicted an assumption is also
 friction (`orbit.friction` action `add`); a missing capability is a cost, not
 friction — one event can be both.
 
-### 6. Checkpoint
+### 6. Status line and warns
+
+Notices are how the operator sees a resident without opening its task. Post
+them with `orbit.notice.post` in the mandate's own workspace; they need no
+right, no linked task and no evidence.
+
+**One status line, every cycle.** Before the checkpoint, post one `info`
+notice with `dedupe_key` `resident:<mandate id, lowercase>:status`: a title of
+at most 120 characters saying where the mandate stands now ("3 in review, 1
+waiting on a merge", "All quiet"), and a body only when it adds something. The
+post replaces the previous cycle's line in place (`outcome` `updated`); never
+post a second info notice or a different key. Name no expiry: Orbit sets it to
+twice the mandate's heartbeat, so a resident that stops cycling goes silent
+instead of looking alive, and naming one is refused. Post it even when nothing
+changed, since the post is what keeps the line alive. On a `handoff` or
+`ended` checkpoint the line says so. When the manager pauses, takes over,
+stops, resumes or releases the mandate, Orbit writes that line itself.
+
+**A warn for each thing that needs the operator.** A blocker or issue only
+the operator can clear gets one `warn` notice, never an `incident` (that kind
+means something is broken) and never a line in the status notice:
+
+- The title names the exact ask: "Decide: retry or drop the stuck delivery",
+  "Fix the GitHub credential on the build host", "Merge #412".
+- One warn per blocker. Give `linked_task` when a task is the blocker and let
+  the key derive, or pass `dedupe_key` `resident:<mandate>:warn:<blocker>` (for
+  example `…:warn:pr-412`). Posting the same key again updates that warn, so a
+  repeat cycle never opens a duplicate.
+- When the ask is a choice between options, raise it with `orbit.decision`
+  action `raise` as in step 4 and cite it in the warn's `evidence` as
+  `{"type": "decision", "value": "<decision request id>"}`, so the answer lands
+  in task history.
+- A warn lasts 72 hours from its last post. Re-post one that still stands when
+  its ask changes and at least once a day; one you stop re-posting lapses.
+- Close it yourself with `orbit.notice.close` (`dedupe_key` or `id`, and a
+  `reason`) in the cycle that sees the blocker cleared. You can close only
+  notices this mandate's cycles posted. A warn whose `linked_task` reaches
+  `done` closes itself.
+
+The brief lists the notices in scope, your own included: check it for warns
+you opened before posting or closing. The limits are 10 open notices and 30
+posts an hour per mandate; a refusal is a cost to record, not a reason to
+drop the checkpoint.
+
+### 7. Checkpoint
 
 End every cycle with exactly one `orbit.resident.checkpoint` call carrying
 the complete checkpoint record: your cycle and run ids, the wake reasons and
@@ -173,8 +219,7 @@ reference forward when you resume), and one outcome:
 
 Keep standing state in structured fields such as `requests[]` and `decisions[]`,
 carrying it forward without retelling it in prose. Put operator asks in
-`requests[]` and the corresponding notice when supported, never a "FOR DANIEL"
-paragraph in notes. Notes are the cycle's delta, not a recurring status report.
+`requests[]` and a warn notice, never a "FOR DANIEL" paragraph in notes. Notes are the cycle's delta, not a recurring status report.
 The brief has no older-notes tail; read task state when you need older detail.
 
 A checkpoint for a stale cycle, or a second checkpoint for the same cycle,

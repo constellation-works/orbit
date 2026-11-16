@@ -632,11 +632,19 @@ impl OrbitRuntime {
             }
         }
         wake_items.insert("watch".into(), digest_of(&json!(explicit_items)));
-        // Info notices stay in the brief but never wake: only an incident or
-        // maintenance notice opening or clearing is a state the mandate acts
-        // on. Only open ones are items, so clearing one removes its key.
+        // Info notices stay in the brief but never wake: only a warn, incident
+        // or maintenance notice opening or clearing is a state the mandate
+        // acts on. Only open ones are items, so clearing one removes its key.
+        // Residents' own notices are left out: a status line changes every
+        // cycle and lapses by design, and a cycle's own warn is not news to
+        // it, so counting either would wake the mandate at its cadence floor.
         for notice in notices.iter().filter(|notice| {
-            notice.kind != NoticeKind::Info && notice.status == EffectiveStatus::Open
+            notice.kind != NoticeKind::Info
+                && notice.status == EffectiveStatus::Open
+                && !notice
+                    .dedupe_key
+                    .starts_with(orbit_types::record::RESIDENT_NOTICE_KEY_PREFIX)
+                && notice.author.task_id.as_deref() != Some(task.id.as_ref())
         }) {
             wake_items.insert(format!("notice:{}", notice.id), "open".into());
         }

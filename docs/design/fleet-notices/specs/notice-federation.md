@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: where fleet notices live (the home workspace's owner), how followers read and write them, what global scope reaches, and linked tasks across workspaces"
-last_validated: 2026-11-05
+last_validated: 2026-11-15
 title: Spec — Notice federation
 owner: claude
 status: Draft
@@ -9,7 +9,7 @@ feature: fleet-notices
 tags: [fleet-notices, spec, federated-mcp]
 related_features: [fleet-notices, federated-mcp, host-registry, distributed-drain, operator-attention]
 related_artifacts: [ORB-21207, ORB-21171]
-last_updated: 2026-11-05
+last_updated: 2026-11-15
 ---
 
 # Spec: Notice federation
@@ -75,7 +75,7 @@ it still returns `updated` or `corroborated` with the stored expiry untouched.
   `degraded` entry, while a configured destination that does not answer, and an owner with no
   configured destination, both degrade.
 - Both routes share the list order and the `limit` rule: the order is `Notice::cmp_list_order` in
-  `orbit-types` (kind incident, maintenance, info; newest `updated_at`; id), and the bound and
+  `orbit-types` (kind warn, incident, maintenance, info; newest `updated_at`; id), and the bound and
   default are `NOTICE_LIST_MAX_LIMIT`/`NOTICE_LIST_DEFAULT_LIMIT` in `orbit-common`'s notice
   operation spec. An out-of-range `limit` is the same `notice_invalid_field` refusal with or
   without a workspace, and the workspace-less caller refuses it before reading any owner.

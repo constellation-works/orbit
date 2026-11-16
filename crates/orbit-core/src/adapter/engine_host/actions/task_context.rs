@@ -2,7 +2,7 @@ use std::path::Path;
 
 use orbit_common::text::floor_char_boundary;
 use orbit_engine::{DispatchError, WORKFLOW_RUN_FAILED_EVENT};
-use orbit_types::record::Notice;
+use orbit_types::record::{Notice, NoticeKind};
 use orbit_types::task::{
     LIGHT_DELIVERY_TAGS, SKIP_VALIDATION_TAG, Task, TaskComment, TaskHistoryEntry,
     refuses_implementer_writes,
@@ -248,6 +248,10 @@ fn read_open_notices_for_brief(
 /// [`BRIEF_MAX_ITEMS`], each body cut to [`BRIEF_BODY_CHARS`] characters. No
 /// evidence and no field naming a tool or command reaches the brief.
 fn build_fleet_notice_brief(mut notices: Vec<Notice>) -> Option<FleetNoticeBrief> {
+    // A warn asks the operator, and a resident's status line reports on its
+    // own mandate: neither tells a working agent anything to act on, and
+    // either would crowd an incident out of the few items quoted.
+    notices.retain(|notice| notice.kind != NoticeKind::Warn && !notice.is_resident_status_line());
     if notices.is_empty() {
         return None;
     }

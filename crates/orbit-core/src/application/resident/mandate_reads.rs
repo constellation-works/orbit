@@ -112,6 +112,29 @@ impl OrbitRuntime {
         })
     }
 
+    /// The mandate's status line as the reads report it: the title and body
+    /// of its notice, when it was last posted, when it lapses, and `stale`
+    /// once it has lapsed or been closed. `null` before the first line, or
+    /// when the notices cannot be read.
+    fn resident_status_line_json(&self, task_id: &str) -> Value {
+        match self.resident_status_line(task_id) {
+            Ok(Some(notice)) => json!({
+                "notice_id": notice.id,
+                "title": notice.title,
+                "body": notice.body,
+                "posted_at": notice.updated_at,
+                "expires_at": notice.expires_at,
+                "status": notice.status,
+                "stale": notice.status != orbit_types::record::EffectiveStatus::Open,
+            }),
+            Ok(None) => Value::Null,
+            Err(error) => {
+                tracing::warn!(task = task_id, %error, "failed to read a resident's status line");
+                Value::Null
+            }
+        }
+    }
+
     /// `orbit.resident.show`: the mandate, its effective authority, the
     /// authority record with its grant history, open grant requests, live
     /// cycle, latest parsed checkpoint and the mandate's state.
@@ -149,6 +172,7 @@ impl OrbitRuntime {
             "title": view.task.title,
             "status": view.task.status,
             "latest_checkpoint": latest_checkpoint,
+            "status_line": self.resident_status_line_json(&view.task.id),
             "live_cycle": live_cycle,
             "state": state,
             "mandate": view.mandate.as_ref().ok().map(view::to_json),
