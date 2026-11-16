@@ -49,6 +49,7 @@ review records alone; "runtime" kinds need run, claim, provider or host state.
 | `host_unhealthy` | runtime | `orbit host list` live probe (reachability, version, pull protocol), the default `orbit doctor` workspace check, and `orbit.drain.probe` refusals on a follower | a registered host does not answer or reports a skewed binary or protocol, or a default doctor check fails or warns | the check's recorded onset when the source has one, else `null` |
 | `notice_open` | record | the notice store's effective-open read (`list_notices` with status open), derived only on the home owner | an effective-open fleet notice is homed in the workspace; expired or closed notices are not items | `opened_at` |
 | `resident_stalled` | task | the resident mandate view and its checkpoint comments (`application/resident/due.rs`, `resident_stall`), derived only on the home owner | an `active` resident mandate (not paused, taken over, handed off or ended) wrote no checkpoint for twice its heartbeat, or its last three checkpoints are all `incomplete`, or its workspace's cycle routine is disabled — no cycle can fire at all then, however recently it checkpointed ([manager-channel](../../resident-orchestrator/specs/manager-channel.md#what-residents-report-through)) | the last checkpoint (task creation when it never checkpointed), or the first of the three incomplete ones |
+| `routine_tripped` | runtime | the host's routine circuit breakers (`routine_breakers` in `~/.orbit/orbit.db`, written by the routine sweep), reported by each checkout for the routines its workspace defines | the routine's breaker is open: its last three fires failed with the same error class, and the sweep stops firing it until a trial fire succeeds or an operator resets it ([routines design](../../routines/2_design.md#41-circuit-breaker)) | `tripped_at` |
 
 Notes that bind implementations:
 
@@ -159,6 +160,7 @@ The task-level implementation returns at most 32 warning findings in `detail.fin
 | `host_unhealthy` | `orbit.drain.probe` or `orbit host show` for diagnosis, plus the failing doctor check's own fix hint when it names one |
 | `notice_open` | `orbit.notice.show`; `also`: `orbit.notice.close` (needs `reason`) |
 | `resident_stalled` | `orbit.resident.control` with `action: wake` and `status_request: true` (needs `reason`) when the resident cycle routine is enabled; `orbit.routine.control` with `action: toggle`, `expected_enabled: false`, `enabled: true` and the observed routine `name` and `target` (no `needs`) when it is disabled — routine enablement requires trusted operator authority and an explicit workspace; `also`: `orbit.resident.show` |
+| `routine_tripped` | `orbit routine breaker reset <name>` once the cause is fixed; `also`: `orbit routine show <name>` and `orbit routine breaker bypass <name>` (one fire on the next sweep) |
 
 For `claim_stale`, `input` carries only `claim_id` and `workspace`; the observed phase is
 `detail.phase`. The operator supplies `expected_phase` after inspecting it, a fresh/replayed
@@ -202,6 +204,7 @@ and are not waiting on a single task.
 | `friction_untriaged` | low | medium | none |
 | `host_unhealthy` | high | critical | critical when the host is the owner of an in-scope workspace, or its failure is the reason another item is degraded |
 | `resident_stalled` | medium | high | none; fingerprint state is the stall reason, `last_checkpoint_at`, and the routine state (`cycle_routine_disabled`, `cycle_routine_name`) |
+| `routine_tripped` | high | high | none; fingerprint state is `tripped_at` and `trips`, so a re-opened breaker after a failed trial is a new episode |
 | `notice_open` | `warn` and `incident` high, `maintenance` medium, `info` low (residents' status lines excluded) | critical | one step higher when the linked task is terminal but not `done`, or when the notice expires within 2 hours. This kind's severity is the notice rule in [notice-delivery](../../fleet-notices/specs/notice-delivery.md#attention-kind), not the age-bump ladder; its fingerprint state is `revision`, effective `status` and severity, with `refs` carrying `notice_id` and the linked `task_id`, `reason` the notice title, and `since` its `opened_at` |
 
 The thresholds, the 48-hour run window, the 120-minute stuck bound, the 60-second CI cache, the

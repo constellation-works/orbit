@@ -21,6 +21,7 @@ use crate::application::job::run_owner_liveness;
 use crate::application::routines::clock::load_clock_settings;
 use crate::runtime::host_signal::{HostSignalProbe, ScheduledShutdown, default_host_signal_probe};
 use chrono::Utc;
+use orbit_automation::routines::breaker::{ObservedFire, ObservedOutcome};
 use orbit_automation::routines::sweep::TICK_DEADLINE;
 use orbit_automation::routines::sweep::run_sweep_core;
 pub use orbit_automation::routines::sweep::{
@@ -29,6 +30,7 @@ pub use orbit_automation::routines::sweep::{
 };
 use orbit_common::OrbitError;
 use orbit_common::observability::log_rotation::{self, LogRotationConfig};
+use orbit_store::contracts::JobRunQuery;
 use orbit_types::workflow::{JobRun, JobRunState};
 use orbit_types::workspace::Workspace;
 use serde_json::json;
@@ -145,6 +147,70 @@ impl RoutineDispatch for RuntimeDispatch<'_> {
                     crate::application::job::RunOwnerLiveness::Unknown => RunOwnerLiveness::Unknown,
                 }
             })
+    }
+
+    fn routine_runs(
+        &self,
+        routine: &super::loader::LoadedRoutine,
+        limit: usize,
+    ) -> Result<Vec<ObservedFire>, OrbitError> {
+        let Some(runtime) = self.runtimes.get(&routine.source_orbit_dir) else {
+            return Ok(Vec::new());
+        };
+        let runs = runtime
+            .stores()
+            .jobs()
+            .list_job_runs_filtered(&JobRunQuery {
+                job_id: Some(routine.definition.target.job_name().to_string()),
+                trigger_routine: Some(routine.definition.name.clone()),
+                limit: Some(limit),
+                include_steps: false,
+                ..JobRunQuery::default()
+            })?;
+        Ok(runs
+            .into_iter()
+            .map(|run| ObservedFire {
+                created_at: run.created_at,
+                outcome: match run.state {
+                    JobRunState::Pending | JobRunState::Running | JobRunState::Retrying => {
+                        ObservedOutcome::InFlight
+                    }
+                    JobRunState::Success | JobRunState::Held => ObservedOutcome::Succeeded,
+                    JobRunState::Skipped => ObservedOutcome::Ignored,
+                    JobRunState::Failed
+                    | JobRunState::Timeout
+                    | JobRunState::Cancelled
+                    | JobRunState::Interrupted => ObservedOutcome::Failed(None),
+                },
+                run_id: Some(run.run_id.to_string()),
+            })
+            .collect())
+    }
+
+    fn run_failure_class(&self, source_orbit_dir: &Path, run_id: &str) -> Option<String> {
+        let run = self
+            .runtimes
+            .get(source_orbit_dir)?
+            .stores()
+            .jobs()
+            .get_job_run(run_id)
+            .ok()
+            .flatten()?;
+        let code = run
+            .steps
+            .iter()
+            .filter(|step| step.state != JobRunState::Success)
+            .find_map(|step| step.typed_failure_code())
+            .map(|code| code.as_str().to_string());
+        Some(code.unwrap_or_else(|| run.state.to_string()))
+    }
+
+    fn host_orbit_build(&self) -> Option<String> {
+        let build = orbit_common::process::build::current_orbit_build();
+        Some(match build.source_commit {
+            Some(commit) => format!("{}+{commit}", build.version),
+            None => build.version,
+        })
     }
 }
 

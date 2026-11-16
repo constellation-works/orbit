@@ -21,6 +21,9 @@ pub enum ScheduleDisplayState {
     /// Source or trigger state cannot be shown as a next evaluation, or this
     /// host can never admit the delivery work it would evaluate.
     Unavailable,
+    /// The routine's circuit breaker is open: the sweep fires it again only
+    /// for a trial, so the next evaluation is the next trial.
+    Tripped,
 }
 
 impl ScheduleDisplayState {
@@ -32,6 +35,7 @@ impl ScheduleDisplayState {
             Self::Waiting => "waiting",
             Self::NeverObserved => "never_observed",
             Self::Unavailable => "unavailable",
+            Self::Tripped => "tripped",
         }
     }
 

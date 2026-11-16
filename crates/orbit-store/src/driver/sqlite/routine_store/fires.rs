@@ -17,6 +17,25 @@ impl Store {
         &self,
         intent: &RoutineFireIntentParams,
     ) -> Result<bool, OrbitError> {
+        self.routine_insert_fire_intent(intent, true)
+    }
+
+    /// Record the intent of one fire that consumes no scheduled slot, such as
+    /// an operator's circuit-breaker bypass [ORB-25103]. Unlike
+    /// [`Self::routine_record_fire_intent`] it leaves the cursor's
+    /// `last_slot` alone, so the routine's due slots stay unconsumed.
+    pub fn routine_record_unscheduled_fire_intent(
+        &self,
+        intent: &RoutineFireIntentParams,
+    ) -> Result<bool, OrbitError> {
+        self.routine_insert_fire_intent(intent, false)
+    }
+
+    fn routine_insert_fire_intent(
+        &self,
+        intent: &RoutineFireIntentParams,
+        advance_cursor: bool,
+    ) -> Result<bool, OrbitError> {
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             let now = crate::now_string();
             let inserted = tx
@@ -38,6 +57,9 @@ impl Store {
                 .map_err(sqlite_store_error)?;
             if inserted == 0 {
                 return Ok(false);
+            }
+            if !advance_cursor {
+                return Ok(true);
             }
             // Slots are chrono RFC3339 UTC (`+00:00`), so the text order is
             // chronological. A retry of an older slot must not rewind a cursor

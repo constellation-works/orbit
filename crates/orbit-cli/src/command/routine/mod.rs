@@ -1,3 +1,4 @@
+mod breaker;
 mod command;
 mod init;
 mod list;

@@ -206,6 +206,10 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         .route("/routines", get(routines::list_routine_health))
         .route("/routines/toggle", post(routines::toggle_routine))
         .route(
+            "/routines/breaker",
+            post(routine_breaker::control_routine_breaker),
+        )
+        .route(
             "/routines/trigger",
             post(schedule_edits::set_routine_trigger),
         )

@@ -6,12 +6,13 @@ use orbit_cmd::registry_routines::routine_statuses;
 use orbit_core::OrbitError;
 use orbit_core::application::routines::{
     FireField, OwnerOnlyRoutine, RetiredRoutine, RoutineField, RoutineStatusReport, project_fire,
-    recent_fires,
+    recent_fires, routine_breaker_events,
 };
 use orbit_types::workflow::automation::members::BatchMember;
 use serde_json::{Map, Value, json};
 
 const RECENT_FIRE_LIMIT: usize = 10;
+const BREAKER_EVENT_LIMIT: usize = 10;
 
 const ROUTINE_COLUMNS: &[(&str, RoutineField)] = &[
     ("name", RoutineField::Name),
@@ -29,6 +30,8 @@ const ROUTINE_COLUMNS: &[(&str, RoutineField)] = &[
     ("target", RoutineField::Target),
     ("policy", RoutineField::Policy),
     ("next_due", RoutineField::NextDue),
+    ("state", RoutineField::State),
+    ("breaker", RoutineField::Breaker),
 ];
 
 const FIRE_COLUMNS: &[(&str, FireField)] = &[
@@ -77,6 +80,7 @@ impl RoutineShowArgs {
             )));
         };
         let fires = recent_fires(global_root, &self.name, RECENT_FIRE_LIMIT)?;
+        let breaker_events = routine_breaker_events(global_root, &self.name, BREAKER_EVENT_LIMIT)?;
         let definition = &status.routine.definition;
 
         let mut doc = Map::new();
@@ -94,6 +98,7 @@ impl RoutineShowArgs {
                     .collect::<Vec<_>>()
             ),
         );
+        doc.insert("breaker_events".into(), json!(breaker_events));
         let doc = Value::Object(doc);
 
         use std::fmt::Write as _;
@@ -196,11 +201,43 @@ impl RoutineShowArgs {
             "Effective on this host: {}",
             if status.effective() { "yes" } else { "no" }
         );
-        let _ = writeln!(
-            out,
-            "Next due: {}",
-            status.next_due.as_deref().unwrap_or("unknown")
-        );
+        if status.tripped().is_some() {
+            let _ = writeln!(out, "Next due: tripped (fires only as a breaker trial)");
+        } else {
+            let _ = writeln!(
+                out,
+                "Next due: {}",
+                status.next_due.as_deref().unwrap_or("unknown")
+            );
+        }
+        if let Some(notice) = super::list::tripped_notice(status) {
+            let _ = writeln!(out, "Circuit breaker: {notice}");
+            let _ = writeln!(
+                out,
+                "  fire once now: orbit routine breaker bypass {}",
+                definition.name
+            );
+        }
+        if !breaker_events.is_empty() {
+            let _ = writeln!(out, "Breaker events:");
+            for event in &breaker_events {
+                let detail = event
+                    .detail
+                    .as_deref()
+                    .map(|detail| format!(" ({detail})"))
+                    .unwrap_or_default();
+                let run = event
+                    .run_id
+                    .as_deref()
+                    .map(|run_id| format!(" run {run_id}"))
+                    .unwrap_or_default();
+                let _ = writeln!(
+                    out,
+                    "  [{}] {} by {}{}{}",
+                    event.event, event.at, event.actor, detail, run
+                );
+            }
+        }
         if fires.is_empty() {
             let _ = writeln!(out, "Recent fires: none");
         } else {

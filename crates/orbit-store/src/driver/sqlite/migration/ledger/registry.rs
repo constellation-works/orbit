@@ -841,12 +841,20 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_job_run_host_id_indexes,
     },
+    // ORB-25103: host-local routine circuit breakers and their transition
+    // log. New tables only, which an older binary never reads or writes.
+    Migration {
+        version: 93,
+        name: "routine_breakers",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_routine_breakers,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 92;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 93;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

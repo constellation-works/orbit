@@ -62,6 +62,7 @@ export function createRoutineCatalogue({ payload, routines, workspaceId, renderR
       const states = [
         ["blocked", all.filter(routine => routineState(routine) === "blocked").length],
         ["stalled", all.filter(routine => routine.automation?.condition?.stall).length],
+        ["tripped", all.filter(routine => routine.breaker?.tripped).length],
         ["failing repeatedly", failingRoutines(all).length],
       ].filter(([, total]) => total);
       if (states.length) group.firstChild.appendChild(el("span", {
