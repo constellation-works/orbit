@@ -260,14 +260,80 @@ pub enum RecordedLightDeliveryReason {
 /// The replay identity of a recorded light-delivery decision: exactly the
 /// information its history event and note carry, so two decisions share a
 /// key exactly when they would record the same event and note. The
-/// candidate is the abbreviated commit the note shows.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// candidate is the abbreviated commit the note shows. Equality uses the
+/// encoded event and note, preserving legacy replay identity even when a
+/// path or profile key contains note punctuation.
+#[derive(Debug, Clone)]
 pub struct LightDeliveryReplayKey {
-    pub tag: String,
+    tag: String,
     /// The candidate commit as recorded (its first 12 characters).
-    pub candidate: String,
-    pub outcome: RecordedLightDeliveryOutcome,
-    pub reason: RecordedLightDeliveryReason,
+    candidate: String,
+    outcome: RecordedLightDeliveryOutcome,
+    reason: RecordedLightDeliveryReason,
+    identity_note: String,
+}
+
+impl PartialEq for LightDeliveryReplayKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.event() == other.event() && self.identity_note == other.identity_note
+    }
+}
+
+impl Eq for LightDeliveryReplayKey {}
+
+impl LightDeliveryReplayKey {
+    /// The recorded tag.
+    #[must_use]
+    pub fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    /// The abbreviated candidate commit shown in the note.
+    #[must_use]
+    pub fn candidate(&self) -> &str {
+        &self.candidate
+    }
+
+    /// The recorded applied or ignored outcome.
+    #[must_use]
+    pub fn outcome(&self) -> &RecordedLightDeliveryOutcome {
+        &self.outcome
+    }
+
+    /// The typed reason parsed from the note.
+    #[must_use]
+    pub fn reason(&self) -> &RecordedLightDeliveryReason {
+        &self.reason
+    }
+
+    fn event(&self) -> &'static str {
+        match self.outcome {
+            RecordedLightDeliveryOutcome::Applied { .. } => LIGHT_DELIVERY_APPLIED_EVENT,
+            RecordedLightDeliveryOutcome::Ignored => LIGHT_DELIVERY_IGNORED_EVENT,
+        }
+    }
+
+    fn render_note(&self) -> String {
+        let skips_review = self.tag != SKIP_VALIDATION_TAG;
+        let reason = render_reason(&self.reason);
+        match &self.outcome {
+            RecordedLightDeliveryOutcome::Applied { guard_passed } => {
+                let skipped = applied_skipped(skips_review);
+                let guard_note = if *guard_passed { GUARD_PASSED_NOTE } else { "" };
+                format!(
+                    "`{}{APPLIED_INFIX}{}: {reason}{guard_note}, so {skipped}.",
+                    self.tag, self.candidate
+                )
+            }
+            RecordedLightDeliveryOutcome::Ignored => {
+                let normal = ignored_normal(skips_review);
+                format!(
+                    "`{}{IGNORED_INFIX}{}: {reason}; normal {normal} applies.",
+                    self.tag, self.candidate
+                )
+            }
+        }
+    }
 }
 
 impl LightDeliveryReplayKey {
@@ -318,12 +384,15 @@ impl LightDeliveryReplayKey {
             };
             (RecordedLightDeliveryOutcome::Ignored, reason)
         };
-        Self {
+        let mut key = Self {
             tag: decision.tag.clone(),
             candidate: short(&decision.candidate).to_string(),
             outcome,
             reason,
-        }
+            identity_note: String::new(),
+        };
+        key.identity_note = key.render_note();
+        key
     }
 }
 
@@ -375,10 +444,14 @@ impl RecordedLightDeliveryDecision {
         } else {
             decode_ignored(note)?
         };
-        let record = Self { key };
+        let mut key = key;
         // Only a note this codec renders identically decodes, so key
         // equality is exactly the recorded event-and-note equality.
-        (record.note() == note).then_some(record)
+        if key.render_note() != note {
+            return None;
+        }
+        key.identity_note = note.to_string();
+        Some(Self { key })
     }
 
     /// The replay identity this record carries.
@@ -390,35 +463,14 @@ impl RecordedLightDeliveryDecision {
     /// The history event this record writes.
     #[must_use]
     pub fn event(&self) -> &'static str {
-        match self.key.outcome {
-            RecordedLightDeliveryOutcome::Applied { .. } => LIGHT_DELIVERY_APPLIED_EVENT,
-            RecordedLightDeliveryOutcome::Ignored => LIGHT_DELIVERY_IGNORED_EVENT,
-        }
+        self.key.event()
     }
 
     /// The history note this record writes: the tag, the abbreviated
     /// candidate, what happened and why.
     #[must_use]
     pub fn note(&self) -> String {
-        let LightDeliveryReplayKey {
-            tag,
-            candidate,
-            outcome,
-            reason,
-        } = &self.key;
-        let skips_review = tag != SKIP_VALIDATION_TAG;
-        let reason = render_reason(reason);
-        match outcome {
-            RecordedLightDeliveryOutcome::Applied { guard_passed } => {
-                let skipped = applied_skipped(skips_review);
-                let guard_note = if *guard_passed { GUARD_PASSED_NOTE } else { "" };
-                format!("`{tag}{APPLIED_INFIX}{candidate}: {reason}{guard_note}, so {skipped}.")
-            }
-            RecordedLightDeliveryOutcome::Ignored => {
-                let normal = ignored_normal(skips_review);
-                format!("`{tag}{IGNORED_INFIX}{candidate}: {reason}; normal {normal} applies.")
-            }
-        }
+        self.key.identity_note.clone()
     }
 
     /// The history entry recording this decision, written by `by` at `at`.
@@ -496,6 +548,7 @@ fn decode_applied(note: &str) -> Option<LightDeliveryReplayKey> {
         candidate: candidate.to_string(),
         outcome: RecordedLightDeliveryOutcome::Applied { guard_passed },
         reason,
+        identity_note: String::new(),
     })
 }
 
@@ -533,6 +586,7 @@ fn decode_ignored(note: &str) -> Option<LightDeliveryReplayKey> {
         candidate: candidate.to_string(),
         outcome: RecordedLightDeliveryOutcome::Ignored,
         reason,
+        identity_note: String::new(),
     })
 }
 
@@ -549,19 +603,21 @@ fn decode_light(reason: &str) -> Option<RecordedLightDeliveryReason> {
 
 fn decode_outside(reason: &str) -> Option<RecordedLightDeliveryReason> {
     let body = reason.strip_prefix('`')?.strip_suffix('`')?;
-    if let Some((first, profile_key)) = body.split_once(OUTSIDE_ONE_INFIX) {
+    if let Some((head, profile_key)) = body.rsplit_once(OUTSIDE_MANY_INFIX)
+        && let Some((first, others)) = head.rsplit_once("` and ")
+        && let Ok(others) = others.parse::<usize>()
+        && let Some(count) = others.checked_add(1)
+    {
         return Some(RecordedLightDeliveryReason::Outside {
             first: first.to_string(),
-            count: 1,
+            count,
             profile_key: profile_key.to_string(),
         });
     }
-    let (head, profile_key) = body.split_once(OUTSIDE_MANY_INFIX)?;
-    let (first, others) = head.rsplit_once("` and ")?;
-    let others: usize = others.parse().ok()?;
+    let (first, profile_key) = body.rsplit_once(OUTSIDE_ONE_INFIX)?;
     Some(RecordedLightDeliveryReason::Outside {
         first: first.to_string(),
-        count: others.checked_add(1)?,
+        count: 1,
         profile_key: profile_key.to_string(),
     })
 }
