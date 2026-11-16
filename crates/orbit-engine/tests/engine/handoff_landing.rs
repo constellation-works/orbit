@@ -880,16 +880,9 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
             now_ms,
         );
         if matches!(decision, orbit_types::workflow::CiRerunAdmission::Reserved) {
-            history.push(orbit_types::task::TaskHistoryEntry {
-                at: chrono::DateTime::from_timestamp_millis(now_ms as i64).unwrap(),
-                by: "owner".into(),
-                event: orbit_types::workflow::CI_RERUN_RESERVED_EVENT.into(),
-                note: Some(serde_json::to_string(plan).unwrap()),
-                from_status: None,
-                to_status: None,
-                operation_id: None,
-                decision: None,
-            });
+            history.push(plan.reservation_entry(
+                chrono::DateTime::from_timestamp_millis(now_ms as i64).unwrap(),
+            ));
         }
         Ok(decision)
     }

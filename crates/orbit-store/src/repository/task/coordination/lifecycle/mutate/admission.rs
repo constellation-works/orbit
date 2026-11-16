@@ -77,7 +77,10 @@ impl TaskCommitBoundary {
                 let mutation = ClaimMutation::RecordLandingHistory {
                     handoff_id: handoff_id.into(),
                     event: CI_RERUN_RESERVED_EVENT.into(),
-                    note: encode(plan)?,
+                    note: plan.reservation_note(),
+                    decision: Some(orbit_types::task::TaskDecision::CiRerunReserved(Box::new(
+                        plan.clone(),
+                    ))),
                 };
                 let mutation_id = format!(
                     "ci-retry:{}:{}:{}:{}:{}",

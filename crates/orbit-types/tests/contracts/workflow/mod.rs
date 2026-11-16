@@ -1,5 +1,6 @@
 mod activity_v2;
 mod candidate_carry;
+mod ci_rerun;
 mod delivery_conventions;
 mod final_recovery;
 mod gate_note;
