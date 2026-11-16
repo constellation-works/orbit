@@ -106,13 +106,19 @@ class RelativeImportTests(unittest.TestCase):
                     "fn probe() { super::super::landing::checks::read(); }",
                     "use super::super::{landing::{checks::Probe}};",
                     "use super::super::landing::{ /* note */ checks::Probe};",
+                    "use super::super::landing as l;\nuse l::checks::Probe;",
+                    "use super::super::{landing as l};\nuse l::{checks::Probe};",
+                    "use crate::executor::automation::vcs::landing as l;\nfn probe() { l::checks::read(); }",
+                    "use super::super::landing::{self as l};\nuse l::checks::Probe;",
+                    "use super::super::landing as l;\nuse l as m;\nuse m::checks::Probe;",
                 )
             ], rejected=True, base=vcs)
         self.check_rows([
             ("checks/probe.rs", "use super::super::pr::Probe;\n"
              "// landing::checks is the retired path.\n"
              'const EVIDENCE: &str = "the landing waits";\n'),
-            *[(f"{consumer}/probe.rs", "use super::super::checks::Probe;\n")
+            *[(f"{consumer}/probe.rs", "use super::super::checks::Probe;\n"
+               "use super::super::landing as l;\nuse l::Probe as Other;\n")
               for consumer in ("pr", "base", "claim")],
         ], rejected=False, base=vcs)
 

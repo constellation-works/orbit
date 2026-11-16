@@ -378,8 +378,11 @@ def code_tokens(source):
             yield match.group(), match.start()
 
 
-def use_tree(tokens, index, prefix=()):
-    """Expand relative paths, carrying the prefix through nested use groups."""
+def use_tree(tokens, index, prefix=(), aliases=None):
+    """Expand relative paths, carrying the prefix through nested use groups.
+
+    When `aliases` is a list, each `path as name` rename appends `(path, name)`.
+    """
     paths = []
     while index + 1 < len(tokens) and tokens[index + 1][0] == "::":
         prefix += (tokens[index][0],)
@@ -387,7 +390,7 @@ def use_tree(tokens, index, prefix=()):
     if index < len(tokens) and tokens[index][0] == "{":
         index += 1
         while index < len(tokens) and tokens[index][0] != "}":
-            member_paths, index = use_tree(tokens, index, prefix)
+            member_paths, index = use_tree(tokens, index, prefix, aliases)
             paths.extend(member_paths)
             if index < len(tokens) and tokens[index][0] == ",":
                 index += 1
@@ -399,6 +402,8 @@ def use_tree(tokens, index, prefix=()):
         paths.append(prefix + (tokens[index][0],))
         index += 1
         if index < len(tokens) and tokens[index][0] == "as":
+            if aliases is not None and index + 1 < len(tokens):
+                aliases.append((paths[-1], tokens[index + 1][0]))
             index += 2
     return paths, index
 
@@ -417,6 +422,29 @@ for path in paths:
     tokens = list(code_tokens(source))
     if sys.argv[4] == "named-path":
         prefixes = [tuple(name.split("::")) for name in upper]
+        # A `use <path>::landing as l;` rename lets `l::checks` stand for
+        # `landing::checks`: track each alias of a multi-segment prefix's first
+        # segment, including aliases of aliases, and match prefixes through it.
+        renames = []
+        for index, (name, _) in enumerate(tokens):
+            if name == "use":
+                use_tree(tokens, index + 1, (), renames)
+        expanded = []
+        for prefix in prefixes:
+            if len(prefix) < 2:
+                continue
+            heads = {prefix[0]}
+            grown = True
+            while grown:
+                grown = False
+                for segments, alias in renames:
+                    if segments[-1] == "self" and len(segments) > 1:
+                        segments = segments[:-1]
+                    if segments[-1] in heads and alias not in heads and alias != "_":
+                        heads.add(alias)
+                        grown = True
+            expanded.extend((head, *prefix[1:]) for head in heads - {prefix[0]})
+        prefixes = [*prefixes, *expanded]
         for index, (name, start) in enumerate(tokens):
             if not any(name == prefix[0] for prefix in prefixes):
                 continue
