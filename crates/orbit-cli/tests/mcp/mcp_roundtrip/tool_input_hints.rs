@@ -12,7 +12,7 @@ fn mcp_missing_records_name_a_recovery_tool_or_field() {
             "orbit_task_show",
             json!({"id": "TST-99999999"}),
             "not_found",
-            "orbit.task.list",
+            "`orbit_task_list {}`",
         ),
         (
             "orbit_task_show",
