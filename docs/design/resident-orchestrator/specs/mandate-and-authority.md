@@ -42,7 +42,7 @@ being able to delegate power.
   "workspaces": ["orbit-office"],
   "watch": {"tasks": ["ORB-21180"], "tags": ["scribe-v2"]},
   "crew": "opus",
-  "cadence": {"floor_minutes": 10, "heartbeat_minutes": 120},
+  "cadence": {"heartbeat_minutes": 120},
   "continuity": "prefer",
   "probe": false
 }
@@ -54,9 +54,9 @@ being able to delegate power.
 | `exit_criteria` | 1–8 lines; criteria checkable from task state should be phrased that way |
 | `deadline` | Optional RFC 3339; past it the resident only hands off |
 | `workspaces` | Workspaces the mandate is about; must be a superset of the authority's scope. v1: all owned by the assignment's owner host |
-| `watch` | Tasks and tags whose changes feed the wake digest, in addition to tasks the resident dispatched or filed |
+| `watch` | Tasks and tags whose every change wakes the resident, in addition to the state changes of tasks its cycles acted on ([2_design.md §5.1](../2_design.md#51-slice-3-as-implemented)) |
 | `crew` | A registered crew; any provider |
-| `cadence` | `floor_minutes` ≥ max(5, clock cadence); `heartbeat_minutes` ≥ `floor_minutes` |
+| `cadence` | `heartbeat_minutes` ≥ `floor_minutes`; `floor_minutes` ≥ max(5, clock cadence), optional, defaulting to `heartbeat_minutes` (set lower only when the operator asks for faster reaction) |
 | `continuity` | `prefer` (resume a provider conversation when the adapter can) or `off` |
 | `probe` | `true` while the mandate is run interactively as a probe |
 

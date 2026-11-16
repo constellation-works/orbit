@@ -58,9 +58,9 @@ spec:
     verified clean tree replays each on the base after them, outside the agent
     sandbox in a detached worktree; each must report a passed test and no
     skip, and its log is pinned beside the required commands'. A failing
-    replay fails the step with its output; an empty list, a selector outside
-    the grammar or a replay that runs nothing is refused, as is the
-    declaration on a candidate that changes its base.
+    replay fails the step with its output; an empty list, more than 16
+    selectors, a selector outside the grammar or a replay that runs nothing is
+    refused, as is the declaration on a candidate that changes its base.
   input_schema_json:
     type: object
     required: [workspace_path]

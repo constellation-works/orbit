@@ -79,6 +79,14 @@ pub(super) fn dispatch_recovery(
         "attempt": attempt,
         "max_attempts": max_attempts,
     });
+    if matches!(
+        recovery.name.as_str(),
+        STEP_FAILURE_RECOVERY_ACTIVITY | PR_CONFLICT_RECOVERY_ACTIVITY
+    ) && let StepFailure::Error(error) = failure
+        && let Some(diagnostic) = error.error_diagnostic()
+    {
+        input["error_diagnostic"] = super::input::bounded_recovery_input(&ctx.run_id, diagnostic);
+    }
     if let StepFailure::Error(DispatchError::RecoverableVcsConflict(conflict)) = failure
         && let Some(object) = input.as_object_mut()
     {

@@ -178,17 +178,40 @@ pub struct PostDeployRecord {
 
 impl PostDeployRecord {
     /// Read the current declaration and subsequent operator measurements.
-    pub fn read(history: &[TaskHistoryEntry]) -> Option<Self> {
-        let (start, owed) = history
+    ///
+    /// No declaration is `Ok(None)`. An unreadable newest declaration is an
+    /// error: completion must fail closed, never reuse an older declaration.
+    /// The newest declaration must name an automation writer (a system label
+    /// or machine id). Operator-authored entries cannot replace obligations;
+    /// operator measurements are read separately after the declaration.
+    pub fn read(history: &[TaskHistoryEntry]) -> Result<Option<Self>, super::WorkflowError> {
+        let Some((start, entry)) = history
             .iter()
             .enumerate()
             .rev()
-            .find_map(|(index, entry)| {
-                (entry.event == POST_DEPLOY_OWED_EVENT)
-                    .then(|| serde_json::from_str::<PostDeployOwed>(entry.note.as_deref()?).ok())
-                    .flatten()
-                    .map(|owed| (index, owed))
-            })?;
+            .find(|(_, entry)| entry.event == POST_DEPLOY_OWED_EVENT)
+        else {
+            return Ok(None);
+        };
+        let unreadable = |reason| {
+            super::WorkflowError::Invalid(format!(
+                "newest post-deploy owed declaration at {} is unreadable: {reason}",
+                entry.at
+            ))
+        };
+        if !is_automation_actor(&entry.by) {
+            return Err(unreadable(format!(
+                "writer `{}` is not an automation actor",
+                entry.by
+            )));
+        }
+        let note = entry
+            .note
+            .as_deref()
+            .ok_or_else(|| unreadable("missing note".to_string()))?;
+        let owed: PostDeployOwed =
+            serde_json::from_str(note).map_err(|error| unreadable(error.to_string()))?;
+        OwedCriterion::check_all(&owed.criteria).map_err(unreadable)?;
         let mut recorded: Vec<Option<RecordedPostDeploy>> =
             owed.criteria.iter().map(|_| None).collect();
         for entry in &history[start + 1..] {
@@ -214,7 +237,7 @@ impl PostDeployRecord {
                 });
             }
         }
-        Some(Self { owed, recorded })
+        Ok(Some(Self { owed, recorded }))
     }
 
     /// Criteria no operator has recorded met.

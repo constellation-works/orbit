@@ -956,11 +956,11 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   commands on the base and replays each selector on the base, outside the agent
   sandbox in a detached worktree, pinning each passing log beside theirs. A
   failing replay fails the claim with its output (the owner blocks the task); an
-  empty list, a selector outside that grammar, or a run that executes no test or
-  prints a skip is refused. A candidate that also changes the base is refused for
-  this outcome. A supplied report stays authoritative: one that is malformed or
-  fails verification is refused, never replaced by the selectors, and a summary
-  alone is refused.
+  empty list, more than 16 selectors, a selector outside that grammar, or a run
+  that executes no test or prints a skip is refused. A candidate that also
+  changes the base is refused for this outcome. A supplied report stays
+  authoritative: one that is malformed or fails verification is refused, never
+  replaced by the selectors, and a summary alone is refused.
 - Before a follower receives a claim, the owner excludes tasks whose immutable
   `required_tools` cannot be satisfied in a remote claimed implementer. The
   pull receipt names the required tool and restriction in `deferred_conflicts`:
@@ -1955,7 +1955,10 @@ one. From then on:
   Transient, flaky and unattributed classification reruns share one durable rerun
   budget per head across owner completion and claimed landing. Inspect `ci_check_rerun_reserved`
   first: it stores the complete exact failed-job authorization before sending
-  `gh run rerun <run> --failed`. A later `ci_check_rerun` means the request
+  `gh run rerun <run> --failed`. Its note is one line naming the checks, PR, run
+  and attempt; the complete plan, provider authentication included, is the
+  entry's `decision` (`kind: ci_rerun_reserved`) in `orbit task show --json`
+  history. Entries written before that carry the plan as a JSON note instead. A later `ci_check_rerun` means the request
   received a definite accepted reply. An absent reply record is ambiguous,
   not permission to resend. Restart and concurrent observations consume the
   same reservation without another request, repair charge or worker.

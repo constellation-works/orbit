@@ -620,6 +620,7 @@ impl TaskCommitBoundary {
                     handoff_id,
                     event,
                     note,
+                    decision,
                 } => {
                     if !auth.operator
                         || claim.phase != ExecutionClaimPhase::HandedOff
@@ -642,6 +643,17 @@ impl TaskCommitBoundary {
                     if note.trim().is_empty() {
                         return Err(invalid("handoff landing history requires a note"));
                     }
+                    if let Some(decision) = decision {
+                        let orbit_types::task::TaskDecision::CiRerunReserved(plan) = decision
+                        else {
+                            return Err(invalid("unsupported handoff landing history decision"));
+                        };
+                        if event != orbit_types::workflow::CI_RERUN_RESERVED_EVENT
+                            || *note != plan.reservation_note()
+                        {
+                            return Err(invalid("handoff landing history decision mismatch"));
+                        }
+                    }
                     self.check_live_landing_attempt(auth, handoff_id)?;
                     params.append_history.push(
                         orbit_types::task::TaskHistoryEntry::new(
@@ -649,7 +661,8 @@ impl TaskCommitBoundary {
                             "system",
                             event.clone(),
                         )
-                        .with_note(Some(note.clone())),
+                        .with_note(Some(note.clone()))
+                        .with_decision(decision.clone()),
                     );
                     history_event = false;
                 }

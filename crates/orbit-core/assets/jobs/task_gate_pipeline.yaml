@@ -36,6 +36,9 @@
 #   before its first agent that may edit, waiting up to `max_wait_seconds`
 #   while other tasks hold it; a re-application of the unchanged published
 #   patch is not an edit. Admission skips the lock check for that task too.
+#   An operator's explicit ship (`operator_readiness_override`) un-defers
+#   that footprint at the gate and records the local holders it overrode, so
+#   the leaf edits beside them instead of waiting.
 # - On conflict, the loop backs off by `poll_interval_seconds`, capped at
 #   the remaining elapsed budget. It checks expiry before the next attempt
 #   and breaks immediately when `reserve.output.reserved` becomes true. If

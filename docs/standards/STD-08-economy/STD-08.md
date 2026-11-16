@@ -1,10 +1,10 @@
 ---
 id: STD-08-economy
-title: Economy — bounded agent context, delta-only records, one channel per ask, bookkeeping off the page, one-line errors, size stated at design time
-summary: Normative rules for designing anything an agent or operator reads repeatedly (prompts, briefs, tool results, task comments, checkpoints, errors, logs, reports) with an economical mindset — a fixed size that does not grow with history, each fact once and referenced by id, delta-only records, machine bookkeeping kept out of the readable body, asks in their own channel, outcome first, one-line errors with the diagnostic behind a detail view and repeats collapsed, and the steady-state and repeated size stated before it ships; follow it in any project where agents produce or consume text.
+title: Economy — bounded agent context, delta-only records, one channel per ask, bookkeeping off the page, one-line errors, complete stored records, size stated at design time
+summary: Normative rules for designing anything an agent or operator reads repeatedly (prompts, briefs, tool results, task comments, checkpoints, errors, logs, reports) with an economical mindset — a fixed size that does not grow with history, each fact once and referenced by id, delta-only records, machine bookkeeping kept out of the readable body, asks in their own channel, outcome first, one-line errors with the diagnostic behind a detail view and repeats collapsed, and the steady-state and repeated size stated before it ships — while errors, logs and audit records stay complete and structured when stored; follow it in any project where agents produce or consume text.
 status: draft
 tags: [standard, agents, tokens, design]
-version: 1
+version: 2
 created: 2026-11-15
 updated: 2026-11-15
 last_validated: 2026-11-15
@@ -71,7 +71,7 @@ enforces it, [`exemplars.md`](exemplars.md) worked examples in Orbit, and
 - **R9.** Text written for a reader MUST lead with the outcome. It does not restate the
   request, narrate the steps taken, or close with a recap of what it already said.
 
-### Errors and failures
+### Errors, logs and audit
 
 - **R10.** An error or failure shown to a reader MUST say in one plain line what failed,
   why, and the next step. Its structured diagnostic (codes, paths, ids, serialized payloads)
@@ -79,6 +79,12 @@ enforces it, [`exemplars.md`](exemplars.md) worked examples in Orbit, and
   identical failures collapse into one entry with a count and the time range.
   [STD-02](../STD-02-rust-architecture-and-errors/STD-02.md) owns which cause an error
   names; this rule owns how much of it is shown.
+- **R11.** Errors, logs and audit records MUST be complete when stored. Each keeps its full
+  structured diagnostic, and each logged event or audited action records who acted, what
+  was done, when, its inputs (or a digest of them) and its outcome, as structured fields
+  rather than prose. Nothing is trimmed from a stored record to save space; only a declared
+  retention policy removes records. Economy applies to how a record is shown and reread
+  (R5, R7, R10), never to what is recorded.
 
 ## Applies to
 

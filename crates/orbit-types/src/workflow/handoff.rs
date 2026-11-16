@@ -607,6 +607,33 @@ pub struct AlreadyResolved {
 pub const ALREADY_RESOLVED_FIELD: &str = "already_resolved";
 
 impl AlreadyResolved {
+    /// Maximum host test executions one already-resolved declaration may request.
+    pub const MAX_SELECTORS: usize = 16;
+
+    /// Admission refuses a declaration that names no selectors, and every
+    /// declaration above the cap; replay enforces only the cap, since replay
+    /// with no declaration is an empty list.
+    pub fn check_selector_count(count: usize) -> Result<(), String> {
+        if count == 0 {
+            return Err(format!(
+                "`{ALREADY_RESOLVED_FIELD}` names no test selectors, so nothing would show the \
+                 base resolves the task"
+            ));
+        }
+        Self::check_selector_cap(count)
+    }
+
+    /// Refuse more than [`Self::MAX_SELECTORS`] selectors before anything runs.
+    pub fn check_selector_cap(count: usize) -> Result<(), String> {
+        if count > Self::MAX_SELECTORS {
+            return Err(format!(
+                "`{ALREADY_RESOLVED_FIELD}` names {count} test selectors; at most {} are allowed",
+                Self::MAX_SELECTORS
+            ));
+        }
+        Ok(())
+    }
+
     /// The declaration in an implementer's `output`, if it makes one.
     pub fn from_output(output: &serde_json::Value) -> Result<Option<Self>, String> {
         match output.get(ALREADY_RESOLVED_FIELD) {
@@ -623,19 +650,14 @@ impl AlreadyResolved {
         }
     }
 
-    /// Admit every selector in the closed
+    /// Admit at most [`Self::MAX_SELECTORS`] selectors in the closed
     /// [`HostSandboxCommand`](super::HostSandboxCommand) grammar, since each
     /// runs on the claim host outside any agent sandbox: one integration
     /// `--test` target or the package's `--lib` unit tests. An exact required
     /// command is not a selector: validation already runs it, and it need not
     /// run a test.
     pub fn admit(&self) -> Result<Vec<super::HostSandboxCommand>, String> {
-        if self.selectors.is_empty() {
-            return Err(format!(
-                "`{ALREADY_RESOLVED_FIELD}` names no test selectors, so nothing would show the \
-                 base resolves the task"
-            ));
-        }
+        Self::check_selector_count(self.selectors.len())?;
         let mut admitted: Vec<super::HostSandboxCommand> = Vec::new();
         for selector in &self.selectors {
             let command = super::HostSandboxCommand::admit(selector, &[]).map_err(|refusal| {

@@ -51,7 +51,6 @@ The crew must be a name from your `[crews]` table in
   },
   "crew": "sol",
   "cadence": {
-    "floor_minutes": 15,
     "heartbeat_minutes": 60
   },
   "continuity": "prefer"
@@ -65,15 +64,33 @@ The crew must be a name from your `[crews]` table in
 | `exit_criteria` | Yes | 1 to 8 entries, each one line of at most 240 characters. |
 | `workspaces` | Yes | At least one, unique. The authority's scope stays inside this list. |
 | `crew` | Yes | The name of a configured crew. |
-| `cadence.floor_minutes` | Yes | An integer of at least 5: the fewest minutes between two cycles. |
-| `cadence.heartbeat_minutes` | Yes | An integer of at least `floor_minutes`: the most minutes without a cycle. |
+| `cadence.heartbeat_minutes` | Yes | An integer of at least 5 and at least `floor_minutes`: the most minutes without a cycle. |
+| `cadence.floor_minutes` | No | An integer of at least 5: the fewest minutes between two cycles. Defaults to `heartbeat_minutes`. Set it lower only when the mandate must react to a change faster than its heartbeat. |
 | `deadline` | No | An RFC 3339 instant. When it passes, the mandate ends with reason `deadline` and the assignment moves to review, whether or not the cycle routine runs. |
-| `watch` | No | `tasks` (task IDs) and `tags` whose changes wake the resident. Both default to empty. |
+| `watch` | No | `tasks` (task IDs) and `tags` whose changes wake the resident: any change to these tasks counts. Both default to empty. |
 | `continuity` | No | `prefer` (default) resumes the provider conversation when the adapter can. `off` starts every cycle fresh. |
 | `probe` | No | Boolean, default `false`: whether the mandate runs interactively as a probe. |
 
 Unknown keys are refused, also inside `cadence` and `watch`. A mandate that
 fails these rules shows as `invalid` and cannot be widened.
+
+### When a resident wakes
+
+Besides the tasks in `watch`, a resident watches the tasks its cycles acted
+on until they close. For those it reacts only to a change of state: a task
+blocking, entering review, getting a review decision, finishing or being
+rejected, or one of its decision requests being answered or expiring. Edits,
+retried runs and moves between proposed, backlog and in-progress do not wake
+it. An incident or maintenance notice opening or clearing, an answered
+request on the assignment, a comment on the assignment and a mandate or
+authority change also wake it. Info notices do not.
+
+Each cycle's checkpoint plans the next wake in `next_wake.not_before`. Without
+a change that wakes it sooner, the next cycle starts then, but never sooner
+than `floor_minutes` and never later than `heartbeat_minutes` after the last
+cycle started. A cycle that ended `incomplete` waits for the heartbeat. With
+a 20-minute heartbeat and nothing to react to, a resident runs at most three
+cycles an hour.
 
 ## Inspect a mandate
 

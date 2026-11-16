@@ -49,7 +49,7 @@ cycle reread.
 - **R9 (outcome first).** The owner runs agent sessions in a concise output style ("lead with
   the result … no closing recap") because narration and recaps are what he skips.
 
-## Errors and failures
+## Errors, logs and audit
 
 - **R10 (one-line errors, repeats collapsed).** The owner, on the Orbit run list, where every
   failed `resident_cycle_pipeline` run showed "execution failed: v2 job dispatch: worktree
@@ -58,3 +58,9 @@ cycle reread.
   (session f09993e5). The cause fitted in one line: the resident cycle passed no repo root
   (ORB-25050). The error type interpolates its serialized diagnostic into the message
   (`WorktreeIntegrity` in `orbit-engine`'s dispatcher), so every surface shows it raw.
+- **R11 (complete stored records).** The owner, right after v1: "I think we should be
+  thorough for errors, logs, anything audit" (session f09993e5). Errors, logs and audit
+  records are evidence: context cannot be added after the fact, and the worktree-mismatch
+  failure above was diagnosable only because its full diagnostic was kept. Without this rule,
+  v1's economy rules could be read as licence to log less. The split is storage versus view:
+  record everything in structured fields, show one line and read filtered slices.

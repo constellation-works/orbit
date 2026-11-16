@@ -249,8 +249,8 @@ function startForm(payload) {
     ]),
     el("fieldset", { class: "resident-step" }, [
       el("legend", { text: "3 · When it runs" }),
-      field("Floor minutes", input("floor_minutes", { type: "number", min: "1", value: "15" })),
-      field("Heartbeat minutes", input("heartbeat_minutes", { type: "number", min: "1", value: "60" }), "At least the floor."),
+      field("Heartbeat minutes", input("heartbeat_minutes", { type: "number", min: "1", value: "60" }), "The longest it goes without a cycle."),
+      field("Floor minutes", input("floor_minutes", { type: "number", min: "1" }), "Optional; defaults to the heartbeat. Set it lower only to react to changes sooner."),
       field("Deadline", input("deadline", { type: "datetime-local" }), "Optional."),
       field("Crew", crew),
       field("Continuity", continuity),
@@ -306,12 +306,10 @@ async function startResident(form, controls, status) {
     workspaces,
     watch: { tasks: csv(values.watch_tasks.value), tags: csv(values.watch_tags.value) },
     crew: values.crew.value,
-    cadence: {
-      floor_minutes: Number(values.floor_minutes.value),
-      heartbeat_minutes: Number(values.heartbeat_minutes.value),
-    },
+    cadence: { heartbeat_minutes: Number(values.heartbeat_minutes.value) },
     continuity: values.continuity.value,
   };
+  if (values.floor_minutes.value.trim()) mandate.cadence.floor_minutes = Number(values.floor_minutes.value);
   if (values.deadline.value) mandate.deadline = new Date(values.deadline.value).toISOString();
 
   const visit = captureWorkspaceVisit();

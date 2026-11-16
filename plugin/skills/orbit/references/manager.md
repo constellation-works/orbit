@@ -50,8 +50,9 @@ session cannot write, or hand the filing to a session with that surface.
    `resident.mandate/v1`: `goal` (one line), `exit_criteria` (1–8 lines),
    optional `deadline` (RFC 3339), `workspaces` the mandate is about,
    `watch` (`tasks` and `tags` whose changes wake the resident), `crew` (any
-   registered crew), `cadence` (`floor_minutes` at least 5, `heartbeat_minutes`
-   at least the floor) and `continuity` (`prefer` or `off`).
+   registered crew), `cadence` (`heartbeat_minutes` at least 5, optional
+   `floor_minutes` at least 5 and at most the heartbeat) and `continuity`
+   (`prefer` or `off`). See "Cadence: floor and heartbeat" below.
 3. Submit the authority grant with the human's words verbatim (next section).
 4. The mandate becomes active when it has a valid mandate artifact and its
    assignment is open (tagged `resident`, control active): a grant is not an
@@ -71,6 +72,27 @@ the `tasks-write` toolset, but it is not otherwise gated: an edit cannot
 widen authority — the effective scope is the workspaces both the
 mandate and the authority record cover. `orbit.resident.show` reports both
 records beside the effective authority.
+
+## Cadence: floor and heartbeat
+
+The **heartbeat** is the longest a resident goes without a cycle. The
+**floor** is the shortest gap between two cycles, however much changes; it
+bounds cost when the resident has something to react to. Between them, each
+checkpoint's `next_wake.not_before` picks the next cycle time when nothing
+wakes it sooner.
+
+A resident wakes early only on a change it acts on: any change to a task in
+`watch`, or a state change (blocked, review, review decision, done,
+rejected, a settled decision request) of a task its cycles acted on; an
+incident or maintenance notice opening or clearing; an answer, comment or
+mandate or authority change on the assignment. Edits, run retries and moves
+between active states do not wake it.
+
+Leave `floor_minutes` out: it defaults to the heartbeat. Set a lower floor
+only when the operator asks for faster reaction ("react within 5 minutes");
+"every 20 minutes or as it sees fit" is `heartbeat_minutes: 20` with no
+floor. Keep `watch` for tasks whose every change matters: a watched tag on a
+busy queue makes the floor the interval.
 
 ## Relay grants verbatim
 

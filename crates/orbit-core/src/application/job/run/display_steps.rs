@@ -48,12 +48,18 @@ pub struct RunDisplayStep {
     pub state: String,
     pub error_code: Option<String>,
     pub error_message: Option<String>,
+    /// Structured failure detail, shown only on request.
+    pub error_diagnostic: Option<Value>,
     /// How an audit-derived step ended; record steps carry none.
     pub outcome: Option<String>,
 }
 
 impl RunDisplayStep {
     pub fn from_job_step(step: &JobRunStep) -> Self {
+        let legacy = step
+            .error_message
+            .as_deref()
+            .and_then(orbit_types::workflow::activity_job::legacy_worktree_failure);
         Self {
             step_index: step.step_index,
             target_type: step.target_type.to_string(),
@@ -66,7 +72,13 @@ impl RunDisplayStep {
             agent_response_json: step.agent_response_json.clone(),
             state: step.state.to_string(),
             error_code: step.error_code.clone(),
-            error_message: step.error_message.clone(),
+            error_message: legacy
+                .as_ref()
+                .map(|(message, _)| message.clone())
+                .or_else(|| step.error_message.clone()),
+            error_diagnostic: legacy.map(|(_, diagnostic)| {
+                orbit_common::security::redaction::redact_all_json(diagnostic)
+            }),
             outcome: None,
         }
     }
@@ -88,6 +100,10 @@ impl RunDisplayStep {
             ),
             _ => None,
         };
+        let legacy = step
+            .error_message
+            .as_deref()
+            .and_then(orbit_types::workflow::activity_job::legacy_worktree_failure);
         let interrupted = step.state.is_none() && run_state.is_terminal();
         let state = match step.state {
             Some(state) => state,
@@ -109,7 +125,14 @@ impl RunDisplayStep {
             agent_response_json: None,
             state,
             error_code: None,
-            error_message: step.error_message,
+            error_message: legacy
+                .as_ref()
+                .map(|(message, _)| message.clone())
+                .or(step.error_message),
+            error_diagnostic: step
+                .error_diagnostic
+                .or_else(|| legacy.map(|(_, diagnostic)| diagnostic))
+                .map(orbit_common::security::redaction::redact_all_json),
             outcome,
         }
     }
@@ -144,6 +167,7 @@ impl RunDisplayStep {
             "agent_response_json": self.agent_response_json,
             "error_code": self.error_code,
             "error_message": self.error_message,
+            "error_diagnostic": self.error_diagnostic,
             "outcome": self.outcome,
         })
     }
@@ -237,8 +261,10 @@ impl RunDisplaySteps {
 /// persists its audit-derived steps only once the run ends, so a running run
 /// reads its trail.
 ///
-/// `audit_steps` is called only when the record does not answer, so a caller
-/// listing many runs reads no trail it does not show.
+/// A run with a failed recorded activity also reads the audit, for the
+/// structured diagnostic the store does not keep; successful recorded
+/// activities need no read. Callers that list many runs (delivery attention,
+/// why-stuck) therefore read one trail per failed run they show.
 pub fn run_display_steps(
     run: &JobRun,
     audit_steps: impl FnOnce() -> Vec<RunAuditStep>,
@@ -248,17 +274,28 @@ pub fn run_display_steps(
         .steps
         .iter()
         .all(|step| step.target_type == JobTargetType::Job);
-    let audit = if run_level_only {
+    let audit = if run_level_only || run.steps.iter().any(|step| step.error_message.is_some()) {
         audit_steps()
     } else {
         Vec::new()
     };
-    if !run.steps.is_empty() && audit.is_empty() {
+    if !run.steps.is_empty() && (!run_level_only || audit.is_empty()) {
         return RunDisplaySteps {
             records: run
                 .steps
                 .iter()
-                .map(RunDisplayStep::from_job_step)
+                .map(|step| {
+                    let mut displayed = RunDisplayStep::from_job_step(step);
+                    if displayed.error_diagnostic.is_none() {
+                        displayed.error_diagnostic = audit
+                            .iter()
+                            .rev()
+                            .find(|audit| audit.step_id == step.target_id)
+                            .and_then(|audit| audit.error_diagnostic.clone())
+                            .map(orbit_common::security::redaction::redact_all_json);
+                    }
+                    displayed
+                })
                 .collect(),
             source: RunStepSource::Record,
         };

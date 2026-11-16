@@ -1,12 +1,16 @@
 mod activity_v2;
 mod candidate_carry;
+mod ci_rerun;
+mod commit_message;
 mod delivery_conventions;
 mod final_recovery;
 mod gate_note;
+mod handoff;
 mod host_evidence;
 mod job;
 mod job_v2;
 mod pipeline;
+mod post_deploy;
 mod pr_auto_fix_base_red;
 mod review_history;
 mod review_report;

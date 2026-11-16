@@ -4,7 +4,7 @@
 //! ```text
 //! <type>: <summary> [ID]… (#PR)
 //!
-//! <full title, only when the subject cut it>
+//! <full title, when the subject cut or rewrote it>
 //!
 //! <execution summary; for bundles one `- ID: summary` line per task>
 //!
@@ -14,9 +14,12 @@
 //! ```
 //!
 //! The subject is at most [`COMMIT_SUBJECT_BUDGET`] characters, PR number
-//! included, cut at a word boundary and never with an ellipsis. `type` comes
-//! from the task type ([`CommitType::for_task_type`]). Trailers form exactly
-//! one final paragraph, keyed from [`TrailerKey`] in its declaration order.
+//! included, cut at a word boundary and never with an ellipsis. A literal `…`
+//! in the title becomes `...`, and commas inside brackets become semicolons;
+//! when the subject cuts or rewrites the title, the full title leads the body.
+//! `type` comes from the task type ([`CommitType::for_task_type`]). Trailers
+//! form exactly one final paragraph, keyed from [`TrailerKey`] in its
+//! declaration order.
 //! [`validate`] checks a rendered message against all of that.
 
 use std::fmt;
@@ -253,22 +256,22 @@ pub fn orbit_identity(role: CommitRole, model: Option<&str>) -> (String, String)
     (name, email)
 }
 
-/// The role a historical Orbit address stood for, for identities written
-/// before the one scheme: `agent@orbit.invalid` and family addresses
-/// (`claude@orbit.local`) were implementers, `<family>-reviewer@orbit.local`
-/// reviewers, `orbit-recovery@orbit.local` recoveries and
-/// `orbit@orbit.local` Orbit. Current addresses map to their own role.
-/// `None` for an address Orbit never wrote.
+/// Recognize the four current role addresses at `orbit.invalid` and the
+/// historical `orbit.local` scheme: family addresses were implementers,
+/// `<family>-reviewer` reviewers, `orbit-recovery` recoveries and `orbit` Orbit.
+/// Other addresses, including other `orbit.invalid` local parts, return `None`
+/// so their original identity is preserved.
 pub fn orbit_role_for_email(email: &str) -> Option<CommitRole> {
     let email = email.trim().to_ascii_lowercase();
     let (local, domain) = email.rsplit_once('@')?;
     match domain {
-        "orbit.invalid" => Some(match local {
-            "reviewer" => CommitRole::Reviewer,
-            "recovery" => CommitRole::Recovery,
-            "orbit" => CommitRole::Orbit,
-            _ => CommitRole::Implementer,
-        }),
+        "orbit.invalid" => match local {
+            "implementer" => Some(CommitRole::Implementer),
+            "reviewer" => Some(CommitRole::Reviewer),
+            "recovery" => Some(CommitRole::Recovery),
+            "orbit" => Some(CommitRole::Orbit),
+            _ => None,
+        },
         "orbit.local" => Some(if local == "orbit" {
             CommitRole::Orbit
         } else if local == "orbit-recovery" {

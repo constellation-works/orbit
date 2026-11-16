@@ -1577,6 +1577,101 @@ pub(super) fn published_requeue_is_admitted_past_held_locks_and_reuses_its_pr() 
     assert_eq!(opened["pr_number"], "17");
 }
 
+/// An operator's explicit ship of a preserved published delivery overrides
+/// the local lock its gate deferred on: the gate keeps the publication, does
+/// not defer the footprint to the leaf, and the task's history names the
+/// holder. Without the mark the same shipment still defers and waits.
+pub(super) fn operator_shipped_published_requeue_overrides_held_local_lock() {
+    let mut f = Fixture::drained();
+    publication(&mut f);
+    requeue(&mut f);
+    let holder = f
+        .runtime
+        .add_task(orbit_core::application::task::TaskAddParams {
+            title: "Overlapping work in review".into(),
+            description: "Changes the same file".into(),
+            acceptance_criteria: vec!["Observable".into()],
+            plan: "Fixture".into(),
+            context_files: vec!["file:source.txt".into()],
+            complexity: orbit_core::TaskComplexity::Medium,
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .unwrap()
+        .id;
+    f.runtime
+        .apply_task_automation_update(
+            &holder,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Review),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let reserve = |input: Value| {
+        f.runtime
+            .run_deterministic("reserve_locks", &json!({}), &input, Default::default())
+            .unwrap()
+    };
+    let overrides = |f: &Fixture| {
+        f.runtime
+            .get_task_history(&f.task)
+            .unwrap()
+            .into_iter()
+            .filter(|entry| entry.event == "readiness_overridden")
+            .map(|entry| entry.note.unwrap_or_default())
+            .collect::<Vec<_>>()
+    };
+
+    let unmarked =
+        reserve(json!({"task_ids":[f.task],"ttl_seconds":120,"delivery_job":"task_pr_pipeline"}));
+    assert_eq!(
+        (&unmarked["reserved"], &unmarked["footprint_deferred"]),
+        (&json!(true), &json!(true)),
+        "an unmarked preserved shipment still defers its footprint: {unmarked}"
+    );
+    assert!(
+        overrides(&f).is_empty(),
+        "an unmarked shipment records no override: {:?}",
+        overrides(&f)
+    );
+
+    let gate = reserve(
+        json!({"task_ids":[f.task],"ttl_seconds":120,"delivery_job":"task_pr_pipeline","operator_readiness_override":true}),
+    );
+    assert_eq!(gate["reserved"], true, "{gate}");
+    assert_eq!(
+        gate["footprint_deferred"], false,
+        "the operator's ship does not defer the footprint to its leaf: {gate}"
+    );
+    assert_eq!(gate["reserved_files"], json!([]), "{gate}");
+    assert_eq!(
+        gate["published_delivery"],
+        json!({"source_run_id": f.source.run_id, "pull_request": "17"}),
+        "the preserved publication is still carried: {gate}"
+    );
+    let notes = overrides(&f);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(
+        notes[0].contains(&format!("context_lock_conflict (task {} on ", holder)),
+        "the history names the overridden holder: {notes:?}"
+    );
+
+    // The gate forwards `footprint_deferred: false` to the leaf, so its first
+    // editing activity takes no footprint wait while the holder still holds.
+    let (run, setup) = next_with(
+        &f,
+        json!({"task_ids":[f.task],"footprint_deferred":gate["footprint_deferred"],"footprint_wait_seconds":0}),
+    );
+    let resumed = f.action("candidate_resume", json!({"job_run_id":run.run_id,"task_ids":[f.task],"workspace_path":setup["workspace_path"],"base_sha":setup["base_sha"]}));
+    assert_eq!(resumed["outcome"], "resumed_carried");
+    assert_eq!(resumed["prior_pull_request"], "17");
+    checkpoint(&f, &run.run_id, 6, "resume_candidate", resumed);
+    f.runtime
+        .acquire_deferred_footprint(&run.run_id, "agent_implement")
+        .expect("the editing activity does not wait for the overridden local holder");
+}
+
 /// [ORB-24993] A resumed published delivery whose deferred footprint stays
 /// busy ends held, and terminal cleanup returns its task to the backlog
 /// still bound to that held run. Admission still treats the task as the

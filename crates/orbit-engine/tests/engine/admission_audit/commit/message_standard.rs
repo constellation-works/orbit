@@ -124,7 +124,7 @@ fn squash_of_motivating_pr_composes_one_standard_message() {
          Orbit-Recovery-Run: jrun-20261115-1043-c3\n\
          Orbit-Recovery-Step: complete_pr\n\
          Orbit-Recovery-Activity: step_failure_recovery\n\
-         Co-authored-by: orbit[claude-opus-5-5] <implementer@orbit.invalid>\n\
+         Co-authored-by: orbit[claude-opus-5-5] <agent@orbit.invalid>\n\
          Co-authored-by: orbit[muse-spark-1.3-contributor] <recovery@orbit.invalid>"
     );
     assert_eq!(rendered, expected);
@@ -215,8 +215,8 @@ fn every_producer_emits_a_valid_message_typed_by_its_task() {
     let base = git_output(repo, &["rev-parse", "HEAD"]).unwrap();
     commit_as(
         repo,
-        "orbit[gpt]",
-        "agent@orbit.invalid",
+        "Someone",
+        "someone@orbit.invalid",
         "feat: one [ORB-1]",
         "a.txt",
     );
@@ -235,6 +235,13 @@ fn every_producer_emits_a_valid_message_typed_by_its_task() {
         squash.title.ends_with(" [ORB-1] [ORB-2] (#12)"),
         "each id in its own brackets: {}",
         squash.title
+    );
+    assert!(
+        squash
+            .body
+            .contains("Co-authored-by: Someone <someone@orbit.invalid>"),
+        "foreign co-author identity must survive squash composition: {}",
+        squash.body
     );
     produced.push((
         "bundle squash".to_string(),

@@ -23,7 +23,6 @@ const RUN_FILTERS = new Set(["all", "failed"]);
 const PIPELINE_GROUP_JOBS = new Set(["task_auto_pipeline", "task_gate_pipeline", "task_pr_pipeline"]);
 // Worst first: a group reads as the most urgent state among its runs.
 const GROUP_STATE_PRIORITY = ["failed", "timeout", "interrupted", "running", "pending"];
-const FAILED_AT_EXCERPT_CHARS = 80;
 
 const RUN_SORT_DEFAULT_DIR = {
   when: "desc",
@@ -1164,10 +1163,6 @@ function runErrorStep(run) {
     || null;
 }
 
-function truncateText(text, max) {
-  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
-}
-
 // Why a failed, timed-out or interrupted run ended; null for any other state.
 function runFailure(run) {
   if (!runIsResumable(run)) return null;
@@ -1175,10 +1170,11 @@ function runFailure(run) {
   const stepId = step && step.target_id ? String(step.target_id) : "";
   const code = (step && step.error_code) || run.error_code || "";
   const message = (step && step.error_message) || run.error_message || "";
-  const detail = [code, message].filter(Boolean).join(": ").replace(/\s+/g, " ").trim();
+  const detail = String(message || code).replace(/\s+/g, " ").trim();
   return {
     stepId,
-    excerpt: truncateText(detail, FAILED_AT_EXCERPT_CHARS),
+    excerpt: detail,
+    signature: JSON.stringify([run.workspace_id || getWorkspace() || "", run.job_id, run.state, code, message]),
     title: [stepId && `Step: ${stepId}`, code && `Code: ${code}`, message && `Message: ${message}`]
       .filter(Boolean).join("\n"),
   };
@@ -1207,7 +1203,7 @@ function runFailedAtCell(run, { withJob = false } = {}) {
 
 function runFailureHash(run) {
   const failure = runFailure(run);
-  return failure ? `${failure.stepId}|${failure.excerpt}` : "";
+  return failure ? `${failure.stepId}|${failure.signature}` : "";
 }
 
 // Runs of one task's pipelines share a group per attempt; an attempt with a
@@ -1217,7 +1213,34 @@ function runFailureHash(run) {
 function groupRunsForDisplay(sorted) {
   const entries = [];
   const groups = new Map();
+  // Form repeats in time order before applying the operator's sort. A
+  // different state or complete error of that job breaks the sequence; excerpts
+  // and volatile diagnostic ids never decide whether two errors match.
+  const repeats = new Map();
+  const previousByJob = new Map();
+  for (const run of sorted.slice().sort((a, b) => runTimestampValue(b) - runTimestampValue(a))) {
+    const job = JSON.stringify([run.workspace_id || getWorkspace() || "", run.job_id]);
+    let previous = previousByJob.get(job);
+    const failure = runFailure(run);
+    if (failure && failure.excerpt && previous && previous.signature === failure.signature) {
+      previous.runs.push(run);
+    } else {
+      previous = failure && failure.excerpt ? { signature: failure.signature, runs: [run], repeatedFailure: true } : null;
+    }
+    previousByJob.set(job, previous);
+    if (previous) repeats.set(runIdentity(run), previous);
+  }
+  const seenRepeats = new Set();
   for (const run of sorted) {
+    const repeat = repeats.get(runIdentity(run));
+    if (repeat && repeat.runs.length > 1) {
+      if (!seenRepeats.has(repeat)) {
+        repeat.key = `failure:${runIdentity(repeat.runs[repeat.runs.length - 1])}`;
+        entries.push(repeat);
+        seenRepeats.add(repeat);
+      }
+      continue;
+    }
     const taskIds = PIPELINE_GROUP_JOBS.has(run.job_id) ? runTaskIds(run) : [];
     if (taskIds.length !== 1) {
       entries.push({ run });
@@ -1233,7 +1256,7 @@ function groupRunsForDisplay(sorted) {
     group.runs.push(run);
   }
   return entries
-    .flatMap((entry) => (entry.runs ? splitAttempts(entry) : [entry]))
+    .flatMap((entry) => (entry.runs && !entry.repeatedFailure ? splitAttempts(entry) : [entry]))
     .map((entry) => (entry.runs && entry.runs.length === 1 ? { run: entry.runs[0] } : entry));
 }
 
@@ -1314,26 +1337,36 @@ function runGroupRow(group, attributed, listed) {
   const jobNames = runs.map((run) => run.job_id).join(", ");
   const toggle = el("button", {
     class: "id run-group-toggle",
-    text: `${expanded ? "▾" : "▸"} ${runs.length} pipeline runs`,
-    title: `${expanded ? "Hide" : "Show"} ${jobNames}`,
+    text: group.repeatedFailure ? `${expanded ? "▾" : "▸"} ${first.job_id}` : `${expanded ? "▾" : "▸"} ${runs.length} pipeline runs`,
+    title: group.repeatedFailure ? `${expanded ? "Hide" : "Show"} the ${runs.length} individual failed runs of ${first.job_id}` : `${expanded ? "Hide" : "Show"} ${jobNames}`,
   });
-  const failure = groupFailure(group, failed, listed);
+  const failure = group.repeatedFailure ? { run: first } : groupFailure(group, failed, listed);
   let failedAt = el("span", { class: "run-failed-at" });
-  if (failure && failure.run) failedAt = runFailedAtCell(failure.run, { withJob: true });
+  if (failure && failure.run) failedAt = runFailedAtCell(failure.run, { withJob: !group.repeatedFailure });
   else if (failure) failedAt = rootCauseFailedAtCell(failure.cause);
+  if (group.repeatedFailure) {
+    const oldest = runs[runs.length - 1];
+    const firstAt = oldest.finished_at || oldest.started_at || oldest.scheduled_at || oldest.created_at;
+    failedAt.appendChild(el("span", {
+      class: "run-failure-range",
+      text: `${formatDateTime(firstAt)} – ${formatDateTime(ts)}`,
+    }));
+  }
   const explained = failure && failure.run ? [failure.run, ...failed.filter((run) => run !== failure.run)] : failed;
-  if (explained.length > 1) failedAt.title = explained.map((run) => `${run.job_id}\n${runFailure(run).title}`).join("\n\n");
+  if (!group.repeatedFailure && explained.length > 1) failedAt.title = explained.map((run) => `${run.job_id}\n${runFailure(run).title}`).join("\n\n");
   const failureHash = failure ? (failure.run ? `${runIdentity(failure.run)}:${runFailureHash(failure.run)}` : JSON.stringify(failure.cause)) : "";
   const row = el("div", {
     class: `runs-row runs-group${attributed ? " workspace-attributed" : ""}`,
-    title: `${runs.length} pipeline runs for this task: ${jobNames}`,
+    title: group.repeatedFailure ? `${runs.length} identical failures of ${first.job_id}` : `${runs.length} pipeline runs for this task: ${jobNames}`,
   }, [
     el("span", { class: "state" }, [stateCell(runGroupState(runs))]),
     attributed ? el("span", { class: "run-workspace", text: first.workspace_name || first.workspace_id, title: first.workspace_id }) : null,
-    toggle,
-    runTaskLinks(first),
+    group.repeatedFailure ? el("span", { class: "run-repeat-job" }, [toggle,
+      el("span", { class: "run-group-count", text: `${runs.length} identical failures` }),
+    ]) : toggle,
+    group.repeatedFailure ? el("span", { class: "run-tasks", text: "—" }) : runTaskLinks(first),
     failedAt,
-    el("span", { class: "run-id-cell" }, [el("span", { class: "run-group-count", text: `${runs.length} runs` })]),
+    el("span", { class: "run-id-cell" }, [el("span", { class: "run-group-count", text: group.repeatedFailure ? "—" : `${runs.length} runs` })]),
     el("span", { class: "when", text: formatAge(ts), title: ts ? formatDateTime(ts) : "" }),
     runCountCell(denials, "denials"),
     runCountCell(toolFails, "tool-fails"),
@@ -1468,7 +1501,6 @@ export function renderRuns(runs) {
     attributed ? el("span", { class: "runs-workspace-header", text: "Workspace" }) : null,
     runHeaderCell("Job", "job"),
     runHeaderCell("Task", "task"),
-    el("span", { class: "run-failed-at-header", text: "Failed at", title: "The step a failed, timed-out or interrupted run stopped at, and its error" }),
     runHeaderCell("Run ID", "run_id"),
     runHeaderCell("When", "when"),
     runHeaderCell("Denials", "denials", { num: true }),

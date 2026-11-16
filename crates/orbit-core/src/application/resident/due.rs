@@ -1,15 +1,24 @@
-//! When a mandate is due: its wake digest, cadence and live-cycle state.
+//! When a mandate is due: its wake items, cadence and live-cycle state.
 //!
-//! The digest hashes what a cycle reacts to: the watched tasks (the
-//! mandate's `watch` ids and tags plus the subjects of the last checkpoint's
-//! actions), decision requests on the assignment and those tasks, notices in
-//! the mandate's workspaces or global scope, and the assignment's
-//! non-resident comments. A mandate is due when that digest differs from the
-//! last checkpoint's, its heartbeat elapsed, its deadline passed since the
-//! last cycle, it never cycled, its last cycle died, or a manager's `wake`,
-//! `resume` or `release` came after the last cycle started; and only once
-//! the cadence floor since the last cycle start allows it and no cycle is
-//! live. A mandate is stalled when it has not checkpointed for twice its
+//! The wake items are what a cycle reacts to, one keyed state each: the
+//! mandate and its authority revision; the assignment's settled decision
+//! requests; one hash over the tasks the mandate's `watch` names (ids and
+//! tags), where any change counts; each task the last checkpoint acted on
+//! and each still-open task earlier cycles acted on, by state class, review
+//! decision and settled decision requests only; each open incident or
+//! maintenance notice in scope; and the assignment's non-resident comments.
+//! Observe records them in the cycle's grant, finalize records the state of
+//! the tasks the cycle acted on, and the next due check compares item by
+//! item, so run churn, edits and the resident's own actions on tasks it
+//! acted on do not wake it.
+//!
+//! A mandate is due when such a qualifying change happened since the last
+//! checkpoint's observation, its planned next wake (clamped between the
+//! floor and the heartbeat) or its heartbeat came, its deadline passed since
+//! the last cycle, it never cycled, its last cycle died, or a manager's
+//! `wake`, `resume` or `release` came after the last cycle started; and only
+//! once the cadence floor since the last cycle start allows it and no cycle
+//! is live. A mandate is stalled when it has not checkpointed for twice its
 //! heartbeat, or its last three checkpoints are all `incomplete`.
 
 use std::collections::BTreeSet;
@@ -17,10 +26,11 @@ use std::collections::BTreeSet;
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::record::{EffectiveStatus, Notice, NoticeKind, NoticeScope};
-use orbit_types::task::{Task, TaskComment, TaskHistoryEntry};
+use orbit_types::task::{DecisionRequestState, Task, TaskComment, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
-    RESIDENT_CYCLE_GRANTED_EVENT, ResidentCheckpoint, ResidentComment, ResidentCycleGrant,
-    ResidentLiveCycle, ResidentMandate, resident_authority_revision,
+    RESIDENT_CYCLE_GRANTED_EVENT, RESIDENT_WAKE_SETTLED_EVENT, ResidentCheckpoint, ResidentComment,
+    ResidentCycleGrant, ResidentLiveCycle, ResidentMandate, ResidentWakeItems, ResidentWakeSettled,
+    resident_authority_revision,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -46,8 +56,11 @@ pub(crate) struct StartedCycle {
 #[derive(Debug, Clone)]
 pub(crate) struct ResidentDue {
     pub(crate) mandate: ResidentMandate,
-    /// `sha256:<hex>` over everything a cycle reacts to.
+    /// `sha256:<hex>` over the wake items.
     pub(crate) digest: String,
+    /// What a cycle reacts to, one keyed state each; observe records them
+    /// in the grant as the next due check's baseline.
+    pub(crate) wake_items: ResidentWakeItems,
     /// Why a cycle would wake; empty when it would not.
     pub(crate) reasons: Vec<String>,
     /// Why a due mandate may not cycle yet (`cycle_live`, `cadence_floor`).
@@ -70,7 +83,9 @@ pub(crate) struct ResidentDue {
 
 impl ResidentDue {
     /// The scheduler member fingerprint: the last cycle it follows and what
-    /// made it due, so each cycle is its own member episode.
+    /// made it due (a manager wake, the heartbeat, the planned next wake, a
+    /// qualifying change, or else the digest), so each cycle is its own
+    /// member episode.
     pub(crate) fn fingerprint(&self) -> String {
         let after = self
             .last_cycle
@@ -80,6 +95,12 @@ impl ResidentDue {
             format!("wake:{}", at.to_rfc3339())
         } else if self.reasons.iter().any(|reason| reason == "heartbeat") {
             "heartbeat".to_string()
+        } else if self.reasons.iter().any(|reason| reason == "next_wake") {
+            "next_wake".to_string()
+        } else if self.reasons.iter().any(|reason| reason == "digest_changed") {
+            // Not the digest: churn that does not qualify still moves it,
+            // and must not retire a member a qualifying change admitted.
+            "changed".to_string()
         } else {
             self.digest.clone()
         };
@@ -227,6 +248,95 @@ fn wake_comments(comments: &[TaskComment], cycles: &[StartedCycle]) -> Vec<serde
         .collect()
 }
 
+/// A task's state class in the wake items. Moving between `proposed`,
+/// `backlog` and `in-progress` is drain churn, not a state the resident acts
+/// on, so those share one class.
+fn task_wake_class(status: TaskStatus) -> &'static str {
+    match status {
+        TaskStatus::Proposed | TaskStatus::Backlog | TaskStatus::InProgress => "active",
+        TaskStatus::Blocked => "blocked",
+        TaskStatus::Review => "review",
+        TaskStatus::Someday => "someday",
+        TaskStatus::Done => "done",
+        TaskStatus::Archived => "archived",
+        TaskStatus::Rejected => "rejected",
+    }
+}
+
+/// The class a wake item value starts with.
+fn wake_item_class(value: &str) -> &str {
+    value.split(' ').next().unwrap_or_default()
+}
+
+/// Whether a task item's class is closed, so earlier cycles' subjects stop
+/// being carried in the watched set.
+fn wake_class_closed(class: &str) -> bool {
+    matches!(class, "done" | "archived" | "rejected")
+}
+
+/// The settled (answered, superseded or expired) decision requests among
+/// `requests`, as one stable segment. An open request is the resident's own
+/// question or one it already sees in its brief; it wakes on its answer.
+fn settled_decisions(requests: &[orbit_types::task::DecisionRequest]) -> String {
+    let mut settled: Vec<String> = requests
+        .iter()
+        .filter(|request| request.state != DecisionRequestState::Open)
+        .map(|request| format!("{}={}", request.id, request.state.as_str()))
+        .collect();
+    settled.sort();
+    if settled.is_empty() {
+        String::new()
+    } else {
+        format!("decisions:{}", settled.join(","))
+    }
+}
+
+/// Whether the wake items changed in a way the mandate acts on since
+/// `baseline`: an item present in both changed state, a newly present item
+/// needs attention (a task the resident acted on that is `blocked` or in
+/// `review`, or any other new key such as a notice opening), or an item
+/// other than such a task is gone (a notice cleared). A task that only
+/// joined or left the set of tasks the resident acted on, merely active or
+/// closed, does not count.
+fn wake_items_changed(baseline: &ResidentWakeItems, current: &ResidentWakeItems) -> bool {
+    let changed_or_new = current.iter().any(|(key, value)| match baseline.get(key) {
+        Some(before) => before != value,
+        None if key.starts_with("task:") => {
+            matches!(wake_item_class(value), "blocked" | "review")
+        }
+        None => true,
+    });
+    changed_or_new
+        || baseline
+            .keys()
+            .any(|key| !key.starts_with("task:") && !current.contains_key(key))
+}
+
+/// When the mandate's next unprompted cycle is due after the last cycle
+/// started at `started`: its last checkpoint's planned `next_wake`, clamped
+/// between the floor and the heartbeat, or the heartbeat when the last
+/// cycle left no checkpoint of its own or ended `incomplete` (a synthesized
+/// or failed cycle's plan is not the resident's).
+fn planned_wake_at(
+    mandate: &ResidentMandate,
+    started: &StartedCycle,
+    last: Option<&ResidentCheckpoint>,
+) -> DateTime<Utc> {
+    let floor = started.at + Duration::minutes(i64::from(mandate.cadence.floor_minutes));
+    let heartbeat = started.at + Duration::minutes(i64::from(mandate.cadence.heartbeat_minutes));
+    match last {
+        Some(checkpoint)
+            if checkpoint.cycle == started.live.cycle && checkpoint.outcome != "incomplete" =>
+        {
+            checkpoint
+                .next_wake
+                .not_before
+                .clamp(floor, heartbeat.max(floor))
+        }
+        _ => heartbeat,
+    }
+}
+
 impl OrbitRuntime {
     /// Whether `notice` reaches a mandate covering `workspaces`.
     fn notice_in_scope(&self, notice: &Notice, workspaces: &BTreeSet<String>) -> bool {
@@ -286,6 +396,164 @@ impl OrbitRuntime {
         Ok(tasks)
     }
 
+    /// The tasks whose state feeds the wake items, each with whether the
+    /// mandate's `watch` names it (by id or tag): explicitly watched tasks
+    /// first, then the last checkpoint's subjects, then the still-open tasks
+    /// `baseline` carried from earlier cycles; capped.
+    fn resident_wake_tasks(
+        &self,
+        mandate: &ResidentMandate,
+        last: Option<&ResidentCheckpoint>,
+        baseline: Option<&ResidentWakeItems>,
+    ) -> Result<Vec<(Task, bool)>, OrbitError> {
+        let mut explicit = Vec::new();
+        let mut ids: BTreeSet<String> = mandate.watch.tasks.iter().cloned().collect();
+        if !mandate.watch.tags.is_empty() {
+            for task in self.list_task_metadata()?.iter() {
+                if task.tags.iter().any(|tag| mandate.watch.tags.contains(tag)) {
+                    ids.remove(task.id.as_str());
+                    explicit.push(task.clone());
+                }
+            }
+        }
+        for id in ids {
+            // A subject may name a run or a missing task; it simply does not count.
+            if let Ok(task) = self.get_task(&id) {
+                explicit.push(task);
+            }
+        }
+        explicit.sort_by(|left, right| left.id.cmp(&right.id));
+        explicit.dedup_by(|left, right| left.id == right.id);
+        let mut seen: BTreeSet<String> = explicit.iter().map(|task| task.id.to_string()).collect();
+        let mut tasks: Vec<(Task, bool)> = explicit.into_iter().map(|task| (task, true)).collect();
+        let subjects: BTreeSet<String> = last
+            .map(|last| {
+                last.actions
+                    .iter()
+                    .map(|action| action.subject.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let carried: BTreeSet<String> = baseline
+            .into_iter()
+            .flatten()
+            .filter_map(|(key, value)| {
+                let id = key.strip_prefix("task:")?;
+                (!wake_class_closed(wake_item_class(value))).then(|| id.to_string())
+            })
+            .collect();
+        for id in subjects.into_iter().chain(carried) {
+            if tasks.len() >= MAX_WATCHED_TASKS {
+                break;
+            }
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            if let Ok(task) = self.get_task(&id) {
+                tasks.push((task, false));
+            }
+        }
+        tasks.truncate(MAX_WATCHED_TASKS);
+        Ok(tasks)
+    }
+
+    /// One watched task's wake item: its state class, review decision and
+    /// settled decision requests, plus `updated_at` when the mandate watches
+    /// it explicitly (every change to an explicitly watched task wakes).
+    pub(crate) fn resident_task_wake_item(
+        &self,
+        task: &Task,
+        explicit: bool,
+    ) -> Result<String, OrbitError> {
+        let mut value = task_wake_class(task.status).to_string();
+        if let Some(pr_status) = task.pr_status.as_deref().filter(|pr| !pr.is_empty()) {
+            value.push_str(&format!(" pr:{pr_status}"));
+        }
+        if explicit {
+            value.push_str(&format!(" at:{}", task.updated_at.to_rfc3339()));
+        }
+        let settled = settled_decisions(&self.get_task_decision_requests(task.id.as_str())?);
+        if !settled.is_empty() {
+            value.push(' ');
+            value.push_str(&settled);
+        }
+        Ok(value)
+    }
+
+    /// The baseline the next due check compares against: the items observe
+    /// recorded for `cycle`, overlaid with the state finalize recorded for
+    /// the tasks that cycle acted on. `None` for a grant written before
+    /// items were recorded.
+    fn resident_wake_baseline(
+        history: &[TaskHistoryEntry],
+        cycle: &str,
+    ) -> Option<ResidentWakeItems> {
+        let mut items = cycle_grant(history, cycle)?.wake_items?;
+        if let Some(settled) = history
+            .iter()
+            .rev()
+            .filter(|entry| entry.event == RESIDENT_WAKE_SETTLED_EVENT)
+            .filter_map(|entry| {
+                serde_json::from_str::<ResidentWakeSettled>(entry.note.as_deref()?).ok()
+            })
+            .find(|settled| settled.cycle == cycle)
+        {
+            items.extend(settled.items);
+        }
+        Some(items)
+    }
+
+    /// Record, for `cycle`'s finished checkpoint, the state of the tasks it
+    /// acted on, so the resident's own actions never wake its next cycle.
+    pub(crate) fn record_resident_wake_settled(
+        &self,
+        task_id: &str,
+        cycle: &str,
+    ) -> Result<(), OrbitError> {
+        let comments = self.get_task_comments(task_id)?;
+        let Some(checkpoint) = checkpoints(task_id, &comments)
+            .into_iter()
+            .rev()
+            .find(|checkpoint| checkpoint.cycle == cycle)
+        else {
+            return Ok(());
+        };
+        let Ok(mandate) = super::resident_mandate_from_artifact(self, task_id)? else {
+            return Ok(());
+        };
+        let subjects: BTreeSet<&str> = checkpoint
+            .actions
+            .iter()
+            .map(|action| action.subject.as_str())
+            .collect();
+        let mut items = ResidentWakeItems::new();
+        for id in subjects {
+            let Ok(task) = self.get_task(id) else {
+                continue;
+            };
+            // A task `watch` names is part of the `watch` hash, which keeps
+            // what observe saw.
+            if mandate.watch.tasks.iter().any(|watched| watched == id)
+                || task.tags.iter().any(|tag| mandate.watch.tags.contains(tag))
+            {
+                continue;
+            }
+            items.insert(
+                format!("task:{id}"),
+                self.resident_task_wake_item(&task, false)?,
+            );
+        }
+        if items.is_empty() {
+            return Ok(());
+        }
+        let note = serde_json::to_string(&ResidentWakeSettled {
+            cycle: cycle.to_string(),
+            items,
+        })
+        .map_err(|error| OrbitError::Execution(format!("serialize wake items: {error}")))?;
+        self.append_resident_history(task_id, RESIDENT_WAKE_SETTLED_EVENT, note)
+    }
+
     /// Whether the live cycle's run can no longer act: its lease expired, or
     /// its run is terminal and its owner stopped, or the run is gone. Any
     /// other lookup failure is an error, so the cycle stays live for this
@@ -325,15 +593,8 @@ impl OrbitRuntime {
         let last_cycle = cycles.last().cloned();
         let live = live_cycle_from_history(history)?;
 
-        let watched = self.resident_watched_tasks(&mandate, last)?;
-        let mut decisions = Vec::new();
-        for id in
-            std::iter::once(task.id.to_string()).chain(watched.iter().map(|t| t.id.to_string()))
-        {
-            for request in self.get_task_decision_requests(&id)? {
-                decisions.push(json!([request.id, request.state]));
-            }
-        }
+        let baseline = last.and_then(|last| Self::resident_wake_baseline(history, &last.cycle));
+        let watched = self.resident_wake_tasks(&mandate, last, baseline.as_ref())?;
         let (notices, notice_error) = match self.resident_notices(&mandate) {
             Ok(notices) => (notices, None),
             Err(error) => (Vec::new(), Some(error.to_string())),
@@ -349,31 +610,52 @@ impl OrbitRuntime {
                 .map(|notice| notice.id.clone())
                 .collect()
         };
-        let digest = digest_of(&json!({
-            "mandate": mandate,
-            "authority_revision": resident_authority_revision(history),
-            "tasks": watched
-                .iter()
-                .map(|task| json!([task.id, task.status, task.updated_at]))
-                .collect::<Vec<_>>(),
-            "decisions": decisions,
-            // Residents' own notices are left out: a status line changes
-            // every cycle and lapses by design, and a cycle's own warn is
-            // not news to it, so counting either would wake the mandate at
-            // its cadence floor forever.
-            "notices": notices
-                .iter()
-                .filter(|notice| {
-                    !notice
-                        .dedupe_key
-                        .starts_with(orbit_types::record::RESIDENT_NOTICE_KEY_PREFIX)
-                        && notice.author.task_id.as_deref() != Some(task.id.as_ref())
-                })
-                .map(|notice| json!([notice.id, notice.revision, notice.status]))
-                .collect::<Vec<_>>(),
-            "notice_error": notice_error,
-            "comments": wake_comments(&comments, &cycles),
-        }));
+        let mut wake_items = ResidentWakeItems::new();
+        wake_items.insert("mandate".into(), digest_of(&json!(mandate)));
+        wake_items.insert(
+            "authority".into(),
+            resident_authority_revision(history).to_string(),
+        );
+        wake_items.insert(
+            "assignment".into(),
+            settled_decisions(&self.get_task_decision_requests(&task.id)?),
+        );
+        // Tasks `watch` names never leave the set, so one hash keeps the
+        // grant small; any change to one of them wakes.
+        let mut explicit_items = Vec::new();
+        for (watched_task, explicit) in &watched {
+            let item = self.resident_task_wake_item(watched_task, *explicit)?;
+            if *explicit {
+                explicit_items.push(json!([watched_task.id, item]));
+            } else {
+                wake_items.insert(format!("task:{}", watched_task.id), item);
+            }
+        }
+        wake_items.insert("watch".into(), digest_of(&json!(explicit_items)));
+        // Info notices stay in the brief but never wake: only a warn, incident
+        // or maintenance notice opening or clearing is a state the mandate
+        // acts on. Only open ones are items, so clearing one removes its key.
+        // Residents' own notices are left out: a status line changes every
+        // cycle and lapses by design, and a cycle's own warn is not news to
+        // it, so counting either would wake the mandate at its cadence floor.
+        for notice in notices.iter().filter(|notice| {
+            notice.kind != NoticeKind::Info
+                && notice.status == EffectiveStatus::Open
+                && !notice
+                    .dedupe_key
+                    .starts_with(orbit_types::record::RESIDENT_NOTICE_KEY_PREFIX)
+                && notice.author.task_id.as_deref() != Some(task.id.as_ref())
+        }) {
+            wake_items.insert(format!("notice:{}", notice.id), "open".into());
+        }
+        if notice_error.is_some() {
+            wake_items.insert("notices".into(), "unreadable".into());
+        }
+        wake_items.insert(
+            "comments".into(),
+            digest_of(&json!(wake_comments(&comments, &cycles))),
+        );
+        let digest = digest_of(&json!(wake_items));
 
         let mut reasons = Vec::new();
         let mut withheld = None;
@@ -386,17 +668,25 @@ impl OrbitRuntime {
                 withheld = Some("cycle_live".to_string());
             }
         }
-        match (last, &last_cycle) {
-            (None, None) => reasons.push("first_cycle".into()),
-            (Some(last), _) if last.wake.digest != digest => reasons.push("digest_changed".into()),
-            (None, Some(_)) => reasons.push("digest_changed".into()),
-            _ => {}
+        let changed = match (last, &baseline) {
+            (Some(_), Some(baseline)) => wake_items_changed(baseline, &wake_items),
+            (Some(last), None) => last.wake.digest != digest,
+            (None, _) => last_cycle.is_some(),
+        };
+        if last.is_none() && last_cycle.is_none() {
+            reasons.push("first_cycle".into());
+        } else if changed {
+            reasons.push("digest_changed".into());
         }
         let since = last_cycle
             .as_ref()
             .map_or(task.created_at, |cycle| cycle.at);
         if now - since >= Duration::minutes(i64::from(mandate.cadence.heartbeat_minutes)) {
             reasons.push("heartbeat".into());
+        } else if let Some(cycle) = &last_cycle
+            && now >= planned_wake_at(&mandate, cycle, last)
+        {
+            reasons.push("next_wake".into());
         }
         let control = super::control::resident_control_from_history(history)
             .map_err(OrbitError::Execution)?;
@@ -424,6 +714,7 @@ impl OrbitRuntime {
         Ok(ResidentDue {
             mandate,
             digest,
+            wake_items,
             reasons,
             withheld,
             last_cycle,

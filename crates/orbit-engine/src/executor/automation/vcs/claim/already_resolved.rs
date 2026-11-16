@@ -51,6 +51,7 @@ pub(super) fn replay<H: RuntimeHost + ?Sized>(
     candidate: &HandoffCandidate,
     selectors: &[HostSandboxCommand],
 ) -> Result<Vec<ClaimedResult>, OrbitError> {
+    AlreadyResolved::check_selector_cap(selectors.len()).map_err(refused)?;
     let mut results = Vec::new();
     for (index, selector) in selectors.iter().enumerate() {
         let run =
