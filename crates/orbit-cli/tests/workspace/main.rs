@@ -69,6 +69,7 @@ mod teardown_retry;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod tmp_gc;
 mod workspace_preset;
+mod workspace_rebind;
 mod workspace_selector;
 mod workspace_ship_mode;
 mod workspace_source_remote;

@@ -644,6 +644,7 @@ impl RegisteredRuntimeFactory {
         workspace: &Workspace,
         checkout: &WorkspaceCheckout,
     ) -> Result<OrbitRuntime, OrbitError> {
+        crate::workspace_rebind::refuse_pending_checkout_rebind(global_root, &checkout.orbit_dir)?;
         let identity = inspect_machine_identity(global_root)?;
         OrbitRuntime::from_resolved_roots_observational_with_binding(
             global_root,
