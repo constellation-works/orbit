@@ -222,11 +222,9 @@ same order. To verify the colours, open the **Workspaces** chip: each workspace
 pill matches its entry's colour in that list, which is the colour key. The rail
 Workspace picker has no workspace colours, so use it for order only.
 
-Under **All workspaces**, the Tasks dock adds a **Fleet** tab right after its
-**Drain** tab. Open it to see the **Fleet drains** pane, which
-lists drain rows across the registered hosts and their workspaces. The tab is
-present only while **All workspaces** is selected in the rail picker; choosing a
-single workspace removes it.
+**Observe › Fleet** lists the drain rows across the registered hosts and their
+workspaces in its **Drains** section. The workspace picker does not filter
+Fleet, so the list is the same whichever workspace is selected.
 
 The Tasks dock's **Drain** pane holds the **Auto-drain** card and, beside it, the
 quick-start card headed **Start a window**. When the target is a replica checkout,
@@ -278,11 +276,12 @@ the machine is not registered, when you need `--no-operator` or a non-default
   restore the host each history entry names, and an entry without `?host=`
   is the serving host.
 - Every panel, action, log tail and resource chip follows the selected host,
-  and the workspace picker lists that host's workspaces. Settings › Hosts
-  keeps editing the serving host's `hosts.toml`. It also shows each reachable
-  registered host's load, memory, disk, admission throttle, and drain or
-  pull-drain state, and **Show** on a row switches the dashboard to that host.
-  An unreachable host shows its error instead of readings.
+  and the workspace picker lists that host's workspaces. **Observe › Fleet**
+  keeps editing the serving host's `hosts.toml`. Each reachable registered host
+  has a card with its load, memory, disk, I/O and admission state, and the
+  **Drains** section lists its drains and pull drains. Select the host's card,
+  then **Show** in its dialog, to switch the dashboard to that host. An
+  unreachable host shows its error instead of readings.
 - Version or protocol skew shows a persistent banner and is never refused.
   An unreachable host replaces the panels with one state carrying a code:
   `unknown_host`, `unreachable_destination`, `process_timeout`,

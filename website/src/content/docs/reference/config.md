@@ -241,7 +241,7 @@ the rest. Most ignored keys stop being recognised on 2026-12-07 or
 
 `~/.orbit/hosts.toml` lists the remote Orbit installations this machine
 reaches over SSH. Manage it with `orbit host add`, `rename` and `remove`, or
-the dashboard's [Settings › Hosts](/how-to/dashboard/#hosts). For setup and
+the dashboard's [Observe › Fleet](/how-to/dashboard/#fleet) page. For setup and
 prefix routing, see [Run Orbit across hosts](/how-to/multi-host/).
 
 `orbit host add` reads the remote's identity and writes an entry like this
