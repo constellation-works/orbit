@@ -883,37 +883,89 @@ fn model_context_and_forged_run_inputs_cannot_grant_repair_authority() {
     f.assert_original();
 }
 
+// The 29 independent rows were one serial carrier, the largest in its CI
+// partition (40-71 s hosted, ORB-25328). Thirteen tables, one more than
+// NEXTEST_PARTITIONS, spread them across slots and partitions while every
+// other test in this binary keeps its count partition.
 crate::scenario_table!(
-    cancelled_source_repair_scenarios,
+    cancelled_source_repair_scenarios_01,
     failed_requeued_publisher_is_inspected_and_submitted_without_a_successor,
     failed_requeued_direct_publisher_retains_authority_and_drift_refusals,
     published_completion_requeue_adopts_without_reimplementation,
+);
+
+crate::scenario_table!(
+    cancelled_source_repair_scenarios_02,
     requeue_refuses_a_publication_candidate_resume_would_refuse,
     candidate_resume_identity_refusals_name_their_predicate,
     system_crew_redraws_keep_the_preserved_publication_adoptable,
+);
+
+crate::scenario_table!(
+    cancelled_source_repair_scenarios_03,
     crew_redraws_keep_every_other_adoption_refusal,
     published_requeue_is_admitted_past_held_locks_and_reuses_its_pr,
     operator_shipped_published_requeue_overrides_held_local_lock,
+);
+
+crate::scenario_table!(
+    cancelled_source_repair_scenarios_04,
     footprint_held_resume_keeps_the_preserved_publication,
     deferred_resumed_runs_behind_one_holder_take_the_footprint_in_turn,
+);
+
+crate::scenario_table!(
+    cancelled_source_repair_scenarios_05,
     auto_fix_advanced_publication_is_adopted_at_its_recorded_head,
     unrecorded_publication_move_is_refused,
+);
+
+crate::scenario_table!(
+    cancelled_source_repair_scenarios_06,
     published_requeue_refuses_changed_scope_head_and_incomplete_source,
     stopped_successor_is_explicitly_bound_when_repairing_older_publication,
+);
+
+crate::scenario_table!(
+    cancelled_source_repair_scenarios_07,
     legacy_publication_behind_a_stopped_successor_cannot_start_fresh,
     discard_survives_unpublished_held_successors,
+);
+
+crate::scenario_table!(
+    cancelled_source_repair_scenarios_08,
     discard_across_successors_keeps_every_refusal,
     failed_pre_adoption_chain_rebinds_the_original_publication,
+);
+
+crate::scenario_table!(
+    cancelled_source_repair_scenarios_09,
     failed_successor_chain_keeps_every_neighboring_refusal,
     cancelled_published_repair_accepts_fresh_generation,
+);
+
+crate::scenario_table!(
+    cancelled_source_repair_scenarios_10,
     cancelled_candidate_requires_explicit_intent_and_continues_same_branch,
     cancelled_admission_refuses_identity_liveness_lease_and_evidence_drift,
+);
+
+crate::scenario_table!(
+    cancelled_source_repair_scenarios_11,
     current_policy_is_captured_and_review_runs_at_its_scheduled_boundary,
     concurrent_replay_and_cancelled_attempt_keep_one_durable_reservation,
+);
+
+crate::scenario_table!(
+    cancelled_source_repair_scenarios_12,
     exhausted_budget_and_unreadable_ledger_refuse_without_run_admission,
     scope_and_cancellation_are_rechecked_before_source_effects,
+);
+
+crate::scenario_table!(
+    cancelled_source_repair_scenarios_13,
     model_context_and_forged_run_inputs_cannot_grant_repair_authority,
-    lost_spawn_reply_reconciles_the_reserved_run_after_older_retries
+    lost_spawn_reply_reconciles_the_reserved_run_after_older_retries,
 );
 
 crate::scenario_table!(

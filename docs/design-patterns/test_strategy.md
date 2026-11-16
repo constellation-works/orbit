@@ -1021,6 +1021,68 @@ pre-Check delay and awaited-job queue delay separately. Preserve unavailable
 queue timestamps as uncertainty. Hosted compliance is **not run, owed after
 publication**, not established by this fixture.
 
+### Long serial carriers split across partitions (2026-11-16)
+
+ORB-25328 follows the ORB-25327 watch: 20 completed PR `ci.yml` runs, 18
+executed Checks and two cancelled; nearest-rank p90 **578 s**, median 472 s,
+maximum 591 s. Over all 18 executed runs (`Test build` step logs, base
+`81d47425e`), the workspace cache restored with 1–50 changed inputs, the
+folded list-build took 62–319 s, archive 5–11 s, pack 10–15 s, the four
+uploads 6–27 s and the partition proof plus job tail 7.9–17.3 s. The last test job
+ended 101–227 s after the build, the first 56–133 s after it. The build
+lane is the CPU-bound compile already described above; this pass takes the
+test-job tail.
+
+Every per-test `PASS` line of all twelve test jobs in four runs (43833954392,
+43834344202, 43841072481, 43836366170; three full, one affected scope that
+included `orbit-engine`) shows one test setting a partition floor:
+`pr_landing::ci_rerun::dependency_adapter_refuses_incomplete_or_forged_evidence`
+took **100.4–129.4 s** in partition 9 every time, and that partition's
+nextest Summary (100–129 s) is essentially that one test. It runs 62
+independent fresh-fixture rows (31 forged-evidence cases under the grouped
+and raw log forms) serially in one isolated child. Partition 7's largest
+carrier, `task_delivery::source_repair::cancelled_source_repair_scenarios`,
+ran 29 independent scenario rows serially in 39.9–71.1 s.
+
+Each is now thirteen carriers (`…_01` to `…_13`) over the same rows, row
+bodies, assertions, fixtures and isolation; no row is removed, retried,
+skipped or weakened, and the CI priority filter covers every carrier by
+prefix. Thirteen is one more than `NEXTEST_PARTITIONS`: nextest's `count:`
+partitioning assigns round-robin by sorted name within each binary, so twelve
+extra names leave every other test in `orbit-engine::engine` and
+`orbit-core::runtime` in its current partition (checked with
+`cargo nextest list --partition count:k/12`), and the thirteen carriers
+spread across all twelve partitions (eleven hold one carrier and one holds
+two). The deterministic work proxy is the longest serial unit: 62 rows
+become at most 3 per log form (6 rows), and 29 scenario rows at most 3.
+
+Local measurements (shared 32-thread host, `taskset -c 0-3`, `--profile ci`,
+six slots, same binary per arm, three repetitions; Summary seconds):
+
+| Carrier | Before | After (6 slots) | After (1 slot, summed work) |
+|---|---|---|---|
+| dependency adapter | 29.99, 28.79, 26.74 | 8.86, 8.75, 8.64 (longest carrier ≤ 6.1) | 26.60 |
+| cancelled source repair | 10.24, 10.32, 10.10 | 4.45, 3.95, 3.91 | 11.46 |
+
+Serial summed work is unchanged for the first and 12% higher for the second
+(twelve more child startups). The task's `ci-budget/replay.py` replays the
+four runs' hosted per-test durations: it re-derives every split binary's
+observed partition membership (0 mismatches) and reproduces each observed
+maximum partition Summary exactly, then assigns the carriers and list-schedules
+each partition on six slots with priority carriers first. The last
+partition's nextest time moves by −14.1, −8.8, −3.3 and +1.2 s (at the
+measured 1.12 overhead: −13.9, −8.4, −2.8, +1.4 s; at a pessimistic 1.6:
+−12.6, −7.0, −1.8, +2.5 s). This is a projection of one phase from four
+runs, not a hosted measurement or a p90. Partitions 7 and 8 stay load-bound
+(about 670–690 summed test seconds over six slots), so the remaining
+test-tail lever is uneven count partitions, and the larger one is still the
+build. **The 400 s budget is not restored by this pass.** After publication,
+once the latest 20 completed PR `ci.yml` runs carry this revision, the
+operator runs `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400`
+under the [hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff),
+reporting coverage, gaps (skipped, cancelled, missing) and queue time
+separately.
+
 ## Why
 
 On 2026-10-03, unit tests under `crates/*/src/**` were about 295k lines and 7,675 test functions, more lines than the production code they covered. Crate-root integration tests were 37k lines. Most unit tests pinned internals, so a refactor that kept behaviour unchanged still broke dozens of them, and each break cost an agent tokens to repair a test rather than find a bug. A review of all of them kept 180 (2.3%).
