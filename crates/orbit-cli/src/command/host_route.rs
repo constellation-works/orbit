@@ -222,7 +222,11 @@ fn attention_preflight(
     attention: &super::attention::AttentionCommand,
     global_root: &Path,
 ) -> Result<Preflight, OrbitError> {
-    if explicit_root(cli) || orbit_mcp::federated::load_destinations(global_root)?.is_empty() {
+    // A wait is always a local read bounded by its session grant.
+    if attention.wait.is_some()
+        || explicit_root(cli)
+        || orbit_mcp::federated::load_destinations(global_root)?.is_empty()
+    {
         return Ok(Preflight::Local);
     }
     let input = &attention.query.input;

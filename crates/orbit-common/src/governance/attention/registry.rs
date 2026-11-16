@@ -6,6 +6,9 @@ use crate::governance::operation::{
 /// The MCP client name the federated aggregator initializes its hops with.
 /// A destination honours `candidate_read` only from a session that names it.
 pub const ATTENTION_AGGREGATOR_CLIENT: &str = "orbit-federated-mux";
+/// The environment variable a shell reads its attention wait grant from.
+/// A flag would put the token in the process list.
+pub const ATTENTION_WAIT_TOKEN_ENV: &str = "ORBIT_ATTENTION_WAIT_TOKEN";
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 operation_registry! {
     noun: ATTENTION;
@@ -157,6 +160,11 @@ const QUERY: OperationSpec<AttentionVerb> = OperationSpec {
             "Public response limit, 1–500 (default 100).",
             CliArgKind::flag("limit"),
             "Public response limit, 1–500 (default 100)",
+        ),
+        mcp_only(
+            "wait_grant",
+            ParamType::Boolean,
+            "Also mint a short-lived token that lets this session's own shell run `orbit attention wait` for the workspaces read; export it as ORBIT_ATTENTION_WAIT_TOKEN. Needs a session with a capability grant; not combinable with host.",
         ),
         mcp_only(
             "candidate_read",

@@ -425,6 +425,12 @@
         "required": false
       },
       {
+        "name": "wait_grant",
+        "description": "Also mint a short-lived token that lets this session's own shell run `orbit attention wait` for the workspaces read; export it as ORBIT_ATTENTION_WAIT_TOKEN. Needs a session with a capability grant; not combinable with host.",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
         "name": "candidate_read",
         "description": "Reserved for Orbit's federated aggregator; never send it.",
         "param_type": "boolean",
