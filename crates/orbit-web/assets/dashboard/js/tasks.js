@@ -8,7 +8,7 @@ import { buildRiskRowPart, riskinessSignature } from './task-riskiness.js';
 import { $, absTimeNode, rerender, taskState, setRenderer, taskList, tasksMeta, plural, isOsTag, taskDispatchIdentity, isSelectedTask, TASK_SECTION_STEP } from './task-shared.js';
 import { buildMutationFeedback, crewOptionsSignature, feedbackSignature, humanCrewFor } from './task-crew.js';
 import { invalidateDistributedConsole } from './distributed.js';
-import { recoveryRefusals } from './task-agent-actions.js';
+import { recoveryRefusals, recoveryRefusalDetails } from './task-agent-actions.js';
 export { normalizeCrewPayload, cacheCrewPayload, hasCrewOptions } from './task-crew.js';
 import * as taskReadiness from './task-readiness.js';
 import * as taskComments from './task-comments.js';
@@ -49,6 +49,7 @@ onWorkspaceChange(() => {
   taskState.fieldFeedback.clear();
   clearTaskDataCaches();
   recoveryRefusals.clear();
+  recoveryRefusalDetails.clear();
   taskState.expandedComments.clear();
   taskComments.rawComments.clear();
   taskState.restoredCommentHash = null;

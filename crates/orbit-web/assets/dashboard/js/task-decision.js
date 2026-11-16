@@ -207,7 +207,14 @@ async function answerDecision(task, detail, requestId, answer, note, btnNode, co
     decisionAnswersInFlight.delete(flightKey);
     if (!visit.isCurrent()) return;
     for (const control of controls) control.disabled = false;
-    detail.prepend(taskShared.actionErrorNode(`decision answer: ${error.message || String(error)}`));
+    const refusalDetail = error && error.body && typeof error.body.detail === "string"
+      ? error.body.detail
+      : "";
+    detail.prepend(taskShared.actionErrorNode(
+      `decision answer: ${error.message || String(error)}`,
+      undefined,
+      refusalDetail,
+    ));
     return;
   }
   decisionAnswersInFlight.delete(flightKey);

@@ -269,8 +269,10 @@ pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
             force_overridable_response(error)
         }
         orbit_core::OrbitError::InvalidInput(msg)
-        | orbit_core::OrbitError::ClaimRefused { message: msg, .. } => bad_request(msg),
-        orbit_core::OrbitError::InvalidInputDiagnostic { message, .. } => bad_request(message),
+        | orbit_core::OrbitError::ClaimRefused { message: msg, .. } => bad_request_shown(msg),
+        orbit_core::OrbitError::InvalidInputDiagnostic { message, .. } => {
+            bad_request_shown(message)
+        }
         orbit_core::OrbitError::TaskCompletionLiveRun { task_id, run_id } => (
             StatusCode::CONFLICT,
             Json(json!({
@@ -472,6 +474,24 @@ pub(super) fn bad_request(message: String) -> Response {
     (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
 }
 
+/// A 400 whose `error` is one line when `message` is a source-repair refusal.
+///
+/// The previous `error` text moves to `detail`. Other messages stay a single
+/// `error` field.
+fn bad_request_shown(message: String) -> Response {
+    match source_repair_body(&message) {
+        Some(body) => (StatusCode::BAD_REQUEST, Json(body)).into_response(),
+        None => bad_request(message),
+    }
+}
+
+/// `error` plus `detail` when `message` is a source-repair refusal whose line
+/// is shorter than the stored text. `None` leaves the caller on its old body.
+fn source_repair_body(message: &str) -> Option<serde_json::Value> {
+    let text = orbit_common::source_repair_reader_text(message)?;
+    (text.line != text.detail).then(|| json!({ "error": text.line, "detail": text.detail }))
+}
+
 /// JSON body that is optional only when it is absent or empty.
 ///
 /// `Option<Json<T>>` yields `None` only when the request has no `Content-Type`
@@ -547,11 +567,12 @@ pub(super) fn not_found(message: String) -> Response {
 }
 
 pub(super) fn server_error(e: orbit_core::OrbitError) -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({ "error": e.to_string() })),
-    )
-        .into_response()
+    let stored = e.to_string();
+    let body = match source_repair_body(&stored) {
+        Some(body) => body,
+        None => json!({ "error": stored }),
+    };
+    (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response()
 }
 
 /// Normalize framework-generated client errors to the dashboard's JSON error
