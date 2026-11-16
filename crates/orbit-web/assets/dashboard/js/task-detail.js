@@ -224,14 +224,28 @@ export function humanTaskCommands(text) {
   let fenceBaseIndent = 0;
   let fenceInBlockquote = false;
   let fenceQuoteDepth = 0;
+  let fenceInList = false;
   let blockLines = [];
   // Open list items, outermost first. A fence indented to an item's content
   // indent (plus up to three columns) is a fenced block inside that item —
   // the way `marked` renders it — while the same indent at the top level is
-  // an indented code block and yields no command.
+  // an indented code block and yields no command. Each item records the
+  // blockquote depth it opened at, so an item inside a quote does not own
+  // lines after that quote ends.
   let listStack = [];
 
-  for (const rawLine of lines) {
+  const flushBlock = (dropTrailingBlank = false) => {
+    let end = blockLines.length;
+    if (dropTrailingBlank) {
+      while (end > 0 && !blockLines[end - 1].trim()) end--;
+    }
+    const c = blockLines.slice(0, end).join("\n");
+    if (c.trim()) out.push(c);
+    blockLines = [];
+  };
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const rawLine = lines[lineIndex];
     // Expanded text measures list and fence structure. Command bytes stay on
     // the original line: a tab inside the command is not four spaces.
     const expanded = detabLeading(rawLine);
@@ -242,11 +256,35 @@ export function humanTaskCommands(text) {
       const source = fenceInBlockquote
         ? stripBlockquotePrefixes(rawLine, fenceQuoteDepth)
         : rawLine;
+      // Markdown ends an unclosed fenced block when its enclosing list
+      // item or blockquote ends. A quoted fence needs its quote prefix on
+      // every line; a list fence needs lines at or past its item's content
+      // indent (blank lines close neither). End the block and reprocess
+      // this line outside the fence, so dedented prose stays prose and a
+      // later top-level fence still opens as its own command.
+      const quoteEnded =
+        fenceInBlockquote &&
+        stripBlockquotePrefix(expanded).depth < fenceQuoteDepth;
+      const listEnded =
+        !quoteEnded &&
+        fenceInList &&
+        !!structural.trim() &&
+        leadingSpaces(structural) < fenceBaseIndent;
+      if (quoteEnded || listEnded) {
+        flushBlock(true);
+        inFence = false;
+        fenceInList = false;
+        fenceInBlockquote = false;
+        fenceQuoteDepth = 0;
+        lineIndex--;
+        continue;
+      }
       if (isClosingFence(structural, fenceChar, fenceLength, fenceBaseIndent)) {
         inFence = false;
-        const c = blockLines.join("\n");
-        if (c.trim()) out.push(c);
-        blockLines = [];
+        fenceInList = false;
+        fenceInBlockquote = false;
+        fenceQuoteDepth = 0;
+        flushBlock();
       } else {
         blockLines.push(stripFenceLead(source, fenceLead));
       }
@@ -255,6 +293,14 @@ export function humanTaskCommands(text) {
 
     const { line, quoted, depth } = stripBlockquotePrefix(expanded);
     if (!line.trim()) continue;
+    // A line outside an item's quote has left that quote's container, so
+    // items opened inside the quote no longer own it.
+    while (
+      listStack.length &&
+      listStack[listStack.length - 1].quoteDepth > depth
+    ) {
+      listStack.pop();
+    }
     const indent = leadingSpaces(line);
     const item = parseListItem(line);
     // Close the items this line sits outside of. A sibling item closes the
@@ -276,7 +322,7 @@ export function humanTaskCommands(text) {
       // after the sibling pop likewise starts nothing.
       const parent = listStack[listStack.length - 1];
       if (parent ? indent >= parent.contentIndent : item.markerIndent <= 3) {
-        listStack.push(item);
+        listStack.push({ ...item, quoteDepth: depth });
         continue;
       }
     }
@@ -294,14 +340,12 @@ export function humanTaskCommands(text) {
       fenceBaseIndent = containerIndent;
       fenceInBlockquote = quoted;
       fenceQuoteDepth = depth;
+      fenceInList = listStack.length > 0;
       blockLines = [];
     }
   }
 
-  if (inFence) {
-    const c = blockLines.join("\n");
-    if (c.trim()) out.push(c);
-  }
+  if (inFence) flushBlock();
 
   return out;
 }
