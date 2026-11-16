@@ -1641,19 +1641,6 @@ input.field-editor-input {
 .resident-comment-notes { white-space: pre-wrap; margin: 8px 0; }
 .resident-comment-label { color: var(--fg-dim); margin-top: 8px; }
 .resident-comment ul { margin: 0; padding-left: 20px; }
-.pilot-assessment-fields {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 4px 16px;
-  margin: 0;
-}
-.pilot-assessment-fields dt, .pilot-assessment-label { color: var(--fg-dim); }
-.pilot-assessment-fields dd { margin: 0; overflow-wrap: anywhere; }
-.pilot-assessment-label { margin-top: 12px; }
-@media (max-width: 600px) {
-  .pilot-assessment-fields { grid-template-columns: minmax(0, 1fr); gap: 2px; }
-  .pilot-assessment-fields dd { margin-bottom: 6px; }
-}
 .comment-raw {
   font-family: var(--font-mono);
   font-size: 11px;

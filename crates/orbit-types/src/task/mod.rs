@@ -137,6 +137,7 @@ pub use mutation_proposal::{
 pub use os_requirement::{
     ExecutorOsLimit, HostOs, OS_TAG_PREFIX, TaskOsRequirement, validate_os_tags,
 };
+pub use pilot_summary::PilotCommentView;
 pub use plan::{TaskPlan, TaskPlanCheckpoint, TaskPlanSuccessCriterion};
 pub use readiness::{
     READINESS_WAIVED_TAG, ReadinessGap, ReadinessGapCode, ReadinessSeverity, ReadinessStage,
