@@ -235,7 +235,9 @@ export function residentsDockShown() {
 // CSS media queries mirror this named breakpoint in shell.css and tasks.css.
 const TASKS_ONE_COLUMN_QUERY = "(max-width: 1315px)";
 
-function tasksOneColumn() {
+/// Whether the Tasks view is in its one-column layout, where the dock is a
+/// route of its own rather than a column beside the list.
+export function tasksOneColumn() {
   return typeof window.matchMedia === "function" && window.matchMedia(TASKS_ONE_COLUMN_QUERY).matches;
 }
 

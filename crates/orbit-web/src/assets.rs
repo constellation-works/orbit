@@ -377,6 +377,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/log-tail.js"),
     ),
     (
+        "/static/js/dock-toggle.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/dock-toggle.js"),
+    ),
+    (
         "/static/js/diagnostics.js",
         JS,
         include_bytes!("../assets/dashboard/js/diagnostics.js"),

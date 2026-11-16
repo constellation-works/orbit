@@ -173,6 +173,8 @@
              both columns, it spans the dock column too (log-tail.js). -->
         <div class="controls">
           <div id="task-filter" role="group" aria-label="Filter tasks"></div>
+          <!-- Shown only while the dock is collapsed (dock-toggle.js). -->
+          <button type="button" class="dock-toggle" id="dock-expand" aria-controls="side-dock" aria-expanded="true" aria-label="Show dock"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><rect x="2.8" y="3.8" width="14.4" height="12.4" rx="2"/><path d="M12.4 3.8v12.4"/></svg></button>
         </div>
         <div class="col-tasks" style="display: flex; flex-direction: column; min-width: 0;">
           <section class="panel" id="tasks-panel">
@@ -209,6 +211,7 @@
                 <button type="button" role="tab" class="dock-seg" id="dock-tab-residents" data-mode="residents" aria-selected="false" aria-controls="dock-pane-residents" tabindex="-1">Residents <span id="dock-residents-state" class="dock-seg-count"></span></button>
                 <button type="button" role="tab" class="dock-seg" id="dock-tab-log" data-mode="log" aria-selected="false" aria-controls="dock-pane-log" tabindex="-1">Log <span id="dock-log-state" class="dock-seg-count dock-log-state"></span></button>
               </div>
+              <button type="button" class="dock-toggle" id="dock-collapse" aria-controls="side-dock" aria-expanded="true" aria-label="Hide dock"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><rect x="2.8" y="3.8" width="14.4" height="12.4" rx="2"/><path d="M12.4 3.8v12.4"/></svg></button>
             </div>
             <div class="dock-pane" id="dock-pane-drain" role="tabpanel" aria-labelledby="dock-tab-drain" data-pane="drain">
               <div class="drain-columns">

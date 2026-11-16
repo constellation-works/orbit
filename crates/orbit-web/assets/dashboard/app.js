@@ -13,6 +13,7 @@ import { fetchAndRenderAgents, getAgentsRole, placeholdAgentsAggregate, setAgent
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/reliability.js';
 import { openDoctor, peekDoctor, wireDoctorPanel } from './js/doctor.js';
 import { initLogTail, fitLogPanelToViewport, noticesDockShown, residentsDockShown, setDockMode, setDockRouteShown } from './js/log-tail.js';
+import { initDockToggle } from './js/dock-toggle.js';
 import { renderDiagnostics } from './js/diagnostics.js';
 import { fetchAndRenderMetrics, placeholdMetricsAggregate } from './js/metrics.js';
 import { fetchAndRenderResources, placeholdResourcesAggregate } from './js/resources.js';
@@ -2326,6 +2327,7 @@ void startFleetIndicatorRefresh().catch(error => console.error(error));
 iT();
 
 initLogTail();
+initDockToggle();
 // The status bar opens the full tail in the Tasks dock.
 document.getElementById("log-statusbar-open")?.addEventListener("click", () => {
   sAT("tasks?dock=log");
