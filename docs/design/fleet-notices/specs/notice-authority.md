@@ -86,6 +86,9 @@ input. A resident differs from other managed agents in these ways only:
   so a mandate that stops cycling lapses instead of looking alive. A control action replaces the
   line too: `pause`, `takeover` and `stop` (a deadline stop included) leave a line saying so that
   lasts 7 days, and `resume` and `release` leave one that lapses like a cycle's.
+  While paused, taken over or stopped, a still-admitted cycle's status post returns the existing
+  line unchanged, including its expiry; the cycle may still checkpoint and finalize. After
+  `resume` or `release`, cycle posts replace and refresh the line normally again.
 - **Warn.** A resident may post `warn`, one per blocker. Without a `dedupe_key` the key is
   `resident:<mandate>:` followed by the usual derived key (`task:<linked task>` or the slugged
   title). It lasts 72 hours from each post, at most 7 days, and the cycle closes it when the
