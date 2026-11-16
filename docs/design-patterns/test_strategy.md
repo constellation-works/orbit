@@ -1051,8 +1051,9 @@ prefix. Thirteen is one more than `NEXTEST_PARTITIONS`: nextest's `count:`
 partitioning assigns round-robin by sorted name within each binary, so twelve
 extra names leave every other test in `orbit-engine::engine` and
 `orbit-core::runtime` in its current partition (checked with
-`cargo nextest list --partition count:k/12`), and the carriers land one per
-partition. The deterministic work proxy is the longest serial unit: 62 rows
+`cargo nextest list --partition count:k/12`), and the thirteen carriers
+spread across all twelve partitions (eleven hold one carrier and one holds
+two). The deterministic work proxy is the longest serial unit: 62 rows
 become at most 3 per log form (6 rows), and 29 scenario rows at most 3.
 
 Local measurements (shared 32-thread host, `taskset -c 0-3`, `--profile ci`,
